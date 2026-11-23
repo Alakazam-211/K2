@@ -1205,6 +1205,24 @@ NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
   - k2 compute get shows the network the job asked for (network: none;
     dummies: …); --json: result.network {mode, dummies, line}.
 
+USER NAMESPACES (--userns; k2-node 0.46.18 on the node)
+  By default a job can't create user namespaces (rootless Podman,
+  unshare -U, bubblewrap): its node's job wall denies them. --userns lets
+  this job, if the node's owner granted its workspace that on the node:
+    k2 compute grant <node> --workspace <w> --userns      (the owner or an Admin)
+    k2 compute run --userns -- podman run --rm alpine true
+  - Only on nodes your own server owns; never on a node where your server
+    is a tenant (another server's machine): userns_owner_only, exit 3.
+    The grant can't be given there either.
+  - The grant row is required, for the owner and an Admin too; an agent
+    can't set it and no card asks for it. --no-userns takes it away.
+  - K2 places such a job only on a node that offers it and where the
+    grant says --userns; with none: userns_not_granted (naming the node),
+    userns_needs_update or userns_owner_only, exit 3. Never placed without
+    its ask, and never sent if the grant was turned off since.
+  - k2 compute get shows "userns: allowed (--userns, granted by the
+    node's owner)"; --json: userns: true. k2 compute grants shows it.
+
 IN THE JOB
   The node sets these K2_* variables in every job, and --env can't set
   them:
@@ -1445,6 +1463,14 @@ COMMON ERRORS
   job_network_unavailable  the node can't run the job at its --network now
                          (its wall or root executor changed since): the job
                          fails, never runs with more network
+  userns_not_granted     --userns, but the node's owner hasn't granted your
+                         workspace user namespaces there (owner or Admin:
+                         k2 compute grant <node> --workspace <ws> --userns);
+                         exit 3
+  userns_owner_only      --userns is only for the node owner's own server: this
+                         server is a tenant of that node; exit 3
+  userns_needs_update    --userns, but no node for you runs it yet (k2-node
+                         0.46.18, Linux with its job wall); exit 3
 
 SHARED NODES
   A node may serve several K2 servers at once (k2 compute nodes says

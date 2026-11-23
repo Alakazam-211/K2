@@ -1022,11 +1022,17 @@ fn info(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         } else {
             ""
         };
+        // 0.46.18: the grant lets this workspace's jobs ask --userns.
+        let userns = if p::truthy(&cx.at(l, p::get(&g, "allowUserns"))?) {
+            "  --userns allowed"
+        } else {
+            ""
+        };
         let t = cx.at(
             l,
             p::pct(
-                "grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s",
-                &[ws, s(&d), mp, s(&per), mq, md, s(ci)],
+                "grant: %s  %s/job  %s parallel%s  %s queued  %s GB disk%s%s",
+                &[ws, s(&d), mp, s(&per), mq, md, s(ci), s(userns)],
             ),
         )?;
         cx.print(&t);
@@ -1193,12 +1199,18 @@ fn grants(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         } else {
             ""
         };
+        // 0.46.18: the grant lets this workspace's jobs ask --userns.
+        let userns = if p::truthy(&cx.at(l, p::get(&g, "allowUserns"))?) {
+            "  userns"
+        } else {
+            ""
+        };
         let by = cx.at(l, p::idx(&g, "grantedBy"))?;
         let t = cx.at(
             l,
             p::pct(
-                "%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s  by %s",
-                &[node, ws, mj, mp, mq, md, s(ci), by],
+                "%-14s %-20s max %ss/job  %s parallel  %s queued  %s GB disk%s%s  by %s",
+                &[node, ws, mj, mp, mq, md, s(ci), s(userns), by],
             ),
         )?;
         cx.print(&t);

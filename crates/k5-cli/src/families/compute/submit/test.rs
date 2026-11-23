@@ -67,6 +67,7 @@ const BARE: &[&str] = &[
     "--now",
     "--cache-required",
     "--plan",
+    "--userns",
 ];
 
 /// The words after `test`. `None`: the shell's.

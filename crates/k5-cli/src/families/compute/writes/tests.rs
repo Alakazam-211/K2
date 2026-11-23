@@ -1101,6 +1101,24 @@ mod grant_verb {
             grant::body(&a),
             Ok(r#"{"node": "mini", "workspace": "acme", "maxJobSecs": 5400, "maxDiskGb": 60, "allowCi": true, "allowGpu": false}"#.into())
         );
+        // 0.46.18: --userns / --no-userns send allowUserns after allowGpu;
+        // left out, the grant keeps what it has (no key).
+        let Words::Ask(a) = w(&["mini", "--workspace", "acme", "--gpu", "--userns"], false) else {
+            panic!("an ask")
+        };
+        assert_eq!(
+            grant::body(&a),
+            Ok(r#"{"node": "mini", "workspace": "acme", "allowGpu": true, "allowUserns": true}"#.into())
+        );
+        let Words::Ask(a) = w(&["mini", "--workspace", "acme", "--no-userns"], false) else {
+            panic!("an ask")
+        };
+        assert_eq!(grant::body(&a), Ok(r#"{"node": "mini", "workspace": "acme", "allowUserns": false}"#.into()));
+        let Words::Ask(a) = w(&["mini", "--workspace", "acme"], false) else {
+            panic!("an ask")
+        };
+        assert_eq!(a.userns, None);
+        assert!(grant::USAGE.ends_with("[--gpu|--no-gpu] [--userns|--no-userns]"));
         assert_eq!(w(&["mini"], false), Words::Usage(grant::USAGE.into()));
         assert!(matches!(w(&["mini"], true), Words::Ask(Ask { .. })));
         assert_eq!(
@@ -1136,6 +1154,9 @@ mod grant_verb {
     fn the_lines() {
         let s = grant::reader(br#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true},"note":"n.","resent":2}"#);
         assert_eq!(s.stdout, "granted mini to acme (max 7200s/job, 2 parallel, 1 running per submitter, 10 queued, 60 GB disk, CI allowed). n.\nre-sent 2 queued job(s) of acme on mini with the new caps (they keep their order)\n");
+        // 0.46.18: --userns on the grant.
+        let s = grant::reader(br#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"allowGpu":true,"allowUserns":true},"note":"n."}"#);
+        assert_eq!(s.stdout, "granted mini to acme (max 7200s/job, 2 parallel, 10 queued, 60 GB disk, GPU jobs allowed, --userns jobs allowed). n.\n");
         let s = grant::reader(br#"{"node":"mini"}"#);
         assert!(
             s.stderr

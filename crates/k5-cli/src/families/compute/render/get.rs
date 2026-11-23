@@ -163,6 +163,10 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
         )?;
         cx.print(&t);
     }
+    // 0.46.18: the job may make user namespaces (`--userns`).
+    if p::truthy(&g(cx, ln!("if j.get(\"userns\"):"), "userns")?) {
+        cx.print("  userns:   allowed (--userns, granted by the node's owner)");
+    }
     let l = ln!("pl = j.get(\"placement\") or ctl.get(\"placement\") or {}");
     let mut pl = g(cx, l, "placement")?;
     if !p::truthy(&pl) {

@@ -3,7 +3,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network="" strict=""
+    local network="" strict="" userns=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -52,6 +52,9 @@ cmd_compute_run() {
             # --strict (0.46.17): the server runs a sh -c / bash -c script
             # under bash -euo pipefail.
             --strict) strict=1; shift ;;
+            # --userns (0.46.18): this job may make user namespaces, on a
+            # node its own server owns whose owner granted its workspace.
+            --userns) userns=1; shift ;;
             # --gate = --tier ci (0.46.5; an older daemon only knows gate,
             # so both go in the body).
             --gate) gate=1; tier="ci"; shift ;;
@@ -324,7 +327,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
         K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
         K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_cacheRequired_b="${cache_required#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node" K2_CJ_receiptV_n="$receipt_v" \
-        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json" K2_CJ_strict_b="$strict")"
+        K2_CJ_gpu_j="$gpu_json" K2_CJ_gpuMemBytes_n="$gpu_mem" K2_CJ_network="$network" K2_CJ_netnsDummies_j="$netns_json" K2_CJ_strict_b="$strict" K2_CJ_userns_b="$userns")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -406,6 +409,9 @@ nw = v.get("network")
 if isinstance(nw, dict):
     # 0.46.14: the job asked for --network none (and dummy interfaces).
     sys.stderr.write("[k2 compute] network: %s (this job only: loopback%s, no internet, no LAN)\n" % (nw.get("line"), " and its dummy interfaces" if nw.get("dummies") else ""))
+if v.get("userns"):
+    # 0.46.18: the job may make user namespaces there.
+    sys.stderr.write("[k2 compute] userns: allowed (--userns, granted by the node\x27s owner)\n")
 if ends:
     sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
 eff = v.get("effective") or {}
@@ -720,7 +726,7 @@ cmd_compute_test() {
             --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns) pass+=("$1"); shift ;;
             --gpu=*) pass+=("$1"); shift ;;
             --gpu)
                 case "${2:-}" in

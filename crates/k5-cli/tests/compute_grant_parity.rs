@@ -22,7 +22,7 @@ const HELP: &[&[&str]] = &[
     &["grant", "--help", "mini"],
     &["grant", "mini", "--max-time", "2h", "--ci", "--help"],
 ];
-const GRANTED: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true},"note":"agents there can run jobs.","resent":2}"#;
+const GRANTED: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":7200,"maxParallel":2,"maxQueued":10,"maxDiskGb":60,"submitterMaxRunning":1,"allowCi":true,"allowUserns":true},"note":"agents there can run jobs.","resent":2}"#;
 const PLAIN: &str = r#"{"node":"mini","workspace":"acme","grant":{"maxJobSecs":3600,"maxParallel":1,"maxQueued":10,"maxDiskGb":40},"note":"ok."}"#;
 
 #[test]
@@ -49,11 +49,33 @@ fn compute_grant() {
                 "1",
                 "--ci",
                 "--no-gpu",
+                "--userns",
             ],
             &[],
             vec![ok(GRANTED)],
             owner_and_port,
             0,
+            1,
+        ),
+        case(
+            "--no-userns (0.46.18)",
+            &["grant", "mini", "--workspace", "acme", "--no-userns"],
+            &[],
+            vec![ok(PLAIN)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--userns on a node where this server is a tenant: userns_owner_only",
+            &["grant", "mini", "--workspace", "acme", "--userns"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"userns_owner_only","hint":"--userns is only for the node owner's own server: this server is a tenant of mini, so its jobs can't make user namespaces there","node":"mini"}}"#.into(),
+            )],
+            owner_and_port,
+            3,
             1,
         ),
         case(

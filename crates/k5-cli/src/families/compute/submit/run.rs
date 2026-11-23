@@ -119,6 +119,9 @@ pub struct Ask {
     /// `--strict`: the server runs a `sh -c` or `bash -c` script under
     /// `bash -euo pipefail` (it refuses any other command).
     pub strict: bool,
+    /// `--userns` (0.46.18): the job may make user namespaces, on a node
+    /// its own server owns whose owner granted its workspace that.
+    pub userns: bool,
     /// `--label` (always an object once read).
     pub labels: Option<Value>,
     /// `--env` (always an object once read).
@@ -290,6 +293,10 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             }
             "--strict" => {
                 a.strict = true;
+                i += 1;
+            }
+            "--userns" => {
+                a.userns = true;
                 i += 1;
             }
             "--gate" => {
@@ -837,6 +844,7 @@ pub fn body(a: &Ask, cwd: &str, repo_dir: &str, ws: &str, client: &str) -> Strin
         ("network", st(&a.network)),
         ("netnsDummies", a.netns.clone()),
         ("strict", flag(a.strict)),
+        ("userns", flag(a.userns)),
     ];
     dumps(&object(
         fields

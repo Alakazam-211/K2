@@ -4327,7 +4327,7 @@ exit: 0
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
       "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
@@ -4361,6 +4361,7 @@ exit: 0
         {"name": "--gpu-mem", "arg": "4G", "description": "Only with --gpu (alone: exit 2): the job's GPU memory budget."},
         {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
         {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. dummy0=10.254.254.1/32; from k2-node 0.46.17 the first is the IPv4 default route (a browser gets an ICE host candidate; nothing leaves). NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
+        {"name": "--userns", "arg": null, "description": "By default a job can't create user namespaces (rootless Podman, unshare -U, bubblewrap). --userns lets this job, if the node's owner granted its workspace that on the node (k2 compute grant <node> --workspace <w> --userns). Only on nodes your own server owns; never on a node where your server is a tenant (else userns_not_granted, userns_owner_only or userns_needs_update, exit 3)."},
         {"name": "--receipt-v2", "arg": null, "description": "The node signs receipt v2; only nodes on protocol 9 take it (preview: ciPreview)."},
         {"name": "--retry-interrupted", "arg": null, "description": "Retry a job that an infrastructure failure interrupted."},
         {"name": "--no-retry", "arg": null, "description": "Never retry (the same as --retries 0)."},
@@ -5270,8 +5271,8 @@ exit: 0
     },
     {
       "name": "compute grant",
-      "usage": "k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu]",
-      "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci and --gpu need the owner or an Admin login. Any other agent asks for its own grant's limits (no --ci or --gpu; --workspace may be left out): owner_only (exit 3) ends with k2 permission request compute.grant node=<node> max-time=… --why \"…\".",
+      "usage": "k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]",
+      "description": "Grant a workspace a node, with limits. Owner or admin, or an agent allowed to manage compute nodes; --ci, --gpu and --userns need the owner or an Admin login (--userns only on a node this server owns: userns_owner_only, exit 3, where it is a tenant). Any other agent asks for its own grant's limits (no --ci or --gpu; --workspace may be left out): owner_only (exit 3) ends with k2 permission request compute.grant node=<node> max-time=… --why \"…\".",
       "args": [{"name": "node", "required": true}],
       "flags": [
         {"name": "--workspace", "arg": "WS", "description": "The workspace that gets the node (an agent may leave it out: its own)."},
@@ -5283,7 +5284,9 @@ exit: 0
         {"name": "--ci", "arg": null, "description": "This workspace may send --tier ci (it jumps every queue)."},
         {"name": "--no-ci", "arg": null, "description": "Take --tier ci away."},
         {"name": "--gpu", "arg": null, "description": "This workspace may send --gpu jobs; the node's own owner must also turn GPU jobs on for this server."},
-        {"name": "--no-gpu", "arg": null, "description": "Take --gpu jobs away."}
+        {"name": "--no-gpu", "arg": null, "description": "Take --gpu jobs away."},
+        {"name": "--userns", "arg": null, "description": "This workspace's jobs may ask --userns on this node (they may create user namespaces); only on a node this server owns."},
+        {"name": "--no-userns", "arg": null, "description": "Take --userns jobs away."}
       ]
     },
     {

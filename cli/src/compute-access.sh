@@ -1,5 +1,5 @@
 cmd_compute_grant() {
-    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub="" allow_gpu=""
+    local node="" workspace="" maxt="" maxd="" maxp="" maxq="" allow_ci="" maxsub="" allow_gpu="" allow_userns=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) _need_value "$@"; workspace="${2:-}"; shift 2 ;;
@@ -15,6 +15,10 @@ cmd_compute_grant() {
             # what the grant had.
             --gpu) allow_gpu=1; shift ;;
             --no-gpu) allow_gpu=0; shift ;;
+            # User namespaces in jobs (0.46.18): owner or an Admin login
+            # only, on a node this server owns; absent keeps what it had.
+            --userns) allow_userns=1; shift ;;
+            --no-userns) allow_userns=0; shift ;;
             --max-time) maxt="$(_compute_secs "${2:-}")"; shift 2 ;;
             --max-disk) _need_value "$@"; maxd="${2:-}"; maxd="${maxd%[Gg]}"; shift 2 ;;
             --max-parallel) _need_value "$@"; maxp="${2:-}"; shift 2 ;;
@@ -25,7 +29,7 @@ cmd_compute_grant() {
     done
     # An agent's session may leave out --workspace: its passport names its
     # own (0.46.17). A person's never may.
-    { [ -n "$node" ] && { [ -n "$workspace" ] || _compute_in_session; }; } || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu]" >&2; exit 2; }
+    { [ -n "$node" ] && { [ -n "$workspace" ] || _compute_in_session; }; } || { echo "usage: k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G] [--max-parallel 1] [--max-queued 10] [--submitter-max-running N] [--ci|--no-ci] [--gpu|--no-gpu] [--userns|--no-userns]" >&2; exit 2; }
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_workspace="$workspace" K2_CJ_maxJobSecs_n="$maxt" \
         K2_CJ_maxDiskGb_n="$maxd" K2_CJ_maxParallel_n="$maxp" K2_CJ_maxQueued_n="$maxq" K2_CJ_submitterMaxRunning_n="$maxsub")"
@@ -35,13 +39,16 @@ cmd_compute_grant() {
     if [ -n "$allow_gpu" ]; then
         body="$(printf '%s' "$body" | K2_CG_GPU="$allow_gpu" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowGpu"] = os.environ["K2_CG_GPU"] == "1"; print(json.dumps(v))')"
     fi
+    if [ -n "$allow_userns" ]; then
+        body="$(printf '%s' "$body" | K2_CG_USERNS="$allow_userns" python3 -c 'import json,os,sys; v=json.load(sys.stdin); v["allowUserns"] = os.environ["K2_CG_USERNS"] == "1"; print(json.dumps(v))')"
+    fi
     _compute_call POST /cli/compute/grants/set "$body" tcp
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
 g = v["grant"]
 sub = (", %s running per submitter" % g["submitterMaxRunning"]) if g.get("submitterMaxRunning") else ""
-print("granted %s to %s (max %ss/job, %s parallel%s, %s queued, %s GB disk%s%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], sub, g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", ", GPU jobs allowed" if g.get("allowGpu") else "", v["note"]))
+print("granted %s to %s (max %ss/job, %s parallel%s, %s queued, %s GB disk%s%s%s). %s" % (v["node"], v["workspace"], g["maxJobSecs"], g["maxParallel"], sub, g["maxQueued"], g["maxDiskGb"], ", CI allowed" if g.get("allowCi") else "", ", GPU jobs allowed" if g.get("allowGpu") else "", ", --userns jobs allowed" if g.get("allowUserns") else "", v["note"]))
 if v.get("resent"):
     print("re-sent %d queued job(s) of %s on %s with the new caps (they keep their order)" % (v["resent"], v["workspace"], v["node"]))'
 }

@@ -200,6 +200,16 @@ Agents:
                                 loopback; nothing leaves). Private,
                                 link-local or test ranges only (exit 2 else);
                                 implies --network none
+                 [--userns]     by default a job can't create user namespaces
+                                (rootless Podman, unshare -U, bubblewrap).
+                                --userns lets this job, if the node's owner
+                                granted its workspace that on the node (k2
+                                compute grant <node> --workspace <w> --userns).
+                                Only on nodes your own server owns; never on a
+                                node where your server is a tenant (else
+                                userns_not_granted, userns_owner_only or
+                                userns_needs_update, exit 3). k2 study compute:
+                                USER NAMESPACES
                  [--receipt-v2]  the node signs receipt v2 (how and where the job
                                 ran, and its signed self-statement; k2 compute receipt
                                 shows both); only nodes on protocol 9 take it
@@ -603,7 +613,7 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    compute:<ws>/lane:<owner>/<lane> --as env
   k2 compute grant <node> --workspace WS [--max-time 2h] [--max-disk 60G]
                    [--max-parallel 1] [--max-queued 10] [--ci|--no-ci] [--gpu|--no-gpu]
-                   [--submitter-max-running N]   at most N running jobs per
+                   [--userns|--no-userns] [--submitter-max-running N]   at most N running jobs per
                    submitter on that node (0 = off, the default; CI exempt).
                    Changing --max-parallel or this re-sends the workspace's
                    jobs already waiting in a shared node's queue
@@ -614,6 +624,11 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    node=<node> --why "…"). The node's own owner must also turn
                    GPU jobs on for this server at that machine
                    (sudo k2-node admin gpu on). It doesn't give --exclusive
+                   --userns: this workspace's jobs may ask --userns on this node
+                   (they may create user namespaces: rootless Podman,
+                   unshare -U, bubblewrap). The owner or an Admin login only,
+                   and only on a node this server owns: never where this
+                   server is a tenant (userns_owner_only). No card asks for it
                    The owner or an Admin grants. An agent asks for its own
                    grant's limits on a card (no --ci or --gpu; it may leave out
                    --workspace): the refusal ends with k2 permission request

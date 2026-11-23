@@ -31,12 +31,15 @@ use crate::front::{self, Route};
 use crate::offline::{self, Env};
 use crate::pages::{self, Page};
 use crate::text::Variant;
-use crate::{out, passport, python};
+use crate::{out, passport};
 use k2_client::env_names;
 use k2_client::{cli_name, product_name};
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "macos")]
+mod mac_walk;
 
 /// The setting Codex sets on every tool call.
 pub const THREAD_ID: &str = "CODEX_THREAD_ID";
@@ -459,10 +462,14 @@ fn substituted(bytes: Vec<u8>) -> Option<String> {
 }
 
 /// `_cli_codex_ancestry` for this process: `ps` from `PATH`, then the
-/// parent walk in `python3` ([`ANCESTRY_PY`]). `None` where the binary
-/// can't do it as the shell does: no `python3` it can be sure of when
-/// the walk needs one, an answer that isn't UTF-8, or a program that
-/// can't be started for another reason.
+/// parent walk ([`ANCESTRY_PY`]). On macOS the binary walks itself, with
+/// libproc and sysctl as the Python does (`mac_walk`), so it needs no
+/// `python3`: on a Mac where `ps` can't run and there is no `python3`,
+/// the shell can't walk and refuses (broken), the binary still decides by
+/// what is above it. Elsewhere it runs the Python. `None` where the binary can't
+/// do it as the shell does: no `python3` it can be sure of when the walk
+/// needs one, an answer that isn't UTF-8, or a program that can't be
+/// started for another reason.
 pub fn ancestry(env: &Env) -> Option<Anc> {
     let start = std::process::id().to_string();
     let path = env.get("PATH");
@@ -475,11 +482,31 @@ pub fn ancestry(env: &Env) -> Option<Anc> {
         PsRun::Failed => 3,
         PsRun::Unknown => return None,
     };
-    if !matches!(python::in_env(env), python::Python3::Present) {
+    #[cfg(target_os = "macos")]
+    {
+        let r_walk = match mac_walk::rows(std::process::id()) {
+            Ok(rows) => return Some(verdict_of(&rows, &start)),
+            Err(code) => code,
+        };
+        Some(if r_ps == 2 && r_walk == mac_walk::DENIED {
+            Anc::Blind
+        } else {
+            Anc::Broken
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    python_walk(env, path, &start, r_ps)
+}
+
+/// The walk in `python3` after `ps` gave no chain (`r_ps`: 2 refused,
+/// 3 failed).
+#[cfg(not(target_os = "macos"))]
+fn python_walk(env: &Env, path: Option<&OsStr>, start: &str, r_ps: i32) -> Option<Anc> {
+    if !matches!(crate::python::in_env(env), crate::python::Python3::Present) {
         return None;
     }
     let mut cmd = std::process::Command::new("python3");
-    cmd.args(["-c", ANCESTRY_PY, "k2-codex-ancestry", &start])
+    cmd.args(["-c", ANCESTRY_PY, "k2-codex-ancestry", start])
         .stdin(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::null());
     if let Some(p) = path {
@@ -489,7 +516,7 @@ pub fn ancestry(env: &Env) -> Option<Anc> {
     let r_py = match out.status.code() {
         Some(0) => {
             let rows = substituted(out.stdout)?;
-            return Some(verdict_of(&rows, &start));
+            return Some(verdict_of(&rows, start));
         }
         Some(2 | 126) => 2,
         _ => 3,

@@ -136,7 +136,8 @@ fn row(
         noun: k5_cli::fallthrough::noun(&words),
     }
     .to_string();
-    // (A matching marker's walk is python3's where ps can't give it.)
+    // (A matching marker's walk is python3's where ps can't give it,
+    // except on macOS, where the binary walks itself.)
     let handed = String::from_utf8_lossy(&rig.raw(Side::NoPython3).1).contains(&no_python);
     assert_eq!(
         handed,

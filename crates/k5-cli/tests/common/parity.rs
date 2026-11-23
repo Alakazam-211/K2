@@ -701,7 +701,7 @@ impl Rig {
         let tools = self.take_tool_log();
         println!("-- rust, no python3: {out:?}");
         // With no python3 the Codex tab gate can't walk the processes here
-        // when ps can't: the binary hands the line to the shell.
+        // when ps can't (off macOS): the binary hands the line to the shell.
         if handed || codex_walk_needs_python3(&c.env) {
             let words: Vec<OsString> = self.argv(c).into_iter().map(OsString::from).collect();
             let line = k5_cli::fallthrough::FrontError::NoPython {
@@ -1073,10 +1073,14 @@ fn as_before_311(text: &str) -> String {
 /// needs `python3` on this host for a row with `env`: a Codex call in a
 /// K2 session whose tab marker names its passport's session (the only
 /// case the gate walks), where `ps` here doesn't give the chain above
-/// this process ([`ps_gives_the_chain`]). The binary then walks with
-/// `python3`, as the shell does (`k5_cli::codex_gate::ancestry`); with
-/// none it hands the line to the shell.
+/// this process ([`ps_gives_the_chain`]), on a host other than macOS. The
+/// binary then walks with `python3`, as the shell does
+/// (`k5_cli::codex_gate::ancestry`); with none it hands the line to the
+/// shell. On macOS it walks itself (libproc), with or without `python3`.
 pub fn codex_walk_needs_python3(env: &[(&'static str, String)]) -> bool {
+    if cfg!(target_os = "macos") {
+        return false;
+    }
     let lookup = |name: &str| {
         env.iter()
             .rev()

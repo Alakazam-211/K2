@@ -1950,28 +1950,39 @@ call_name = "Hub Calls"
 
     /// The default brand's file is where every left-out field comes from,
     /// so it must spell each one; a gap in it stops every brand's build
-    /// and says it was the default brand's file.
+    /// and says it was the default brand's file. A gap in its [control]
+    /// is refused by the all-or-none rule, naming the key; a gap anywhere
+    /// else by the field's own missing line.
     #[test]
     fn the_default_brand_file_spells_every_field() {
         let text = std::fs::read_to_string(default_file()).expect("read brand/k2");
-        let gap: String = text
-            .lines()
-            .filter(|l| !l.starts_with("relay_list = "))
-            .map(|l| format!("{l}\n"))
-            .collect();
-        assert_ne!(gap, text, "brand/k2 has a relay_list line to take out");
-        let t = TempBrand::new("default-gap", Some(&gap));
-        let err = load(&t.file(), &t.file()).expect_err("a default with a gap");
-        assert!(
-            err.contains(
-                "control.relay_list is missing; the default brand file spells every field"
-            ),
-            "{err}"
-        );
-        let other = TempBrand::new("on-a-gap", Some(GOOD));
-        let err = load(&other.file(), &t.file()).expect_err("a brand on a default with a gap");
-        assert!(err.ends_with("(the default brand file)"), "{err}");
-        assert!(err.contains("control.relay_list is missing"), "{err}");
+        let mut gaps = Vec::new();
+        for k in CONTROL_KEYS {
+            let want =
+                format!("[control] leaves out {k}: a brand that sets [control] sets all six");
+            gaps.push((k.to_string(), want));
+        }
+        let field = "feeds.daemon is missing; the default brand file spells every field";
+        gaps.push(("daemon".to_string(), field.to_string()));
+        for (key, want) in gaps {
+            let gap: String = text
+                .lines()
+                .filter(|l| !l.starts_with(&format!("{key} = ")))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            assert_eq!(
+                gap.lines().count() + 1,
+                text.lines().count(),
+                "brand/k2 has one {key} line to take out"
+            );
+            let t = TempBrand::new(&format!("default-gap-{key}"), Some(&gap));
+            let err = load(&t.file(), &t.file()).expect_err("a default with a gap");
+            assert!(err.contains(&want), "{key}: {err}");
+            let other = TempBrand::new(&format!("on-a-gap-{key}"), Some(GOOD));
+            let err = load(&other.file(), &t.file()).expect_err("a brand on a default with a gap");
+            assert!(err.ends_with("(the default brand file)"), "{key}: {err}");
+            assert!(err.contains(&want), "{key}: {err}");
+        }
     }
 
     /// Each shape refused, naming the field.

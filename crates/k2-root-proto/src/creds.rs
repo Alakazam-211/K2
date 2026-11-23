@@ -207,6 +207,11 @@ pub const K2_UNIT_FAMILIES: &[(&str, Option<&str>)] = &[
     // scripts/node/spikes/s6-gpu-mem-proof.sh): they run test loads as a
     // compute job's user, so no credential is ever bound to one.
     ("k2-s6-proof-", None),
+    // The loopback check's transient root test units
+    // (k2-loopback-test-<tag>-<pid>, crates/k2-node/tests/job_loopback_linux.rs):
+    // systemd-run units that run the node's job shim as root, so no
+    // credential is ever bound to one.
+    ("k2-loopback-test-", None),
     // Virtual desktops' units, one pair per desktop: k2-desktop-<id>-x and
     // k2-desktop-<id>-session (crates/k2-core/src/desktop/virtual_desktop.rs
     // `units`): Xvfb and the window manager for the shared desktop and each
@@ -636,6 +641,7 @@ mod tests {
         assert_eq!(deny_reason("ops-daemon-two.service", &[]), None);
         assert!(deny_reason("k2-daemon-acme.service", &[]).is_some(), "a hosted box's daemon unit");
         assert_eq!(deny_reason("k2-s6-proof-4242-1.service", &[]), Some("a unit K2 generates"), "the GPU proof's transient units");
+        assert_eq!(deny_reason("k2-loopback-test-old-4242.service", &[]), Some("a unit K2 generates"), "the loopback check's transient root test units");
     }
 
     /// Review A-H2 / B-M1: fail closed. No allow list, or a unit off it, is

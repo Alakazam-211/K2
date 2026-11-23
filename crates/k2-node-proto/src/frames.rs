@@ -1234,6 +1234,7 @@ pub const CANCEL_IF_QUEUED: &str = "if_queued";
 /// - either on a started job → its real state (`preparing`, `running`, …),
 ///   the job untouched; on an ended one → its row; unknown → `unknown` /
 ///   `not_on_node`.
+///
 /// The node may also end queued rows by itself: `cancelled` / `superseded`
 /// (not in `Welcome.resume`, V47), `share_expired`, `share_revoked`.
 ///

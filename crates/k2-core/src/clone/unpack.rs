@@ -62,6 +62,17 @@ pub fn unpack_bundle(
     dest_parent: &Path,
     home: &Path,
 ) -> Result<(UnpackResult, CloneManifest), String> {
+    unpack_bundle_detailed(bundle_path, dest_parent, home).map_err(|e| e.to_string())
+}
+
+/// [`unpack_bundle`] with the failure's parts kept apart: the message, and
+/// whether the folder the unpack claimed was deleted (a failure partway
+/// deletes it).
+pub fn unpack_bundle_detailed(
+    bundle_path: &Path,
+    dest_parent: &Path,
+    home: &Path,
+) -> Result<(UnpackResult, CloneManifest), UnpackError> {
     let manifest = super::read_manifest_from_bundle(bundle_path)?;
 
     // Every entry is checked before anything is made or written: a bundle
@@ -88,8 +99,55 @@ pub fn unpack_bundle(
     // project path → resume/exists-check/#23 repair) slug the canonical form
     // — sessions would land in a dir Claude never reads. Creating it first
     // makes the unpack slug match what the rest of the system computes.
-    let dest_path = claim_dest_dir(dest_parent, &source_name)?;
+    let dest_path = claim_dest_dir(dest_parent, &source_name).map_err(UnpackError::from)?;
 
+    // A failure from here on deletes the claimed folder: nothing half
+    // filled is left behind.
+    match fill_claimed(bundle_path, home, &manifest, dest_path.clone(), source_name) {
+        Ok(result) => Ok((result, manifest)),
+        Err(message) => Err(remove_claimed(dest_path, message)),
+    }
+}
+
+/// Why an unpack failed, and what it did about the folder it claimed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpackError {
+    pub message: String,
+    /// The claimed folder, deleted after a failure partway. `None` when
+    /// the failure came before the claim, or the delete failed.
+    pub removed_folder: Option<PathBuf>,
+    /// The delete of the claimed folder failed: its path and the error.
+    pub removal_error: Option<String>,
+}
+
+impl From<String> for UnpackError {
+    fn from(message: String) -> Self {
+        Self { message, removed_folder: None, removal_error: None }
+    }
+}
+
+impl std::fmt::Display for UnpackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)?;
+        if let Some(p) = &self.removed_folder {
+            write!(f, "; the new folder {} was deleted", p.display())?;
+        }
+        if let Some(e) = &self.removal_error {
+            write!(f, "; the new folder could not be deleted ({e})")?;
+        }
+        Ok(())
+    }
+}
+
+/// Fill the claimed folder (and the home-side session and provider
+/// folders) from the bundle.
+fn fill_claimed(
+    bundle_path: &Path,
+    home: &Path,
+    manifest: &CloneManifest,
+    dest_path: PathBuf,
+    source_name: String,
+) -> Result<UnpackResult, String> {
     // ── recompute remote slug from the FINAL dest path ────────────────
     let remote_slug = claude_project_hash(&dest_path.to_string_lossy());
     let source_slug = manifest.source_slug.clone();
@@ -235,15 +293,30 @@ pub fn unpack_bundle(
         }
     }
 
-    Ok((
-        UnpackResult {
-            dest_path,
-            remote_slug,
-            source_name,
-            threads_json,
+    Ok(UnpackResult {
+        dest_path,
+        remote_slug,
+        source_name,
+        threads_json,
+    })
+}
+
+/// Delete the folder this unpack claimed, after a failure partway. Its
+/// contents are the bundle's files, so they are removed outright, not moved
+/// to the Trash. `remove_dir_all` removes a link it meets (the claimed path
+/// itself included) without following it.
+fn remove_claimed(dest_path: PathBuf, message: String) -> UnpackError {
+    match std::fs::remove_dir_all(&dest_path) {
+        Ok(()) => UnpackError { message, removed_folder: Some(dest_path), removal_error: None },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            UnpackError { message, removed_folder: Some(dest_path), removal_error: None }
+        }
+        Err(e) => UnpackError {
+            message,
+            removed_folder: None,
+            removal_error: Some(format!("{}: {e}", dest_path.display())),
         },
-        manifest,
-    ))
+    }
 }
 
 /// The permission bits a bundle entry carries for a regular file, without

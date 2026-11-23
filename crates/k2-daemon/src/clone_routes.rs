@@ -465,7 +465,16 @@ fn verified_peer(who: &crate::compute_routes::Who) -> Option<String> {
 fn audit_unpack(who: &crate::compute_routes::Who, ingress: &str, facts: &clone::BundleFacts, resp: &CliResponse) {
     let parsed: serde_json::Value = serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null);
     let ok = resp.status.starts_with("200");
-    let outcome = if ok { "ok" } else { "refused" };
+    // `failed`: the unpack claimed a folder and stopped partway (the
+    // folder was deleted, or the delete failed); `refused`: nothing made.
+    let partway = !parsed["removed_folder"].is_null() || !parsed["removal_error"].is_null();
+    let outcome = if ok {
+        "ok"
+    } else if partway {
+        "failed"
+    } else {
+        "refused"
+    };
     let login = match who {
         crate::compute_routes::Who::Login { username, .. } => Some(username.clone()),
         _ => None,
@@ -484,6 +493,8 @@ fn audit_unpack(who: &crate::compute_routes::Who, ingress: &str, facts: &clone::
         detail["destPath"] = parsed["dest_path"].clone();
     } else {
         detail["error"] = parsed["error"].clone();
+        detail["removedFolder"] = parsed["removed_folder"].clone();
+        detail["removalError"] = parsed["removal_error"].clone();
     }
     if let Err(e) = k2_core::auth_audit::try_record_detail(&ev, detail) {
         log_debug!("[daemon/clone] WARN could not write the clone-unpack audit row: {e}");
@@ -518,7 +529,7 @@ fn unpack_request(b: UnpackBody, vault_caller: Option<crate::vault::actor::Vault
         vault_out = Some(out);
         copied
     };
-    match unpack_and_register_with_carry(
+    match unpack_and_register_detailed(
         std::path::Path::new(&b.bundle_path),
         std::path::Path::new(&b.dest_parent),
         &home,
@@ -554,7 +565,16 @@ fn unpack_request(b: UnpackBody, vault_caller: Option<crate::vault::actor::Vault
             }
             CliResponse::ok_json(resp.to_string())
         }
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => {
+            let mut body = serde_json::json!({ "error": e.to_string() });
+            if let Some(p) = &e.removed_folder {
+                body["removed_folder"] = serde_json::json!(p.to_string_lossy());
+            }
+            if let Some(r) = &e.removal_error {
+                body["removal_error"] = serde_json::json!(r);
+            }
+            CliResponse { status: "400 Bad Request", content_type: "application/json", body: body.to_string() }
+        }
     }
 }
 
@@ -604,8 +624,19 @@ pub fn unpack_and_register_with_carry(
     home: &std::path::Path,
     carry: &mut dyn FnMut(&Project, &clone::CloneManifest) -> std::collections::HashSet<String>,
 ) -> Result<UnpackOutcome, String> {
+    unpack_and_register_detailed(bundle_path, dest_parent, home, carry).map_err(|e| e.to_string())
+}
+
+/// [`unpack_and_register_with_carry`] with the failure's parts kept apart
+/// (whether the unpack deleted the folder it claimed), for the audit row.
+pub fn unpack_and_register_detailed(
+    bundle_path: &std::path::Path,
+    dest_parent: &std::path::Path,
+    home: &std::path::Path,
+    carry: &mut dyn FnMut(&Project, &clone::CloneManifest) -> std::collections::HashSet<String>,
+) -> Result<UnpackOutcome, clone::UnpackError> {
     // 1. Extract files at recomputed paths; get the manifest back.
-    let (result, manifest) = clone::unpack_bundle(bundle_path, dest_parent, home)?;
+    let (result, manifest) = clone::unpack_bundle_detailed(bundle_path, dest_parent, home)?;
     let dest_path = result.dest_path.to_string_lossy().to_string();
 
     // GH#25 observability (receive side): the prior unpack handler emitted NO
@@ -659,7 +690,7 @@ pub fn unpack_and_register_with_carry(
         Ok(pops::AddFromPathResult::NeedsGitInit { .. }) => {
             pops::projects_add_without_git(&dest_path)?
         }
-        Err(e) => return Err(format!("register project: {e}")),
+        Err(e) => return Err(format!("register project: {e}").into()),
     };
 
     // 3. Apply the manifest's K2 settings to the freshly registered row.

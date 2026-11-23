@@ -2583,6 +2583,29 @@ fn unpack_good_bundle_is_byte_identical() {
     assert_eq!(fs::read_to_string(memory).unwrap(), "## Memory Index\n");
 }
 
+/// A bundle that fails on its last entry (here a file below a name an
+/// earlier entry made a file) leaves no folder behind: the folder the
+/// unpack claimed is deleted, and the error says so.
+#[test]
+fn unpack_failing_on_its_last_entry_leaves_no_folder() {
+    let site = unpack_site("unpack-fail-late");
+    build_raw_bundle(
+        &site.bundle,
+        &manual_manifest(RAW_SOURCE),
+        &[
+            file_entry("workspace/README.md", b"fine\n"),
+            file_entry("workspace/deep/a/b.txt", b"fine\n"),
+            file_entry("workspace/a", b"a file\n"),
+            file_entry("workspace/a/b.txt", b"below a file\n"),
+        ],
+    );
+    let err = unpack_bundle(&site.bundle, &site.dest_parent, &site.home).expect_err("the last entry fails");
+    let claimed = site.dest_parent.join("proj");
+    assert!(err.contains(&format!("the new folder {} was deleted", claimed.display())), "{err}");
+    let left: Vec<_> = fs::read_dir(&site.dest_parent).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert!(left.is_empty(), "no folder is left behind: {left:?}");
+}
+
 /// The facts an unpack audit row records: the file's SHA-256, the archive's
 /// entry count and the manifest's sender and clone ids; `None` for what
 /// can't be read.

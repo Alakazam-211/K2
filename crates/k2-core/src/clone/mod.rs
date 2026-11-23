@@ -61,7 +61,7 @@ pub use repair::{
     SlugMigration, SlugMigrationReport,
 };
 pub use settings::{capture_settings, WorkspaceSettings};
-pub use unpack::{unpack_bundle, UnpackResult};
+pub use unpack::{unpack_bundle, unpack_bundle_detailed, UnpackError, UnpackResult};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

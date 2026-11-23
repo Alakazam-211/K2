@@ -441,6 +441,38 @@ fn unpack_writes_an_audit_row_for_every_request() {
     assert_eq!(d["claimedServerId"], "00aa11bb22cc33dd");
     assert_eq!((&d["peer"], &d["login"]), (&serde_json::Value::Null, &serde_json::Value::Null), "owner token: no peer, no login");
     assert!(d["error"].as_str().expect("error").contains("is a symlink"), "{d}");
+    assert_eq!((&d["removedFolder"], &d["removalError"]), (&serde_json::Value::Null, &serde_json::Value::Null), "refused before any folder");
+
+    // One that fails partway: its claimed folder is deleted, and the row
+    // says so.
+    let partway = root.path().join("partway.tar.gz");
+    {
+        let f = fs::File::create(&partway).unwrap();
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::default()));
+        let parts: [(&str, &[u8]); 3] =
+            [("manifest.json", &manifest[..]), ("workspace/a", &b"a file\n"[..]), ("workspace/a/b.txt", &b"below a file\n"[..])];
+        for (name, bytes) in parts {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append_data(&mut h, name, bytes).unwrap();
+        }
+        b.into_inner().unwrap().finish().unwrap();
+    }
+    let partway_parent = root.path().join("dest-partway");
+    fs::create_dir_all(&partway_parent).unwrap();
+    let body = serde_json::json!({ "bundle_path": partway, "dest_parent": partway_parent }).to_string();
+    let resp = super::handle_clone_unpack(body.as_bytes(), None, &crate::compute_routes::Who::Owner, "loopback");
+    assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+    let row = last_unpack_audit_row();
+    assert_eq!(row["outcome"], "failed");
+    let d = &row["detail"];
+    let claimed = partway_parent.join("Audit Agent");
+    assert_eq!(d["removedFolder"], serde_json::json!(claimed.to_string_lossy()), "{d}");
+    assert_eq!(d["removalError"], serde_json::Value::Null);
+    assert_eq!(d["entries"], serde_json::json!(3));
+    assert!(!claimed.exists() && fs::read_dir(&partway_parent).unwrap().next().is_none(), "no folder left behind");
 
     let _ = pops::projects_delete(&project_id);
 }

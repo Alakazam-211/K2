@@ -146,6 +146,8 @@ source "$K2CR_LIB_DIR/rust-pin.sh"
 source "$K2CR_LIB_DIR/compute-tier.sh"
 # shellcheck source=scripts/lib/release-repo.sh
 source "$K2CR_LIB_DIR/release-repo.sh"
+# shellcheck source=scripts/lib/root-helper-size.sh
+source "$K2CR_LIB_DIR/root-helper-size.sh"
 
 k2cr_k2() { "${K2_BIN:-k2}" "$@"; }
 
@@ -571,6 +573,12 @@ k2cr_stage() {
             (cd "$dist" && { sha256sum -c --quiet "$f.sha256" 2>/dev/null || shasum -a 256 -c --quiet "$f.sha256"; }) \
                 || { echo "  ✗ stage: $f doesn't match its .sha256" >&2; return 1; }
         done
+    done
+    # The helpers must fit the 8 MiB self-update cap of helpers already on
+    # boxes (scripts/lib/root-helper-size.sh), or they can never update.
+    for arch in $arches; do
+        k2_root_helper_size_gate "$dist/k2-root-helper-linux-$arch" \
+            || { echo "  ✗ stage: k2-root-helper-linux-$arch is too big for fielded helpers' self-update (above)" >&2; return 1; }
     done
     echo "  staged $(grep -c . "$K2CR_STATE/staged.txt") compute-built files in $dist" | tee -a "$K2CR_STATE/summary.txt"
 }

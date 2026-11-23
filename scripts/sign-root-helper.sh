@@ -64,6 +64,8 @@ source "$ROOT/scripts/lib/wait-progress.sh"
 # The release signer's verdict (--verdict).
 # shellcheck source=lib/k2-signer.sh
 source "$ROOT/scripts/lib/k2-signer.sh"
+# shellcheck source=lib/root-helper-size.sh
+source "$ROOT/scripts/lib/root-helper-size.sh"
 
 log() { printf '[sign-root-helper] %s\n' "$*"; }
 die() { printf '[sign-root-helper] ERROR: %s\n' "$*" >&2; exit 1; }
@@ -142,6 +144,8 @@ for ARCH in x86_64 aarch64; do
 	got="$(shasum -a 256 "$TMP/$A" | awk '{print $1}')"
 	[ -n "$want" ] && [ "$want" = "$got" ] || die "$A: sha256 differs from CI's .sha256 ($got vs $want)"
 	[ "$(head -c 4 "$TMP/$A" | od -An -c | tr -d ' \n')" = '177ELF' ] || die "$A is not an ELF"
+	# Fielded helpers (<= 0.46.17) refuse a self-update over 8 MiB.
+	k2_root_helper_size_gate "$TMP/$A" || die "$A is too big for the self-update of helpers already on boxes (above) — not signing"
 	if LC_ALL=C grep -a -q K2_ROOT_HELPER_TEST_KEYS_ENABLED "$TMP/$A"; then
 		die "$A is a TEST-KEYS build — refusing to sign"
 	fi

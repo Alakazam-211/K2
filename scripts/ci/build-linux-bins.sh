@@ -123,6 +123,8 @@ source "$ROOT/scripts/linux-ptyd-embed.sh"
 source "$ROOT/scripts/ci/repro-build-env.sh"
 # shellcheck source=scripts/lib/build-paths.sh
 source "$ROOT/scripts/lib/build-paths.sh"
+# shellcheck source=scripts/lib/root-helper-size.sh
+source "$ROOT/scripts/lib/root-helper-size.sh"
 
 # From a compute job: BUILD_* → the K2_* names option_env! reads.
 for v in GMAIL_CLIENT_ID GMAIL_CLIENT_SECRET MICROSOFT_CLIENT_ID; do
@@ -227,6 +229,10 @@ cp "$REL/k2-node" "$OUT/$NODE"
 cp "$REL/k2-root-helper" "$OUT/$HELPER"
 cp "$REL/k2-app-engine" "$OUT/$ENGINE"
 cp "$REL/k5-cli" "$OUT/$K5CLI"
+
+# The root helper must fit the self-update cap of the oldest helper in the
+# field (8 MiB), or boxes can't update to it (0.46.17's didn't fit).
+k2_root_helper_size_gate "$OUT/$HELPER"
 
 # The byte checks daemon-binaries.yml runs, before anything leaves the node.
 # release.sh runs them again on what it fetched (scripts/lib/compute-release.sh).

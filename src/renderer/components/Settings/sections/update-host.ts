@@ -790,6 +790,15 @@ export async function watchUpdateComeback(
   return { kind: 'unconfirmed', reason: `it did not come back within ${mins} minutes` }
 }
 
+/** The button on an update offer, for someone on an older version: the
+ *  K2 app row in Settings → General (and the update toast), and the
+ *  connected-server row (standalone and bundled-app hosts). One place, so a change of
+ *  word is a one-line change (Rosson 2026-11-23: was "Download"). */
+export const UPGRADE_LABELS = {
+  app: 'Upgrade',
+  server: 'Upgrade server',
+} as const
+
 /** In-flight line while the host restarts onto the update. */
 export function updateReconnectingCopy(hostLabel: string): string {
   return `Updating ${hostLabel}… reconnecting…`

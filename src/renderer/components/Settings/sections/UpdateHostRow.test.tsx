@@ -28,7 +28,7 @@ import { UpdateHostRow } from './GeneralSection'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
-import { forgetAllUpdateJobsForTests } from './update-host'
+import { forgetAllUpdateJobsForTests, UPGRADE_LABELS } from './update-host'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { RecoveringError } from '@/lib/daemon-cli'
 
@@ -169,7 +169,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
     await screen.findByText('Rosson is on v0.46.3')
-    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
+    expect(screen.queryByRole('button', { name: UPGRADE_LABELS.server })).toBeNull()
     expect(screen.getByRole('button', { name: 'Check for updates' })).toBeTruthy()
   })
 
@@ -180,7 +180,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     await clickButton('Check for updates')
     await screen.findByText('Update available for Rosson — 0.46.2 → 0.46.3')
 
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await screen.findByText('Update staged for Rosson — ready to install & restart.')
 
     await clickButton('Install & restart Rosson')
@@ -204,12 +204,12 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     scriptUpdate({ check: CHECK_AVAILABLE })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await clickButton('Install & restart Rosson')
     await screen.findByText('Updated Rosson to v0.46.3.', undefined, { timeout: 5000 })
   })
 
-  it('bundled-app host: one-shot "Update Host", comeback on the new instance', async () => {
+  it('bundled-app host: one-shot Upgrade server, comeback on the new instance', async () => {
     scriptUpdate({ check: { ...CHECK_AVAILABLE, installKind: 'bundled-app' }, jobAfterRestart: null })
     // Bundled-app hosts restart themselves after `start`; simulate that here.
     const post = cliPost.getMockImplementation()!
@@ -227,7 +227,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Update server')
+    await clickButton(UPGRADE_LABELS.server)
     await screen.findByText('Updated Rosson to v0.46.3.', undefined, { timeout: 5000 })
     expect(remote.bootUrls.every((u) => u.endsWith('?token=host-session-tok'))).toBe(true)
   })
@@ -237,7 +237,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     scriptUpdate({ check: CHECK_AVAILABLE, jobAfterRestart: null, backOn: '0.46.2' })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await clickButton('Install & restart Rosson')
     await screen.findByText(
       'Update failed on Rosson: it came back on v0.46.2; the update to v0.46.3 did not install.',
@@ -251,7 +251,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     scriptUpdate({ check: CHECK_AVAILABLE, jobAfterRestart: { phase: 'failed', error: 'boot verifier failed' } })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await clickButton('Install & restart Rosson')
     await screen.findByText('Update failed on Rosson: boot verifier failed.', undefined, { timeout: 5000 })
   })
@@ -276,7 +276,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     })
     const all = [row().textContent ?? '', ...useToastStore.getState().toasts.map((t) => t.message)].join('\n')
     expect(all).not.toContain('undefined')
-    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
+    expect(screen.queryByRole('button', { name: UPGRADE_LABELS.server })).toBeNull()
   })
 
   it('a status reply without a phase is shown on the row, and the job still reaches Install & restart', async () => {
@@ -295,10 +295,10 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await screen.findByText(/Unexpected reply from Rosson to the update status/)
-    // The job is kept: the Download button does not come back for it.
-    expect(screen.queryByRole('button', { name: 'Download' })).toBeNull()
+    // The job is kept: the Upgrade server button does not come back for it.
+    expect(screen.queryByRole('button', { name: UPGRADE_LABELS.server })).toBeNull()
     await screen.findByRole('button', { name: 'Install & restart Rosson' }, { timeout: 5000 })
     expect(row().textContent).not.toMatch(/Unexpected reply/)
   })
@@ -307,7 +307,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     scriptUpdate({ check: CHECK_AVAILABLE })
     const first = render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await screen.findByText('Update staged for Rosson — ready to install & restart.')
     first.unmount()
 
@@ -325,7 +325,7 @@ describe('Settings → General → Update on a remote host (boot-status views)',
     scriptUpdate({ check: CHECK_AVAILABLE })
     const first = render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await screen.findByText('Update staged for Rosson — ready to install & restart.')
     first.unmount()
 
@@ -514,7 +514,7 @@ describe('Settings → General → Update: who may update, and Install & restart
     })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await clickButton('Install & restart Rosson')
     await screen.findByText('Updated Rosson to v0.46.3.', undefined, { timeout: 5000 })
     expect(applies).toEqual([{ host: 'rosson.k2.dev', body: { job_id: 'job-1' } }])
@@ -531,7 +531,7 @@ describe('Settings → General → Update: who may update, and Install & restart
     })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await clickButton('Install & restart Rosson')
     await screen.findByText("Couldn't install the update on Rosson: swap binary: Permission denied (os error 13)")
     expect(screen.queryByText('Updating Rosson… reconnecting…')).toBeNull()
@@ -559,7 +559,7 @@ describe('Settings → General → Update: who may update, and Install & restart
     })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await clickButton('Install & restart Rosson')
     await screen.findByText(
       'Rosson no longer has the downloaded update (it restarted), so nothing was installed. Check for updates to download it again.',
@@ -584,7 +584,7 @@ describe('Settings → General → Update: who may update, and Install & restart
     })
     render(<UpdateHostRow />)
     await clickButton('Check for updates')
-    await clickButton('Download')
+    await clickButton(UPGRADE_LABELS.server)
     await screen.findByRole('button', { name: 'Install & restart Rosson' }, { timeout: 5000 })
     expect(toastText()).not.toMatch(/Only the server's owner or an admin/)
   })

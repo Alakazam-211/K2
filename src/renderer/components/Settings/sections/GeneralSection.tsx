@@ -43,6 +43,7 @@ import {
   type UpdateCheckResult,
   type UpdateStatusResult,
   type UpdatePhase,
+  UPGRADE_LABELS,
 } from './update-host'
 // Comeback watcher (0.40.48 remote-update ergonomics): after the update
 // job reaches `restarting`, poll the host's /boot-status (host token) until it's
@@ -95,7 +96,7 @@ import { SendFeedbackRows } from './SendFeedbackRows'
 import { CLI_NAME, PRODUCT_NAME, RELEASES_URL_PREFIX } from '@/lib/brand'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
-  { id: 'general.app-version', section: 'general', group: 'General', label: `${PRODUCT_NAME} app`, description: `The ${PRODUCT_NAME} version on this computer: check for, download and install updates`, keywords: ['update', 'version', 'check', 'release', 'download', 'install', 'app version'] },
+  { id: 'general.app-version', section: 'general', group: 'General', label: `${PRODUCT_NAME} app`, description: `The ${PRODUCT_NAME} version on this computer: check for, download and install updates`, keywords: ['update', 'upgrade', 'version', 'check', 'release', 'download', 'install', 'app version'] },
   { id: 'general.auto-update-checks', section: 'general', group: 'General', label: 'Check for updates automatically', description: 'Look for a new version every few hours and say when one is ready. This computer only.', keywords: ['update', 'automatic', 'auto', 'check', 'disable', 'background'] },
   { id: 'general.cli-version', section: 'general', group: 'General', label: `${CLI_NAME} command`, description: `The ${CLI_NAME} command-line tool for terminals and agents: its version, and installing or updating it`, keywords: [CLI_NAME, 'cli', 'command', 'terminal', 'install', 'update', 'path', 'cli version'] },
   { id: 'general.git-tools', section: 'general', group: 'General', label: 'Git', description: "Whether git works on this server. On a Mac without Apple's command line tools, install them in one click (no Xcode needed)", keywords: ['git', 'xcode', 'xcode-select', 'command line tools', 'clt', 'developer tools', 'install', 'apple', 'homebrew', 'apt'] },
@@ -428,7 +429,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
                 <span data-testid="linux-package-update-hint">
                   {linuxCanInstall
                     ? `${PRODUCT_NAME} downloads the package, checks it, and asks for your password to install it. Then ${PRODUCT_NAME} restarts.`
-                    : 'On Linux, updates come from your package (deb, rpm or Arch). Download opens the new version on GitHub.'}
+                    : `On Linux, updates come from your package (deb, rpm or Arch). ${UPGRADE_LABELS.app} opens the new version on GitHub.`}
                 </span>
               ) : (
                 `You're on ${currentVersion || 'an older version'}. Download it, then install and restart.`
@@ -440,7 +441,7 @@ function AppVersionRow({ isRemote }: { isRemote: boolean }): React.JSX.Element {
             className="flex-shrink-0"
             onClick={() => void useUpdateStore.getState().openAvailableDownload()}
           >
-            {linuxInstall ? 'Install and restart' : 'Download'}
+            {linuxInstall ? 'Install and restart' : UPGRADE_LABELS.app}
           </Button>
         </Callout>
       )
@@ -1526,7 +1527,7 @@ function RestartHostRow(): React.JSX.Element | null {
 // Flow (against the P3 daemon update routes, host-aware):
 //   1. "Check for updates" → POST daemon/update/check → {current, latest,
 //      available, …}. If available, show "Update available — c → l".
-//   2. "Download" → POST daemon/update/start {} → {job_id}, then poll
+//   2. "Upgrade server" → POST daemon/update/start {} → {job_id}, then poll
 //      GET daemon/update/status?job_id every ~1.5s, surfacing phase +
 //      download progress.
 //   3. phase==staged → "Install & restart <host>" → confirm (NAMES host) →
@@ -1933,7 +1934,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
 
   // Decide the action-area content from the current state. A job whose
   // phase isn't known yet (picked up after leaving the page, or replies
-  // that can't be read) is in progress: never the idle Download button,
+  // that can't be read) is in progress: never the idle Upgrade server button,
   // which would start a second download.
   const inProgress =
     hostGoneInstalling ||
@@ -1945,8 +1946,9 @@ export function UpdateHostRow(): React.JSX.Element | null {
   const idle = !inProgress && !staged
   const progressPct = typeof status?.progress === 'number' ? status.progress * 100 : undefined
 
-  // The one control on the right: Check → Download (or Update server) →
-  // Install & restart. A job in flight shows its phase below instead.
+  // The one control on the right: Check → Upgrade server → Install &
+  // restart (bundled-app hosts skip that last step). A job in flight shows
+  // its phase below instead.
   let control: React.ReactNode = null
   if (idle) {
     control = check?.available ? (
@@ -1957,12 +1959,12 @@ export function UpdateHostRow(): React.JSX.Element | null {
         disabled={!canUpdate}
         title={gate.title}
       >
-        {/* Bundled-app hosts (Shape A) update in one shot — the Tauri
-            updater downloads + installs + relaunches, there's no separate
-            staged "Install & restart" step — so the button is "Update
-            server", not "Download". Standalone (Shape B) hosts keep the
-            two-step Download → Install & restart flow. */}
-        {check?.installKind === 'bundled-app' ? 'Update server' : 'Download'}
+        {/* One word wherever a newer version is offered. Bundled-app hosts
+            (Shape A) do it in one shot: the Tauri updater downloads,
+            installs and relaunches, with no staged "Install & restart"
+            step. Standalone (Shape B) hosts download first, then offer
+            Install & restart. */}
+        {UPGRADE_LABELS.server}
       </Button>
     ) : (
       <Button

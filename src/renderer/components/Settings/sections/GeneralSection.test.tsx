@@ -52,6 +52,7 @@ vi.mock('./useNotifyPrefs', () => ({ threadPushAvailable: () => false }))
 import { cliInstalledLine, GeneralSection } from './GeneralSection'
 import { useSettingsStore } from '@/stores/settings'
 import { useUpdateStore } from '@/stores/update'
+import { UPGRADE_LABELS } from './update-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
@@ -68,7 +69,7 @@ beforeEach(() => {
   reset.mockReset().mockResolvedValue(undefined)
   useConfirmDialogStore.setState({ confirm })
   useSettingsStore.setState({ resetAllSettings: reset, generalSubTab: null, pendingUpdateCheck: false })
-  useUpdateStore.setState({ status: 'idle', version: null, error: null, progress: 0, archDownloadUrl: null, linuxManualCommand: null })
+  useUpdateStore.setState({ status: 'idle', version: null, error: null, progress: 0, archDownloadUrl: null, linuxCanInstall: false, linuxManualCommand: null })
   useToastStore.setState({ toasts: [] })
   useConnectHostStore.setState({ activeHost: 'local' })
 })
@@ -99,11 +100,33 @@ describe('Settings → General', () => {
     tauri.cli = { installed: false, installedVersion: null, bundledVersion: '0.46.11', updateAvailable: false }
     useUpdateStore.setState({ status: 'available', version: '0.47.0' })
     render(<GeneralSection />)
-    const download = within(row('general.app-version')).getByRole('button', { name: 'Download' })
-    expect(download.className).toContain('accent-fill')
+    const upgrade = within(row('general.app-version')).getByRole('button', { name: UPGRADE_LABELS.app })
+    expect(upgrade.className).toContain('accent-fill')
     const install = await within(row('general.cli-version')).findByRole('button', { name: 'Install' })
     expect(install.className).not.toContain('accent-fill')
     expect(within(row('general.app-version')).queryByRole('button', { name: 'Check for updates' })).toBeNull()
+  })
+
+  it('someone on an older version is offered Upgrade, not Download; a Linux one-step install keeps Install and restart', () => {
+    useUpdateStore.setState({ status: 'available', version: '0.47.0', archDownloadUrl: null, linuxCanInstall: false })
+    const { unmount } = render(<GeneralSection />)
+    const appRow = within(row('general.app-version'))
+    expect(appRow.getByRole('button', { name: UPGRADE_LABELS.app }).textContent).toBe(UPGRADE_LABELS.app)
+    expect(appRow.queryByRole('button', { name: 'Download' })).toBeNull()
+    unmount()
+
+    // Linux package that K2 can't install itself: the button opens GitHub; the hint names the same button.
+    useUpdateStore.setState({ archDownloadUrl: 'https://example.invalid/k2.deb', linuxCanInstall: false })
+    const second = render(<GeneralSection />)
+    expect(within(row('general.app-version')).getByRole('button', { name: UPGRADE_LABELS.app })).toBeTruthy()
+    expect(row('general.app-version').textContent).toContain(`${UPGRADE_LABELS.app} opens the new version on GitHub.`)
+    second.unmount()
+
+    // Linux package K2 installs and restarts in one step.
+    useUpdateStore.setState({ linuxCanInstall: true })
+    render(<GeneralSection />)
+    expect(within(row('general.app-version')).getByRole('button', { name: 'Install and restart' })).toBeTruthy()
+    expect(within(row('general.app-version')).queryByRole('button', { name: UPGRADE_LABELS.app })).toBeNull()
   })
 
   // 0.46.11: k2 in a new Terminal window with no admin (k2_client::cli_install).

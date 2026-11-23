@@ -15,6 +15,7 @@ import {
 } from '@/lib/auto-update-checks'
 import { compareVersions } from '@/lib/server-capabilities'
 import { PRODUCT_NAME } from '@/lib/brand'
+import { UPGRADE_LABELS } from '@/components/Settings/sections/update-host'
 
 interface UpdateInfo {
   current_version: string
@@ -73,7 +74,7 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
     const hasUpdate = await updateStore.checkForUpdate()
     if (hasUpdate) {
       const version = useUpdateStore.getState().version
-      if (version) notifyUpdateAvailable(version, 'Update')
+      if (version) notifyUpdateAvailable(version, UPGRADE_LABELS.app)
       return
     }
     // A failed Arch manifest fetch returns false with status `error`.
@@ -90,7 +91,7 @@ async function checkForUpdate(showToastIfNone = false): Promise<void> {
   try {
     const info = await invoke<UpdateInfo>('check_for_update')
     if (info.has_update) {
-      notifyUpdateAvailable(info.latest_version, 'Download')
+      notifyUpdateAvailable(info.latest_version, UPGRADE_LABELS.app)
     } else if (showToastIfNone && !info.has_update) {
       useToastStore.getState().addToast(
         `${PRODUCT_NAME} v${info.current_version} is up to date`,

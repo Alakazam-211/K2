@@ -320,7 +320,8 @@ mod tests {
 
     #[test]
     fn every_binding_field_and_any_tamper_fails() {
-        let mutations: Vec<Box<dyn Fn(&mut Binding)>> = vec![
+        type Mutation = Box<dyn Fn(&mut Binding)>;
+        let mutations: Vec<Mutation> = vec![
             Box::new(|b| b.controller_fp.push('x')),
             Box::new(|b| b.node_fp.push('x')),
             Box::new(|b| b.job_id = "j2".into()),

@@ -91,7 +91,8 @@ part_web() {
     step "brand name policy (brand.sh lint), offline"; bash tests/garden/brand-lint.sh
     step "k2-literal gate on broken trees";        bash tests/garden/k2-literal-gate.sh
     step "distributor pipeline template, offline"; bash tests/garden/distributor-template.sh
-    step "interop wire comparer on fixtures"; python3 -B tests/interop/test_wire_compare.py
+    step "interop wire comparer on fixtures";     python3 -B tests/interop/test_wire_compare.py
+    step "interop Postal test plane, no sockets";  python3 -B tests/interop/test_postal_plane.py
     step "private-docs gate";                      bash scripts/private-docs-gate.sh
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot

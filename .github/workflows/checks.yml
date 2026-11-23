@@ -215,6 +215,9 @@ jobs:
       - name: Interop wire comparer on fixtures
         run: python3 -B tests/interop/test_wire_compare.py
 
+      - name: Interop Postal test plane, no sockets
+        run: python3 -B tests/interop/test_postal_plane.py
+
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
 

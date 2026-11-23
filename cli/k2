@@ -108893,7 +108893,7 @@ WHICH TO PICK
   markdown (safe)     k2-markdown@1    7 KB
   code highlighting   highlight.js@11  129 KB
   diffs               k2-diff@1        23 KB
-  maths               katex@0.18       630 KB
+  maths               katex@0.18       631 KB
   3D                  three@0.186      959 KB
   2D games            kaplay@3001      185 KB
   UI components       preact@10        17 KB
@@ -108925,11 +108925,11 @@ EVERY LIBRARY: request, global, licence, size
   roughjs@4             rough            MIT                   27 KB
   howler@2              Howler           MIT                   35 KB
   tone@15               Tone             MIT                  337 KB
-  leaflet@1             L                BSD-2-Clause         171 KB
+  leaflet@1             L                BSD-2-Clause         172 KB
   marked@18             marked           MIT                   46 KB
   dompurify@3           DOMPurify        Apache-2.0            29 KB
   highlight.js@11       hljs             BSD-3-Clause         129 KB
-  katex@0.18            katex            MIT                  630 KB
+  katex@0.18            katex            MIT                  631 KB
   preact@10             preact           MIT AND Apache-2.0    17 KB
   lit@3                 Lit              BSD-3-Clause          23 KB
   font-caveat@5         K2Fonts          OFL-1.1              182 KB

@@ -9,7 +9,7 @@
     "cli/k2#refusals": "ddcabe88a9e2b89511c38b5e3e6ddd9d65cd03ca786ab6782be08073d72e6832",
     "cli/k2#study app-api": "a4066d43ba4886ee4c6bbb07ddc7064361b4274139a91d9b5720bca81792b626",
     "cli/k2#study live": "7f314f6dcdbee2c019329bbfaf2e35ed524f9e067d738c44addc18b4ec91487e",
-    "cli/k2#zen guide libs": "31aa703aa91f797b7ff5ae5c47c6147c22ab973224bc660973e813046034d820",
+    "cli/k2#zen guide libs": "8d95b2660d186fd0855139d0db589b68c21730790baab4dd62ef2663d3049033",
     "crates/k2-core/src/app_surface.rs": "9fb953dd7f03d80af4fb0e72ccbe7f8d3166a498fb15ae133e7e4ab42bd32b7d",
     "sdk/generated/k2-frame.js": "7bd8c1e35f3bbb7cd390c862003fdf5c9b6317c3565c17d0b07d8bb9d8ccee16",
     "sdk/generated/k2.d.ts": "3572db06fac77c5b0368031061110aeb4eed16edcf54bac7a6b9c5a463d78afa",

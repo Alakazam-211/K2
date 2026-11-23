@@ -23,6 +23,8 @@
 //!   library types, `apply`, `.k2/agent/template.lock`. Every door's
 //!   `template` resolves through it.
 //! - [`starter_permissions`]: the Kessel and Chief of Staff starter sets.
+//! - [`permission_records`]: a template hire's cards and declines, held
+//!   by the daemon (0330).
 //!
 //! Launch and first brief need the daemon's session machinery, so the
 //! daemon runs them after the durable steps commit.
@@ -34,6 +36,7 @@ pub mod deliveries;
 pub mod ledger;
 pub mod limits;
 pub mod links;
+pub mod permission_records;
 pub mod plan;
 pub mod recipe;
 pub mod root;

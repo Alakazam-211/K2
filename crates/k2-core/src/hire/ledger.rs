@@ -349,6 +349,15 @@ pub fn event(
     );
 }
 
+/// One audit row by an actor string (a hire's later step, when the
+/// [`HireCaller`] is gone: the pending card filed at the first start).
+pub fn event_by(conn: &Connection, action: &str, actor: &str, result: &str, reason: Option<&str>, detail: Option<&serde_json::Value>) {
+    let _ = conn.execute(
+        "INSERT INTO hire_events (at, action, actor, result, reason, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![now_secs(), action, actor, result, reason, detail.map(|d| d.to_string())],
+    );
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct HireEvent {

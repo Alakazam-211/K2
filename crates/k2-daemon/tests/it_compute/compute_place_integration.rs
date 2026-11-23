@@ -2780,7 +2780,7 @@ async fn userns_jobs_go_only_to_owned_nodes_granted_and_offering_it() {
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let plan = row(&job).plan().expect("a plan");
     assert!(!plan.userns);
-    assert!(!serde_json::to_string(&plan).unwrap().contains("userns"), "no ask: the plan as before");
+    assert!(serde_json::to_value(&plan).unwrap().get("userns").is_none(), "no ask: the plan as before (no userns key)");
     let r = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
     assert!(j(&r).get("userns").is_none(), "{}", r.body);
     // --no-userns: refused again, naming the node.

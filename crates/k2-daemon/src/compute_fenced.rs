@@ -28,3 +28,24 @@ pub(crate) fn refusal(who: &Who, ws: &Ws) -> R<()> {
 pub(crate) fn requested_by_passport(requested_by: &str) -> bool {
     requested_by.starts_with("agent:") || requested_by.starts_with("shell:")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::requested_by_passport;
+    use crate::compute_routes::Who;
+    use k2_core::connect_users::Role;
+
+    /// The node's source fetch reads only the stored label, so the two
+    /// prefixes are pinned to `Who::label`: a renamed label fails here.
+    #[test]
+    fn the_passport_prefixes_are_who_labels() {
+        let agent = Who::Agent { project_id: "p".into(), session_id: "s".into() };
+        let shell = Who::Shell { project_id: "p".into(), session_id: "s".into() };
+        assert!(agent.label().starts_with("agent:"), "{}", agent.label());
+        assert!(shell.label().starts_with("shell:"), "{}", shell.label());
+        assert!(requested_by_passport(&agent.label()) && requested_by_passport(&shell.label()));
+        for who in [Who::Owner, Who::Login { username: "agent:x".into(), role: Role::Member }, Who::Wrong, Who::Invalid] {
+            assert!(!requested_by_passport(&who.label()), "{}", who.label());
+        }
+    }
+}

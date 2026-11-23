@@ -1085,3 +1085,55 @@ echo "done" >> $R; exec sleep 3600
     let owner = std::fs::metadata(&b_cg).unwrap().uid();
     assert_eq!(owner == 0, expect_root, "B's cgroup (where its job ran) is root's exactly when the helper places: uid {owner}");
 }
+
+/// B4 pre-rows 4, P2 and P7 (design rev 3.1): what a fenced session can
+/// reach through same-user sockets. RECORDS what happens (`row …` lines
+/// for the review); fails only when a probe didn't run. Run from
+/// `scripts/agent-isolation-b4-prerows.sh` (lingering on, so the user bus
+/// exists; the owner's tmux server started by the script).
+#[test]
+#[ignore = "needs a delegated unit, a user manager and the owner's tmux: scripts/agent-isolation-b4-prerows.sh"]
+fn b4_prerows_from_a_fenced_session() {
+    let _unit = preflight();
+    let bus = input("K2_ISO_USER_BUS").expect("K2_ISO_USER_BUS: the K2 user's bus socket (the script turns lingering on)");
+    let tmux = input("K2_ISO_TMUX_SOCK").expect("K2_ISO_TMUX_SOCK: the owner's tmux socket (the script starts it)");
+    assert!(std::fs::metadata(&bus).is_ok(), "no user bus at {}", bus.display());
+    let mut d = Daemon::new("prerows");
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    d.set_fence(&a_id, true);
+    let ssh = d.home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("id_test"), "PRIVATE KEY\n").unwrap();
+    let rt = bus.parent().expect("runtime dir");
+    let script = format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid
+export XDG_RUNTIME_DIR={rt} DBUS_SESSION_BUS_ADDRESS=unix:path={bus}
+cat {key} > /dev/null 2> {a}/e0; echo "own_read_key $? $(cat {a}/e0)" >> $R
+busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId > {a}/o1 2>&1; echo "system_bus $? $(head -c 200 {a}/o1 | tr '\n' ' ')" >> $R
+busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId > {a}/o2 2>&1; echo "user_bus $? $(head -c 200 {a}/o2 | tr '\n' ' ')" >> $R
+systemd-run --user --quiet --collect --wait --pipe -- sh -c 'echo cg=$(cut -d: -f3 /proc/self/cgroup); cat {key} > /dev/null 2>&1 && echo key=read || echo key=refused' > {a}/o3 2>&1; echo "user_run $? $(head -c 300 {a}/o3 | tr '\n' ' ')" >> $R
+systemd-run --user --quiet --scope -- sh -c 'echo cg=$(cut -d: -f3 /proc/self/cgroup)' > {a}/o4 2>&1; echo "user_scope $? $(head -c 300 {a}/o4 | tr '\n' ' ')" >> $R
+test -S {tmux}; echo "tmux_socket_visible $?" >> $R
+tmux -S {tmux} new-window -d "sh -c 'cat {key} > /dev/null 2>&1 && echo read > {a}/p7 || echo refused > {a}/p7'" > {a}/o5 2>&1; echo "tmux_new_window $? $(head -c 200 {a}/o5 | tr '\n' ' ')" >> $R
+sleep 2; echo "tmux_window_ran $(cat {a}/p7 2>/dev/null || echo none)" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        rt = rt.display(),
+        bus = bus.display(),
+        key = ssh.join("id_test").display(),
+        tmux = tmux.display(),
+    );
+    d.spawn("tab-a", &a_ws, &script);
+    let r = results(&a_ws.join("results"), "done");
+    let a_pid: i32 = std::fs::read_to_string(a_ws.join("pid")).unwrap().trim().parse().unwrap();
+    d.pids.push(a_pid);
+    assert!(denied(&r["own_read_key"]), "the session is fenced (it can't read the key itself): {}", r["own_read_key"]);
+    println!("row 4a: a fenced session on the system bus (GetId): {}", r["system_bus"]);
+    println!("row 4b: a fenced session on the user bus (GetId): {}", r["user_bus"]);
+    println!("row P2a: systemd-run --user from a fenced session: {}", r["user_run"]);
+    println!("row P2b: systemd-run --user --scope from a fenced session: {}", r["user_scope"]);
+    println!("row P7a: the owner's tmux socket visible to the fenced session (0 = yes): {}", r["tmux_socket_visible"]);
+    println!("row P7b: tmux new-window on the owner's server: {} · the window read the key: {}", r["tmux_new_window"], r["tmux_window_ran"]);
+}

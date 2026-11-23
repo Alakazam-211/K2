@@ -1,7 +1,7 @@
 //! `k2 agent isolation layout`: on stubs only. The root helper is a
 //! [`Stub`] (no root call), this box's scope placement is never touched (the
 //! stub records the start and the stop), and this computer's owner check is
-//! `presence::fake` (no prompt).
+//! the presence module's test seam (no prompt).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use super::*;
-use crate::vault_routes::presence::{self, fake};
+use crate::vault_routes::presence::fake as seam;
 
 const WS_F: &str = "3f1c2d4e-0000-4000-8000-00000000abcd";
 const WS_O: &str = "9a8b7c6d-0000-4000-8000-0000000000ef";
@@ -67,14 +67,14 @@ struct Presence;
 
 impl Presence {
     fn offers(method: Option<&'static str>, approve: bool) -> Self {
-        fake::set(Some(fake::Fake { method, approve }));
+        seam::set(Some(seam::Fake { method, approve }));
         Presence
     }
 }
 
 impl Drop for Presence {
     fn drop(&mut self) {
-        fake::set(None);
+        seam::set(None);
     }
 }
 
@@ -140,13 +140,13 @@ fn the_owner_turns_scopes_on_with_this_computers_check() {
     assert_eq!((v["changed"].as_bool(), v["placing"].as_bool(), v["agentsInOldLayout"].as_u64()), (Some(true), Some(true), Some(1)), "{v}");
     assert!(v["appliesTo"].as_str().expect("appliesTo").contains("Running sessions keep their place"), "{v}");
     assert_eq!(
-        fake::last_prompt().as_deref(),
+        seam::last_prompt().as_deref(),
         Some(format!("{}: turn on a root-owned scope for every agent session on this server", k2_core::brand::PRODUCT_NAME).as_str()),
         "this computer's prompt names the step"
     );
     assert!(audit_outcomes().iter().any(|o| o.starts_with("ok on")), "{:?}", audit_outcomes());
     // Again: already on, nothing asked or run.
-    fake::set(Some(fake::Fake { method: Some(presence::LOCAL_AUTH), approve: false }));
+    seam::set(Some(seam::Fake { method: Some(presence::LOCAL_AUTH), approve: false }));
     let (s, v) = post(&host, Caller::Owner, json!({ "mode": "on" }));
     assert_eq!((s, v["changed"].as_bool()), (200, Some(false)), "{v}");
     assert_eq!(host.calls(), ["setup", "layout"]);
@@ -224,7 +224,7 @@ fn a_passport_is_refused_and_taught_the_card_for_on() {
     }
     assert!(host.calls().is_empty() && host.started.borrow().is_none() && !host.stopped.get());
     assert_eq!(agent_scope::owner_choice(), OwnerChoice::NotSet);
-    assert!(fake::last_prompt().is_none(), "no prompt for a passport");
+    assert!(seam::last_prompt().is_none(), "no prompt for a passport");
 
     let params = HashMap::new();
     let teach = |mode: &str| -> Value {
@@ -255,7 +255,7 @@ fn an_admin_reads_the_status_but_turns_nothing_on_or_off() {
     let (s, v) = post(&host, eve.clone(), json!({ "mode": "on" }));
     assert_eq!((s, code_of(&v)), (403, "owner_only"), "{v}");
     assert!(v.pointer("/error/hint").and_then(Value::as_str).expect("hint").contains("an admin login can't give"), "{v}");
-    assert!(fake::last_prompt().is_none(), "no prompt for an admin");
+    assert!(seam::last_prompt().is_none(), "no prompt for an admin");
     let (s, v) = post(&host, eve.clone(), json!({ "mode": "off" }));
     assert_eq!((s, code_of(&v)), (403, "owner_only"), "{v}");
     assert!(v.pointer("/error/hint").and_then(Value::as_str).expect("hint").contains("loosens"), "{v}");

@@ -142,6 +142,7 @@ fn a_key_hire_registers_only_the_folder_its_walk_opened() {
         let path = st.root.join(tag);
         if premade {
             fs::create_dir(&path).expect("mkdir");
+            chmod(&path, 0o755);
         }
         link_at(Stage::BeforeRegister, path.clone(), st.outside.clone());
         let e = key_hire(&st.root, &path, template).expect_err("a link put in before the register is refused");
@@ -184,6 +185,7 @@ fn a_key_plain_hire_takes_on_a_folder_only_its_owner_can_write() {
     // A template hire still takes on an empty one.
     let empty = st.root.join("empty");
     fs::create_dir(&empty).expect("mkdir");
+    chmod(&empty, 0o755);
     let out = key_hire(&st.root, &empty, true).expect("an empty folder is new");
     assert!(out.created && registered(&empty));
 }

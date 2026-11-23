@@ -3,8 +3,9 @@
 //!
 //! In order, first that applies:
 //!
-//! 0. An offline verb ([`OFFLINE_FIRST`], or `-h`/`--help` anywhere)
-//!    never reaches the daemon: it runs and is never counted.
+//! 0. An offline verb ([`OFFLINE_FIRST`], or `-h`/`--help` anywhere,
+//!    or for `app exec` and `app shell` [`app_cmd_says_help`]) never
+//!    reaches the daemon: it runs and is never counted.
 //! 1. A passport is set (`HOOK_TOKEN` under its K5_, K2_ and K2SO_ names,
 //!    empty counts as unset): the call uses it.
 //! 2. No passport and `NO_OWNER_FALLBACK=1`: the shell CLI refuses it
@@ -49,6 +50,7 @@ pub const OFFLINE_FIRST: &[&str] = &[
 
 /// An argument that makes any command offline, anywhere before the first
 /// bare `--` (the words after it are a child command's, as the shell's loop).
+/// Not for `app exec` and `app shell` ([`app_cmd_says_help`]).
 pub const OFFLINE_ANYWHERE: &[&str] = &["-h", "--help"];
 
 /// The settings that say a harness or a K2 session started this process.
@@ -154,17 +156,57 @@ pub fn decide(facts: Facts, tree: impl FnOnce() -> Ancestry) -> Verdict {
     }
 }
 
-/// True when the arguments name an offline verb.
+/// True when the arguments name an offline verb: the first word is one
+/// of [`OFFLINE_FIRST`]; for `app exec` and `app shell`,
+/// [`app_cmd_says_help`] on the words after them; for any other command,
+/// one of [`OFFLINE_ANYWHERE`] before the first bare `--`.
 pub fn is_offline(args: &[OsString]) -> bool {
     let first = args
         .first()
         .map(OsString::as_os_str)
         .unwrap_or(OsStr::new(""));
-    OFFLINE_FIRST.iter().any(|v| first == *v)
-        || args
-            .iter()
-            .take_while(|a| *a != "--")
-            .any(|a| OFFLINE_ANYWHERE.iter().any(|v| a == *v))
+    if OFFLINE_FIRST.iter().any(|v| first == *v) {
+        return true;
+    }
+    // `case "${1:-} ${2:-}" in "app exec"|"app shell")`.
+    if first == "app" && args.get(1).is_some_and(|v| v == "exec" || v == "shell") {
+        return app_cmd_says_help(&args[2..]);
+    }
+    args.iter()
+        .take_while(|a| *a != "--")
+        .any(|a| OFFLINE_ANYWHERE.iter().any(|v| a == *v))
+}
+
+/// The shell's `_app_cmd_says_help` on the words after `app exec` or `app
+/// shell`: `-h`, `--help` or the word `help` before the App, or as the
+/// first word after it (after the verb's own flags). Everything after
+/// that is the command's own, so `app exec <app> ls -h` runs `ls -h`.
+/// A bare `--` ends it (no help); `--timeout` takes the next word when
+/// there is one; any other word that starts with `-` is a flag; an empty
+/// word is never the App.
+pub fn app_cmd_says_help(words: &[OsString]) -> bool {
+    let mut app = false;
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        if w == "--" {
+            return false;
+        }
+        if w == "-h" || w == "--help" || w == "help" {
+            return true;
+        }
+        if w == "--timeout" {
+            if words.len() - i > 1 {
+                i += 1;
+            }
+        } else if !w.as_encoded_bytes().starts_with(b"-") {
+            if app {
+                return false;
+            }
+            app = !w.is_empty();
+        }
+        i += 1;
+    }
+    false
 }
 
 /// The facts, from the arguments and an environment lookup.
@@ -401,6 +443,13 @@ mod tests {
             &["msg", "--help"],
             &["msg", "a", "-h"],
             &["msg", "-h", "--", "x"],
+            &["app", "exec", "-h"],
+            &["app", "exec", "help"],
+            &["app", "exec", "web", "--help"],
+            &["app", "shell", "web", "help"],
+            &["app", "exec", "--timeout", "5", "web", "-h"],
+            &["app", "exec", "", "-h"],
+            &["app", "list", "-h"],
         ];
         for row in offline {
             assert!(is_offline(&args(row)), "{row:?}");
@@ -418,6 +467,12 @@ mod tests {
             // As the shell's loop: a bare `--` stops it.
             &["msg", "--", "-h"],
             &["msg", "--", "--help"],
+            // After `app exec <app>`, the words are the command's own.
+            &["app", "exec", "web", "ls", "-h"],
+            &["app", "shell", "web", "ls", "help"],
+            &["app", "exec", "--timeout", "-h"],
+            &["app", "exec", "--", "-h"],
+            &["app", "exec"],
         ];
         for row in online {
             assert!(!is_offline(&args(row)), "{row:?}");

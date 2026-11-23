@@ -130,8 +130,9 @@ fn the_shell_s_lines() {
     assert!(policy.contains("        firewall|front) echo \"dns\" ;;\n"));
     // No prelude row lets `firewall` past the connection gate.
     assert!(!policy.contains("[ \"${1:-}\" = \"firewall\" ]"));
+    // `firewall` is never `app exec` or `app shell`: the loop's arm.
     assert!(policy.contains(
-        "for _a in \"$@\"; do [ \"$_a\" = \"--\" ] && break; case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
+        "\n    *) for _a in \"$@\"; do [ \"$_a\" = \"--\" ] && break; case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done ;;\nesac\n"
     ));
 }
 

@@ -17,13 +17,16 @@ fn policy() -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
-/// The guard's three lines that set `_k2_offline_verb`.
+/// The guard's lines that set `_k2_offline_verb`.
 fn offline_block() -> String {
-    common::block(
-        &policy(),
-        r#"_k2_offline_verb="""#,
-        r#"for _a in "$@"; do [ "$_a" = "--" ] && break; case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done"#,
-    )
+    common::block(&policy(), r#"_k2_offline_verb="""#, "esac")
+}
+
+/// The guard's block with the function it calls for `app exec` and `app
+/// shell`, ready for bash.
+fn offline_script() -> String {
+    let says_help = common::block(&policy(), "_app_cmd_says_help() {", "}");
+    format!("{says_help}\n{}", offline_block())
 }
 
 #[test]
@@ -39,7 +42,14 @@ fn the_offline_list_is_the_shell_s_word_for_word() {
         .map(|v| if v == r#""""# { "" } else { v })
         .collect();
     assert_eq!(shell, OFFLINE_FIRST);
-    let anywhere = block.lines().nth(2).expect("the loop line");
+    assert!(
+        block.contains("\n    \"app exec\"|\"app shell\") if _app_cmd_says_help \"${@:3}\"; then _k2_offline_verb=1; fi ;;\n"),
+        "{block}"
+    );
+    let anywhere = block
+        .lines()
+        .find(|l| l.starts_with("    *) for _a in "))
+        .expect("the loop line, for every other command");
     assert!(
         anywhere.contains(&format!("case \"$_a\" in {})", OFFLINE_ANYWHERE.join("|"))),
         "{anywhere}"
@@ -49,7 +59,7 @@ fn the_offline_list_is_the_shell_s_word_for_word() {
 #[cfg(unix)]
 #[test]
 fn every_command_line_is_offline_as_the_shell_says() {
-    let script = format!("{}\nprintf '%s' \"$_k2_offline_verb\"", offline_block());
+    let script = format!("{}\nprintf '%s' \"$_k2_offline_verb\"", offline_script());
     let rows: &[&[&str]] = &[
         &[],
         &[""],
@@ -75,6 +85,32 @@ fn every_command_line_is_offline_as_the_shell_says() {
         &[" help"],
         &["help", "msg"],
         &["heartbeat", "list", "--json"],
+        // `app exec` and `app shell`: everything after the App is the
+        // command's own.
+        &["app", "exec", "-h"],
+        &["app", "exec", "help"],
+        &["app", "exec", "web", "--help"],
+        &["app", "exec", "web", "help"],
+        &["app", "exec", "web", "ls", "-h"],
+        &["app", "exec", "web", "ls", "help"],
+        &["app", "shell", "web", "-h"],
+        &["app", "shell", "web", "bash", "--help"],
+        &["app", "exec", "--timeout", "5", "web", "-h"],
+        &["app", "exec", "--timeout", "-h"],
+        &["app", "exec", "--timeout"],
+        &["app", "exec", "-x", "web", "-h"],
+        &["app", "exec", "--", "-h"],
+        &["app", "exec", "web", "--", "-h"],
+        &["app", "exec", "", "-h"],
+        &["app", "exec", "", "web", "ls", "-h"],
+        &["app", "exec", "-", "web", "-h"],
+        &["app", "exec"],
+        &["app", "exec", "web"],
+        &["app", "list", "-h"],
+        &["app", "list", "--", "-h"],
+        &["app exec", "web", "ls", "-h"],
+        &["app", "exec x", "-h"],
+        &["app", "Exec", "web", "ls", "-h"],
     ];
     for row in rows {
         let shell = common::bash_args(&script, row) == "1";

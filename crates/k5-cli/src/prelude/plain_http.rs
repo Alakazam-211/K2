@@ -151,27 +151,15 @@ pub fn refusal_line(base_url: &str) -> String {
     format!("Error: a password never goes over plain http:// to another computer; use K2_HOST=https://<name> (got: {base_url})")
 }
 
-/// `_k2_offline_verb`: the first word is none, empty, `study`, `help`,
-/// `--help`, `-h`, `--schema`, `version` or `--version`, or a word
-/// before the first bare `--` is `-h` or `--help` (the words after it are
-/// a child command's).
+/// `_k2_offline_verb`, the virtual-desktop guard's one rule
+/// ([`crate::passport::is_offline`]): the first word is none, empty,
+/// `study`, `help`, `--help`, `-h`, `--schema`, `version` or
+/// `--version`; for `app exec` and `app shell`, a help word before the
+/// command ([`crate::passport::app_cmd_says_help`]); for any other
+/// command, a word before the first bare `--` is `-h` or `--help` (the
+/// words after it are a child command's).
 pub fn offline_verb(args: &[OsString]) -> bool {
-    let first = args.first().map_or(OsStr::new(""), OsString::as_os_str);
-    let local = [
-        "",
-        "study",
-        "help",
-        "--help",
-        "-h",
-        "--schema",
-        "version",
-        "--version",
-    ];
-    local.iter().any(|w| first == *w)
-        || args
-            .iter()
-            .take_while(|a| *a != "--")
-            .any(|a| a == "-h" || a == "--help")
+    crate::passport::is_offline(args)
 }
 
 /// `--password`, `--password-stdin` or `--password=...`.
@@ -277,7 +265,13 @@ mod tests {
             refusal_line("${base}")
         )));
         assert!(p.contains(
-            "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\nfor _a in \"$@\"; do [ \"$_a\" = \"--\" ] && break; case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done\n"
+            "case \"${1:-}\" in \"\"|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac\ncase \"${1:-} ${2:-}\" in\n"
+        ));
+        assert!(p.contains(
+            "    \"app exec\"|\"app shell\") if _app_cmd_says_help \"${@:3}\"; then _k2_offline_verb=1; fi ;;\n    *) for _a in \"$@\"; do [ \"$_a\" = \"--\" ] && break; case \"$_a\" in -h|--help) _k2_offline_verb=1 ;; esac; done ;;\nesac\n"
+        ));
+        assert!(p.contains(
+            "_app_cmd_says_help() {\n    local app=\"\"\n    while [ $# -gt 0 ]; do\n        case \"$1\" in\n            --) return 1 ;;\n            -h|--help|help) return 0 ;;\n            --timeout) [ $# -gt 1 ] && shift ;;\n            -*) ;;\n            *) [ -z \"$app\" ] || return 1; app=\"$1\" ;;\n        esac\n        shift\n    done\n    return 1\n}\n"
         ));
     }
 
@@ -348,6 +342,26 @@ mod tests {
         assert_eq!(
             step(&words(&["whoami", "--", "--help"]), "10.0.0.5", false, port),
             warn("10.0.0.5")
+        );
+        // After `app exec <app>` the words are the command's: `ls -h`
+        // reaches the daemon, a help word before the command doesn't.
+        assert_eq!(
+            step(
+                &words(&["app", "exec", "web", "ls", "-h"]),
+                "10.0.0.5",
+                false,
+                port
+            ),
+            warn("10.0.0.5")
+        );
+        assert_eq!(
+            step(
+                &words(&["app", "shell", "web", "help"]),
+                "10.0.0.5",
+                false,
+                port
+            ),
+            Step::Quiet
         );
         // A password, the switch or not; never asked for this computer.
         for pw in ["--password", "--password-stdin", "--password=x"] {

@@ -526,9 +526,13 @@ pub fn converge(
             }
         }
     } else if existing.is_none() {
+        #[cfg(test)]
+        test_hook::run(test_hook::Stage::AfterChecks, &path);
         let dir_exists = Path::new(&path).exists();
         let result = if dir_exists {
             steps_out.push(skipped("create-dir", "exists"));
+            #[cfg(test)]
+            test_hook::run(test_hook::Stage::BeforeRegister, &path);
             crate::workspace::lifecycle::open_workspace_ex(&path, !no_wiki, seed_agents_md, fanout)
         } else {
             if let Some(parent) = Path::new(&path).parent() {
@@ -537,6 +541,8 @@ pub fn converge(
                 }
             }
             steps_out.push(done("create-dir"));
+            #[cfg(test)]
+            test_hook::run(test_hook::Stage::BeforeRegister, &path);
             crate::workspace::lifecycle::create_workspace_ex(&path, !no_wiki, seed_agents_md, fanout)
         };
         match result {
@@ -685,6 +691,50 @@ pub fn converge(
         template: template_out,
     })
 }
+
+/// Tests: a step run at a named point of a hire that makes or opens a
+/// folder, so a test can change the filesystem there.
+#[cfg(test)]
+pub(crate) mod test_hook {
+    use std::cell::RefCell;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Stage {
+        /// After the root and new-folder checks, before any folder is
+        /// made or opened.
+        AfterChecks,
+        /// Right before the folder is registered.
+        BeforeRegister,
+    }
+
+    type Hook = Box<dyn FnMut(Stage, &str)>;
+
+    thread_local! {
+        static HOOK: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+
+    /// Set (or clear, with `None`) this thread's hook.
+    pub(crate) fn set(hook: Option<Hook>) {
+        HOOK.with(|h| *h.borrow_mut() = hook);
+    }
+
+    pub(crate) fn run(stage: Stage, path: &str) {
+        let taken = HOOK.with(|h| h.borrow_mut().take());
+        if let Some(mut f) = taken {
+            f(stage, path);
+            HOOK.with(|h| {
+                let mut slot = h.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(f);
+                }
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "converge_tests.rs"]
+mod key_hire_tests;
 
 #[cfg(test)]
 mod tests {

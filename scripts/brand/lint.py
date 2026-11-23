@@ -74,9 +74,15 @@ case, emails, minisign key lines, colours #RRGGBB, relative folders), and a
 [machine] name other than the default brand's (machine: the code still
 uses those names everywhere).
 
+[control] is all six keys or none (control). On our brands it is held to
+the bash CLI's own copy of the Connect address (cli/src/connect.sh): only
+brand/k2 may set it, and its connect must be the bash copy's (bash), until
+the bash CLI reads the brand file.
+
 --hosted also checks a brand (not ours) as the brand of a hosted box: every
 field such a box needs is set (hosted), the links that may not be none are
-not "", and none of them is the default brand's own value (ours).
+not "", none of them is the default brand's own value (ours), and its
+update keys are not the distributor template's test-only key (testkey).
 
 --name checks one command name (and --product one product) against the
 brands this repo holds and prints `<name><TAB><answer>`: the first rule it
@@ -296,7 +302,6 @@ TABLES = {
     "zones": ("label", "internal"),
     "control": ("connect", "cert", "push", "relay", "relay_list", "web_api"),
     "feeds": ("daemon", "downloads"),
-    "pins": ("keys",),
     "machine": ("home", "binary_prefix", "unit_prefix"),
     "look": ("icons", "accent"),
     "links": ("site", "support_email", "support_url", "terms", "privacy", "dashboard", "feedback"),
@@ -312,12 +317,12 @@ FIELD_SHAPES = {
     "control.connect": "url", "control.cert": "url", "control.push": "url",
     "control.relay": "domain", "control.relay_list": "url", "control.web_api": "url",
     "feeds.daemon": "url", "feeds.downloads": "url",
-    "update.keys": "keys", "pins.keys": "keys",
+    "update.keys": "keys",
     "machine.home": "home", "machine.binary_prefix": "prefix", "machine.unit_prefix": "prefix",
     "look.icons": "path", "look.accent": "colour",
     "links.site": "url", "links.support_email": "email", "links.support_url": "url?",
     "links.terms": "url?", "links.privacy": "url?", "links.dashboard": "url?", "links.feedback": "url?",
-    "mail.system_from": "email", "mail.system_from_name": "name", "mail.postal": "bool",
+    "mail.system_from": "from", "mail.system_from_name": "name", "mail.postal": "bool",
     "phone.bundle_id": "rdns", "phone.team_id": "team", "phone.push_topic": "rdns",
     "sew.call_name": "name",
 }
@@ -328,14 +333,23 @@ HOSTED = (
     "names.company", "names.login", "zones.label", "zones.internal", "package.update_feed",
     "update.keys", "feeds.daemon", "feeds.downloads", "look.icons", "links.site",
     "links.support_email", "links.support_url", "links.terms", "links.privacy",
-    "links.dashboard", "links.feedback", "mail.system_from", "mail.postal",
+    "links.dashboard", "links.feedback", "mail.postal",
 )
 HOSTED_SOME = ("links.support_url", "links.terms", "links.privacy")
 HOSTED_NOT_OURS = (
     "names.company", "names.login", "zones.label", "package.update_feed", "update.keys",
     "feeds.daemon", "feeds.downloads", "links.site", "links.support_email", "links.support_url",
-    "links.terms", "links.privacy", "links.dashboard", "links.feedback", "mail.system_from",
+    "links.terms", "links.privacy", "links.dashboard", "links.feedback",
 )
+# [control] is all six or none (K2's ruling).
+CONTROL = ("relay", "relay_list", "connect", "cert", "push", "web_api")
+# The bash CLI's own copy of control.connect: only our default brand runs
+# the bash CLI, so brand/k2's [control] must match it, and no other brand
+# of ours may set [control], until the bash CLI reads the brand file.
+BASH_CONNECT = ("cli/src/connect.sh", re.compile(r"^_envn_into K2_CONNECT_BASE CONNECT_BASE (\S+)$"))
+# The distributor template's [update] key is made only for tests: a
+# hosted brand that ships it is refused.
+TEMPLATE_BRAND = os.path.join("templates", "distributor", "brand", "brand.toml")
 DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 URL_PATH = re.compile(r"(/[!#-&(-;=?-\[\]-_a-~]*)?")
 
@@ -415,6 +429,13 @@ def shape_problem(shape, v, ours):
         local, at, domain = v.partition("@")
         ok = at and re.fullmatch(r"[A-Za-z0-9._+-]+", local) and is_domain(domain)
         return None if ok else "an email address: <name>@<domain>"
+    if shape == "from":
+        local, at, domain = v.partition("@")
+        if at and domain == "{server}":
+            v = f"{local}@server.invalid"
+        local, at, domain = v.partition("@")
+        ok = at and re.fullmatch(r"[A-Za-z0-9._+-]+", local) and is_domain(domain)
+        return None if ok else "an email address: <name>@{server} or <name>@<domain>"
     if shape == "colour":
         return None if re.fullmatch(r"#[0-9A-Fa-f]{6}", v) else "a colour in hex: #RRGGBB"
     if shape == "path":
@@ -448,6 +469,52 @@ def field_value(doc, field):
     return True, t[key]
 
 
+def bash_connect():
+    """(where, url) of the bash CLI's copy of the Connect address."""
+    rel, rx = BASH_CONNECT
+    with open(os.path.join(HERE, rel), encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            m = rx.match(line.rstrip("\n"))
+            if m:
+                return f"{rel}:{n}", m.group(1)
+    sys.exit(f"brand lint: no `_envn_into K2_CONNECT_BASE CONNECT_BASE <url>` line in {rel}: "
+             "the check of our [control] against the bash CLI did not run")
+
+
+def test_only_keys():
+    """The distributor template's [update] keys: (key ids, key lines)."""
+    path = os.path.join(HERE, TEMPLATE_BRAND)
+    try:
+        with open(path, "rb") as f:
+            keys = tomllib.load(f)["update"]["keys"]
+    except (OSError, KeyError, TypeError) as e:
+        sys.exit(f"brand lint: can't read the template's test-only key from {TEMPLATE_BRAND} ({e}): "
+                 "the --hosted key check did not run")
+    return {k["key_id"] for k in keys}, {k["pubkey"] for k in keys}
+
+
+def control_findings(doc, brand_id, ours, default_id):
+    out = []
+    t = doc.get("control")
+    if not isinstance(t, dict):
+        return out
+    for k in CONTROL:
+        if k not in t:
+            out.append((f"control.{k}", "control",
+                        f"a brand that sets [control] sets all six ({', '.join(CONTROL)}); this one is left out"))
+    if ours:
+        where, url = bash_connect()
+        if brand_id != default_id:
+            out.append(("control", "bash",
+                        f"our brand {brand_id} may not set [control]: only the default brand ({default_id}) runs "
+                        f"the bash CLI, whose own copy is {where}, until it reads the brand file"))
+        elif t.get("connect") != url:
+            out.append(("control.connect", "bash",
+                        f"{t.get('connect')!r} is not the bash CLI's copy {url!r} ({where}); "
+                        "change both, or teach the bash CLI to read the brand file first"))
+    return out
+
+
 def field_findings(doc, ours, hosted, default):
     """(field, rule, why) for every other field: unknown tables and keys,
     shapes, the machine names, and with `hosted` what a hosted box needs."""
@@ -479,7 +546,14 @@ def field_findings(doc, ours, hosted, default):
             _, want = field_value(default, field)
             if v != want:
                 out.append((field, "machine", f"must be {want!r} for now: the code still uses that name everywhere"))
+    out += control_findings(doc, doc.get("id"), ours, default.get("id"))
     if hosted and not ours:
+        ids, lines = test_only_keys()
+        for k in (doc.get("update") or {}).get("keys") or []:
+            if isinstance(k, dict) and (k.get("key_id") in ids or k.get("pubkey") in lines):
+                out.append(("update.keys", "testkey",
+                            f"holds the distributor template's test-only key {k.get('key_id')}: "
+                            "its private half never existed; put your own update key here"))
         for field in HOSTED:
             present, v = field_value(doc, field)
             if not present:

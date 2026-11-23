@@ -117,7 +117,18 @@ while IFS=$'\t' read -r field value want; do
     rows=$((rows + 1))
     table="${field%%.*}"
     brand "f$rows" q8 q8 "Initech Hub"
-    if [ "$table" = names ]; then
+    if [ "$table" = control ]; then
+        # [control] is all six or none: the row's key on a whole table.
+        {
+            printf '\n[control]\n'
+            for k in relay relay_list connect cert push web_api; do
+                case "$k" in "${field#*.}") [ "$value" = - ] || printf '%s = %s\n' "$k" "$value" ;;
+                    relay) printf 'relay = "relay.example.invalid"\n' ;;
+                    *) printf '%s = "https://%s.example.invalid"\n' "$k" "${k//_/-}" ;;
+                esac
+            done
+        } >> "$T/f$rows/brand.toml"
+    elif [ "$table" = names ]; then
         # The scratch brand has [names] already: the key goes in it.
         awk -v kv="${field#*.} = $value" '{ print } /^\[names\]$/ { print kv }' "$T/f$rows/brand.toml" > "$T/f$rows/b" \
             && mv "$T/f$rows/b" "$T/f$rows/brand.toml"
@@ -140,10 +151,22 @@ lint "$T/f-why"
 [[ "$out" == *"brand lint: q8: field links.site: shape: must be an https URL"* ]] || die "a shape finding's line: $out"; ok
 
 # ── --hosted: what a hosted box of a brand needs ──────────────────────
-for b in "$HERE/brand/xy" "$HERE/templates/distributor/brand"; do
-    lint "$b" --hosted
-    [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the hosted fields)"* ]] || die "$b --hosted: $out"; ok
-done
+lint "$HERE/brand/xy" --hosted
+[ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the hosted fields)"* ]] || die "brand/xy --hosted: $out"; ok
+# The template is whole but for its test-only update key: --hosted (a
+# release's lint) refuses that key and nothing else.
+lint "$HERE/templates/distributor/brand" --hosted
+[ "$rc" = 1 ] && [[ "$out" == *"field update.keys: testkey: holds the distributor template's test-only key"* ]] \
+    && [[ "$out" == *"REFUSED (1 finding(s))"* ]] || die "the template --hosted: $out"; ok
+lint "$HERE/templates/distributor/brand"; [ "$rc" = 0 ] || die "the template without --hosted: $out"; ok
+# With a key of its own it passes; the same key by its line alone is still refused.
+cp -R "$HERE/templates/distributor/brand" "$T/h-own"
+tkey="$(sed -n 's/.*key_id = "\([0-9A-F]*\)", pubkey = "\([^"]*\)".*/\1 \2/p' "$HERE/templates/distributor/brand/brand.toml")"
+[ -n "$tkey" ] || die "the template has no update key line"
+own_id=25B77D84DA3C24B8 own_line=RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m
+sed -i.bak -e "s#key_id = \"${tkey%% *}\", pubkey = \"${tkey#* }\"#key_id = \"$own_id\", pubkey = \"$own_line\"#" "$T/h-own/brand.toml" && rm -f "$T/h-own/brand.toml.bak"
+lint "$T/h-own" --hosted
+[ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the hosted fields)"* ]] || die "the template with its own key --hosted: $out"; ok
 # Ours are never a partner's box: --hosted checks their shapes only.
 lint "$HERE/brand/k2" --hosted
 [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists)"* ]] || die "brand/k2 --hosted: $out"; ok
@@ -154,10 +177,12 @@ lint "$T/h-bare" --hosted
 [ "$rc" = 1 ] || die "a bare brand --hosted: $out"
 for f in names.company names.login zones.label zones.internal package.update_feed update.keys \
     feeds.daemon feeds.downloads look.icons links.site links.support_email links.support_url \
-    links.terms links.privacy links.dashboard links.feedback mail.system_from mail.postal; do
+    links.terms links.privacy links.dashboard links.feedback mail.postal; do
     [[ "$out" == *"field $f: hosted: a hosted box needs it set"* ]] || die "a bare brand --hosted names $f: $out"
 done
-[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 18 ] || die "a bare brand --hosted: 18 fields: $out"; ok
+[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 17 ] || die "a bare brand --hosted: 17 fields: $out"; ok
+# System mail has no fleet-wide sender: left out, it is noreply@{server}.
+[[ "$out" != *"mail.system_from"* ]] || die "mail.system_from is not asked of a hosted brand: $out"; ok
 # A link that may not be none, and a value that is the default brand's own.
 cp -R "$HERE/templates/distributor/brand" "$T/h-terms"
 sed -i.bak 's#^terms = .*#terms = ""#' "$T/h-terms/brand.toml" && rm -f "$T/h-terms/brand.toml.bak"
@@ -172,6 +197,35 @@ lint "$T/h-ours" --hosted
 [ "$rc" = 1 ] && [[ "$out" == *"field links.site: ours: is the default brand's own value"* ]] \
     && [[ "$out" == *"field links.support_email: ours:"* ]] || die "the default brand's own values: $out"; ok
 lint "$T/h-ours"; [ "$rc" = 0 ] || die "the default brand's values are only refused with --hosted: $out"; ok
+
+# ── [control] on our brands: the bash CLI's copy ──────────────────────
+# A stand-in repo: the lint, our brand folders, the template and the bash
+# CLI's part that holds the Connect address.
+R2="$T/repo"
+mkdir -p "$R2/scripts" "$R2/cli/src" "$R2/templates/distributor"
+cp -R "$HERE/scripts/brand" "$R2/scripts/brand"
+cp -R "$HERE/brand" "$R2/brand"
+cp -R "$HERE/templates/distributor/brand" "$R2/templates/distributor/brand"
+cp "$HERE/cli/src/connect.sh" "$R2/cli/src/connect.sh"
+rlint() { rc=0; out="$("$(command -v python3)" "$R2/scripts/brand/lint.py" "$@" 2>&1)" || rc=$?; }
+where="cli/src/connect.sh:$(grep -n '^_envn_into K2_CONNECT_BASE CONNECT_BASE ' "$R2/cli/src/connect.sh" | cut -d: -f1)"
+[ "$where" != "cli/src/connect.sh:" ] || die "cli/src/connect.sh has no _envn_into K2_CONNECT_BASE line"
+rlint "$R2/brand/k2"; [ "$rc" = 0 ] || die "brand/k2's [control] matches the bash copy: $out"; ok
+sed -i.bak 's#^connect = .*#connect = "https://connect.example.invalid"#' "$R2/brand/k2/brand.toml" && rm -f "$R2/brand/k2/brand.toml.bak"
+rlint "$R2/brand/k2"
+[ "$rc" = 1 ] && [[ "$out" == *"field control.connect: bash: "*"is not the bash CLI's copy"*"($where)"* ]] || die "brand/k2's connect off the bash copy: $out"; ok
+cp "$HERE/brand/k2/brand.toml" "$R2/brand/k2/brand.toml"
+sed -n '/^\[control\]$/,/^$/p' "$HERE/brand/k2/brand.toml" >> "$R2/brand/k5/brand.toml"
+rlint "$R2/brand/k5"
+[ "$rc" = 1 ] && [[ "$out" == *"field control: bash: our brand k5 may not set [control]"*"$where"* ]] || die "[control] on brand/k5: $out"; ok
+cp "$HERE/brand/k5/brand.toml" "$R2/brand/k5/brand.toml"
+grep -v '^_envn_into K2_CONNECT_BASE' "$HERE/cli/src/connect.sh" > "$R2/cli/src/connect.sh"
+rlint "$R2/brand/k2"
+[ "$rc" = 1 ] && [[ "$out" == *"the check of our [control] against the bash CLI did not run"* ]] || die "no bash copy: $out"; ok
+# A brand not ours may set a whole [control]; the bash rule is not its.
+brand c-own q8 q8 "Initech Hub"
+sed -n '/^\[control\]$/,/^$/p' "$HERE/brand/k2/brand.toml" | sed 's#k2\.dev#example.invalid#' >> "$T/c-own/brand.toml"
+lint "$T/c-own"; [ "$rc" = 0 ] || die "a whole [control] on a brand not ours: $out"; ok
 
 # ── --registry: the private list of reserved distributor brands ───────
 # A stand-in registry with neutral names (the real one never goes in the

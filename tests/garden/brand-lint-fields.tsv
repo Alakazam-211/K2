@@ -3,8 +3,10 @@
 # per row, the field set to the value). Tab-separated:
 #   <table.key> <the value, as TOML> <answer>
 # The answer is ok, or the rule of the field's finding: unknown (a table
-# or key the reader does not know), shape, or machine (a machine name
-# other than the default brand's). The reader in crates/k2-brand refuses
+# or key the reader does not know), shape, machine (a machine name other
+# than the default brand's) or control ([control] is all six or none).
+# A [control] row starts from a whole [control] table and sets the one key
+# to the value; - leaves that key out. The reader in crates/k2-brand refuses
 # the same shapes; the lint is stricter only on .. in look.icons.
 field	value	answer
 names.short	"Hub"	ok
@@ -21,6 +23,12 @@ zones.label	"boxes.example.in1"	shape
 zones.internal	true	ok
 zones.internal	"yes"	shape
 control.connect	"https://connect.example.invalid"	ok
+control.relay	-	control
+control.relay_list	-	control
+control.connect	-	control
+control.cert	-	control
+control.push	-	control
+control.web_api	-	control
 control.connect	"http://connect.example.invalid"	shape
 control.cert	"https://cert.example.invalid/cert"	ok
 control.cert	"https://cert.example.invalid:8443/cert"	shape
@@ -32,13 +40,13 @@ control.web_api	"https://example.invalid/a b"	shape
 feeds.daemon	"https://updates.example.invalid/daemon-latest.json"	ok
 feeds.downloads	"https://updates.example.invalid/download"	ok
 feeds.downloads	"updates.example.invalid/download"	shape
-pins.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	ok
-pins.keys	[{ role = "primary", key_id = "0000000000000000", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
-pins.keys	[{ role = "backup", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
-pins.keys	[{ role = "spare", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
-pins.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m", why = "x" }]	shape
-pins.keys	[]	shape
 update.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWnotakey" }]	shape
+update.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	ok
+update.keys	[{ role = "primary", key_id = "0000000000000000", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
+update.keys	[{ role = "backup", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
+update.keys	[{ role = "spare", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
+update.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m", why = "x" }]	shape
+update.keys	[]	shape
 machine.home	".k2"	ok
 machine.home	".gy"	machine
 machine.home	"k2"	shape
@@ -64,7 +72,10 @@ links.terms	"http://example.invalid/terms"	shape
 links.privacy	"https://example.invalid/privacy"	ok
 links.dashboard	""	ok
 links.feedback	"https://feedback.example.invalid"	ok
-mail.system_from	"noreply@example.invalid"	ok
+mail.system_from	"noreply@{server}"	ok
+mail.system_from	"noreply@box.partner.example"	ok
+mail.system_from	"noreply@{box}"	shape
+mail.system_from	"noreply"	shape
 mail.system_from_name	"Hub mail"	ok
 mail.postal	false	ok
 mail.postal	0	shape

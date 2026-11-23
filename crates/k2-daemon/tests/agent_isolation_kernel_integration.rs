@@ -565,6 +565,53 @@ fn the_five_step_demo_on_a_real_kernel() {
 
 /// Restart survival: ptyd's sessions outlive the daemon in their cgroups;
 /// the next daemon knows them from the cgroup names and the passport store.
+/// M2 review (open items): a fenced agent can't bring an outside file into
+/// its workspace for the daemon to read. A hard link to a credential file or
+/// to a sibling's file is refused by the kernel (Landlock's refer rule); a
+/// symlink can be made but not read, and the daemon refuses to deliver it
+/// (403 `path_out_of_reach`) and delivers nothing.
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn a_fenced_agent_links_no_outside_file_in() {
+    let _unit = preflight();
+    let mut d = Daemon::new("links");
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    let (_b_id, b_ws) = d.workspace("B");
+    d.set_fence(&a_id, true);
+    let ssh = d.home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("id_test"), "PRIVATE KEY\n").unwrap();
+    let script = format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid
+ln {key} {a}/hl 2> {a}/e1; echo "hardlink_key_rc $? $(cat {a}/e1)" >> $R
+ln {b}/README.md {a}/hl2 2> {a}/e2; echo "hardlink_sibling_rc $? $(cat {a}/e2)" >> $R
+ln -s {key} {a}/sl 2> {a}/e3; cat {a}/sl > /dev/null 2> {a}/e4; echo "symlink_read_rc $? $(cat {a}/e4)" >> $R
+code=$(curl -s -o {a}/o1 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" -H 'Content-Type: application/x-www-form-urlencoded' --data "workspace={a_id}&path={a}/sl&wake=false" http://localhost/cli/inbox/deliver); echo "deliver_symlink $code $(cut -c1-200 {a}/o1)" >> $R
+code=$(curl -s -o {a}/o2 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" -H 'Content-Type: application/x-www-form-urlencoded' --data "workspace={a_id}&path={key}&wake=false" http://localhost/cli/inbox/deliver); echo "deliver_key $code $(cut -c1-200 {a}/o2)" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        b = b_ws.display(),
+        key = ssh.join("id_test").display(),
+    );
+    d.spawn("tab-a", &a_ws, &script);
+    let r = results(&a_ws.join("results"), "done");
+    let a_pid: i32 = std::fs::read_to_string(a_ws.join("pid")).unwrap().trim().parse().unwrap();
+    d.pids.push(a_pid);
+    println!("links: {r:?}");
+    assert!(!r["hardlink_key_rc"].starts_with("0"), "a hard link to a credential file is refused: {}", r["hardlink_key_rc"]);
+    assert!(!r["hardlink_sibling_rc"].starts_with("0"), "a hard link to a sibling's file is refused: {}", r["hardlink_sibling_rc"]);
+    assert!(!a_ws.join("hl").exists() && !a_ws.join("hl2").exists(), "no hard link was made");
+    assert!(denied(&r["symlink_read_rc"]), "a symlink out can't be read: {}", r["symlink_read_rc"]);
+    for row in ["deliver_symlink", "deliver_key"] {
+        assert!(r[row].starts_with("403") && r[row].contains("path_out_of_reach"), "{row}: the daemon refuses: {}", r[row]);
+    }
+    let inbox = a_ws.join(".k2/inbox");
+    let landed = std::fs::read_dir(&inbox).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(landed, 0, "nothing was delivered into {}", inbox.display());
+}
+
 #[test]
 #[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
 fn a_fenced_agent_survives_a_daemon_restart_and_is_still_recognised() {

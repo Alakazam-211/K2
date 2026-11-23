@@ -1252,7 +1252,7 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
     if !canon.starts_with(&root_c) {
         return Err(());
     }
-    let bytes = std::fs::read(&canon).map_err(|_| ())?;
+    let bytes = read_inside(&canon, &root_c)?;
     let ext = canon
         .extension()
         .and_then(|s| s.to_str())
@@ -1260,6 +1260,31 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
     // The MIME table is shared with K2's static file server (0.46.7 TC-2);
     // this helper's path list is its own (`is_static_path`, unchanged).
     Ok((crate::static_files::content_type(ext.as_deref()).to_string(), bytes))
+}
+
+/// Read `path` only if the file it opens is inside `root` (M2 review: the
+/// check is on the opened handle, so a folder swapped for a link after the
+/// name was checked is caught). Regular files only.
+#[cfg(unix)]
+fn read_inside(path: &Path, root: &Path) -> Result<Vec<u8>, ()> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY).open(path).map_err(|_| ())?;
+    if !f.metadata().map_err(|_| ())?.is_file() {
+        return Err(());
+    }
+    let real = k2_core::agent_fence::fd_path(&f).ok_or(())?;
+    if !real.starts_with(root) {
+        return Err(());
+    }
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes).map_err(|_| ())?;
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_inside(path: &Path, _root: &Path) -> Result<Vec<u8>, ()> {
+    std::fs::read(path).map_err(|_| ())
 }
 
 fn upstream_addr(gw: &Gateway) -> Result<String, String> {
@@ -1669,6 +1694,32 @@ mod tests {
     /// Sew report: a static App's `.wasm`, `.mjs` and web fonts were served
     /// as `application/octet-stream`, which browsers refuse for
     /// `WebAssembly.instantiateStreaming` and module scripts.
+    /// M2 review: links inside an App's folder never serve a file outside
+    /// it: a link to a file outside, a link to a folder outside, and the
+    /// handle check itself (a name checked, then swapped for a link out,
+    /// is refused at the read).
+    #[cfg(unix)]
+    #[test]
+    fn links_inside_an_app_folder_serve_nothing_outside_it() {
+        let base = std::env::temp_dir().join(format!("k2-gw-links-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+        let root = base.join("site");
+        let secret_dir = base.join("secret");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::create_dir_all(&secret_dir).unwrap();
+        std::fs::write(secret_dir.join("daemon.token"), "TOKEN").unwrap();
+        std::fs::write(root.join("index.html"), "<p>hi</p>").unwrap();
+        std::os::unix::fs::symlink(secret_dir.join("daemon.token"), root.join("token.txt")).unwrap();
+        std::os::unix::fs::symlink(&secret_dir, root.join("assets/out")).unwrap();
+        assert!(read_static_file(&root, "/index.html").is_ok(), "its own page");
+        assert!(read_static_file(&root, "/token.txt").is_err(), "a link to a file outside");
+        assert!(read_static_file(&root, "/assets/out/daemon.token").is_err(), "a link to a folder outside");
+        // The handle check: the name inside, the opened file outside.
+        let root_c = dunce::canonicalize(&root).unwrap();
+        assert!(read_inside(&root.join("token.txt"), &root_c).is_err(), "checked where it opened");
+        assert_eq!(read_inside(&root_c.join("index.html"), &root_c).unwrap(), b"<p>hi</p>");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn read_static_file_types_web_assets() {
         let root = std::env::temp_dir().join(format!(

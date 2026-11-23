@@ -70,7 +70,7 @@ fn scope_box(moves: bool) -> T {
 /// scope's cgroup under either slice.
 fn systemd_stops(t: &T) {
     let root = t.root.clone();
-    let effect: Rc<dyn Fn(&[String])> = Rc::new(move |args: &[String]| {
+    let effect: Effect = Rc::new(move |args: &[String]| {
         if args.first().map(String::as_str) == Some("stop") {
             let name = args.last().cloned().unwrap_or_default();
             for d in [OPEN_DIR, FENCED_DIR] {
@@ -338,7 +338,7 @@ fn agents_stop_all_stops_only_names_the_classifier_accepts() {
     std::fs::write(t.p(&format!("{OPEN_DIR}/cgroup.procs")), "").unwrap();
     // systemd ends the first; the second is still there after the wait.
     let root = t.root.clone();
-    let effect: Rc<dyn Fn(&[String])> = Rc::new(move |args: &[String]| {
+    let effect: Effect = Rc::new(move |args: &[String]| {
         if args.first().map(String::as_str) == Some("stop") && args.last().map(String::as_str) == Some(SCOPE) {
             std::fs::remove_dir(under(&root, &format!("{OPEN_DIR}/{SCOPE}"))).unwrap();
         }

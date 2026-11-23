@@ -23,7 +23,18 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, resolve } from 'node:path'
 
-import { copyrightLines, copyrightPart, glueBanner, hasBanner, libraryBanner } from './banners.mjs'
+import {
+  LICENCE_LINE,
+  bannerExpression,
+  copyrightLines,
+  copyrightPart,
+  glueBanner,
+  hasBanner,
+  libraryBanner,
+  licenceFileExpression,
+  licenceFileProblems,
+  licenceSections,
+} from './banners.mjs'
 import { LIBS, type LibFile, type LibSpec, type StyleSource } from './libs'
 import { replaceZenLibNotice } from '../../src/renderer/lib/zen/zen-lib-notice'
 import { zenLibInlineProblem, zenLibInlineSafe } from '../../src/renderer/lib/zen/zen-lib-inline'
@@ -177,13 +188,13 @@ async function bundle(lib: LibSpec, file: { name: string; bundle: string }): Pro
  *  kit files carry their own banner. The copyright comes from the licence
  *  text this script writes to LICENSE.txt, the file the third-party
  *  notices list ships. */
-function withBanner(lib: LibSpec, f: LibFile, text: string, copyright: string): string {
-  const meta = { id: lib.id, version: lib.version, license: lib.license, copyright }
+function withBanner(lib: LibSpec, f: LibFile, text: string, license: string, copyright: string): string {
+  const meta = { id: lib.id, version: lib.version, license, copyright }
   let out: string
-  if ('own' in f || ('copy' in f && hasBanner(text, lib.id, lib.license))) out = text
+  if ('own' in f || ('copy' in f && hasBanner(text, lib.id, license))) out = text
   else if ('copy' in f || 'bundle' in f) out = `${libraryBanner(meta)}\n${text}`
   else out = `${glueBanner({ ...meta, file: f.name, title: lib.title })}\n${text}`
-  if (!hasBanner(out, lib.id, lib.license)) die(`${lib.id}@${lib.version}/${f.name}: no licence banner naming ${lib.id}, ${lib.license} and a copyright in its first lines`)
+  if (!hasBanner(out, lib.id, license)) die(`${lib.id}@${lib.version}/${f.name}: no licence banner naming ${lib.id}, ${license} and a copyright in its first lines`)
   return out
 }
 
@@ -271,7 +282,7 @@ function dependencyLicences(lib: LibSpec): string {
   return `\n\n######## Bundled dependencies (code from these packages is inside the files above) ########\n\n${parts.join('\n')}`
 }
 
-async function licenseText(lib: LibSpec): Promise<string> {
+async function licenseText(lib: LibSpec): Promise<{ title: string; sections: string }> {
   const parts: string[] = []
   for (const l of lib.licenses) {
     let text: string
@@ -294,8 +305,37 @@ async function licenseText(lib: LibSpec): Promise<string> {
     }
     parts.push(`==== ${label} ====\n\n${text.trimEnd()}\n`)
   }
-  if (lib.own) return `${lib.title} ${lib.version} - licence texts. K2's own code (Alakazam Labs), under K2's licence.\n\n${parts.join('\n')}`
-  return `${lib.title} ${lib.version} — licence texts, as shipped upstream.\n\n${parts.join('\n')}`
+  const title = lib.own
+    ? `${lib.title} ${lib.version} - licence texts. K2's own code (Alakazam Labs), under K2's licence.`
+    : `${lib.title} ${lib.version} — licence texts, as shipped upstream.`
+  return { title, sections: parts.join('\n') }
+}
+
+/** The folder's LICENSE.txt: the title line, the licence line (the row's
+ *  licence, `licenseAlso`, then every bundled dependency's; banners.mjs
+ *  bannerExpression), then the library's own licence texts and its bundled
+ *  dependencies'. Call it after every file's text is read, so
+ *  bundledPackages is complete. */
+function licenceFile(lib: LibSpec, own: { title: string; sections: string }): string {
+  const body = own.sections + dependencyLicences(lib)
+  const deps = licenceSections(body).flatMap((s) => (s.dep ? [s.dep.licence] : []))
+  const expr = bannerExpression(lib.license, lib.licenseAlso ?? [], deps)
+  if (!lib.own && !licenceOk(expr)) die(`${lib.id}: licence "${expr}" is not on the shippable list; flag it, don't guess`)
+  return `${own.title}\n${LICENCE_LINE}${expr}\n\n${body}`
+}
+
+/** The copyright part of a library's banners: its own licence texts'
+ *  copyright lines, then those of the bundled packages `bannerCopyrightsOf`
+ *  names (from their sections of the LICENSE.txt). */
+function bannerCopyright(lib: LibSpec, own: { sections: string }, lic: string): { part: string; lines: string[] } {
+  let text = own.sections
+  for (const name of lib.bannerCopyrightsOf ?? []) {
+    const s = licenceSections(lic).find((x) => x.dep?.name === name)
+    if (!s) die(`${lib.id}: bannerCopyrightsOf names ${name}, which has no section in its LICENSE.txt`)
+    if (!copyrightLines(s.body).length) die(`${lib.id}: bannerCopyrightsOf names ${name}, whose licence text has no copyright line`)
+    text += `\n${s.body}`
+  }
+  return { part: copyrightPart(text, lib.title.replace(/\s*\(.*\)$/, '')), lines: copyrightLines(text) }
 }
 
 /** A script text K2 inlines into an HTML <script> element must not end it
@@ -339,12 +379,25 @@ for (const lib of LIBS) {
   // The library's own licence texts: the start of its LICENSE.txt, and
   // where its banners' copyright lines come from.
   const ownLicence = await licenseText(lib)
-  const copyright = copyrightPart(ownLicence, lib.title.replace(/\s*\(.*\)$/, ''))
   const files: ZenLibEntry['files'] = []
+  let lic: string
+  let bannerLines: string[] = []
   if (lib.source === 'bundled') {
     if (!lib.files.length) die(`${key}: a bundled library needs files`)
-    for (const f of lib.files) {
-      const text = inlineSafe(lib, f.name, withBanner(lib, f, await fileText(lib, f), copyright))
+    // Every file's text first: a copied or bundled file records the
+    // packages it carries, which its LICENSE.txt and so its banners name.
+    const texts: string[] = []
+    for (const f of lib.files) texts.push(await fileText(lib, f))
+    lic = licenceFile(lib, ownLicence)
+    // A served library's LICENSE.txt is sound (banners.mjs): a licence line
+    // covering every bundled dependency, no section that is only a URL.
+    const unsound = licenceFileProblems(lic, lib.license)
+    if (unsound.length) die(`${key}/${LICENSE_FILE}: ${unsound.join('; ')}`)
+    const license = licenceFileExpression(lic) ?? die(`${key}/${LICENSE_FILE}: no licence line`)
+    const copyright = bannerCopyright(lib, ownLicence, lic)
+    bannerLines = copyright.lines
+    for (const [i, f] of lib.files.entries()) {
+      const text = inlineSafe(lib, f.name, withBanner(lib, f, texts[i], license, copyright.part))
       const buf = Buffer.from(text, 'utf8')
       writeFileSync(join(dir, f.name), buf)
       // 0.46.5 (copy detection, vs-live L11): a copied npm file also records
@@ -361,16 +414,16 @@ for (const lib of LIBS) {
       if (zenLibInlineProblem(buf.toString('utf8'))) console.log(`  ${key}/${name}: rewritten for inlining at load time`)
       files.push({ name, bytes: buf.length, sha256: sha256(buf), url })
     }
+    lic = licenceFile(lib, ownLicence)
   }
   // K2's own kit carries K2's licence (MIT from 0.46.10); every other library a shippable one.
   if (lib.own ? lib.license !== 'MIT' : !licenceOk(lib.license)) {
     die(`${key}: licence "${lib.license}" is not on the shippable list; flag it, don't guess`)
   }
 
-  const lic = ownLicence + dependencyLicences(lib)
   // The banners and the notices list must not disagree: every copyright
   // line a banner names is in the LICENSE.txt the notices ship.
-  for (const line of copyrightLines(ownLicence)) {
+  for (const line of bannerLines) {
     if (!normalize(lic).includes(normalize(line))) die(`${key}: banner copyright "${line}" is not in its LICENSE.txt`)
   }
   // Each `; `-separated part (a `name: ` prefix aside) must appear in the

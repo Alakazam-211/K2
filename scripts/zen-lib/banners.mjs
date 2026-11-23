@@ -23,6 +23,13 @@
 // licence-gate rule, made stricter: there the comment may be anywhere in
 // the file, any allowlisted id counts and no copyright is needed.
 //
+// Which SPDX ids: every id of the library's LICENSE.txt licence line
+// (licenceFileProblem, licenceFileExpression below), not only its
+// zen-lib.json row. That line is the row's licence, plus the extra licences
+// its own licence text names (scripts/zen-lib/libs.ts `licenseAlso`), plus
+// the licence of every bundled dependency section; so a banner never names
+// fewer licences than the code in its file.
+//
 // scripts/zen-lib/banner-cases.json holds the cases every port of this rule
 // must pass (check-banners.mjs --self-test runs them; the partner build's
 // licence-allow.py reads the same file).
@@ -197,4 +204,138 @@ export function glueBanner({ file, id, version, title, license, copyright }) {
 function checkedComment(c) {
   if (c.slice(2, -2).includes('*/') || c.includes('\n')) throw new Error(`a banner can't hold "*/" or a newline: ${c}`)
   return c
+}
+
+// ── The library's LICENSE.txt ─────────────────────────────────────────────
+//
+// What scripts/zen-lib/vendor.ts writes as <id>@<version>/LICENSE.txt:
+//
+//   <title> <version> - licence texts, as shipped upstream.   (first line)
+//   SPDX-License-Identifier: <expression>                      (second line)
+//
+//   ==== <label> ====                                         (a section)
+//   <text>
+//
+// A section's label is the package file its text came from
+// (`marked/LICENSE`), or, for a bundled dependency,
+// `<name>@<version> (<expression>)[ <file>]`. The licence line must name
+// the row's licence and every bundled dependency's (it may name more: the
+// extra licences libs.ts records). A served library's text comes from its
+// npm packages: a section labelled by a URL, or one that is empty or only a
+// URL, is a problem.
+
+/** The licence line's tag. */
+export const LICENCE_LINE = 'SPDX-License-Identifier: '
+
+/** A bundled dependency's section label: `<name>@<version> (<expression>)`,
+ *  then optionally a space and its file. */
+const DEP_LABEL = /^(\S+)@(\S+) \((.+)\)(?: (\S+))?$/
+
+/** The sections of a LICENSE.txt: [{ label, body, dep }], `dep` the
+ *  { name, version, licence } of a bundled dependency's section, else null.
+ *  A section header is a whole line `==== <label> ====`. */
+export function licenceSections(text) {
+  const out = []
+  let cur = null
+  for (const line of text.split('\n')) {
+    const m = /^==== (.+) ====$/.exec(line)
+    if (m) {
+      const d = DEP_LABEL.exec(m[1])
+      cur = { label: m[1], body: '', dep: d ? { name: d[1], version: d[2], licence: d[3] } : null }
+      out.push(cur)
+    } else if (cur) {
+      cur.body += `${line}\n`
+    }
+  }
+  return out
+}
+
+/** The terms of an expression joined by a top-level AND: `MIT AND
+ *  (Apache-2.0 OR MIT)` -> [`MIT`, `(Apache-2.0 OR MIT)`]. A term with
+ *  OR or WITH is kept in parentheses. */
+export function andTerms(expr) {
+  const out = []
+  let depth = 0
+  let cur = ''
+  const words = expr.trim().split(/[ \t\n\v\f\r]+/)
+  const flush = () => {
+    const t = cur.trim()
+    if (!t) return
+    const bare = t.startsWith('(') && t.endsWith(')') ? t.slice(1, -1).trim() : t
+    out.push(/ (OR|WITH) /.test(bare) ? `(${bare})` : bare)
+    cur = ''
+  }
+  for (const w of words) {
+    if (w === 'AND' && depth === 0) {
+      flush()
+      continue
+    }
+    for (const ch of w) depth += ch === '(' ? 1 : ch === ')' ? -1 : 0
+    cur += `${cur ? ' ' : ''}${w}`
+  }
+  flush()
+  return out
+}
+
+/** The licence a library's banners name: the row's licence, then the
+ *  extras (libs.ts `licenseAlso`), then each bundled dependency's licence,
+ *  each term once, joined with AND. */
+export function bannerExpression(rowLicence, extras, depLicences) {
+  const terms = []
+  for (const e of [rowLicence, ...extras, ...depLicences]) {
+    for (const t of andTerms(e)) if (!terms.includes(t)) terms.push(t)
+  }
+  return terms.join(' AND ')
+}
+
+/** The expression on a LICENSE.txt's licence line (its second line), or
+ *  null when it has none. */
+export function licenceFileExpression(text) {
+  const second = text.split('\n')[1] ?? ''
+  return second.startsWith(LICENCE_LINE) && second.length > LICENCE_LINE.length ? second.slice(LICENCE_LINE.length).trim() : null
+}
+
+/** What is wrong with a served library's LICENSE.txt, as a list (empty
+ *  when nothing is): no licence line; a licence line that leaves out an id
+ *  of the row's licence or of a bundled dependency's; no section; a
+ *  section labelled by a URL; a section that is empty or only a URL. */
+export function licenceFileProblems(text, rowLicence) {
+  const out = []
+  const expr = licenceFileExpression(text)
+  const sections = licenceSections(text)
+  if (!sections.length) out.push('no licence text section')
+  for (const s of sections) {
+    const body = s.body.trim()
+    if (/^https?:\/\//.test(s.label)) out.push(`the section "${s.label}" is a URL, not a file from the package`)
+    else if (!body) out.push(`the section "${s.label}" is empty`)
+    else if (/^\S+:\/\/\S+$/.test(body)) out.push(`the section "${s.label}" is only a URL`)
+  }
+  if (expr === null) {
+    out.push(`no "${LICENCE_LINE}<expression>" line (its second line)`)
+    return out
+  }
+  const named = new Set(licenceIds(expr))
+  const want = [{ from: 'the row', licence: rowLicence }, ...sections.filter((s) => s.dep).map((s) => ({ from: s.label, licence: s.dep.licence }))]
+  for (const w of want) {
+    const missing = licenceIds(w.licence).filter((id) => !named.has(id))
+    if (missing.length) out.push(`its licence line "${expr}" leaves out ${missing.join(', ')} (${w.from})`)
+  }
+  return out
+}
+
+/** The licence a served library's banners must name: its LICENSE.txt's
+ *  licence line, or, when that is missing, the row's licence with every
+ *  bundled dependency's (so the check still reports banners that name too
+ *  few). */
+export function licenceToName(text, rowLicence) {
+  return (
+    licenceFileExpression(text) ??
+    bannerExpression(
+      rowLicence,
+      [],
+      licenceSections(text)
+        .filter((s) => s.dep)
+        .map((s) => s.dep.licence),
+    )
+  )
 }

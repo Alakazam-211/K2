@@ -20,7 +20,9 @@
 //   script writes (the NOTICE line is checked against it).
 // - Every file the daemon serves starts with a licence banner naming the
 //   id, the SPDX licence and a copyright (scripts/zen-lib/banners.mjs; the vendor
-//   script writes it, scripts/zen-lib/check-banners.mjs checks it).
+//   script writes it, scripts/zen-lib/check-banners.mjs checks it). The
+//   licence is the LICENSE.txt licence line: `license`, `licenseAlso` and
+//   every bundled dependency's licence.
 // - 0.46.5 (prd-widget-size-and-shared-libs-v1 WL6, vs-live L3): one entry
 //   per LINE (the major; 0.minor below 1.0). A patch replaces its line's
 //   entry in place (K2 updates patches inside a line); a new major is a new
@@ -87,6 +89,14 @@ export interface LibSpec {
   /** 0.46.5 (WL17): text a copy of it carries in its first 1 KB (its own
    *  upstream banner, never a generic licence header). */
   fingerprints?: string[]
+  /** Licences its own licence text names beyond `license` (a part of the
+   *  library under another licence), each with a comment citing the line.
+   *  They go on its LICENSE.txt licence line and so into every banner of
+   *  its files. Recorded here, never read out of the text. */
+  licenseAlso?: string[]
+  /** Bundled packages whose copyright lines its banners name beside its
+   *  own (from their sections of its LICENSE.txt). */
+  bannerCopyrightsOf?: string[]
 }
 
 const THREE_ADDONS: [string, string][] = [
@@ -297,6 +307,12 @@ export const LIBS: LibSpec[] = [
       'Copyright 2017-2026 The Apache Software Foundation; This product includes software developed at The Apache Software Foundation (https://www.apache.org/).',
     source: 'bundled',
     licenses: ['echarts/LICENSE', 'echarts/NOTICE', 'echarts/licenses/LICENSE-d3'],
+    // echarts/LICENSE, "Apache ECharts Subcomponents": "BSD 3-Clause
+    // (d3.js): The following files embed d3.js BSD 3-Clause" (its
+    // LICENSE.txt, about line 220; the text is echarts/licenses/LICENSE-d3).
+    licenseAlso: ['BSD-3-Clause'],
+    // zrender (BSD-3-Clause) is ECharts' renderer, inside echarts.min.js.
+    bannerCopyrightsOf: ['zrender'],
     files: [{ name: 'echarts.min.js', copy: 'echarts/dist/echarts.min.js' }],
   },
   {
@@ -422,6 +438,11 @@ export const LIBS: LibSpec[] = [
     copyright: 'Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/)',
     source: 'bundled',
     licenses: ['marked/LICENSE'],
+    // marked/LICENSE, "## Markdown": "Copyright (c) 2004, John Gruber ...
+    // Redistribution and use in source and binary forms, with or without
+    // modification, are permitted" with the three BSD clauses (its
+    // LICENSE.txt, about line 36 on): BSD-3-Clause.
+    licenseAlso: ['BSD-3-Clause'],
     files: [{ name: 'marked.umd.js', copy: 'marked/lib/marked.umd.js' }],
     notes: 'marked does not sanitize: pass its HTML through DOMPurify.sanitize before showing agent text.',
   },

@@ -4,6 +4,9 @@
 // src/shared/zen-lib.json, which crates/k2-daemon/src/zen_lib_bundled.rs
 // embeds; this also checks that table names exactly those files, at their
 // paths under src/renderer/zen-lib/. What a banner is: scripts/zen-lib/banners.mjs.
+// The licence a banner names is the library's LICENSE.txt licence line,
+// which must cover the row's licence and every bundled dependency's; a
+// served library's LICENSE.txt must have no section that is only a URL.
 //
 //   node scripts/zen-lib/check-banners.mjs             check; exit 1 on any failure
 //   node scripts/zen-lib/check-banners.mjs --print     also print each file's first line
@@ -16,7 +19,18 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { BANNER_WINDOW, bannerOf, bannerProblem, copyrightLines, glueBanner, hasBanner, libraryBanner } from './banners.mjs'
+import {
+  BANNER_WINDOW,
+  bannerExpression,
+  bannerOf,
+  bannerProblem,
+  copyrightLines,
+  glueBanner,
+  hasBanner,
+  libraryBanner,
+  licenceFileProblems,
+  licenceToName,
+} from './banners.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const MANIFEST = 'src/shared/zen-lib.json'
@@ -38,9 +52,15 @@ function selfTest() {
     if (names.has(c.name)) throw new Error(`${CASES}: two cases are named "${c.name}"`)
     names.add(c.name)
     if (typeof c.pass !== 'boolean' || typeof c.text !== 'string' || !c.id || !c.licence) throw new Error(`${CASES}: "${c.name}" is incomplete`)
+    if ('licence_file' in c && typeof c.licence_file !== 'string') throw new Error(`${CASES}: "${c.name}": licence_file is a string`)
     if (Boolean(c.pad) !== c.text.includes('{{pad}}')) throw new Error(`${CASES}: "${c.name}": pad and {{pad}} go together`)
     const text = c.pad ? c.text.replace('{{pad}}', c.pad.unit.repeat(c.pad.times)) : c.text
-    const got = hasBanner(text, c.id, c.licence)
+    // With a licence_file (the library's LICENSE.txt), that file must be
+    // sound and the banner names its licence line; without, the row's licence.
+    const got =
+      typeof c.licence_file === 'string'
+        ? licenceFileProblems(c.licence_file, c.licence).length === 0 && hasBanner(text, c.id, licenceToName(c.licence_file, c.licence))
+        : hasBanner(text, c.id, c.licence)
     if (got !== c.pass) {
       console.error(`FAIL self-test: "${c.name}" (${c.id}, ${c.licence}): got ${got ? 'pass' : 'fail'}, want ${c.pass ? 'pass' : 'fail'}`)
       bad++
@@ -72,6 +92,16 @@ function selfTest() {
   if (!threw) {
     console.error('FAIL self-test: a copyright with "*/" was written into a banner')
     bad++
+  }
+  for (const [args, want] of [
+    [['Apache-2.0', ['BSD-3-Clause'], ['0BSD', 'BSD-3-Clause']], 'Apache-2.0 AND BSD-3-Clause AND 0BSD'],
+    [['MIT AND Apache-2.0', [], ['MIT', '(MIT OR CC0-1.0)', 'MIT OR CC0-1.0']], 'MIT AND Apache-2.0 AND (MIT OR CC0-1.0)'],
+  ]) {
+    const got = bannerExpression(...args)
+    if (got !== want) {
+      console.error(`FAIL self-test: bannerExpression${JSON.stringify(args)} gave "${got}", want "${want}"`)
+      bad++
+    }
   }
   if (bad) {
     console.error(`zen-lib banners: self-test: ${bad} failure(s)`)
@@ -108,23 +138,37 @@ function check() {
   // checked like its first. --print groups the files by library.
   let pass = 0
   let lastKey = ''
+  // The licence each library's banners name: its LICENSE.txt licence line.
+  const licence = new Map()
+  const unsound = new Set()
+  for (const w of want) {
+    if (licence.has(w.key)) continue
+    const rel = `src/renderer/zen-lib/${w.key}/${w.lib.licenseFile}`
+    const text = readFileSync(join(ROOT, rel), 'utf8')
+    for (const p of licenceFileProblems(text, w.lib.license)) {
+      problems.push(`${rel}: ${p}`)
+      unsound.add(w.key)
+    }
+    licence.set(w.key, licenceToName(text, w.lib.license))
+  }
   for (const w of want) {
     const rel = `src/renderer/zen-lib/${w.key}/${w.name}`
     const text = readFileSync(join(ROOT, rel), 'utf8')
-    const problem = bannerProblem(text, w.lib.id, w.lib.license)
+    const lic = licence.get(w.key)
+    const problem = bannerProblem(text, w.lib.id, lic)
     if (args.has('--print')) {
-      if (w.key !== lastKey) console.log(`== ${w.key} (${w.lib.license})`)
+      if (w.key !== lastKey) console.log(`== ${w.key} (${lic})`)
       lastKey = w.key
       const first = text.split('\n').find((l) => l.trim()) ?? ''
-      const banner = bannerOf(text, w.lib.id, w.lib.license)
+      const banner = bannerOf(text, w.lib.id, lic)
       console.log(`  ${problem ? 'FAIL' : 'ok  '} ${w.name}: ${first.slice(0, 400)}`)
       if (banner && banner !== first) console.log(`       banner: ${banner.slice(0, 600)}`)
     }
-    if (problem) problems.push(`${rel}: ${problem} (${w.lib.id}, ${w.lib.license})`)
-    else pass++
+    if (problem) problems.push(`${rel}: ${problem} (${w.lib.id}, ${lic})`)
+    else if (!unsound.has(w.key)) pass++
   }
   for (const p of problems) console.error(`FAIL ${p}`)
-  console.log(`zen-lib banners: ${pass} of ${want.length} served files start with a banner naming their package, licence and copyright`)
+  console.log(`zen-lib banners: ${pass} of ${want.length} served files start with a banner naming their package, licence and copyright, from a sound LICENSE.txt`)
   if (problems.length) {
     console.error(`zen-lib banners: ${problems.length} failure(s); run scripts/vendor-zen-lib.sh and commit the output`)
     process.exit(1)

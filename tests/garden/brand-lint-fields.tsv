@@ -1,0 +1,79 @@
+# The brand file's other fields and the answer scripts/brand.sh lint gives
+# for each value (tests/garden/brand-lint.sh reads it: one scratch brand
+# per row, the field set to the value). Tab-separated:
+#   <table.key> <the value, as TOML> <answer>
+# The answer is ok, or the rule of the field's finding: unknown (a table
+# or key the reader does not know), shape, or machine (a machine name
+# other than the default brand's). The reader in crates/k2-brand refuses
+# the same shapes; the lint is stricter only on .. in look.icons.
+field	value	answer
+names.short	"Hub"	ok
+names.short	" Hub"	shape
+names.company	"Initech"	ok
+names.lockup	"Initech Hub by Initech"	ok
+names.server	"Hub Box"	ok
+names.login	""	shape
+names.login	7	shape
+zones.label	"boxes.example.invalid"	ok
+zones.label	"Boxes.example.invalid"	shape
+zones.label	"example"	shape
+zones.label	"boxes.example.in1"	shape
+zones.internal	true	ok
+zones.internal	"yes"	shape
+control.connect	"https://connect.example.invalid"	ok
+control.connect	"http://connect.example.invalid"	shape
+control.cert	"https://cert.example.invalid/cert"	ok
+control.cert	"https://cert.example.invalid:8443/cert"	shape
+control.push	"https://push.example.invalid"	ok
+control.relay	"relay.example.invalid"	ok
+control.relay	"https://relay.example.invalid"	shape
+control.relay_list	"https://example.invalid/api/tunnel/relays"	ok
+control.web_api	"https://example.invalid/a b"	shape
+feeds.daemon	"https://updates.example.invalid/daemon-latest.json"	ok
+feeds.downloads	"https://updates.example.invalid/download"	ok
+feeds.downloads	"updates.example.invalid/download"	shape
+pins.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	ok
+pins.keys	[{ role = "primary", key_id = "0000000000000000", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
+pins.keys	[{ role = "backup", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
+pins.keys	[{ role = "spare", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	shape
+pins.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m", why = "x" }]	shape
+pins.keys	[]	shape
+update.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWnotakey" }]	shape
+machine.home	".k2"	ok
+machine.home	".gy"	machine
+machine.home	"k2"	shape
+machine.binary_prefix	"k2"	ok
+machine.binary_prefix	"gy"	machine
+machine.unit_prefix	"k2"	ok
+look.icons	"assets/icons"	ok
+look.icons	"../icons"	shape
+look.icons	"/icons"	shape
+look.icons	"assets//icons"	shape
+look.accent	"#3A6FF7"	ok
+look.accent	"#3a6ff7"	ok
+look.accent	"blue"	shape
+look.accent	"#3A6FF"	shape
+links.site	"https://example.invalid"	ok
+links.site	""	shape
+links.support_email	"help@example.invalid"	ok
+links.support_email	"help"	shape
+links.support_email	"help@example"	shape
+links.support_url	"https://example.invalid/support"	ok
+links.terms	""	ok
+links.terms	"http://example.invalid/terms"	shape
+links.privacy	"https://example.invalid/privacy"	ok
+links.dashboard	""	ok
+links.feedback	"https://feedback.example.invalid"	ok
+mail.system_from	"noreply@example.invalid"	ok
+mail.system_from_name	"Hub mail"	ok
+mail.postal	false	ok
+mail.postal	0	shape
+phone.bundle_id	"com.example.hub"	ok
+phone.bundle_id	"Com.Example"	shape
+phone.team_id	"ABCDE12345"	ok
+phone.team_id	"abc"	shape
+phone.push_topic	"com.example.hub"	ok
+sew.call_name	"Hub Calls"	ok
+sew.call_name	""	shape
+links.website	"https://example.invalid"	unknown
+colours.accent	"#3A6FF7"	unknown

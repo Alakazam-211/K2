@@ -2,7 +2,7 @@
 """The name policy for a brand: its command, its aliases, its id and its
 product name, each checked on its own rules.
 
-    bash scripts/brand.sh lint <brand folder> [--live] [--registry <file>]
+    bash scripts/brand.sh lint <brand folder> [--live] [--hosted] [--registry <file>]
     bash scripts/brand.sh lint --name <command> [--product <name>] [--registry <file>]
 
 A brand has two names that are never made from each other: the product's
@@ -66,6 +66,17 @@ not three fields, or a command or id not of the command's shape, stops the
 lint. The row whose brand id is the brand being linted is that brand's own
 reservation and is not a collision. A missing file stops the lint: a name
 is never called free without its check.
+
+Every brand's other fields are checked for their shapes (the same shapes
+crates/k2-brand's reader refuses): a table or key it does not know
+(unknown), a value of the wrong shape (shape: URLs https, domains in lower
+case, emails, minisign key lines, colours #RRGGBB, relative folders), and a
+[machine] name other than the default brand's (machine: the code still
+uses those names everywhere).
+
+--hosted also checks a brand (not ours) as the brand of a hosted box: every
+field such a box needs is set (hosted), the links that may not be none are
+not "", and none of them is the default brand's own value (ours).
 
 --name checks one command name (and --product one product) against the
 brands this repo holds and prints `<name><TAB><answer>`: the first rule it
@@ -272,6 +283,218 @@ def product_findings(product, others):
     return out
 
 
+# ── the other fields ──────────────────────────────────────────────────
+
+# The tables a brand file may hold, and the keys of each one this lint
+# knows. [cli] and [package] are checked by their own readers; [update] and
+# [pins] are lists of keys.
+TABLES = {
+    "names": ("product", "short", "company", "lockup", "server", "login"),
+    "cli": None,
+    "package": None,
+    "update": ("keys",),
+    "zones": ("label", "internal"),
+    "control": ("connect", "cert", "push", "relay", "relay_list", "web_api"),
+    "feeds": ("daemon", "downloads"),
+    "pins": ("keys",),
+    "machine": ("home", "binary_prefix", "unit_prefix"),
+    "look": ("icons", "accent"),
+    "links": ("site", "support_email", "support_url", "terms", "privacy", "dashboard", "feedback"),
+    "mail": ("system_from", "system_from_name", "postal"),
+    "phone": ("bundle_id", "team_id", "push_topic"),
+    "sew": ("call_name",),
+}
+# Each field's shape. "url?" is an https URL or "" (none).
+FIELD_SHAPES = {
+    "names.short": "name", "names.company": "name", "names.lockup": "name",
+    "names.server": "name", "names.login": "name",
+    "zones.label": "domain", "zones.internal": "bool",
+    "control.connect": "url", "control.cert": "url", "control.push": "url",
+    "control.relay": "domain", "control.relay_list": "url", "control.web_api": "url",
+    "feeds.daemon": "url", "feeds.downloads": "url",
+    "update.keys": "keys", "pins.keys": "keys",
+    "machine.home": "home", "machine.binary_prefix": "prefix", "machine.unit_prefix": "prefix",
+    "look.icons": "path", "look.accent": "colour",
+    "links.site": "url", "links.support_email": "email", "links.support_url": "url?",
+    "links.terms": "url?", "links.privacy": "url?", "links.dashboard": "url?", "links.feedback": "url?",
+    "mail.system_from": "email", "mail.system_from_name": "name", "mail.postal": "bool",
+    "phone.bundle_id": "rdns", "phone.team_id": "team", "phone.push_topic": "rdns",
+    "sew.call_name": "name",
+}
+# What a hosted box of a brand (not ours) needs set. The links in
+# HOSTED_SOME may not be "" either; the fields in HOSTED_NOT_OURS may not
+# be the default brand's own value.
+HOSTED = (
+    "names.company", "names.login", "zones.label", "zones.internal", "package.update_feed",
+    "update.keys", "feeds.daemon", "feeds.downloads", "look.icons", "links.site",
+    "links.support_email", "links.support_url", "links.terms", "links.privacy",
+    "links.dashboard", "links.feedback", "mail.system_from", "mail.postal",
+)
+HOSTED_SOME = ("links.support_url", "links.terms", "links.privacy")
+HOSTED_NOT_OURS = (
+    "names.company", "names.login", "zones.label", "package.update_feed", "update.keys",
+    "feeds.daemon", "feeds.downloads", "links.site", "links.support_email", "links.support_url",
+    "links.terms", "links.privacy", "links.dashboard", "links.feedback", "mail.system_from",
+)
+DOMAIN_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+URL_PATH = re.compile(r"(/[!#-&(-;=?-\[\]-_a-~]*)?")
+
+
+def is_domain(v):
+    labels = v.split(".")
+    return (len(v) <= 253 and len(labels) >= 2 and all(DOMAIN_LABEL.fullmatch(l) for l in labels)
+            and labels[-1].isalpha() and labels[-1].isascii())
+
+
+def is_url(v):
+    if not v.startswith("https://"):
+        return False
+    rest = v[len("https://"):]
+    host, slash, path = rest.partition("/")
+    return is_domain(host) and URL_PATH.fullmatch(slash + path) is not None
+
+
+def minisign_key_id(line):
+    """minisign's key id of a public key line, or None when it is not one."""
+    import base64, binascii
+    if not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", line or "") or len(line) % 4:
+        return None
+    try:
+        raw = base64.b64decode(line, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != 42 or raw[:2] != b"Ed":
+        return None
+    return f"{int.from_bytes(raw[2:10], 'little'):016X}"
+
+
+def key_problem(keys):
+    if not isinstance(keys, list) or not keys:
+        return "a list of { role, key_id, pubkey } tables, at least one"
+    seen = set()
+    for i, k in enumerate(keys):
+        if not isinstance(k, dict) or set(k) != {"role", "key_id", "pubkey"}:
+            return f"[{i}] must be a table of role, key_id and pubkey"
+        if not all(isinstance(k[x], str) for x in k):
+            return f"[{i}]: role, key_id and pubkey are strings"
+        if k["role"] not in ("primary", "backup"):
+            return f"[{i}].role {k['role']!r} must be primary or backup"
+        got = minisign_key_id(k["pubkey"])
+        if got is None:
+            return f"[{i}].pubkey is not a minisign public key line"
+        if got != k["key_id"]:
+            return f"[{i}].key_id {k['key_id']!r} is not the pubkey's key id ({got})"
+        if got in seen:
+            return f"lists {got} twice"
+        seen.add(got)
+    if keys[0]["role"] != "primary":
+        return "must start with a primary key"
+    return None
+
+
+def shape_problem(shape, v, ours):
+    """Why `v` is not of `shape`, or None."""
+    if shape == "bool":
+        return None if isinstance(v, bool) else "true or false"
+    if shape == "keys":
+        return key_problem(v)
+    if not isinstance(v, str):
+        return "a string"
+    if shape == "url?" and v == "":
+        return None
+    if v == "":
+        return "not empty"
+    if shape == "name":
+        ok = len(v) <= 40 and v == v.strip() and not any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in v)
+        return None if ok else "one line of 1 to 40 characters with no space at either end"
+    if shape == "domain":
+        return None if is_domain(v) else "a domain name in lower case (example.invalid)"
+    if shape in ("url", "url?"):
+        return None if is_url(v) else "an https URL: https://<domain>[/<path>]"
+    if shape == "email":
+        local, at, domain = v.partition("@")
+        ok = at and re.fullmatch(r"[A-Za-z0-9._+-]+", local) and is_domain(domain)
+        return None if ok else "an email address: <name>@<domain>"
+    if shape == "colour":
+        return None if re.fullmatch(r"#[0-9A-Fa-f]{6}", v) else "a colour in hex: #RRGGBB"
+    if shape == "path":
+        parts = v.split("/")
+        ok = not v.startswith("/") and "\\" not in v and all(parts) and not any(ord(c) < 32 for c in v)
+        if ok and not ours and ".." in parts:
+            return "a folder inside the brand folder (no ..)"
+        return None if ok else "a folder from the brand folder: relative, parts split by /"
+    if shape == "rdns":
+        return None if re.fullmatch(r"[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+", v) else "a reverse-DNS id in lower case (com.example.app)"
+    if shape == "team":
+        return None if re.fullmatch(r"[A-Z0-9]{10}", v) else "an Apple team id: 10 capital letters and digits"
+    if shape == "home":
+        return None if re.fullmatch(r"\.[a-z][a-z0-9]{1,11}", v) else "a dot and a name: ^\\.[a-z][a-z0-9]{1,11}$"
+    if shape == "prefix":
+        return None if SHAPE.fullmatch(v) else "^[a-z][a-z0-9]{1,11}$"
+    raise AssertionError(shape)
+
+
+def read_doc(folder):
+    with open(os.path.join(folder, "brand.toml"), "rb") as f:
+        return tomllib.load(f)
+
+
+def field_value(doc, field):
+    """(set, value) of `table.key` in a brand file."""
+    table, _, key = field.partition(".")
+    t = doc.get(table)
+    if not isinstance(t, dict) or key not in t:
+        return False, None
+    return True, t[key]
+
+
+def field_findings(doc, ours, hosted, default):
+    """(field, rule, why) for every other field: unknown tables and keys,
+    shapes, the machine names, and with `hosted` what a hosted box needs."""
+    out = []
+    for key, value in doc.items():
+        if key in ("id", "schema"):
+            continue
+        if key not in TABLES:
+            out.append((key, "unknown", f"a table this build does not know (it knows {', '.join(TABLES)})"))
+            continue
+        if not isinstance(value, dict):
+            out.append((key, "shape", "must be a table"))
+            continue
+        known = TABLES[key]
+        if known is None:
+            continue
+        for k in value:
+            if k not in known:
+                out.append((f"{key}.{k}", "unknown", f"a key [{key}] does not hold (it knows {', '.join(known)})"))
+    for field, shape in FIELD_SHAPES.items():
+        present, v = field_value(doc, field)
+        if not present:
+            continue
+        why = shape_problem(shape, v, ours)
+        if why:
+            out.append((field, "shape", f"must be {why}" if not why.startswith(("[", "lists", "must")) else why))
+            continue
+        if field.startswith("machine."):
+            _, want = field_value(default, field)
+            if v != want:
+                out.append((field, "machine", f"must be {want!r} for now: the code still uses that name everywhere"))
+    if hosted and not ours:
+        for field in HOSTED:
+            present, v = field_value(doc, field)
+            if not present:
+                out.append((field, "hosted", "a hosted box needs it set"))
+                continue
+            if field in HOSTED_SOME and v == "":
+                out.append((field, "hosted", "a hosted box needs a link here, not \"\""))
+                continue
+            if field in HOSTED_NOT_OURS and v != "":
+                _, theirs = field_value(default, field)
+                if v == theirs:
+                    out.append((field, "ours", "is the default brand's own value; a hosted box sets its own"))
+    return out
+
+
 # ── the live checks ────────────────────────────────────────────────────
 
 def fetch(env, default):
@@ -356,7 +579,7 @@ def package_findings(name, ok):
 ORDER = ("shape", "product", "ours", "hard", "unique", "registry", "text", "soft", "host", "package")
 
 
-def lint_brand(folder, live, registry=None):
+def lint_brand(folder, live, registry=None, hosted=False):
     brand = read_brand(folder)
     others = [b for b in held() if b["folder"] != brand["folder"]]
     hard, soft = reserved()
@@ -381,6 +604,9 @@ def lint_brand(folder, live, registry=None):
             for what, name in names[1:]:
                 for rule, why in host_findings(name) + package_findings(name, ok):
                     findings.append((what, name, rule, why))
+    default = read_doc(os.path.join(HERE, "brand", "k2"))
+    for field, rule, why in field_findings(read_doc(folder), is_ours(brand), hosted, default):
+        findings.append(("field", field, rule, why))
     for what, name, rule, why in findings:
         print(f"brand lint: {brand['id']}: {what} {name}: {rule}: {why}", file=sys.stderr)
     if findings:
@@ -389,6 +615,8 @@ def lint_brand(folder, live, registry=None):
     live_note = ", the host and the package indexes" if live and not is_ours(brand) else ""
     if registry is not None and not is_ours(brand):
         live_note += f", the registry ({len(registry)} brands)"
+    if hosted and not is_ours(brand):
+        live_note += ", the hosted fields"
     print(f"brand lint: {brand['id']}: command {brand['name']}, product {brand['product']!r}: ok (the written lists{live_note})")
     return 0
 
@@ -410,7 +638,7 @@ def lint_name(name, product, registry=None):
 
 
 def main(argv):
-    usage = ("usage: brand.sh lint <brand folder> [--live] [--registry <file>]"
+    usage = ("usage: brand.sh lint <brand folder> [--live] [--hosted] [--registry <file>]"
              " | brand.sh lint --name <command> [--product <name>] [--registry <file>]")
     args = list(argv)
     registry = None
@@ -421,13 +649,19 @@ def main(argv):
             return 2
         registry = read_registry(args[i + 1])
         del args[i:i + 2]
+    hosted = "--hosted" in args
+    if hosted:
+        if args.count("--hosted") != 1 or args[:1] == ["--name"]:
+            print(usage, file=sys.stderr)
+            return 2
+        args.remove("--hosted")
     if args[:1] == ["--name"] and len(args) in (2, 4) and (len(args) == 2 or args[2] == "--product"):
         return lint_name(args[1], args[3] if len(args) == 4 else None, registry)
     if len(args) in (1, 2) and not args[0].startswith("-") and args[1:] in ([], ["--live"]):
         if not os.path.isfile(os.path.join(args[0], "brand.toml")):
             print(f"brand lint: no brand.toml in {args[0]}", file=sys.stderr)
             return 2
-        return lint_brand(args[0], live=args[1:] == ["--live"], registry=registry)
+        return lint_brand(args[0], live=args[1:] == ["--live"], registry=registry, hosted=hosted)
     print(usage, file=sys.stderr)
     return 2
 

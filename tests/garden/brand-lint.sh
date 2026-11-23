@@ -2,9 +2,10 @@
 # Tests for scripts/brand.sh lint (scripts/brand/lint.py): the table of
 # names and their answers (tests/garden/brand-lint-names.tsv), the brands
 # this repo holds, a scratch brand's command, aliases, id and product, the
-# sign-off for a soft collision, and the live host and package checks
-# against a stand-in PATH and local index files. Offline: no network, no
-# CLI, no cargo.
+# sign-off for a soft collision, the live host and package checks against
+# a stand-in PATH and local index files, the table of the other fields'
+# shapes (tests/garden/brand-lint-fields.tsv) and --hosted. Offline: no
+# network, no CLI, no cargo.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 B="$HERE/scripts/brand.sh"
@@ -109,6 +110,69 @@ out="$(PATH="$T/bin" BRAND_LINT_BREW_JSON="file://$T/nope.json" "$(command -v py
 # Ours get no live checks (our own install may be on the host).
 live "$HERE/brand/k2"; [ "$rc" = 0 ] || die "brand/k2 --live: $out"; ok
 
+# ── the other fields: the shapes table ───────────────────────────────
+rows=0
+while IFS=$'\t' read -r field value want; do
+    case "$field" in ''|'#'*|field) continue ;; esac
+    rows=$((rows + 1))
+    table="${field%%.*}"
+    brand "f$rows" q8 q8 "Initech Hub"
+    if [ "$table" = names ]; then
+        # The scratch brand has [names] already: the key goes in it.
+        awk -v kv="${field#*.} = $value" '{ print } /^\[names\]$/ { print kv }' "$T/f$rows/brand.toml" > "$T/f$rows/b" \
+            && mv "$T/f$rows/b" "$T/f$rows/brand.toml"
+    else
+        printf '\n[%s]\n%s = %s\n' "$table" "${field#*.}" "$value" >> "$T/f$rows/brand.toml"
+    fi
+    lint "$T/f$rows"
+    if [ "$want" = ok ]; then
+        [ "$rc" = 0 ] || die "the fields table: $field = $value: want ok, got: $out"
+    else
+        [ "$rc" = 1 ] && [[ "$out" == *"field $table"*": $want: "* ]] \
+            || die "the fields table: $field = $value: want $want, got: $out"
+    fi
+done < "$HERE/tests/garden/brand-lint-fields.tsv"
+[ "$rows" -ge 60 ] || die "the fields table has only $rows rows"; ok
+# A finding names the field and says what shape it wants.
+brand f-why q8 q8 "Initech Hub"
+printf '\n[links]\nsite = "http://example.invalid"\n' >> "$T/f-why/brand.toml"
+lint "$T/f-why"
+[[ "$out" == *"brand lint: q8: field links.site: shape: must be an https URL"* ]] || die "a shape finding's line: $out"; ok
+
+# ── --hosted: what a hosted box of a brand needs ──────────────────────
+for b in "$HERE/brand/xy" "$HERE/templates/distributor/brand"; do
+    lint "$b" --hosted
+    [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the hosted fields)"* ]] || die "$b --hosted: $out"; ok
+done
+# Ours are never a partner's box: --hosted checks their shapes only.
+lint "$HERE/brand/k2" --hosted
+[ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists)"* ]] || die "brand/k2 --hosted: $out"; ok
+# A brand with only its names lacks every field a hosted box needs.
+brand h-bare q8 q8 "Initech Hub"
+lint "$T/h-bare"; [ "$rc" = 0 ] || die "without --hosted the hosted fields are not asked for: $out"; ok
+lint "$T/h-bare" --hosted
+[ "$rc" = 1 ] || die "a bare brand --hosted: $out"
+for f in names.company names.login zones.label zones.internal package.update_feed update.keys \
+    feeds.daemon feeds.downloads look.icons links.site links.support_email links.support_url \
+    links.terms links.privacy links.dashboard links.feedback mail.system_from mail.postal; do
+    [[ "$out" == *"field $f: hosted: a hosted box needs it set"* ]] || die "a bare brand --hosted names $f: $out"
+done
+[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 18 ] || die "a bare brand --hosted: 18 fields: $out"; ok
+# A link that may not be none, and a value that is the default brand's own.
+cp -R "$HERE/templates/distributor/brand" "$T/h-terms"
+sed -i.bak 's#^terms = .*#terms = ""#' "$T/h-terms/brand.toml" && rm -f "$T/h-terms/brand.toml.bak"
+lint "$T/h-terms" --hosted
+[ "$rc" = 1 ] && [[ "$out" == *"field links.terms: hosted: a hosted box needs a link here"* ]] || die "an empty terms link: $out"; ok
+cp -R "$HERE/templates/distributor/brand" "$T/h-ours"
+site="$(sed -n 's/^site = //p' "$HERE/brand/k2/brand.toml")"
+mail="$(sed -n 's/^support_email = //p' "$HERE/brand/k2/brand.toml")"
+[ -n "$site" ] && [ -n "$mail" ] || die "brand/k2 has no links.site or links.support_email"
+sed -i.bak -e "s#^site = .*#site = $site#" -e "s#^support_email = .*#support_email = $mail#" "$T/h-ours/brand.toml" && rm -f "$T/h-ours/brand.toml.bak"
+lint "$T/h-ours" --hosted
+[ "$rc" = 1 ] && [[ "$out" == *"field links.site: ours: is the default brand's own value"* ]] \
+    && [[ "$out" == *"field links.support_email: ours:"* ]] || die "the default brand's own values: $out"; ok
+lint "$T/h-ours"; [ "$rc" = 0 ] || die "the default brand's values are only refused with --hosted: $out"; ok
+
 # ── --registry: the private list of reserved distributor brands ───────
 # A stand-in registry with neutral names (the real one never goes in the
 # repo): command, product, brand id, tab-separated.
@@ -149,7 +213,7 @@ lint "$T/r-free" --registry "$T/bad.tsv"
 
 # ── usage ─────────────────────────────────────────────────────────────
 for args in "" "--name" "--name a b" "$T/nope" "$HERE/brand/xy --nope" "$HERE/brand/xy --registry" \
-    "--registry $REG"; do
+    "--registry $REG" "--name q7 --hosted" "$HERE/brand/xy --hosted --hosted" "--hosted"; do
     # shellcheck disable=SC2086
     lint $args
     [ "$rc" = 2 ] || die "args '$args': rc $rc: $out"; ok

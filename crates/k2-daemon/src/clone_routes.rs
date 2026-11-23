@@ -307,6 +307,11 @@ fn build_workspace_bundle(
             clone_id: Some(clone_id.clone()),
             threads_json: threads_part.map(|(json, _)| json),
             threads: threads_summary,
+            // The daemon makes its identity at boot; a bundle never makes one.
+            source_server_id: k2_core::federation::identity::identity_path()
+                .exists()
+                .then(crate::boot_status::server_id)
+                .flatten(),
         },
         &bundle_path,
     )
@@ -415,15 +420,77 @@ struct UnpackBody {
 /// With `vault_carry_b64`, also adds the moved vault secrets to the new
 /// project and reports `vault_imported` / `vault_skipped` (names only); a
 /// carry problem never fails the unpack.
+///
+/// Every request that names a bundle writes one `clone-unpack` row to the
+/// auth audit (`~/.k2/auth-audit.jsonl`), whatever the outcome: who asked
+/// (`owner` or `login:<name>`), `ingress`, and in `detail`:
+/// - `claimedServerId`: the sending server's id as the bundle's manifest
+///   states it. Only a claim: nothing on this side checks it.
+/// - `peer`: the server id this side verified for the sender (a federation
+///   or pairing key). Always `null` today: the route admits only the owner
+///   token and Connect logins (`http::token_ok`), and neither carries a
+///   peer key, so there is no verified peer to name.
+/// - `login`: the Connect login that uploaded and asked, `null` for the
+///   owner token.
+/// - the bundle's SHA-256, its entry count and the clone id, read before
+///   the unpack (which deletes the bundle), and the new folder or the error.
 pub fn handle_clone_unpack(
     body: &[u8],
     vault_caller: Option<crate::vault::actor::VaultCaller>,
+    who: &crate::compute_routes::Who,
+    ingress: &str,
 ) -> CliResponse {
     let b: UnpackBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
+    let facts = clone::bundle_facts(std::path::Path::new(&b.bundle_path));
+    let resp = unpack_request(b, vault_caller);
+    audit_unpack(who, ingress, &facts, &resp);
+    resp
+}
 
+/// The server id this side verified for whoever sent the bundle. No caller
+/// this route admits carries a federation or pairing key (see
+/// [`handle_clone_unpack`]), so it is `None` for every one: an audit row
+/// writes `null` rather than a guess.
+fn verified_peer(who: &crate::compute_routes::Who) -> Option<String> {
+    use crate::compute_routes::Who;
+    match who {
+        Who::Owner | Who::Login { .. } | Who::Agent { .. } | Who::Shell { .. } | Who::Wrong | Who::Invalid => None,
+    }
+}
+
+/// The `clone-unpack` audit row for one unpack request.
+fn audit_unpack(who: &crate::compute_routes::Who, ingress: &str, facts: &clone::BundleFacts, resp: &CliResponse) {
+    let parsed: serde_json::Value = serde_json::from_str(&resp.body).unwrap_or(serde_json::Value::Null);
+    let ok = resp.status.starts_with("200");
+    let outcome = if ok { "ok" } else { "refused" };
+    let login = match who {
+        crate::compute_routes::Who::Login { username, .. } => Some(username.clone()),
+        _ => None,
+    };
+    let ev = k2_core::auth_audit::AuditEvent::new("clone-unpack", &who.label(), outcome, ingress, "-", "clone");
+    let mut detail = serde_json::json!({
+        "claimedServerId": facts.source_server_id,
+        "peer": verified_peer(who),
+        "login": login,
+        "bundleSha256": facts.sha256,
+        "entries": facts.entries,
+        "cloneId": facts.clone_id,
+        "status": resp.status,
+    });
+    if ok {
+        detail["destPath"] = parsed["dest_path"].clone();
+    } else {
+        detail["error"] = parsed["error"].clone();
+    }
+    if let Err(e) = k2_core::auth_audit::try_record_detail(&ev, detail) {
+        log_debug!("[daemon/clone] WARN could not write the clone-unpack audit row: {e}");
+    }
+}
+
+fn unpack_request(b: UnpackBody, vault_caller: Option<crate::vault::actor::VaultCaller>) -> CliResponse {
     let home = match k2_core::paths::home_dir() {
         Some(h) => h,
         None => return CliResponse::internal_error("cannot resolve home directory"),

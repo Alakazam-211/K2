@@ -8100,7 +8100,7 @@ async fn handle_one_request(
             let result = if p == "/cli/clone/bundle" {
                 crate::clone_routes::handle_clone_bundle(&body_bytes, vault_caller)
             } else {
-                crate::clone_routes::handle_clone_unpack(&body_bytes, vault_caller)
+                crate::clone_routes::handle_clone_unpack(&body_bytes, vault_caller, &clone_who, ingress.as_str())
             };
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;

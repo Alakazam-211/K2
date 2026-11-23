@@ -81,6 +81,7 @@ pub fn build_bundle_with_extras(
     let mut manifest = inventory.manifest(opts, created_at, settings, pinned_chat, chat_pins);
     manifest.clone_id = extras.clone_id.clone();
     manifest.threads = extras.threads_json.as_ref().and(extras.threads);
+    manifest.source_server_id = extras.source_server_id.clone();
     let manifest_json = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| format!("serialize manifest: {e}"))?;
 

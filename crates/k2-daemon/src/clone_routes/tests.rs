@@ -329,13 +329,120 @@ fn unpack_handler_400s_on_missing_bundle() {
     // it_misc/clone_routes_integration.rs). This asserts the HANDLER itself
     // produces a clean 400 on a nonexistent bundle path rather than
     // panicking.
+    let _home = crate::test_support::TempHome::new();
     let body = serde_json::json!({
         "bundle_path": "/nonexistent/bundle.tar.gz",
         "dest_parent": "/tmp",
     })
     .to_string();
-    let resp = super::handle_clone_unpack(body.as_bytes(), None);
+    let resp = super::handle_clone_unpack(body.as_bytes(), None, &crate::compute_routes::Who::Owner, "loopback");
     assert_eq!(resp.status, "400 Bad Request", "missing bundle → 400");
+}
+
+/// The last `clone-unpack` row of the auth audit.
+fn last_unpack_audit_row() -> serde_json::Value {
+    let rows = k2_core::auth_audit::read_all().expect("read the auth audit");
+    rows.into_iter().rev().find(|r| r["event"] == "clone-unpack").expect("a clone-unpack audit row")
+}
+
+/// Every unpack request writes one `clone-unpack` audit row: who asked,
+/// the ingress, the sending server's id as the bundle states it, the
+/// bundle's SHA-256 and entry count, the clone id, and the outcome (the
+/// new folder when it landed, the error when it was refused).
+#[test]
+fn unpack_writes_an_audit_row_for_every_request() {
+    use sha2::{Digest, Sha256};
+    let _home = crate::test_support::TempHome::new();
+    let root = TempDir::new("k2-unpack-audit");
+    let project = root.path().join("source").join("Audit Agent");
+    let src_home = root.path().join("src-home");
+    write(&project.join("README.md"), "# Audit Agent\n");
+    write(&project.join("src/main.rs"), "fn main() {}\n");
+    fs::create_dir_all(&src_home).unwrap();
+    let canon = dunce::canonicalize(&project).unwrap();
+    let opts = clone::CloneOptions { home_override: Some(src_home.clone()), ..Default::default() };
+    let inv = clone::inventory(&canon.to_string_lossy(), opts.clone()).unwrap();
+    let bundle = root.path().join("audit-bundle.tar.gz");
+    clone::build_bundle_with_extras(
+        &inv,
+        &opts,
+        "2026-11-23T00:00:00Z".to_string(),
+        None,
+        None,
+        vec![],
+        clone::BundleExtras {
+            clone_id: Some("clone-audit-1".into()),
+            source_server_id: Some("00aa11bb22cc33dd".into()),
+            ..Default::default()
+        },
+        &bundle,
+    )
+    .unwrap();
+    let sha = k2_core::federation::sas::to_hex(&Sha256::digest(fs::read(&bundle).unwrap()));
+    let entries = inv.entries.len() as u64 + 1; // + manifest.json
+    // Read now: a landed unpack deletes its bundle.
+    let manifest = serde_json::to_vec(&clone::read_manifest_from_bundle(&bundle).unwrap()).unwrap();
+    let dest_parent = root.path().join("dest");
+    fs::create_dir_all(&dest_parent).unwrap();
+
+    let body = serde_json::json!({ "bundle_path": bundle, "dest_parent": dest_parent }).to_string();
+    let dana = crate::compute_routes::Who::Login {
+        username: "dana".into(),
+        role: k2_core::connect_users::Role::Member,
+    };
+    let resp = super::handle_clone_unpack(body.as_bytes(), None, &dana, "tunnel");
+    assert_eq!(resp.status, "200 OK", "{}", resp.body);
+    let landed: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+    let row = last_unpack_audit_row();
+    assert_eq!(row["user"], "login:dana");
+    assert_eq!(row["outcome"], "ok");
+    assert_eq!(row["ingress"], "tunnel");
+    assert_eq!(row["client"], "clone");
+    let d = &row["detail"];
+    assert_eq!(d["claimedServerId"], "00aa11bb22cc33dd", "the manifest's claim, recorded as a claim");
+    assert_eq!(d["peer"], serde_json::Value::Null, "no verified peer for a login upload: null, not the claim");
+    assert_eq!(d["login"], "dana");
+    assert!(d.get("senderServerId").is_none(), "{d}");
+    assert_eq!(d["bundleSha256"], serde_json::json!(sha));
+    assert_eq!(d["entries"], serde_json::json!(entries));
+    assert_eq!(d["cloneId"], "clone-audit-1");
+    assert_eq!(d["destPath"], landed["dest_path"]);
+    let project_id = landed["project"]["id"].as_str().expect("project id").to_string();
+
+    // A refused bundle is audited too: here one with a symlink entry.
+    let refused = root.path().join("refused.tar.gz");
+    {
+        let f = fs::File::create(&refused).unwrap();
+        let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::default()));
+        let mut h = tar::Header::new_gnu();
+        h.set_size(manifest.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "manifest.json", &manifest[..]).unwrap();
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::Symlink);
+        h.set_path("workspace/link").unwrap();
+        h.set_link_name("elsewhere").unwrap();
+        h.set_size(0);
+        h.set_mode(0o777);
+        h.set_cksum();
+        b.append(&h, std::io::empty()).unwrap();
+        b.into_inner().unwrap().finish().unwrap();
+    }
+    let refused_sha = k2_core::federation::sas::to_hex(&Sha256::digest(fs::read(&refused).unwrap()));
+    let body = serde_json::json!({ "bundle_path": refused, "dest_parent": dest_parent }).to_string();
+    let resp = super::handle_clone_unpack(body.as_bytes(), None, &crate::compute_routes::Who::Owner, "loopback");
+    assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+    let row = last_unpack_audit_row();
+    assert_eq!((row["user"].as_str(), row["outcome"].as_str()), (Some("owner"), Some("refused")));
+    let d = &row["detail"];
+    assert_eq!(d["bundleSha256"], serde_json::json!(refused_sha));
+    assert_eq!(d["entries"], serde_json::json!(2));
+    assert_eq!(d["claimedServerId"], "00aa11bb22cc33dd");
+    assert_eq!((&d["peer"], &d["login"]), (&serde_json::Value::Null, &serde_json::Value::Null), "owner token: no peer, no login");
+    assert!(d["error"].as_str().expect("error").contains("is a symlink"), "{d}");
+
+    let _ = pops::projects_delete(&project_id);
 }
 
 #[test]

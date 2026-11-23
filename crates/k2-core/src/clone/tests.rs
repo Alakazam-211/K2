@@ -832,6 +832,7 @@ fn manual_manifest(source_project_path: &str) -> CloneManifest {
         chat_pins: vec![],
         clone_id: None,
         threads: None,
+        source_server_id: None,
     }
 }
 
@@ -2017,7 +2018,12 @@ fn bundle_with_extras_writes_threads_file_and_manifest_fields() {
         None,
         None,
         vec![],
-        BundleExtras { clone_id: Some("clone-ct-1".into()), threads_json: Some(json.clone()), threads: Some(summary) },
+        BundleExtras {
+            clone_id: Some("clone-ct-1".into()),
+            threads_json: Some(json.clone()),
+            threads: Some(summary),
+            source_server_id: Some("0123456789abcdef".into()),
+        },
         &out,
     )
     .unwrap();
@@ -2025,6 +2031,7 @@ fn bundle_with_extras_writes_threads_file_and_manifest_fields() {
     assert_eq!(m.version, 1, "additive: the manifest version stays 1");
     assert_eq!(m.clone_id.as_deref(), Some("clone-ct-1"));
     assert_eq!(m.threads, Some(summary));
+    assert_eq!(m.source_server_id.as_deref(), Some("0123456789abcdef"));
     let extract = fx._root.path().join("ct-extract");
     fs::create_dir_all(&extract).unwrap();
     let names = untar(&out, &extract);
@@ -2034,7 +2041,10 @@ fn bundle_with_extras_writes_threads_file_and_manifest_fields() {
     let plain = fx._root.path().join("ct-plain.tar.gz");
     build_bundle(&inv, &opts(&fx.home), "2026-10-16T00:00:00Z".to_string(), None, None, vec![], &plain).unwrap();
     let raw = serde_json::to_string(&read_manifest_from_bundle(&plain).unwrap()).unwrap();
-    assert!(!raw.contains("clone_id") && !raw.contains("\"threads\""), "old-shape manifest: {raw}");
+    assert!(
+        !raw.contains("clone_id") && !raw.contains("\"threads\"") && !raw.contains("source_server_id"),
+        "old-shape manifest: {raw}"
+    );
     let plain_x = fx._root.path().join("ct-plain-x");
     fs::create_dir_all(&plain_x).unwrap();
     let plain_names = untar(&plain, &plain_x);
@@ -2571,4 +2581,40 @@ fn unpack_good_bundle_is_byte_identical() {
     }
     let memory = dest_home.join(".claude/projects").join(&res.remote_slug).join("memory/MEMORY.md");
     assert_eq!(fs::read_to_string(memory).unwrap(), "## Memory Index\n");
+}
+
+/// The facts an unpack audit row records: the file's SHA-256, the archive's
+/// entry count and the manifest's sender and clone ids; `None` for what
+/// can't be read.
+#[test]
+fn bundle_facts_reads_hash_entry_count_and_sender() {
+    use sha2::{Digest, Sha256};
+    let site = unpack_site("bundle-facts");
+    let mut manifest = manual_manifest(RAW_SOURCE);
+    manifest.source_server_id = Some("fedcba9876543210".into());
+    manifest.clone_id = Some("clone-facts-1".into());
+    build_raw_bundle(
+        &site.bundle,
+        &manifest,
+        &[file_entry("workspace/a.txt", b"a\n"), file_entry("workspace/b/c.txt", b"c\n")],
+    );
+    let want_sha = crate::federation::sas::to_hex(&Sha256::digest(fs::read(&site.bundle).unwrap()));
+    let facts = super::bundle_facts(&site.bundle);
+    assert_eq!(
+        facts,
+        super::BundleFacts {
+            sha256: Some(want_sha),
+            entries: Some(3),
+            source_server_id: Some("fedcba9876543210".into()),
+            clone_id: Some("clone-facts-1".into()),
+        },
+        "manifest.json and two files"
+    );
+
+    let not_tar = site.root.path().join("not-a-bundle.tar.gz");
+    fs::write(&not_tar, b"plain text").unwrap();
+    let f = super::bundle_facts(&not_tar);
+    assert_eq!(f.sha256.as_deref().map(str::len), Some(64), "any readable file is hashed");
+    assert_eq!((f.entries, f.source_server_id, f.clone_id), (None, None, None));
+    assert_eq!(super::bundle_facts(&site.root.path().join("missing.tar.gz")), super::BundleFacts::default());
 }

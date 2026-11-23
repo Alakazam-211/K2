@@ -344,6 +344,8 @@ fn a_clone_copies_chosen_secrets_by_id_and_never_shows_a_value() {
         let r = crate::clone_routes::handle_clone_unpack(
             json!({ "bundle_path": bundle, "dest_parent": dest_dir.path(), "vault_carry_b64": carry }).to_string().as_bytes(),
             Some(owner()),
+            &crate::compute_routes::Who::Owner,
+            "loopback",
         );
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let u = json_of(&r);

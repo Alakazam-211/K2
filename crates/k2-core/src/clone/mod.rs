@@ -248,6 +248,11 @@ pub struct CloneManifest {
     /// (counts only). `None` = no Threads in the bundle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threads: Option<crate::overlay::transfer::ThreadsSummary>,
+    /// The sending server's `serverId` (federation identity, 0.46.18), as
+    /// the source states it: the destination's unpack audit row names it.
+    /// `None` on older bundles. Additive like `clone_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_server_id: Option<String>,
 }
 
 /// Optional, additive bundle parts (0.46.0): the clone id and the Threads
@@ -258,6 +263,49 @@ pub struct BundleExtras {
     /// `threads/threads.json` bytes (`k2-threads-export/1`).
     pub threads_json: Option<Vec<u8>>,
     pub threads: Option<crate::overlay::transfer::ThreadsSummary>,
+    /// The sending server's `serverId` for the manifest (0.46.18).
+    pub source_server_id: Option<String>,
+}
+
+/// What an unpack audit row records about a bundle file, read before the
+/// unpack (the route deletes the bundle after it). Each part is `None`
+/// when it can't be read (no file, not a gzip tar, no manifest).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BundleFacts {
+    /// SHA-256 of the bundle file's bytes, lowercase hex.
+    pub sha256: Option<String>,
+    /// Archive entries, `manifest.json` included.
+    pub entries: Option<u64>,
+    /// The manifest's `source_server_id`.
+    pub source_server_id: Option<String>,
+    /// The manifest's `clone_id`.
+    pub clone_id: Option<String>,
+}
+
+/// Read [`BundleFacts`] for the bundle at `path`, writing nothing.
+pub fn bundle_facts(path: &std::path::Path) -> BundleFacts {
+    use sha2::{Digest, Sha256};
+    let sha256 = std::fs::File::open(path).ok().and_then(|mut f| {
+        let mut h = Sha256::new();
+        std::io::copy(&mut f, &mut h).ok()?;
+        Some(crate::federation::sas::to_hex(&h.finalize()))
+    });
+    let entries = std::fs::File::open(path).ok().and_then(|f| {
+        let mut ar = tar::Archive::new(flate2::read::GzDecoder::new(f));
+        let mut n = 0u64;
+        for e in ar.entries().ok()? {
+            e.ok()?;
+            n += 1;
+        }
+        Some(n)
+    });
+    let manifest = read_manifest_from_bundle(path).ok();
+    BundleFacts {
+        sha256,
+        entries,
+        source_server_id: manifest.as_ref().and_then(|m| m.source_server_id.clone()),
+        clone_id: manifest.and_then(|m| m.clone_id),
+    }
 }
 
 impl CloneInventory {
@@ -307,6 +355,7 @@ impl CloneInventory {
             chat_pins,
             clone_id: None,
             threads: None,
+            source_server_id: None,
         }
     }
 }

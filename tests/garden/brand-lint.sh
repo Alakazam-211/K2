@@ -85,17 +85,16 @@ mkdir -p "$T/bin"
 ln -s "$(command -v bash)" "$T/bin/bash"
 if command -v zsh >/dev/null; then ln -s "$(command -v zsh)" "$T/bin/zsh"; fi
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/zk"; chmod +x "$T/bin/zk"
-printf 'abc\nyj\nqq9\n' > "$T/brew.txt"
-printf 'oldname: qq8\n' > "$T/brew-aliases.txt"
+printf '[{"name": "abc", "aliases": [], "oldnames": []}, {"name": "qq9", "aliases": ["qq8"], "oldnames": ["qq5"], "executables": ["qq4"]}]' > "$T/brew.json"
 printf 'usr/bin/qq7    utils/qq\nusr/share/doc/q9/README    doc/q9\nusr/lib/qq6/bin/qq6 x/y\n' | gzip > "$T/contents.gz"
 live() {
     rc=0
-    out="$(PATH="$T/bin" BRAND_LINT_BREW_NAMES="file://$T/brew.txt" BRAND_LINT_BREW_ALIASES="file://$T/brew-aliases.txt" \
+    out="$(PATH="$T/bin" BRAND_LINT_BREW_JSON="file://$T/brew.json" \
         BRAND_LINT_DEBIAN_CONTENTS="file://$T/contents.gz" "$(command -v python3)" "$HERE/scripts/brand/lint.py" "$1" --live 2>&1)" || rc=$?
 }
 brand l-host q8 zk "Initech Hub"
 live "$T/l-host"; [ "$rc" = 1 ] && [[ "$out" == *"command zk: host: bash finds it: $T/bin/zk"* ]] || die "a name on the host's PATH: $out"; ok
-for n in qq9 qq8 qq7; do
+for n in qq9 qq8 qq5 qq4 qq7; do
     brand "l-$n" q8 "$n" "Initech Hub"
     live "$T/l-$n"; [ "$rc" = 1 ] && [[ "$out" == *"command $n: package:"* ]] || die "a package name $n: $out"; ok
 done
@@ -105,7 +104,7 @@ printf '[[ok]]\nname = "qq9"\nk2 = "x"\nsteward = "y"\nwhy = "z"\n' > "$T/l-qq9/
 live "$T/l-qq9"; [ "$rc" = 0 ] || die "a signed-off package name: $out"; ok
 # A source that can't be read fails: a name is never free unchecked.
 rc=0
-out="$(PATH="$T/bin" BRAND_LINT_BREW_NAMES="file://$T/nope.txt" "$(command -v python3)" "$HERE/scripts/brand/lint.py" "$T/l-free" --live 2>&1)" || rc=$?
+out="$(PATH="$T/bin" BRAND_LINT_BREW_JSON="file://$T/nope.json" "$(command -v python3)" "$HERE/scripts/brand/lint.py" "$T/l-free" --live 2>&1)" || rc=$?
 [ "$rc" = 1 ] && [[ "$out" == *"the package check did not run"* ]] || die "an index that can't be read: $out"; ok
 # Ours get no live checks (our own install may be on the host).
 live "$HERE/brand/k2"; [ "$rc" = 0 ] || die "brand/k2 --live: $out"; ok

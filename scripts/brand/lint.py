@@ -45,12 +45,13 @@ both sign-offs for that name (K2's ruling 6):
   host     the name resolves in bash (command -v, type -a), in zsh
            (whence -a) when zsh is here, and on Windows in PowerShell
            (Get-Command), pwsh and where.exe: anything found is refused
-  package  Homebrew's formula names and aliases, Debian's file index
+  package  Homebrew's formulae (names, aliases, old names and the programs
+           they install, from its formula.json), Debian's file index
            (usr/bin, bin, usr/sbin), Arch's pkgfile and winget when they
            are here: a hit is a soft collision (it needs the sign-off)
 The live checks fail loudly when a source can't be read: a name is never
 called free without its check. Their sources can be pointed elsewhere
-(BRAND_LINT_BREW_NAMES, BRAND_LINT_BREW_ALIASES, BRAND_LINT_DEBIAN_CONTENTS:
+(BRAND_LINT_BREW_JSON, BRAND_LINT_DEBIAN_CONTENTS:
 a URL, file:// too); the tests use that, and are offline.
 
 --registry <file> also checks the names against the brands we have
@@ -73,6 +74,7 @@ something is, 2 for a usage error.
 """
 import gzip
 import io
+import json
 import os
 import re
 import shutil
@@ -98,8 +100,9 @@ OUR_HELPERS = (
 )
 # The default build's outputs: what our own text prints.
 TEXT_PLACES = ("cli/k2", "cli/text", "tests/golden", "src/shared/cli-catalog.generated.json")
-BREW_NAMES = "https://formulae.brew.sh/api/formula_names.txt"
-BREW_ALIASES = "https://formulae.brew.sh/api/formula_aliases.txt"
+# Homebrew's formula list: one object per formula. (formula_names.txt is a
+# file brew writes in its local cache, not one the API serves.)
+BREW_JSON = "https://formulae.brew.sh/api/formula.json"
 DEBIAN_CONTENTS = "https://deb.debian.org/debian/dists/stable/main/Contents-amd64.gz"
 
 
@@ -309,11 +312,20 @@ _index = {}
 
 def package_findings(name, ok):
     if "brew" not in _index:
-        _index["brew"] = set(fetch("BRAND_LINT_BREW_NAMES", BREW_NAMES).split())
-        aliases = set()
-        for line in fetch("BRAND_LINT_BREW_ALIASES", BREW_ALIASES).splitlines():
-            aliases.update(w for w in re.split(r"[\s|:]+", line) if w)
-        _index["brew_aliases"] = aliases
+        try:
+            formulae = json.loads(fetch("BRAND_LINT_BREW_JSON", BREW_JSON))
+        except ValueError as e:
+            raise SystemExit(f"brand lint: Homebrew's formula list is not JSON ({e}): the package check did not run")
+        if not isinstance(formulae, list) or not formulae:
+            raise SystemExit("brand lint: Homebrew's formula list is empty or not a list: the package check did not run")
+        names = set()
+        for f in formulae:
+            if not isinstance(f, dict) or not isinstance(f.get("name"), str):
+                raise SystemExit("brand lint: a Homebrew formula with no name: the package check did not run")
+            names.add(f["name"])
+            for key in ("aliases", "oldnames", "executables"):
+                names.update(v for v in (f.get(key) or []) if isinstance(v, str))
+        _index["brew"] = names
         names = set()
         for line in fetch("BRAND_LINT_DEBIAN_CONTENTS", DEBIAN_CONTENTS).splitlines():
             path = line.split()[0] if line.split() else ""
@@ -322,8 +334,8 @@ def package_findings(name, ok):
                     names.add(path[len(prefix):])
         _index["debian"] = names
     hits = []
-    if name in _index["brew"] or name in _index["brew_aliases"]:
-        hits.append("a Homebrew formula or alias")
+    if name in _index["brew"]:
+        hits.append("a Homebrew formula, alias or program")
     if name in _index["debian"]:
         hits.append("a Debian package's program")
     if shutil.which("pkgfile"):

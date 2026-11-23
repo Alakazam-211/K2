@@ -38,7 +38,7 @@ fn input(env: &str) -> Option<PathBuf> {
     static INPUTS: std::sync::OnceLock<HashMap<&'static str, PathBuf>> = std::sync::OnceLock::new();
     INPUTS
         .get_or_init(|| {
-            ["K2_ISO_DAEMON_BIN", "K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_ISO_CLI", "K2_ISO_TOOLCHAIN_HOME", "K2_ISO_PERSIST_HOME", "K2_ISO_EXPECT"]
+            ["K2_ISO_DAEMON_BIN", "K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_ISO_CLI", "K2_ISO_TOOLCHAIN_HOME", "K2_ISO_PERSIST_HOME", "K2_ISO_EXPECT", "K2_ISO_USER_BUS", "K2_ISO_TMUX_SOCK"]
                 .into_iter()
                 .filter_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()).map(|v| (k, PathBuf::from(v))))
                 .collect()

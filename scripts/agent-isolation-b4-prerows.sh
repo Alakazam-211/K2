@@ -54,15 +54,6 @@ for _ in $(seq 1 50); do
 done
 [ -n "$sib" ] || { echo "no sibling process" >&2; exit 1; }
 
-# 1. AttachProcessesToUnit as the K2 user (system bus): a sibling's pid and
-#    our own, onto the test daemon's unit.
-out="$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau "$unit" "" 1 "$sib" 2>&1)"
-row 1a "attach a sibling's pid onto $unit as $user: rc=$? $(echo "$out" | first_line) · now in $(cut -d: -f3 /proc/"$sib"/cgroup)"
-sleep 300 & own=$!
-out="$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau "$unit" "" 1 "$own" 2>&1)"
-row 1b "attach own pid onto $unit as $user: rc=$? $(echo "$out" | first_line) · now in $(cut -d: -f3 /proc/"$own"/cgroup)"
-kill "$own" 2>/dev/null
-
 # 3. Does systemd remove and remake an empty slice's cgroup?
 sudo systemd-run --quiet --collect --slice=k2isorow-empty.slice --unit=k2isorow-e1 true
 sleep 0.5
@@ -136,12 +127,14 @@ sudo systemd-run --uid="$uid" --gid="$(id -g)" \
 rc=$?
 tmux -S "/tmp/tmux-$uid/default" kill-server 2>/dev/null
 grep -E '^row ' "$log"
+fenced_ok=1
 if [ "$rc" != 0 ] || ! grep -q '^row P7' "$log"; then
     echo "the fenced-session rows did not run (rc=$rc):" >&2
     tail -40 "$log" >&2
-    exit 1
+    fenced_ok=0
+else
+    ran=$((ran + 3))
 fi
-ran=$((ran + 3))
 
 # P4. The daemon unit after a Delegate=no drop-in, with a live ptyd.
 port_file="$persist/home/.k2/daemon.port"
@@ -159,6 +152,24 @@ done
 cg="$(systemctl show -p ControlGroup --value "$unit")"
 tree() { find "/sys/fs/cgroup$cg" -maxdepth 2 -name cgroup.procs -printf '%h ' 2>/dev/null; echo "· owner $(stat -c %U "/sys/fs/cgroup$cg" 2>/dev/null)"; }
 row P4a "before the drop-in: $unit at $cg: $(tree)"
+# 1. AttachProcessesToUnit as the K2 user (system bus): a sibling's pid and
+#    our own, onto the test daemon's unit (running: an inactive unit takes
+#    no attach). A fresh sibling in a root-made scope.
+sudo systemd-run --quiet --collect --scope --slice="$slice" --unit=k2isorow-sibling2 --uid="$uid" sleep 600 &
+sib=""
+for _ in $(seq 1 50); do
+    sib="$(head -1 /sys/fs/cgroup/$slice/k2isorow-sibling2.scope/cgroup.procs 2>/dev/null)"
+    [ -n "$sib" ] && break
+    sleep 0.1
+done
+[ -n "$sib" ] || { echo "no second sibling process" >&2; exit 1; }
+out="$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau "$unit" "" 1 "$sib" 2>&1)"
+row 1a "attach a sibling's pid onto $unit as $user: rc=$? $(echo "$out" | first_line) · now in $(cut -d: -f3 /proc/"$sib"/cgroup)"
+sleep 300 & own=$!
+out="$(busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau "$unit" "" 1 "$own" 2>&1)"
+row 1b "attach own pid onto $unit as $user: rc=$? $(echo "$out" | first_line) · now in $(cut -d: -f3 /proc/"$own"/cgroup)"
+kill "$own" 2>/dev/null
+
 # N2 (pre-row 1, the sub-cgroup form): can the K2 user have PID 1 put its
 # own pid into a ROOT-owned agent cgroup of the delegated unit
 # (`/agents/a-<other>`)? If yes, M1b's "can't move itself into another
@@ -199,4 +210,5 @@ sudo systemctl kill --signal=KILL "$unit" 2>/dev/null
 
 kill "$sib_wrap" 2>/dev/null
 echo "rows recorded: $ran"
+[ "$fenced_ok" = 1 ] || { echo "the fenced-session rows (4, P2, P7) did not run" >&2; exit 1; }
 [ "$ran" -ge 12 ] || { echo "fewer rows than expected ran" >&2; exit 1; }

@@ -58,9 +58,7 @@ print(json.dumps(b))
         local pw=""
         _k2_password_transport_ok
         if [ -t 0 ]; then
-            printf 'Password for your login: ' >&2
-            IFS= read -rs pw || pw=""
-            echo >&2
+            _k2_read_hidden pw 'Password for your login: '
         else
             IFS= read -r pw || pw=""
         fi

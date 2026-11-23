@@ -367,15 +367,14 @@ _vault_confirm_token_plan() {
     methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
     text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
     [ -n "$text" ] && echo "You are approving: $text" >&2
-    local m=""
+    local m="" ask=""
     case " $methods " in
-        *" vault-password "*) m="vault-password"; printf 'Vault password: ' >&2 ;;
-        *" connect-password "*) m="connect-password"; printf 'Your K2 Connect password: ' >&2 ;;
+        *" vault-password "*) m="vault-password"; ask='Vault password: ' ;;
+        *" connect-password "*) m="connect-password"; ask='Your K2 Connect password: ' ;;
         *) echo "no_confirm_method: set a vault password first: k2 vault confirm-password set" >&2; exit 3 ;;
     esac
     local pw=""
-    IFS= read -rs pw || pw=""
-    echo >&2
+    _k2_read_hidden pw "$ask"
     body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "method": sys.argv[4], "password": sys.stdin.read(), sys.argv[3]: json.loads(sys.argv[2])}))' "$action" "$plan" "$key" "$m")"
     pw=""
     _vault_sock_call POST "confirm/finish" "$body"

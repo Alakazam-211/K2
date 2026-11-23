@@ -284,11 +284,10 @@ print("\x1f".join([one(l.get("state")), one(l.get("url")), one(l.get("code")), o
                 if [ "$prompted" = "0" ]; then
                     prompted=1
                     local pasted=""
-                    printf 'Paste the code: ' >&2
                     if [ -t 0 ]; then
-                        IFS= read -rs pasted || pasted=""
-                        echo >&2
+                        _k2_read_hidden pasted 'Paste the code: '
                     else
+                        printf 'Paste the code: ' >&2
                         IFS= read -r pasted || pasted=""
                     fi
                     if [ -z "$pasted" ]; then
@@ -697,9 +696,7 @@ if v.get("note"):
             local api_key=""
             _k2_password_transport_ok
             if [ -t 0 ]; then
-                printf 'Paste the API token: ' >&2
-                IFS= read -rs api_key || api_key=""
-                echo >&2
+                _k2_read_hidden api_key 'Paste the API token: '
             else
                 IFS= read -r api_key || true
             fi

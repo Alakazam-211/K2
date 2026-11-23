@@ -1297,12 +1297,8 @@ _publish_read_pin() {
     _k2_password_transport_ok
     if [ -t 0 ]; then
         local again=""
-        printf 'PIN for %s (6 to 64 characters): ' "$1" >&2
-        IFS= read -rs _K2_PIN || _K2_PIN=""
-        echo >&2
-        printf 'The same PIN again: ' >&2
-        IFS= read -rs again || again=""
-        echo >&2
+        _k2_read_hidden _K2_PIN "PIN for $1 (6 to 64 characters): "
+        _k2_read_hidden again 'The same PIN again: '
         [ "$_K2_PIN" = "$again" ] || return 1
     else
         IFS= read -r _K2_PIN || true

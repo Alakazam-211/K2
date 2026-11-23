@@ -1009,8 +1009,8 @@ print()' >&2
             fi
             tokj="$(_with_confirm_token '{}' "$tok")"
             local p1="" p2=""
-            printf 'New vault password (10+ characters): ' >&2; IFS= read -rs p1 || p1=""; echo >&2
-            printf 'Again: ' >&2; IFS= read -rs p2 || p2=""; echo >&2
+            _k2_read_hidden p1 'New vault password (10+ characters): '
+            _k2_read_hidden p2 'Again: '
             [ -n "$p1" ] && [ "$p1" = "$p2" ] || { echo "usage: the two entries don't match" >&2; exit 2; }
             local pb
             pb="$(printf '%s' "$p1" | python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["password"]=sys.stdin.read(); print(json.dumps(o))' "$tokj")"
@@ -1186,9 +1186,8 @@ else:
             rd="$(cd "$from" 2>/dev/null && pwd)" || { echo "usage: $from isn't a folder" >&2; exit 2; }
             [ -f "$rd/vault.db" ] || { echo "usage: no vault.db in $rd" >&2; exit 2; }
             if [ -t 0 ]; then
-                if [ "$h" = "recovery" ]; then printf 'Recovery words (24, not shown): ' >&2; else printf 'Backup key (AGE-SECRET-KEY-1…, not shown): ' >&2; fi
-                IFS= read -rs secret_in || secret_in=""
-                echo >&2
+                if [ "$h" = "recovery" ]; then _k2_read_hidden secret_in 'Recovery words (24, not shown): '
+                else _k2_read_hidden secret_in 'Backup key (AGE-SECRET-KEY-1…, not shown): '; fi
             else
                 secret_in="$(cat)"
             fi

@@ -2298,8 +2298,61 @@ cli_post_json_stdin() {
     return "$rc"
 }
 
+# _k2_read_hidden NAME PROMPT: `printf PROMPT >&2; IFS= read -rs NAME ||
+# NAME=""; echo >&2`, with the terminal's echo turned off BEFORE the
+# prompt shows, so nothing typed after it can be echoed. At a terminal:
+# the settings saved (stty -g), echo off, input typed before the prompt
+# thrown away (as getpass's TCSAFLUSH: a secret never comes from a line
+# that was shown), then the prompt and one line, then the settings put
+# back and a newline on stderr. Ctrl-C, SIGTERM or SIGHUP during the read
+# put the settings back first, then the signal goes on to whatever trap
+# was there before (or ends the shell, as it would have). Not a terminal:
+# the same printf, read and echo as before. A program should hand a
+# secret over through a pipe, not by typing at the prompt.
+_K2_HIDDEN_STTY=""
+_k2_hidden_restore() {
+    [ -z "$_K2_HIDDEN_STTY" ] || stty "$_K2_HIDDEN_STTY" 2>/dev/null
+    _K2_HIDDEN_STTY=""
+}
+# _k2_hidden_signal SIG TRAP: the settings back, TRAP (what `trap -p SIG`
+# printed before, or none) in place again, then SIG once more to this
+# very shell (a subshell too: sh's parent is it).
+_k2_hidden_signal() {
+    _k2_hidden_restore
+    if [ -n "$2" ]; then eval "$2"; else trap - "$1"; fi
+    sh -c 'kill -'"$1"' "$PPID"'
+}
+_k2_read_hidden() {
+    local __k2h_v="" __k2h_int="" __k2h_term="" __k2h_hup=""
+    if [ -t 0 ] && _K2_HIDDEN_STTY="$(stty -g 2>/dev/null)" && [ -n "$_K2_HIDDEN_STTY" ]; then
+        __k2h_int="$(trap -p INT)"; __k2h_term="$(trap -p TERM)"; __k2h_hup="$(trap -p HUP)"
+        trap '_k2_hidden_signal INT "$__k2h_int"' INT
+        trap '_k2_hidden_signal TERM "$__k2h_term"' TERM
+        trap '_k2_hidden_signal HUP "$__k2h_hup"' HUP
+        # Echo off, then what was typed ahead read and dropped (no line
+        # mode for that, so the read returns at once), then line mode back.
+        stty -echo -echok -echonl -icanon min 0 time 0 2>/dev/null
+        while [ "$(dd bs=4096 count=1 2>/dev/null | wc -c | tr -d ' ')" != 0 ]; do :; done
+        stty icanon 2>/dev/null
+        printf '%s' "$2" >&2
+        IFS= read -r __k2h_v || __k2h_v=""
+        _k2_hidden_restore
+        if [ -n "$__k2h_int" ]; then eval "$__k2h_int"; else trap - INT; fi
+        if [ -n "$__k2h_term" ]; then eval "$__k2h_term"; else trap - TERM; fi
+        if [ -n "$__k2h_hup" ]; then eval "$__k2h_hup"; else trap - HUP; fi
+        echo >&2
+    else
+        printf '%s' "$2" >&2
+        IFS= read -r __k2h_v || __k2h_v=""
+        echo >&2
+    fi
+    eval "$1=\$__k2h_v"
+    __k2h_v=""
+}
+
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
-# is a terminal (`read -rs`), else one line from the pipe. Never echoed.
+# is a terminal (_k2_read_hidden), else one line from the pipe. Never
+# echoed.
 # _cli_read_secret_stdin [PROMPT] [password]
 _cli_read_secret_stdin() {
     local prompt="${1:-Paste the key: }"
@@ -2309,9 +2362,7 @@ _cli_read_secret_stdin() {
     # piped, before anything is read (_k2_password_transport_ok).
     [ "${2:-}" != password ] || _k2_password_transport_ok
     if [ -t 0 ]; then
-        printf '%s' "$prompt" >&2
-        IFS= read -rs _K2_SECRET || _K2_SECRET=""
-        echo >&2
+        _k2_read_hidden _K2_SECRET "$prompt"
     else
         IFS= read -r _K2_SECRET || true
     fi

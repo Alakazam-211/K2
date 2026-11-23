@@ -2863,8 +2863,61 @@ cli_post_json_stdin() {
     return "$rc"
 }
 
+# _k2_read_hidden NAME PROMPT: `printf PROMPT >&2; IFS= read -rs NAME ||
+# NAME=""; echo >&2`, with the terminal's echo turned off BEFORE the
+# prompt shows, so nothing typed after it can be echoed. At a terminal:
+# the settings saved (stty -g), echo off, input typed before the prompt
+# thrown away (as getpass's TCSAFLUSH: a secret never comes from a line
+# that was shown), then the prompt and one line, then the settings put
+# back and a newline on stderr. Ctrl-C, SIGTERM or SIGHUP during the read
+# put the settings back first, then the signal goes on to whatever trap
+# was there before (or ends the shell, as it would have). Not a terminal:
+# the same printf, read and echo as before. A program should hand a
+# secret over through a pipe, not by typing at the prompt.
+_K2_HIDDEN_STTY=""
+_k2_hidden_restore() {
+    [ -z "$_K2_HIDDEN_STTY" ] || stty "$_K2_HIDDEN_STTY" 2>/dev/null
+    _K2_HIDDEN_STTY=""
+}
+# _k2_hidden_signal SIG TRAP: the settings back, TRAP (what `trap -p SIG`
+# printed before, or none) in place again, then SIG once more to this
+# very shell (a subshell too: sh's parent is it).
+_k2_hidden_signal() {
+    _k2_hidden_restore
+    if [ -n "$2" ]; then eval "$2"; else trap - "$1"; fi
+    sh -c 'kill -'"$1"' "$PPID"'
+}
+_k2_read_hidden() {
+    local __k2h_v="" __k2h_int="" __k2h_term="" __k2h_hup=""
+    if [ -t 0 ] && _K2_HIDDEN_STTY="$(stty -g 2>/dev/null)" && [ -n "$_K2_HIDDEN_STTY" ]; then
+        __k2h_int="$(trap -p INT)"; __k2h_term="$(trap -p TERM)"; __k2h_hup="$(trap -p HUP)"
+        trap '_k2_hidden_signal INT "$__k2h_int"' INT
+        trap '_k2_hidden_signal TERM "$__k2h_term"' TERM
+        trap '_k2_hidden_signal HUP "$__k2h_hup"' HUP
+        # Echo off, then what was typed ahead read and dropped (no line
+        # mode for that, so the read returns at once), then line mode back.
+        stty -echo -echok -echonl -icanon min 0 time 0 2>/dev/null
+        while [ "$(dd bs=4096 count=1 2>/dev/null | wc -c | tr -d ' ')" != 0 ]; do :; done
+        stty icanon 2>/dev/null
+        printf '%s' "$2" >&2
+        IFS= read -r __k2h_v || __k2h_v=""
+        _k2_hidden_restore
+        if [ -n "$__k2h_int" ]; then eval "$__k2h_int"; else trap - INT; fi
+        if [ -n "$__k2h_term" ]; then eval "$__k2h_term"; else trap - TERM; fi
+        if [ -n "$__k2h_hup" ]; then eval "$__k2h_hup"; else trap - HUP; fi
+        echo >&2
+    else
+        printf '%s' "$2" >&2
+        IFS= read -r __k2h_v || __k2h_v=""
+        echo >&2
+    fi
+    eval "$1=\$__k2h_v"
+    __k2h_v=""
+}
+
 # Read one secret from stdin into _K2_SECRET: a hidden prompt when stdin
-# is a terminal (`read -rs`), else one line from the pipe. Never echoed.
+# is a terminal (_k2_read_hidden), else one line from the pipe. Never
+# echoed.
 # _cli_read_secret_stdin [PROMPT] [password]
 _cli_read_secret_stdin() {
     local prompt="${1:-Paste the key: }"
@@ -2874,9 +2927,7 @@ _cli_read_secret_stdin() {
     # piped, before anything is read (_k2_password_transport_ok).
     [ "${2:-}" != password ] || _k2_password_transport_ok
     if [ -t 0 ]; then
-        printf '%s' "$prompt" >&2
-        IFS= read -rs _K2_SECRET || _K2_SECRET=""
-        echo >&2
+        _k2_read_hidden _K2_SECRET "$prompt"
     else
         IFS= read -r _K2_SECRET || true
     fi
@@ -22367,9 +22418,7 @@ cmd_notifications_relay() {
             local pw=""
             _k2_password_transport_ok
             if [ -t 0 ]; then
-                printf 'Relay password (SMTP password or API key): ' >&2
-                IFS= read -rs pw || pw=""
-                echo >&2
+                _k2_read_hidden pw 'Relay password (SMTP password or API key): '
             else
                 IFS= read -r pw || true
             fi
@@ -39429,11 +39478,10 @@ print("\x1f".join([one(l.get("state")), one(l.get("url")), one(l.get("code")), o
                 if [ "$prompted" = "0" ]; then
                     prompted=1
                     local pasted=""
-                    printf 'Paste the code: ' >&2
                     if [ -t 0 ]; then
-                        IFS= read -rs pasted || pasted=""
-                        echo >&2
+                        _k2_read_hidden pasted 'Paste the code: '
                     else
+                        printf 'Paste the code: ' >&2
                         IFS= read -r pasted || pasted=""
                     fi
                     if [ -z "$pasted" ]; then
@@ -39842,9 +39890,7 @@ if v.get("note"):
             local api_key=""
             _k2_password_transport_ok
             if [ -t 0 ]; then
-                printf 'Paste the API token: ' >&2
-                IFS= read -rs api_key || api_key=""
-                echo >&2
+                _k2_read_hidden api_key 'Paste the API token: '
             else
                 IFS= read -r api_key || true
             fi
@@ -41867,9 +41913,7 @@ _vault_body_with_value() {
     local base_json="$1"
     if [ -t 0 ]; then
         local v=""
-        printf 'Value (not shown): ' >&2
-        IFS= read -rs v || v=""
-        echo >&2
+        _k2_read_hidden v 'Value (not shown): '
         [ -n "$v" ] || { echo "usage: no value on stdin" >&2; exit 2; }
         printf '%s' "$v" | python3 -c '
 import base64, json, sys
@@ -42155,17 +42199,13 @@ print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
                 printf 'Which owner login on this server (k2 users lists them): ' >&2
                 IFS= read -r login || login=""
             fi
-            printf 'Sign-in password for owner login %s: ' "$login" >&2
-            IFS= read -rs pw || pw=""
-            echo >&2
+            _k2_read_hidden pw "Sign-in password for owner login $login: "
             body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "owner-login-password", "username": sys.argv[3], "password": sys.stdin.read()}))' "$action" "$secret_id" "$login")"
             pw=""
             ;;
         *" vault-password "*)
             local pw=""
-            printf 'Vault password: ' >&2
-            IFS= read -rs pw || pw=""
-            echo >&2
+            _k2_read_hidden pw 'Vault password: '
             body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "vault-password", "password": sys.stdin.read()}))' "$action" "$secret_id")"
             pw=""
             ;;
@@ -44976,15 +45016,14 @@ _vault_confirm_token_plan() {
     methods="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin).get("methods") or []))')"
     text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
     [ -n "$text" ] && echo "You are approving: $text" >&2
-    local m=""
+    local m="" ask=""
     case " $methods " in
-        *" vault-password "*) m="vault-password"; printf 'Vault password: ' >&2 ;;
-        *" connect-password "*) m="connect-password"; printf 'Your K2 Connect password: ' >&2 ;;
+        *" vault-password "*) m="vault-password"; ask='Vault password: ' ;;
+        *" connect-password "*) m="connect-password"; ask='Your K2 Connect password: ' ;;
         *) echo "no_confirm_method: set a vault password first: k2 vault confirm-password set" >&2; exit 3 ;;
     esac
     local pw=""
-    IFS= read -rs pw || pw=""
-    echo >&2
+    _k2_read_hidden pw "$ask"
     body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "method": sys.argv[4], "password": sys.stdin.read(), sys.argv[3]: json.loads(sys.argv[2])}))' "$action" "$plan" "$key" "$m")"
     pw=""
     _vault_sock_call POST "confirm/finish" "$body"
@@ -46195,8 +46234,8 @@ print()' >&2
             fi
             tokj="$(_with_confirm_token '{}' "$tok")"
             local p1="" p2=""
-            printf 'New vault password (10+ characters): ' >&2; IFS= read -rs p1 || p1=""; echo >&2
-            printf 'Again: ' >&2; IFS= read -rs p2 || p2=""; echo >&2
+            _k2_read_hidden p1 'New vault password (10+ characters): '
+            _k2_read_hidden p2 'Again: '
             [ -n "$p1" ] && [ "$p1" = "$p2" ] || { echo "usage: the two entries don't match" >&2; exit 2; }
             local pb
             pb="$(printf '%s' "$p1" | python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["password"]=sys.stdin.read(); print(json.dumps(o))' "$tokj")"
@@ -46372,9 +46411,8 @@ else:
             rd="$(cd "$from" 2>/dev/null && pwd)" || { echo "usage: $from isn't a folder" >&2; exit 2; }
             [ -f "$rd/vault.db" ] || { echo "usage: no vault.db in $rd" >&2; exit 2; }
             if [ -t 0 ]; then
-                if [ "$h" = "recovery" ]; then printf 'Recovery words (24, not shown): ' >&2; else printf 'Backup key (AGE-SECRET-KEY-1…, not shown): ' >&2; fi
-                IFS= read -rs secret_in || secret_in=""
-                echo >&2
+                if [ "$h" = "recovery" ]; then _k2_read_hidden secret_in 'Recovery words (24, not shown): '
+                else _k2_read_hidden secret_in 'Backup key (AGE-SECRET-KEY-1…, not shown): '; fi
             else
                 secret_in="$(cat)"
             fi
@@ -49241,12 +49279,8 @@ _publish_read_pin() {
     _k2_password_transport_ok
     if [ -t 0 ]; then
         local again=""
-        printf 'PIN for %s (6 to 64 characters): ' "$1" >&2
-        IFS= read -rs _K2_PIN || _K2_PIN=""
-        echo >&2
-        printf 'The same PIN again: ' >&2
-        IFS= read -rs again || again=""
-        echo >&2
+        _k2_read_hidden _K2_PIN "PIN for $1 (6 to 64 characters): "
+        _k2_read_hidden again 'The same PIN again: '
         [ "$_K2_PIN" = "$again" ] || return 1
     else
         IFS= read -r _K2_PIN || true
@@ -52541,9 +52575,7 @@ print(json.dumps(b))
         local pw=""
         _k2_password_transport_ok
         if [ -t 0 ]; then
-            printf 'Password for your login: ' >&2
-            IFS= read -rs pw || pw=""
-            echo >&2
+            _k2_read_hidden pw 'Password for your login: '
         else
             IFS= read -r pw || pw=""
         fi

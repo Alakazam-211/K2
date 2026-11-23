@@ -151,9 +151,7 @@ _vault_body_with_value() {
     local base_json="$1"
     if [ -t 0 ]; then
         local v=""
-        printf 'Value (not shown): ' >&2
-        IFS= read -rs v || v=""
-        echo >&2
+        _k2_read_hidden v 'Value (not shown): '
         [ -n "$v" ] || { echo "usage: no value on stdin" >&2; exit 2; }
         printf '%s' "$v" | python3 -c '
 import base64, json, sys
@@ -439,17 +437,13 @@ print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
                 printf 'Which owner login on this server (k2 users lists them): ' >&2
                 IFS= read -r login || login=""
             fi
-            printf 'Sign-in password for owner login %s: ' "$login" >&2
-            IFS= read -rs pw || pw=""
-            echo >&2
+            _k2_read_hidden pw "Sign-in password for owner login $login: "
             body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "owner-login-password", "username": sys.argv[3], "password": sys.stdin.read()}))' "$action" "$secret_id" "$login")"
             pw=""
             ;;
         *" vault-password "*)
             local pw=""
-            printf 'Vault password: ' >&2
-            IFS= read -rs pw || pw=""
-            echo >&2
+            _k2_read_hidden pw 'Vault password: '
             body="$(printf '%s' "$pw" | python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "vault-password", "password": sys.stdin.read()}))' "$action" "$secret_id")"
             pw=""
             ;;

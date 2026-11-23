@@ -1610,9 +1610,7 @@ cmd_notifications_relay() {
             local pw=""
             _k2_password_transport_ok
             if [ -t 0 ]; then
-                printf 'Relay password (SMTP password or API key): ' >&2
-                IFS= read -rs pw || pw=""
-                echo >&2
+                _k2_read_hidden pw 'Relay password (SMTP password or API key): '
             else
                 IFS= read -r pw || true
             fi

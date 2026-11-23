@@ -4,6 +4,12 @@
 # --token-stdin` ask for it on the terminal ("Token: ", "Tunnel token: "),
 # read it with echo off (the terminal never shows it), put echo back, and
 # send it to the daemon as typed (decoded, for a pairing token).
+# Echo is off before the prompt shows: the driver reads the terminal a
+# byte at a time and looks at the echo flag when all of the prompt but
+# its last byte has come (on macOS the CLI can't have gone on past a
+# drain while a byte of it is still unread). What was typed before the
+# prompt is dropped, never taken as the token. Ctrl-C at the prompt stops
+# the command (130) with echo back on and nothing sent.
 #
 # The pty driver (tests/cli/clone_security.sh's) plays the person: stdin
 # and stderr are a pty that is the session's controlling terminal. A stub
@@ -102,23 +108,35 @@ def stop():
     except ProcessLookupError:
         pass
 seen = b""
-def pump(t):
+def pump(t, n=65536):
     global seen
     r, _, _ = select.select([m], [], [], t)
     if r:
-        seen += os.read(m, 65536)
+        seen += os.read(m, n)
+def echo_state():
+    return "on" if termios.tcgetattr(m)[3] & termios.ECHO else "off"
+# A step whose text is "" sends at once (typed ahead of any prompt). For
+# any other, the terminal is read a byte at a time, and the echo flag is
+# written to $W/echo-at-prompt when all of the text but its last byte has
+# come.
 for want, send in steps:
     end = time.time() + 60
-    while want.encode() not in seen:
+    w = want.encode()
+    noted = not w
+    while w not in seen:
+        if not noted and seen.endswith(w[:-1]):
+            open(os.path.join(W, "echo-at-prompt"), "a").write(echo_state() + "\n")
+            noted = True
         if time.time() > end or p.poll() is not None:
             pump(0.2)
-            if want.encode() in seen:
+            if w in seen:
                 break
             open(os.path.join(W, "tty"), "wb").write(seen)
             stop()
             sys.exit("ptyrun: never saw %r on the terminal" % want)
-        pump(0.1)
-    seen = seen.replace(want.encode(), b"<<" + want.encode() + b">>", 1)
+        pump(0.1, 1)
+    if w:
+        seen = seen.replace(w, b"<<" + w + b">>", 1)
     os.write(m, send.encode())
 end = time.time() + 120
 while p.poll() is None:
@@ -141,6 +159,7 @@ PYEOF
 k2pty() {
     local steps="$1"; shift
     : >"$W/requests.log"
+    rm -f "$W/echo-at-prompt"
     set +e
     "$PY" "$W/ptyrun.py" ctty "$steps" "$W" -- "$K2" "$@" 2>"$W/drv"; RC=$?
     set -e
@@ -148,11 +167,20 @@ k2pty() {
     DRV="$(cat "$W/drv")"
 }
 
+# expect_echo_off_at_prompt LABEL: echo was already off when the prompt
+# (all but its last byte) was on the terminal.
+expect_echo_off_at_prompt() {
+    local at
+    at="$(cat "$W/echo-at-prompt" 2>/dev/null || echo "not seen")"
+    [ "$at" = off ] && ok "$1: echo is off before the prompt shows" || bad "$1: echo was $at when the prompt showed"
+}
+
 check() {
     local label="$1" prompt="$2" secret="$3" route="$4" sent="$5"
     case "$DRV" in *ptyrun:*) bad "$label: $DRV"; return ;; esac
     case "$TTY" in *"<<$prompt>>"*) ok "$label: asks on the terminal" ;; *) bad "$label: no '$prompt' prompt: $TTY" ;; esac
     case "$TTY" in *"$secret"*) bad "$label: the terminal showed the token: $TTY" ;; *) ok "$label: the token is not echoed" ;; esac
+    expect_echo_off_at_prompt "$label"
     [ "$ECHO" = on ] && ok "$label: echo is back on" || bad "$label: echo is $ECHO after the run"
     if grep -F "POST $route " "$W/requests.log" | grep -qF "$sent"; then
         ok "$label: the token reached $route"
@@ -173,6 +201,25 @@ for form in --token-stdin -; do
     k2pty "[[\"Token: \", \"$FED_TOKEN\\n\"]]" fed pair-join "$form"
     check "fed pair-join $form" "Token: " "$FED_TOKEN" /cli/federation/pair/v2/respond "$SENT"
 done
+
+# 3. Typed ahead of the prompt: dropped (as getpass's TCSAFLUSH), so the
+#    token typed at the prompt is what's sent, never the earlier line.
+k2pty '[["", "typed-ahead-TTY\n"], ["Tunnel token: ", "tun-TTY-7f3a\n"]]' tunnel switch acme --token-stdin
+check "tunnel switch, a line typed ahead" "Tunnel token: " "tun-TTY-7f3a" /cli/tunnel/switch '"token": "tun-TTY-7f3a"'
+if grep -qF "typed-ahead-TTY" "$W/requests.log"; then
+    bad "tunnel switch, a line typed ahead: it was sent: $(cat "$W/requests.log")"
+else
+    ok "tunnel switch, a line typed ahead: dropped, never sent"
+fi
+
+# 4. Ctrl-C at the prompt: the command stops (130), echo is back on, and
+#    nothing goes to the switch.
+k2pty '[["Tunnel token: ", "\u0003"]]' tunnel switch acme --token-stdin
+case "$DRV" in *ptyrun:*) bad "tunnel switch, Ctrl-C: $DRV" ;; *) ok "tunnel switch, Ctrl-C: the driver ran" ;; esac
+[ "$RC" = 130 ] && ok "tunnel switch, Ctrl-C: exit 130" || bad "tunnel switch, Ctrl-C: exit $RC, not 130"
+[ "$ECHO" = on ] && ok "tunnel switch, Ctrl-C: echo is back on" || bad "tunnel switch, Ctrl-C: echo is $ECHO after it"
+expect_echo_off_at_prompt "tunnel switch, Ctrl-C"
+if grep -qF "POST /cli/tunnel/switch " "$W/requests.log"; then bad "tunnel switch, Ctrl-C: the switch was sent"; else ok "tunnel switch, Ctrl-C: nothing sent to the switch"; fi
 
 echo "token_stdin_tty: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

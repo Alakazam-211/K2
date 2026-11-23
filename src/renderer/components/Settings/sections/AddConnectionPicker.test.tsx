@@ -273,7 +273,7 @@ describe('AddConnectionPicker: search and keyboard', () => {
     expect(screen.getByText('No agents match')).toBeTruthy()
   })
 
-  it('↑/↓ walk the pickable rows across sections, skipping connected ones, and Enter connects', async () => {
+  it('↑/↓ walk the pickable rows across sections, skipping connected ones, and Enter twice connects', async () => {
     const onAddRemote = vi.fn(async () => null)
     const onAddLocal = vi.fn(async () => undefined)
     render(<Harness local={['ws-billing']} onAddLocal={onAddLocal} onAddRemote={onAddRemote} />)
@@ -286,11 +286,16 @@ describe('AddConnectionPicker: search and keyboard', () => {
     expect(box.getAttribute('aria-activedescendant')).toBe(option('peer:fp-acme', 'Adam').id)
     fireEvent.keyDown(box, { key: 'ArrowUp' })
     fireEvent.keyDown(box, { key: 'Enter' })
+    // The first Enter only arms the confirm.
+    expect(document.querySelector('[data-picker-confirm]')?.textContent).toContain('Connect News desk ↔ Cortana?')
+    expect(onAddLocal).not.toHaveBeenCalled()
+    fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() => expect(onAddLocal).toHaveBeenCalledWith('ws-cortana'))
     expect(onAddRemote).not.toHaveBeenCalled()
 
     fireEvent.change(box, { target: { value: 'jobs' } })
     fireEvent.keyDown(box, { key: 'ArrowDown' })
+    fireEvent.keyDown(box, { key: 'Enter' })
     fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() => expect(onAddRemote).toHaveBeenCalledWith('jobs::acme.k2.dev'))
   })
@@ -324,9 +329,11 @@ describe('AddConnectionPicker: connected agents and adding', () => {
     render(<Harness onAddRemote={onAddRemote} />)
     await screen.findByText('RPM')
     fireEvent.click(option('peer:fp-rpm', 'globex'))
+    fireEvent.click(option('peer:fp-rpm', 'globex'))
     await waitFor(() => expect(option('peer:fp-rpm', 'globex').getAttribute('data-row-state')).toBe('checked'))
     expect(onAddRemote).toHaveBeenCalledWith('globex::rpm.k2.dev')
     fireEvent.click(option('peer:fp-acme', 'Jobs'))
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     await waitFor(() => expect(option('peer:fp-acme', 'Jobs').getAttribute('data-row-state')).toBe('checked'))
     expect(screen.getByRole('dialog', { name: 'Add connection' })).toBeTruthy()
     // The rosters were fetched once: adding never re-dials every server.
@@ -343,9 +350,64 @@ describe('AddConnectionPicker: connected agents and adding', () => {
     )
     await screen.findByText('RPM')
     fireEvent.click(option('peer:fp-rpm', 'Argus'))
+    fireEvent.click(option('peer:fp-rpm', 'Argus'))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toBe('Couldn’t connect to Argus: peer is not trusted')
     expect(option('peer:fp-rpm', 'Argus').getAttribute('data-row-state')).toBe('pickable')
+  })
+})
+
+describe('AddConnectionPicker: who each row is, and the confirm (0.46.18)', () => {
+  const rich = (n: number, folder: string, display: string) => ({ display_name: display, folder, connections: n })
+  const ROSTERS_RICH = {
+    servers: [
+      {
+        ...ROSTERS.servers[0],
+        agents: [
+          { ...agent('ws-billing', 'Billing', 'billing'), ...rich(2, '~/clients/billing', 'Billing desk') },
+          { ...agent('ws-cortana', 'Cortana', 'cortana'), ...rich(40, '~/hub/cortana', 'Cortana') },
+          { ...agent('ws-cortana2', 'Cortana', 'cortana-staff'), ...rich(1, '~/staff/cortana', 'Cortana') },
+        ],
+      },
+    ],
+    timeout_secs: 5,
+  }
+
+  it('shows each local row’s handle, folder and connections, a hub in bold, and searches them', async () => {
+    cli.handler = ok(ROSTERS_RICH)
+    render(<Harness />)
+    await waitFor(() => expect(sectionEl('local').querySelectorAll('[data-row-detail]').length).toBe(3))
+    const details = [...sectionEl('local').querySelectorAll('[data-row-detail]')].map((d) => d.textContent)
+    expect(details).toEqual([
+      '@billing · ~/clients/billing · 2 connections',
+      '@cortana · ~/hub/cortana · 40 connections',
+      '@cortana-staff · ~/staff/cortana · 1 connection',
+    ])
+    expect(sectionEl('local').querySelectorAll('[data-hub]').length).toBe(1)
+    fireEvent.change(search(), { target: { value: 'staff' } })
+    expect(rowLabels('local')).toEqual(['Cortana'])
+    expect(sectionEl('local').querySelector('[data-row-detail]')?.textContent).toContain('@cortana-staff')
+  })
+
+  it('a pick arms a one-line confirm that names a hub; Cancel connects nothing', async () => {
+    cli.handler = ok(ROSTERS_RICH)
+    const onAddLocal = vi.fn(async () => undefined)
+    render(<Harness onAddLocal={onAddLocal} />)
+    await waitFor(() => expect(sectionEl('local').querySelectorAll('[data-hub]').length).toBe(1))
+    const hubRow = [...sectionEl('local').querySelectorAll('[role="option"]')].find((r) =>
+      r.textContent?.includes('@cortana ·'),
+    ) as HTMLElement
+    fireEvent.click(hubRow)
+    const confirm = document.querySelector('[data-picker-confirm]') as HTMLElement
+    expect(confirm.textContent).toContain('Connect News desk ↔ Cortana?')
+    expect(confirm.querySelector('[data-confirm-hub]')?.textContent).toContain('Cortana is a hub: 40 connections.')
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    expect(document.querySelector('[data-picker-confirm]')).toBeNull()
+    expect(onAddLocal).not.toHaveBeenCalled()
+    fireEvent.click(hubRow)
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+    await waitFor(() => expect(onAddLocal).toHaveBeenCalledWith('ws-cortana'))
+    expect(onAddLocal).toHaveBeenCalledTimes(1)
   })
 })
 

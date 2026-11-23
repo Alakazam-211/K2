@@ -101,11 +101,58 @@ pub(crate) fn sort_roster_json(body: &mut serde_json::Value) {
     }
 }
 
+/// How many workspaces each workspace is connected to (either direction,
+/// each other workspace once): `projects.id → count`.
+fn connection_counts() -> std::collections::HashMap<String, u64> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut out = std::collections::HashMap::new();
+    let Ok(mut st) = conn.prepare(
+        "SELECT pid, COUNT(DISTINCT other) FROM ( \
+           SELECT source_project_id AS pid, target_project_id AS other FROM workspace_relations \
+           UNION ALL SELECT target_project_id, source_project_id FROM workspace_relations \
+         ) WHERE pid <> other GROUP BY pid",
+    ) else {
+        return out;
+    };
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)));
+    if let Ok(rows) = rows {
+        for (pid, n) in rows.flatten() {
+            out.insert(pid, n.max(0) as u64);
+        }
+    }
+    out
+}
+
+/// A workspace folder as people know it: under the home folder `~/…`,
+/// else the path; at most its last two parts (`~/…/clients/ana`).
+pub(crate) fn folder_label(path: &str, home: Option<&std::path::Path>) -> String {
+    let p = std::path::Path::new(path);
+    let (prefix, rest) = match home.and_then(|h| p.strip_prefix(h).ok()) {
+        Some(r) => ("~/", r.to_path_buf()),
+        None => ("", p.to_path_buf()),
+    };
+    let parts: Vec<String> = rest.components().filter_map(|c| match c {
+        std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+        _ => None,
+    }).collect();
+    match parts.len() {
+        0 => path.to_string(),
+        1 | 2 if prefix.is_empty() => path.to_string(),
+        1 | 2 => format!("{prefix}{}", parts.join("/")),
+        n => format!("{prefix}…/{}", parts[n - 2..].join("/")),
+    }
+}
+
 /// This server's workspaces as connection targets, A to Z. Every workspace
 /// is listed (a local connection needs no remote-message switch); the
-/// caller hides the one it is adding connections for.
+/// caller hides the one it is adding connections for. Each row also says
+/// who it is beyond its handle (0.46.18 papercut 6): the agent's display
+/// name, its folder and how many workspaces it connects to (a hub shows).
 fn local_agents() -> Result<Vec<serde_json::Value>, String> {
     let projects = k2_core::projects_ops::projects_list()?;
+    let counts = connection_counts();
+    let home = dirs::home_dir();
     let mut agents: Vec<serde_json::Value> = projects
         .into_iter()
         .map(|p| {
@@ -124,6 +171,9 @@ fn local_agents() -> Result<Vec<serde_json::Value>, String> {
                 "agent": agent,
                 "address": agent,
                 "aliases": [],
+                "display_name": k2_core::workspace::display::agent_display_name_with_name(&p.path, &p.name),
+                "folder": folder_label(&p.path, home.as_deref()),
+                "connections": counts.get(&p.id).copied().unwrap_or(0),
             })
         })
         .collect();
@@ -301,6 +351,18 @@ mod tests {
     use super::*;
     use crate::test_support::dead_port;
     use std::io::{Read, Write};
+
+    /// 0.46.18 papercut 6: the picker tells two workspaces with the same
+    /// name apart by their folder (at most its last two parts, `~` home).
+    #[test]
+    fn a_folder_is_shown_from_home_with_at_most_its_last_two_parts() {
+        let home = std::path::Path::new("/Users/pat");
+        assert_eq!(folder_label("/Users/pat/ws", Some(home)), "~/ws");
+        assert_eq!(folder_label("/Users/pat/clients/ana", Some(home)), "~/clients/ana");
+        assert_eq!(folder_label("/Users/pat/k2/clients/ana", Some(home)), "~/…/clients/ana");
+        assert_eq!(folder_label("/srv/k2/staff/ana", Some(home)), "…/staff/ana");
+        assert_eq!(folder_label("/srv/a", None), "/srv/a");
+    }
 
     fn pin(label: &str, sub: &str, base: &str) -> FederationPeer {
         let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();

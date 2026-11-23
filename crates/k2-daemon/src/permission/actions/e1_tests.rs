@@ -600,6 +600,40 @@ fn connections_add_connects_once_and_checks_its_target() {
     assert!(!k2_core::workspace::settings::get_agents_can_create_connections(&ws.path));
 }
 
+/// 0.46.18 papercut 6: an agent asks a person to connect two OTHER
+/// workspaces by exact handle. The card names both with folder and count;
+/// Allow connects exactly those two, never the asking agent; an agent's own
+/// connection stays `connections.add`.
+#[test]
+fn connections_add_between_connects_two_other_workspaces_by_handle() {
+    let _env = env();
+    let (asker, a, b) = (seed("e1ba"), seed("e1bb"), seed("e1bc"));
+    let (s, v) = ask(&asker, "connections.add-between", json!({ "from": a.handle, "to": asker.handle }));
+    assert_ne!(s, "200 OK", "the asker is never one end: {v}");
+    let (s, v) = ask(&asker, "connections.add-between", json!({ "from": a.handle, "to": "no-such-workspace-e1b" }));
+    assert_ne!(s, "200 OK", "{v}");
+    assert_eq!(check("connections.add-between", &asker, json!({ "from": a.handle, "to": a.handle })), Check::Moved(format!("from= and to= are both {}", a.handle)));
+
+    let spec = actions::find("connections.add-between").expect("registered").spec;
+    let words = crate::permission::present::words(spec, &ctx(&asker, json!({ "from": a.handle, "to": b.handle })));
+    assert!(words.consequences.contains(&format!("@{} (", a.handle)) && words.consequences.contains("0 connections"), "{}", words.consequences);
+    assert!(words.consequences.contains("gets no connection itself"), "{}", words.consequences);
+
+    ask_and_allow(&asker, "connections.add-between", json!({ "from": a.handle, "to": b.handle }), "owner");
+    assert!(k2_core::connections::are_local_peers(&a.id, &b.id), "exactly those two");
+    assert!(!k2_core::connections::are_local_peers(&asker.id, &a.id) && !k2_core::connections::are_local_peers(&asker.id, &b.id), "never the asker");
+    let (s, v) = ask(&asker, "connections.add-between", json!({ "from": a.handle, "to": b.handle }));
+    assert_eq!((s.as_str(), v["status"].as_str()), ("200 OK", Some("already_done")), "{v}");
+    // A Member login can't answer it (an Admin floor).
+    let member = login("e1bm", Role::Member);
+    let c = seed("e1bd");
+    match apply("connections.add-between", &asker, json!({ "from": a.handle, "to": c.handle }), &as_login(&member)) {
+        Applied::Refused { .. } => {}
+        other => panic!("a Member connected two workspaces: {other:?}"),
+    }
+    assert!(!k2_core::connections::are_local_peers(&a.id, &c.id));
+}
+
 // ── GardenOwner (§5.2.1) ────────────────────────────────────────────
 
 struct ZenEnv {

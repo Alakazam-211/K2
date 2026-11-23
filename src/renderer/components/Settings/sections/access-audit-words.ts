@@ -292,6 +292,7 @@ const ACTION_WORDS: Record<string, string> = {
   'organization.manage': 'manage the org chart',
   'connections.create': 'add a connection',
   'connections.add': 'add a connection',
+  'connections.add-between': 'connect two other workspaces',
   'docs.share': 'share a document',
   'sew.owner-handoff': 'open chat as the owner',
   'sew.rollback-data-loss': 'roll Sew back',

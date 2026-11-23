@@ -9,7 +9,7 @@
 //! | File | Lane | v1 rows |
 //! |---|---|---|
 //! | `switches.rs` | E1 | the Agent tab's switches (vault, DNS and mail included) + `to=off` |
-//! | `connections.rs` | E1 | `connections.create`, `connections.add` |
+//! | `connections.rs` | E1 | `connections.create`, `connections.add`; `connections.add-between` (0.46.18: connect two other workspaces, asked only) |
 //! | `gardens.rs` | E1, Garden access A4 | `garden.keep-mine`; `garden.access` (+ `-off`), `garden.delete` |
 //! | `held.rs` | E2 | `apps.approve`, `mail.approve`, `garden.proposal.approve`, `sources.approve` |
 //! | `compute.rs` | E2 | `compute.admin-approve` (cut if late) |

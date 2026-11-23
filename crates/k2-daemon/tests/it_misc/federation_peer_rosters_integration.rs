@@ -313,6 +313,13 @@ fn peer_rosters_lists_this_server_then_paired_servers_a_to_z_with_offline_ones_c
     assert_eq!(labels, vec!["This server", "alpha-hang", "bravo", "Mike-hang", "Zulu-old"], "{v}");
     assert_eq!(v["servers"][0]["kind"], "local");
     assert_eq!(names(server(&v, "This server")), vec!["Accounts", "sales"]);
+    // 0.46.18 papercut 6: each local row says who it is beyond its handle.
+    for a in server(&v, "This server")["agents"].as_array().expect("agents") {
+        let name = a["workspace_name"].as_str().expect("name");
+        assert_eq!(a["folder"], format!("~/ws/{name}"), "{a}");
+        assert_eq!(a["connections"], 0, "{a}");
+        assert_eq!(a["display_name"], name, "{a}");
+    }
 
     let bravo = server(&v, "bravo");
     assert_eq!(bravo["status"], "ok", "{bravo}");

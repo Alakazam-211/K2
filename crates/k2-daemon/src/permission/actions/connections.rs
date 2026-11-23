@@ -2,6 +2,14 @@
 //! workspace", standing, with its `connections.create-off` twin) and
 //! `connections.add to=` (one connection, one time). PRD rev 3.1 §5.2.
 //!
+//! `connections.add-between from= to=` (0.46.18, App role papercut 6): an
+//! agent asks a person to connect two OTHER workspaces of this server, by
+//! exact handle, so there is no list to misclick. Asked only (no wall).
+//! The card names both, each with its folder and how many workspaces it
+//! connects to (a hub shows); the asking agent gets no connection itself.
+//! An Admin floor; an agent never answers it. Allow runs the Settings
+//! add's own entry for `from`, as the person.
+//!
 //! Both apply through the Settings routes' own entries (§6.4, C15):
 //! - `connections.create` → `misc_routes::connections_switch_entry`
 //!   (`POST /cli/agents-create-connections`, Admin in route_policy);
@@ -95,6 +103,37 @@ pub(crate) static ADD: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
+pub(crate) const ADD_BETWEEN_ACTION: &str = "connections.add-between";
+
+pub(crate) static ADD_BETWEEN: ActionSpec = ActionSpec {
+    id: ADD_BETWEEN_ACTION,
+    area: Area::Switches,
+    params: &[
+        ParamSpec { key: "from", kind: ParamKind::Workspace, required: true, list: false, choices: &[] },
+        ParamSpec { key: "to", kind: ParamKind::Workspace, required: true, list: false, choices: &[] },
+    ],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Connections",
+        what_changes: "Connect {from} to {to}",
+        consequences: "{from_detail} and {to_detail} can message each other. {ws} asked for it and gets no connection itself. \
+            Check both: a wrong workspace, or a hub, gives it many peers at once.",
+        scope: "{from} and {to}",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: CONNECTIONS_TAB,
+    walls: &[],
+    coverage: WallCoverage::None,
+    form: None,
+    machine_hints: &[],
+};
+
 /// `connections.create`: on = the effective gate (the server-wide master
 /// lets every workspace in too); off = this workspace's own switch.
 fn switch_on(ctx: &Ctx, want_on: bool) -> Result<bool, String> {
@@ -166,6 +205,86 @@ fn connected(ctx: &Ctx) -> Result<bool, String> {
     Ok(k2_core::connections::are_local_peers(&ctx.workspace_id, &target_id))
 }
 
+/// A workspace of this server by its exact handle: `(id, path, handle)`.
+fn local_workspace(handle: &str) -> Result<(String, String, String), String> {
+    let h = handle.trim();
+    if h.is_empty() || k2_core::connections::is_remote_target(h) {
+        return Err(format!("name a workspace of this server by its handle, not '{h}'"));
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT id, path, handle FROM projects WHERE handle = ?1 COLLATE NOCASE", rusqlite::params![h], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+    })
+    .map_err(|_| format!("no workspace with the handle '{h}' on this server"))
+}
+
+/// Both ends of `connections.add-between`, checked: two workspaces of this
+/// server, neither the asking one, not the same.
+fn between(ctx: &Ctx) -> Result<((String, String, String), (String, String, String)), String> {
+    let from = local_workspace(param(ctx, "from").ok_or("name the first workspace: from=<handle>")?)?;
+    let to = local_workspace(param(ctx, "to").ok_or("name the second workspace: to=<handle>")?)?;
+    if from.0 == to.0 {
+        return Err(format!("from= and to= are both {}", from.2));
+    }
+    if from.0 == ctx.workspace_id || to.0 == ctx.workspace_id {
+        return Err(format!("{} is the asking workspace: for its own connection ask connections.add to=<workspace>", ctx.workspace_handle));
+    }
+    Ok((from, to))
+}
+
+/// How many workspaces `id` connects to.
+fn connection_count(id: &str) -> i64 {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT COUNT(DISTINCT CASE WHEN source_project_id = ?1 THEN target_project_id ELSE source_project_id END) \
+           FROM workspace_relations WHERE (source_project_id = ?1 OR target_project_id = ?1) AND source_project_id <> target_project_id",
+        rusqlite::params![id],
+        |r| r.get(0),
+    )
+    .unwrap_or(0)
+}
+
+/// One end in words: `@handle (~/folder, N connections)`, a hub named so.
+fn end_words(w: &(String, String, String)) -> String {
+    let n = connection_count(&w.0);
+    let folder = crate::federation_rosters::folder_label(&w.1, dirs::home_dir().as_deref());
+    let hub = if n >= 10 { ", a hub" } else { "" };
+    format!("@{} ({folder}, {n} connection{}{hub})", w.2, if n == 1 { "" } else { "s" })
+}
+
+/// The card's computed words: `{from_detail}` and `{to_detail}`.
+pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
+    if action != ADD_BETWEEN_ACTION {
+        return None;
+    }
+    let mut out = ctx.clone();
+    for key in ["from", "to"] {
+        let words = match param(ctx, key).map(local_workspace) {
+            Some(Ok(w)) => end_words(&w),
+            _ => param(ctx, key).unwrap_or("?").to_string(),
+        };
+        out.params.insert(format!("{key}_detail"), serde_json::Value::String(words));
+    }
+    Some(out)
+}
+
+fn check_add_between(ctx: &Ctx) -> Check {
+    match between(ctx) {
+        Ok((from, to)) => check_state(true, k2_core::connections::are_local_peers(&from.0, &to.0)),
+        Err(m) => Check::Moved(m),
+    }
+}
+
+fn apply_add_between(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let (from, to) = match between(ctx) {
+        Ok(x) => x,
+        Err(m) => return Applied::Refused { code: "workspace_not_found".into(), message: m },
+    };
+    applied(&crate::misc_routes::connections_add_entry(who, &from.1, &to.2), format!("Connected {} to {}.", from.2, to.2))
+}
+
 fn check_add(ctx: &Ctx) -> Check {
     match connected(ctx) {
         Ok(on) => check_state(true, on),
@@ -185,6 +304,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &CREATE, check: check_create, apply: apply_create },
         Registered { spec: &CREATE_OFF, check: check_create_off, apply: apply_create_off },
         Registered { spec: &ADD, check: check_add, apply: apply_add },
+        Registered { spec: &ADD_BETWEEN, check: check_add_between, apply: apply_add_between },
     ]
 }
 

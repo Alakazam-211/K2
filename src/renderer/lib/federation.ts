@@ -63,6 +63,11 @@ export interface RosterAgent {
   address: string
   /** Pre-slug / basename / previous-handle tokens (D8). */
   aliases?: string[]
+  /** This server's rows (0.46.18): the agent's display name, its folder
+   *  (`~/…`) and how many workspaces it connects to. A peer's may lack them. */
+  display_name?: string
+  folder?: string
+  connections?: number
 }
 
 /** D4 workspace-handle slug (renderer twin of `slugify_address_token`). */

@@ -15,6 +15,12 @@
 // - Offline / refusing servers are greyed with a Retry (that server only).
 // - A server paired with the older code shows an inline re-pair hint.
 // - Agents already connected stay in the list, checked.
+// - Each row of this server says who it is (0.46.18 papercut 6): the
+//   handle, its folder and how many workspaces it connects to; a hub
+//   (HUB_AT or more) is bold. The search reads all of them.
+// - A pick arms a one-line confirm ("Connect A ↔ B?"); the same row again
+//   (click or Enter) or Connect adds it, Cancel drops it. A wrong
+//   connection is an isolation leak, so nothing connects on one click.
 // - Adding keeps the picker open; the row turns checked once the
 //   connection lists reload. Errors show in the footer.
 // - Esc, or a press anywhere outside the picker and its + button, closes
@@ -68,8 +74,36 @@ export interface AddConnectionPickerProps {
 }
 
 type PickTarget =
-  | { kind: 'local'; id: string; name: string }
+  | { kind: 'local'; id: string; name: string; connections?: number }
   | { kind: 'peer'; target: string; name: string }
+
+/** A workspace with this many connections or more is a hub: bold in the
+ *  list, named so in the confirm. */
+export const HUB_AT = 10
+
+/** `N connection(s)`. */
+function connectionsText(n: number): string {
+  return `${n} connection${n === 1 ? '' : 's'}`
+}
+
+/** A local row's detail: `@handle · ~/folder · N connections`. */
+function localDetail(agent: string, folder: string | undefined, n: number | undefined): React.ReactNode {
+  const hub = typeof n === 'number' && n >= HUB_AT
+  return (
+    <span data-row-detail="">
+      @{agent}
+      {folder ? ` · ${folder}` : ''}
+      {typeof n === 'number' && (
+        <>
+          {' · '}
+          <span className={hub ? 'font-semibold text-[var(--color-text-primary)]' : undefined} data-hub={hub ? '' : undefined}>
+            {connectionsText(n)}
+          </span>
+        </>
+      )}
+    </span>
+  )
+}
 
 type Note = { tone: 'error' | 'muted'; text: string }
 
@@ -114,6 +148,8 @@ export function AddConnectionPicker({
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
   const [note, setNote] = useState<Note | null>(null)
+  /** The pick waiting for its confirm. */
+  const [armed, setArmed] = useState<string | null>(null)
   const alive = useRef(true)
   const loadSeq = useRef(0)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -204,11 +240,11 @@ export function AddConnectionPicker({
       const value = `local:${a.workspace_id}`
       const name = a.workspace_name || a.agent
       const taken = connectedLocalIds.has(a.workspace_id)
-      map.set(value, { kind: 'local', id: a.workspace_id, name })
+      map.set(value, { kind: 'local', id: a.workspace_id, name, connections: a.connections })
       localRows.push({
         value,
         label: name,
-        detail: a.agent,
+        detail: localDetail(a.agent, a.folder, a.connections),
         avatar: {
           kind: 'workspace',
           path: p?.path ?? `conn-local:${a.workspace_id}`,
@@ -219,8 +255,10 @@ export function AddConnectionPicker({
           fetchIcon: Boolean(p),
         },
         state: taken ? 'checked' : busy.has(value) ? 'disabled' : 'pickable',
-        title: taken ? `Already connected to ${name}` : `Connect to ${name}`,
-        keywords: [a.agent, p?.path ?? '', 'this server'],
+        title: taken
+          ? `Already connected to ${name}`
+          : `Connect to ${name}${a.display_name && a.display_name !== name ? ` (${a.display_name})` : ''}`,
+        keywords: [a.agent, p?.path ?? '', 'this server', a.display_name ?? '', a.folder ?? ''],
       })
     }
     let localStatus: React.ReactNode = undefined
@@ -398,9 +436,18 @@ export function AddConnectionPicker({
     loadAll,
   ])
 
+  const selfName = projectsById.get(projectId)?.name ?? 'this workspace'
+
   const onPick = (value: string): void => {
     const pick = picks.current.get(value)
     if (!pick || busy.has(value)) return
+    // The first pick arms the confirm; the same row again (or Connect) adds.
+    if (armed !== value) {
+      setArmed(value)
+      setNote(null)
+      return
+    }
+    setArmed(null)
     setBusy((prev) => new Set(prev).add(value))
     setNote(null)
     const done = (): void => {
@@ -422,6 +469,8 @@ export function AddConnectionPicker({
       .finally(done)
   }
 
+  const armedPick = armed ? picks.current.get(armed) : undefined
+
   return (
     <div ref={rootRef} className={panelClass} role="dialog" aria-label="Add connection">
       <SearchableAgentList
@@ -437,6 +486,37 @@ export function AddConnectionPicker({
         listClassName={listClass}
         autoFocus
       />
+      {armedPick && armed && (
+        <div
+          className="px-3 py-2 type-hint border-t border-[var(--color-border)] flex items-center gap-2"
+          role="status"
+          data-picker-confirm=""
+        >
+          <span className="flex-1 min-w-0 truncate">
+            Connect {selfName} ↔ {armedPick.name}?
+            {armedPick.kind === 'local' && typeof armedPick.connections === 'number' && armedPick.connections >= HUB_AT && (
+              <strong data-confirm-hub="">
+                {' '}
+                {armedPick.name} is a hub: {connectionsText(armedPick.connections)}.
+              </strong>
+            )}
+          </span>
+          <button
+            type="button"
+            className="no-drag px-2 py-0.5 border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
+            onClick={() => onPick(armed)}
+          >
+            Connect
+          </button>
+          <button
+            type="button"
+            className="no-drag px-2 py-0.5 hover:text-[var(--color-text-primary)] cursor-pointer"
+            onClick={() => setArmed(null)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {note && (
         <div
           className={`px-3 py-2 type-hint border-t border-[var(--color-border)] ${
@@ -449,7 +529,7 @@ export function AddConnectionPicker({
         </div>
       )}
       <div className="px-3 py-1.5 type-hint text-[var(--color-text-muted)] border-t border-[var(--color-border)]">
-        ↑/↓ move · Enter connects · Esc closes · stays open after each add
+        ↑/↓ move · Enter picks, Enter again connects · Esc closes · stays open after each add
       </div>
     </div>
   )

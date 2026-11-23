@@ -76137,6 +76137,12 @@ AGENT GATE (create / remove)
   (or Settings → Workspaces / Agents → <workspace> → Connections → "Let this agent add
   connections"). `list` is always allowed.
 
+TWO OTHER WORKSPACES
+  An agent never connects two other workspaces itself. It asks a person, by
+  exact handle: k2 permission request connections.add-between from=<handle>
+  to=<handle> --why "…". The card names both, with folder and connection
+  count (a hub shows); an owner or admin allows it.
+
 MSG / READ PEER GATE
   Live `k2 msg`, tray `k2 msg --inbox-wake|--inbox-silent`, and `k2 read` require a local
   connection to the target (or same-workspace). Unconnected peers

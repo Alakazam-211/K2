@@ -397,10 +397,9 @@ fn reroot_session_rel(rel: &Path, source_slug: &str, remote_slug: &str) -> Optio
     // dir_seg is `<source-slug>` or `<source-slug>-<branch>`.
     let new_dir = if dir_seg == source_slug {
         remote_slug.to_string()
-    } else if let Some(branch_suffix) = dir_seg.strip_prefix(&format!("{source_slug}-")) {
-        format!("{remote_slug}-{branch_suffix}")
     } else {
-        return None;
+        let branch_suffix = dir_seg.strip_prefix(&format!("{source_slug}-"))?;
+        format!("{remote_slug}-{branch_suffix}")
     };
     Some(PathBuf::from(new_dir).join(file))
 }

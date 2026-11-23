@@ -184,7 +184,7 @@ mod imp {
     pub(super) fn open_file(root: &Path, rel: &Path, create_new: bool) -> io::Result<Option<File>> {
         let n = rel.components().count();
         let dir = open_dirs(root, rel, n - 1)?;
-        let name = cname(rel.components().last().expect("check_rel: at least one part").as_os_str())?;
+        let name = cname(rel.components().next_back().expect("check_rel: at least one part").as_os_str())?;
         let mut flags = libc::O_WRONLY | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
         if create_new {
             flags |= libc::O_EXCL;
@@ -250,7 +250,7 @@ mod imp {
     pub(super) fn open_file(root: &Path, rel: &Path, create_new: bool) -> io::Result<Option<File>> {
         let n = rel.components().count();
         let dir = open_dirs(root, rel, n - 1)?;
-        let path = dir.join(rel.components().last().expect("check_rel: at least one part"));
+        let path = dir.join(rel.components().next_back().expect("check_rel: at least one part"));
         match std::fs::symlink_metadata(&path) {
             Ok(_) if create_new => return Ok(None),
             Ok(m) if is_link(&m) => return Err(linked(rel)),

@@ -13,7 +13,7 @@
 //! ([`place`], [`stop`], [`stop_for_pid`]). With no scope placer the M1b
 //! layout (`<unit>/agents/a-<ws>`) applies as before.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 // The names, the same as `k2_root_proto::agent_scope` (k2-core doesn't
 // depend on it at run time; the tests below check every one against it).
@@ -143,17 +143,138 @@ pub fn classify_scope(path: &str) -> Option<(String, String, Kind, String)> {
 /// Calls the root helper (`agents …`, daemon class) and returns its JSON.
 pub type Caller = Box<dyn Fn(&[String]) -> Result<serde_json::Value, String> + Send + Sync>;
 
-static CALLER: OnceLock<Caller> = OnceLock::new();
+type Shared = Arc<dyn Fn(&[String]) -> Result<serde_json::Value, String> + Send + Sync>;
 
-/// Boot: the root helper places agent scopes on this box (protocol 19,
-/// `namespaces.agentscope`, and `agents layout` ready).
+/// Who calls the helper: `placer` while scopes are placed for new sessions
+/// (cleared by the owner's `k2 agent isolation layout off`), `kept` for
+/// stopping the scopes still live after that (a service's `publish stop`).
+struct Slot {
+    placer: Mutex<Option<Shared>>,
+    kept: Mutex<Option<Shared>>,
+}
+
+fn locked(m: &Mutex<Option<Shared>>) -> MutexGuard<'_, Option<Shared>> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Slot {
+    const fn new() -> Self {
+        Slot { placer: Mutex::new(None), kept: Mutex::new(None) }
+    }
+    fn set(&self, c: Caller) {
+        let c: Shared = Arc::from(c);
+        *locked(&self.kept) = Some(c.clone());
+        *locked(&self.placer) = Some(c);
+    }
+    fn clear(&self) -> bool {
+        locked(&self.placer).take().is_some()
+    }
+    fn placing(&self) -> bool {
+        locked(&self.placer).is_some()
+    }
+    fn placer(&self) -> Option<Shared> {
+        locked(&self.placer).clone()
+    }
+    fn stopper(&self) -> Option<Shared> {
+        locked(&self.kept).clone()
+    }
+}
+
+static CALLER: Slot = Slot::new();
+
+/// Boot, or the owner's `k2 agent isolation layout on`: the root helper
+/// places agent scopes on this box (protocol 19, `namespaces.agentscope`,
+/// and `agents layout` ready).
 pub fn set_caller(c: Caller) {
-    let _ = CALLER.set(c);
+    CALLER.set(c);
+}
+
+/// The owner's `k2 agent isolation layout off`: no new session gets a
+/// scope from now on. Scopes still live keep running and can still be
+/// stopped ([`stop`]). `true` when scopes were being placed.
+pub fn clear_caller() -> bool {
+    CALLER.clear()
 }
 
 /// The helper places every isolated process in its own scope here.
 pub fn scope_placement() -> bool {
-    CALLER.get().is_some()
+    CALLER.placing()
+}
+
+// ── the owner's choice (`k2 agent isolation layout on|off`) ─────────────
+
+/// Whether the owner turned scopes on for this server. Kept in its own
+/// file (`~/.k2/agent-isolation-layout.json`), written only by the daemon's
+/// layout route after the owner's own check, never by the generic settings
+/// route (`/cli/settings/update` can't reach it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerChoice {
+    /// Never turned on: the default.
+    NotSet,
+    On,
+    Off,
+}
+
+impl OwnerChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OwnerChoice::NotSet => "not set",
+            OwnerChoice::On => "on",
+            OwnerChoice::Off => "off",
+        }
+    }
+}
+
+/// The file's name under `~/.k2`.
+pub const CHOICE_FILE: &str = "agent-isolation-layout.json";
+
+fn choice_path() -> std::path::PathBuf {
+    crate::paths::k2_home().join(CHOICE_FILE)
+}
+
+/// Pure: the file's text → the choice. Anything but `{"layout":"scopes"}`
+/// or `{"layout":"off"}` is [`OwnerChoice::NotSet`] (never "on" by doubt).
+pub fn choice_from(text: &str) -> OwnerChoice {
+    let v: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
+    match v["layout"].as_str() {
+        Some("scopes") => OwnerChoice::On,
+        Some("off") => OwnerChoice::Off,
+        _ => OwnerChoice::NotSet,
+    }
+}
+
+/// The owner's choice on this server ([`OwnerChoice::NotSet`] with no file).
+pub fn owner_choice() -> OwnerChoice {
+    let path = choice_path();
+    match std::fs::read_to_string(&path) {
+        Ok(t) => {
+            let c = choice_from(&t);
+            if c == OwnerChoice::NotSet {
+                crate::log_debug!("[agents] WARN {} says neither scopes nor off; read as not set", path.display());
+            }
+            c
+        }
+        Err(_) => OwnerChoice::NotSet,
+    }
+}
+
+/// Record the owner's choice (`by`: who, kept in the file), through a
+/// temporary file and a rename, mode 0600.
+pub fn set_owner_choice(on: bool, by: &str) -> Result<(), String> {
+    let path = choice_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let text = serde_json::json!({ "layout": if on { "scopes" } else { "off" }, "by": by, "at": at }).to_string();
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("chmod {}: {e}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename {} -> {}: {e}", tmp.display(), path.display()))
 }
 
 /// What `/boot-status` and the doctor say about scopes on this box (R4):
@@ -212,8 +333,8 @@ pub fn old_layout_allowed(ws: &str) -> bool {
 /// Place `pid` (an exec helper waiting, started at `start`) in its scope.
 /// `Ok(the scope's cgroup)`.
 pub fn place(ws: &str, plan: &ScopePlan, pid: u32, start: u64) -> Result<String, String> {
-    let call = CALLER.get().ok_or("no root helper places agent scopes on this box")?;
-    let v = call(&plan.argv(ws, pid, start))?;
+    let call = CALLER.placer().ok_or("no root helper places agent scopes on this box")?;
+    let v = (*call)(&plan.argv(ws, pid, start))?;
     let want = plan.cgroup(ws).ok_or_else(|| format!("workspace id {ws:?} or scope id {:?} can't name a scope", plan.id))?;
     match v["cgroup"].as_str() {
         Some(cg) if cg == want => Ok(want),
@@ -224,11 +345,11 @@ pub fn place(ws: &str, plan: &ScopePlan, pid: u32, start: u64) -> Result<String,
 /// End one scope (C4): idle stop, `publish stop`, a job's end. Already
 /// gone is fine.
 pub fn stop(ws: &str, id: &str) -> Result<(), String> {
-    let call = CALLER.get().ok_or("no root helper places agent scopes on this box")?;
+    let call = CALLER.stopper().ok_or("no root helper places agent scopes on this box")?;
     if scope_name(ws, id).is_none() {
         return Err(format!("{ws:?}/{id:?} doesn't name an agent scope"));
     }
-    call(&["agents".into(), "stop".into(), ws.into(), id.into()]).map(|_| ())
+    (*call)(&["agents".into(), "stop".into(), ws.into(), id.into()]).map(|_| ())
 }
 
 /// The scope `pid` runs in, if it is an agent scope: read before its
@@ -240,9 +361,10 @@ pub fn scope_of_pid(pid: u32) -> Option<(String, String)> {
 
 /// After a service or job process is ended: stop its scope too, so a child
 /// that left its process group doesn't stay (a root-owned scope's
-/// `cgroup.kill` is root's). Nothing outside scope mode.
+/// `cgroup.kill` is root's). Nothing where scopes were never placed; after
+/// the owner's `layout off`, the scopes still live are still stopped.
 pub fn stop_for(scope: Option<(String, String)>) {
-    if let Some((ws, id)) = scope.filter(|_| scope_placement()) {
+    if let Some((ws, id)) = scope.filter(|_| CALLER.stopper().is_some()) {
         if let Err(e) = stop(&ws, &id) {
             crate::log_debug!("[agents] stop scope of agent {ws} ({id}): {e}");
         }
@@ -276,6 +398,55 @@ mod tests {
         for name in [format!("k2-agent-{WS}:0123456789abcdef.scope"), "k2-agent-a:b.scope".into(), format!("k2-agent-{WS}-0123456789abcdef.scope")] {
             assert_eq!(parse_scope_name(&name).is_some(), rp::parse_scope_name(&name).is_some(), "{name}");
         }
+    }
+
+    /// The owner's `layout off` stops new placements but keeps the helper
+    /// call for stopping the scopes still live. A slot of the test's own,
+    /// so no other test sees this box's placement change.
+    #[test]
+    fn clearing_the_caller_stops_placing_but_not_stopping() {
+        let slot = Slot::new();
+        assert!(!slot.placing() && slot.placer().is_none() && slot.stopper().is_none());
+        assert!(!slot.clear(), "nothing to clear");
+        slot.set(Box::new(|argv: &[String]| Ok::<_, String>(serde_json::json!({ "argv": argv }))));
+        assert!(slot.placing());
+        let placer = slot.placer().expect("a placer once set");
+        assert_eq!((*placer)(&["agents".to_string(), "layout".to_string()]).expect("the call")["argv"][1], "layout");
+        assert!(slot.clear(), "it was placing");
+        assert!(!slot.placing() && slot.placer().is_none(), "no new placement after clear");
+        assert!(!slot.clear(), "already clear");
+        let stopper = slot.stopper().expect("kept for stopping the scopes still live");
+        assert_eq!((*stopper)(&["agents".to_string(), "stop".to_string()]).expect("the call")["argv"][1], "stop");
+        slot.set(Box::new(|_: &[String]| Ok::<_, String>(serde_json::Value::Null)));
+        assert!(slot.placing(), "on again");
+    }
+
+    /// The owner's choice reads back as written; a file that says anything
+    /// else is "not set", never "on".
+    #[test]
+    fn the_owners_choice_reads_back_and_doubt_is_not_on() {
+        let home = crate::test_env::TempHome::new();
+        assert_eq!(owner_choice(), OwnerChoice::NotSet, "no file: never turned on");
+        set_owner_choice(true, "owner").expect("write on");
+        assert_eq!(owner_choice(), OwnerChoice::On);
+        let text = std::fs::read_to_string(crate::paths::k2_home().join(CHOICE_FILE)).expect("the file");
+        assert!(crate::paths::k2_home().starts_with(home.path()), "inside the test's own home");
+        let v: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+        assert_eq!((v["layout"].as_str(), v["by"].as_str()), (Some("scopes"), Some("owner")), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(crate::paths::k2_home().join(CHOICE_FILE)).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        set_owner_choice(false, "connect:rosa").expect("write off");
+        assert_eq!(owner_choice(), OwnerChoice::Off);
+        for bad in ["", "{}", "not json", r#"{"layout":"on"}"#, r#"{"layout":true}"#, r#"{"layout":"SCOPES"}"#, "[1]"] {
+            assert_eq!(choice_from(bad), OwnerChoice::NotSet, "{bad}");
+        }
+        assert_eq!(choice_from(r#"{"layout":"scopes","by":"x","at":1}"#), OwnerChoice::On);
+        assert_eq!(choice_from(r#"{"layout":"off"}"#), OwnerChoice::Off);
+        assert_eq!((OwnerChoice::NotSet.as_str(), OwnerChoice::On.as_str(), OwnerChoice::Off.as_str()), ("not set", "on", "off"));
     }
 
     #[test]

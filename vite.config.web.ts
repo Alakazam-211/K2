@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url'
 // The brand's names for the renderer (src/renderer/lib/brand.generated.ts),
 // written from the brand file before the build.
 import { viteBrandValues } from './scripts/brand-values.mjs'
+import { shikiLeftOutPlugin } from './src/renderer/lib/shiki-vite-plugin'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -24,7 +25,9 @@ const version: string = pkg.version || 'dev'
 const shim = (name: string) => resolve(__dirname, `src/renderer/shims/${name}`)
 
 export default defineConfig({
-  plugins: [viteBrandValues(), react(), tailwindcss()],
+  // The code viewer's shiki grammars and themes: left-out ones never reach a
+  // chunk (src/renderer/lib/shiki-vite-plugin.ts).
+  plugins: [viteBrandValues(), react(), tailwindcss(), shikiLeftOutPlugin(__dirname)],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src/renderer'),

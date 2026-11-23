@@ -6,6 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'fs'
 // The brand's names for the renderer (src/renderer/lib/brand.generated.ts),
 // written from the brand file before the build.
 import { viteBrandValues } from './scripts/brand-values.mjs'
+import { shikiLeftOutPlugin } from './src/renderer/lib/shiki-vite-plugin'
 
 /**
  * The Zen widget standard library (prd-zen-user-widgets-v2 UWB12): files
@@ -56,7 +57,9 @@ function zenLibDesktopCopy(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [viteBrandValues(), react(), tailwindcss(), zenLibDesktopCopy()],
+  // The code viewer's shiki grammars and themes: left-out ones never reach a
+  // chunk (src/renderer/lib/shiki-vite-plugin.ts).
+  plugins: [viteBrandValues(), react(), tailwindcss(), zenLibDesktopCopy(), shikiLeftOutPlugin(__dirname)],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src/renderer'),

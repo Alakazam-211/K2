@@ -1,9 +1,19 @@
 import { useState, useEffect, useRef } from 'react'
-import { type BundledLanguage, type BundledTheme, type SpecialLanguage, codeToHtml, bundledLanguages } from 'shiki'
+import { createHighlighterCore, type HighlighterCore } from 'shiki/core'
+import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
+import { loadAllowedShikiLang, resolveShikiLang, shikiThemeLoader } from '@/lib/shiki-allowlist'
+
+// Grammars and themes come only from the allowlist (lib/shiki-allowlist.ts),
+// loaded one by one on first use. A language that isn't on it, or an alias of
+// one, renders as plain, escaped text through the fallbacks below.
 
 // ── Language detection ──────────────────────────────────────────────
 
-const EXT_TO_LANG: Record<string, BundledLanguage> = {
+// Every name below goes through the allowlist, so an entry whose grammar
+// isn't allowed (yaml, toml, terraform, hcl, nginx...) detects nothing and
+// the file renders as plain text. It highlights again on its own once the
+// grammar is allowed.
+const EXT_TO_LANG: Record<string, string> = {
   // Web
   ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',
   mjs: 'javascript', cjs: 'javascript', mts: 'typescript', cts: 'typescript',
@@ -42,7 +52,7 @@ const EXT_TO_LANG: Record<string, BundledLanguage> = {
   env: 'dotenv',
 }
 
-const FILENAME_TO_LANG: Record<string, BundledLanguage> = {
+const FILENAME_TO_LANG: Record<string, string> = {
   'Dockerfile': 'dockerfile',
   'Makefile': 'makefile',
   'CMakeLists.txt': 'cmake',
@@ -51,8 +61,7 @@ const FILENAME_TO_LANG: Record<string, BundledLanguage> = {
   'Vagrantfile': 'ruby',
   'Justfile': 'just',
   // NOTE: .gitignore / .gitattributes have no Shiki grammar — they render
-  // via the plain-text fallback (same output as before: the invalid lang
-  // names made codeToHtml reject into that same fallback).
+  // via the plain-text fallback.
   '.editorconfig': 'ini',
   '.eslintrc': 'json',
   '.prettierrc': 'json',
@@ -60,51 +69,96 @@ const FILENAME_TO_LANG: Record<string, BundledLanguage> = {
   'jsconfig.json': 'jsonc',
 }
 
-export function detectLanguage(filePath: string): BundledLanguage | undefined {
+/** The allowed grammar id for a file path, or undefined (plain text). */
+export function detectLanguage(filePath: string): string | undefined {
   const name = filePath.split('/').pop() || ''
 
   // Check full filename first
-  if (FILENAME_TO_LANG[name] && name in bundledLanguages) return FILENAME_TO_LANG[name]
-  if (FILENAME_TO_LANG[name]) return FILENAME_TO_LANG[name]
+  if (FILENAME_TO_LANG[name]) return resolveShikiLang(FILENAME_TO_LANG[name])
 
   // .env files (.env, .env.local, .env.production, etc.)
-  if (name === '.env' || name.startsWith('.env.')) return 'dotenv' as BundledLanguage
+  if (name === '.env' || name.startsWith('.env.')) return resolveShikiLang('dotenv')
 
   // Check extension (handle multi-part extensions like .test.ts)
   const parts = name.split('.')
   if (parts.length > 1) {
     const ext = parts.pop()!.toLowerCase()
     const lang = EXT_TO_LANG[ext]
-    if (lang && lang in bundledLanguages) return lang
+    if (lang) return resolveShikiLang(lang)
   }
 
   return undefined
 }
 
-/** Resolve a markdown fence language string to a Shiki language. */
-export function resolveFenceLang(lang: string): BundledLanguage | SpecialLanguage | undefined {
+// Shiki's built-in plain renderer (no grammar), for fences that say "text".
+const PLAIN_FENCES = new Set(['text', 'txt', 'plain', 'plaintext'])
+
+/**
+ * Resolve a markdown fence language string to an allowed Shiki language
+ * ('plaintext' for text fences), or undefined for the unstyled fallback.
+ */
+export function resolveFenceLang(lang: string): string | undefined {
   const l = lang.toLowerCase().trim()
-  if (l in bundledLanguages) return l as BundledLanguage
-  // Common aliases ('plaintext' is a Shiki SpecialLanguage, not bundled)
-  const aliases: Record<string, BundledLanguage | SpecialLanguage> = {
-    'js': 'javascript', 'ts': 'typescript', 'py': 'python', 'rb': 'ruby',
-    'sh': 'bash', 'shell': 'bash', 'zsh': 'bash', 'yml': 'yaml',
-    'cs': 'csharp', 'c++': 'cpp', 'objc': 'objective-c',
-    'dockerfile': 'dockerfile', 'makefile': 'makefile',
-    'text': 'plaintext', 'txt': 'plaintext', 'plain': 'plaintext',
-  }
-  return aliases[l]
+  if (PLAIN_FENCES.has(l)) return 'plaintext'
+  return resolveShikiLang(l)
 }
 
 // ── Theme ───────────────────────────────────────────────────────────
 
-const THEME: BundledTheme = 'github-dark-default'
+const THEME = 'github-dark-default'
+
+// ── Highlighter (one per page, grammars loaded on first use) ────────
+
+let highlighter: Promise<HighlighterCore> | null = null
+const langLoads = new Map<string, Promise<boolean>>()
+
+function getHighlighter(): Promise<HighlighterCore> {
+  if (!highlighter) {
+    highlighter = (async () => {
+      const themeLoader = shikiThemeLoader(THEME)
+      if (!themeLoader) throw new Error(`code viewer theme ${THEME} is not on the shiki allowlist`)
+      return createHighlighterCore({
+        themes: [(await themeLoader()).default],
+        langs: [],
+        engine: createOnigurumaEngine(import('shiki/wasm')),
+      })
+    })()
+    // A failed start is retried on the next request (this one renders plain).
+    highlighter.catch(() => { highlighter = null })
+  }
+  return highlighter
+}
+
+function ensureLang(hl: HighlighterCore, id: string): Promise<boolean> {
+  let p = langLoads.get(id)
+  if (!p) {
+    p = (async () => {
+      const regs = await loadAllowedShikiLang(id)
+      if (!regs) return false
+      await hl.loadLanguage(...regs)
+      return true
+    })()
+    langLoads.set(id, p)
+    p.catch(() => { langLoads.delete(id) })
+  }
+  return p
+}
+
+/**
+ * Highlight `code` as `lang` (an allowed grammar id, or 'plaintext').
+ * Resolves to null when the language isn't allowed: render plain text.
+ */
+export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
+  const hl = await getHighlighter()
+  if (lang !== 'plaintext' && !(await ensureLang(hl, lang))) return null
+  return hl.codeToHtml(code, { lang, theme: THEME })
+}
 
 // ── Highlighted code component (for file viewer) ────────────────────
 
 interface CodeViewerProps {
   code: string
-  language?: BundledLanguage
+  language?: string
   className?: string
 }
 
@@ -120,10 +174,7 @@ export function CodeViewer({ code, language, className }: CodeViewerProps): Reac
       return
     }
 
-    codeToHtml(code, {
-      lang: language,
-      theme: THEME,
-    }).then((result) => {
+    highlightToHtml(code, language).then((result) => {
       if (!cancelled) setHtml(result)
     }).catch(() => {
       if (!cancelled) setHtml(null)
@@ -169,10 +220,7 @@ export function HighlightedCodeBlock({ code, language }: CodeBlockProps): React.
       return
     }
 
-    codeToHtml(code, {
-      lang,
-      theme: THEME,
-    }).then((result) => {
+    highlightToHtml(code, lang).then((result) => {
       if (!cancelled) setHtml(result)
     }).catch(() => {
       if (!cancelled) setHtml(null)

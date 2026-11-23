@@ -200,8 +200,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Settings
 - **Changes to the Send feedback settings are recorded.** When the owner or an admin turns "Allow sending feedback to K2", "Agents may send feedback to K2" or "Agents may include K2 details" on or off (Settings → General → Send feedback), Settings → Logs → Access Audit records who changed which one, from what to what. A change that leaves a setting as it was, or a refused attempt, records nothing.
-- **Changes to who may report are recorded.** Settings → Logs → Access Audit records who answered the agent question, and who changed which switch or part, from what to what. Only the owner or an admin can change them; a Member, a Voice & Chat login or an agent can't.
-- **Members can use terminal sessions.** A Member login can open and use terminal sessions, and they run as the server's user. Give Member only to people you'd trust with the server.
+- **Changes to who may report are recorded.** Settings → Logs → Access Audit records who answered the agent question, and who changed which switch or part, from what to what. Only the owner or an admin can change them; a Voice & Chat login or an agent can't.
+- **Members can use terminal sessions.** A Member login can open and use terminal sessions, and they run as the server's user, so a Member with a terminal can do anything the owner can, whatever their role says. Give Member only to people you'd trust as an owner.
 
 ### Agents
 - **Right-clicking an agent puts Workspace settings first.**

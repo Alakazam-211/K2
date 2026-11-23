@@ -56,6 +56,7 @@ pub mod caller;
 pub mod cli;
 pub mod creds;
 pub mod agent_cgroup;
+pub mod agent_scope;
 pub mod desktop;
 pub mod engine;
 pub mod k2_auth;

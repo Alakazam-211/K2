@@ -19,6 +19,7 @@
 #![cfg(unix)]
 
 pub mod agents;
+pub mod agents_scope;
 pub mod apps;
 pub mod caller;
 pub mod core;
@@ -273,6 +274,7 @@ fn dispatch(
         Verb::DesktopPackagesInstall => Some(desktop::packages_install(ctx)?),
         Verb::AgentsPlace { ws, pid, start } => Some(agents::place(ctx, who, ws, *pid, *start)?),
         Verb::AgentsCheck => Some(agents::check(ctx, who)?),
+        Verb::AgentScope(v) => Some(agents_scope::run(ctx, v, who)?),
 
         Verb::FrontStatus => Some(front::status(ctx)?),
         Verb::FrontInstall => Some(front::install(ctx, who)?),

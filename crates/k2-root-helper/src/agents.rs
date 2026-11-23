@@ -30,11 +30,11 @@ use k2_root_proto::agent_cgroup::{argv1, may_place_from, start_of_stat, unit_of,
 use crate::caller::Caller;
 use crate::ctx::{Ctx, Fail, HResult};
 
-const CGROUP_FS: &str = "/sys/fs/cgroup";
+pub(crate) const CGROUP_FS: &str = "/sys/fs/cgroup";
 #[cfg(target_os = "linux")]
 const CGROUP2_SUPER_MAGIC: i64 = 0x6367_7270;
 
-fn cgroup_line(text: &str) -> Option<String> {
+pub(crate) fn cgroup_line(text: &str) -> Option<String> {
     text.lines().find_map(|l| l.strip_prefix("0::")).map(|p| p.trim().to_string()).filter(|p| p.starts_with('/'))
 }
 
@@ -42,13 +42,13 @@ fn read(ctx: &Ctx, abs: &str) -> HResult<Vec<u8>> {
     std::fs::read(ctx.p(abs)).map_err(|e| Fail::state(format!("agents place refused: {abs} unreadable ({})", e.kind())))
 }
 
-fn owner_of(p: &Path) -> HResult<u32> {
+pub(crate) fn owner_of(p: &Path) -> HResult<u32> {
     use std::os::unix::fs::MetadataExt;
     std::fs::symlink_metadata(p).map(|m| m.uid()).map_err(|e| Fail::io_err("stat agent cgroup", e))
 }
 
 #[cfg(target_os = "linux")]
-fn is_cgroup2(p: &Path) -> bool {
+pub(crate) fn is_cgroup2(p: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else { return false };
     // SAFETY: statfs into a zeroed struct for a NUL-terminated path.
@@ -56,11 +56,11 @@ fn is_cgroup2(p: &Path) -> bool {
     (unsafe { libc::statfs(c.as_ptr(), &mut st) } == 0) && st.f_type as i64 == CGROUP2_SUPER_MAGIC
 }
 #[cfg(not(target_os = "linux"))]
-fn is_cgroup2(_p: &Path) -> bool {
+pub(crate) fn is_cgroup2(_p: &Path) -> bool {
     false
 }
 
-fn pids_in(dir: &Path) -> Vec<String> {
+pub(crate) fn pids_in(dir: &Path) -> Vec<String> {
     std::fs::read_to_string(dir.join("cgroup.procs")).unwrap_or_default().split_whitespace().map(str::to_string).collect()
 }
 
@@ -109,18 +109,27 @@ fn ensure_root_owned(ctx: &Ctx, leaf: &Path, dir: &Path) -> HResult<bool> {
     Ok(true)
 }
 
-/// Steps 1 and 2, shared by `place` and `check`: the caller's unit and its
-/// agents' leaf, and the daemon user's uid.
-fn unit_and_leaf(ctx: &Ctx, who: &Caller) -> HResult<(String, PathBuf, u32)> {
+/// The caller's system unit: its `daemon.toml` entry, the daemon user's
+/// uid, and the unit's cgroup from the caller's own main process (minus
+/// the `daemon/` leaf). Shared with protocol 19's scopes, which need no
+/// delegation.
+pub(crate) fn daemon_unit(ctx: &Ctx, who: &Caller) -> HResult<(crate::caller::DaemonEntry, String, u32)> {
     let entry = crate::daemon_unit::caller_entry(ctx, who)?;
     if entry.scope != "system" {
         return Err(Fail::state("agents place refused: a user-scope daemon has no delegated unit"));
     }
     let daemon_uid = ctx.procs.uid_of_user(&entry.user).ok_or_else(|| Fail::state("agents place refused: the daemon user is unknown"))?;
-    // 1. The daemon's unit, from its own main process.
     let main_cg = cgroup_line(&String::from_utf8_lossy(&read(ctx, &format!("/proc/{}/cgroup", who.pid))?))
         .ok_or_else(|| Fail::state("agents place refused: the daemon has no cgroup v2 path"))?;
     let unit = unit_of(&main_cg).ok_or_else(|| Fail::state("agents place refused: the daemon is not in a system unit"))?;
+    Ok((entry, unit, daemon_uid))
+}
+
+/// Steps 1 and 2, shared by `place` and `check`: the caller's unit and its
+/// agents' leaf, and the daemon user's uid.
+fn unit_and_leaf(ctx: &Ctx, who: &Caller) -> HResult<(String, PathBuf, u32)> {
+    // 1. The daemon's unit, from its own main process.
+    let (_, unit, daemon_uid) = daemon_unit(ctx, who)?;
     // 2. The agents' leaf, the daemon's own.
     let leaf: PathBuf = ctx.p(&format!("{CGROUP_FS}{unit}/{AGENTS_LEAF}"));
     if !leaf.is_dir() || !leaf.join("cgroup.procs").exists() {

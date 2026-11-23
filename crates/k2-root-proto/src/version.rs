@@ -175,6 +175,22 @@
 //!   throwaway cluster restore-to made), under `namespaces.pgrestore`,
 //!   [`PGRESTORE_MIN_PROTOCOL`] ([`crate::pg_restore`]). The daemon gates
 //!   on the flag, never on the number alone.
+//!   Also in 19, Agent Isolation M2 B4 (`crate::agent_scope`), one
+//!   root-owned systemd scope per agent session in K2's agent slices
+//!   (`k2agents.slice` with `k2agents-open.slice` and
+//!   `k2agents-fenced.slice`, each kept alive by an anchor), outside the
+//!   daemon's unit. `agents scope <ws> <id> <pid> <start> <open|fenced>
+//!   [mem=N] [cpu=N]` (the exec helper's process, the same checks as
+//!   `agents place`, into `k2-agent-<ws>:<id>.scope` by
+//!   `StartTransientUnit` as root, caps as numbers only), `agents adopt <ws>
+//!   <id> <open|fenced>` (an old-layout `agents/a-<ws>` that lived through
+//!   an update, every process into one new scope), `agents stop <ws> <id>`,
+//!   `agents stop-all`, `agents layout` (report only, with the P1 probe run
+//!   as the daemon's user), and `agents setup` / `agents teardown` (the
+//!   slice and anchor units). Under `namespaces.agentscope`,
+//!   [`AGENTSCOPE_MIN_PROTOCOL`]; an 18 helper refuses the argv, so the
+//!   daemon keeps M1b's layout (`agents place`).
+//!   Never 20 before 19 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -247,6 +263,11 @@ pub const PGRESTORE_MIN_PROTOCOL: u32 = 19;
 /// per-agent cgroups. Gated on this AND `namespaces.agentcg == true`: below it
 /// the daemon reports agent identity unavailable (sessions traceable only).
 pub const AGENTCG_MIN_PROTOCOL: u32 = 18;
+/// `agents scope|adopt|stop|stop-all|layout|setup|teardown` (Agent Isolation
+/// M2 B4): root-owned per-session scopes in K2's agent slices. Gated on
+/// this AND `namespaces.agentscope == true`: below it the daemon keeps
+/// M1b's `agents place` layout.
+pub const AGENTSCOPE_MIN_PROTOCOL: u32 = 19;
 /// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
 /// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
 pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;
@@ -436,7 +457,7 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 19, "protocol 19 = the first bump after 0.46.17 (point-in-time restore of a named cluster); 18 = 0.46.17's (archiving on an existing named cluster)");
+        assert_eq!(PROTOCOL, 19, "protocol 19 = the first bump after 0.46.17 (point-in-time restore of a named cluster, and Agent Isolation M2 B4's scopes); 18 = 0.46.17's (archiving on an existing named cluster); 17 = 0.46.14's (Stalwart's tree for Stalwart alone)");
         assert_eq!(PGRESTORE_MIN_PROTOCOL, 19, "pg basebackup / restore-to join the bump after 0.46.17");
         for argv in [
             &["pg", "basebackup", "17-feedback"][..],
@@ -445,6 +466,12 @@ mod tests {
             &["pg", "drop-drill", "17-fb_drill"][..],
         ] {
             assert!(crate::verbs::catalog().iter().any(|v| v.argv() == argv), "protocol 19 carries {argv:?}");
+        assert_eq!(AGENTSCOPE_MIN_PROTOCOL, 19, "the agent scopes are protocol 19");
+        for tail in ["stop-all", "layout", "setup", "teardown"] {
+            assert!(
+                crate::verbs::catalog().iter().any(|v| v.argv() == ["agents", tail]),
+                "protocol 19 carries agents {tail}"
+            );
         }
         assert_eq!(PGARCHIVE_MIN_PROTOCOL, 18, "pg wal-archive joins 0.46.17's one bump");
         assert!(

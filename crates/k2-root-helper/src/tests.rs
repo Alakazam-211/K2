@@ -2493,6 +2493,10 @@ mod desktop_tests;
 #[path = "agents_tests.rs"]
 mod agents_tests;
 
+// The `agents` namespace, protocol 19 (Agent Isolation M2 B4 scopes), same test doubles.
+#[path = "agents_scope_tests.rs"]
+mod agents_scope_tests;
+
 // `helper cli-refresh` and the brand's retired aliases, same fakes.
 #[path = "cli_alias_tests.rs"]
 mod cli_alias_tests;

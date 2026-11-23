@@ -1,0 +1,413 @@
+//! `agents` namespace, protocol 19 (Agent Isolation M2 B4) over the temp
+//! root and test doubles of `tests.rs`: the exact `StartTransientUnit` argv, the
+//! refusals before it, adopt, stop, stop-all, layout's P1 verdict, setup
+//! and teardown. `real_owners` is off here (no root on the test runner), so
+//! the ownership checks are the kernel rows'.
+
+use super::*;
+use k2_root_proto::agent_scope::{anchor_unit, slice_unit, Level};
+use k2_root_proto::creds::BUSCTL;
+
+const UNIT: &str = "/system.slice/k2-daemon.service";
+const WS: &str = "ws-scope-test";
+const SID: &str = "0123456789abcdef";
+const EXEC_PID: i32 = 7000;
+const START: u64 = 123_456_789;
+const SCOPE: &str = "k2-agent-ws-scope-test:0123456789abcdef.scope";
+const OPEN_DIR: &str = "/sys/fs/cgroup/k2agents.slice/k2agents-open.slice";
+const FENCED_DIR: &str = "/sys/fs/cgroup/k2agents.slice/k2agents-fenced.slice";
+
+fn exec_proc(t: &T, pid: i32, ruid: u32, cgroup: &str) {
+    mkdirs(&t.root, &[&format!("/proc/{pid}")]);
+    let stat = format!("{pid} (k2-daemon) S {}{START} 0 0\n", "1 ".repeat(18));
+    std::fs::write(t.p(&format!("/proc/{pid}/stat")), stat).unwrap();
+    std::fs::write(t.p(&format!("/proc/{pid}/cmdline")), b"/usr/local/bin/k2-daemon\0--agent-exec\0").unwrap();
+    std::fs::write(t.p(&format!("/proc/{pid}/cgroup")), format!("0::{cgroup}\n")).unwrap();
+    t.procs.0.borrow_mut().procs.insert(pid, P { exe: "/usr/local/bin/k2-daemon".into(), exe_owner: K2_UID, ppid: DAEMON_PID, ruid, sid: pid });
+}
+
+/// The daemon in its (not delegated) unit, the slices set up, the exec
+/// helper (pid 7000) waiting in the daemon's leaf, and a systemd that moves
+/// the pids it is given (`moves`) or doesn't.
+fn scope_box(moves: bool) -> T {
+    let t = box_root();
+    mkdirs(&t.root, &[&format!("/proc/{DAEMON_PID}"), &format!("/sys/fs/cgroup{UNIT}/daemon"), OPEN_DIR, FENCED_DIR]);
+    std::fs::write(t.p(&format!("/proc/{DAEMON_PID}/cgroup")), format!("0::{UNIT}/daemon\n")).unwrap();
+    exec_proc(&t, EXEC_PID, K2_UID, &format!("{UNIT}/daemon"));
+    let root = t.root.clone();
+    let busctl: Program = Rc::new(move |args: &[String]| {
+        let has = |w: &str| args.iter().any(|a| a == w);
+        let out = |s: &str| ExecOut { status: 0, stdout: s.as_bytes().to_vec(), stderr: vec![] };
+        if has("StartTransientUnit") {
+            let (name, slice) = (&args[6], &args[11]);
+            let i = args.iter().position(|a| a == "PIDs").expect("PIDs");
+            let n: usize = args[i + 2].parse().expect("count");
+            let rel = format!("/k2agents.slice/{slice}/{name}");
+            std::fs::create_dir_all(under(&root, &format!("/sys/fs/cgroup{rel}"))).unwrap();
+            if moves {
+                for p in &args[i + 3..i + 3 + n] {
+                    let f = under(&root, &format!("/proc/{p}/cgroup"));
+                    if f.exists() {
+                        std::fs::write(f, format!("0::{rel}\n")).unwrap();
+                    }
+                }
+            }
+            return out(r#"{"type":"o","data":["/org/freedesktop/systemd1/job/7"]}"#);
+        }
+        if has("LoadUnit") {
+            return out(r#"{"type":"o","data":["/org/freedesktop/systemd1/unit/k2_2ddaemon_2eservice"]}"#);
+        }
+        if has("Delegate") {
+            return out(r#"{"type":"b","data":true}"#);
+        }
+        ExecOut { status: 1, stdout: vec![], stderr: b"unexpected busctl call".to_vec() }
+    });
+    t.exec.0.borrow_mut().programs.insert(BUSCTL.into(), busctl);
+    t
+}
+
+fn json_of(o: &crate::Outcome) -> serde_json::Value {
+    serde_json::from_slice(&o.stdout).expect("json answer")
+}
+
+fn busctl_calls(t: &T) -> Vec<Vec<String>> {
+    t.calls().into_iter().filter(|(p, _, _)| p == BUSCTL).map(|(_, a, _)| a).collect()
+}
+
+fn systemctl_calls(t: &T) -> Vec<Vec<String>> {
+    t.calls().into_iter().filter(|(p, a, _)| p == SYSTEMCTL && !a.iter().any(|x| x == "MainPID")).map(|(_, a, _)| a).collect()
+}
+
+fn scope_argv<'a>(kind: &'a str, caps: &[&'a str]) -> Vec<String> {
+    let (pid, start) = (EXEC_PID.to_string(), START.to_string());
+    let mut v: Vec<String> = ["agents", "scope", WS, SID, &pid, &start, kind].iter().map(|s| s.to_string()).collect();
+    v.extend(caps.iter().map(|s| s.to_string()));
+    v
+}
+
+fn call_v(t: &T, v: &[String]) -> crate::Outcome {
+    let refs: Vec<&str> = v.iter().map(String::as_str).collect();
+    t.call(&refs)
+}
+
+#[test]
+fn agents_scope_starts_one_transient_unit_with_exactly_these_properties() {
+    let t = scope_box(true);
+    let o = call_v(&t, &scope_argv("open", &[]));
+    ok(&o);
+    let v = json_of(&o);
+    assert_eq!(v["scope"], SCOPE, "{v}");
+    assert_eq!(v["cgroup"], format!("/k2agents.slice/k2agents-open.slice/{SCOPE}"), "{v}");
+    assert_eq!(v["pid"], EXEC_PID, "{v}");
+    let want: Vec<String> = [
+        "call",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "StartTransientUnit",
+        "ssa(sv)a(sa(sv))",
+        SCOPE,
+        "fail",
+        "4",
+        "Slice",
+        "s",
+        "k2agents-open.slice",
+        "PIDs",
+        "au",
+        "1",
+        "7000",
+        "Delegate",
+        "b",
+        "false",
+        "CollectMode",
+        "s",
+        "inactive-or-failed",
+        "0",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(busctl_calls(&t), vec![want]);
+    assert!(systemctl_calls(&t).is_empty(), "nothing stopped: {:?}", systemctl_calls(&t));
+}
+
+#[test]
+fn agents_scope_caps_become_memory_max_and_cpu_quota_numbers() {
+    let t = scope_box(true);
+    let o = call_v(&t, &scope_argv("fenced", &["mem=512", "cpu=150"]));
+    ok(&o);
+    assert_eq!(json_of(&o)["cgroup"], format!("/k2agents.slice/k2agents-fenced.slice/{SCOPE}"));
+    let calls = busctl_calls(&t);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let a = &calls[0];
+    assert_eq!(a[8], "6", "four fixed properties and the two caps: {a:?}");
+    assert_eq!(a[11], "k2agents-fenced.slice");
+    let tail: Vec<&str> = a[a.len() - 7..].iter().map(String::as_str).collect();
+    assert_eq!(tail, ["MemoryMax", "t", "536870912", "CPUQuotaPerSecUSec", "t", "1500000", "0"]);
+    for tok in a {
+        assert!(!tok.contains("mem=") && !tok.contains("cpu=") && !tok.contains('%'), "no caller token passes through: {tok}");
+    }
+}
+
+fn refused(t: &T, argv: &[String], why: &str) {
+    let o = call_v(t, argv);
+    assert_ne!(o.code, exit::OK, "must be refused: {argv:?}");
+    assert!(o.stderr.contains(why), "says why ({why}): {}", o.stderr);
+    assert!(busctl_calls(t).is_empty(), "systemd never asked: {:?}", busctl_calls(t));
+}
+
+#[test]
+fn agents_scope_refuses_a_process_whose_start_time_differs() {
+    let t = scope_box(true);
+    let mut a = scope_argv("open", &[]);
+    a[5] = (START + 1).to_string();
+    refused(&t, &a, "start time differs");
+}
+
+#[test]
+fn agents_scope_refuses_a_process_not_in_the_exec_helper() {
+    let t = scope_box(true);
+    std::fs::write(t.p(&format!("/proc/{EXEC_PID}/cmdline")), b"/bin/sh\0-c\0true\0").unwrap();
+    refused(&t, &scope_argv("open", &[]), "not waiting in the exec helper");
+}
+
+#[test]
+fn agents_scope_refuses_a_process_of_another_user() {
+    let t = scope_box(true);
+    t.procs.0.borrow_mut().procs.get_mut(&EXEC_PID).unwrap().ruid = 0;
+    refused(&t, &scope_argv("open", &[]), "not the daemon user's");
+}
+
+#[test]
+fn agents_scope_refuses_a_process_outside_the_daemons_unit() {
+    for cg in [
+        "/system.slice/other.service".to_string(),
+        "/user.slice/user-1001.slice/session-3.scope".to_string(),
+        format!("{UNIT}/agents/a-ws-other"),
+        format!("/k2agents.slice/k2agents-open.slice/k2-agent-ws-other:{SID}.scope"),
+    ] {
+        let t = scope_box(true);
+        std::fs::write(t.p(&format!("/proc/{EXEC_PID}/cgroup")), format!("0::{cg}\n")).unwrap();
+        refused(&t, &scope_argv("open", &[]), "outside the daemon's unit");
+    }
+}
+
+#[test]
+fn agents_scope_takes_a_process_from_the_unit_itself_or_its_own_old_cgroup() {
+    for cg in [UNIT.to_string(), format!("{UNIT}/agents/a-{WS}")] {
+        let t = scope_box(true);
+        std::fs::write(t.p(&format!("/proc/{EXEC_PID}/cgroup")), format!("0::{cg}\n")).unwrap();
+        ok(&call_v(&t, &scope_argv("open", &[])));
+    }
+}
+
+#[test]
+fn agents_scope_refuses_when_the_slice_is_missing() {
+    let t = scope_box(true);
+    std::fs::remove_dir(t.p(FENCED_DIR)).unwrap();
+    refused(&t, &scope_argv("fenced", &[]), "agents setup");
+    ok(&call_v(&t, &scope_argv("open", &[])));
+}
+
+#[test]
+fn agents_scope_is_the_daemons_alone() {
+    let t = scope_box(true);
+    t.as_agent();
+    let o = call_v(&t, &scope_argv("open", &[]));
+    assert_eq!(o.code, exit::NOT_DAEMON, "{}", o.stderr);
+    assert!(busctl_calls(&t).is_empty());
+}
+
+#[test]
+fn agents_scope_stops_the_scope_when_the_process_did_not_land_in_it() {
+    let t = scope_box(false);
+    let o = call_v(&t, &scope_argv("open", &[]));
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("not in its scope"), "{}", o.stderr);
+    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()]]);
+}
+
+#[test]
+fn agents_adopt_moves_every_live_process_of_the_old_cgroup_into_one_scope() {
+    let t = scope_box(true);
+    let old = format!("{UNIT}/agents/a-{WS}");
+    mkdirs(&t.root, &[&format!("/sys/fs/cgroup{old}")]);
+    exec_proc(&t, 7101, K2_UID, &old);
+    exec_proc(&t, 7102, K2_UID, &old);
+    // 7103 is listed but exited since: skipped.
+    std::fs::write(t.p(&format!("/sys/fs/cgroup{old}/cgroup.procs")), "7101\n7102\n7103\n").unwrap();
+    let o = t.call(&["agents", "adopt", WS, SID, "open"]);
+    ok(&o);
+    let v = json_of(&o);
+    assert_eq!(v["moved"], 2, "{v}");
+    assert_eq!(v["pids"], serde_json::json!([7101, 7102]), "{v}");
+    assert_eq!(v["scope"], SCOPE, "{v}");
+    let calls = busctl_calls(&t);
+    assert_eq!(calls.len(), 1, "one scope for them all: {calls:?}");
+    let a: Vec<&str> = calls[0].iter().map(String::as_str).collect();
+    let i = a.iter().position(|x| *x == "PIDs").expect("PIDs");
+    assert_eq!(&a[i..i + 5], ["PIDs", "au", "2", "7101", "7102"]);
+    assert!(!a.contains(&"MemoryMax"), "adopt sets no caps: {a:?}");
+}
+
+#[test]
+fn agents_adopt_refuses_another_users_process_and_a_missing_or_empty_cgroup() {
+    let t = scope_box(true);
+    let r = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert!(r.code != exit::OK && r.stderr.contains("no old-layout cgroup"), "{}", r.stderr);
+    let old = format!("{UNIT}/agents/a-{WS}");
+    mkdirs(&t.root, &[&format!("/sys/fs/cgroup{old}")]);
+    std::fs::write(t.p(&format!("/sys/fs/cgroup{old}/cgroup.procs")), "").unwrap();
+    let r = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert!(r.code != exit::OK && r.stderr.contains("empty"), "{}", r.stderr);
+    exec_proc(&t, 7101, K2_UID, &old);
+    exec_proc(&t, 7102, 0, &old);
+    std::fs::write(t.p(&format!("/sys/fs/cgroup{old}/cgroup.procs")), "7101\n7102\n").unwrap();
+    let r = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert!(r.code != exit::OK && r.stderr.contains("not the daemon user's"), "{}", r.stderr);
+    assert!(busctl_calls(&t).is_empty(), "systemd never asked: {:?}", busctl_calls(&t));
+}
+
+#[test]
+fn agents_stop_of_a_scope_that_is_gone_is_ok_and_runs_nothing() {
+    let t = scope_box(true);
+    let o = t.call(&["agents", "stop", WS, SID]);
+    ok(&o);
+    let v = json_of(&o);
+    assert_eq!(v["gone"], true, "{v}");
+    assert!(systemctl_calls(&t).is_empty(), "{:?}", systemctl_calls(&t));
+    mkdirs(&t.root, &[&format!("{FENCED_DIR}/{SCOPE}")]);
+    let o = t.call(&["agents", "stop", WS, SID]);
+    ok(&o);
+    assert_eq!(json_of(&o)["kind"], "fenced");
+    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()]]);
+}
+
+#[test]
+fn agents_stop_all_stops_only_names_the_classifier_accepts() {
+    let t = scope_box(true);
+    let other = format!("k2-agent-abc-def:{SID}.scope");
+    mkdirs(
+        &t.root,
+        &[
+            &format!("{OPEN_DIR}/{SCOPE}"),
+            &format!("{OPEN_DIR}/k2agents-open-anchor.service"),
+            &format!("{OPEN_DIR}/k2-agent-abc.scope"),
+            &format!("{OPEN_DIR}/k2-agent-abc:XYZ.scope"),
+            &format!("{FENCED_DIR}/{other}"),
+            &format!("/sys/fs/cgroup/k2agents.slice/k2-agent-top:{SID}.scope"),
+        ],
+    );
+    std::fs::write(t.p(&format!("{OPEN_DIR}/cgroup.procs")), "").unwrap();
+    let o = t.call(&["agents", "stop-all"]);
+    ok(&o);
+    assert_eq!(json_of(&o)["stopped"], 2);
+    assert_eq!(systemctl_calls(&t), vec![vec!["stop".to_string(), SCOPE.to_string()], vec!["stop".to_string(), other]]);
+}
+
+fn layout_with_probe(status: i32, stderr: &str) -> (T, serde_json::Value) {
+    let t = scope_box(true);
+    mkdirs(&t.root, &[&format!("{OPEN_DIR}/{SCOPE}"), &format!("/sys/fs/cgroup{UNIT}/agents/a-ws-old")]);
+    std::fs::write(t.p(&format!("{OPEN_DIR}/{SCOPE}/cgroup.procs")), "7000\n7001\n").unwrap();
+    std::fs::write(t.p(&format!("/sys/fs/cgroup{UNIT}/agents/a-ws-old/cgroup.procs")), "7200\n").unwrap();
+    {
+        let mut e = t.exec.0.borrow_mut();
+        e.answers.insert(RUNUSER.into(), ExecOut { status, stdout: vec![], stderr: stderr.as_bytes().to_vec() });
+        e.rules.push((SYSTEMCTL.into(), "is-active".into(), ExecOut { status: 0, stdout: b"active\n".to_vec(), stderr: vec![] }));
+    }
+    let o = t.call(&["agents", "layout"]);
+    ok(&o);
+    let v = json_of(&o);
+    (t, v)
+}
+
+#[test]
+fn agents_layout_reports_p1_refused_when_systemd_says_no() {
+    let (t, v) = layout_with_probe(1, "Failed to start transient scope unit: Access denied");
+    assert_eq!(v["p1"], "refused", "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["slices"]["k2agents-open.slice"]["present"], true, "{v}");
+    assert_eq!(v["anchors"]["k2agents-fenced-anchor.service"]["active"], true, "{v}");
+    assert_eq!(v["unit"]["delegate"], true, "{v}");
+    assert_eq!(v["unit"]["cgroup"], UNIT, "{v}");
+    assert_eq!(v["scopes"], serde_json::json!([{"ws": WS, "id": SID, "kind": "open", "pids": 2}]), "{v}");
+    assert_eq!(v["survivors"][0]["ws"], "ws-old", "{v}");
+    assert_eq!(v["survivors"][0]["pids"], 1, "{v}");
+    let probe: Vec<Vec<String>> = t.calls().into_iter().filter(|(p, _, _)| p == RUNUSER).map(|(_, a, _)| a).collect();
+    assert_eq!(probe.len(), 1, "{probe:?}");
+    let a: Vec<&str> = probe[0].iter().map(String::as_str).collect();
+    assert_eq!(&a[..10], ["-u", "k2", "--", SYSTEMD_RUN, "--system", "--scope", "--quiet", "--collect", "--no-ask-password", "--slice=k2agents-open.slice"]);
+    assert!(a[10].starts_with("--unit=k2-agent-probe:") && a[10].ends_with(".scope"), "{a:?}");
+    assert_eq!(&a[11..], ["--", "true"]);
+    // Report only: nothing started or stopped.
+    assert!(busctl_calls(&t).iter().all(|c| !c.iter().any(|x| x == "StartTransientUnit")));
+    assert!(systemctl_calls(&t).iter().all(|c| c[0] == "is-active"), "{:?}", systemctl_calls(&t));
+}
+
+#[test]
+fn agents_layout_reports_p1_allowed_as_not_ok() {
+    let (_t, v) = layout_with_probe(0, "");
+    assert_eq!(v["p1"], "ALLOWED", "{v}");
+    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(v["ready"], false, "{v}");
+    let (_t, v) = layout_with_probe(1, "Failed to connect to bus: No such file or directory");
+    assert_eq!(v["p1"], "unknown", "{v}");
+    assert_eq!(v["ready"], false, "{v}");
+}
+
+#[test]
+fn agents_setup_writes_the_units_once_and_teardown_removes_them() {
+    let t = scope_box(true);
+    mkdirs(&t.root, &["/usr/bin"]);
+    std::fs::write(t.p("/usr/bin/sleep"), b"elf").unwrap();
+    let o = t.call(&["agents", "setup"]);
+    ok(&o);
+    assert_eq!(json_of(&o)["changed"], true);
+    for l in Level::ALL {
+        let slice = std::fs::read_to_string(t.p(&format!("/etc/systemd/system/{}", l.slice()))).expect("slice unit");
+        assert_eq!(slice, slice_unit(l));
+        let anchor = std::fs::read_to_string(t.p(&format!("/etc/systemd/system/{}", l.anchor()))).expect("anchor unit");
+        assert_eq!(anchor, anchor_unit(l, "/usr/bin/sleep").expect("anchor"));
+    }
+    let anchors = ["k2agents-anchor.service", "k2agents-open-anchor.service", "k2agents-fenced-anchor.service"];
+    let mut enable = vec!["enable".to_string(), "--now".to_string()];
+    enable.extend(anchors.iter().map(|s| s.to_string()));
+    assert_eq!(systemctl_calls(&t), vec![vec!["daemon-reload".to_string()], enable.clone()]);
+    // Again: nothing to write, no reload.
+    let o = t.call(&["agents", "setup"]);
+    ok(&o);
+    assert_eq!(json_of(&o)["changed"], false);
+    assert_eq!(systemctl_calls(&t).last(), Some(&enable));
+    assert_eq!(systemctl_calls(&t).iter().filter(|c| c[0] == "daemon-reload").count(), 1);
+    // Teardown: scopes first, then the anchors, then the files.
+    mkdirs(&t.root, &[&format!("{OPEN_DIR}/{SCOPE}")]);
+    let before = systemctl_calls(&t).len();
+    let o = t.call(&["agents", "teardown"]);
+    ok(&o);
+    let v = json_of(&o);
+    assert_eq!((v["stopped"].clone(), v["removed"].clone()), (serde_json::json!(1), serde_json::json!(6)), "{v}");
+    let mut disable = vec!["disable".to_string(), "--now".to_string()];
+    disable.extend(anchors.iter().map(|s| s.to_string()));
+    assert_eq!(
+        systemctl_calls(&t)[before..].to_vec(),
+        vec![vec!["stop".to_string(), SCOPE.to_string()], disable, vec!["daemon-reload".to_string()]]
+    );
+    for l in Level::ALL {
+        assert!(!t.p(&format!("/etc/systemd/system/{}", l.slice())).exists());
+        assert!(!t.p(&format!("/etc/systemd/system/{}", l.anchor())).exists());
+    }
+    // And again: nothing left to do.
+    std::fs::remove_dir(t.p(&format!("{OPEN_DIR}/{SCOPE}"))).unwrap();
+    let before = systemctl_calls(&t).len();
+    ok(&t.call(&["agents", "teardown"]));
+    assert_eq!(systemctl_calls(&t).len(), before, "idempotent: {:?}", &systemctl_calls(&t)[before..]);
+}
+
+#[test]
+fn agents_setup_refuses_without_a_sleep_program() {
+    let t = scope_box(true);
+    let o = t.call(&["agents", "setup"]);
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("no sleep program"), "{}", o.stderr);
+    assert!(!t.p("/etc/systemd/system/k2agents.slice").exists());
+}

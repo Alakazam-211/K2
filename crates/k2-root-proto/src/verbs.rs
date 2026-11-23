@@ -942,6 +942,10 @@ pub enum Verb {
     /// delegated to it). The daemon asks once at boot before it lets the
     /// helper place its sessions.
     AgentsCheck,
+    /// Protocol 19 (Agent Isolation M2 B4, `namespaces.agentscope`; see
+    /// `crate::agent_scope`): `agents scope|adopt|stop|stop-all|layout|setup|teardown`,
+    /// one root-owned systemd scope per agent session in K2's agent slices.
+    AgentScope(crate::agent_scope::ScopeVerb),
     // front (protocol 8, 0.46.1 front443; see `crate::templates::front_socket_unit`)
     /// `front status` (open, read-only): whether the fixed
     /// `k2-front-443.socket` unit and each system daemon's `k2-front.conf`
@@ -1220,6 +1224,9 @@ impl Verb {
         let max = if args.starts_with(&["apps", "process", "caps"]) {
             6 + crate::apps::MAX_DEVICES
         } else if args.starts_with(&["pg", "psql", "--cluster"]) {
+            9
+        } else if args.starts_with(&["agents", "scope"]) {
+            // ws, id, pid, start, kind, then `mem=` and `cpu=` (protocol 19).
             9
         } else if args.starts_with(&["apps", "nft", "app"]) {
             // id, gateway, every box service, then `--db <port>…` (15).
@@ -1540,6 +1547,7 @@ impl Verb {
                 pid: crate::agent_cgroup::pid_ok(pid).ok_or(REFUSED)?,
                 start: crate::agent_cgroup::start_ok(start).ok_or(REFUSED)?,
             },
+            ["agents", rest @ ..] => Verb::AgentScope(crate::agent_scope::ScopeVerb::parse(rest).ok_or(REFUSED)?),
             ["front", "status"] => Verb::FrontStatus,
             ["front", "install"] => Verb::FrontInstall,
             ["front", "remove"] => Verb::FrontRemove,
@@ -1817,6 +1825,11 @@ impl Verb {
             Verb::DesktopPackagesInstall => s(&["desktop", "packages", "install"]),
             Verb::AgentsPlace { ws, pid, start } => s(&["agents", "place", ws.as_str(), &pid.to_string(), &start.to_string()]),
             Verb::AgentsCheck => s(&["agents", "check"]),
+            Verb::AgentScope(v) => {
+                let mut a = s(&["agents"]);
+                a.extend(v.tail());
+                a
+            }
             Verb::FrontStatus => s(&["front", "status"]),
             Verb::FrontInstall => s(&["front", "install"]),
             Verb::FrontRemove => s(&["front", "remove"]),
@@ -1982,6 +1995,7 @@ impl Verb {
             // Moves a process between cgroups as root: only the daemon, for
             // the sessions it spawns.
             Verb::AgentsPlace { .. } | Verb::AgentsCheck => Daemon,
+            Verb::AgentScope(v) => v.class(),
             Verb::FrontStatus | Verb::FrontHttpStatus => Open,
             // Moves who owns the box's :443 onto the daemon's own unit (and
             // back): only the daemon itself may ask.
@@ -2045,6 +2059,9 @@ impl Verb {
     /// a restart).
     pub fn takes_lock(&self) -> bool {
         if let Verb::Sew(v) = self {
+            return !v.reads_only();
+        }
+        if let Verb::AgentScope(v) = self {
             return !v.reads_only();
         }
         !matches!(
@@ -2354,6 +2371,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AgentsCheck,
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
+    v.extend(crate::agent_scope::ScopeVerb::catalog().into_iter().map(Verb::AgentScope));
     v.extend([Verb::FrontStatus, Verb::FrontInstall, Verb::FrontRemove]);
     v.extend([Verb::FrontHttpStatus, Verb::FrontHttpInstall, Verb::FrontHttpRemove]);
     v.extend([

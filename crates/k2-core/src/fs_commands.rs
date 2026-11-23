@@ -1159,6 +1159,21 @@ fn resolve_destination(source: &Path, destination: &Path) -> PathBuf {
 }
 
 pub fn move_files(sources: &[String], destination: &str) -> Result<(), String> {
+    move_files_with(sources, destination, false)
+}
+
+/// [`move_files`] for an App guest: when a rename can't move an entry
+/// (another disk), the copy-then-delete fallback never follows a link and
+/// stops at one, or at a file with other hard links, before anything is
+/// deleted (`fs_link_free_copy`, [`OtherEntry::Refuse`]).
+///
+/// [`OtherEntry::Refuse`]: crate::fs_link_free_copy::OtherEntry::Refuse
+pub fn move_files_no_follow(sources: &[String], destination: &str) -> Result<(), String> {
+    move_files_with(sources, destination, true)
+}
+
+fn move_files_with(sources: &[String], destination: &str, no_follow: bool) -> Result<(), String> {
+    use crate::fs_link_free_copy as lf;
     let dest = Path::new(destination);
     if !dest.exists() {
         return Err(format!("Destination does not exist: {destination}"));
@@ -1178,7 +1193,18 @@ pub fn move_files(sources: &[String], destination: &str) -> Result<(), String> {
         }
         let target = disambiguate_path(&target);
         if fs::rename(src, &target).is_err() {
-            if src.is_dir() {
+            if no_follow {
+                let md = fs::symlink_metadata(src).map_err(|e| format!("Failed to read {source}: {e}"))?;
+                if md.is_dir() {
+                    lf::copy_dir(src, &target, lf::OtherEntry::Refuse)?;
+                    fs::remove_dir_all(src)
+                        .map_err(|e| format!("Moved but failed to remove source: {e}"))?;
+                } else {
+                    lf::copy_file(src, &target)?;
+                    fs::remove_file(src)
+                        .map_err(|e| format!("Copied but failed to remove source: {e}"))?;
+                }
+            } else if src.is_dir() {
                 copy_dir_recursive(src, &target)?;
                 fs::remove_dir_all(src)
                     .map_err(|e| format!("Moved but failed to remove source: {e}"))?;
@@ -1211,6 +1237,33 @@ pub fn copy_files(sources: &[String], destination: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// [`copy_files`] for an App guest: a folder is copied without following
+/// any link inside it. Links, files with other hard links, pipes, sockets
+/// and devices are left out of the copy (`fs_link_free_copy`,
+/// [`OtherEntry::Skip`]); a source that is itself one of those is refused.
+/// Returns how many entries were left out.
+///
+/// [`OtherEntry::Skip`]: crate::fs_link_free_copy::OtherEntry::Skip
+pub fn copy_files_no_follow(sources: &[String], destination: &str) -> Result<u64, String> {
+    use crate::fs_link_free_copy as lf;
+    let dest = Path::new(destination);
+    if !dest.exists() {
+        return Err(format!("Destination does not exist: {destination}"));
+    }
+    let mut skipped = 0;
+    for source in sources {
+        let src = Path::new(source);
+        let md = fs::symlink_metadata(src).map_err(|_| format!("Source does not exist: {source}"))?;
+        let target = disambiguate_path(&resolve_destination(src, dest));
+        if md.is_dir() {
+            skipped += lf::copy_dir(src, &target, lf::OtherEntry::Skip)?;
+        } else {
+            lf::copy_file(src, &target)?;
+        }
+    }
+    Ok(skipped)
 }
 
 pub fn delete(paths: &[String], permanent: bool) -> Result<(), String> {

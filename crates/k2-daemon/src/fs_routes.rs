@@ -1411,6 +1411,17 @@ fn refuse_protected_write_at(
             return Some(heartbeats_area_response());
         }
     }
+    // Every guest write lands inside the room, with or without folder
+    // walls and with or without the `.k2/` opt-in: a target that resolves
+    // outside the room (or can't be resolved) is the jail's 400; an
+    // upload-only drop answers its usual missing-cap 403 (no oracle).
+    if !full.as_deref().is_some_and(|f| rel_in_room(&resolved.path, f).is_some()) {
+        return Some(if need == PathNeed::Upload {
+            scope_refused(need)
+        } else {
+            CliResponse::bad_request("path escapes the workspace")
+        });
+    }
     // The `.k2/` opt-in widens `files:write` only; an upload-only drop
     // never reaches `.k2/`, whatever the line holds.
     if need != PathNeed::Upload && pass.has_cap_in_room(&resolved.project_id, k2_core::skin::CAP_FILES_AGENT_CONFIG) {
@@ -2680,23 +2691,27 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
         }
     }
     let abs_dest = dest_path.to_string_lossy().to_string();
-    let result = if is_move {
-        fsc::move_files(&abs_sources, &abs_dest)
-    } else {
-        fsc::copy_files(&abs_sources, &abs_dest)
-    };
-    match result {
-        Ok(()) => {
-            if is_move {
+    // A guest's copy (and a move's copy-then-delete fallback) never
+    // follows a link inside a folder: the copy leaves links out and says
+    // how many (`skipped`); the move fallback stops at one.
+    if is_move {
+        match fsc::move_files_no_follow(&abs_sources, &abs_dest) {
+            Ok(()) => {
                 let mut paths = abs_sources;
                 paths.push(abs_dest);
                 crate::session_events::emit_fs_changed_for_paths(paths);
-            } else {
-                crate::session_events::emit_fs_changed_for_paths([abs_dest]);
+                CliResponse::ok_json(r#"{"success":true}"#.to_string())
             }
-            CliResponse::ok_json(r#"{"success":true}"#.to_string())
+            Err(e) => CliResponse::bad_request(e),
         }
-        Err(e) => CliResponse::bad_request(e),
+    } else {
+        match fsc::copy_files_no_follow(&abs_sources, &abs_dest) {
+            Ok(skipped) => {
+                crate::session_events::emit_fs_changed_for_paths([abs_dest]);
+                CliResponse::ok_json(serde_json::json!({ "success": true, "skipped": skipped }).to_string())
+            }
+            Err(e) => CliResponse::bad_request(e),
+        }
     }
 }
 

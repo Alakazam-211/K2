@@ -322,6 +322,7 @@ pub mod board;
 // Settings → Cores → Multiplayer: the cores a box switches on or off.
 pub mod docs_cores;
 pub mod fs_commands;
+pub mod fs_link_free_copy;
 pub mod file_links;
 pub mod secret_paths;
 pub mod fs_compress;

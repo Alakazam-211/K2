@@ -12,17 +12,27 @@
 //!   followed) and reloads what changed. It removes the policy file even
 //!   when the caller's `daemon.toml` entry can't be read, so a box is never
 //!   left with the denial after K2's scopes are gone.
-//! - **layout** reports the two files (`present`, `missing`, `differs`) and
-//!   the unit's delegation (`off`, `pending-full-restart`, `on`,
-//!   `unknown`).
+//! - **layout** reports whether the bus policy is in effect (`active`,
+//!   `present-but-not-active`, `missing`): with K2's file in place it asks,
+//!   as the daemon's user, for `AttachProcessesToUnit` of a unit that
+//!   doesn't exist, which only the loaded policy refuses (a file dbus-daemon
+//!   rejects as malformed is dropped whole while `ReloadConfig` still
+//!   answers 0: seen on the test box). Also the drop-in (`present`,
+//!   `missing`, `differs`) and the unit's delegation (`off`,
+//!   `pending-full-restart`, `on`, `unknown`).
+//! - **setup** refuses, with the probe's answer, when the policy is not in
+//!   effect after the reload.
 
 use std::ffi::OsStr;
 
 use k2_root_proto::agent_scope_policy::{
-    bus_policy, bus_reload_argv, classify_delegation, delegate_dropin, full_restart_command, Delegation, FileState, BUS_CONFIG_DIR,
-    BUS_POLICY_DIR, BUS_POLICY_FILE, BUS_POLICY_PATH, DELEGATE_DROPIN_FILE,
+    bus_policy, bus_policy_state, bus_reload_argv, classify_delegation, classify_policy_probe, delegate_dropin, full_restart_command,
+    policy_probe_argv, Delegation, FileState, PolicyProbe, BUS_CONFIG_DIR, BUS_POLICY_DIR, BUS_POLICY_FILE, BUS_POLICY_PATH,
+    DELEGATE_DROPIN_FILE,
 };
+use k2_root_proto::apps::ENV;
 use k2_root_proto::creds::BUSCTL;
+use k2_root_proto::paths::RUNUSER;
 use serde_json::json;
 
 use crate::caller::DaemonEntry;
@@ -81,6 +91,37 @@ pub(crate) fn reload_bus(ctx: &Ctx) -> HResult<()> {
         .map_err(|f| Fail::state(format!("the system bus did not reload its policy ({})", f.msg)))
 }
 
+/// The in-effect probe, run as the daemon's user (`runuser`, `LC_ALL=C`
+/// so the bus's refusal reads in the words the classifier knows).
+fn probe(ctx: &Ctx, user: &str) -> (PolicyProbe, String) {
+    let mut args: Vec<String> = ["-u", user, "--", ENV, "LC_ALL=C", BUSCTL].iter().map(|s| s.to_string()).collect();
+    args.extend(policy_probe_argv().iter().map(|s| s.to_string()));
+    match ctx.exec.run(RUNUSER, &args, None) {
+        Ok(out) => {
+            let err: String = String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect();
+            (classify_policy_probe(out.status, &err), if out.status == 0 { "the call went through".into() } else { err })
+        }
+        Err(e) => (PolicyProbe::NotDenied, format!("runuser: {}", e.kind())),
+    }
+}
+
+/// After setup: the policy must be in effect. One more bus reload when the
+/// first look says no and setup didn't reload already.
+pub(crate) fn require_active(ctx: &Ctx, entry: &DaemonEntry, reloaded: bool) -> HResult<()> {
+    let (mut p, mut why) = probe(ctx, &entry.user);
+    if p != PolicyProbe::Denied && !reloaded {
+        reload_bus(ctx)?;
+        (p, why) = probe(ctx, &entry.user);
+    }
+    if p == PolicyProbe::Denied {
+        return Ok(());
+    }
+    Err(Fail::state(format!(
+        "agents setup refused: the bus policy ({BUS_POLICY_PATH}) is written and the bus reloaded, but it is not in effect: the server user's \
+         AttachProcessesToUnit was not refused ({why}). The system bus may have rejected the file (its log says why)"
+    )))
+}
+
 /// What teardown removed.
 pub(crate) struct Removed {
     pub bus_policy: bool,
@@ -117,12 +158,18 @@ fn dropin_state(ctx: &Ctx, unit: &str) -> FileState {
 /// is not delegated (`off`, or `pending-full-restart`: systemd already
 /// refuses moves into it, row P4), and the fields for the answer.
 pub(crate) fn report(ctx: &Ctx, entry: &DaemonEntry, delegate: Option<bool>, cgroup_owner: Option<u32>) -> (bool, serde_json::Map<String, serde_json::Value>) {
-    let bus = policy_state(ctx, entry);
+    let file = policy_state(ctx, entry);
+    let probed = (file != FileState::Missing).then(|| probe(ctx, &entry.user));
+    let bus = bus_policy_state(file, probed.as_ref().map(|(p, _)| *p));
     let dropin = dropin_state(ctx, &entry.unit);
     let delegation = classify_delegation(delegate, cgroup_owner, ctx.root_uid);
-    let ready = bus == FileState::Present && dropin == FileState::Present && delegation.not_delegated();
+    let ready = bus == "active" && dropin == FileState::Present && delegation.not_delegated();
     let mut m = serde_json::Map::new();
-    m.insert("busPolicy".into(), json!(bus.as_str()));
+    m.insert("busPolicy".into(), json!(bus));
+    m.insert("busPolicyFile".into(), json!(file.as_str()));
+    if let Some((p, why)) = probed.filter(|(p, _)| *p != PolicyProbe::Denied) {
+        m.insert("busPolicyProbe".into(), json!(format!("{p:?}: {why}")));
+    }
     m.insert("busPolicyPath".into(), json!(BUS_POLICY_PATH));
     m.insert("delegateDropin".into(), json!(dropin.as_str()));
     m.insert("delegateDropinPath".into(), json!(format!("{}/{}.d/{DELEGATE_DROPIN_FILE}", k2_root_proto::paths::SYSTEMD_SYSTEM_DIR, entry.unit)));

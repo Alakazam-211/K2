@@ -93,7 +93,7 @@ fn ready_layout(scopes: Value, survivors: Value) -> Value {
         "anchors": { "k2agents-anchor.service": { "active": true, "state": "active" } },
         "scopes": scopes,
         "survivors": survivors,
-        "busPolicy": "present",
+        "busPolicy": "active",
         "delegateDropin": "present",
         "delegation": "off",
         "unit": { "name": "k2-daemon.service", "delegate": false },
@@ -425,14 +425,14 @@ fn on_names_the_full_restart_while_delegation_is_pending_and_status_shows_it() {
     host.sessions.set(4);
     let (s, v) = post(&host, Caller::Owner, json!({ "mode": "on" }));
     assert_eq!(s, 200, "{v}");
-    assert_eq!((v["busPolicy"].as_str(), v["delegation"].as_str()), (Some("present"), Some("pending-full-restart")), "{v}");
+    assert_eq!((v["busPolicy"].as_str(), v["delegation"].as_str()), (Some("active"), Some("pending-full-restart")), "{v}");
     assert_eq!((v["fullRestart"]["needed"].as_bool(), v["fullRestart"]["endsSessions"].as_u64()), (Some(true), Some(4)), "{v}");
     assert_eq!(v["fullRestart"]["command"], "the helper's command", "{v}");
     assert!(v["fullRestart"]["message"].as_str().expect("message").contains("k2-ptyd"), "{v}");
 
     let (s, v) = post(&host, Caller::Owner, json!({ "mode": "status" }));
     assert_eq!(s, 200, "{v}");
-    assert_eq!((v["busPolicy"].as_str(), v["delegation"].as_str()), (Some("present"), Some("pending-full-restart")), "{v}");
+    assert_eq!((v["busPolicy"].as_str(), v["delegation"].as_str()), (Some("active"), Some("pending-full-restart")), "{v}");
     assert_eq!(v["fullRestart"]["endsSessions"], 4, "{v}");
 
     // Delegation off: nothing to restart.

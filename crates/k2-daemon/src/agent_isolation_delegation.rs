@@ -12,7 +12,8 @@
 
 use serde_json::{json, Value};
 
-/// `agents layout`'s `busPolicy` (`present`, `missing`, `differs`).
+/// `agents layout`'s `busPolicy` (`active`, `present-but-not-active`,
+/// `missing`): only `active` means the bus enforces it.
 pub fn bus_policy(layout: &Value) -> Option<&str> {
     layout["busPolicy"].as_str()
 }
@@ -60,10 +61,12 @@ pub fn full_restart(layout: &Value, running_sessions: usize) -> Option<Value> {
 /// Why `agents layout` is not ready, in the owner's words: the first of the
 /// P1 probe, the bus policy, the drop-in, the delegation, then the slices.
 pub fn not_ready_reason(v: &Value) -> String {
-    if let Some(p) = bus_policy(v).filter(|p| *p != "present") {
+    if let Some(p) = bus_policy(v).filter(|p| *p != "active") {
+        let path = v["busPolicyPath"].as_str().unwrap_or(k2_root_proto::agent_scope_policy::BUS_POLICY_PATH);
+        let probe = v["busPolicyProbe"].as_str().map(|w| format!(" (the probe: {w})")).unwrap_or_default();
         return format!(
-            "the bus policy that stops the server user asking systemd to move processes ({}): {p}; agents setup writes it",
-            v["busPolicyPath"].as_str().unwrap_or(k2_root_proto::agent_scope_policy::BUS_POLICY_PATH)
+            "the bus policy that stops the server user asking systemd to move processes ({path}): {p}{probe}; agents setup writes it and \
+             checks the bus enforces it"
         );
     }
     if let Some(d) = v["delegateDropin"].as_str().filter(|d| *d != "present") {
@@ -86,7 +89,7 @@ mod tests {
     fn layout(delegation: &str) -> Value {
         json!({
             "ready": true,
-            "busPolicy": "present",
+            "busPolicy": "active",
             "delegateDropin": "present",
             "delegation": delegation,
             "unit": { "name": "k2-daemon.service" },
@@ -119,7 +122,10 @@ mod tests {
         v["busPolicy"] = json!("missing");
         v["busPolicyPath"] = json!("/etc/dbus-1/system.d/k2-agents.conf");
         assert!(not_ready_reason(&v).contains("bus policy") && not_ready_reason(&v).contains("(/etc/dbus-1/system.d/k2-agents.conf): missing"), "{}", not_ready_reason(&v));
-        v["busPolicy"] = json!("present");
+        v["busPolicy"] = json!("present-but-not-active");
+        v["busPolicyProbe"] = json!("NotDenied: Unit k2-agents-probe.service not loaded.");
+        assert!(not_ready_reason(&v).contains("present-but-not-active (the probe: NotDenied"), "{}", not_ready_reason(&v));
+        v["busPolicy"] = json!("active");
         v["delegateDropin"] = json!("differs");
         assert!(not_ready_reason(&v).contains("Delegate=no drop-in") && not_ready_reason(&v).contains(": differs"), "{}", not_ready_reason(&v));
         v["delegateDropin"] = json!("present");

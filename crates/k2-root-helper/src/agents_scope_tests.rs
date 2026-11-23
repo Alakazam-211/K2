@@ -88,7 +88,13 @@ fn scope_box_full(moves: bool, reused: &[u32], extra: &[u32]) -> T {
         }
         ExecOut { status: 1, stdout: vec![], stderr: b"unexpected busctl call".to_vec() }
     });
-    t.exec.0.borrow_mut().programs.insert(BUSCTL.into(), busctl);
+    {
+        let mut e = t.exec.0.borrow_mut();
+        e.programs.insert(BUSCTL.into(), busctl);
+        // The bus policy's in-effect probe (as the daemon's user): the bus
+        // refuses it, as with the policy loaded.
+        e.rules.push((RUNUSER.into(), "AttachProcessesToUnit".into(), ExecOut { status: 1, stdout: vec![], stderr: b"Call failed: Access denied".to_vec() }));
+    }
     t
 }
 

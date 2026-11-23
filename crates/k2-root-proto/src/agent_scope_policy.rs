@@ -53,6 +53,13 @@ pub const MANAGER_IFACE: &str = "org.freedesktop.systemd1.Manager";
 /// `StartTransientUnit` with `PIDs=` also moves processes, but on the
 /// system bus polkit refuses it to the K2 user (row P1, which `agents
 /// layout` checks on every box); the bus policy leaves it alone.
+///
+/// Every rule names its interface: dbus-daemon rejects the whole file for
+/// a `<deny>` that gives `send_member` without `send_interface` or a path
+/// ("if you specify a member you must specify an interface or a path",
+/// seen on the test box 2026-11-23, where `ReloadConfig` still answered 0).
+/// A deny naming an interface also matches a call that leaves its
+/// interface out (dbus-daemon's documented rule), so those are refused too.
 pub const DENIED: &[(&str, &str)] = &[
     (MANAGER_IFACE, "AttachProcessesToUnit"),
     ("org.freedesktop.systemd1.Service", "AttachProcesses"),
@@ -62,12 +69,6 @@ pub const DENIED: &[(&str, &str)] = &[
     ("org.freedesktop.systemd1.Slice", "AttachProcesses"),
     ("org.freedesktop.systemd1.Scope", "AttachProcesses"),
 ];
-
-/// The same members denied by name alone: D-Bus lets a method call leave
-/// its interface out, and a later systemd may add the method to another
-/// unit type. A rule naming a member and no interface matches every
-/// interface on both dbus-daemon and dbus-broker.
-pub const DENIED_MEMBERS: &[&str] = &["AttachProcessesToUnit", "AttachProcesses"];
 
 /// The bus policy for the daemon's user (`daemon.toml`'s, which must pass
 /// [`user_ok`]: lowercase letters, digits, `_` and `-`, so nothing in it
@@ -86,9 +87,6 @@ pub fn bus_policy(user: &str) -> Option<String> {
     let mut rules = String::new();
     for (iface, member) in DENIED {
         rules.push_str(&format!("    <deny send_destination=\"{SYSTEMD_DEST}\" send_interface=\"{iface}\" send_member=\"{member}\"/>\n"));
-    }
-    for member in DENIED_MEMBERS {
-        rules.push_str(&format!("    <deny send_destination=\"{SYSTEMD_DEST}\" send_member=\"{member}\"/>\n"));
     }
     Some(format!(
         "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN\"\n \
@@ -122,6 +120,56 @@ pub fn delegate_dropin() -> &'static str {
 /// itself; dbus-broker does not.
 pub fn bus_reload_argv() -> [&'static str; 5] {
     ["call", "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ReloadConfig"]
+}
+
+/// The unit name the in-effect probe asks about: never a real unit, so
+/// systemd (were the call let through) answers "not loaded" and moves
+/// nothing (the pid list is empty too).
+pub const PROBE_UNIT: &str = "k2-agents-probe.service";
+
+/// The `busctl` argv (after the program) of the in-effect probe, run as the
+/// daemon's user with `LC_ALL=C`: `AttachProcessesToUnit(PROBE_UNIT, "",
+/// [])`. With the policy loaded the bus itself refuses it ("Access
+/// denied"); without it systemd answers about the unit.
+pub fn policy_probe_argv() -> [&'static str; 9] {
+    ["call", SYSTEMD_DEST, "/org/freedesktop/systemd1", MANAGER_IFACE, "AttachProcessesToUnit", "ssau", PROBE_UNIT, "", "0"]
+}
+
+/// What the in-effect probe showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyProbe {
+    /// The bus refused the call: the policy is loaded.
+    Denied,
+    /// The call reached systemd (any other answer): the policy is not in
+    /// effect.
+    NotDenied,
+}
+
+/// The probe's exit status and stderr → its verdict. Only the bus's own
+/// refusal counts: busctl prints `Access denied` (dbus-daemon's message
+/// starts `Rejected send message`, dbus-broker's says the sender `is not
+/// authorized to send`). systemd answers an unknown unit before any
+/// permission check, so it never says this for the probe's unit.
+pub fn classify_policy_probe(status: i32, stderr: &str) -> PolicyProbe {
+    let e = stderr.to_ascii_lowercase();
+    let denied = ["access denied", "rejected send message", "not authorized to send"];
+    if status != 0 && denied.iter().any(|w| e.contains(w)) {
+        PolicyProbe::Denied
+    } else {
+        PolicyProbe::NotDenied
+    }
+}
+
+/// `agents layout`'s `busPolicy`: `missing` (no file at K2's path),
+/// `active` (K2's text there and the probe refused), else
+/// `present-but-not-active` (a file whose text differs, or the bus not
+/// enforcing it: not reloaded, or rejected as malformed).
+pub fn bus_policy_state(file: FileState, probe: Option<PolicyProbe>) -> &'static str {
+    match (file, probe) {
+        (FileState::Missing, _) => "missing",
+        (FileState::Present, Some(PolicyProbe::Denied)) => "active",
+        _ => "present-but-not-active",
+    }
 }
 
 /// One K2 file as `agents layout` finds it.
@@ -205,6 +253,10 @@ pub fn full_restart_command(unit: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "agent_scope_policy_dbus_tests.rs"]
+mod dbus_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -223,12 +275,31 @@ mod tests {
     <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Swap" send_member="AttachProcesses"/>
     <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Slice" send_member="AttachProcesses"/>
     <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Scope" send_member="AttachProcesses"/>
-    <deny send_destination="org.freedesktop.systemd1" send_member="AttachProcessesToUnit"/>
-    <deny send_destination="org.freedesktop.systemd1" send_member="AttachProcesses"/>
   </policy>
 </busconfig>
 "#;
         assert_eq!(bus_policy("k2").as_deref(), Some(want));
+        for l in want.lines().filter(|l| l.contains("<deny")) {
+            assert!(l.contains("send_interface=\""), "dbus-daemon drops the whole file for a member without an interface: {l}");
+        }
+    }
+
+    #[test]
+    fn the_in_effect_probe_and_its_verdict() {
+        assert_eq!(
+            policy_probe_argv(),
+            ["call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "AttachProcessesToUnit", "ssau", "k2-agents-probe.service", "", "0"]
+        );
+        assert_eq!(classify_policy_probe(1, "Call failed: Access denied"), PolicyProbe::Denied);
+        assert_eq!(classify_policy_probe(1, "Call failed: Rejected send message, 1 matched rules"), PolicyProbe::Denied);
+        assert_eq!(classify_policy_probe(1, "Call failed: Unit k2-agents-probe.service not loaded."), PolicyProbe::NotDenied);
+        assert_eq!(classify_policy_probe(1, "Call failed: Invalid argument"), PolicyProbe::NotDenied);
+        assert_eq!(classify_policy_probe(0, "Access denied"), PolicyProbe::NotDenied, "a call that went through is never a refusal");
+        assert_eq!(bus_policy_state(FileState::Missing, None), "missing");
+        assert_eq!(bus_policy_state(FileState::Present, Some(PolicyProbe::Denied)), "active");
+        assert_eq!(bus_policy_state(FileState::Present, Some(PolicyProbe::NotDenied)), "present-but-not-active");
+        assert_eq!(bus_policy_state(FileState::Present, None), "present-but-not-active");
+        assert_eq!(bus_policy_state(FileState::Differs, Some(PolicyProbe::Denied)), "present-but-not-active", "not K2's text");
     }
 
     #[test]

@@ -725,6 +725,8 @@ fn setup(ctx: &Ctx, who: &Caller) -> HResult<J> {
     if policy.bus_policy {
         crate::agents_scope_policy::reload_bus(ctx).map_err(|f| Fail::state(format!("agents setup: the bus policy is written, but {}", f.msg)))?;
     }
+    // Written is not loaded: the bus must refuse the server user's move.
+    crate::agents_scope_policy::require_active(ctx, &entry, policy.bus_policy)?;
     Ok(json!({
         "ok": true,
         "changed": changed || policy.bus_policy || policy.delegate_dropin,

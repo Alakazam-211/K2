@@ -239,8 +239,6 @@ policy_text() {
     <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Swap" send_member="AttachProcesses"/>
     <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Slice" send_member="AttachProcesses"/>
     <deny send_destination="org.freedesktop.systemd1" send_interface="org.freedesktop.systemd1.Scope" send_member="AttachProcesses"/>
-    <deny send_destination="org.freedesktop.systemd1" send_member="AttachProcessesToUnit"/>
-    <deny send_destination="org.freedesktop.systemd1" send_member="AttachProcesses"/>
   </policy>
 </busconfig>
 POLICY
@@ -325,6 +323,10 @@ try_2 2-before
 policy_text | sudo tee "$policy" >/dev/null
 out="$(bus_reload 2>&1)"
 row H1 "bus policy for $user installed, ReloadConfig: rc=$? $(echo "$out" | first_line) · bus $(systemctl show -p Id --value dbus.service 2>/dev/null) · $(state)"
+# The in-effect probe agents layout runs (a unit that doesn't exist, no
+# pids): "Access denied" only when the bus enforces the policy.
+out="$(LC_ALL=C busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager AttachProcessesToUnit ssau k2-agents-probe.service "" 0 2>&1)"
+row H1-probe "AttachProcessesToUnit of k2-agents-probe.service as $user: rc=$? $(echo "$out" | first_line)"
 try_1c 1c-policy
 try_2 2-policy
 # H2. The drop-in, daemon-reload, no restart (the daemon and ptyd keep
@@ -358,4 +360,4 @@ sudo systemctl kill --signal=KILL "$unit" 2>/dev/null
 kill "$sib_wrap" 2>/dev/null
 echo "rows recorded: $ran"
 [ "$fenced_ok" = 1 ] || { echo "the fenced-session rows (4, P2, P7) did not run" >&2; exit 1; }
-[ "$ran" -ge 34 ] || { echo "fewer rows than expected ran" >&2; exit 1; }
+[ "$ran" -ge 35 ] || { echo "fewer rows than expected ran" >&2; exit 1; }

@@ -4,6 +4,7 @@
 
 use super::*;
 use k2_root_proto::agent_scope_policy::{bus_policy, delegate_dropin};
+use k2_root_proto::apps::ENV;
 
 const POLICY: &str = "/etc/dbus-1/system.d/k2-agents.conf";
 const DROPIN: &str = "/etc/systemd/system/k2-daemon.service.d/zz-k2-agents-delegate.conf";
@@ -29,6 +30,17 @@ fn systemd_bus(t: &T, delegate: Option<bool>, reload_status: i32) {
         out(1, "", "unexpected busctl call")
     });
     t.exec.0.borrow_mut().programs.insert(BUSCTL.into(), p);
+}
+
+/// The bus lets the server user's `AttachProcessesToUnit` through (the
+/// policy not loaded): systemd answers about the unit.
+fn policy_not_in_effect(t: &T) {
+    let out = ExecOut { status: 1, stdout: vec![], stderr: b"Call failed: Unit k2-agents-probe.service not loaded.".to_vec() };
+    t.exec.0.borrow_mut().rules.insert(0, (RUNUSER.into(), "AttachProcessesToUnit".into(), out));
+}
+
+fn probes(t: &T) -> Vec<Vec<String>> {
+    t.calls().into_iter().filter(|(p, a, _)| p == RUNUSER && a.iter().any(|x| x == "AttachProcessesToUnit")).map(|(_, a, _)| a).collect()
 }
 
 fn reloads(t: &T) -> usize {
@@ -57,6 +69,28 @@ fn agents_setup_writes_the_bus_policy_and_the_delegate_dropin_then_reloads_both(
         "one bus reload, as root"
     );
     assert_eq!(systemctl_calls(&t).iter().filter(|c| c[0] == "daemon-reload").count(), 1, "{:?}", systemctl_calls(&t));
+    // Written is not loaded: setup asked, as the daemon's user, and the bus
+    // refused.
+    assert_eq!(
+        probes(&t),
+        vec![sv(&[
+            "-u",
+            "k2",
+            "--",
+            ENV,
+            "LC_ALL=C",
+            BUSCTL,
+            "call",
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "AttachProcessesToUnit",
+            "ssau",
+            "k2-agents-probe.service",
+            "",
+            "0"
+        ])]
+    );
     // Again: nothing changed, no reload of either.
     let o = t.call(&["agents", "setup"]);
     ok(&o);
@@ -89,6 +123,24 @@ fn agents_setup_fails_loudly_when_the_bus_does_not_reload() {
     let o = t.call(&["agents", "setup"]);
     assert_ne!(o.code, exit::OK);
     assert!(o.stderr.contains("the bus policy is written, but the system bus did not reload"), "{}", o.stderr);
+}
+
+#[test]
+fn agents_setup_refuses_when_the_bus_policy_is_written_but_not_in_effect() {
+    let t = scope_box(true);
+    with_sleep(&t);
+    systemd_bus(&t, Some(false), 0);
+    policy_not_in_effect(&t);
+    let o = t.call(&["agents", "setup"]);
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("is not in effect") && o.stderr.contains("not loaded"), "{}", o.stderr);
+    assert_eq!(reloads(&t), 1, "the reload that followed the write; nothing more");
+    // The file was already there (unchanged): one more reload, then the
+    // same refusal.
+    let o = t.call(&["agents", "setup"]);
+    assert_ne!(o.code, exit::OK);
+    assert_eq!(reloads(&t), 2);
+    assert_eq!(probes(&t).len(), 3);
 }
 
 #[test]
@@ -164,7 +216,7 @@ fn layout_of(t: &T) -> serde_json::Value {
 fn agents_layout_is_ready_with_the_policy_the_dropin_and_delegation_off() {
     let t = layout_box(Some(false));
     let v = layout_of(&t);
-    assert_eq!(v["busPolicy"], "present", "{v}");
+    assert_eq!((v["busPolicy"].clone(), v["busPolicyFile"].clone()), (serde_json::json!("active"), serde_json::json!("present")), "{v}");
     assert_eq!(v["delegateDropin"], "present", "{v}");
     assert_eq!(v["delegation"], "off", "the unit's cgroup is root's: {v}");
     assert_eq!(v["unit"]["delegate"], false, "{v}");
@@ -179,10 +231,18 @@ fn agents_layout_is_not_ready_without_the_bus_policy_or_the_dropin() {
     std::fs::remove_file(t.p(POLICY)).unwrap();
     let v = layout_of(&t);
     assert_eq!((v["busPolicy"].clone(), v["ready"].clone()), (serde_json::json!("missing"), serde_json::json!(false)), "{v}");
+    assert!(probes(&t).len() == 1, "no probe without the file (setup's only): {:?}", probes(&t));
     std::fs::write(t.p(POLICY), bus_policy("someone-else").unwrap()).unwrap();
     let v = layout_of(&t);
-    assert_eq!((v["busPolicy"].clone(), v["ready"].clone()), (serde_json::json!("differs"), serde_json::json!(false)), "{v}");
+    assert_eq!((v["busPolicy"].clone(), v["busPolicyFile"].clone(), v["ready"].clone()), (serde_json::json!("present-but-not-active"), serde_json::json!("differs"), serde_json::json!(false)), "{v}");
     std::fs::write(t.p(POLICY), bus_policy("k2").unwrap()).unwrap();
+    assert_eq!(layout_of(&t)["ready"], true);
+    // K2's file in place, but the bus doesn't enforce it.
+    policy_not_in_effect(&t);
+    let v = layout_of(&t);
+    assert_eq!((v["busPolicy"].clone(), v["busPolicyFile"].clone(), v["ready"].clone()), (serde_json::json!("present-but-not-active"), serde_json::json!("present"), serde_json::json!(false)), "{v}");
+    assert!(v["busPolicyProbe"].as_str().unwrap_or("").contains("not loaded"), "{v}");
+    t.exec.0.borrow_mut().rules.remove(0);
     assert_eq!(layout_of(&t)["ready"], true);
     std::fs::remove_file(t.p(DROPIN)).unwrap();
     let v = layout_of(&t);

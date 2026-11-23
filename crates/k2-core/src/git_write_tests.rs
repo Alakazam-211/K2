@@ -156,7 +156,8 @@ fn writes_run_no_hooks() {
     stage_all(s(&d)).expect("stage all");
     unstage_file(s(&d), "b.txt").expect("unstage");
     commit(s(&d), "k2 commit").expect("commit (unsigned, no prompt)");
-    fx::git(&d, &["branch", "side"]);
+    // The fixture's own git (hooks off) makes the branch K2 then deletes.
+    fx::git(&d, &["-c", if cfg!(windows) { "core.hooksPath=NUL" } else { "core.hooksPath=/dev/null" }, "branch", "side"]);
     delete_branch(s(&d), "side").expect("delete branch");
     let ran: Vec<String> =
         std::fs::read_dir(&marks).expect("marks").map(|e| e.expect("entry").file_name().to_string_lossy().to_string()).collect();

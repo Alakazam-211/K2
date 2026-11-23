@@ -8,4 +8,4 @@
 # as a word in shell code" (value rows in scripts/cli-name-allowlist.txt hold
 # them), and "interpreter code, not in a string".
 
-101 k2 followed by a word that is not a command
+94 k2 followed by a word that is not a command

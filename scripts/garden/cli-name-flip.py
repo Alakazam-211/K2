@@ -75,6 +75,19 @@ CODE_WHY = "interpreter code, not in a string"
 # verb: a flag, a placeholder, an ellipsis.
 COMMAND_TAIL = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
 NEXT_WORD = re.compile(r" ([a-z][a-z0-9-]*)")
+# Exact phrases where the name is the command though no rule below says so:
+# (the text just before it, the text just after it, why). A person reads
+# the program here, so a brand's build prints its own command. Kept short
+# and exact on purpose: a new row needs a reason. crates/k5-cli/src/
+# brand_text.rs holds the same list (COMMAND_PHRASES); its test holds the
+# two rewrites equal.
+COMMAND_PHRASES = (
+    ("ran ", " from", "the program a person ran, in a folder (compute's job folder)"),
+    ("run ", " from a terminal", "the program run from a terminal outside the app (llm account)"),
+    ("", " asks for the confirm", "the program that asks the person at its terminal (migrate export-secrets)"),
+    ("where ", " uses the owner's token", "the program run in a plain shell (compute git-access)"),
+    ("No ", " hostdb", "a verb the command does not have (db bind)"),
+)
 EXTRA_VERBS = {"help", "version", "study", "update", "setup", "explain", "capabilities", "whoami", "cli", "command", "commands", "verb", "verbs"}
 
 
@@ -260,6 +273,13 @@ def reads_as_command(line, m, known):
     return False
 
 
+def in_command_phrase(before, after):
+    """The name sits in one of the COMMAND_PHRASES. Read for the CLI's
+    printed text only (classify), not by --area rust or the brand gate's
+    Rust reading: a Rust string with such a phrase is the B7 steps'."""
+    return any(before.endswith(b) and after.startswith(a) for b, a, _ in COMMAND_PHRASES)
+
+
 def is_stamp(before, after):
     """`[k2 ...]` or `[k2]`: a log or stamp prefix, a name that is not the
     CLI's. `before` and `after` are the text on each side of the word."""
@@ -289,7 +309,7 @@ def classify(line, m, where, known):
             if ASSIGNED.match(after) and (not before or before[-1] in " \t;(,'\""):
                 return "kept", NAME_WHY
             return "unsure", CODE_WHY
-    if not reads_as_command(line, m, known):
+    if not reads_as_command(line, m, known) and not in_command_phrase(before, after):
         return "unsure", "k2 followed by a word that is not a command"
     return "text", "printed text" if not where.endswith("-code") else "string in interpreter code"
 

@@ -9,7 +9,8 @@
 //! The rule is `scripts/garden/cli-name-flip.py`'s for printed text (a
 //! `cli/text` page or a schema entry): a use of the name is rewritten only
 //! where it reads as the command (a verb, a flag or a placeholder after
-//! it, backticks around it, or words such as `run` or `Usage:` before it).
+//! it, backticks around it, words such as `run` or `Usage:` before it, or
+//! one of a few exact phrases, `COMMAND_PHRASES`).
 //! A `[k2 ...]` stamp, a string that is exactly the name (a value) and any
 //! other use stay as they are. `text.rs`'s tests hold this port to the
 //! Python, file by file.
@@ -40,6 +41,17 @@ const EXTRA_VERBS: &[&str] = &[
     "commands",
     "verb",
     "verbs",
+];
+
+/// Exact phrases where the name is the command though no other rule says
+/// so: the text just before it and just after it (the flip's
+/// `COMMAND_PHRASES`, the same rows; its reasons are there).
+const COMMAND_PHRASES: &[(&str, &str)] = &[
+    ("ran ", " from"),
+    ("run ", " from a terminal"),
+    ("", " asks for the confirm"),
+    ("where ", " uses the owner's token"),
+    ("No ", " hostdb"),
 ];
 
 /// Words that, with spaces after them, put the command after them (the
@@ -213,7 +225,14 @@ fn is_command(before: &str, after: &str, known: &BTreeSet<String>) -> bool {
         (Some(q @ ('\'' | '"')), Some(c)) if c == q => return false,
         _ => {}
     }
-    reads_as_command(before, after, known)
+    reads_as_command(before, after, known) || in_command_phrase(before, after)
+}
+
+/// The flip's `in_command_phrase`.
+fn in_command_phrase(before: &str, after: &str) -> bool {
+    COMMAND_PHRASES
+        .iter()
+        .any(|(b, a)| before.ends_with(b) && after.starts_with(a))
 }
 
 /// The flip's `reads_as_command`.
@@ -291,6 +310,11 @@ mod tests {
             ("try 'k2 msg'", "try 'xy msg'"),
             ("the k2 CLI", "the xy CLI"),
             ("k2 msg and k2 agent", "xy msg and xy agent"),
+            ("or where you ran k2 from inside it", "or where you ran xy from inside it"),
+            ("or run k2 from a terminal outside K2.", "or run xy from a terminal outside K2."),
+            ("  terminal), k2 asks for the confirm.", "  terminal), xy asks for the confirm."),
+            ("where k2 uses the owner's token;", "where xy uses the owner's token;"),
+            ("No k2 hostdb.", "No xy hostdb."),
         ] {
             assert_eq!(xy(line), want, "{line:?}");
         }
@@ -318,6 +342,13 @@ mod tests {
             "k2 nope",
             "the k2 CLIs",
             "K2 msg",
+            // Values a program reads, in every brand: the widget API's
+            // object and firewall's --managed-by k2.
+            "            k2 object's helpers.",
+            "  k2     K2 applies it at your provider's firewall",
+            "  auto   k2 once an apply was recorded, else owner",
+            "ran k2.",
+            "No k2",
         ] {
             assert_eq!(xy(line), line, "{line:?}");
         }

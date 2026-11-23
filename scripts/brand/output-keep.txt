@@ -29,21 +29,16 @@ keep	(?<![A-Za-z0-9_])k2so\.db	the retired database file name, a link the daemon
 # Debt: the lines of cli/text that the CLI name rule does not rewrite (the
 # flip calls them unsure or kept: a value, or prose it cannot read as the
 # command). Step B8 rewords or sorts them; each row then goes.
-debt	b	                                (the repo root, or where you ran k2 from inside it),
-debt	b	Documents: xy store … (same DB). Files: workspace FS. No k2 hostdb.
 debt	b	                                          k2     K2 applies it at your provider's firewall
 debt	b	                                          auto   k2 once an apply was recorded, else owner
 debt	b	         then enable). Default k2; standalone = Sew's own password logins.
 debt	b	                              Who owns the mail certificate (k2 |
-debt	b	tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.
-debt	b	  terminal), k2 asks for the confirm. Anyone else (an agent, a script, an
 debt	b	                         fingerprints; export again to this box's key (k2
 debt	b	      without one, k2 prints a hint (K2 uses the first line otherwise).
 debt	b	                            k2: K2's own agent (k2so is accepted too)
 debt	b	            k2 object's helpers.
 debt	b	  --mode <mode>           Agent mode: off | custom | manager | k2   (default: custom).
 debt	b	  --mode <mode>           off | custom | manager | k2 ("off" also sets enabled=false)
-debt	b	        where k2 uses the owner's token; a K2 tab sends the tab's passport
 debt	b	  k2: K2 issues, installs and renews it; Stalwart ACME stays Manual —
 debt	b	                         xy hostmail config shows both under forwarding, and k2
 debt	b	Needs the root helper /usr/local/libexec/k2-root-helper (user k2 runs it
@@ -60,10 +55,8 @@ debt	b	Sew 0.6.0+: a shorter way, chat for every App user with one chat key (k2
 debt	b	    xy hostchat status: identity k2 (else xy hostchat enable). xy hostchat
 debt	b	          weston --backend=headless --renderer=gl --xwayland --socket=k2-$$ &
 debt	b	          WAYLAND_DISPLAY=k2-$$ ./my-gpu-tests'
-debt	b	    to the job's working dir (the repo root, or where you ran k2 from inside
 debt	b	    keeps your apex mail where it is), publish its records, then k2
 debt	b	      how to get it (k5: Python 3, for a command it hands to the shell CLI).
-debt	b	  Subs / Tokens, or run k2 from a terminal outside K2 (otherwise exit 3,
 debt	b	  k2             The mail host is attached in `xy domain` (role mail) AND
 debt	b	    acme-cert-names   on k2 boxes "Manual (K2 owns and renews this
 debt	b	  when it is self-signed, expired or does not cover the mail host — k2

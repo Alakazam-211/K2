@@ -228,6 +228,13 @@ python3 "$FLIP" --apply --root "$X" | grep -q "rewrote 2 uses of k2 to k5 in 1 f
 printf 'Run k2 msg <addr> to send.\n' > "$X/cli/text/study/a.txt"
 python3 "$FLIP" --apply --to xy --root "$X" | grep -q "rewrote 1 uses of k2 to xy in 1 files" || die "--apply --to xy"; ok
 [ "$(cat "$X/cli/text/study/a.txt")" = 'Run xy msg <addr> to send.' ] || die "the --to xy file: $(cat "$X/cli/text/study/a.txt")"; ok
+# The few exact phrases where the name is the command though no other rule
+# says so (COMMAND_PHRASES) are rewritten; the same words elsewhere, and a
+# value such as the widget API's k2 object, are not.
+printf '%s\n' "or where you ran k2 from inside it" "No k2 hostdb." "  terminal), k2 asks for the confirm." \
+    "ran k2." "No k2" "            k2 object's helpers." > "$X/cli/text/study/a.txt"
+python3 "$FLIP" --apply --to xy --root "$X" | grep -q "rewrote 3 uses of k2 to xy in 1 files" || die "--apply --to xy on the phrases: $(cat "$X/cli/text/study/a.txt")"; ok
+[ "$(cat "$X/cli/text/study/a.txt")" = "$(printf '%s\n' "or where you ran xy from inside it" "No xy hostdb." "  terminal), xy asks for the confirm." "ran k2." "No k2" "            k2 object's helpers.")" ] || die "the phrases file: $(cat "$X/cli/text/study/a.txt")"; ok
 set +e
 out="$(python3 "$FLIP" --apply --to X-Y --root "$X" 2>&1)"; code=$?
 set -e

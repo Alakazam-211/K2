@@ -80,10 +80,11 @@ pub fn is_workspace_dot_dir(segment: &str) -> bool {
     WORKSPACE_DOT_DIR_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
 }
 
-/// The K2 home folder's name under the user's home: `.k2`. Spell it only
-/// here; a path into the home comes from [`k2_home`] (or [`k2_home_in`]
-/// for a given user home).
-pub const HOME_DIR_NAME: &str = ".k2";
+/// The K2 home folder's name under the user's home: `.k2`, the brand
+/// file's `[machine] home` (every brand has today's name for now; the
+/// reader refuses another). Name it only through here; a path into the
+/// home comes from [`k2_home`] (or [`k2_home_in`] for a given user home).
+pub const HOME_DIR_NAME: &str = k2_brand::machine::HOME_DIR_NAME;
 
 /// The K2 home directory: `$HOME/.k2`, unless the home override names
 /// another folder (see [`home_override`]).

@@ -281,6 +281,8 @@ Agents:
                  node/npm/npx, bun, pip, uv, pnpm, go, java, deno need --needs
                  (node@22, bun, python@3.12, uv, …). The log names a missing one
                  at start; k2 study compute: WHAT A JOB HAS WITHOUT --needs.
+                 A repo with rust-toolchain.toml: leave rust out of --needs and
+                 the node uses its pin (rust@stable is for a repo without one).
                  Cargo builds in $CARGO_TARGET_DIR (the log prints it), not ./target
                  -- <command…>
   k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]

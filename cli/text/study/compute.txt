@@ -486,7 +486,7 @@ MEMORY (--mem, required; 0.46.6)
   which still builds its dependencies): 24G with --env CARGO_BUILD_JOBS=8;
   a small standalone crate: 8G; a shell or Python script: 1-2G; anything
   else: what it uses at its peak, plus a margin. A K2 cargo job, whole:
-    k2 compute run --dirty --needs rust@stable,cmake@3,sys:pkg-config \
+    k2 compute run --dirty --needs cmake@3,sys:pkg-config \
         --mem 24G --env CARGO_BUILD_JOBS=8 -- cargo nextest run -p k2-core Without --mem the job reserves
   4 GB (a note says so) and is stopped above it: failed/mem_cap, "stopped:
   the job used more than its memory limit of 4.0 GB". The node starts a
@@ -771,6 +771,9 @@ TOOLCHAINS (what the job needs installed)
   0.46.9 node; placement prefers nodes that have them). rust@stable+minimal
   leaves them out (a small node). Add components with +:
   rust@stable+clippy+rustfmt, rust@1.95.0+rust-src+llvm-tools.
+  A repo with rust-toolchain.toml: leave rust out of --needs and the
+  node uses its pin. A rust@ need overrides the file, so rust@stable
+  is for a repo without a pin.
   Anything else is refused before the job starts (tool_unsupported,
   exit 2), never silently skipped; for the long tail name a mise backend:
   aqua:owner/repo@1, ubi:owner/repo@1, npm:pkg@1, pipx:pkg@1, cargo:crate@1.
@@ -810,7 +813,8 @@ WHAT A JOB HAS WITHOUT --needs
                        pip, a known python3: python@3.12   uv, uvx: uv
                        pnpm   deno   go   java   zig   ninja   protoc
                        cmake where it's missing: cmake@3
-                       another Rust: rust@1.99 (rust@stable is already there)
+                       another Rust: rust@1.99 (rust@stable is already
+                       there; a repo's rust-toolchain.toml pin needs none)
   When in doubt, name it: a need that is already there costs nothing.
   The job log's "tools:" line says what its PATH resolves to, and a job
   whose command calls python3, pip, uv, node, npm, npx, bun, cargo, … that
@@ -879,7 +883,8 @@ ENVIRONMENT (0.46.9: what each machine is, and its system packages)
                      Vulkan loader and Mesa's GPU drivers, eglinfo,
                      vulkaninfo, Weston with Xwayland, Xvfb (GPU JOBS)
   A job names at most 32 needs; a profile counts as one, however many
-  packages it holds. A Tauri build on Ubuntu:
+  packages it holds. A Tauri build on Ubuntu (with a rust-toolchain.toml,
+  drop rust@stable):
     k2 compute run --distro ubuntu@24.04 --mem 16G \
         --needs profile:tauri-linux,rust@stable,node@22 -- cargo build --release
   k2 compute node packages <node> shows which profiles the node's owner

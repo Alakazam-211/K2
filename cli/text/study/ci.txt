@@ -24,11 +24,11 @@ SET UP CI FOR THIS REPO (from inside the repo; P = a person's step)
   2. k2 ci init --check test --needs rust@stable --os linux --mem 8 -- cargo test --locked
        Node:   --needs node@22 ... -- sh -c 'npm ci && npm test'
        Python: --needs python@3.12 ... -- sh -c 'pip install -r requirements.txt && pytest -q'
-       A job starts from a clean checkout of the commit: install, then
-       test. --mem is GB (8 = 8 GB). No --: a placeholder check that
-       fails until you edit it. --branches main,release/* picks what the
-       watch checks (default main). Later changes: edit the file
-       (init --force rewrites all of it).
+       Rust:   with rust-toolchain.toml, leave rust out of --needs (the node uses its pin)
+       A job starts from a clean checkout of the commit: install, then test.
+       --mem is GB (8 = 8 GB). No --: a placeholder check that fails until you edit it.
+       --branches main,release/* picks what the watch checks (default main). Later
+       changes: edit the file (init --force rewrites all of it).
   3. git add .k2/ci.toml && git commit -m "K2 CI" && git push
        K2 reads .k2/ci.toml AT THE COMMIT it checks, so commit it.
   4. k2 ci run --wait

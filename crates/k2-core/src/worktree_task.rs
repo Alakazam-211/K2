@@ -141,7 +141,7 @@ fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
     if rev.starts_with('-') || crate::git::refuse_message_search_revspec(rev).is_err() {
         return None;
     }
-    git(dir, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
+    git(dir, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{rev}^{{commit}}")])
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())

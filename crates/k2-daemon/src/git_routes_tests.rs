@@ -342,6 +342,42 @@ fn agent_routes_are_scoped_to_the_own_workspace() {
 }
 
 #[test]
+fn cell_git_routes_take_only_a_branch_tag_or_commit_id_for_base() {
+    let d = repo("agent-base");
+    let own = s(&d);
+    std::fs::write(d.join("a.txt"), "one\ntwo\nthree\n").expect("edit a");
+    let sha = git2::Repository::open(&d).expect("open").head().expect("head").target().expect("oid").to_string();
+    let snap = |base: &str| handle_agent_route("/cli/git/snapshot", false, &params(&[("base", base)]), b"", &own);
+    let diff = |base: &str| {
+        handle_agent_route("/cli/git/diff-file", false, &params(&[("file_path", "a.txt"), ("sides", "1"), ("base", base)]), b"", &own)
+    };
+
+    for base in ["HEAD^{/x}", "@{-1}"] {
+        for r in [snap(base), diff(base)] {
+            assert_eq!(r.status, "400 Bad Request", "{base}: {}", r.body);
+            assert_eq!(json(&r)["code"], "bad_ref", "{base}");
+            assert_eq!(json(&r)["error"], format!("'{base}' isn't a branch name"), "{base}");
+        }
+    }
+    for base in ["main", sha.as_str()] {
+        let r = snap(base);
+        assert_eq!(r.status, "200 OK", "{base}: {}", r.body);
+        assert_eq!(json(&r)["base"]["ref"], base, "{base}");
+        let r = diff(base);
+        assert_eq!(r.status, "200 OK", "{base}: {}", r.body);
+        assert_eq!(json(&r)["new"]["text"], "one\ntwo\nthree\n", "{base}");
+    }
+
+    // The TCP routes still take a walk like HEAD~0, and refuse only a
+    // commit-message search.
+    let tcp = handle_git_snapshot(&params(&[("path", &own), ("base", "HEAD~0")]));
+    assert_eq!(tcp.status, "200 OK", "{}", tcp.body);
+    let tcp = handle_git_snapshot(&params(&[("path", &own), ("base", "HEAD^{/init}")]));
+    assert_eq!(tcp.status, "400 Bad Request", "{}", tcp.body);
+    assert_eq!(json(&tcp)["code"], "bad_ref");
+}
+
+#[test]
 fn agent_route_refuses_a_workspace_inside_a_bigger_repo() {
     let d = repo("agent-mono");
     let pkg = d.join("pkg");

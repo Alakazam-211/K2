@@ -796,6 +796,16 @@ pub fn is_agent_route(path: &str) -> bool {
     AGENT_ROUTES.contains(&path)
 }
 
+/// A plain branch, tag or commit id: `[A-Za-z0-9/_.-]` only, at most 200
+/// characters, no leading `-` and no `..`. Expects a trimmed string.
+pub(crate) fn is_plain_ref_name(r: &str) -> bool {
+    !r.is_empty()
+        && r.len() <= 200
+        && !r.starts_with('-')
+        && !r.contains("..")
+        && r.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'))
+}
+
 fn agent_forbidden(hint: String) -> CliResponse {
     CliResponse {
         status: "403 Forbidden",
@@ -900,6 +910,14 @@ pub fn handle_agent_route_as(
         Err(r) => return r,
     };
     p.insert("path".into(), scoped);
+    // On the cell socket `base` is only a branch, tag or commit id, as on
+    // the Workbench path; the TCP routes still take `HEAD~2` and the like.
+    if let Some(b) = p.get("base").map(|b| b.trim().to_string()).filter(|b| !b.is_empty()) {
+        if !is_plain_ref_name(&b) {
+            return changes_error(git_changes::ChangesError::new(git_changes::codes::BAD_REF, format!("'{b}' isn't a branch name")));
+        }
+        p.insert("base".into(), b);
+    }
     match path {
         "/cli/git/snapshot" => handle_git_snapshot(&p),
         "/cli/git/diff-file" => handle_git_diff_file(&p),

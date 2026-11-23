@@ -266,12 +266,7 @@ fn default_base(t: &Target) -> String {
 /// A ref a widget names: a plain branch or commit name, never an option.
 fn safe_ref(r: &str) -> Result<String, CliResponse> {
     let r = r.trim();
-    let ok = !r.is_empty()
-        && r.len() <= 200
-        && !r.starts_with('-')
-        && !r.contains("..")
-        && r.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
-    if ok {
+    if crate::git_routes::is_plain_ref_name(r) {
         Ok(r.to_string())
     } else {
         Err(bad_args(format!("'{r}' isn't a branch name")))

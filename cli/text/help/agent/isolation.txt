@@ -1,7 +1,8 @@
-k2 agent isolation — turn an agent's folder fence on or off (Linux)
+k2 agent isolation — an agent's folder fence, and the server's agent scopes (Linux)
 
 USAGE
   k2 agent isolation <workspace> fence|off [--json]
+  k2 agent isolation layout on|off|status [--json]
 
 WHAT IT DOES
   fence  The agent's next terminals, job runs and services start under a folder fence that K5 loads
@@ -15,15 +16,32 @@ WHAT IT DOES
   Off by default for every agent. Running terminals keep what they started
   with; restart the agent (k2 agent restart <name>) to apply a change.
 
+LAYOUT (the whole server; off until the owner turns it on)
+  layout on      Every new agent session, job run and service gets its own
+                 root-owned systemd scope, outside the server's own service,
+                 placed by the root helper (protocol 19). Asks for this
+                 computer's owner check first: Touch ID or the Mac's
+                 password, Windows Hello, or on a Linux server an owner
+                 login's sign-in password. Running sessions keep their place
+                 until they restart.
+  layout off     New sessions start without a scope. Refused while a fenced
+                 session runs in a scope (it says which). With no scope live
+                 the agent slices are removed; otherwise at the next daemon
+                 start with none live.
+  layout status  The root helper's layout report, the owner's setting, and
+                 why scopes are off when they are.
+
 WHO MAY
-  The server's owner turns it on or off. An admin may turn it on, not off.
-  An agent can't change its own (exit 3).
+  The server's owner turns the fence on or off. An admin may turn it on, not off.
+  The layout is the owner's: on and off. An admin may read its status.
+  An agent can't change either (exit 3; for layout on, it can ask with a card).
 
 NEEDS
   Linux with Landlock (Ubuntu 24.04's kernel has it on). Refused (exit 3,
   fence_unavailable) where the kernel has none, or when the agent's
   workspace is your home folder or holds ~/.k2. Macs get their fence in a
-  later release.
+  later release. The layout needs the root helper at protocol 19 (exit 3,
+  helper_needed).
 
 SEE ALSO
   k2 study isolation · k2 agent whois <pid> · k2 app doctor (agentIdentity)

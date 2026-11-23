@@ -307,6 +307,9 @@ pub mod cell_server;
 // Agent Isolation M1: per-agent cgroup identity, the passport checks on the
 // session socket and TCP, whois, and the per-agent folder fence switch.
 pub mod agent_isolation;
+// Agent Isolation M2 B4: the owner's switch for root-owned agent scopes
+// (`k2 agent isolation layout on|off|status`).
+pub mod agent_isolation_layout;
 // A /cli/* request over 5 s (or still running at 30 s) logs one line.
 pub mod slow_request;
 // gzip for JSON that leaves this machine; ETag/304 on the projects list.

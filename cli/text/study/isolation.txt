@@ -32,6 +32,16 @@ LABELLED BY AGENT (on wherever the server can have it)
   fenced agent can't do any of this, but fencing an agent does not
   protect it from an unfenced one.
 
+  Agent scopes (the owner's switch, off until turned on): k2 agent
+  isolation layout on gives every new session, job run and service its own
+  root-owned systemd scope outside the server's own service, placed by the
+  root helper (protocol 19). It asks for this computer's owner check first.
+  Running sessions keep their place until they restart. k2 agent isolation
+  layout status says what is live and, when scopes are off, why. An agent's
+  own `layout on` is refused (exit 3); with permission cards on it ends with:
+      k2 permission request agent.isolation-layout --why "<what you need it for>"
+  The owner still has to run `layout on` themselves for the owner check.
+
   Where it's unavailable (macOS, a user-unit install, a box prepared before
   0.46.16, a container) passports work as before; /boot-status
   (agentIsolation) and k2 app doctor (agentIdentity) say so and why.

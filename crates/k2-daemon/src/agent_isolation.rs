@@ -328,22 +328,108 @@ fn register_scope_placement() -> Result<(), String> {
 }
 
 fn scope_placement_inner(state: &mut k2_core::agent_scope::BoxState) -> Result<(), String> {
+    // The owner turns scopes on (`k2 agent isolation layout on`, with this
+    // computer's owner check); never on by itself.
+    match k2_core::agent_scope::owner_choice() {
+        k2_core::agent_scope::OwnerChoice::On => {}
+        k2_core::agent_scope::OwnerChoice::Off => {
+            teardown_at_boot();
+            return Err(WHY_OFF_BY_OWNER.to_string());
+        }
+        k2_core::agent_scope::OwnerChoice::NotSet => return Err(why_off_not_turned_on()),
+    }
     let st = crate::root_helper::state();
     if !agentscope_ok(&st) {
-        return Err(crate::root_helper::helper_needed("a root-owned scope per agent session", k2_root_proto::version::AGENTSCOPE_MIN_PROTOCOL, &st));
+        return Err(scope_helper_needed(&st));
     }
+    let v = layout_now()?;
+    note_layout(state, &v);
+    layout_ready(&v)?;
+    install_scope_caller();
+    log_debug!("[agents] identity on: the root helper places each agent session, job run and service in its own scope");
+    state.old_layout = adopt_survivors(&v);
+    Ok(())
+}
+
+/// Why scopes are off when the owner turned them off.
+pub const WHY_OFF_BY_OWNER: &str = "turned off by the owner";
+
+/// Why scopes are off when the owner never turned them on.
+pub fn why_off_not_turned_on() -> String {
+    format!("not turned on ({} agent isolation layout on)", k2_core::brand::CLI_NAME)
+}
+
+/// The helper is too old (or missing) for scopes: the words for it.
+pub fn scope_helper_needed(st: &crate::root_helper::RootHelperState) -> String {
+    crate::root_helper::helper_needed("a root-owned scope per agent session", k2_root_proto::version::AGENTSCOPE_MIN_PROTOCOL, st)
+}
+
+/// `agents layout` now (report only).
+pub fn layout_now() -> Result<serde_json::Value, String> {
     let out = crate::root_helper::call(&["agents".to_string(), "layout".to_string()], None)?;
-    let v: serde_json::Value = serde_json::from_slice(&out).map_err(|e| format!("agents layout: not JSON: {e}"))?;
+    serde_json::from_slice(&out).map_err(|e| format!("agents layout: not JSON: {e}"))
+}
+
+/// The layout's P1 answer and `kernel.pid_max`, for `/boot-status`.
+pub fn note_layout(state: &mut k2_core::agent_scope::BoxState, v: &serde_json::Value) {
     state.p1 = v["p1"].as_str().map(str::to_string);
     state.pid_max = v["pidMax"].as_u64();
-    layout_ready(&v)?;
+}
+
+/// Every isolated process gets its own scope from now on (boot, or the
+/// owner's `k2 agent isolation layout on`).
+pub fn install_scope_caller() {
     k2_core::agent_scope::set_caller(Box::new(|argv: &[String]| {
         let out = crate::root_helper::call(argv, None)?;
         serde_json::from_slice(&out).map_err(|e| format!("agents {}: not JSON: {e}", argv.get(1).map(String::as_str).unwrap_or("")))
     }));
-    log_debug!("[agents] identity on: the root helper places each agent session, job run and service in its own scope");
-    state.old_layout = adopt_survivors(&v);
-    Ok(())
+}
+
+/// Pure: when the owner turns scopes on while the server runs, the agents
+/// whose sessions are running in the old layout (`agents layout`'s
+/// `survivors`): they keep their place, and are recognised there, until
+/// they end; their next start gets a scope. Nothing is adopted.
+pub fn running_in_old_layout(layout: &serde_json::Value) -> Vec<(String, String)> {
+    layout["survivors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["ws"].as_str())
+        .map(|ws| (ws.to_string(), "running since before scopes were turned on; it gets a scope at its next start".to_string()))
+        .collect()
+}
+
+/// Pure: the owner's setting is off and `agents layout` shows slices or
+/// anchors `agents setup` made, with no scope live: time for `agents
+/// teardown`.
+pub fn teardown_due(layout: &serde_json::Value) -> bool {
+    let set_up = |key: &str, field: &str| layout[key].as_object().is_some_and(|m| m.values().any(|x| x[field].as_bool() == Some(true)));
+    let live = layout["scopes"].as_array().map_or(0, Vec::len);
+    (set_up("slices", "present") || set_up("anchors", "active")) && live == 0
+}
+
+/// Boot with the owner's setting off: the slices are removed once no scope
+/// is live (`k2 agent isolation layout off` leaves them while unfenced
+/// sessions still run in scopes). Logged; never stops the boot.
+fn teardown_at_boot() {
+    let st = crate::root_helper::state();
+    if !agentscope_ok(&st) {
+        return;
+    }
+    let v = match layout_now() {
+        Ok(v) => v,
+        Err(e) => {
+            log_debug!("[agents] scopes are off (the owner's setting); agents layout: {e}");
+            return;
+        }
+    };
+    if !teardown_due(&v) {
+        return;
+    }
+    match crate::root_helper::call(&["agents".to_string(), "teardown".to_string()], None) {
+        Ok(out) => log_debug!("[agents] scopes are off (the owner's setting) and none is live: agents teardown: {}", String::from_utf8_lossy(&out)),
+        Err(e) => log_debug!("[agents] WARN scopes are off (the owner's setting); agents teardown: {e} (tried again at the next start)"),
+    }
 }
 
 /// M4 (review R1): sessions that lived through an update in a root-owned

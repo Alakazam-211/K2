@@ -8685,6 +8685,8 @@ async fn handle_one_request(
         }
         // 0.46.17: `k2 explain <kit id>`, the Markdown kit's page (`crate::kit_explain_route::serve_tcp`).
         p if p == crate::kit_explain_route::ROUTE => if crate::kit_explain_route::serve_tcp(&mut *stream, &mut buf, is_post, &path, &query, bearer_token.as_deref(), state.token.as_str()).await { return DispatchOutcome::Done; },
+        // Agent Isolation M2 B4: `k2 agent isolation layout on|off|status` (`crate::agent_isolation_layout::serve_tcp`).
+        p if p == crate::agent_isolation_layout::ROUTE => if crate::agent_isolation_layout::serve_tcp(&mut *stream, &mut buf, is_post, &path, &query, bearer_token.as_deref(), state.token.as_str()).await { return DispatchOutcome::Done; },
         // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Dark (404) until
         // Apps (beta) (`apps`, default on) or K2_APPS is on. Passport rules live in the handler.
         p if crate::apps::routes::is_route(p) => {

@@ -24,6 +24,7 @@ COMMANDS
   access set <ws> chat_manage on|off
                           "Manage chat and voice" for that workspace's agent (the owner or an admin)
   isolation <ws> fence|off  The agent's folder fence (Linux; off by default; the owner's switch)
+  isolation layout on|off|status  A root-owned scope for every agent session (Linux; the owner's)
   whois <pid>             Which agent owns a process (owner only; Linux)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)

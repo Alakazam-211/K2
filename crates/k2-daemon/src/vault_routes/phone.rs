@@ -146,9 +146,10 @@ fn caller_key(c: &VaultCaller) -> String {
 
 /// The steps this path covers: every owner confirm except making a login an
 /// owner or re-keying an owner login (`presence` takes no login password
-/// for those), and the card's own confirm.
+/// for those), turning on agent scopes (confirmed at the computer or with an
+/// owner login's own password), and the card's own confirm.
 pub fn eligible(action: &str) -> bool {
-    CONFIRM_ACTIONS.contains(&action) && action != presence::OWNER_LOGIN && action != CARD_CONFIRM
+    CONFIRM_ACTIONS.contains(&action) && action != presence::OWNER_LOGIN && action != presence::ISOLATION_LAYOUT && action != CARD_CONFIRM
 }
 
 /// May `c` raise a phone card for `action` here? `Err` says why not.

@@ -18,6 +18,10 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/agent-instances", Admin),
     post("/cli/agent-instances/hire", Admin),
     post("/cli/agent-instances/retire", Admin),
+    // Agent Isolation M2 B4 (`agent_isolation_layout`): status is an Admin
+    // read; on and off are the owner's (the handler refuses an Admin, and
+    // `on` takes this computer's owner check).
+    both("/cli/agent-isolation/layout", Admin),
     post("/cli/agent-teams/link", Admin),
     get("/cli/agent-teams/links", Member),
     post("/cli/agent-teams/unlink", Admin),

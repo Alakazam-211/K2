@@ -25342,10 +25342,11 @@ cmd_app_guest() {
 
 cmd_help_agent_isolation() {
     cat <<'EOF'
-k2 agent isolation — turn an agent's folder fence on or off (Linux)
+k2 agent isolation — an agent's folder fence, and the server's agent scopes (Linux)
 
 USAGE
   k2 agent isolation <workspace> fence|off [--json]
+  k2 agent isolation layout on|off|status [--json]
 
 WHAT IT DOES
   fence  The agent's next terminals, job runs and services start under a folder fence that K5 loads
@@ -25359,15 +25360,32 @@ WHAT IT DOES
   Off by default for every agent. Running terminals keep what they started
   with; restart the agent (k2 agent restart <name>) to apply a change.
 
+LAYOUT (the whole server; off until the owner turns it on)
+  layout on      Every new agent session, job run and service gets its own
+                 root-owned systemd scope, outside the server's own service,
+                 placed by the root helper (protocol 19). Asks for this
+                 computer's owner check first: Touch ID or the Mac's
+                 password, Windows Hello, or on a Linux server an owner
+                 login's sign-in password. Running sessions keep their place
+                 until they restart.
+  layout off     New sessions start without a scope. Refused while a fenced
+                 session runs in a scope (it says which). With no scope live
+                 the agent slices are removed; otherwise at the next daemon
+                 start with none live.
+  layout status  The root helper's layout report, the owner's setting, and
+                 why scopes are off when they are.
+
 WHO MAY
-  The server's owner turns it on or off. An admin may turn it on, not off.
-  An agent can't change its own (exit 3).
+  The server's owner turns the fence on or off. An admin may turn it on, not off.
+  The layout is the owner's: on and off. An admin may read its status.
+  An agent can't change either (exit 3; for layout on, it can ask with a card).
 
 NEEDS
   Linux with Landlock (Ubuntu 24.04's kernel has it on). Refused (exit 3,
   fence_unavailable) where the kernel has none, or when the agent's
   workspace is your home folder or holds ~/.k2. Macs get their fence in a
-  later release.
+  later release. The layout needs the root helper at protocol 19 (exit 3,
+  helper_needed).
 
 SEE ALSO
   k2 study isolation · k2 agent whois <pid> · k2 app doctor (agentIdentity)
@@ -25437,6 +25455,16 @@ LABELLED BY AGENT (on wherever the server can have it)
   fenced agent can't do any of this, but fencing an agent does not
   protect it from an unfenced one.
 
+  Agent scopes (the owner's switch, off until turned on): k2 agent
+  isolation layout on gives every new session, job run and service its own
+  root-owned systemd scope outside the server's own service, placed by the
+  root helper (protocol 19). It asks for this computer's owner check first.
+  Running sessions keep their place until they restart. k2 agent isolation
+  layout status says what is live and, when scopes are off, why. An agent's
+  own `layout on` is refused (exit 3); with permission cards on it ends with:
+      k2 permission request agent.isolation-layout --why "<what you need it for>"
+  The owner still has to run `layout on` themselves for the owner check.
+
   Where it's unavailable (macOS, a user-unit install, a box prepared before
   0.46.16, a container) passports work as before; /boot-status
   (agentIsolation) and k2 app doctor (agentIdentity) say so and why.
@@ -25464,7 +25492,13 @@ EOF
 }
 
 # k2 agent isolation <workspace> fence|off [--json]
+# k2 agent isolation layout on|off|status [--json]
 cmd_agent_isolation() {
+    if [ "${1:-}" = "layout" ]; then
+        shift
+        cmd_agent_isolation_layout "$@"
+        return
+    fi
     local ws="" mode="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -25491,6 +25525,80 @@ import json, sys
 v = json.load(sys.stdin)
 state = "on" if v.get("fence") else "off"
 print("Folder fence is %s for %s: %s." % (state, v.get("workspace"), v.get("appliesTo", "its next terminals")))'
+}
+
+# k2 agent isolation layout on|off|status [--json] (Agent Isolation M2 B4):
+# a root-owned scope for every agent session. on is the owner's, with this
+# computer's owner check: on a Mac or Windows PC the daemon asks at once;
+# otherwise it answers vault_presence_required with the check to get, which
+# is asked here (a terminal outside K2) and `on` is sent again with its
+# token. off is the owner's; status the owner's or an admin's.
+cmd_agent_isolation_layout() {
+    local mode="" json_out=0 raw sid tok
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) cmd_help_agent_isolation; return 0 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; cmd_help_agent_isolation >&2; exit 2 ;;
+            *) if [ -z "$mode" ]; then mode="$1"; else cmd_help_agent_isolation >&2; exit 2; fi; shift ;;
+        esac
+    done
+    case "$mode" in
+        on|off|status) ;;
+        '') cmd_help_agent_isolation >&2; exit 2 ;;
+        *) echo "Error: the layout is on, off or status (got '$mode')" >&2; exit 2 ;;
+    esac
+    raw="$(_compute_send POST /cli/agent-isolation/layout "$(_compute_json K2_CJ_mode="$mode")")"
+    _compute_split "$raw"
+    if [ "$mode" = on ] && [ "$_CP_STATUS" != "200" ]; then
+        sid="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    d = {}
+e = d.get("error") if isinstance(d, dict) else None
+c = d.get("confirm") if isinstance(d, dict) else None
+ok = isinstance(e, dict) and e.get("code") == "vault_presence_required" and isinstance(c, dict) and c.get("action") == "isolation-layout"
+print((c.get("secretId") or "") if ok else "")')"
+        if [ -n "$sid" ] && ! _envn_any HOOK_SOCK HOOK_TOKEN && [ -S "$(_vault_sock)" ]; then
+            tok="$(_vault_confirm_token isolation-layout "$sid" "")" || exit 3
+            raw="$(_compute_send POST /cli/agent-isolation/layout "$(_compute_json K2_CJ_mode=on K2_CJ_confirmToken="$tok")")"
+            tok=""
+            _compute_split "$raw"
+        fi
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | K2_AIL_MODE="$mode" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+mode = os.environ["K2_AIL_MODE"]
+if mode == "status":
+    print("Agent scopes: %s (the owner'"'"'s setting: %s)" % ("on" if v.get("placing") else "off", v.get("setting")))
+    if v.get("whyOff"):
+        print("  why off: %s" % v["whyOff"])
+    l = v.get("layout")
+    if isinstance(l, dict):
+        scopes = l.get("scopes") or []
+        fenced = sum(1 for s in scopes if s.get("kind") == "fenced")
+        print("  slices ready: %s; P1: %s; kernel.pid_max: %s" % ("yes" if l.get("ready") else "no", l.get("p1"), l.get("pidMax")))
+        print("  live scopes: %d (%d fenced)" % (len(scopes), fenced))
+        if l.get("survivors"):
+            print("  agents in the old layout: %d" % len(l["survivors"]))
+    elif v.get("layoutError"):
+        print("  layout: %s" % v["layoutError"])
+    for o in v.get("oldLayout") or []:
+        print("  old layout: %s (%s)" % (o.get("agent"), o.get("why")))
+elif mode == "on":
+    if v.get("changed"):
+        print("Agent scopes are on: %s." % v.get("appliesTo"))
+    else:
+        print("Agent scopes were already on.")
+else:
+    print("Agent scopes are off: %s." % v.get("appliesTo"))
+    if v.get("message"):
+        print("  %s." % v["message"].rstrip("."))'
 }
 
 # k2 agent whois <pid> [--json]
@@ -43701,9 +43809,10 @@ print("%s\tcard %s on %s'"'"'s Thread%s (%s)" % (p.get("request", ""), p.get("re
 # phone. $4: extra JSON for the phone card (a share's `grant`). Prints the token. Some steps
 # take this computer's own user check instead (the daemon's presence
 # actions: vault-password-set, recovery-setup, backup-export-initial,
-# box-move-export, backup-key-add, owner-login): the Mac's sheet, Windows
-# Hello, on a Linux server an owner login's sign-in password, or for a
-# server's first owner login, this terminal (outside K2).
+# box-move-export, backup-key-add, owner-login, isolation-layout): the Mac's
+# sheet, Windows Hello, on a Linux server an owner login's sign-in password,
+# or for a server with no owner login (its first one, or turning on agent
+# scopes), this terminal (outside K2).
 _vault_confirm_token() {
     local action="$1" secret_id="${2:-}" label="${3:-}" phone_extra="${4:-}"
     _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None}))' "$action" "$secret_id")"
@@ -43713,7 +43822,7 @@ _vault_confirm_token() {
     login="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("login") or "")')"
     local body
     local first_setup=0
-    case "$action" in vault-password-set|recovery-setup|backup-export-initial|box-move-export|backup-key-add|owner-login) first_setup=1 ;; esac
+    case "$action" in vault-password-set|recovery-setup|backup-export-initial|box-move-export|backup-key-add|owner-login|isolation-layout) first_setup=1 ;; esac
     local text
     text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
     [ "$first_setup" = 1 ] && [ -n "$text" ] && echo "You are approving: $text" >&2
@@ -78540,6 +78649,7 @@ COMMANDS
   access set <ws> chat_manage on|off
                           "Manage chat and voice" for that workspace's agent (the owner or an admin)
   isolation <ws> fence|off  The agent's folder fence (Linux; off by default; the owner's switch)
+  isolation layout on|off|status  A root-owned scope for every agent session (Linux; the owner's)
   whois <pid>             Which agent owns a process (owner only; Linux)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)

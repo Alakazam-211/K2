@@ -2397,6 +2397,7 @@ const CONFIRM_ACTIONS: &[&str] = &[
     presence::BOX_MOVE_EXPORT,
     presence::BACKUP_KEY_ADD,
     presence::OWNER_LOGIN,
+    presence::ISOLATION_LAYOUT,
     "recovery-rotate",
     "confirm-password-change",
     "legacy-export",

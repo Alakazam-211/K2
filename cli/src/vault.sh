@@ -357,9 +357,10 @@ print("%s\tcard %s on %s'"'"'s Thread%s (%s)" % (p.get("request", ""), p.get("re
 # phone. $4: extra JSON for the phone card (a share's `grant`). Prints the token. Some steps
 # take this computer's own user check instead (the daemon's presence
 # actions: vault-password-set, recovery-setup, backup-export-initial,
-# box-move-export, backup-key-add, owner-login): the Mac's sheet, Windows
-# Hello, on a Linux server an owner login's sign-in password, or for a
-# server's first owner login, this terminal (outside K2).
+# box-move-export, backup-key-add, owner-login, isolation-layout): the Mac's
+# sheet, Windows Hello, on a Linux server an owner login's sign-in password,
+# or for a server with no owner login (its first one, or turning on agent
+# scopes), this terminal (outside K2).
 _vault_confirm_token() {
     local action="$1" secret_id="${2:-}" label="${3:-}" phone_extra="${4:-}"
     _vault_sock_call POST "confirm/start" "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None}))' "$action" "$secret_id")"
@@ -369,7 +370,7 @@ _vault_confirm_token() {
     login="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("login") or "")')"
     local body
     local first_setup=0
-    case "$action" in vault-password-set|recovery-setup|backup-export-initial|box-move-export|backup-key-add|owner-login) first_setup=1 ;; esac
+    case "$action" in vault-password-set|recovery-setup|backup-export-initial|box-move-export|backup-key-add|owner-login|isolation-layout) first_setup=1 ;; esac
     local text
     text="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("confirmText") or "")')"
     [ "$first_setup" = 1 ] && [ -n "$text" ] && echo "You are approving: $text" >&2

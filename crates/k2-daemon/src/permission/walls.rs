@@ -362,6 +362,9 @@ pub(crate) const V1_ACTIONS: &[&str] = &[
     // 0.46.18: a person sets or clears a workspace's hosted mail address
     // cap for an agent (`k2 hostmail config --address-cap <n>|none`).
     "mail.address-cap",
+    // Agent Isolation M2 B4: a root-owned scope for every agent session (the
+    // owner's, with this computer's owner check).
+    "agent.isolation-layout",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -442,6 +445,10 @@ const COMPUTE_GRANT_ROW: Row = Row {
 /// `k2 settings set ciPreview true`'s body (0.46.17), and its route.
 const CI_PREVIEW_ON: &[(&str, &str)] = &[("/ciPreview", "true")];
 const CI_SETTINGS_ROUTE: &str = super::actions::ci_preview::SETTINGS_ROUTE;
+
+/// `k2 agent isolation layout on`'s body, and its route.
+const ISOLATION_LAYOUT_ON: &[(&str, &str)] = &[("/mode", "on")];
+const ISOLATION_LAYOUT_ROUTE: &str = crate::agent_isolation_layout::ROUTE;
 
 /// What `POST /cli/settings/update` answers a passport over TCP
 /// (`token_ok` refuses it before the handler): a flat `error` string.
@@ -636,6 +643,11 @@ pub(crate) const ROWS: &[Row] = &[
     // "It can't be requested".
     Row { body_eq: CI_PREVIEW_ON, ..row(ask("ci.preview", Floor::Owner), code(403, "owner_only"), CI_SETTINGS_ROUTE, POST) },
     Row { body_eq: CI_PREVIEW_ON, ..row(ask("ci.preview", Floor::Owner), code(403, SETTINGS_TCP_REFUSAL), CI_SETTINGS_ROUTE, POST) },
+    // ── Agent Isolation M2 B4 ─────────────────────────────────────────
+    // An agent's own `k2 agent isolation layout on` (TCP's `owner_only`, and
+    // the cell socket's teaching one). Only `on`: `off` and `status` stay
+    // "It can't be requested".
+    Row { body_eq: ISOLATION_LAYOUT_ON, ..row(ask("agent.isolation-layout", Floor::Owner), code(403, "owner_only"), ISOLATION_LAYOUT_ROUTE, POST) },
     // ── Sew (0.46.6)───────────────────────────────────────────────────
     // An agent's own call to the owner handoff: agents never become Sew's
     // install owner; the owner opens it for themselves on a card.
@@ -1822,6 +1834,8 @@ mod tests {
             (409, "GET", "/cli/compute/roster", vec![], None, json!({"error":{"code":"ci_preview_off","hint":"x"}}), "ci.preview"),
             (403, "POST", "/cli/settings/update", vec![], Some(json!({"ciPreview":true})), json!({"error":{"code":"owner_only","hint":"x"}}), "ci.preview"),
             (403, "POST", "/cli/settings/update", vec![], Some(json!({"ciPreview":true})), json!({"error":"invalid or missing token"}), "ci.preview"),
+            // Agent Isolation M2 B4: an agent's own `k2 agent isolation layout on`.
+            (403, "POST", "/cli/agent-isolation/layout", vec![], Some(json!({"mode":"on"})), json!({"error":{"code":"owner_only","hint":"x"}}), "agent.isolation-layout"),
             // 0.46.16 Postal: off refuses an agent on every route; each
             // agent step answers with the card K2 put up (`asked: true`).
             (403, "GET", "/cli/postal/status", vec![], None, json!({"ok":false,"state":"off","error":{"code":"postal_off","hint":"x"}}), "postal.enable"),
@@ -2440,7 +2454,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 89);
+        assert_eq!(V1_ACTIONS.len(), 90);
         let mut seen = std::collections::HashSet::new();
         for a in V1_ACTIONS {
             assert!(seen.insert(*a), "{a} is listed twice in V1_ACTIONS");

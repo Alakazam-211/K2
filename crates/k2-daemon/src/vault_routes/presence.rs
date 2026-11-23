@@ -56,11 +56,16 @@ pub const BACKUP_KEY_ADD: &str = "backup-key-add";
 /// With the owner token: making a login an owner (`role:<username>`) or
 /// setting an owner login's password (`password:<username>`).
 pub const OWNER_LOGIN: &str = "owner-login";
+/// Agent Isolation M2 B4: turning on a root-owned scope for every agent
+/// session on this server (`k2 agent isolation layout on`); `secretId` =
+/// [`ISOLATION_LAYOUT_BINDING`]. The owner token or an owner login.
+pub const ISOLATION_LAYOUT: &str = "isolation-layout";
+pub const ISOLATION_LAYOUT_BINDING: &str = "layout:on";
 
 /// The vault's own steps (taken on the vault routes).
 #[cfg_attr(not(test), allow(dead_code))]
 pub const VAULT_STEPS: &[&str] = &[PASSWORD_SET, RECOVERY_SETUP, BACKUP_EXPORT_INITIAL, BOX_MOVE_EXPORT, BACKUP_KEY_ADD];
-pub const ACTIONS: &[&str] = &[PASSWORD_SET, RECOVERY_SETUP, BACKUP_EXPORT_INITIAL, BOX_MOVE_EXPORT, BACKUP_KEY_ADD, OWNER_LOGIN];
+pub const ACTIONS: &[&str] = &[PASSWORD_SET, RECOVERY_SETUP, BACKUP_EXPORT_INITIAL, BOX_MOVE_EXPORT, BACKUP_KEY_ADD, OWNER_LOGIN, ISOLATION_LAYOUT];
 
 pub const LOCAL_AUTH: &str = "local-auth";
 pub const WINDOWS_HELLO: &str = "windows-hello";
@@ -97,6 +102,7 @@ pub fn reason(action: &str, secret: Option<&str>) -> String {
             Some(r) => format!("add a vault backup key ({})", r.fingerprint()),
             None => "add a vault backup key".into(),
         },
+        ISOLATION_LAYOUT => "turn on a root-owned scope for every agent session on this server".into(),
         _ => {
             if let Some(u) = s.strip_prefix("role:") {
                 format!("make login {u} an owner of this server")
@@ -111,7 +117,7 @@ pub fn reason(action: &str, secret: Option<&str>) -> String {
 
 /// The prompt's whole text: the step, and who asks where known.
 pub fn prompt(action: &str, secret: Option<&str>) -> String {
-    let what = if action == OWNER_LOGIN { k2_core::brand::PRODUCT_NAME.to_string() } else { format!("{} vault", k2_core::brand::PRODUCT_NAME) };
+    let what = if action == OWNER_LOGIN || action == ISOLATION_LAYOUT { k2_core::brand::PRODUCT_NAME.to_string() } else { format!("{} vault", k2_core::brand::PRODUCT_NAME) };
     let asker = request_peer::asker().map(|a| format!(" (asked from {a})")).unwrap_or_default();
     let t = format!("{what}: {}{asker}", reason(action, secret));
     t.chars().filter(|ch| !ch.is_control()).take(240).collect()
@@ -125,6 +131,7 @@ fn step(action: &str) -> &'static str {
         BACKUP_EXPORT_INITIAL => "a vault backup before a recovery key is confirmed",
         BOX_MOVE_EXPORT => "a box-move export of the vault before a recovery key is confirmed",
         BACKUP_KEY_ADD => "adding a vault backup key before a recovery key is confirmed",
+        ISOLATION_LAYOUT => "turning on a root-owned scope for every agent session",
         _ => "making a login an owner, or setting an owner login's password, with the owner token",
     }
 }
@@ -136,6 +143,7 @@ fn command(action: &str) -> &'static str {
         BACKUP_EXPORT_INITIAL => "k2 vault backup <folder>",
         BOX_MOVE_EXPORT => "k2 migrate export-secrets",
         BACKUP_KEY_ADD => "k2 vault backup key <age1…>",
+        ISOLATION_LAYOUT => "k2 agent isolation layout on",
         _ => "the k2 users command",
     }
 }
@@ -213,7 +221,10 @@ pub fn methods(c: &VaultCaller, action: &str) -> Vec<&'static str> {
         Actor::Login { role: Role::Owner, .. } if action != OWNER_LOGIN => vec![CONNECT_PASSWORD],
         Actor::Owner if c.channel != Channel::Login => match os_method() {
             Some(m) => vec![m],
-            None if action == OWNER_LOGIN => vec![TERMINAL],
+            // A Linux server with no owner login: a terminal outside K2
+            // for its first owner login, and for turning on agent scopes
+            // (a tightening; without it such a server could never).
+            None if action == OWNER_LOGIN || action == ISOLATION_LAYOUT => vec![TERMINAL],
             None => vec![],
         },
         _ => vec![],
@@ -282,6 +293,8 @@ pub fn binding(action: &str, secret_id: Option<&str>) -> Result<Option<String>, 
             Some(r) => k2_vault::agefmt::Recipient::parse(r.trim()).map(|r| Some(format!("add:{}", r.encode()))).map_err(|_| bad("secretId is add:<age1… recipient>")),
             None => Err(bad("secretId is add:<age1… recipient>")),
         },
+        ISOLATION_LAYOUT if sid == ISOLATION_LAYOUT_BINDING => Ok(Some(ISOLATION_LAYOUT_BINDING.to_string())),
+        ISOLATION_LAYOUT => Err(bad("secretId is layout:on")),
         _ => {
             let (kind, user) = sid.split_once(':').ok_or_else(|| bad("secretId is role:<username> or password:<username>"))?;
             if !matches!(kind, "role" | "password") {
@@ -298,9 +311,9 @@ pub fn binding(action: &str, secret_id: Option<&str>) -> Result<Option<String>, 
 /// request's peer.
 pub(super) fn bound_stamp(c: &VaultCaller, action: &str) -> String {
     let stamp = c.actor.stamp();
-    if action == OWNER_LOGIN {
-        // Minted on the vault socket or TCP, taken on the users routes
-        // (TCP): the owner only.
+    if action == OWNER_LOGIN || action == ISOLATION_LAYOUT {
+        // Minted on the vault socket or TCP, taken on the users routes or
+        // the agent-isolation layout route (TCP): the owner only.
         stamp
     } else {
         format!("{stamp}{}", request_peer::bind())
@@ -444,6 +457,40 @@ pub(crate) fn owner_login_change_on(vault: Option<&LocalVault>, binding: &str, t
         Err(e) => format!("deny {binding}: {}", e.code),
     };
     crate::vault::auth_audit("owner-login-check", "owner", &outcome, ingress);
+    res
+}
+
+/// Agent Isolation M2 B4: turning on a root-owned scope for every agent
+/// session (`k2 agent isolation layout on`), by the owner token or an owner
+/// login (`c`). The same checks as [`owner_login_change`]: a token from
+/// `/cli/vault/confirm/finish` for [`ISOLATION_LAYOUT`] /
+/// [`ISOLATION_LAYOUT_BINDING`], minted for this caller (an owner login with
+/// its own password; the owner token with this computer's check, an owner
+/// login's password on a Linux server, or a terminal outside K2 on a server
+/// with no owner login), or, with none, this computer's own prompt right
+/// now where it has one. An admin login and a passport are refused.
+pub fn isolation_layout_change(c: &VaultCaller, token: Option<&str>, ingress: &str) -> Result<(), VaultError> {
+    isolation_layout_change_on(None, c, token, ingress)
+}
+
+/// [`isolation_layout_change`] on a given vault (tests); `None`: the daemon's.
+pub(crate) fn isolation_layout_change_on(vault: Option<&LocalVault>, c: &VaultCaller, token: Option<&str>, ingress: &str) -> Result<(), VaultError> {
+    let res = owner_human(c).and_then(|()| match token.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => match vault {
+            Some(v) => take(v, c, ISOLATION_LAYOUT, Some(ISOLATION_LAYOUT_BINDING), Some(t)).map(|_| ()),
+            None => crate::vault::get().and_then(|v| take(&v, c, ISOLATION_LAYOUT, Some(ISOLATION_LAYOUT_BINDING), Some(t)).map(|_| ())),
+        },
+        None => match methods(c, ISOLATION_LAYOUT).into_iter().find(|m| matches!(*m, LOCAL_AUTH | WINDOWS_HELLO)) {
+            Some(method) => os_check(ISOLATION_LAYOUT, method, &prompt(ISOLATION_LAYOUT, Some(ISOLATION_LAYOUT_BINDING))),
+            None if methods(c, ISOLATION_LAYOUT).is_empty() => Err(unavailable(ISOLATION_LAYOUT)),
+            None => Err(required(ISOLATION_LAYOUT)),
+        },
+    });
+    let outcome = match &res {
+        Ok(()) => format!("ok {ISOLATION_LAYOUT_BINDING}"),
+        Err(e) => format!("deny {ISOLATION_LAYOUT_BINDING}: {}", e.code),
+    };
+    crate::vault::auth_audit("isolation-layout-check", &c.actor.stamp(), &outcome, ingress);
     res
 }
 

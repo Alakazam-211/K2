@@ -248,6 +248,13 @@ fn skin_user_writes() {
                 2,
             ),
             // covers: skin user add
+            one(
+                "user add: a test login waits for the rooms-ok card",
+                &["user", "add", "bob"],
+                r#"{"username":"bob","waitingForReset":{"rooms":["ops"],"test":true,"ask":"k2 app user rooms-ok shop bob"}}"#,
+                0,
+            ),
+            // covers: skin user add
             traceback(one(
                 "user add: waiting rooms that are a number",
                 &["user", "add", "bob"],

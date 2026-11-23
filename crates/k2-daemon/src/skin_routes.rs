@@ -763,8 +763,19 @@ pub(crate) fn waiting_note(username: &str) -> Option<serde_json::Value> {
         }
     }
     let app = on_app?;
-    // `ask` with this server's name, and `askTail`, the same line after
-    // the name: a CLI puts its own in front (white-label C5).
+    // A test login has no person to choose a password (0.46.18 papercut
+    // 5): its rooms open on the rooms-ok card instead. `ask` with this
+    // server's name, and `askTail`, the same line after the name: a CLI
+    // puts its own in front (white-label C5).
+    if let Some(t) = skin::test_guests::get(&p.id).ok().flatten() {
+        let tail = format!("app user rooms-ok {} {}", runtime_app_name(&t.app), p.username);
+        return Some(serde_json::json!({
+            "rooms": held,
+            "test": true,
+            "ask": format!("{} {tail}", k2_core::brand::CLI_NAME),
+            "askTail": tail,
+        }));
+    }
     let tail = format!("app user invite {} --app {app}", p.username);
     Some(serde_json::json!({
         "rooms": held,
@@ -1199,6 +1210,17 @@ pub(crate) fn outside_reason(p: &skin::SkinPrincipal, roles: &[skin::SkinRole], 
         return "it has nothing tying it to your workspace (the owner's login)".to_string();
     }
     "it reaches outside your workspace (another workspace's room or App)".to_string()
+}
+
+/// The App id `k2 app user rooms-ok` takes for service `svc` (its runtime
+/// App's id, else the service's name).
+fn runtime_app_name(svc: &str) -> String {
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::get_app_by_service(&conn, svc).ok().flatten()
+    };
+    row.map(|a| a.app_id).unwrap_or_else(|| app_name_of(svc))
 }
 
 /// Where the owner changes a login's role, in words (papercut 2's path).
@@ -3238,6 +3260,18 @@ fn tied_room_hint(raw: &str) -> Option<String> {
     let held: Vec<String> = wanted.iter().filter(|r| !skin::ties::room_inside(&tie, &pass.app, &approved, r)).map(|r| room_label(r)).collect();
     if held.is_empty() {
         return None;
+    }
+    // A test login (0.46.18 papercut 5): no password ever clears it; the
+    // rooms-ok card opens the role's rooms for it.
+    if skin::test_guests::get(pid).ok().flatten().is_some() {
+        return Some(format!(
+            "this pass cannot use that agent. This test login reaches only its App's own room until a person opens the others for it: {} stays closed. \
+             What opens it: {cli} app user rooms-ok {app} {user} (an owner or admin answers the card; it lasts as long as the test login).",
+            held.join(", "),
+            cli = k2_core::brand::CLI_NAME,
+            user = pass.username,
+            app = runtime_app_name(&pass.app),
+        ));
     }
     Some(format!(
         "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up, so {} stays held back. What clears it: the person chooses their own password: first sign-in with a temporary password, an invite or reset link, or the App's forgot-password flow (an agent: k2 app user invite {user} --app {app}). Approving the room for the App doesn't clear it.",

@@ -177,11 +177,20 @@ fn waiting(d: &Value, line: u32, o: &mut Out) -> Result<(), Raise> {
     let w = need(&w, line + 1)?;
     if truthy(&g(w, "rooms")) {
         let rooms = join(", ", &g(w, "rooms"), line + 2)?;
-        o.line(format!(
-            "Waiting: everything else works now, but they can't use room {rooms} until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite ({}), or your App's forgot-password flow.",
-            // This binary's name before the daemon's askTail (C5).
-            st(&crate::transport::permission::ask_of(w))
-        ));
+        // A test login (0.46.18): its rooms open on the rooms-ok card.
+        if truthy(&g(w, "test")) {
+            o.line(format!(
+                "Waiting: everything else works now, but room {rooms} stays closed to this test login until an owner or admin opens it: {} (it asks them on a card).",
+                // This binary's name before the daemon's askTail (C5).
+                st(&crate::transport::permission::ask_of(w))
+            ));
+        } else {
+            o.line(format!(
+                "Waiting: everything else works now, but they can't use room {rooms} until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite ({}), or your App's forgot-password flow.",
+                // This binary's name before the daemon's askTail (C5).
+                st(&crate::transport::permission::ask_of(w))
+            ));
+        }
     }
     Ok(())
 }

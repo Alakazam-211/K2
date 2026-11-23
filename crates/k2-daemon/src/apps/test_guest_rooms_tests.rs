@@ -126,6 +126,11 @@ fn an_agents_test_login_reaches_its_roles_rooms_only_after_an_owner_allows_the_c
     assert_eq!(added["roomsWait"]["askTail"], format!("app user rooms-ok {} {user}", f.app_id), "{added}");
     // Today's rule: only the agent's own room.
     assert_eq!(rooms_now(&user, &f.svc), vec![f.a.id.clone()]);
+    // 0.46.18 papercut 5: what waits names the rooms-ok card, never a
+    // password reset (a test login has no person to choose one).
+    let note = crate::skin_routes::waiting_note(&user).expect("a room waits");
+    assert_eq!((note["test"].clone(), note["rooms"].clone()), (json!(true), json!([f.b.handle])), "{note}");
+    assert_eq!(note["ask"], format!("k2 app user rooms-ok {} {user}", f.app_id), "{note}");
 
     // The agent asks: one card on its Thread naming the login, role and rooms.
     let asked = rooms_ok(&agent(&f.a), &f.app_id, &user).unwrap_or_else(|e| panic!("{e:?}"));

@@ -379,7 +379,7 @@ if pw:
     print("To handle no password at all: k2 app user invite <username> --app <app> mails them a link.")
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
+    print(("Waiting: everything else works now, but room %s stays closed to this test login until an owner or admin opens it: %s (it asks them on a card)." if w.get("test") else "Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow.") % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 show)
                     # app-user-profile P6 (0.46.5): a person's profile in one
@@ -520,7 +520,7 @@ else:
     print("No mail path on this box: give %s this one-time link yourself (shown once):\n%s" % (d.get("username"), d.get("link")))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
+    print(("Waiting: everything else works now, but room %s stays closed to this test login until an owner or admin opens it: %s (it asks them on a card)." if w.get("test") else "Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow.") % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 reset)
                     local username="" app="" to="" code=0 from="" json_out=0 revoke=0
@@ -844,7 +844,7 @@ else:
     print("Skin user %s default rooms: %s" % (d.get("username",""), ", ".join(handles) if handles else "(none)"))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
+    print(("Waiting: everything else works now, but room %s stays closed to this test login until an owner or admin opens it: %s (it asks them on a card)." if w.get("test") else "Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow.") % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 role)
                     local username="${1:-}" role="${2:-}"
@@ -860,7 +860,7 @@ d=json.load(sys.stdin)
 print("Skin user %s role: %s" % (d.get("username",""), d.get("roleName") or d.get("role_name") or "—"))
 w=d.get("waitingForReset") or {}
 if w.get("rooms"):
-    print("Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow." % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
+    print(("Waiting: everything else works now, but room %s stays closed to this test login until an owner or admin opens it: %s (it asks them on a card)." if w.get("test") else "Waiting: everything else works now, but they can'"'"'t use room %s until they choose their own password, because you set this login up: first sign-in with a temporary password, an invite (%s), or your App'"'"'s forgot-password flow.") % (", ".join(w["rooms"]), ("k2 <tail>".replace("<tail>", w["askTail"]) if isinstance(w.get("askTail"), str) and w["askTail"] else w.get("ask"))))'
                     ;;
                 unassign)
                     local username="${1:-}"

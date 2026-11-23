@@ -310,10 +310,22 @@ mod tests {
             ("try 'k2 msg'", "try 'xy msg'"),
             ("the k2 CLI", "the xy CLI"),
             ("k2 msg and k2 agent", "xy msg and xy agent"),
-            ("or where you ran k2 from inside it", "or where you ran xy from inside it"),
-            ("or run k2 from a terminal outside K2.", "or run xy from a terminal outside K2."),
-            ("  terminal), k2 asks for the confirm.", "  terminal), xy asks for the confirm."),
-            ("where k2 uses the owner's token;", "where xy uses the owner's token;"),
+            (
+                "or where you ran k2 from inside it",
+                "or where you ran xy from inside it",
+            ),
+            (
+                "or run k2 from a terminal outside K2.",
+                "or run xy from a terminal outside K2.",
+            ),
+            (
+                "  terminal), k2 asks for the confirm.",
+                "  terminal), xy asks for the confirm.",
+            ),
+            (
+                "where k2 uses the owner's token;",
+                "where xy uses the owner's token;",
+            ),
             ("No k2 hostdb.", "No xy hostdb."),
         ] {
             assert_eq!(xy(line), want, "{line:?}");

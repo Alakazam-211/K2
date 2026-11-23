@@ -283,6 +283,7 @@ impl Holds {
         self.asked.remove(key);
     }
 
+    #[cfg(test)]
     pub fn is_held(&self, key: &str) -> bool {
         self.held.contains(key)
     }

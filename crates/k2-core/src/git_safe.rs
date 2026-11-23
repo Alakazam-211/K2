@@ -859,7 +859,9 @@ pub(crate) mod tests {
         let mut bad = Vec::new();
         let mut allowed = Vec::new();
         for f in &files {
-            if is_test_file(f) || f.ends_with("k2-core/src/git_safe.rs") {
+            // git_fixture.rs is test-only (`cfg(any(test, feature = "test-util"))`):
+            // it builds fixture repos with plain git on purpose.
+            if is_test_file(f) || f.ends_with("k2-core/src/git_safe.rs") || f.ends_with("k2-core/src/git_fixture.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(f).unwrap_or_else(|e| panic!("read {}: {e}", f.display()));

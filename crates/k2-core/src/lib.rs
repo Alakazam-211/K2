@@ -332,6 +332,11 @@ pub mod git_changes;
 pub mod git_notes;
 /// The one builder for K2-run `git`: no hooks, fsmonitor, ext diff or textconv (SS15).
 pub mod git_safe;
+/// The one door for gitoxide (gix): every K2 git read opens repos here.
+pub mod gitx;
+/// Test repositories made by the real git CLI (oracle fixtures).
+#[cfg(any(test, feature = "test-util"))]
+pub mod git_fixture;
 /// What one agent turn changed, from git (workbench-v1 B7): the changes card.
 pub mod turn_changes;
 /// Ensure global git user.name / user.email when missing (init-git path).

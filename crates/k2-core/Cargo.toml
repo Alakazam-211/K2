@@ -164,6 +164,25 @@ dunce = "1"
 # out of the daemon.
 git2 = { version = "0.19", default-features = false }
 
+# gitoxide: pure-Rust git reads (status, diffs, refs, revparse, merge-base),
+# replacing libgit2 (prd research-gix-instead-of-libgit2-v1). Every open goes
+# through `crate::gitx` (no git binary, no filter drivers, other-owner repos
+# refused). Writes go through the person's git CLI (`git_safe`).
+# Features: pure Rust only, no C. Never `max-performance`, `max-control` or
+# `pack-cache-lru-static` (they pull uluru, MPL-2.0), never a zlib-ng or
+# network feature. Pinned exactly: gix breaks its API about monthly, and a
+# version is taken only once it is two weeks old.
+gix = { version = "=0.90.0", default-features = false, features = [
+    "sha1",
+    "revision",
+    "index",
+    "status",
+    "dirwalk",
+    "excludes",
+    "attributes",
+    "blob-diff",
+] }
+
 # Move-to-trash semantics used when removing worktrees — users can
 # recover a reject-then-reject-again worktree from the Finder trash.
 trash = "5"

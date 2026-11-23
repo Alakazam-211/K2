@@ -1703,6 +1703,8 @@ async fn async_main() {
     thread_activity::spawn();
     // workbench-v1 B7: a changed-files card on a worktree agent's Thread per turn.
     turn_changes::spawn();
+    // 0.46.18: an agent told it's out of usage gets one "working again" line.
+    crate::llm_out_notice::spawn_resume();
     // Thread cards past their time frame turn `expired` (0.45.5).
     overlay_routes::spawn_card_expiry();
     // Signed approvals past their answer_by turn `expired`.

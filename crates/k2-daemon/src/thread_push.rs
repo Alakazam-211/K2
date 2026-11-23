@@ -588,13 +588,55 @@ pub fn on_agent_post(
     if kind == ThreadMsgKind::Text {
         crate::app_push::agent_reply::on_agent_post(conversation_id, project_id, &agent_name_for(from), seq, &preview);
     }
+    enqueue(conversation_id, project_id, addr, agent_name_for(from), seq, kind, preview, msg);
+}
+
+/// 0.46.18: one of K2's own lines on an agent's Thread that the people
+/// following it should hear about (an agent out of usage). The same
+/// coalescer as the agent's replies, so each person's bell, mute and
+/// workspace switch, the budget and air-gap decide, under the AGENT's name
+/// (`agent_addr`); the message itself stays K2's (`from`). Never an App
+/// guest's push (K2's notices are the server's business).
+#[allow(clippy::too_many_arguments)]
+pub fn on_system_post(
+    conversation_id: &str,
+    project_id: &str,
+    addr: &str,
+    agent_addr: &str,
+    from: &str,
+    seq: i64,
+    text: &str,
+    item_id: &str,
+    created_at: i64,
+) {
+    if crate::push_routes::airgap_blocks() {
+        return;
+    }
+    let kind = ThreadMsgKind::Text;
+    let msg = k2_core::push::ThreadMsg::new(item_id, seq, conversation_id, from, created_at, kind, text);
+    let preview = post_preview(kind, text, 0);
+    note_last_preview(conversation_id, &preview);
+    enqueue(conversation_id, project_id, addr, agent_name_for(agent_addr), seq, kind, preview, msg);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn enqueue(
+    conversation_id: &str,
+    project_id: &str,
+    addr: &str,
+    agent_name: String,
+    seq: i64,
+    kind: ThreadMsgKind,
+    preview: String,
+    msg: k2_core::push::ThreadMsg,
+) {
     // The same rev `GET /cli/projects/list` shows as this row's `iconRev`.
     let (agent_color, avatar_rev) = k2_core::projects_ops::project_push_look(project_id);
     let post = Post {
         conversation_id: conversation_id.to_string(),
         project_id: project_id.to_string(),
         addr: addr.to_string(),
-        agent_name: agent_name_for(from),
+        agent_name,
         seq,
         kind,
         avatar_rev,

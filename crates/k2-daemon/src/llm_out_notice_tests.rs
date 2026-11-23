@@ -313,3 +313,131 @@ fn the_event_names_the_login_by_label_only() {
     assert_eq!(keys.len(), 8, "kind + seven fields, nothing else: {ev}");
     assert!(!ev.to_string().contains("acc_1"), "the login by its label only: {ev}");
 }
+
+// ── 0.46.18: working again ──────────────────────────────────────────
+
+fn worked(started_s: i64, ended_s: i64) -> Worked {
+    Worked { pane: "p".into(), project_hint: None, started_ms: started_s * 1000, ended_ms: ended_s * 1000 }
+}
+
+#[test]
+fn repeated_detections_are_one_notice_and_working_again_is_one_line() {
+    let world = Fake::new(login(Tool::Claude, Next::Nothing));
+    let ep = fresh();
+    let t = now();
+    assert!(handle(&world, &ep, &hook_signal(), t).is_some());
+    for i in 1..=10 {
+        assert!(handle(&world, &ep, &hook_signal(), t + i * 20).is_none(), "detection {i}: same episode");
+    }
+    assert_eq!(world.count(), 1, "exactly one notice for eleven detections");
+    assert_eq!(ep.lock().out_since("sales"), Some(t), "the agent is out from the notice");
+    let doc = handle_worked(&world, &ep, &worked(t + 600, t + 700), None).expect("working again");
+    assert_eq!(doc, "doc-2");
+    {
+        let posts = world.posts.lock();
+        let (addr, text, notice) = &posts[1];
+        assert_eq!((addr.as_str(), text.as_str()), ("sales", "sales is working again."));
+        assert_eq!((notice.kind.as_str(), notice.code.as_str()), ("info", ou::CODE_RESUMED));
+        assert!(notice.actions.is_empty());
+    }
+    assert!(handle_worked(&world, &ep, &worked(t + 800, t + 900), None).is_none(), "one line per episode");
+    assert_eq!(world.count(), 2);
+    // The next limit is a new episode: one more notice.
+    assert!(handle(&world, &ep, &hook_signal(), t + 1000).is_some());
+    assert!(handle(&world, &ep, &hook_signal(), t + 1010).is_none());
+    assert_eq!(world.count(), 3);
+}
+
+#[test]
+fn a_turn_that_hit_the_limit_is_not_working_again() {
+    let world = Fake::new(login(Tool::Claude, Next::Nothing));
+    let ep = fresh();
+    let t = now();
+    // Nobody is out: nothing.
+    assert!(handle_worked(&world, &ep, &worked(t, t + 1), None).is_none());
+    handle(&world, &ep, &hook_signal(), t).expect("notice");
+    // The turn that ran out (started before the notice; a statusLine at
+    // 100% mid-turn ends that turn well).
+    assert!(handle_worked(&world, &ep, &worked(t - 30, t + 2), None).is_none());
+    // A turn whose pane showed the limit again since it started.
+    assert!(handle_worked(&world, &ep, &worked(t + 60, t + 70), Some((t + 65) * 1000)).is_none());
+    assert!(handle_worked(&world, &ep, &worked(t + 60, t + 70), Some((t + 60) * 1000)).is_none(), "at the start counts");
+    assert_eq!(world.count(), 1, "no working-again line yet");
+    // A limit seen before this turn started doesn't count against it.
+    assert!(handle_worked(&world, &ep, &worked(t + 100, t + 110), Some((t + 70) * 1000)).is_some());
+    assert_eq!(world.count(), 2);
+}
+
+#[test]
+fn a_failed_working_again_post_still_ends_the_episode() {
+    let mut world = Fake::new(login(Tool::Claude, Next::Nothing));
+    let ep = fresh();
+    let t = now();
+    handle(&world, &ep, &hook_signal(), t).expect("notice");
+    world.fail = true;
+    assert!(handle_worked(&world, &ep, &worked(t + 10, t + 20), None).is_none());
+    world.fail = false;
+    assert!(!ep.lock().any_out(), "the agent works: no line owed later");
+    assert!(handle(&world, &ep, &hook_signal(), t + 30).is_some(), "its next limit is news");
+}
+
+#[test]
+fn only_a_good_turn_end_with_a_start_is_worked() {
+    use crate::activity_store::RowEvent;
+    use k2_core::activity::{Outcome, Reason, TurnEnded};
+    let ev = |te: Option<TurnEnded>, row: Option<serde_json::Value>| RowEvent {
+        session_id: "pane-9".into(),
+        agent_name: "ws-a".into(),
+        workspace_path: None,
+        row,
+        turn_ended: te,
+        holds_awake: false,
+        evidence_at: None,
+    };
+    let row = json!({"sessionId": "pane-9", "projectId": "proj-1", "turnStartedAt": 1_000});
+    let good = TurnEnded { outcome: Outcome::Success, reason: Reason::TurnDone, at: 5_000 };
+    assert_eq!(
+        worked_from(&ev(Some(good), Some(row.clone()))),
+        Some(Worked { pane: "pane-9".into(), project_hint: Some("proj-1".into()), started_ms: 1_000, ended_ms: 5_000 })
+    );
+    let failed = TurnEnded { outcome: Outcome::Failure, reason: Reason::TurnFailed, at: 5_000 };
+    assert_eq!(worked_from(&ev(Some(failed), Some(row.clone()))), None, "the red X: not working");
+    let cut = TurnEnded { outcome: Outcome::Cancelled, reason: Reason::Interrupted, at: 5_000 };
+    assert_eq!(worked_from(&ev(Some(cut), Some(row.clone()))), None, "an interrupt");
+    assert_eq!(worked_from(&ev(None, Some(row))), None, "no turn end");
+    assert_eq!(worked_from(&ev(Some(good), None)), None, "a removed row");
+    assert_eq!(worked_from(&ev(Some(good), Some(json!({"projectId": "proj-1"})))), None, "no start");
+}
+
+#[test]
+fn a_good_turn_end_waits_out_the_settle() {
+    let mut s = Settle::default();
+    assert!(s.is_empty());
+    s.push(Worked { pane: "a".into(), project_hint: None, started_ms: 0, ended_ms: 1_000 });
+    s.push(Worked { pane: "b".into(), project_hint: None, started_ms: 0, ended_ms: 4_000 });
+    s.push(Worked { pane: "a".into(), project_hint: None, started_ms: 0, ended_ms: 2_000 });
+    assert!(s.due(1_000 + RESUME_SETTLE_MS).is_empty(), "a's newer end replaced the older one");
+    let due = s.due(2_000 + RESUME_SETTLE_MS);
+    assert_eq!(due.iter().map(|w| w.pane.as_str()).collect::<Vec<_>>(), vec!["a"]);
+    assert!(!s.is_empty());
+    let due = s.due(4_000 + RESUME_SETTLE_MS);
+    assert_eq!(due.iter().map(|w| w.pane.as_str()).collect::<Vec<_>>(), vec!["b"]);
+    assert!(s.is_empty());
+}
+
+#[test]
+fn every_limit_a_pane_shows_is_remembered_even_past_the_gate() {
+    let pane = pane();
+    assert_eq!(out_seen(&pane), None);
+    let before = Utc::now().timestamp_millis();
+    on_hook(&stop_failure(&pane, "rate_limit"));
+    let first = out_seen(&pane).expect("seen");
+    assert!(first >= before, "{first} >= {before}");
+    on_hook(&stop_failure(&pane, "rate_limit"));
+    assert!(out_seen(&pane).expect("seen again") >= first, "the gated second signal still counts");
+    observed(&pane);
+    // Not a limit: not seen.
+    let other = self::pane();
+    on_hook(&stop_failure(&other, "server_error"));
+    assert_eq!(out_seen(&other), None);
+}

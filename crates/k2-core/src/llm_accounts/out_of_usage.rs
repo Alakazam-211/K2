@@ -77,6 +77,8 @@ pub const SWITCH_ROUTE: &str = "/cli/llm/accounts/switch";
 pub const CODE_SWITCHED: &str = "llm.out_of_usage.switched";
 pub const CODE_SWITCH_AVAILABLE: &str = "llm.out_of_usage.switch_available";
 pub const CODE_NO_LOGIN: &str = "llm.out_of_usage.no_login";
+/// 0.46.18: the agent works again after an out-of-usage notice.
+pub const CODE_RESUMED: &str = "llm.out_of_usage.resumed";
 
 /// At or over the limit (a percent, 0..100).
 fn at_limit(pct: f64) -> bool {
@@ -327,9 +329,26 @@ pub fn when_words(at: i64, now: i64, offset: FixedOffset) -> String {
     format!("{clock} ({zone})")
 }
 
-/// The first sentence: who is out, on which login, until when.
+/// A login label that is an email address (a signed-in account's default
+/// label): never in the words. The notice goes on the Thread and, as a
+/// push, through the relay to phones (0.46.18).
+pub fn is_email_label(label: &str) -> bool {
+    match label.trim().split_once('@') {
+        Some((user, host)) => !user.trim().is_empty() && !host.trim().is_empty(),
+        None => false,
+    }
+}
+
+/// The tool as people read it (`Claude`), from its wire name.
+fn tool_words(tool: &str) -> String {
+    super::Tool::parse(tool).map(|t| t.display().to_string()).unwrap_or_else(|| plain(tool))
+}
+
+/// The first sentence: who is out, on which login, until when. An email
+/// label is named by its tool instead ("its Claude login").
 fn first_sentence(f: &Facts, now: i64, offset: FixedOffset) -> String {
-    let (agent, login) = (plain(&f.agent), plain(&f.login));
+    let agent = plain(&f.agent);
+    let login = if is_email_label(&f.login) { format!("its {} login", tool_words(&f.tool)) } else { plain(&f.login) };
     match f.kind {
         OutKind::Credit => format!("{agent} is out of credit on {login}."),
         OutKind::Usage => match f.resets_at.filter(|r| *r > now) {
@@ -343,10 +362,26 @@ fn first_sentence(f: &Facts, now: i64, offset: FixedOffset) -> String {
 pub fn notice_text(f: &Facts, now: i64, offset: FixedOffset) -> String {
     let first = first_sentence(f, now, offset);
     match &f.next {
+        Next::Switched { label } if is_email_label(label) => {
+            format!("{first} Switched to another {} login.", tool_words(&f.tool))
+        }
         Next::Switched { label } => format!("{first} Switched to {}.", plain(label)),
+        Next::Available { label, .. } if is_email_label(label) => {
+            format!("{first} Another {} login has room: switch to it, or add a login.", tool_words(&f.tool))
+        }
         Next::Available { label, .. } => format!("{first} {} has room: switch to it, or add a login.", plain(label)),
         Next::Nothing => format!("{first} Add or switch a login."),
     }
+}
+
+/// 0.46.18: the one line when an agent that was told it's out works again.
+pub fn resumed_text(agent: &str) -> String {
+    format!("{} is working again.", plain(agent))
+}
+
+/// The resumed line's notice (neutral, nothing to press).
+pub fn resumed_notice() -> SystemNotice {
+    SystemNotice::info(CODE_RESUMED)
 }
 
 fn add_login_action(tool: &str) -> NoticeAction {
@@ -371,7 +406,7 @@ pub fn notice(f: &Facts) -> SystemNotice {
             let mut n = SystemNotice::action(CODE_SWITCH_AVAILABLE);
             n.actions.push(NoticeAction {
                 id: ACTION_SWITCH.to_string(),
-                label: format!("Switch to {}", label.trim()),
+                label: if is_email_label(label) { "Switch login".to_string() } else { format!("Switch to {}", label.trim()) },
                 route: Some(SWITCH_ROUTE.to_string()),
                 body: Some(json!({ "id": id })),
                 workspace: None,
@@ -394,12 +429,53 @@ pub fn notice(f: &Facts) -> SystemNotice {
 /// [`QUIET_WITHOUT_RESET_SECS`] when the reset isn't known. Every signal
 /// for the same event (the hook, the statusLine, the transcript) lands
 /// inside that window.
+///
+/// **An episode ends when the agent works again (0.46.18).** An agent told
+/// it's out is remembered by its address ([`Episodes::mark_out`]); when it
+/// works again, [`Episodes::resume`] drops every claim for it (its next
+/// limit is news again) and says whether it was out, so the daemon posts
+/// one "working again" line per episode.
 #[derive(Debug, Default)]
 pub struct Episodes {
     until: HashMap<String, i64>,
+    /// Agent address → when (unix seconds) its latest out notice went up.
+    out: HashMap<String, i64>,
 }
 
+/// An agent still marked out this long after its last notice is forgotten
+/// (past the weekly window: a deleted agent never works again).
+pub const FORGET_OUT_SECS: i64 = 8 * 86_400;
+
 impl Episodes {
+    /// The claim key for an agent and a login.
+    pub fn key(agent: &str, tool: &str, login: &str) -> String {
+        format!("{agent}|{tool}|{login}")
+    }
+
+    /// `agent` was just told it's out.
+    pub fn mark_out(&mut self, agent: &str, now: i64) {
+        self.out.retain(|_, at| now - *at < FORGET_OUT_SECS);
+        self.out.insert(agent.to_string(), now);
+    }
+
+    /// When `agent`'s latest out notice went up, while it is out.
+    pub fn out_since(&self, agent: &str) -> Option<i64> {
+        self.out.get(agent).copied()
+    }
+
+    /// Is any agent out right now (a cheap check before any lookup)?
+    pub fn any_out(&self) -> bool {
+        !self.out.is_empty()
+    }
+
+    /// `agent` works again: its episode ends. True when it had been told
+    /// it's out (the caller posts the one "working again" line).
+    pub fn resume(&mut self, agent: &str) -> bool {
+        let prefix = format!("{agent}|");
+        self.until.retain(|k, _| !k.starts_with(&prefix));
+        self.out.remove(agent).is_some()
+    }
+
     /// May `key` (agent + login) get a notice now? Claims it when yes.
     pub fn admit(&mut self, key: &str, resets_at: Option<i64>, now: i64) -> bool {
         self.until.retain(|_, until| *until > now);

@@ -245,3 +245,68 @@ fn old_records_and_past_resets_are_not_news() {
     h.resets_at = Some(NOW - 1);
     assert!(!is_news(&h, NOW), "already reset");
 }
+
+// ── 0.46.18: the episode ends when the agent works again ────────────
+
+#[test]
+fn working_again_ends_the_episode_once_and_the_next_limit_is_news() {
+    let mut e = Episodes::default();
+    let key = Episodes::key("sales", "claude", "acc_1");
+    assert!(!e.any_out());
+    assert!(e.admit(&key, None, NOW));
+    e.mark_out("sales", NOW);
+    assert!(e.any_out());
+    assert_eq!(e.out_since("sales"), Some(NOW));
+    assert_eq!(e.out_since("sales/2"), None, "another agent isn't out");
+    assert!(!e.admit(&key, None, NOW + 60), "still the same episode");
+    assert!(e.admit(&Episodes::key("sales/2", "claude", "acc_1"), None, NOW + 60), "another agent: its own claim");
+    assert!(e.resume("sales"), "sales was out: one working-again line");
+    assert!(!e.resume("sales"), "a second resume of the same episode says nothing");
+    assert!(!e.any_out());
+    assert!(e.admit(&key, None, NOW + 120), "after working again, the next limit is a new episode");
+    assert!(!e.admit(&Episodes::key("sales/2", "claude", "acc_1"), None, NOW + 120), "sales/2's claim is untouched");
+    // A later notice moves the time; an agent out for over a week is forgotten.
+    e.mark_out("sales", NOW + 300);
+    assert_eq!(e.out_since("sales"), Some(NOW + 300));
+    e.mark_out("other", NOW + 300 + FORGET_OUT_SECS);
+    assert_eq!(e.out_since("sales"), None, "forgotten after FORGET_OUT_SECS");
+    assert_eq!(e.out_since("other"), Some(NOW + 300 + FORGET_OUT_SECS));
+}
+
+#[test]
+fn the_working_again_words() {
+    assert_eq!(resumed_text("sales"), "sales is working again.");
+    assert_eq!(resumed_text("sales/re_view"), r"sales/re\_view is working again.", "markdown marks escaped");
+    let n = resumed_notice();
+    assert_eq!((n.kind.as_str(), n.code.as_str()), ("info", CODE_RESUMED));
+    assert!(n.actions.is_empty(), "nothing to press: {n:?}");
+}
+
+#[test]
+fn an_email_label_never_reaches_the_words() {
+    assert!(is_email_label("alice@example.com"));
+    assert!(is_email_label(" alice@example.com "));
+    assert!(!is_email_label("Work Max"));
+    assert!(!is_email_label("@team"));
+    assert!(!is_email_label("team@"));
+    let mut f = facts(Next::Available { id: "acc_2".into(), label: "bob@example.com".into() });
+    f.login = "alice@example.com".into();
+    let text = notice_text(&f, NOW, mst());
+    assert_eq!(
+        text,
+        "sales is out of usage on its Claude login until 10:00 (UTC-07:00). Another Claude login has room: switch to it, or add a login."
+    );
+    let n = notice(&f);
+    assert_eq!(n.actions[0].label, "Switch login");
+    let all = format!("{text} {}", serde_json::to_string(&n).expect("json"));
+    assert!(!all.contains('@'), "no email anywhere in the notice: {all}");
+    f.next = Next::Switched { label: "bob@example.com".into() };
+    assert_eq!(
+        notice_text(&f, NOW, mst()),
+        "sales is out of usage on its Claude login until 10:00 (UTC-07:00). Switched to another Claude login."
+    );
+    f.kind = OutKind::Credit;
+    f.tool = "codex".into();
+    f.next = Next::Nothing;
+    assert_eq!(notice_text(&f, NOW, mst()), "sales is out of credit on its Codex login. Add or switch a login.");
+}

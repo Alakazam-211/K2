@@ -20,6 +20,13 @@
 //! or none), and one notice per agent and login per event
 //! ([`ou::Episodes`]). An API key's `rate_limit` is a throttle, not out of
 //! tokens: no notice.
+//!
+//! 0.46.18: the notice is also pushed to the people who get the agent's
+//! Thread pushes (their bell, mutes and workspace switch decide). The
+//! episode ends when the agent works again: [`spawn_resume`] follows the
+//! activity rows, and a turn that ends well (started after the notice, its
+//! pane showing no limit since, [`RESUME_SETTLE_MS`] later) clears the
+//! claims and posts one quiet line, "<agent> is working again."
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -117,7 +124,7 @@ pub fn handle(world: &dyn World, episodes: &Mutex<ou::Episodes>, sig: &Signal, n
     let resets_at = sig.hit.resets_at.or(login.reading_reset).filter(|r| *r > now);
     // 0.46.17: a heartbeat fire that fails now is the limit, not a failure.
     crate::heartbeat_turned_off::note_out(&place.workspace_id, sig.hit.kind, resets_at, now);
-    let key = format!("{}|{}|{}", place.addr, login.tool.as_str(), login.id.as_deref().unwrap_or(&login.label));
+    let key = ou::Episodes::key(&place.addr, login.tool.as_str(), login.id.as_deref().unwrap_or(&login.label));
     if !episodes.lock().admit(&key, resets_at, now) {
         return None;
     }
@@ -134,6 +141,8 @@ pub fn handle(world: &dyn World, episodes: &Mutex<ou::Episodes>, sig: &Signal, n
     let code = notice.code.clone();
     match world.post(&place.addr, &text, notice) {
         Ok(doc_id) => {
+            // 0.46.18: the agent is out until it works again ([`handle_worked`]).
+            episodes.lock().mark_out(&place.addr, now);
             k2_core::log_debug!("[llm-out] {} {} ({}): {code}", place.addr, login.tool.as_str(), sig.hit.source);
             Some(Posted {
                 addr: place.addr,
@@ -218,6 +227,9 @@ fn observe(sig: Signal) {
     if !ou::is_news(&sig.hit, now) {
         return;
     }
+    // Every limit a pane shows counts against "working again", even one
+    // the gate below drops (0.46.18).
+    note_out_seen(&sig.pane, Utc::now().timestamp_millis());
     {
         static GATE: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
         let mut g = GATE.get_or_init(|| Mutex::new(HashMap::new())).lock();
@@ -234,11 +246,178 @@ fn observe(sig: Signal) {
         let _ = std::thread::Builder::new().name("llm-out-notice".into()).spawn(move || {
             if let Some(p) = handle(&LiveWorld, episodes(), &sig, Utc::now().timestamp()) {
                 crate::session_events::emit_llm_out_of_usage(&p);
+                // 0.46.18: the people who get this agent's Thread pushes
+                // get this one too (their bell, mutes and workspace
+                // switch decide, as for the agent's own replies).
+                if let Err(e) = crate::overlay_routes::push_system_notice(&p.addr, &p.doc_id) {
+                    k2_core::log_debug!("[llm-out] no push for {}: {e}", p.addr);
+                }
             }
         });
     }
     #[cfg(test)]
     let _ = episodes;
+}
+
+// ── Working again (0.46.18) ─────────────────────────────────────────
+
+/// A good turn end waits this long before it counts: a limit read in the
+/// same transcript poll (Codex writes its error, then ends the turn) or a
+/// late hook lands first.
+pub const RESUME_SETTLE_MS: i64 = 10_000;
+/// A pane's last limit is remembered this long.
+const OUT_SEEN_KEEP_MS: i64 = 60 * 60 * 1000;
+
+fn out_seen_map() -> &'static Mutex<HashMap<String, i64>> {
+    static M: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `pane` showed a limit at `at_ms`.
+pub(crate) fn note_out_seen(pane: &str, at_ms: i64) {
+    let mut m = out_seen_map().lock();
+    m.retain(|_, at| at_ms - *at < OUT_SEEN_KEEP_MS);
+    m.insert(pane.to_string(), at_ms);
+}
+
+/// When `pane` last showed a limit (unix ms).
+pub(crate) fn out_seen(pane: &str) -> Option<i64> {
+    out_seen_map().lock().get(pane).copied()
+}
+
+/// A turn that ended well, as the "working again" check sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Worked {
+    pub pane: String,
+    pub project_hint: Option<String>,
+    /// When the turn started and ended (unix ms).
+    pub started_ms: i64,
+    pub ended_ms: i64,
+}
+
+/// A row event that is a turn ending well (`Stop`, Codex's
+/// `task_complete`), else `None`.
+pub fn worked_from(ev: &crate::activity_store::RowEvent) -> Option<Worked> {
+    let te = ev.turn_ended?;
+    if te.outcome != k2_core::activity::Outcome::Success {
+        return None;
+    }
+    let row = ev.row.as_ref()?;
+    Some(Worked {
+        pane: ev.session_id.clone(),
+        project_hint: row.get("projectId").and_then(Value::as_str).map(str::to_string),
+        started_ms: row.get("turnStartedAt").and_then(Value::as_i64)?,
+        ended_ms: te.at,
+    })
+}
+
+/// Did the agent behind `w` work again? Not when its pane showed a limit
+/// since the turn started (`out_seen_ms`: that turn hit it), nor when the
+/// turn started before the agent's out notice. When it did, its episode
+/// ends ([`ou::Episodes::resume`]) and K2 posts the one line; the doc id.
+pub fn handle_worked(
+    world: &dyn World,
+    episodes: &Mutex<ou::Episodes>,
+    w: &Worked,
+    out_seen_ms: Option<i64>,
+) -> Option<String> {
+    if !episodes.lock().any_out() || out_seen_ms.is_some_and(|at| at >= w.started_ms) {
+        return None;
+    }
+    let place = world.place(&w.pane, w.project_hint.as_deref())?;
+    {
+        let mut ep = episodes.lock();
+        let since = ep.out_since(&place.addr)?;
+        if w.started_ms.div_euclid(1000) < since || !ep.resume(&place.addr) {
+            return None;
+        }
+    }
+    match world.post(&place.addr, &ou::resumed_text(&place.addr), ou::resumed_notice()) {
+        Ok(doc_id) => {
+            k2_core::log_debug!("[llm-out] {} is working again", place.addr);
+            Some(doc_id)
+        }
+        Err(e) => {
+            k2_core::log_debug!("[llm-out] couldn't tell {}'s Thread it works again: {e}", place.addr);
+            None
+        }
+    }
+}
+
+/// Good turn ends waiting out [`RESUME_SETTLE_MS`] (one per pane: a newer
+/// one replaces it).
+#[derive(Debug, Default)]
+pub struct Settle {
+    waiting: Vec<Worked>,
+}
+
+impl Settle {
+    pub fn push(&mut self, w: Worked) {
+        self.waiting.retain(|x| x.pane != w.pane);
+        self.waiting.push(w);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.waiting.is_empty()
+    }
+
+    /// The ones whose wait is over at `now_ms`, oldest first.
+    pub fn due(&mut self, now_ms: i64) -> Vec<Worked> {
+        let (due, wait): (Vec<Worked>, Vec<Worked>) =
+            self.waiting.drain(..).partition(|w| now_ms - w.ended_ms >= RESUME_SETTLE_MS);
+        self.waiting = wait;
+        due
+    }
+}
+
+/// Follow the activity rows (once): a good turn end of an agent that was
+/// told it's out ends its episode with one "working again" line. Runs on
+/// the headless daemon (no client involved).
+pub fn spawn_resume() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        let mut rows = crate::activity_store::subscribe();
+        let t = std::thread::Builder::new().name("llm-out-resume".into()).spawn(move || {
+            let mut settle = Settle::default();
+            loop {
+                let ev = if settle.is_empty() {
+                    match rows.blocking_recv() {
+                        Ok(ev) => Some(ev),
+                        Err(RecvError::Lagged(n)) => {
+                            k2_core::log_debug!("[llm-out] row bus lagged {n}");
+                            None
+                        }
+                        Err(RecvError::Closed) => return,
+                    }
+                } else {
+                    match rows.try_recv() {
+                        Ok(ev) => Some(ev),
+                        Err(TryRecvError::Empty) => {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            None
+                        }
+                        Err(TryRecvError::Lagged(n)) => {
+                            k2_core::log_debug!("[llm-out] row bus lagged {n}");
+                            None
+                        }
+                        Err(TryRecvError::Closed) => return,
+                    }
+                };
+                if let Some(w) = ev.as_ref().and_then(worked_from) {
+                    if episodes().lock().any_out() {
+                        settle.push(w);
+                    }
+                }
+                for w in settle.due(Utc::now().timestamp_millis()) {
+                    handle_worked(&LiveWorld, episodes(), &w, out_seen(&w.pane));
+                }
+            }
+        });
+        if let Err(e) = t {
+            k2_core::log_debug!("[llm-out] the resume follower could not start: {e}");
+        }
+    });
 }
 
 // ── The live world ──────────────────────────────────────────────────

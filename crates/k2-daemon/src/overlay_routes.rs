@@ -1720,6 +1720,33 @@ pub(crate) fn post_workspace_notice(addr: &str, text: &str, notice: overlay::Sys
     post_system_line(addr, text, "thread", notice, None).map(|(_, id)| id)
 }
 
+/// 0.46.18: push a K2 notice already on `addr`'s Thread (doc `doc_id`) to
+/// the people who get that agent's Thread pushes, under the agent's name
+/// (`thread_push::on_system_post`: their bell, mutes and workspace switch
+/// decide). The preview is the stored body, redacted.
+pub(crate) fn push_system_notice(addr: &str, doc_id: &str) -> Result<(), String> {
+    let resolved = resolve_addr(addr).map_err(|e| e.body)?;
+    let seq = overlay::store::thread_seq_of(&resolved.conversation_id, doc_id)?
+        .ok_or_else(|| format!("notice {doc_id} is not on {addr}'s Thread"))?;
+    let doc = overlay::store::get_doc(doc_id)?.ok_or_else(|| format!("notice {doc_id} is gone"))?;
+    if doc.system_notice.is_none() {
+        return Err(format!("{doc_id} is not a K2 notice"));
+    }
+    let text = push_preview_text(k2_core::push::ThreadMsgKind::Text, &doc);
+    crate::thread_push::on_system_post(
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &resolved.addr,
+        addr,
+        &doc.from,
+        seq,
+        &text,
+        doc_id,
+        doc.created_at,
+    );
+    Ok(())
+}
+
 fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliResponse {
     // A23: a Thread turn's `startedAt` is the daemon's ms receipt time.
     let received_at = chrono::Utc::now().timestamp_millis();

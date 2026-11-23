@@ -764,6 +764,7 @@ pub mod test_harness {
         crate::activity_events::spawn();
         crate::thread_activity::spawn();
         crate::turn_changes::spawn();
+        crate::llm_out_notice::spawn_resume();
         crate::overlay_routes::spawn_card_expiry();
         crate::approve::expiry::spawn();
         crate::overlay_ws::install_move_listener();

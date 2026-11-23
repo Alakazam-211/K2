@@ -37,8 +37,8 @@ vi.mock('@/lib/home-chat/events-socket', async (orig) => ({
   },
 }))
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import HomeChatView from './HomeChatView'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import HomeChatView, { HOME_CHAT_NO_FILES } from './HomeChatView'
 import { resetHomeChatForTests } from '@/stores/home-chat'
 import { clearCallTileRest, setCallTileRest } from '@/stores/call-tile-place'
 import { useSettingsStore } from '@/stores/settings'
@@ -415,6 +415,61 @@ describe('Home chat view', () => {
     expect(screen.queryByTestId('home-chat-transcript')).toBeNull()
     // Never audio: no player anywhere.
     expect(document.querySelector('audio')).toBeNull()
+  })
+})
+
+// Cmd+V with a picture on the clipboard (0.46.18). DMs and channels send
+// text only (`home-chat/send` takes no files; attachments are later, D19):
+// a pasted image or file says so at once instead of vanishing, nothing is
+// uploaded or sent, and text pastes as before.
+describe('pasting into a DM or channel box', () => {
+  function paste(clip: { files?: File[]; items?: File[]; text?: string }): boolean {
+    const box = screen.getByTestId('home-chat-input')
+    const items = (clip.items ?? []).map((f) => ({ kind: 'file', type: f.type, getAsFile: () => f }))
+    const ev = createEvent.paste(box, {
+      clipboardData: { files: clip.files ?? [], items, getData: (t: string) => (t === 'text/plain' ? clip.text ?? '' : '') },
+    })
+    let ran = true
+    act(() => {
+      ran = fireEvent(box, ev)
+    })
+    return ran
+  }
+  function toasts(): Array<[string, string]> {
+    return useToastStore.getState().toasts.map((t) => [t.message, t.type])
+  }
+  function postsBeyondOpen(): string[] {
+    return h.post.mock.calls.map((c) => c[1]).filter((r) => r !== 'home-chat/view' && r !== 'home-chat/ack')
+  }
+
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] })
+  })
+
+  it('an image item: says DMs and channels take no pictures yet; nothing sent or uploaded', async () => {
+    await open()
+    expect(paste({ items: [new File(['png'], '', { type: 'image/png' })] }), 'the field drops nothing of its own').toBe(false)
+    expect(toasts()).toEqual([[HOME_CHAT_NO_FILES, 'warning']])
+    expect(postsBeyondOpen()).toEqual([])
+  })
+
+  it('a file item (WKWebView files): the same note', async () => {
+    await open()
+    expect(paste({ files: [new File(['%PDF'], 'brief.pdf', { type: 'application/pdf' })], text: 'brief.pdf' })).toBe(false)
+    expect(toasts()).toEqual([[HOME_CHAT_NO_FILES, 'warning']])
+    expect(postsBeyondOpen()).toEqual([])
+  })
+
+  it('text only: pastes as text, no note', async () => {
+    await open()
+    expect(paste({ text: 'hello' }), 'default paste runs').toBe(true)
+    expect(toasts()).toEqual([])
+  })
+
+  it('an image plus text: the text still pastes, and the note says the picture stayed behind', async () => {
+    await open()
+    expect(paste({ files: [new File(['png'], 'image.png', { type: 'image/png' })], text: 'see the chart' })).toBe(true)
+    expect(toasts()).toEqual([[HOME_CHAT_NO_FILES, 'warning']])
   })
 })
 

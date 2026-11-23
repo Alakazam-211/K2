@@ -28,6 +28,7 @@ import { leaveComposeHandoff, takeComposeHandoff } from './composeHandoff'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import { composePaste } from '@/lib/compose-paste'
 import { buildComposeDropPayload } from '@/lib/drop-payload'
 import { dropTextOrToast } from '@/lib/drop-refusal'
 import { composeAttachPayload } from '@/lib/compose-attach'
@@ -740,6 +741,41 @@ export function TerminalComposeBar({
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
   }, [])
 
+  // Files handed to the box (a drop, a paste): on a Thread that takes
+  // files they wait as chips (`addThreadFiles`, the picker's path);
+  // otherwise their paths go into the draft, uploaded first when they
+  // aren't on the server already. Paths on this computer win; browser
+  // files (no path: the web client, a pasted screenshot) upload.
+  const takeFiles = useCallback(
+    (paths: string[], browserFiles: File[]): boolean => {
+      if (paths.length > 0) {
+        if (threadFilesOn) {
+          void addThreadFiles({ paths })
+        } else if (scope.isRemote) {
+          void composeAttachPayload(scope, { paths, workspacePath }).then((payload) => {
+            if (payload) insertPathsText(payload)
+          })
+        } else {
+          insertPathsText(dropTextOrToast(buildComposeDropPayload(paths)))
+        }
+        return true
+      }
+      // Hosted web / no File.path — upload File bytes then insert host path.
+      if (browserFiles.length > 0) {
+        if (threadFilesOn) {
+          void addThreadFiles({ files: browserFiles })
+          return true
+        }
+        void composeAttachPayload(scope, { files: browserFiles, workspacePath }).then((payload) => {
+          if (payload) insertPathsText(payload)
+        })
+        return true
+      }
+      return false
+    },
+    [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
+  )
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
@@ -751,36 +787,28 @@ export function TerminalComposeBar({
           const p = (files[i] as unknown as { path?: string }).path
           if (p) paths.push(p)
         }
-        if (paths.length > 0) {
-          if (threadFilesOn) {
-            void addThreadFiles({ paths })
-          } else if (scope.isRemote) {
-            void composeAttachPayload(scope, { paths, workspacePath }).then((payload) => {
-              if (payload) insertPathsText(payload)
-            })
-          } else {
-            insertPathsText(dropTextOrToast(buildComposeDropPayload(paths)))
-          }
-          return
-        }
-        // Hosted web / no File.path — upload File bytes then insert host path.
-        const browserFiles = filesFromDataTransfer(e.dataTransfer)
-        if (browserFiles.length > 0) {
-          if (threadFilesOn) {
-            void addThreadFiles({ files: browserFiles })
-            return
-          }
-          void composeAttachPayload(scope, { files: browserFiles, workspacePath }).then((payload) => {
-            if (payload) insertPathsText(payload)
-          })
-          return
-        }
+        if (takeFiles(paths, paths.length > 0 ? [] : filesFromDataTransfer(e.dataTransfer))) return
       }
       // Internal path list (text/plain from some drag sources)
       const text = e.dataTransfer.getData('text/plain')
       if (text?.trim()) insertPathsText(text.trim() + ' ')
     },
-    [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
+    [insertPathsText, takeFiles],
+  )
+
+  // Cmd+V with an image (a screenshot, a browser's Copy Image) or a copied
+  // file on the clipboard: attached as if picked (`takeFiles`). A field's
+  // own paste drops files, so before 0.46.18 the image was lost without a
+  // word. Text pastes as text; with files, the text still pastes unless it
+  // is only their names or the image's address (`composePaste`).
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const pasted = composePaste(e.clipboardData)
+      if (!pasted) return
+      if (!pasted.keepText) e.preventDefault()
+      takeFiles(pasted.paths, pasted.files)
+    },
+    [takeFiles],
   )
   // Under a Thread pane, a file dropped anywhere on the pane comes here
   // too (threadDropZone): this same handler, so the same limits and
@@ -1714,6 +1742,7 @@ export function TerminalComposeBar({
       onKeyDown={handleKeyDown}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
+      onPaste={handlePaste}
       rows={1}
       spellCheck={false}
       placeholder={messagePlaceholder}

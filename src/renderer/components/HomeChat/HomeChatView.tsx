@@ -55,6 +55,7 @@ import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
+import { composePaste } from '@/lib/compose-paste'
 import { activeHomeHostKey } from '@/lib/home-address'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
 import {
@@ -855,6 +856,16 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             onDropFiles={filesHere ? composeFiles.onDropFiles : undefined}
             inputRef={inputRef}
             placeholder={dm ? `Message ${title}` : `Message #${title}`}
+            // DMs and channels send text only (attachments are later in
+            // prd-home-people-channels-v1 D19; `home-chat/send` takes no
+            // files). A pasted image says so instead of vanishing; text
+            // beside it still pastes.
+            onPaste={(e) => {
+              const pasted = composePaste(e.clipboardData)
+              if (!pasted) return
+              if (!pasted.keepText) e.preventDefault()
+              useToastStore.getState().addToast(HOME_CHAT_NO_FILES, 'warning')
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Escape' && reply) {
                 e.preventDefault()
@@ -929,6 +940,9 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
     </div>
   )
 }
+
+/** What a file pasted into a DM or channel box says: they send text only. */
+export const HOME_CHAT_NO_FILES = 'Pictures and files can’t be sent in DMs and channels yet. Send them in an agent’s Thread.'
 
 /** The name the row was added with (a hint, until the server answers). */
 function rowLabel(target: HomeChatTarget): string | null {

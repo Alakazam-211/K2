@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type JSX } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { ComposeInsertDetail } from '@/lib/external-drop-router'
+import { composePaste } from '@/lib/compose-paste'
 import { getTicketDraftFiles, setTicketDraftFiles } from '@/lib/composer-drafts'
 import { composeAttachPlan, pickLocalComposeFiles, pickRemoteComposeFile } from '@/lib/pick-compose-files'
 import {
@@ -45,25 +46,6 @@ export function ticketComposeAttach(
   }
   if (!projectPath) return { on: false, why: 'This ticket’s workspace was removed, so files can’t be attached.' }
   return { on: true, why: null }
-}
-
-/** Browser files on a clipboard (a pasted screenshot). */
-export function filesOfClipboard(data: Pick<DataTransfer, 'files' | 'items'> | null | undefined): File[] {
-  if (!data) return []
-  const out: File[] = []
-  if (data.files && data.files.length > 0) {
-    for (let i = 0; i < data.files.length; i++) out.push(data.files[i])
-    return out
-  }
-  const items = data.items
-  if (!items) return out
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i]
-    if (it.kind !== 'file') continue
-    const f = it.getAsFile()
-    if (f) out.push(f)
-  }
-  return out
 }
 
 /** Split dropped files into paths on this computer and browser files. */
@@ -188,11 +170,10 @@ export function useTicketComposeFiles({
   const onPaste = useCallback(
     (e: ClipboardEvent<HTMLTextAreaElement>) => {
       if (!on) return
-      const pasted = filesOfClipboard(e.clipboardData)
-      if (pasted.length === 0) return // text pastes as text
-      e.preventDefault()
-      const { paths, files: browser } = splitDropped(pasted)
-      void add(paths.length > 0 ? { paths } : { files: browser })
+      const pasted = composePaste(e.clipboardData)
+      if (!pasted) return // text pastes as text
+      if (!pasted.keepText) e.preventDefault()
+      void add(pasted.paths.length > 0 ? { paths: pasted.paths } : { files: pasted.files })
     },
     [add, on],
   )

@@ -197,12 +197,11 @@ drv check v0.47.1
     && [[ "$out" == *"v0.47.1 passes the gates for globex"* ]] || die "check: a ready tag: $out"; ok
 # The licence gate: a tag that links libgit2-sys is refused at step 3, by
 # name, before the ceiling, the lint or any build.
-git2="licence: REFUSED (brand globex): this K5 release links libgit2-sys 0.17.0+1.8.1 ("
-lift="It lifts when the gix migration lands (K5 replaces libgit2 with gitoxide); wait for a release without libgit2-sys."
+git2="globex: can't build from v0.46.10: it includes libgit2-sys 0.17.0+1.8.1, which partner builds can't ship. This lifts in the first release where gitoxide has replaced libgit2."
 for mode in check dry-run; do
     rm -rf "$T/dryout"
     if [ "$mode" = check ]; then drv check v0.46.10; else drv dry-run v0.46.10 --out "$T/dryout"; fi
-    [ "$rc" = 1 ] && [[ "$out" == *"$git2"* ]] && [[ "$out" == *"$lift"* ]] \
+    [ "$rc" = 1 ] && [[ "$out" == *"$git2"* ]] \
         && [[ "$out" == *"REFUSED at step 3: the tag links code a private white-label build can't ship"* ]] \
         && [[ "$out" != *"step 4"* ]] && [ ! -e "$T/dryout" ] || die "$mode: a tag that links libgit2-sys: $out"; ok
 done

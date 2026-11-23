@@ -4,11 +4,13 @@
 # refused crate. K5's own builds only get a report.
 #
 # A refused crate, three fields split by " | ":
-#   crate | why a private white-label build can't ship it | what lifts it
+#   crate | why partner builds can't ship it | what lifts it
 # An allowed crate (never refused; the gate names it in its report):
-#   allowed crate | its licence | the ruling
-# The refusal prints all three fields. Take a refused row out only when
+#   allowed crate | its licence | the rule
+# The refusal reads "<brand>: can't build from <tag>: it includes <crate>
+# <version>, which partner builds can't ship. This lifts <what lifts it>.",
+# then the reason on a line of its own. Take a refused row out only when
 # what lifts it has landed and the crate is gone from Cargo.lock.
-libgit2-sys | libgit2 is GPL-2.0 with a linking exception and its xdiff part is LGPL-2.1, statically linked: accepted in public builds only, until gix (owner ruling) | the gix migration lands (K5 replaces libgit2 with gitoxide)
-allowed pg_query | PostgreSQL License | accepted everywhere (owner ruling)
-allowed libsqlite3-sys | SQLite is public domain | accepted everywhere (owner ruling)
+libgit2-sys | allowed in K2's own builds only; refused for partner builds until gitoxide replaces it | in the first release where gitoxide has replaced libgit2
+allowed pg_query | PostgreSQL License | accepted in every build
+allowed libsqlite3-sys | SQLite is public domain | accepted in every build

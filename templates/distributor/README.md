@@ -216,24 +216,27 @@ a build don't follow the brand file yet.
   `driver.sh check` tells you which, quickly.
 - **No tag passes step 3 yet.** Every K5 release so far links
   `libgit2-sys`. No partner build can pass until a K5 release replaces
-  libgit2 with gitoxide (the gix migration). See "The licence gate".
+  libgit2 with gitoxide. See "The licence gate".
 
 ## The licence gate
 
 Step 3 reads the tag's `Cargo.lock` and refuses your build when it holds
 a crate on the tag's `scripts/brand/copyleft-crates.txt`. Each row there
-names the crate, why a private white-label build can't ship it, and what
-lifts the refusal; the refusal line says all three.
+names the crate, why partner builds can't ship it, and what lifts the
+refusal. The refusal names the crate, its version and what lifts it, with
+the reason on the next line:
+
+    globex: can't build from v0.47.3: it includes libgit2-sys 0.17.0+1.8.1, which partner builds can't ship. This lifts in the first release where gitoxide has replaced libgit2.
 
 The rule today, in plain words:
 
-- **libgit2** is accepted in K5's own public builds only, until gix
-  replaces it, and no partner build may ship it. libgit2 is GPL-2.0 with a
+- **libgit2** is allowed in K5's own builds only, and refused for partner
+  builds until gitoxide replaces it. libgit2 is GPL-2.0 with a
   linking exception, and its xdiff part is LGPL-2.1 and statically linked:
   a private build can't meet those terms. So the gate refuses any tag
   whose `Cargo.lock` has `libgit2-sys`.
 - **pg_query** (PostgreSQL License) and **SQLite** (public domain) are
-  accepted everywhere, your builds included. The list marks them
+  accepted in every build, yours included. The list marks them
   `allowed`; the gate names them in its output and never refuses them.
 
 The gate lifts when libgit2 goes: the first K5 release built on gitoxide

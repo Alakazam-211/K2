@@ -27,7 +27,7 @@
 #   2 tools     the tag carries the brand tools this driver calls
 #   3 licence   scripts/brand/licence-gate.sh: the tag's Cargo.lock holds no
 #               crate a private white-label build can't ship (today:
-#               libgit2-sys, until the gix migration replaces libgit2)
+#               libgit2-sys, until gitoxide replaces libgit2)
 #   4 ceiling   scripts/brand/ceiling-zero-gate.sh: every command is native
 #   5 lint      scripts/brand.sh lint on your brand, and --live (lint_live)
 #   6 build     K5's Linux release build with K2_BRAND_DIR = your brand
@@ -199,7 +199,7 @@ gates() { # gates <tag> <sha or empty> <dry: yes|no>
 
     step 3 "licence: no crate a private white-label build can't ship"
     id="$(brand_field id)"
-    bash "$K5/scripts/brand/licence-gate.sh" --brand "$id" "$K5" \
+    bash "$K5/scripts/brand/licence-gate.sh" --brand "$id" --tag "$tag" "$K5" \
         || refuse "the tag links code a private white-label build can't ship (above)"
 
     step 4 "ceiling-zero: every command is native"

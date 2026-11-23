@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Tests for scripts/brand/licence-gate.sh on fixture lockfiles: a Cargo.lock
-# with libgit2-sys refuses a partner brand with a line that names the crate,
-# the reason and what lifts it; one without it passes; pg_query and SQLite
-# are allowed and only named; our own brands and --report only get the
-# report; a broken list or lockfile fails in every mode. The committed list
-# is checked too. No network, no build, no cargo.
+# with libgit2-sys refuses a partner brand with a line that names the tag,
+# the crate, its version and what lifts it, then why; one without it
+# passes; pg_query and SQLite are allowed and only named; our own brands
+# and --report only get the report; a broken list or lockfile fails in
+# every mode. The committed list is checked too. No network, no build, no
+# cargo.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 G="$HERE/scripts/brand/licence-gate.sh"
@@ -33,21 +34,27 @@ lockfile "$T/allowed" "pg_query 6.2.1" "libsqlite3-sys 0.39.1" "libc 0.2.170"
 # A crate whose name only contains a listed one is not that crate.
 lockfile "$T/near" "libgit2-sys-shim 0.1.0" "my-libgit2-sys 0.1.0"
 
-REASON="libgit2 is GPL-2.0 with a linking exception and its xdiff part is LGPL-2.1, statically linked: accepted in public builds only, until gix (owner ruling)"
-LIFTS="the gix migration lands (K5 replaces libgit2 with gitoxide)"
-LINE="this K5 release links libgit2-sys 0.17.0+1.8.1 ($REASON); a private white-label build can't ship it. It lifts when $LIFTS; wait for a release without libgit2-sys."
+WHY="  why: allowed in K2's own builds only; refused for partner builds until gitoxide replaces it"
+# line <who> <tag>: the libgit2-sys line, as the gate prints it.
+line() { echo "$1: can't build from $2: it includes libgit2-sys 0.17.0+1.8.1, which partner builds can't ship. This lifts in the first release where gitoxide has replaced libgit2."; }
 
 # ── the committed list ────────────────────────────────────────────────
 [ "$(grep -c '^libgit2-sys | ' "$LIST")" = 1 ] || die "the committed list has no single libgit2-sys row"; ok
-grep -qxF 'allowed pg_query | PostgreSQL License | accepted everywhere (owner ruling)' "$LIST" \
+grep -qxF 'allowed pg_query | PostgreSQL License | accepted in every build' "$LIST" \
     || die "the committed list does not allow pg_query"; ok
-grep -qxF 'allowed libsqlite3-sys | SQLite is public domain | accepted everywhere (owner ruling)' "$LIST" \
+grep -qxF 'allowed libsqlite3-sys | SQLite is public domain | accepted in every build' "$LIST" \
     || die "the committed list does not allow SQLite"; ok
+# Public text: no word on whose ruling a row is.
+! grep -qiE 'ruling|owner' "$LIST" || die "the committed list says whose ruling a row is"; ok
 
 # ── a partner brand ───────────────────────────────────────────────────
-gate --brand globex "$T/git"
+gate --brand globex --tag v0.47.3 "$T/git"
 [ "$rc" = 1 ] || die "libgit2-sys passed for a partner brand (rc $rc): $out"; ok
-[ "$out" = "licence: REFUSED (brand globex): $LINE" ] || die "the refusal line: $out"; ok
+[ "$out" = "$(line globex v0.47.3)
+$WHY" ] || die "the refusal line: $out"; ok
+gate --brand globex "$T/git"
+[ "$rc" = 1 ] && [ "$out" = "$(line globex "this tree")
+$WHY" ] || die "the refusal line without --tag: rc $rc: $out"; ok
 gate --brand globex "$T/clean"
 [ "$rc" = 0 ] || die "a lockfile without libgit2-sys was refused: $out"; ok
 [ "$out" = "licence: $T/clean/Cargo.lock: none of the 1 refused crate(s) on the list is in it; build it" ] \
@@ -63,28 +70,29 @@ gate --brand globex "$T/near"
 
 # ── our brands and --report: the report only ──────────────────────────
 for b in k2 k5; do
-    gate --brand "$b" "$T/git"
+    gate --brand "$b" --tag v0.47.3 "$T/git"
     [ "$rc" = 0 ] || die "brand $b was refused (rc $rc): $out"; ok
-    [[ "$out" == *"licence: report only (brand $b is ours): $LINE"* ]] \
+    [[ "$out" == *"$(line "licence: report only (brand $b is ours): a partner brand" v0.47.3)"* ]] \
         && [[ "$out" == *"brand $b is not refused here"* ]] || die "brand $b's report: $out"; ok
-    [[ "$out" != *REFUSED* ]] || die "brand $b's report says REFUSED: $out"; ok
+    [[ "$out" != "$b: can't build"* ]] || die "brand $b's report reads as a refusal: $out"; ok
 done
 gate --brand xy --report "$T/git"
-[ "$rc" = 0 ] && [[ "$out" == *"licence: report only (--report; a build of brand xy is refused): $LINE"* ]] \
+[ "$rc" = 0 ] && [[ "$out" == *"$(line "licence: report only (--report): xy" "this tree")"* ]] \
     || die "--report on a partner brand: rc $rc: $out"; ok
 # k2 and k5 are matched whole: a brand id that starts with one is a partner.
 gate --brand k2x "$T/git"
 [ "$rc" = 1 ] || die "brand k2x was treated as ours: $out"; ok
 
 # ── any other row of the list ─────────────────────────────────────────
-printf '# comment\n\nfoo-sys | its bundled C is GPL-3.0 | a release builds it from the system library\n%s\n' \
+printf '# comment\n\nfoo-sys | its bundled C is GPL-3.0 | when a release builds it from the system library\n%s\n' \
     "$(grep '^libgit2-sys | ' "$LIST")" > "$T/two.txt"
 lockfile "$T/foo" "foo-sys 1.2.3" "libgit2-sys 0.17.0+1.8.1" "foo-sys 1.3.0"
-gate --brand globex --list "$T/two.txt" "$T/foo"
+gate --brand globex --tag v0.47.3 --list "$T/two.txt" "$T/foo"
 [ "$rc" = 1 ] || die "two listed crates passed: $out"; ok
-[[ "$out" == *"REFUSED (brand globex): this K5 release links foo-sys 1.2.3 1.3.0 (its bundled C is GPL-3.0); a private white-label build can't ship it. It lifts when a release builds it from the system library; wait for a release without foo-sys."* ]] \
-    || die "the second row's line (name, versions, reason, lift): $out"; ok
-[[ "$out" == *"REFUSED (brand globex): $LINE"* ]] || die "libgit2-sys beside another row: $out"; ok
+[ "$out" = "globex: can't build from v0.47.3: it includes foo-sys 1.2.3, 1.3.0, which partner builds can't ship. This lifts when a release builds it from the system library.
+  why: its bundled C is GPL-3.0
+$(line globex v0.47.3)
+$WHY" ] || die "two rows: each line names its crate, versions and lift, then why: $out"; ok
 
 # ── broken input fails in every mode ──────────────────────────────────
 printf 'libgit2-sys | no lift field\n' > "$T/bad1.txt"
@@ -119,5 +127,7 @@ gate --brand "Glo bex" "$T/git"
 [ "$rc" = 2 ] || die "a malformed brand id: rc $rc: $out"; ok
 gate --brand globex "$T/nowhere"
 [ "$rc" = 2 ] || die "a repo that does not exist: rc $rc: $out"; ok
+gate --brand globex --tag "" "$T/git"
+[ "$rc" = 2 ] || die "an empty --tag: rc $rc: $out"; ok
 
 echo "licence-gate: $pass checks passed"

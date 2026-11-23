@@ -30,6 +30,11 @@
 //! (`sweep-rows.txt`) and the named list as the run found it
 //! (`sweep-named.tsv`).
 //!
+//! A line where either side prints a Python traceback fails unless its
+//! family is one of [`TRACEBACK_FAMILIES`], the families still to fix: a
+//! person or agent gets one plain line and an exit code, never a
+//! traceback (whose words change with the Python version).
+//!
 //! It prints each form where the shell sends a write (anything but a GET)
 //! after a `--`, marked when the request holds the `--` itself as a value:
 //! that is the shell acting on a word it should not have read, a shell
@@ -211,8 +216,9 @@ impl Machine {
     }
 
     /// The scratch folder (as typed and URL-encoded), the shell CLI's
-    /// path, the stub's port, a run's random job id and a traceback
-    /// frame's line number, written the same on both sides.
+    /// path, the stub's port and a run's random job id, written the same
+    /// on both sides. Nothing else is masked: a traceback is compared as
+    /// printed.
     fn mask(&self, text: &str) -> String {
         let dir = self.dir.to_string_lossy().to_string();
         let encoded = dir.replace('/', "%2F");
@@ -221,11 +227,7 @@ impl Machine {
             .replace(&encoded, "<dir>")
             .replace(&cli_k2().to_string_lossy().to_string(), "<cli>")
             .replace(&self.stub.port.to_string(), "<port>");
-        let text = mask_after(&text, "\"clientJobId\": \"");
-        // A Python traceback's frame line: the shell's block and the
-        // binary's copy of it raise on the same line of the answer, at
-        // their own line numbers (the parity rig's Compare::Traceback).
-        mask_after(&text, "File \"<string>\", line ")
+        mask_after(&text, "\"clientJobId\": \"")
     }
 
     fn run(&self, bash: bool, argv: &[String]) -> Got {
@@ -306,8 +308,7 @@ impl Machine {
     }
 }
 
-/// `text` with the hex digits after each `key` written `<id>` (a decimal
-/// line number too).
+/// `text` with the hex digits after each `key` written `<id>`.
 fn mask_after(text: &str, key: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -428,6 +429,20 @@ fn named() -> Vec<(char, String)> {
         .collect()
 }
 
+/// The families whose shell still prints a Python traceback on some line
+/// of this sweep: a reader that can't read the stub's plain 200 raises.
+/// Each is a bug to fix as `ci` was (0.46.18: one plain line on stderr,
+/// exit 1), and a fixed family comes off this list. A family not on it
+/// that prints a traceback fails, and so does a listed one that no longer
+/// prints any, so the list stays exact.
+const TRACEBACK_FAMILIES: &[&str] = &["app", "compute", "doc", "organization"];
+
+/// Whether a side printed a Python traceback.
+fn has_traceback(g: &Got) -> bool {
+    const HEAD: &str = "Traceback (most recent call last):";
+    g.stdout.contains(HEAD) || g.stderr.contains(HEAD)
+}
+
 struct Row {
     class: char,
     line: String,
@@ -443,9 +458,11 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
     let differ = Mutex::new(Vec::new());
     let writes = Mutex::new(Vec::new());
     let hung = Mutex::new(Vec::new());
+    let tracebacks = Mutex::new(Vec::new());
     std::thread::scope(|s| {
         for w in 0..WORKERS {
-            let (probes, next, differ, writes, hung) = (&probes, &next, &differ, &writes, &hung);
+            let (probes, next, differ, writes, hung, tracebacks) =
+                (&probes, &next, &differ, &writes, &hung, &tracebacks);
             s.spawn(move || {
                 let bash_side = machine(&format!("b{w}"));
                 let rust_side = machine(&format!("r{w}"));
@@ -459,6 +476,9 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
                     let line = format!("k2 {}", argv.join(" "));
                     if b.code.is_none() {
                         hung.lock().unwrap().push(line.clone());
+                    }
+                    if has_traceback(&b) || has_traceback(&r) {
+                        tracebacks.lock().unwrap().push(argv[0].clone());
                     }
                     for req in &b.requests {
                         if let Some(wr) = write_of(argv, req) {
@@ -482,6 +502,7 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
     let mut differ = differ.into_inner().unwrap();
     let mut writes = writes.into_inner().unwrap();
     let mut hung = hung.into_inner().unwrap();
+    let tracebacks: BTreeSet<String> = tracebacks.into_inner().unwrap().into_iter().collect();
     differ.sort_by(|a, b| (a.class, &a.line).cmp(&(b.class, &b.line)));
     writes.sort();
     hung.sort();
@@ -544,6 +565,21 @@ fn every_form_with_a_dashdash_answers_as_the_shell_does() {
         if !differ.iter().any(|r| r.class == *c && r.line == *l) {
             failures.push(format!(
                 "{NAMED}: [{c}] {l}: named, but it no longer differs so"
+            ));
+        }
+    }
+    println!("dashdash sweep: families with a traceback: {tracebacks:?}");
+    for f in &tracebacks {
+        if !TRACEBACK_FAMILIES.contains(&f.as_str()) {
+            failures.push(format!(
+                "family {f}: a line printed a Python traceback (one plain line and an exit code instead)"
+            ));
+        }
+    }
+    for f in TRACEBACK_FAMILIES {
+        if !tracebacks.contains(*f) {
+            failures.push(format!(
+                "family {f}: no traceback any more: take it off TRACEBACK_FAMILIES"
             ));
         }
     }

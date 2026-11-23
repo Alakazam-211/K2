@@ -3051,10 +3051,11 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
         let Some(src) = plan.src.clone() else {
             return fail("no_source", "this job has no source".into());
         };
-        // M2 review D1: a job of a workspace fenced since it was submitted
-        // ships no source either (neither the bundle nor the --dirty blob).
-        if crate::agent_isolation::workspace_and_fence(&job.workspace_id).1 {
-            return fail("fenced_no_source", "the workspace's folder fence is on, and K2 doesn't ship a fenced workspace's code yet".into());
+        // M2 review D1: an agent's job from a workspace fenced since it was
+        // submitted ships no source either (neither the bundle nor the
+        // --dirty blob). The owner's or a login's own job ships as before.
+        if crate::compute_fenced::requested_by_passport(&job.requested_by) && crate::agent_isolation::workspace_and_fence(&job.workspace_id).1 {
+            return fail("fenced_no_source", "the workspace's folder fence is on, and K2 doesn't ship a fenced agent's code yet".into());
         }
         let blob = match n.kind {
             TransferKind::Bundle => {

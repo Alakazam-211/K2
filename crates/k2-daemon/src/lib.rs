@@ -455,6 +455,8 @@ pub mod compute_provenance;
 pub mod compute_preset;
 pub mod compute_secrets;
 pub mod compute_routes;
+// D1: a fenced agent's job ships no source yet.
+pub mod compute_fenced;
 // A job's earlier attempts: their list, `logs --attempt N`, `fetch --attempt N`.
 pub mod compute_attempts;
 // Which repo a run ships when the caller's folder decides it (repoDir).

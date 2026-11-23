@@ -1471,7 +1471,10 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     // Idempotency is over the body as sent; `.k2/compute.toml` and
     // `--preset` then fill what no flag set (CE-3).
     let sent = v.clone();
-    apply_presets(&ws, &mut v)?;
+    if b(&v, "noSource") != Some(true) {
+        crate::compute_fenced::refusal(who, &ws)?;
+    }
+    apply_presets(who, &ws, &mut v)?;
     // `--plan` (dry run): every check `run` makes, nothing stored or sent.
     if b(&v, "plan") == Some(true) {
         if v.get("shards").is_some_and(|x| !x.is_null()) {
@@ -1568,7 +1571,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     passport_gate(who)?;
     let mut v = json_body(body)?;
     let ws = target_ws(who, s(&v, "workspace"))?;
-    apply_presets(&ws, &mut v)?;
+    apply_presets(who, &ws, &mut v)?;
     let needs = needs_from(&v)?;
     if needs.is_empty() {
         return Err(no(codes::BAD_REQUEST, 400, "prewarm installs --needs: pass --needs rust@stable,cmake@3, or a --preset (or [defaults]) in .k2/compute.toml that lists needs"));
@@ -1748,13 +1751,15 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
 /// folder, the workspace folder), fills the run body where no flag set a
 /// value, and records the effective settings in the body's `effective`
 /// (always set here, so a client can't send its own).
-fn apply_presets(ws: &Ws, v: &mut serde_json::Value) -> R<()> {
+fn apply_presets(who: &Who, ws: &Ws, v: &mut serde_json::Value) -> R<()> {
     use crate::compute_preset as preset;
     let name = s(v, "preset").map(str::to_string);
     if let Some(p) = name.as_deref().filter(|p| !preset::valid_preset_name(p)) {
         return Err(no(preset::codes::PRESET_NOT_FOUND, 400, format!("--preset {p}: a preset name is 1–40 of a-z 0-9 . _ -")));
     }
+    // A fenced agent's `--repo` names no extra folder for K2 to read (D1).
     let extra: Vec<PathBuf> = match s(v, "repo") {
+        Some(_) if crate::compute_fenced::refusal(who, ws).is_err() => Vec::new(),
         Some(_) => repo_pick(ws, v).map(|p| [p.named, Some(p.home)].into_iter().flatten().collect()).unwrap_or_default(),
         None => Vec::new(),
     };
@@ -2424,6 +2429,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             }
             None
         } else {
+            crate::compute_fenced::refusal(who, ws)?;
             let tmp = compute_ws::dirty_blob_path(&format!("plan-{}", crypto::random_id().map_err(|e| no("internal", 500, e))?));
             let r = source_for(ws, v, &tmp, &mut warnings);
             let _ = std::fs::remove_file(&tmp);
@@ -2468,6 +2474,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         }
         (None, None, None, None, Vec::new())
     } else {
+        crate::compute_fenced::refusal(who, &ws)?;
         let (src, info) = source_for(&ws, &v, &compute_ws::dirty_blob_path(&job_id), &mut warnings)?;
         let repo = info.repo.clone();
         let with = with_for(&ws, &v, repo.as_deref().unwrap_or(""), &mut warnings)?;
@@ -3717,8 +3724,6 @@ impl RepoPick {
 
 /// `--repo` refused (bad folder, escapes the jail, not a repo there).
 pub(crate) const REPO_INVALID: &str = "repo_invalid";
-/// A fenced workspace's job asked to ship source (M2 review D1).
-pub(crate) const FENCED_NO_SOURCE: &str = "fenced_no_source";
 
 pub(crate) fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick {
     let named = (n.root != n.home).then(|| n.root.clone());
@@ -3733,19 +3738,6 @@ pub(crate) fn nested_pick(n: compute::sync::NestedRepo, auto: bool) -> RepoPick 
 /// workspace, never `.k2/`.
 pub(crate) fn repo_pick(ws: &Ws, v: &serde_json::Value) -> R<RepoPick> {
     let ws_dir = Path::new(&ws.path);
-    // M2 review D1: a fenced workspace ships no source until its git steps
-    // run under its fence (K2 reading the repo for it could be pointed
-    // outside the fence mid-read). `--no-source` runs as before.
-    if crate::agent_isolation::workspace_and_fence(&ws.id).1 {
-        return Err(no(
-            FENCED_NO_SOURCE,
-            403,
-            format!(
-                "workspace {}'s folder fence is on, and K2 doesn't ship a fenced workspace's code yet; run with --no-source (copy what the job needs into its command or an artifact), or ask the owner to turn the fence off for this run",
-                ws.handle
-            ),
-        ));
-    }
     if let Some(rel) = s(v, "repo").filter(|r| !r.is_empty()) {
         let n = compute::sync::nested_repo(ws_dir, rel).map_err(|e| no(REPO_INVALID, 400, e))?;
         return Ok(nested_pick(n, false));

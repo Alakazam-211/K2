@@ -183,7 +183,10 @@ fn a_repo_outside_the_workspace_is_refused_with_the_way_in() {
 /// `fenced_no_source`, with `--no-source` named) until its git steps run
 /// under its fence. Off again, it ships as before.
 #[test]
-fn a_fenced_workspace_ships_no_source_yet() {
+fn a_fenced_agent_ships_no_source_yet() {
+    use crate::compute_fenced::{refusal as fenced_source_refusal, requested_by_passport, FENCED_NO_SOURCE};
+    use crate::compute_routes::Who;
+    use k2_core::connect_users::Role;
     let f = fixture("fenced");
     let set = |mode: &str| {
         let db = k2_core::db::shared();
@@ -194,14 +197,24 @@ fn a_fenced_workspace_ships_no_source_yet() {
         )
         .expect("project row");
     };
+    let agent = Who::Agent { project_id: f.ws.id.clone(), session_id: "s-agent".into() };
+    let shell = Who::Shell { project_id: f.ws.id.clone(), session_id: "s-shell".into() };
+    let login = Who::Login { username: "pat".into(), role: Role::Admin };
     set("fence");
+    for who in [&agent, &shell] {
+        let e = fenced_source_refusal(who, &f.ws).err().expect("a fenced workspace's session ships no source");
+        assert_eq!((e.code, e.status), (FENCED_NO_SOURCE, 403), "{}: {}", who.label(), e.hint);
+        assert!(e.hint.contains("--no-source"), "{}", e.hint);
+        assert!(requested_by_passport(&who.label()), "{}", who.label());
+    }
+    for who in [&Who::Owner, &login] {
+        assert!(fenced_source_refusal(who, &f.ws).is_ok(), "{}: the owner's own run ships as before", who.label());
+        assert!(!requested_by_passport(&who.label()), "{}", who.label());
+    }
     let (r, _) = go(&f, serde_json::json!({ "repoDir": dir(&f.ws_dir) }));
-    let e = r.err().expect("a fenced workspace ships no source");
-    assert_eq!((e.code, e.status), (crate::compute_routes::FENCED_NO_SOURCE, 403), "{}", e.hint);
-    assert!(e.hint.contains("--no-source"), "{}", e.hint);
+    assert!(r.is_ok(), "fenced, the owner's run: as before: {:?}", r.err().map(|e| e.hint));
     set("off");
-    let (r, _) = go(&f, serde_json::json!({ "repoDir": dir(&f.ws_dir) }));
-    assert!(r.is_ok(), "unfenced: as before: {:?}", r.err().map(|e| e.hint));
+    assert!(fenced_source_refusal(&agent, &f.ws).is_ok(), "unfenced: an agent's run as before");
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.execute("DELETE FROM projects WHERE id = ?1", [&f.ws.id]).expect("cleanup");

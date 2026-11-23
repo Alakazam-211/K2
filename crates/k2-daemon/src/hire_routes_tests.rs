@@ -1082,6 +1082,36 @@ fn template_hello_goes_only_when_k2s_hire_wrote_it() {
     assert_eq!(hellos_to(&real_handle).len(), 1, "once");
 }
 
+/// T9: a workspace registered the way a clone or an open registers one
+/// (`open_workspace_ex`, no hire) that carries a template.lock with a
+/// pending hello, even a real hire's text copied from its source, never
+/// has it delivered as the owner at its first start: this server's hire
+/// holds no record for it.
+#[test]
+fn template_hello_never_goes_for_an_opened_workspace_with_a_lock() {
+    use k2_core::hire::template::lock;
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (st, source) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Source") }), &[]);
+    assert_eq!(st, 200, "{source}");
+    let source_path = source["path"].as_str().unwrap().to_string();
+    let copied = lock::read(&source_path).unwrap().expect("the source's lock");
+    assert!(copied.hello_pending.is_some(), "{copied:?}");
+
+    // A folder that arrives with the source's lock, then is opened.
+    let path = root.join(uniq("opened")).to_string_lossy().into_owned();
+    std::fs::create_dir_all(&path).unwrap();
+    lock::write(&path, &copied).unwrap();
+    k2_core::workspace::lifecycle::open_workspace_ex(&path, false, false, false).expect("open");
+    let (id, handle) = workspace_at(&path);
+    assert!(lock::has_pending_hello(&path));
+
+    crate::template_hello::on_session_registered(&id, Some("claude"));
+    assert!(!crate::template_hello::launch_hello(&id), "an opened workspace's lock is never delivered");
+    assert!(hellos_to(&handle).is_empty());
+    assert!(lock::has_pending_hello(&path), "the lock is left as it is");
+}
+
 /// Daemon-first hello (PRD §3 Hello row): with `launch: true` a first
 /// template hire starts the agent and delivers its hello once (then the
 /// `onboard` message after it). `launch` absent (an older CLI) or false

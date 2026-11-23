@@ -861,8 +861,10 @@ pub(crate) fn agent_may_touch(ws: &str, path: &str, body: &[u8]) -> Result<(), C
     let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
     if !principal_in_workspace(&p, &roles, &grants, ws) {
         return Err(outside_workspace(format!(
-            "'{}' isn't your workspace's guest: it reaches outside your workspace (another workspace's App or room, a box-wide grant) or it is the owner's",
-            p.username
+            "'{}' isn't your workspace's guest: {}. {}",
+            p.username,
+            outside_reason(&p, &roles, &grants, ws),
+            owners_role_path(&p.username)
         )));
     }
     // Rosson's rule (review 0.46.4): never a box login. A guest whose box
@@ -1143,6 +1145,68 @@ fn role_is_agents(r: &skin::SkinRole, ws: &str) -> bool {
 /// A room's handle, for a hint (its id when it has none).
 fn room_label(room: &str) -> String {
     skin::handles_for_project_ids(&[room.to_string()]).into_iter().next().unwrap_or_else(|| room.to_string())
+}
+
+/// Why login `p` isn't wholly `ws`'s (0.46.18 papercut 4): the first of
+/// [`principal_in_workspace`]'s and `apps::user_hold::own_login`'s reasons
+/// that holds, in words. Never names another workspace's guest's details
+/// beyond the workspace handle or App name.
+pub(crate) fn outside_reason(p: &skin::SkinPrincipal, roles: &[skin::SkinRole], grants: &[skin::SkinGrant], ws: &str) -> String {
+    let ws_h = |id: &str| crate::apps::routes::ws_handle(id);
+    if let Some(a) = p.agent_workspace.as_deref().filter(|a| *a != ws) {
+        return format!("it is the agent login of {}", ws_h(a));
+    }
+    if let Ok(Some(t)) = skin::test_guests::get(&p.id) {
+        if t.workspace_id != ws {
+            return format!("it is a test login of {}", ws_h(&t.workspace_id));
+        }
+    }
+    if let Ok(Some(t)) = skin::ties::get(&p.id) {
+        if t.workspace_id != ws {
+            return format!("{}'s agent set it up", ws_h(&t.workspace_id));
+        }
+    }
+    if let Ok(Some(c)) = skin::creators::workspace_of(&p.id) {
+        if c != ws {
+            return format!("{}'s agent added it", ws_h(&c));
+        }
+    }
+    let mine: Vec<&skin::SkinGrant> = grants.iter().filter(|g| g.subject_kind == "principal" && g.subject_id == p.id).collect();
+    if mine.iter().any(|g| g.kind == "app" && g.target_id == skin::HOST_APP_ID) {
+        return "it also has a box login".to_string();
+    }
+    if let Some(g) = mine.iter().find(|g| g.kind != "app") {
+        return format!("it holds a {} grant (box-wide)", g.kind);
+    }
+    if let Some(g) = mine.iter().find(|g| !app_of_workspace(&g.target_id, ws)) {
+        return format!("it is a login on another workspace's App ({})", app_name_of(&g.target_id));
+    }
+    let role_named = |id: &Option<String>| id.as_ref().and_then(|id| roles.iter().find(|r| &r.id == id));
+    let wide = role_named(&p.role_id).into_iter().chain(mine.iter().filter_map(|g| role_named(&g.role_id))).find(|r| match r.app_id.as_deref() {
+        Some(app) => !app_of_workspace(app, ws),
+        None => !role_in_workspace(r, ws),
+    });
+    if let Some(r) = wide {
+        return match r.app_id.as_deref() {
+            None => format!("its role {} is box-wide and reaches another workspace's room", r.name),
+            Some(_) => format!("its role {} belongs to another workspace's App", r.name),
+        };
+    }
+    if !rooms_in(&p.default_rooms, ws) {
+        return "its own rooms reach another workspace".to_string();
+    }
+    if mine.is_empty() && p.default_rooms.is_empty() {
+        return "it has nothing tying it to your workspace (the owner's login)".to_string();
+    }
+    "it reaches outside your workspace (another workspace's room or App)".to_string()
+}
+
+/// Where the owner changes a login's role, in words (papercut 2's path).
+pub(crate) fn owners_role_path(username: &str) -> String {
+    format!(
+        "Only the owner changes it: in the K2 app, Settings → Access → User Access → {username} → What they can use → Sign-in and Apps → the App's Role, \
+         or k2 app user role {username} <role> from a terminal outside K2"
+    )
 }
 
 /// The name an agent uses for one of its Apps in a `k2 app …` line.

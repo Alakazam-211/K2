@@ -980,7 +980,8 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     ] {
         let r = post(d.port, path, &agent, body.clone()).await;
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{path} {body}: {}", r.body);
-        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("reaches outside your workspace"), "{path}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("isn't your workspace's guest: "), "{path}: {}", r.body);
+        assert!(r.body.contains("Settings → Access → User Access → "), "names the owner's path: {}", r.body);
     }
     let (gb, boxb) = (user("scope-gb"), user("scope-boxb"));
     assert_eq!((gb.has_password, gb.email.clone()), (false, None), "{gb:?}");
@@ -1000,7 +1001,7 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     ] {
         let r = post(d.port, path, &agent, body.clone()).await;
         assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "owner's empty guest {path}: {}", r.body);
-        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("or it is the owner's"), "{path}: {}", r.body);
+        assert!(r.json()["error"]["hint"].as_str().expect("hint").contains("Only the owner changes it"), "{path}: {}", r.body);
     }
     // Unlock by email resolves the guest as unlock does (security review C);
     // a name that is no guest is never the agent's to unlock.

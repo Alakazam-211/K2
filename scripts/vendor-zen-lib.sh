@@ -22,4 +22,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v bun >/dev/null || { echo "vendor-zen-lib: needs bun" >&2; exit 1; }
 command -v npm >/dev/null || { echo "vendor-zen-lib: needs npm" >&2; exit 1; }
-exec bun "$ROOT/scripts/zen-lib/vendor.ts" "$@"
+# vendor.ts imports the renderer's zen-lib loader, which reads the manifest
+# through the @shared alias. The root tsconfig.json only lists references, and
+# bun does not follow them, so name the config that holds the alias.
+exec bun --tsconfig-override "$ROOT/tsconfig.web.json" "$ROOT/scripts/zen-lib/vendor.ts" "$@"

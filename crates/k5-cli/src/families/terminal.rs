@@ -37,7 +37,8 @@
 //! shown and the command dies of SIGPIPE ([`super::end_in_pipe`]).
 //!
 //! Handed to the shell, before anything is printed or sent: a word that is
-//! not UTF-8, `-h` or `--help` anywhere (the front's: each verb prints its
+//! not UTF-8, `-h` or `--help` before any bare `--` (the front's: each
+//! verb prints its
 //! usage and sends nothing), `HOOK_SOCK` set with a `CODEX_`
 //! variable exported, a port curl won't take, a `python3` the binary
 //! can't tell.
@@ -68,8 +69,8 @@ use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["terminal"];
-/// Every form is the family's; a line with `-h` or `--help` is the
-/// front's (a help page, or the shell's).
+/// Every form is the family's; a line with `-h` or `--help` before a bare
+/// `--` is the front's (a help page, or the shell's).
 pub const OWNER: crate::route::Owner = crate::route::Owner::Native;
 /// No verb rows: every form is [`OWNER`]'s.
 pub const VERBS: &[crate::route::Verb] = &[];
@@ -230,7 +231,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // `_wants_help "$@"` stops at a bare `--`: after it `write` sends the
+    // words as the message.
+    if crate::dashdash::wants_help(&words) {
         return None;
     }
     let ask = parse(&words)?;

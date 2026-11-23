@@ -38,8 +38,8 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`), so
 //! there is one copy of each: `organization help` and any form with `-h`
-//! or `--help` (the help, which the front sends to a page or the shell,
-//! [`crate::front`]); a word that is not UTF-8; a
+//! or `--help` before a bare `--` (the help, which the front sends to a
+//! page or the shell, [`crate::front`]); a word that is not UTF-8; a
 //! port that is set but is no port curl takes; a `python3` the binary
 //! can't tell ([`crate::families`], Without Python); the shared Codex
 //! server check; and `bulletin set --file <path>` when the file can't be
@@ -517,10 +517,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let Some((verb, rest)) = words.split_first().filter(|(v, _)| !v.is_empty()) else {
         return bare();
     };
-    // The help, alone or anywhere: the front's page or the shell's.
-    if matches!(*verb, "" | "help" | "-h" | "--help")
-        || rest.iter().any(|w| matches!(*w, "-h" | "--help"))
-    {
+    // The help, alone or before a bare `--` (`_wants_help "$@"`): the
+    // front's page or the shell's. After `--` the words are the verb's.
+    if matches!(*verb, "" | "help" | "-h" | "--help") || crate::dashdash::wants_help(rest) {
         return None;
     }
     let read = flags(rest);

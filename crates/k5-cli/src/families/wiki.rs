@@ -54,7 +54,8 @@
 //! Still the shell's ([`run`] returns `None`): `wiki publish` with a token
 //! in `tunnel.json`, air-gap off, and a proxy setting the binary doesn't
 //! read or a control-plane base it doesn't send to itself, a word that is
-//! not UTF-8, a command line with `-h` or `--help` ([`crate::front`]),
+//! not UTF-8, a command line with `-h` or `--help` before any bare `--`
+//! ([`crate::front`]),
 //! a `--workspace` folder that `cd` reads as an option or that `CDPATH`
 //! would move (bash's own edges), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. An answer that is
@@ -274,7 +275,7 @@ fn note_words(words: &[&str]) -> Form {
 }
 
 /// The command line's form (the words after `wiki`; no `-h` or `--help`
-/// in them, the front's).
+/// before a bare `--`, the front's).
 pub fn parse(words: &[&str]) -> Form {
     let sub = words.first().copied().unwrap_or("");
     let rest = words.get(1..).unwrap_or(&[]);
@@ -336,7 +337,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // The router's `_wants_help "${@:2}"` stops at a bare `--`.
+    if crate::dashdash::wants_help(&words) {
         return None;
     }
     let form = parse(&words);

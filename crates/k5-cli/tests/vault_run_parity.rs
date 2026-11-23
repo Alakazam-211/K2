@@ -283,12 +283,13 @@ fn what_runs_nothing() {
     }
 }
 
-/// A run line with `-h` or `--help` anywhere is the front's: a page, or
-/// the shell (the binary hands it on), the `-h` before `--` or after it.
-/// On both sides it sends nothing and runs nothing, with an owner or with
-/// none. The shell skips its connection gate for a help word before `--`
-/// only (75dfa4fc07): after it the word is the command's, so with no
-/// owner the gate stops the line (exit 1).
+/// A run line with `-h` or `--help` before `--` is the front's: a page,
+/// or the shell (the binary hands it on). After `--` it is the command's
+/// and the family's own: no secret named is the usage line. On both
+/// sides it sends nothing and runs nothing, with an owner or with none.
+/// The shell skips its connection gate for a help word before `--` only
+/// (75dfa4fc07): after it the word is the command's, so with no owner the
+/// gate stops the line (exit 1).
 #[test]
 fn help_runs_nothing() {
     let rig = VRig::new();

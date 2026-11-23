@@ -38,7 +38,8 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - `help`, and a command line with `-h` or `--help` ([`crate::front`]:
+//! - `help`, and a command line with `-h` or `--help` before any bare
+//!   `--` ([`crate::front`]:
 //!   since 0.46.17 `live`, `archives`, `compact` and `set-label` print
 //!   the sessions help for it too); `compact` and `archives` (the
 //!   owner's on-disk view, [`disk`]) where [`disk`] says;
@@ -458,8 +459,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 #[cfg(unix)]
 fn disk_line(args: &[OsString], words: &[&str], hook_sock: Option<&Path>) -> Option<Option<Exit>> {
     let d = disk::parse(words)?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) || !python::family_native(python::here())
-    {
+    // `_wants_help "$@"` stops at a bare `--` (`archives` takes one).
+    if crate::dashdash::wants_help(words) || !python::family_native(python::here()) {
         return Some(None);
     }
     let settings = match daemon::current() {

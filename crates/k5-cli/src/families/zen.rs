@@ -15,7 +15,8 @@
 //! static pages ([`guide`]).
 //!
 //! Still the shell's ([`run`] returns `None` before anything is printed
-//! or sent): a line with `-h` or `--help` (the router's help arms), the
+//! or sent): a line with `-h` or `--help` before any bare `--` (the
+//! router's help arms), the
 //! shot lines [`shot::shells`] names (no runner beside the program, and
 //! the like), and the edge hand-backs every family keeps
 //! (a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a
@@ -102,7 +103,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) || !native(&words) {
+    // The router's `_wants_help` scans stop at a bare `--` (`garden`
+    // takes one).
+    if crate::dashdash::wants_help(&words) || !native(&words) {
         return None;
     }
     // A `_K2_NOANSWER_SOFT` from outside changes `_compute_send`.

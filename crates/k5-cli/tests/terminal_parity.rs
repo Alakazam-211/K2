@@ -515,8 +515,8 @@ fn read() {
 
 /// Help on a line: the front hands it to the shell. `spawn` and `read`
 /// print their usage, exit 0, and send nothing (`_wants_help`). `write`
-/// still takes `--help` as the message and sends it (a bash bug,
-/// reported); that row flips when its fix lands.
+/// takes a `--help` after `--` as the message and sends it: that row is
+/// the family's own.
 #[test]
 fn help_on_a_line_is_the_shell_s() {
     let rig = Rig::new(VERB, "help");
@@ -541,8 +541,9 @@ fn help_on_a_line_is_the_shell_s() {
                 0,
                 0,
             )),
-            // After `--` it is the message, sent as typed.
-            shell(case(
+            // After `--` it is the message, sent as typed: the family's
+            // (the help scan stops at `--`, as `_wants_help` does).
+            case(
                 "write <id> -- --help: sent as the message",
                 &["write", UUID, "--", "--help"],
                 &[],
@@ -550,7 +551,7 @@ fn help_on_a_line_is_the_shell_s() {
                 owner_and_port,
                 0,
                 1,
-            )),
+            ),
             shell(case(
                 "spawn --command x -h: the usage, nothing sent",
                 &["spawn", "--command", "x", "-h"],

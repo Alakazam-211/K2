@@ -23,7 +23,7 @@
 //!
 //! It hands a command line to the shell ([`run`] returns `None`) before
 //! anything is printed or sent when: a word is not UTF-8, `-h` or `--help`
-//! is in it, `HOOK_SOCK` is set with a `CODEX_` variable exported, the
+//! comes before any bare `--`, `HOOK_SOCK` is set with a `CODEX_` variable exported, the
 //! row's tool is not an `id` tool, the binary can't tell what the shell's
 //! `python3` is, or the port is set but is no port curl takes. The exit
 //! for a 404 is the verb's own: `_compute_fail` takes it as an argument
@@ -145,7 +145,7 @@ pub fn run(row: &'static SpecVerb, args: &[OsString]) -> Option<Exit> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     if words.len() < row.words.len()
         || words[..row.words.len()] != *row.words
-        || words.iter().any(|w| matches!(*w, "-h" | "--help"))
+        || crate::dashdash::wants_help(&words)
     {
         return None;
     }

@@ -39,7 +39,8 @@
 //! environment variable.
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`), so
-//! there is one copy of each: any form with `-h` or `--help` (the help,
+//! there is one copy of each: any form with `-h` or `--help` before any
+//! bare `--` (the help,
 //! which the front sends to a page or the shell, [`crate::front`]: help
 //! never acts); a word that is not UTF-8; a `HOME` that is not set or
 //! not UTF-8; a port that is set but is no port curl takes; a `python3`
@@ -253,8 +254,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    // The help, anywhere: the front's page or the shell's.
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // The help, before a bare `--` (`_wants_help "$@"`): the front's page
+    // or the shell's.
+    if crate::dashdash::wants_help(&words) {
         return None;
     }
     if !python::family_native(python::here()) {

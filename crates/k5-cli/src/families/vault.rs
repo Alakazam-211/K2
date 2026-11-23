@@ -39,10 +39,10 @@
 //!
 //! `vault` alone and `vault help` (or an empty verb) print the top page
 //! with nothing sent, past the gates as the shell has them: no connection
-//! gate, but the no-owner refusal. A line with `-h` or `--help` anywhere
-//! never reaches [`run`]: the front answers it with a page or hands it to
-//! the shell (a family's help is never the family's), so a `run` line
-//! whose command has its own `--help` is the shell's too.
+//! gate, but the no-owner refusal. A line with `-h` or `--help` before a
+//! bare `--` never reaches [`run`]: the front answers it with a page or
+//! hands it to the shell (a family's help is never the family's). After
+//! the `--` they are the command's: `run -- ls --help` is [`run`]'s.
 //!
 //! The shell CLI answers ([`run`] returns `None`): a word that is not
 //! UTF-8; `HOOK_SOCK` set with a `CODEX_` variable exported; a port that
@@ -278,8 +278,9 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .skip(1)
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
-    // The front never sends a line with -h or --help here.
-    if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
+    // The front never sends a line with -h or --help before a bare `--`
+    // here. After it they are the command's (`run`).
+    if crate::dashdash::wants_help(&words) {
         return None;
     }
     let (sub, rest) = match words.split_first() {

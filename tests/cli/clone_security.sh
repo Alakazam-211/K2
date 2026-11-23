@@ -270,6 +270,22 @@ def stop():
         os.killpg(p.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+def finish(code):
+    # Every exit writes $W/tty and $W/echo, so a step that gives up fails
+    # its own rows (its code is not the command's) and the suite goes on.
+    # echo: on or off as the command left the terminal; "unknown" when the
+    # terminal's settings can't be read, which no row takes as on or off,
+    # and then the exit is an error too, never the command's code.
+    open(os.path.join(W, "tty"), "wb").write(seen)
+    try:
+        state = "on" if termios.tcgetattr(m)[3] & termios.ECHO else "off"
+    except termios.error as e:
+        state = "unknown"
+        if not isinstance(code, str):
+            code = "ptyrun: can't read the terminal's settings after the run: %s" % e
+    with open(os.path.join(W, "echo"), "w") as f:
+        f.write(state)
+    sys.exit(code)
 seen = b""
 def pump(t):
     global seen
@@ -283,9 +299,8 @@ for want, send in steps:
             pump(0.2)
             if want.encode() in seen:
                 break
-            open(os.path.join(W, "tty"), "wb").write(seen)
             stop()
-            sys.exit("ptyrun: never saw %r on the terminal" % want)
+            finish("ptyrun: never saw %r on the terminal" % want)
         pump(0.1)
     seen = seen.replace(want.encode(), b"<<" + want.encode() + b">>", 1)
     os.write(m, send.encode())
@@ -293,15 +308,12 @@ end = time.time() + 120
 while p.poll() is None:
     if time.time() > end:
         stop()
-        sys.exit("ptyrun: the command never finished")
+        finish("ptyrun: the command never finished")
     pump(0.1)
 pump(0.2)
-open(os.path.join(W, "tty"), "wb").write(seen)
 # The session's end hangs up the slave descriptor; on Linux the master
 # reads the terminal's settings as the command left them.
-with open(os.path.join(W, "echo"), "w") as f:
-    f.write("on" if termios.tcgetattr(m)[3] & termios.ECHO else "off")
-sys.exit(p.returncode if p.returncode >= 0 else 128 - p.returncode)
+finish(p.returncode if p.returncode >= 0 else 128 - p.returncode)
 PYEOF
 
 # ── Helpers ──────────────────────────────────────────────────────────

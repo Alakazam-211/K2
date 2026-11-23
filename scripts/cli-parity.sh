@@ -13,7 +13,11 @@
 #
 # Each run gets a fresh temp HOME, no K2_*, K5_* or K2SO_* variable but
 # K5_CLI_UNDER_TEST and K2_APPROVE_BIN, stdin from /dev/null, and at most
-# CLI_PARITY_TIMEOUT seconds (default 900) when `timeout` is there.
+# CLI_PARITY_TIMEOUT seconds (default 900) when `timeout` is there. A test
+# that needs longer says so on a line of its own,
+#   # cli-parity-timeout: <seconds>
+# and gets that many seconds when they are more than CLI_PARITY_TIMEOUT
+# (tests/cli/help_captured.sh: 2400, it runs 730-800 s on a busy node).
 #
 # A test that passes on bash and fails on the binary fails the gate: its
 # name and the tail of its output are printed. One that fails on both is
@@ -115,8 +119,17 @@ while [ $# -gt 0 ]; do
 done
 
 TIMEOUT_SECS="${CLI_PARITY_TIMEOUT:-900}"
-TIMEOUT=()
-if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout "$TIMEOUT_SECS"); fi
+case "$TIMEOUT_SECS" in ''|*[!0-9]*) echo "cli-parity: CLI_PARITY_TIMEOUT is not a number of seconds: $TIMEOUT_SECS" >&2; exit 2 ;; esac
+HAVE_TIMEOUT=0
+if command -v timeout >/dev/null 2>&1; then HAVE_TIMEOUT=1; fi
+
+# test_timeout <test>: the seconds it may run: its own
+# "# cli-parity-timeout: N" line when N is more than TIMEOUT_SECS.
+test_timeout() {
+    local own
+    own="$(sed -n 's/^# cli-parity-timeout: *\([0-9][0-9]*\) *$/\1/p' "$ROOT/tests/cli/$1" | head -n 1)"
+    if [ -n "$own" ] && [ "$own" -gt "$TIMEOUT_SECS" ]; then echo "$own"; else echo "$TIMEOUT_SECS"; fi
+}
 
 WORK="$(mktemp -d -t k5-cli-parity-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
@@ -153,6 +166,8 @@ fi
 # $WORK/out/<test>.<mode>.
 run_one() {
     local t="$1" mode="$2" home rc=0
+    local limit=()
+    [ "$HAVE_TIMEOUT" = 1 ] && limit=(timeout "$(test_timeout "$t")")
     home="$(mktemp -d "$WORK/home.XXXXXX")"
     (
         # K2_APPROVE_BIN passes through, and no other: it names a built
@@ -168,7 +183,7 @@ run_one() {
         export HOME="$home"
         if [ "$mode" = binary ]; then export K5_CLI_UNDER_TEST="$WORK/bin/k2"; fi
         cd "$ROOT"
-        exec ${TIMEOUT[@]+"${TIMEOUT[@]}"} bash "tests/cli/$t"
+        exec ${limit[@]+"${limit[@]}"} bash "tests/cli/$t"
     ) >"$WORK/out/$t.$mode" 2>&1 </dev/null || rc=$?
     rm -rf "$home"
     return "$rc"

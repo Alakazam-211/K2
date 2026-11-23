@@ -38,6 +38,9 @@
 # ssh and k2 itself are stubs that log and fail: a run that calls one
 # fails the test (but curl to the stub daemon's sockets, for the cards
 # rows). Never touches ~/.k2.
+#
+# It runs 730-800 s on a busy node, close to cli-parity's 900 s default:
+# cli-parity-timeout: 2400
 set -euo pipefail
 export LC_ALL=C
 

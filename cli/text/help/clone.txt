@@ -36,6 +36,8 @@ Flags:
   --yes                        don't ask; take defaults and flags as given
   --json                       names, choices and counts as JSON
 
+A cloned workspace brings its agent's instructions; clone only from servers whose agents you'd run yourself.
+
 Agents propose and a person approves: `k2 clone propose` holds the plan, and
 the person runs `k2 clone approve <id>` from their own terminal (or approves in
 K2). The confirms ask whoever is at that terminal. They are not a security

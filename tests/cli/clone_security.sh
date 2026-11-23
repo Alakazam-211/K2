@@ -973,6 +973,7 @@ expect_has "the help: the confirms ask whoever is at the terminal" "$OUT" "The c
 expect_has "the help: not a security boundary" "$OUT" "They are not a security"
 expect_has "the help: against programs run as the same user" "$OUT" "boundary against programs run as the same user"
 expect_not "the help: no claim that agents can't clone" "$OUT" "Agents can't clone"
+expect_has "the help: a clone brings its agent's instructions" "$OUT" "A cloned workspace brings its agent's instructions; clone only from servers whose agents you'd run yourself."
 
 echo
 echo "clone_security: $pass passed, $fail failed"

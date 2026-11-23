@@ -931,6 +931,17 @@ mod tests {
         }
     }
 
+    /// The help this binary prints (`clone` alone or `help`) is the shell's
+    /// file, and says what a clone brings.
+    #[test]
+    fn the_help_says_a_clone_brings_its_agents_instructions() {
+        let text = crate::text::help("clone").expect("the clone help page");
+        assert!(
+            text.contains("A cloned workspace brings its agent's instructions; clone only from servers whose agents you'd run yourself."),
+            "{text}"
+        );
+    }
+
     #[test]
     fn an_https_daemon_address_is_the_shells_two_spellings() {
         assert!(is_https_host("https://192.0.2.10"));

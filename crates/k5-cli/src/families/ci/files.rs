@@ -475,7 +475,8 @@ fn reported(path: &str, out_dir: &str, name: &str) -> Result<String, String> {
         if f.contains('\0') || !std::path::Path::new(&f).is_file() {
             continue;
         }
-        let data = std::fs::read(&f).map_err(|e| py::plain(&pyjson::os_error(&e, &f).last_line()))?;
+        let data =
+            std::fs::read(&f).map_err(|e| py::plain(&pyjson::os_error(&e, &f).last_line()))?;
         let enc = crate::families::store::widget::b64encode(&data);
         set_reported(&mut b, &label, name, enc).map_err(|e| py::plain(&e))?;
         added.push(label);

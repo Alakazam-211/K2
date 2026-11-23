@@ -4,9 +4,9 @@
 # candidate tier 2               27 entries    33 forms
 # candidate tier 3              133 entries   208 forms
 # out:confirm                    36 entries    56 forms
-# out:file                       97 entries   171 forms
+# out:file                       98 entries   173 forms
 # out:many-requests              50 entries    79 forms
-# out:no-request                124 entries   190 forms
+# out:no-request                123 entries   188 forms
 # out:open-tool                 101 entries   157 forms
 # out:poll                        7 entries    12 forms
 # out:python-client             144 entries   282 forms
@@ -449,7 +449,7 @@ app grant add	1	cli/src/router.sh::app grant add	none	none	out:no-request	-
 app grant rm	1	cli/src/router.sh::app grant rm	none	none	out:no-request	-
 app grant role	1	cli/src/router.sh::app grant role	none	none	out:no-request	-
 app grant set	1	cli/src/router.sh::app grant set	none	none	out:no-request	-
-app grant hooks	2	cli/src/router.sh::app grant hooks	none	none	out:no-request	-
+app grant hooks	2	cli/src/app-wallet.sh:cmd_app:hooks	compute,request,post-json	body,json,python	out:file	-
 app grant copy-host	2	cli/src/router.sh::app grant copy-host	none	none	out:no-request	-
 app grant guests-rooms	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-
 app guest rooms	2	cli/src/app-wallet.sh:cmd_app:~	compute,request,post-json,curl	body,json,python	out:secret	-

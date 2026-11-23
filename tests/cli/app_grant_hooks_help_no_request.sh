@@ -146,6 +146,9 @@ check app grant hooks target chat --on -h
 check app grant hooks target chat --socket --help
 check app grant hooks status --help
 check app grant hooks --json -h
+# The word help before a bare -- is help too (the rule of the app verbs).
+check app grant hooks help
+check app grant hooks retry ob-1 help
 
 echo "== the stub sees the plain forms' requests =="
 : >"$REQ_LOG"

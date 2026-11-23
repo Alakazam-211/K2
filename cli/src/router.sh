@@ -801,7 +801,9 @@ case "${1:-help}" in
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.
             grant)
                 case "${3:-}" in
-                    ""|list|add|create|rm|remove|delete|revoke|set|update|role|hooks|hook|copy-host|copyhost|-h|--help)
+                    # hooks and hook own their help (_app_grant_hooks: its usage on
+                    # stdout, nothing sent); the family page asks the daemon.
+                    ""|list|add|create|rm|remove|delete|revoke|set|update|role|copy-host|copyhost|-h|--help)
                         if _wants_help "${@:2}" || { [ "${3:-}" != -- ] && _app_says_help "${@:4}"; }; then _app_family_usage; _app_rt_usage; exit 0; fi
                         ;;
                 esac

@@ -1789,10 +1789,10 @@ app grant revoke	-	app grant list	cli/src/router.sh:	-	-	parsed
 app grant set	-	app grant list	cli/src/router.sh:	app grant set	-	parsed
 app grant update	-	app grant list	cli/src/router.sh:	-	-	parsed
 app grant role	-	app grant list	cli/src/router.sh:	app grant role	-	parsed
-app grant hooks	-	app grant list	cli/src/router.sh:	app grant hooks	y	parsed
-app grant hook	-	app grant list	cli/src/router.sh:	-	-	parsed
 app grant copy-host	-	app grant list	cli/src/router.sh:	app grant copy-host	y	parsed
 app grant copyhost	-	app grant list	cli/src/router.sh:	-	-	parsed
+app grant hooks	-	app grant list	cli/src/app-wallet.sh:cmd_app	app grant hooks	y	parsed
+app grant hook	-	app grant list	cli/src/app-wallet.sh:cmd_app	-	-	parsed
 app grant hooks status	-	-	cli/src/talk-and-workspace.sh:_app_grant_hooks	-	-	parsed
 app grant hooks log	-	-	cli/src/talk-and-workspace.sh:_app_grant_hooks	-	-	parsed
 app grant hooks retry	-	-	cli/src/talk-and-workspace.sh:_app_grant_hooks	-	-	parsed

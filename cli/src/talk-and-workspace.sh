@@ -2705,10 +2705,10 @@ except Exception as e:
 # Sew S27: `k2 app grant hooks …` — grant-hook status, log, retry, skip,
 # reconcile, target. Owner only (the daemon gates every route).
 _app_grant_hooks() {
-    # -h/--help anywhere prints the usage and sends nothing (0.46.17:
-    # `k2 app grant hooks retry <id> -h` retried the row and `reconcile -h`
-    # started a reconcile).
-    if _wants_help "$@"; then
+    # -h/--help anywhere, or the word help before a bare --, prints the
+    # usage and sends nothing (0.46.17: `k2 app grant hooks retry <id> -h`
+    # retried the row and `reconcile -h` started a reconcile).
+    if _app_says_help "$@"; then
         echo "Usage: k2 app grant hooks [status|log|retry <id>|skip <id>|reconcile|target chat --on|--off]"
         return 0
     fi

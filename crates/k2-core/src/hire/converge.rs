@@ -474,6 +474,7 @@ fn key_folder(
     register: &dyn Fn(&str) -> Result<String, String>,
     steps_out: &mut Vec<StepReport>,
 ) -> Result<String, HireError> {
+    super::root::ensure_root(root)?;
     let (root_real, rel) = below_root(Path::new(path), root)?;
     refuse_links_below(&root_real, &rel)?;
     let target = rel.iter().fold(root_real.clone(), |p, n| p.join(n));

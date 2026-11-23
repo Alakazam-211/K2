@@ -180,6 +180,15 @@ pub fn unsafe_folder_on_the_way(_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Make a hire root (or a key's folder in it) and the folders above it when
+/// it isn't there yet, before a hire walks down from it.
+pub fn ensure_root(root: &Path) -> Result<(), HireError> {
+    if root.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(root).map_err(|e| HireError::usage(format!("make the hire root {}: {e}", root.display())))
+}
+
 /// `hire_root_unsafe` when another user could change a folder on the way
 /// to `dir` (a hire root, or a key's folder in it).
 pub fn check_root_safe(dir: &Path) -> Result<(), HireError> {

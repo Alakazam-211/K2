@@ -326,3 +326,16 @@ fn the_doctor_names_an_unsafe_hire_root_and_the_workspaces_under_it() {
     assert_eq!(super::super::root::doctor_notes(false).len(), 1, "no workspace lines without them asked for");
     chmod(&st.root, 0o700);
 }
+
+/// The first hire on a box: the key's root isn't there yet, and the hire
+/// makes it before it walks down from it.
+#[test]
+fn a_key_hire_makes_its_root_when_it_isnt_there_yet() {
+    let st = setup();
+    let root = st.root.join("not-yet").join("acme");
+    for (tag, template) in [("plain", false), ("tpl", true)] {
+        let path = root.join(tag);
+        let out = key_hire(&root, &path, template).unwrap_or_else(|e| panic!("{tag}: {e}"));
+        assert!(out.created && registered(&path), "{tag}");
+    }
+}

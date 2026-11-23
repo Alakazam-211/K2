@@ -767,6 +767,7 @@
 1 glued crates/k5-cli/src/families/hostchat/apps.rs keeper: wire; the Sew home answer's sew.k2ManagedAvatar flag (sew/home.rs:342), as the shell's Python reads it
 1 value crates/k5-cli/src/families/hostchat.rs keeper: wire; the Sew enable request's identity (--identity, sew/routes.rs:463), as the shell's
 1 value crates/k5-cli/src/families/postal.rs keeper: wire; a label the Postal plane reserves (its list), never the command
+1 value crates/k5-cli/src/families/schema.rs keeper: wire; the --schema manifest's tool key, the CLI catalog's key that programs read (schema-head.sh prints the same)
 1 value crates/k5-cli/src/families/settings.rs keeper: wire; the agent mode the daemon's /cli/mode takes (k2 is a mode's name there, as cmd_settings sends it)
 1 value crates/k5-cli/src/families/zen/data.rs keeper: wire; the Garden access actor the daemon sends
 1 value src/renderer/components/Desktop/DesktopPane.tsx keeper: inert; the key router's own route name

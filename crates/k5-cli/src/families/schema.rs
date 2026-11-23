@@ -3,13 +3,13 @@
 //! (`cli/src/schema-head.sh`): the version line,
 //!
 //! ```text
-//! printf '{\n  "tool": "<the command name>",\n  "version": "%s",\n' "$_v"
+//! printf '{\n  "tool": "k2",\n  "version": "%s",\n' "$_v"
 //! ```
 //!
-//! with `\` and `"` in the version escaped, then the manifest's quoted
-//! heredoc ([`BODY`], joined from the same parts at build time:
-//! [`join`]). Nothing is asked of the daemon, and the words after the
-//! first are never read.
+//! with `\` and `"` in the version escaped ([`TOOL`] is `k2` in every
+//! brand), then the manifest's quoted heredoc ([`BODY`], joined from the
+//! same parts at build time: [`join`]). Nothing is asked of the daemon,
+//! and the words after the first are never read.
 //!
 //! Before it, the shell's prelude ([`crate::offline`]): a setting bash
 //! reads at start, a missing program and the like hand the command to the
@@ -35,7 +35,6 @@ use crate::exit::Exit;
 use crate::offline::{Env, Prelude};
 use crate::pages::Page;
 use crate::prelude::VIRTUAL_DESKTOP;
-use k2_client::brand::CLI_NAME;
 use k2_client::env_names;
 use std::ffi::OsString;
 
@@ -60,10 +59,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     Some(show(&page(args, &p, &env, crate::embedded::version())))
 }
 
+/// The manifest's `tool` key: the CLI catalog's key, `k2` in every brand
+/// (a value programs read, not the command a person types).
+pub const TOOL: &str = "k2";
+
 /// What `cmd_schema` prints for `version`.
 pub fn text(version: &str) -> String {
     let v = version.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("{{\n  \"tool\": \"{CLI_NAME}\",\n  \"version\": \"{v}\",\n{BODY}")
+    format!("{{\n  \"tool\": \"{TOOL}\",\n  \"version\": \"{v}\",\n{BODY}")
 }
 
 /// Whether the virtual desktop's guard stops `args` (`_k2_offline_verb`
@@ -123,8 +126,8 @@ mod tests {
     #[test]
     fn the_version_line_escapes_as_the_shell_does() {
         let t = text("1.2\"3\\4");
-        let head = format!("{{\n  \"tool\": \"{CLI_NAME}\",\n  \"version\": \"1.2\\\"3\\\\4\",\n");
-        assert!(t.starts_with(&head), "{}", &t[..80]);
+        let head = "{\n  \"tool\": \"k2\",\n  \"version\": \"1.2\\\"3\\\\4\",\n";
+        assert!(t.starts_with(head), "{}", &t[..80]);
         assert!(t.ends_with("  ]\n}\n"), "{}", &t[t.len() - 40..]);
     }
 

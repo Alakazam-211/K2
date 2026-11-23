@@ -1444,14 +1444,32 @@ def capture(argv):
         return argv, (("M", page, other) if other else None), why
     return argv, (("Z" if hint else "F"), page), None
 
-CLI_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])k2(?= )")
+# The command's name is \c where the CLI name rule reads it as the command:
+# scripts/garden/cli-name-flip.py's rule, the one crates/k5-cli/src/
+# brand_text.rs runs over the pages and the schema a brand's build embeds.
+# One rule, so a captured page and the file it prints say the same in every
+# brand (a value such as the widget API's k2 object stays k2).
+import importlib.util
+_flip_spec = importlib.util.spec_from_file_location(
+    "cli_name_flip", os.path.join(root, "scripts", "garden", "cli-name-flip.py"))
+FLIP = importlib.util.module_from_spec(_flip_spec)
+_flip_spec.loader.exec_module(FLIP)
+FLIP_VERBS = FLIP.verbs(root)
+def cli_words(line):
+    """The line with each use of the name that reads as the command
+    marked \\x01."""
+    at = [m for m in FLIP.WORD.finditer(line)
+          if FLIP.classify(line, m, "heredoc-quoted", FLIP_VERBS)[0] == "text"]
+    for m in reversed(at):
+        line = line[:m.start()] + "\x01" + line[m.end():]
+    return line
 PRODUCT_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])K2(?![A-Za-z0-9_/~|<-])(?![.:][A-Za-z0-9_/])")
 def escaped(s):
     """The text as the list holds it: \\ \\n \\t escaped, \\c for the
     command's name and \\p for the product's."""
     if "\x01" in s or "\x02" in s:
         sys.exit("FAIL: a help text with a byte this list uses: %r" % s[:80])
-    s = CLI_WORD.sub("\x01", s)
+    s = "\n".join(cli_words(l) for l in s.split("\n"))
     s = PRODUCT_WORD.sub("\x02", s)
     s = s.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
     return s.replace("\x01", "\\c").replace("\x02", "\\p")

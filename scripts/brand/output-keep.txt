@@ -25,25 +25,27 @@ keep	(?<![A-Za-z0-9_])k2:[a-z<]	a Sew, Homes or widget id (k2:<name> too) (k2:ow
 keep	(?<![A-Za-z0-9_])k2\|(?=[a-z])|(?<=[a-z|])\|k2(?![A-Za-z0-9_])	a value in a list of choices (--identity k2|standalone, <off|custom|manager|k2>): a stored value (ruling 5)
 keep	\.k2so(?![A-Za-z0-9_])	the retired home and workspace folders (.k2so/), named where a page says what is still read from them
 keep	(?<![A-Za-z0-9_])k2so\.db	the retired database file name, a link the daemon keeps
+keep	(?<![A-Za-z0-9_])k2(?= object's helpers)	the widget API's `k2` object (k2.<helper> in a widget's script, k2.d.ts): code a widget calls, the same in every brand
+keep	(?<=without )k2\.(?= are counted)	the widget API's `k2.` prefix (zen widget validate --types): code a widget calls
+keep	(?<![A-Za-z0-9_])manager \| k2(?![A-Za-z0-9_])	the agent mode k2 in the list of modes (off | custom | manager | k2): a stored setting the daemon reads (POST /cli/mode)
+keep	(?<![A-Za-z0-9_])k2(?=: \S.{0,30}'s own agent)	the agent mode k2 in settings' list of modes: a stored setting the daemon reads
+keep	(?<=\()k2so(?= is accepted too)	the agent mode's old name k2so, which the daemon still takes for k2: a stored setting
+keep	(?<![A-Za-z0-9_])k2(?=:? +[A-Z][A-Za-z0-9 ]* applies it at your provider's firewall)	firewall's --managed-by k2 (k2|owner|auto) in its list of values: a stored value the daemon reads
+keep	(?<![A-Za-z0-9_])k2(?= once an apply was recorded)	firewall's --managed-by value k2, what auto means: a stored value the daemon reads
+keep	(?<=[Dd]efault )k2(?=; standalone)	hostchat's --identity k2 (k2|standalone): Sew's identity provider, fixed per install
+keep	(?<=the mail certificate: )k2(?= \()	the mail certificate's owner k2 (GET /cli/mail/cert/owner answers k2, stalwart-acme or unknown): a wire value
+keep	(?<=\(default )k2(?=\))|(?<=[Dd]efault label )k2(?![A-Za-z0-9_])	mail app-password's --label default k2: the label stored on the mailbox's secret
 #
 # Debt: the lines of cli/text that the CLI name rule does not rewrite (the
 # flip calls them unsure or kept: a value, or prose it cannot read as the
 # command). Step B8 rewords or sorts them; each row then goes.
-debt	b	                                          k2     K2 applies it at your provider's firewall
-debt	b	                                          auto   k2 once an apply was recorded, else owner
-debt	b	         then enable). Default k2; standalone = Sew's own password logins.
 debt	b	                              Who owns the mail certificate (k2 |
 debt	b	                         fingerprints; export again to this box's key (k2
 debt	b	      without one, k2 prints a hint (K2 uses the first line otherwise).
-debt	b	                            k2: K2's own agent (k2so is accepted too)
-debt	b	            k2 object's helpers.
-debt	b	  --mode <mode>           Agent mode: off | custom | manager | k2   (default: custom).
-debt	b	  --mode <mode>           off | custom | manager | k2 ("off" also sets enabled=false)
 debt	b	  k2: K2 issues, installs and renews it; Stalwart ACME stays Manual —
 debt	b	                         xy hostmail config shows both under forwarding, and k2
 debt	b	Needs the root helper /usr/local/libexec/k2-root-helper (user k2 runs it
 debt	b	printed once. Default --label is k2. POST /cli/mail/app-password.
-debt	b	  --label <s>            Description (default k2)
 debt	b	  k2             The mail host is attached in `xy domain` (role mail) and
 debt	b	other K2 token is in its environment, and a k2 it runs refuses (exit 3)
 debt	b	CALLS WORK ON EVERY LIVE HOST from Sew 0.7.2 ("every App origin" in k2

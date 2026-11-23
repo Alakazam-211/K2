@@ -147,6 +147,11 @@ ran=$((ran + 3))
 
 # P4. The daemon unit after a Delegate=no drop-in, with a live ptyd.
 port_file="$persist/home/.k2/daemon.port"
+sudo systemctl stop "$unit" 2>/dev/null || true
+for f in k2-daemon k2-ptyd k2; do
+    install -m 0755 "$dir/$f" "$persist/bin/$f.new" && mv -f "$persist/bin/$f.new" "$persist/bin/$f"
+done
+rm -f "$port_file" "$persist/home/.k2/daemon.ready"
 sudo systemctl start "$unit"
 for _ in $(seq 1 120); do
     port="$(cat "$port_file" 2>/dev/null || true)"

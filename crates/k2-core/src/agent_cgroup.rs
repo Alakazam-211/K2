@@ -6,8 +6,11 @@
 //!
 //! **What it gives.** Every terminal, `k2 job` run and published service of
 //! an agent is labelled by agent: its processes start in the agent's cgroup
-//! (`systemd-cgls`, `ps -o cgroup`, `k2 agent whois <pid>`), and a fenced
-//! agent can't change its label. A copied terminal or job passport alone no
+//! (`systemd-cgls`, `ps -o cgroup`, `k2 agent whois <pid>`). A fenced agent
+//! can't write to its cgroup files, but until the Unix-socket block lands it
+//! can still reach systemd's buses and other programs of the same user (kernel
+//! rows 4, P2, P7), which can move it or run commands for it outside its
+//! fence. A copied terminal or job passport alone no
 //! longer works: the daemon accepts it on its session socket only from a
 //! process in that agent's cgroup, and over loopback TCP only as that
 //! socket's own forward (no peer process there otherwise). Passports that
@@ -20,8 +23,8 @@
 //! owner token on disk and call as the owner over TCP. Only the folder
 //! fence (Landlock, [`crate::agent_fence`]) closes those for one agent;
 //! root-owned per-agent cgroups placed by the root helper close the first
-//! for all (plan M1b). So the claim is "labelled by agent; a fenced agent
-//! can't change its label", never "cannot be forged".
+//! for all (plan M1b). So the claim is "labelled by agent", with what a
+//! fenced agent can still reach said beside it, never "cannot be forged".
 //!
 //! **Where it applies.** Linux, a system unit the daemon's box prep
 //! delegated, with the restart guard (the agents' leaf is on). Anywhere
@@ -55,10 +58,10 @@ pub const ENV_SESSION_MARK: &str = "K2_AGENT_CGROUP";
 
 /// What the claim is, in the words every surface uses.
 pub const CLAIM: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own cgroup, \
-     and a fenced agent can't change its label. A copied terminal or job passport alone no longer works (App exec and \
-     microVM cell passports aren't bound and work as before). An unfenced agent (same user) can still move itself into \
-     another agent's cgroup, or read the owner token on disk. A fenced agent can't do either. Fencing an agent does not \
-     protect it from an unfenced one";
+     and a fenced agent can't write to its cgroup files. A copied terminal or job passport alone no longer works (App \
+     exec and microVM cell passports aren't bound and work as before). An unfenced agent (same user) can still move itself \
+     into another agent's cgroup, or read the owner token on disk. A fenced agent can't read the owner token, but \
+     until the Unix-socket block lands, a fenced agent can still reach programs of the same user over Unix sockets (systemd's buses, the owner's tmux), which can run commands outside its fence or move its processes. Fencing an agent does not protect it from an unfenced one";
 
 /// The claim with the root helper placing sessions (M1b).
 pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own \
@@ -67,7 +70,8 @@ pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job run
      terminal or job passport alone no longer works (App exec and microVM cell passports aren't bound and work as before). \
      An unfenced agent is still the same user as every other agent: it can make another agent's session run its commands \
      (through that agent's files, the owner token on disk, or ptrace where the kernel allows it), and it can move any \
-     agent's processes out of their cgroup, which drops that label. A fenced agent can't do any of this. Fencing an agent does not \
+     agent's processes out of their cgroup, which drops that label. A fenced agent can't do these directly, but \
+     until the Unix-socket block lands, a fenced agent can still reach programs of the same user over Unix sockets (systemd's buses, the owner's tmux), which can run commands outside its fence or move its processes. Fencing an agent does not \
      protect it from an unfenced one";
 
 /// The claim with the root helper's scopes (B4).
@@ -78,9 +82,8 @@ pub const CLAIM_SCOPE: &str = "labelled by agent: each agent's terminals, job ru
      passports aren't bound and work as before). An unfenced agent is still the same user as every other agent: it can make \
      another agent's session run its commands (through that agent's files, the owner token on disk, or ptrace where the kernel \
      allows it), and until the bus policy lands it can ask systemd to move an agent's processes out of their scope (kernel \
-     row 2), which drops that label. A fenced agent \
-     can still talk to other programs of the same user through their sockets. Fencing an agent does not protect it from an \
-     unfenced one";
+     row 2), which drops that label. A fenced agent can't do these directly, but \
+     until the Unix-socket block lands, a fenced agent can still reach programs of the same user over Unix sockets (systemd's buses, the owner's tmux), which can run commands outside its fence or move its processes. Fencing an agent does not protect it from an unfenced one";
 
 /// The claim that holds on this box now.
 pub fn claim() -> &'static str {

@@ -25,9 +25,10 @@
 //! - **The fence switch** (`POST /cli/agent-access/set {toggle: "fence"}`,
 //!   owner; an Admin may only turn it on): per agent, off by default.
 //!
-//! The claim is "labelled by agent; a fenced agent can't change its label"
-//! ([`k2_core::agent_cgroup::CLAIM`]); never "cannot be forged" while the
-//! cgroups belong to the K2 user (plan M1b: root-owned cgroups).
+//! The claim is "labelled by agent" ([`k2_core::agent_cgroup::CLAIM`]),
+//! with what a fenced agent can still reach said beside it: until the
+//! Unix-socket block lands, systemd's buses and the owner's tmux (kernel rows
+//! 4, P2, P7). Never "cannot be forged" while that holds.
 
 use std::path::{Path, PathBuf};
 

@@ -11,8 +11,10 @@ WHAT IT SAYS
 
   A label is not proof: an agent without the folder fence runs as you, so
   it can move a process out of its label or into another agent's cgroup,
-  or read the owner token on disk. A fenced agent can't change its label
-  (k2 agent isolation <ws> fence).
+  or read the owner token on disk. A fenced agent (k2 agent isolation <ws>
+  fence) can't write to its cgroup files, but until the Unix-socket block
+  lands it can still reach systemd's buses and your tmux, which can move
+  it.
 
 WHO MAY
   The server's owner, from a terminal outside K2 (an agent's passport is

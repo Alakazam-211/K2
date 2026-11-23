@@ -477,10 +477,15 @@ pub struct GrantRow {
     /// 0276 (GPU jobs, 0.46.11): this workspace may send `--gpu` jobs to
     /// this node (owner or Admin only, like `allow_ci`).
     pub allow_gpu: bool,
+    /// 0330 (0.46.18): this workspace may send `--userns` jobs to this
+    /// node (jobs that may make user namespaces). Owner or Admin only, and
+    /// only on a node this server owns; `granted_by` / `granted_at` say who
+    /// set it and when.
+    pub allow_userns: bool,
 }
 
 const GRANT_COLS: &str = "node_id, workspace_id, scopes, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu";
+    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu, allow_userns";
 
 fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
     Ok(GrantRow {
@@ -498,6 +503,7 @@ fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
         allow_ci: r.get::<_, i64>(11)? != 0,
         submitter_max_running: r.get(12)?,
         allow_gpu: r.get::<_, i64>(13)? != 0,
+        allow_userns: r.get::<_, i64>(14)? != 0,
     })
 }
 
@@ -517,6 +523,9 @@ pub struct GrantLimits {
     /// GPU jobs (0276): `None` keeps what the grant has (a new grant: off),
     /// like `allow_ci`.
     pub allow_gpu: Option<bool>,
+    /// `--userns` jobs (0330): `None` keeps what the grant has (a new
+    /// grant: off), like `allow_gpu`.
+    pub allow_userns: Option<bool>,
 }
 
 pub fn set_grant(
@@ -529,13 +538,14 @@ pub fn set_grant(
 ) -> Result<GrantRow, String> {
     conn.execute(
         "INSERT INTO compute_node_grants (node_id, workspace_id, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-         granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0), COALESCE(?11, 0)) \
+         granted_by, granted_at, allow_ci, submitter_max_running, allow_gpu, allow_userns) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0), COALESCE(?11, 0), COALESCE(?12, 0)) \
          ON CONFLICT(node_id, workspace_id) DO UPDATE SET max_job_secs = excluded.max_job_secs, \
          max_disk_gb = excluded.max_disk_gb, max_parallel = excluded.max_parallel, max_queued = excluded.max_queued, \
          granted_by = excluded.granted_by, granted_at = excluded.granted_at, \
          allow_ci = COALESCE(?9, compute_node_grants.allow_ci), \
          submitter_max_running = COALESCE(?10, compute_node_grants.submitter_max_running), \
-         allow_gpu = COALESCE(?11, compute_node_grants.allow_gpu)",
+         allow_gpu = COALESCE(?11, compute_node_grants.allow_gpu), \
+         allow_userns = COALESCE(?12, compute_node_grants.allow_userns)",
         params![
             node_id,
             workspace_id,
@@ -547,7 +557,8 @@ pub fn set_grant(
             at,
             limits.allow_ci.map(i64::from),
             limits.submitter_max_running,
-            limits.allow_gpu.map(i64::from)
+            limits.allow_gpu.map(i64::from),
+            limits.allow_userns.map(i64::from)
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -2651,6 +2662,31 @@ mod tests {
         let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_gpu: Some(false), ..Default::default() }, "owner", 5).unwrap();
         assert!(!g.allow_gpu);
         assert_eq!(serde_json::to_value(&g).unwrap()["allowGpu"], serde_json::json!(false), "the routes show it as allowGpu");
+    }
+
+    /// `--userns` jobs (0330): `allow_userns` is off for a new grant (and
+    /// for every grant made before 0330), set only when asked, recorded
+    /// with who set it and when, kept when re-granting limits, and
+    /// independent of CI and GPU.
+    #[test]
+    fn allow_userns_is_off_by_default_recorded_and_kept_when_absent() {
+        let c = conn();
+        insert_pending_node(&c, "n1", "a", "fp", "pem", &labels(), "o", "1", 1).unwrap();
+        let g = set_grant(&c, "n1", "ws", &GrantLimits::default(), "owner", 2).unwrap();
+        assert!(!g.allow_userns, "a new grant never allows --userns");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_userns: Some(true), ..Default::default() }, "admin:pat", 3).unwrap();
+        assert!(g.allow_userns && !g.allow_gpu && !g.allow_ci, "--userns implies neither --gpu nor --ci");
+        assert_eq!((g.granted_by.as_str(), g.granted_at), ("admin:pat", 3), "who set it and when");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { max_parallel: Some(2), ..Default::default() }, "owner", 4).unwrap();
+        assert!(g.allow_userns, "re-granting limits never drops --userns");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_gpu: Some(true), ..Default::default() }, "owner", 5).unwrap();
+        assert!(g.allow_userns && g.allow_gpu, "--gpu leaves --userns alone");
+        let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_userns: Some(false), ..Default::default() }, "owner", 6).unwrap();
+        assert!(!g.allow_userns && g.allow_gpu, "--no-userns leaves --gpu alone");
+        assert_eq!(serde_json::to_value(&g).unwrap()["allowUserns"], serde_json::json!(false), "the routes show it as allowUserns");
+        // The stored column itself (0330's), not only the row type.
+        let raw: i64 = c.query_row("SELECT allow_userns FROM compute_node_grants WHERE node_id = 'n1' AND workspace_id = 'ws'", [], |r| r.get(0)).unwrap();
+        assert_eq!(raw, 0);
     }
 
     fn tiered_job(c: &Connection, id: &str, ws: &str, tier: &str, submitter: &str, key: Option<&str>, at: i64) -> JobRow {

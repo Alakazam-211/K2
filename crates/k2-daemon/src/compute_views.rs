@@ -1447,6 +1447,12 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         v["network"] = nv.clone();
         v["result"]["network"] = nv;
     }
+    // 0.46.18: the job may make user namespaces (`--userns`, granted by
+    // the node's owner); absent = the job wall's default denial.
+    if j.plan().is_some_and(|p| p.userns) {
+        v["userns"] = true.into();
+        v["result"]["userns"] = true.into();
+    }
     // prd-compute-blacksmith-class-v1 T1: a CI check job's failing tests
     // carry their history mark (`new`, `flaky`, `quarantined`, `known`) for
     // `--failures`, and the record's counts. Only once the CI engine

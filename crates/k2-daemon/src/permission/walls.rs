@@ -403,7 +403,7 @@ const COMPUTE_GRANT_PARAMS: &[(&str, &[ParamFrom])] = &[
 const COMPUTE_GRANT_ROW: Row = Row {
     params: COMPUTE_GRANT_PARAMS,
     optional: &["max-time", "max-parallel", "max-queued", "max-disk"],
-    body_lacks: &["/allowCi", "/allowGpu"],
+    body_lacks: &["/allowCi", "/allowGpu", "/allowUserns"],
     ..row(ask("compute.grant", Floor::Admin), code(403, "owner_only"), "/cli/compute/grants/set", POST)
 };
 
@@ -2730,6 +2730,7 @@ mod tests {
             json!({"node":"node-a","maxJobSecs":14400,"allowCi":false}),
             json!({"node":"node-a","workspace":me.handle,"maxJobSecs":14400,"allowGpu":true}),
             json!({"node":"node-a","maxJobSecs":14400,"allowGpu":false}),
+            json!({"node":"node-a","maxJobSecs":14400,"allowUserns":true}),
         ] {
             let p = teach_as(body.clone());
             assert_eq!(action_of(&p), "compute.use", "{body}: never compute.grant: {p}");

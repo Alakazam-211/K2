@@ -2656,3 +2656,140 @@ async fn strict_runs_a_shell_script_under_bash_euo_pipefail() {
     assert!(r.body.contains("--strict runs a shell script under bash -euo pipefail"), "{}", r.body);
     compute_ws::test_detach("st-a");
 }
+
+/// 0.46.18 (`--userns`): a job that asks goes only to a node this server
+/// owns, that offers `job-userns`, where its workspace's grant says
+/// `--userns`. Only the owner or an Admin sets that (never the agent), and
+/// never on a node where this server is a tenant (`userns_owner_only`,
+/// named); the grant row and its `grant` event record it. With no such
+/// node, or one named, the job is refused with the named code (exit 3),
+/// never placed without its ask. The ask rides in the plan only when
+/// asked, and `--plan` and `get` show it. A job without it places as
+/// before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn userns_jobs_go_only_to_owned_nodes_granted_and_offering_it() {
+    use k2_core::compute::proto::userns::FEATURE_JOB_USERNS;
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "userns");
+    let agent = passport(&me);
+    let with_userns = |rev: u64| {
+        let mut o = offer(rev, 30, 32, 0);
+        o.features.push(FEATURE_JOB_USERNS.into());
+        o
+    };
+    // An older node only: refused, auto or named; a bad value is exit 2.
+    active_node("u-old");
+    grant("u-old", &me, None, 4);
+    let _a = compute_ws::test_attach("u-old", offer(1, 60, 64, 0));
+    let r = run(d.port, &agent, &me, json!({"userns": true})).await;
+    assert_eq!((r.status, code(&r)), (409, "userns_needs_update".to_string()), "{}", r.body);
+    assert!(r.body.contains("0.46.18"), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"node": "u-old", "userns": true})).await;
+    assert_eq!((r.status, code(&r)), (409, "userns_needs_update".to_string()), "named: {}", r.body);
+    assert_eq!(j(&r)["error"]["node"], "u-old", "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"userns": "yes"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    // A node this server owns that runs it, the grant without --userns.
+    active_node("u-own");
+    grant("u-own", &me, None, 4);
+    let _b = compute_ws::test_attach("u-own", with_userns(1));
+    let r = run(d.port, &agent, &me, json!({"userns": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_not_granted".to_string()), "{}", r.body);
+    assert_eq!(j(&r)["error"]["node"], "u-own", "{}", r.body);
+    assert!(r.body.contains("k2 compute grant u-own --workspace userns --userns"), "{}", r.body);
+    // The owner gets no bypass: the grant row is required.
+    let r = run(d.port, OWNER, &me, json!({"node": "u-own", "userns": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_not_granted".to_string()), "owner, pinned: {}", r.body);
+    // The agent can't give itself the right.
+    let r = post(d.port, "/cli/compute/grants/set", &agent, json!({"node": "u-own", "workspace": me.id, "allowUserns": true})).await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    // A node where this server is a tenant: the owner can't grant it there.
+    active_node("u-ten");
+    {
+        let db = k2_core::db::shared();
+        store::set_tenant_of(&db.lock(), "u-ten", "other-server.example").expect("tenant");
+    }
+    grant("u-ten", &me, None, 4);
+    let _c = compute_ws::test_attach("u-ten", with_userns(1));
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "u-ten", "workspace": me.id, "allowUserns": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_owner_only".to_string()), "{}", r.body);
+    assert!(
+        r.body.contains("--userns is only for the node owner's own server: this server is a tenant of u-ten, so its jobs can't make user namespaces there"),
+        "{}",
+        r.body
+    );
+    let ten_grant = |id: &str| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::grant(&conn, id, &me.id).expect("grant row")
+    };
+    assert!(!ten_grant("u-ten").allow_userns, "nothing written");
+    // --no-userns is always allowed (it only takes away).
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "u-ten", "workspace": me.id, "allowUserns": false})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Even a row that says yes (written before the node changed hands)
+    // never runs a --userns job on a tenant node.
+    {
+        let db = k2_core::db::shared();
+        let limits = store::GrantLimits { allow_userns: Some(true), ..Default::default() };
+        store::set_grant(&db.lock(), "u-ten", &me.id, &limits, "owner", 5).expect("grant");
+    }
+    let r = run(d.port, &agent, &me, json!({"node": "u-ten", "userns": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_owner_only".to_string()), "named tenant: {}", r.body);
+    assert_eq!(j(&r)["error"]["node"], "u-ten", "{}", r.body);
+    // The owner grants it on its own node: recorded on the row and as an event.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "u-own", "workspace": me.id, "allowUserns": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["grant"]["allowUserns"], true, "{}", r.body);
+    assert!(!j(&r)["grant"]["grantedBy"].as_str().unwrap_or_default().is_empty(), "who set it: {}", r.body);
+    let g = ten_grant("u-own");
+    assert!(g.allow_userns && g.granted_at > 3, "the row, and when");
+    let detail: String = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT detail_json FROM compute_events WHERE kind = 'grant' AND node_id = 'u-own' ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("a grant event")
+    };
+    assert_eq!(serde_json::from_str::<Value>(&detail).expect("json")["allowUserns"], true, "{detail}");
+    let r = get(d.port, "/cli/compute/grants", OWNER, &format!("node=u-own&workspace={}", me.id)).await;
+    assert_eq!(j(&r)["grants"][0]["allowUserns"], true, "{}", r.body);
+    // Placed on that node only (the older, bigger node and the tenant
+    // node skipped), with the ask in its plan; `get` and `--plan` show it.
+    let r = run(d.port, &agent, &me, json!({"userns": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "u-own", "{}", r.body);
+    assert_eq!(j(&r)["placement"]["skipped"]["userns_needs_update"], 1, "{}", r.body);
+    assert_eq!(j(&r)["placement"]["skipped"]["userns_owner_only"], 1, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert!(row(&job).plan().expect("a plan").userns);
+    let r = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["userns"], true, "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"userns": true, "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["userns"], true, "{}", r.body);
+    // No ask: placed as before (the bigger node), the plan without it.
+    let r = run(d.port, &agent, &me, json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "u-old", "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let plan = row(&job).plan().expect("a plan");
+    assert!(!plan.userns);
+    assert!(!serde_json::to_string(&plan).unwrap().contains("userns"), "no ask: the plan as before");
+    let r = get(d.port, "/cli/compute/jobs/get", &agent, &format!("job={job}")).await;
+    assert!(j(&r).get("userns").is_none(), "{}", r.body);
+    // --no-userns: refused again, naming the node.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "u-own", "workspace": me.id, "allowUserns": false})).await;
+    assert_eq!((r.status, j(&r)["grant"]["allowUserns"].clone()), (200, json!(false)), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"userns": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "userns_not_granted".to_string()), "{}", r.body);
+    assert_eq!(j(&r)["error"]["node"], "u-own", "{}", r.body);
+    compute_ws::test_detach("u-old");
+    compute_ws::test_detach("u-own");
+    compute_ws::test_detach("u-ten");
+}

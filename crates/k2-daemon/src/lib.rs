@@ -409,6 +409,8 @@ pub mod compute_cache_pin;
 pub mod compute_gpu_ask;
 // A compute job's own --network ask (0.46.14): parse, placement, refusals.
 pub mod compute_job_network;
+// A compute job's --userns ask (0.46.18): parse, placement, refusals.
+pub mod compute_userns_ask;
 // Git access for compute jobs (0.46.9, GH#78): `k2 compute git-access`.
 pub mod compute_git;
 // `k2 ci` (0.46.10, C6a): CI on compute: the routes and the watch loop.

@@ -3332,6 +3332,12 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             wait(job_network_feature_wait(), &mut pass);
             continue;
         }
+        // 0.46.18: `--userns` only to a node this server owns, offering
+        // `job-userns` now, where the grant still says `--userns`.
+        if let Some(w) = crate::compute_userns_ask::assign_wait(conn, &plan, node_id, &j.workspace_id, &offer.features) {
+            wait(w, &mut pass);
+            continue;
+        }
         let class = pshare::JobClass::parse(&j.class).unwrap_or_default();
         let ask = share::ShareAsk { cpu_millis: plan.limits.cpu_millis, mem_bytes: plan.limits.mem_bytes, max_secs: plan.limits.max_secs, exclusive: j.exclusive, class };
         if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
@@ -3649,6 +3655,15 @@ pub fn kick(node_id: &str) {
         .unwrap_or_default();
     if k2_core::compute::proto::jobnet::missing_feature(plan.network.as_ref(), &offered).is_some() {
         let w = job_network_feature_wait();
+        if job.reason.as_deref() != Some(w.code.as_str()) {
+            store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
+        }
+        return;
+    }
+    // 0.46.18: never a `--userns` plan to a node this server doesn't own,
+    // that doesn't offer `job-userns` now, or where the workspace's grant
+    // no longer says `--userns`.
+    if let Some(w) = crate::compute_userns_ask::assign_wait(&conn, &plan, node_id, &job.workspace_id, &offered) {
         if job.reason.as_deref() != Some(w.code.as_str()) {
             store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
         }

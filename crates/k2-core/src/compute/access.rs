@@ -59,6 +59,8 @@ pub fn limits_for(n: &NodeRow, asked: &GrantLimits) -> GrantLimits {
         submitter_max_running: asked.submitter_max_running,
         // Nor GPU jobs (0276): kept as asked.
         allow_gpu: asked.allow_gpu,
+        // Nor `--userns` jobs (0330): kept as asked.
+        allow_userns: asked.allow_userns,
     }
 }
 

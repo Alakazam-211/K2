@@ -20,6 +20,7 @@ use k2_core::compute::proto::jobnet::{self, codes as jn, JobNet, JobNetMode};
 use k2_core::compute::store::GrantRow;
 
 use crate::compute_gpu_ask::{gpu_node_refusal, gpu_refusal, gpu_skip};
+use crate::compute_userns_ask::{is_userns_skip, userns_skip};
 use crate::compute_place::{skip, CandReport, Want};
 use crate::compute_routes::{no, Refusal, R};
 
@@ -86,9 +87,13 @@ pub fn lacks(w: &Want, features: &[String]) -> bool {
 }
 
 /// Why a node (behind `offer`) can't take `w`'s asks, or `None`: the GPU
-/// ask's code ([`gpu_skip`]) first, then [`skip::JOB_NETWORK`].
-pub fn ask_skip(w: &Want, grant: Option<&GrantRow>, offer: &Offer) -> Option<&'static str> {
-    gpu_skip(w, grant, offer).or_else(|| lacks(w, &offer.features).then_some(skip::JOB_NETWORK))
+/// ask's code ([`gpu_skip`]) first, then [`skip::JOB_NETWORK`], then the
+/// `--userns` ask's ([`userns_skip`]; `owned`: this server owns the node,
+/// [`crate::compute_userns_ask::owns`]).
+pub fn ask_skip(w: &Want, grant: Option<&GrantRow>, offer: &Offer, owned: bool) -> Option<&'static str> {
+    gpu_skip(w, grant, offer)
+        .or_else(|| lacks(w, &offer.features).then_some(skip::JOB_NETWORK))
+        .or_else(|| userns_skip(w, owned, grant, Some(&offer.features)))
 }
 
 /// The placement note's words for nodes skipped `job_network`.
@@ -119,21 +124,26 @@ pub fn needs_update_hint(n: &JobNet, node: Option<&str>) -> String {
 }
 
 /// A named (or `--same-node-as`) node that can't take `w`: the GPU ask's
-/// refusal first, then the network ask's. A node never seen online can't
-/// say what it offers, so a network ask is refused there too.
+/// refusal first, then the network ask's, then the `--userns` ask's
+/// (`owned`: this server owns the node). A node never seen online can't
+/// say what it offers, so a network or `--userns` ask is refused there too.
 pub(crate) fn named_refusal(
     w: &Want,
     grant: Option<&GrantRow>,
     offer: Option<&Offer>,
+    owned: bool,
     node: &str,
     ws: &str,
 ) -> Option<Refusal> {
     let code = match offer {
-        Some(o) => ask_skip(w, grant, o)?,
+        Some(o) => ask_skip(w, grant, o, owned)?,
         None if w.gpu.is_some() => skip::NO_GPU,
         None if w.network.is_some() => skip::JOB_NETWORK,
-        None => return None,
+        None => userns_skip(w, owned, grant, None)?,
     };
+    if is_userns_skip(code) {
+        return Some(crate::compute_userns_ask::named_refusal(code, node, ws));
+    }
     match (code, w.network.as_ref()) {
         (skip::JOB_NETWORK, Some(n)) => Some(
             no(
@@ -149,7 +159,8 @@ pub(crate) fn named_refusal(
 
 /// Auto-placement with no node left: the GPU ask's refusal first
 /// ([`gpu_refusal`]), then `job_network_needs_update` when some
-/// node was left out only for the network ask. `(code, status, hint,
+/// node was left out only for the network ask, then the `--userns` ask's
+/// ([`crate::compute_userns_ask::auto_refusal`]). `(code, status, hint,
 /// node)`.
 pub(crate) fn auto_refusal(
     w: &Want,
@@ -159,17 +170,17 @@ pub(crate) fn auto_refusal(
     if let Some(r) = gpu_refusal(w, report, ws_handle) {
         return Some(r);
     }
-    let n = w.network.as_ref()?;
-    if !report.cands.is_empty() || report.skipped.get(skip::JOB_NETWORK).copied().unwrap_or(0) == 0
-    {
-        return None;
+    if let Some(n) = w.network.as_ref() {
+        if report.cands.is_empty() && report.skipped.get(skip::JOB_NETWORK).copied().unwrap_or(0) > 0 {
+            return Some((
+                jn::JOB_NETWORK_NEEDS_UPDATE,
+                409,
+                needs_update_hint(n, None),
+                None,
+            ));
+        }
     }
-    Some((
-        jn::JOB_NETWORK_NEEDS_UPDATE,
-        409,
-        needs_update_hint(n, None),
-        None,
-    ))
+    crate::compute_userns_ask::auto_refusal(w, report, ws_handle)
 }
 
 #[cfg(test)]
@@ -200,6 +211,7 @@ mod tests {
             gpu: None,
             gpu_mem: None,
             network,
+            userns: false,
         }
     }
 
@@ -367,10 +379,10 @@ mod tests {
         );
         assert!(needs_update_hint(&JobNet::none(), Some("k2n7")).contains("'k2n7' can't run"));
         // A named node never seen online: refused (it can't say).
-        let e = named_refusal(&none, None, None, "k2n7", "ws").expect("refused");
+        let e = named_refusal(&none, None, None, true, "k2n7", "ws").expect("refused");
         assert_eq!((e.code, e.status), (jn::JOB_NETWORK_NEEDS_UPDATE, 409));
         assert!(
-            named_refusal(&want(None), None, None, "k2n7", "ws").is_none(),
+            named_refusal(&want(None), None, None, true, "k2n7", "ws").is_none(),
             "no ask, no GPU: nothing to refuse"
         );
     }

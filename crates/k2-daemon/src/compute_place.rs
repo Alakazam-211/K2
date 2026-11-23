@@ -161,6 +161,11 @@ pub struct Want {
     /// 0.46.15 (`--network none`, `--netns-dummy`): only nodes offering
     /// what it needs ([`crate::compute_job_network`]).
     pub network: Option<k2_core::compute::proto::jobnet::JobNet>,
+    /// 0.46.18 (`--userns`): the job may make user namespaces. Only a node
+    /// this server owns, offering `job-userns`, where the workspace's grant
+    /// says `--userns` ([`crate::compute_userns_ask`]); no owner/Admin
+    /// bypass.
+    pub userns: bool,
 }
 
 impl Want {
@@ -201,6 +206,7 @@ impl Want {
             gpu: plan.gpu,
             gpu_mem: plan.gpu_mem,
             network: plan.network.clone(),
+            userns: plan.userns,
         }
     }
 
@@ -1031,6 +1037,10 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     f.extend(k2_core::compute::proto::jobnet::plan_features(
         w.network.as_ref(),
     ));
+    // 0.46.18: `--userns` only where the node runs it.
+    if w.userns {
+        f.push(k2_core::compute::proto::userns::FEATURE_JOB_USERNS);
+    }
     f
 }
 
@@ -1111,6 +1121,15 @@ pub mod skip {
     /// or its executor older than 0.46.15, no job wall, or a Mac for
     /// `--netns-dummy`).
     pub const JOB_NETWORK: &str = "job_network";
+    /// 0.46.18 (`--userns`): a node where this server is a tenant (only
+    /// the node owner's own server's jobs may make user namespaces).
+    pub const USERNS_OWNER_ONLY: &str = k2_core::compute::proto::userns::codes::USERNS_OWNER_ONLY;
+    /// 0.46.18: a node this server owns whose k2-node doesn't offer
+    /// `job-userns` (older than 0.46.18, or no job wall).
+    pub const USERNS_NEEDS_UPDATE: &str = k2_core::compute::proto::userns::codes::USERNS_NEEDS_UPDATE;
+    /// 0.46.18: the node runs `--userns` jobs, the workspace's grant there
+    /// doesn't say `--userns`.
+    pub const USERNS_NOT_GRANTED: &str = k2_core::compute::proto::userns::codes::USERNS_NOT_GRANTED;
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -1146,6 +1165,11 @@ pub struct CandReport {
     /// GPU jobs: nodes skipped [`skip::GPU_NEEDS_GRANT`], by name (the
     /// refusal names one for the owner's grant and the agent's card).
     pub gpu_needs_grant: Vec<String>,
+    /// `--userns`: nodes skipped [`skip::USERNS_NOT_GRANTED`], by name.
+    pub userns_not_granted: Vec<String>,
+    /// `--userns`: nodes skipped [`skip::USERNS_OWNER_ONLY`] (this server
+    /// is a tenant there), by name.
+    pub userns_owner_only: Vec<String>,
 }
 
 /// Every node that could take the job, except `exclude`.
@@ -1263,9 +1287,17 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         // feature check, so a node without GPU jobs for this server says
         // `no_gpu`, one that can't run the job's network `job_network`,
         // not `node_too_old`.
-        if let Some(code) = crate::compute_job_network::ask_skip(w, grant.as_ref(), &offer) {
+        // 0.46.18: and the `--userns` ask (a node this server owns, with
+        // `job-userns`, and the grant's `allow_userns`).
+        if let Some(code) = crate::compute_job_network::ask_skip(w, grant.as_ref(), &offer, crate::compute_userns_ask::owns(&n)) {
             if code == skip::GPU_NEEDS_GRANT {
                 out.gpu_needs_grant.push(n.name.clone());
+            }
+            if code == skip::USERNS_NOT_GRANTED {
+                out.userns_not_granted.push(n.name.clone());
+            }
+            if code == skip::USERNS_OWNER_ONLY {
+                out.userns_owner_only.push(n.name.clone());
             }
             skipped(&mut out, code);
             continue;
@@ -1816,6 +1848,9 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::GPU_MEM_NEEDS_UPDATE => "with GPU jobs, but a k2-node too old for --gpu-mem".to_string(),
         skip::TOOLS_UNSUPPORTED => "that can't provide a --needs (system Rust: no Rust targets)".to_string(),
         skip::JOB_NETWORK => crate::compute_job_network::skip_words(w),
+        skip::USERNS_OWNER_ONLY => "where this server is a tenant (--userns is only for nodes it owns)".to_string(),
+        skip::USERNS_NEEDS_UPDATE => "with a k2-node too old for --userns".to_string(),
+        skip::USERNS_NOT_GRANTED => "where your grant doesn't say --userns".to_string(),
         other => other.to_string(),
     };
     format!("{n} {what}")

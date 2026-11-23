@@ -67,6 +67,7 @@ fn grant_row(node: &str, max_job_secs: i64, max_parallel: i64) -> GrantRow {
         allow_ci: false,
         submitter_max_running: 0,
         allow_gpu: false,
+        allow_userns: false,
     }
 }
 
@@ -175,6 +176,7 @@ pub(super) fn want(mem_gb: u64) -> Want {
         gpu: None,
         gpu_mem: None,
         network: None,
+        userns: false,
     }
 }
 
@@ -1435,4 +1437,91 @@ fn a_batch_placement_says_it_waits_for_an_idle_node() {
     let idle = [cand("b2", 30, 32, 0, 4)];
     let ex = Explain { policy: V2, cands: &idle, skipped: &BTreeMap::new(), project_key: None, commit: None };
     assert!(!placement_record(&idle[0], Tier::Now, &w, &ex, 1).why.contains("waits for an idle node"), "an idle node starts it");
+}
+
+/// `--userns` (0.46.18): a job that asks goes only to a node this server
+/// owns (never one where it is a tenant, nor one with another server's
+/// owner label), that offers `job-userns`, where the workspace's grant
+/// says `--userns`. The owner or an Admin gets no bypass (the grant row is
+/// the node owner's yes). A job without the ask sees every node as before.
+#[test]
+fn userns_places_only_on_owned_granted_nodes_that_offer_it() {
+    use crate::compute_job_network::ask_skip;
+    use crate::compute_userns_ask::{auto_refusal, named_refusal, owns, userns_skip};
+    use k2_core::compute::proto::userns::{codes, FEATURE_JOB_USERNS};
+    let w = Want { userns: true, ..want(2) };
+    let plain = want(2);
+    let mut c = cand("own", 30, 32, 0, 2);
+    assert!(owns(&c.node), "role owner, no owner label");
+    assert_eq!(ask_skip(&w, c.grant.as_ref(), &c.offer, owns(&c.node)), Some(skip::USERNS_NEEDS_UPDATE), "no job-userns yet");
+    c.offer.features.push(FEATURE_JOB_USERNS.into());
+    assert_eq!(ask_skip(&w, c.grant.as_ref(), &c.offer, true), Some(skip::USERNS_NOT_GRANTED), "the grant lacks --userns");
+    let admin = Want { admin: true, ..w.clone() };
+    assert_eq!(ask_skip(&admin, c.grant.as_ref(), &c.offer, true), Some(skip::USERNS_NOT_GRANTED), "no owner/Admin bypass");
+    assert_eq!(ask_skip(&admin, None, &c.offer, true), Some(skip::USERNS_NOT_GRANTED), "no grant at all: never");
+    c.grant.as_mut().unwrap().allow_userns = true;
+    assert_eq!(ask_skip(&w, c.grant.as_ref(), &c.offer, true), None);
+    // A node where this server is a tenant: never, whatever its grant says.
+    let mut t = c.clone();
+    t.node.role = "tenant".into();
+    t.node.owner_label = Some("other-server".into());
+    assert!(!owns(&t.node));
+    assert_eq!(ask_skip(&w, t.grant.as_ref(), &t.offer, owns(&t.node)), Some(skip::USERNS_OWNER_ONLY));
+    let mut labelled = c.clone();
+    labelled.node.owner_label = Some("other-server".into());
+    assert!(!owns(&labelled.node), "another server's owner label: not ours");
+    // No ask: nothing changes, anywhere.
+    assert_eq!(ask_skip(&plain, t.grant.as_ref(), &t.offer, false), None);
+    assert_eq!(ask_skip(&plain, None, &cand("p", 30, 32, 0, 2).offer, true), None);
+    assert!(required_features(&w).contains(&FEATURE_JOB_USERNS));
+    assert!(!required_features(&plain).contains(&FEATURE_JOB_USERNS));
+    // A move rebuilds the ask from the stored plan.
+    assert!(Want::of_job(&JobRow::default(), &userns_plan(true)).userns, "a move keeps the ask");
+    assert!(!Want::of_job(&JobRow::default(), &userns_plan(false)).userns);
+    // A node never seen online can't say: refused.
+    assert_eq!(userns_skip(&w, true, c.grant.as_ref(), None), Some(skip::USERNS_NEEDS_UPDATE));
+    // A named node: the named refusals (exit 3), each naming the node.
+    let e = named_refusal(skip::USERNS_OWNER_ONLY, "k2n7", "builder");
+    assert_eq!((e.code, e.status), (codes::USERNS_OWNER_ONLY, 403));
+    assert!(e.hint.contains("--userns is only for the node owner's own server: this server is a tenant of k2n7, so its jobs can't make user namespaces there"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NOT_GRANTED, "k2n7", "builder");
+    assert_eq!((e.code, e.status), (codes::USERNS_NOT_GRANTED, 403));
+    assert!(e.hint.contains("k2 compute grant k2n7 --workspace builder --userns"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "k2n7", "builder");
+    assert_eq!((e.code, e.status), (codes::USERNS_NEEDS_UPDATE, 409));
+    assert!(e.hint.contains("'k2n7' can't") && e.hint.contains("0.46.18"), "{}", e.hint);
+    // Auto-placement with none left: the grant first (the fix an owner can
+    // make), then the update, then a tenant node named.
+    let mut r = CandReport { visible: 3, ..Default::default() };
+    r.skipped.insert(skip::USERNS_OWNER_ONLY, 1);
+    r.userns_owner_only = vec!["shared-node".into()];
+    let (code, status, hint, node) = auto_refusal(&w, &r, "builder").expect("refused");
+    assert_eq!((code, status, node.as_deref()), (codes::USERNS_OWNER_ONLY, 403, Some("shared-node")));
+    assert!(hint.contains("tenant of shared-node"), "{hint}");
+    r.skipped.insert(skip::USERNS_NEEDS_UPDATE, 1);
+    let (code, status, _, node) = auto_refusal(&w, &r, "builder").expect("refused");
+    assert_eq!((code, status, node), (codes::USERNS_NEEDS_UPDATE, 409, None));
+    r.skipped.insert(skip::USERNS_NOT_GRANTED, 1);
+    r.userns_not_granted = vec!["mine".into()];
+    let (code, status, hint, node) = auto_refusal(&w, &r, "builder").expect("refused");
+    assert_eq!((code, status, node.as_deref()), (codes::USERNS_NOT_GRANTED, 403, Some("mine")));
+    assert!(hint.contains("k2 compute grant mine --workspace builder --userns"), "{hint}");
+    assert_eq!(auto_refusal(&plain, &r, "builder"), None, "no ask: the usual no_node_fits");
+    assert_eq!(crate::compute_job_network::auto_refusal(&w, &r, "builder").map(|x| x.0), Some(codes::USERNS_NOT_GRANTED), "the run route's refusal");
+    r.cands.push(c.clone());
+    assert_eq!(auto_refusal(&w, &r, "builder"), None, "a node is left");
+    assert!(skip_words(skip::USERNS_OWNER_ONLY, 1, &w).contains("tenant"));
+    assert!(skip_words(skip::USERNS_NOT_GRANTED, 1, &w).contains("--userns"));
+    assert!(skip_words(skip::USERNS_NEEDS_UPDATE, 1, &w).contains("too old for --userns"));
+}
+
+fn userns_plan(userns: bool) -> Plan {
+    let mut p: Plan = serde_json::from_value(serde_json::json!({
+        "job_id": "j", "workspace_id": ME, "workspace_label": "w", "requested_by": "owner", "node_id": "n", "argv": ["true"], "env": {},
+        "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": GB, "disk_bytes": GB, "log_cap_bytes": 1024},
+        "src": null, "exclusive": false, "created_at": 1
+    }))
+    .expect("a plan");
+    p.userns = userns;
+    p
 }

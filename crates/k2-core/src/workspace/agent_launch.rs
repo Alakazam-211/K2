@@ -490,7 +490,7 @@ mod tests {
         let rest = &before[i + marker.len()..];
         let stamp = rest[..rest.find(' ').expect("stamp")].to_string();
 
-        let wt = dir.join("wt-resume");
+        let wt = dir.join(".worktrees").join("wt-resume");
         fs::create_dir_all(&wt).unwrap();
         let active = crate::workspace::scheduler::agent_work_dir(&path, "scout", "active");
         fs::create_dir_all(&active).unwrap();
@@ -524,5 +524,195 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Case 1: an active work item's worktree ───────────────────────
+
+    /// A workspace under a temp HOME (so the folder-trust gate runs for
+    /// real), with the agent's AGENT.md on disk.
+    struct Ws {
+        root: PathBuf,
+        _home: crate::test_env::TempHome,
+    }
+
+    fn ws_under_temp_home(agent: &str) -> Ws {
+        let home = crate::test_env::TempHome::new();
+        crate::db::init_for_tests();
+        let root = dunce::canonicalize(home.path()).unwrap().join(format!("ws-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(root.join(".k2so/agent")).unwrap();
+        fs::write(
+            root.join(".k2so/agent/AGENT.md"),
+            format!("---\nname: {agent}\ntype: custom\nrole: test\n---\n\n# {agent}\n\nTest body.\n"),
+        )
+        .unwrap();
+        Ws { root, _home: home }
+    }
+
+    /// An active work item whose `worktree_path:` is `wt`.
+    fn put_active_item(root: &Path, agent: &str, wt: &Path) {
+        let active = crate::workspace::scheduler::agent_work_dir(&root.to_string_lossy(), agent, "active");
+        fs::create_dir_all(&active).unwrap();
+        fs::write(
+            active.join("task.md"),
+            format!(
+                "---\ntitle: Resume me\npriority: high\nworktree_path: {}\nbranch: feat\n---\n\nbody\n",
+                wt.display()
+            ),
+        )
+        .unwrap();
+    }
+
+    fn launch_in(root: &Path, agent: &str) -> Result<serde_json::Value, String> {
+        k2_agents_build_launch(
+            root.to_string_lossy().into_owned(),
+            agent.to_string(),
+            Some("claude".to_string()),
+            None,
+            None,
+            None,
+        )
+    }
+
+    const RISKY_HOOK: &str =
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node .claude/setup.mjs"}]}]}}"#;
+
+    #[test]
+    fn case1_worktree_under_dot_worktrees_launches_and_writes_claude_md() {
+        let ws = ws_under_temp_home("scout");
+        let wt = ws.root.join(".worktrees").join("feat");
+        fs::create_dir_all(&wt).unwrap();
+        put_active_item(&ws.root, "scout", &wt);
+
+        let v = launch_in(&ws.root, "scout").expect("a worktree under .worktrees/ launches");
+        assert_eq!(v["cwd"], wt.to_string_lossy().as_ref());
+        assert_eq!(v["worktreePath"], wt.to_string_lossy().as_ref());
+        assert_eq!(v["branch"], "feat");
+        let body = fs::read_to_string(wt.join("CLAUDE.md")).expect("CLAUDE.md written in the worktree");
+        assert!(body.contains("scout"), "the task CLAUDE.md is the composed wake context: {body}");
+    }
+
+    #[test]
+    fn case1_worktree_outside_the_workspace_is_refused_and_nothing_is_written() {
+        let ws = ws_under_temp_home("scout");
+        let outside = ws.root.parent().unwrap().join(format!("elsewhere-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(&outside).unwrap();
+        put_active_item(&ws.root, "scout", &outside);
+
+        let e = launch_in(&ws.root, "scout").expect_err("a worktree outside the workspace is refused");
+        assert!(e.starts_with("worktree_outside_workspace"), "named code, got {e:?}");
+        assert!(
+            fs::symlink_metadata(outside.join("CLAUDE.md")).is_err(),
+            "nothing is written outside the workspace"
+        );
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn case1_worktree_inside_the_workspace_but_not_under_dot_worktrees_is_refused() {
+        let ws = ws_under_temp_home("scout");
+        let wt = ws.root.join("src").join("wt");
+        fs::create_dir_all(&wt).unwrap();
+        put_active_item(&ws.root, "scout", &wt);
+
+        let e = launch_in(&ws.root, "scout").expect_err("only <workspace>/.worktrees/ holds worktrees");
+        assert!(e.starts_with("worktree_outside_workspace"), "named code, got {e:?}");
+        assert!(fs::symlink_metadata(wt.join("CLAUDE.md")).is_err(), "nothing is written");
+    }
+
+    #[test]
+    fn case1_dot_dot_in_the_worktree_path_is_refused() {
+        let ws = ws_under_temp_home("scout");
+        fs::create_dir_all(ws.root.join(".worktrees")).unwrap();
+        let wt = ws.root.join(".worktrees").join("..").join("src");
+        fs::create_dir_all(ws.root.join("src")).unwrap();
+        put_active_item(&ws.root, "scout", &wt);
+
+        let e = launch_in(&ws.root, "scout").expect_err("`..` leaves .worktrees/");
+        assert!(e.starts_with("worktree_outside_workspace"), "named code, got {e:?}");
+        assert!(fs::symlink_metadata(ws.root.join("src/CLAUDE.md")).is_err(), "nothing is written");
+    }
+
+    #[test]
+    fn case1_held_folder_writes_nothing_and_the_launch_is_refused() {
+        let ws = ws_under_temp_home("scout");
+        let wt = ws.root.join(".worktrees").join("risky");
+        fs::create_dir_all(wt.join(".claude")).unwrap();
+        fs::write(wt.join(".claude/settings.json"), RISKY_HOOK).unwrap();
+        put_active_item(&ws.root, "scout", &wt);
+
+        let e = launch_in(&ws.root, "scout").expect_err("a held folder is refused");
+        assert!(
+            e.starts_with(crate::cli_folder_trust::gate::PENDING),
+            "the gate's refusal comes back, got {e:?}"
+        );
+        assert!(
+            crate::cli_folder_trust::gate::refusal_in_text(&e).is_some(),
+            "the error carries the refusal token the daemon turns into a 409: {e:?}"
+        );
+        assert!(fs::symlink_metadata(wt.join("CLAUDE.md")).is_err(), "a held folder gets no CLAUDE.md");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn case1_link_at_claude_md_is_refused_and_its_target_is_untouched() {
+        let ws = ws_under_temp_home("scout");
+        let wt = ws.root.join(".worktrees").join("linked");
+        fs::create_dir_all(&wt).unwrap();
+        let target = ws.root.join("target.txt");
+        fs::write(&target, "original").unwrap();
+        std::os::unix::fs::symlink(&target, wt.join("CLAUDE.md")).unwrap();
+        put_active_item(&ws.root, "scout", &wt);
+
+        let e = launch_in(&ws.root, "scout").expect_err("a link at CLAUDE.md is refused");
+        assert!(e.starts_with("claude_md_is_a_link"), "named code, got {e:?}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "original", "the link's target is untouched");
+        assert!(fs::symlink_metadata(wt.join("CLAUDE.md")).unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn case1_hard_link_at_claude_md_is_refused_and_its_other_name_is_untouched() {
+        let ws = ws_under_temp_home("scout");
+        let wt = ws.root.join(".worktrees").join("hard");
+        fs::create_dir_all(&wt).unwrap();
+        let other = ws.root.join("other.txt");
+        fs::write(&other, "original").unwrap();
+        fs::hard_link(&other, wt.join("CLAUDE.md")).unwrap();
+        put_active_item(&ws.root, "scout", &wt);
+
+        let e = launch_in(&ws.root, "scout").expect_err("a hard link at CLAUDE.md is refused");
+        assert!(e.starts_with("claude_md_is_a_link"), "named code, got {e:?}");
+        assert_eq!(fs::read_to_string(&other).unwrap(), "original", "the other name is untouched");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn case1_link_on_the_way_to_the_worktree_is_refused_and_nothing_is_written() {
+        let ws = ws_under_temp_home("scout");
+        let outside = ws.root.parent().unwrap().join(format!("outside-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(ws.root.join(".worktrees")).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.root.join(".worktrees").join("via-link")).unwrap();
+        put_active_item(&ws.root, "scout", &ws.root.join(".worktrees").join("via-link"));
+
+        let e = launch_in(&ws.root, "scout").expect_err("a link on the way is refused");
+        assert!(e.starts_with("worktree_not_a_folder"), "named code, got {e:?}");
+        assert!(fs::symlink_metadata(outside.join("CLAUDE.md")).is_err(), "nothing is written through the link");
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn case1_dot_worktrees_itself_a_link_is_refused() {
+        let ws = ws_under_temp_home("scout");
+        let outside = ws.root.parent().unwrap().join(format!("outside-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(outside.join("feat")).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.root.join(".worktrees")).unwrap();
+        put_active_item(&ws.root, "scout", &ws.root.join(".worktrees").join("feat"));
+
+        let e = launch_in(&ws.root, "scout").expect_err("a linked .worktrees is refused");
+        assert!(e.starts_with("worktree_not_a_folder"), "named code, got {e:?}");
+        assert!(fs::symlink_metadata(outside.join("feat/CLAUDE.md")).is_err(), "nothing is written through the link");
+        fs::remove_dir_all(&outside).ok();
     }
 }

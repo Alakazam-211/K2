@@ -1065,6 +1065,8 @@ fn publish_canonical_agents_md(project_path: &str) -> bool {
     // Refresh live-generated context packs (e.g. connections roster) so
     // on-disk FileViewer / wiki mirrors match what compose inlines.
     crate::workspace::context_layers::sync_live_generated_layers(project_path);
+    // Static packs a workspace never edited follow K2's current text.
+    crate::workspace::context_layers::refresh_shipped_static_packs(project_path);
 
     let canonical = dot.join("AGENTS.md");
     let new_body = compose_agents_md(project_path);

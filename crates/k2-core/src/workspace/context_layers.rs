@@ -1731,6 +1731,8 @@ You can drive a web browser and this machine's desktop apps, not only a terminal
 - **Passwords:** never type them. Secrets come from a secret card or the vault, read inside your script and never echoed.
 - **Irreversible clicks:** ask your person before any irreversible or outward-facing click: submit, pay, publish, delete, send.
 - **Clean up:** close the tabs, sessions (`agent-browser close`) and windows you open.
+- **Chrome's sandbox:** never pass `--no-sandbox` (or `--disable-setuid-sandbox`) to Chrome, even when an error or a tool's hint suggests it. If Chrome won't start without it, stop and tell your person.
+- **Sandbox off by itself:** agent-browser turns Chrome's sandbox off by itself when `CI` is set, when it runs as root, or in a container. Don't set `CI` in your shell, never run it as root or inside a container, and don't browse sites you don't trust from a compute job.
 "##);
 
 /// Lean wiki hygiene — how to keep `.k2/wiki/` healthy without bloating AGENTS.md.
@@ -1856,6 +1858,88 @@ pub fn static_pack_body(source: &str) -> Option<&'static str> {
         BROWSER_PACK_SOURCE => BROWSER_PACK_MD,
         _ => return None,
     })
+}
+
+/// sha256 of every earlier text K2 shipped for a static pack, by source. A
+/// workspace's pack file that still matches one of these was never edited,
+/// so [`refresh_shipped_static_packs`] brings it up to the current text.
+/// When a pack's text changes, add the hash of the text it replaces here.
+pub(crate) const SHIPPED_PACK_HISTORY: &[(&str, &[&str])] = &[(
+    BROWSER_PACK_SOURCE,
+    &[
+        // 0.46.11: the user pack's text, built in byte for byte.
+        "299199fe6cc1177061929fdab19e89687c427ea76ac3038ca121ef9772afcb4e",
+        // 0.46.12 to 0.46.17: plus the two `k2 desktop env` lines.
+        "871747f60088be7eef49a2143e30c6eb059c1cccce99314b70c60531bda5ff6c",
+    ],
+)];
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Workspaces already logged as keeping an edited pack (one line each per
+/// daemon run, not one per AGENTS.md write).
+static EDITED_PACK_LOGGED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Bring this workspace's stacked static packs up to K2's current text:
+/// a missing file is written, a file byte-identical to an earlier shipped
+/// text ([`SHIPPED_PACK_HISTORY`]) is rewritten, and an edited file is kept
+/// (one log line naming the workspace). Runs before every AGENTS.md
+/// compose, which the daemon also does for every workspace after boot.
+/// Returns whether a file was written.
+pub fn refresh_shipped_static_packs(project_path: &str) -> bool {
+    let Ok(layers) = list_layers(project_path) else {
+        return false;
+    };
+    let mut wrote = false;
+    for layer in &layers {
+        let Some((_, past)) = SHIPPED_PACK_HISTORY.iter().find(|(s, _)| *s == layer.source) else {
+            continue;
+        };
+        let Some(body) = static_pack_body(&layer.source) else {
+            continue;
+        };
+        let abs = abs_layer_path(project_path, &layer.path);
+        let why = match fs::read(&abs) {
+            Ok(bytes) if bytes == body.as_bytes() => continue,
+            Ok(bytes) if past.contains(&sha256_hex(&bytes).as_str()) => "an earlier K2 text",
+            Ok(_) => {
+                let key = format!("{project_path}\n{}", layer.path);
+                let mut logged = EDITED_PACK_LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+                if !logged.contains(&key) {
+                    logged.push(key);
+                    crate::log_debug!(
+                        "[context] {project_path}: {} was edited, so K2 kept it and did not write its newer text",
+                        layer.path
+                    );
+                }
+                continue;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "missing",
+            Err(e) => {
+                crate::log_debug!("[context] {project_path}: cannot read {}: {e}", layer.path);
+                continue;
+            }
+        };
+        if let Some(parent) = abs.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        match crate::fs_atomic::atomic_write_str(&abs, body) {
+            Ok(()) => {
+                wrote = true;
+                crate::log_debug!(
+                    "[context] {project_path}: {} was {why}; wrote K2's current text",
+                    layer.path
+                );
+            }
+            Err(e) => {
+                crate::log_debug!("[context] {project_path}: cannot write {}: {e}", layer.path)
+            }
+        }
+    }
+    wrote
 }
 
 fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {

@@ -1201,9 +1201,10 @@ fn create_user_pack_does_not_insert_project_context_layers() {
 
 /// sha256 of the pack text: as it shipped as a user pack on rosson.k2.dev
 /// (2406 bytes) plus, 0.46.12, the two lines on a Linux server's
-/// `k2 desktop env` (prd-linux-virtual-desktop-v1 L8).
+/// `k2 desktop env` (prd-linux-virtual-desktop-v1 L8), plus, 0.46.18, the
+/// two rules on Chrome's sandbox.
 const BROWSER_PACK_SHA256: &str =
-    "871747f60088be7eef49a2143e30c6eb059c1cccce99314b70c60531bda5ff6c";
+    "839a1dfa719635839b2f6619c8933bff32cea3b62ead1ea1409648dc348109f1";
 
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
@@ -1214,7 +1215,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn assert_browser_pack_text(body: &str) {
-    assert_eq!(body.len(), 3009, "browser pack length; got:\n{body}");
+    assert_eq!(body.len(), 3484, "browser pack length; got:\n{body}");
     assert_eq!(
         sha256_hex(body.as_bytes()),
         BROWSER_PACK_SHA256,
@@ -1237,6 +1238,11 @@ fn assert_browser_pack_text(body: &str) {
         "eval \"$(k2 desktop env)\"",
         "Allow a virtual desktop",
         "$K2_DESKTOP_PROFILE",
+        "never pass `--no-sandbox` (or `--disable-setuid-sandbox`) to Chrome",
+        "If Chrome won't start without it, stop and tell your person.",
+        "Don't set `CI` in your shell",
+        "never run it as root or inside a container",
+        "don't browse sites you don't trust from a compute job",
     ] {
         assert!(body.contains(needle), "browser pack must say {needle:?}");
     }
@@ -1408,6 +1414,99 @@ fn browser_user_pack_with_the_same_slug_yields_to_the_builtin() {
         assert!(!old_dir.exists());
         assert!(fs::read_to_string(&ws_file).unwrap().contains("MY EDITED COPY"));
 
+        cleanup_project(path, &pid);
+    });
+}
+
+// ── 0.46.18: an unedited browser pack follows K2's text ──────────────
+
+/// The 0.46.12 to 0.46.17 text: today's minus the two sandbox rules.
+fn browser_pack_0_46_17_text() -> String {
+    let body = static_pack_body("catalog:browser").expect("browser body");
+    let start = body.find("- **Chrome's sandbox:**").expect("sandbox rule");
+    let old = body[..start].to_string();
+    assert_eq!(
+        sha256_hex(old.as_bytes()),
+        "871747f60088be7eef49a2143e30c6eb059c1cccce99314b70c60531bda5ff6c",
+        "the 0.46.17 text must rebuild byte for byte; got:\n{old}"
+    );
+    old
+}
+
+/// A registered workspace with browser:pack stacked: (pack file, id, root).
+fn stack_browser_pack(tag: &str) -> (PathBuf, String, PathBuf) {
+    let root = unique_root(tag);
+    let path = root.to_str().unwrap().to_string();
+    let pid = register_project(&path);
+    add_layer(&path, None, Some("browser:pack"), None).expect("add browser:pack");
+    let file = root.join(".k2/context/catalog/browser-and-computer-use.md");
+    assert_browser_pack_text(&fs::read_to_string(&file).unwrap());
+    (file, pid, root)
+}
+
+#[test]
+fn browser_pack_history_lists_every_shipped_text() {
+    let (_, past) = SHIPPED_PACK_HISTORY
+        .iter()
+        .find(|(s, _)| *s == "catalog:browser")
+        .expect("browser history");
+    assert_eq!(
+        *past,
+        &[
+            "299199fe6cc1177061929fdab19e89687c427ea76ac3038ca121ef9772afcb4e",
+            "871747f60088be7eef49a2143e30c6eb059c1cccce99314b70c60531bda5ff6c",
+        ][..]
+    );
+    assert!(!past.contains(&BROWSER_PACK_SHA256), "the current text is not an earlier one");
+}
+
+#[test]
+fn unedited_old_browser_pack_is_rewritten_on_the_next_context_write() {
+    crate::tunnel::test_support::with_temp_home(|| {
+        let (file, pid, root) = stack_browser_pack("browser-refresh-old");
+        let path = root.to_str().unwrap();
+        fs::write(&file, browser_pack_0_46_17_text()).unwrap();
+        assert!(!fs::read_to_string(&file).unwrap().contains("--no-sandbox"));
+
+        regen(path).expect("regen");
+        assert_browser_pack_text(&fs::read_to_string(&file).unwrap());
+        let agents = fs::read_to_string(root.join(".k2/AGENTS.md")).expect("AGENTS.md");
+        assert!(
+            agents.contains("never pass `--no-sandbox`"),
+            "AGENTS.md carries the new rule after the rewrite"
+        );
+        assert!(!refresh_shipped_static_packs(path), "a current file is left alone");
+        cleanup_project(path, &pid);
+    });
+}
+
+#[test]
+fn edited_browser_pack_is_kept() {
+    crate::tunnel::test_support::with_temp_home(|| {
+        let (file, pid, root) = stack_browser_pack("browser-refresh-edited");
+        let path = root.to_str().unwrap();
+        let edited = format!("{}- **Mine:** a rule I added.\n", browser_pack_0_46_17_text());
+        fs::write(&file, &edited).unwrap();
+
+        assert!(!refresh_shipped_static_packs(path), "an edited file is not written");
+        regen(path).expect("regen");
+        assert_eq!(fs::read_to_string(&file).unwrap(), edited, "the person's edit stays");
+        let agents = fs::read_to_string(root.join(".k2/AGENTS.md")).expect("AGENTS.md");
+        assert!(agents.contains("a rule I added."), "AGENTS.md composes the edited copy");
+        cleanup_project(path, &pid);
+    });
+}
+
+#[test]
+fn missing_browser_pack_is_written_on_the_next_context_write() {
+    crate::tunnel::test_support::with_temp_home(|| {
+        let (file, pid, root) = stack_browser_pack("browser-refresh-missing");
+        let path = root.to_str().unwrap();
+        fs::remove_file(&file).unwrap();
+
+        regen(path).expect("regen");
+        assert!(file.is_file(), "the missing pack file is written again");
+        assert_browser_pack_text(&fs::read_to_string(&file).unwrap());
         cleanup_project(path, &pid);
     });
 }

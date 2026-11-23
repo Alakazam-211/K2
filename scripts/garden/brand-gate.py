@@ -75,8 +75,18 @@ the word scripts/garden/cli-name-flip.py matches, either digit):
          space beside the name is prose and not counted. A header, cookie,
          key, path or prefix built this way changes with the brand, and two
          brands stop talking. Every row is `keeper: <who reads this name>`;
-         a `debt:` row is an error. Known limit: a name passed as a value
-         (path.join(CLI_NAME), format!("{}", CLI_NAME)) is not seen.
+         a `debt:` row is an error.
+         The name passed as a value is glued the same way (C4, the
+         interop step: a path no live test walks): Rust, a `{}`, `{0}`
+         or `{x}` hole in any macro's format string whose argument is
+         CLI_NAME, PRODUCT_NAME, BRAND_ID (any path to them, a `&` before
+         them) or cli_name!(), product_name!(); a `+` between one of
+         them and a string literal; one of them in `[...].concat()` or
+         `[...].join(sep)` beside a literal or a gluing separator.
+         Renderer: `+` between CLI_NAME or PRODUCT_NAME and a quoted
+         literal, and the same `[...].join(sep)`. Known limit: a name
+         held in a variable first (let n = CLI_NAME; format!("{n}-x")) is
+         not seen.
 
 And one count that is not per file, in scripts/garden/cli-name-unsure-ceilings.txt:
 the flip's `unsure` uses in the bash CLI's parts (cli/src, and cli/text where
@@ -168,7 +178,18 @@ GLUE = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_/=:-"
 RUST_HOLE = re.compile(r"\{(CLI_NAME|PRODUCT_NAME|BRAND_ID)\}")
 RUST_MACRO = re.compile(r"\b(cli_name|product_name)!\(\)")
 TS_HOLE = re.compile(r"\$\{(CLI_NAME|PRODUCT_NAME)\}")
-GLUE_HINT = re.compile(r"\{(CLI_NAME|PRODUCT_NAME|BRAND_ID)\}|\b(cli_name|product_name)!\(\)")
+GLUE_HINT = re.compile(r"\{(CLI_NAME|PRODUCT_NAME|BRAND_ID)\}|\b(cli_name|product_name)!\(\)|\b(CLI_NAME|PRODUCT_NAME|BRAND_ID)\b")
+# A brand value as a whole expression: a const by any path, with a `&`
+# or a `.to_string()` and the like around it, or one of the two macros.
+RUST_VALUE = re.compile(
+    r"&?\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*::)*(?:CLI_NAME|PRODUCT_NAME|BRAND_ID)|(?:\$crate::|(?:[A-Za-z_][A-Za-z0-9_]*::)*)?(?:cli_name|product_name)!\(\))"
+    r"(?:\s*\.\s*(?:to_string|to_owned|into|as_str)\(\))?")
+RUST_MACRO_CALL = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)!\s*\(")
+TS_VALUE = r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)?(?:CLI_NAME|PRODUCT_NAME)\b"
+TS_LIT = r"""(?:'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\$])*`)"""
+TS_PLUS_AFTER = re.compile(r"(?<![A-Za-z0-9_$.])" + TS_VALUE + r"\s*\+\s*(" + TS_LIT + ")")
+TS_PLUS_BEFORE = re.compile("(" + TS_LIT + r")\s*\+\s*(?<![A-Za-z0-9_$])" + TS_VALUE)
+TS_JOIN = re.compile(r"\[([^\[\]]*)\]\s*\.\s*join\(\s*(" + TS_LIT + r")\s*\)")
 
 
 def glued(before, after, after2):
@@ -254,6 +275,287 @@ def in_concat(text, ctx, i):
     return False
 
 
+BRACKETS = {"(": ")", "[": "]", "{": "}"}
+
+
+def rust_close(text, ctx, i):
+    """The index of the code bracket that closes the one at `i`, or -1
+    (no close, or a mismatch: the file is read as nothing glued there)."""
+    stack = [BRACKETS[text[i]]]
+    for j in range(i + 1, len(text)):
+        if ctx[j] != "code":
+            continue
+        c = text[j]
+        if c in BRACKETS:
+            stack.append(BRACKETS[c])
+        elif c in ")]}":
+            if c != stack.pop():
+                return -1
+            if not stack:
+                return j
+    return -1
+
+
+def rust_open(text, ctx, i):
+    """The index of the code `[` that opens the `]` at `i`, or -1."""
+    depth = 0
+    for j in range(i, -1, -1):
+        if ctx[j] != "code":
+            continue
+        c = text[j]
+        if c in ")]}":
+            depth += 1
+        elif c in "([{":
+            depth -= 1
+            if depth == 0:
+                return j if c == "[" else -1
+        elif c == ";":
+            return -1
+    return -1
+
+
+def rust_args(text, ctx, lo, hi):
+    """The comma-separated parts of text[lo:hi] at depth 0, as trimmed
+    (start, end) spans."""
+    spans, depth, start = [], 0, lo
+    for j in range(lo, hi):
+        if ctx[j] != "code":
+            continue
+        c = text[j]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            spans.append((start, j))
+            start = j + 1
+    spans.append((start, hi))
+    out = []
+    for s, e in spans:
+        while s < e and text[s].isspace():
+            s += 1
+        while e > s and text[e - 1].isspace():
+            e -= 1
+        if s < e:
+            out.append((s, e))
+    return out
+
+
+def rust_literal(text, ctx, s, e):
+    """The content span of the string literal that is exactly text[s:e]
+    (`"..."`, `b"..."`, `r#"..."#`), or None."""
+    if any(ctx[k] != "string" for k in range(s, e)):
+        return None
+    m = flip.RAW_OPEN.match(text, s)
+    if m and m.start() == s:
+        lo, hi = m.end(), e - 1 - len(m.group(1))
+    elif text[s] == '"' or text.startswith('b"', s):
+        lo, hi = s + (2 if text[s] == "b" else 1), e - 1
+    else:
+        return None
+    return (lo, hi) if lo <= hi and text[hi] == '"' else None
+
+
+def escaped(text, i, lo):
+    """text[i] is the letter of an escape (`\\n`): an odd run of
+    backslashes before it, not before `lo`."""
+    k, n = i - 1, 0
+    while k >= lo and text[k] == "\\":
+        n += 1
+        k -= 1
+    return n % 2 == 1
+
+
+def lit_last(text, lo, hi):
+    """The last content character of the literal text[lo:hi], '' for none
+    or an escape."""
+    if hi <= lo or escaped(text, hi - 1, lo) or text[hi - 1] == "\\":
+        return ""
+    return text[hi - 1]
+
+
+def lit_first(text, lo, hi):
+    """The first two content characters of the literal text[lo:hi], ''
+    for none or an escape."""
+    if hi <= lo or text[lo] == "\\":
+        return ""
+    return text[lo:min(lo + 2, hi)]
+
+
+def fmt_holes(text, lo, hi):
+    """(start, end, argument) for each `{...}` hole of the format string
+    text[lo:hi]; the argument is '' (the next one), digits or a name."""
+    i = lo
+    while i < hi:
+        c = text[i]
+        if c == "{" and text.startswith("{{", i):
+            i += 2
+        elif c == "{":
+            j = text.find("}", i, hi)
+            if j < 0:
+                return
+            yield i, j + 1, text[i + 1:j].split(":", 1)[0].strip()
+            i = j + 1
+        elif c == "}" and text.startswith("}}", i):
+            i += 2
+        else:
+            i += 1
+
+
+NAMED_ARG = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)\s*")
+
+
+def rust_value_glued(text, ctx, add):
+    """Call `add(position)` for each brand value passed into a token: a
+    format-string hole whose argument is the value, a `+` beside a
+    literal, a `[...].concat()` or `[...].join(sep)` element."""
+    def is_value(s, e):
+        return RUST_VALUE.fullmatch(text, s, e) is not None
+
+    for m in RUST_MACRO_CALL.finditer(text):
+        if ctx[m.start()] != "code" or m.group(1) in ("concat", "cli_name", "product_name"):
+            continue
+        close = rust_close(text, ctx, m.end() - 1)
+        if close < 0:
+            continue
+        args = rust_args(text, ctx, m.end(), close)
+        tpl = None
+        for k, (s, e) in enumerate(args):
+            lit = rust_literal(text, ctx, s, e)
+            if lit:
+                tpl = (k, lit)
+                break
+        if not tpl:
+            continue
+        k, (lo, hi) = tpl
+        positional, named = [], {}
+        for s, e in args[k + 1:]:
+            nm = NAMED_ARG.match(text, s, e)
+            if nm:
+                named[nm.group(1)] = (nm.end(), e)
+            else:
+                positional.append((s, e))
+        nxt = 0
+        for hs, he, arg in fmt_holes(text, lo, hi):
+            if arg == "":
+                span = positional[nxt] if nxt < len(positional) else None
+                nxt += 1
+            elif arg.isdigit():
+                span = positional[int(arg)] if int(arg) < len(positional) else None
+            else:
+                span = named.get(arg)
+            if not span or not is_value(*span):
+                continue
+            before = "" if hs == lo or escaped(text, hs - 1, lo) else text[hs - 1]
+            after = lit_first(text, he, hi)
+            if glued(before, after[:1], after[1:2]):
+                add(hs)
+
+    for m in re.finditer(r"\b(?:CLI_NAME|PRODUCT_NAME|BRAND_ID)\b|\b(?:cli_name|product_name)!\(\)", text):
+        if ctx[m.start()] != "code":
+            continue
+        # The whole value: a path and a `&` before it, a `.to_string()` after.
+        s = m.start()
+        while s > 0 and (text[s - 1].isalnum() or text[s - 1] in "_:$"):
+            s -= 1
+        v = RUST_VALUE.match(text, s)
+        if not v or v.end() < m.end():
+            continue
+        e = v.end()
+        # value + "..."
+        j = e
+        while j < len(text) and text[j].isspace():
+            j += 1
+        if j < len(text) and text[j] == "+" and ctx[j] == "code":
+            j += 1
+            while j < len(text) and (text[j].isspace() or text[j] == "&"):
+                j += 1
+            if j < len(text) and ctx[j] == "string":
+                ls = j
+                while j < len(text) and ctx[j] == "string":
+                    j += 1
+                lit = rust_literal(text, ctx, ls, j)
+                if lit:
+                    a = lit_first(text, *lit)
+                    if glued("", a[:1], a[1:2]):
+                        add(m.start())
+        # "..." + value, the literal maybe as "...".to_string() or String::from("...")
+        j = s - 1
+        while j >= 0 and text[j].isspace():
+            j -= 1
+        if j >= 0 and text[j] == "&":
+            j -= 1
+            while j >= 0 and text[j].isspace():
+                j -= 1
+        if j >= 0 and text[j] == "+" and ctx[j] == "code":
+            j -= 1
+            while j >= 0 and text[j].isspace():
+                j -= 1
+            head = text[max(0, j - 15):j + 1]
+            for tail in (".to_string()", ".to_owned()", ".into()"):
+                if head.endswith(tail):
+                    j -= len(tail)
+                    break
+            else:
+                if j >= 0 and text[j] == ")" and ctx[j] == "code":
+                    j -= 1
+            le = j + 1
+            while j >= 0 and ctx[j] == "string":
+                j -= 1
+            lit = rust_literal(text, ctx, j + 1, le) if le > j + 1 else None
+            if lit and glued(lit_last(text, *lit), "", ""):
+                add(m.start())
+
+    for m in re.finditer(r"\]\s*\.\s*(concat|join)\s*\(", text):
+        if ctx[m.start()] != "code":
+            continue
+        open_i = rust_open(text, ctx, m.start())
+        if open_i < 0:
+            continue
+        elems = rust_args(text, ctx, open_i + 1, m.start())
+        if m.group(1) == "join":
+            close = rust_close(text, ctx, m.end() - 1)
+            sep_args = rust_args(text, ctx, m.end(), close) if close > 0 else []
+            sep = rust_literal(text, ctx, *sep_args[0]) if len(sep_args) == 1 else None
+            if not sep:
+                continue
+            sep_text = text[sep[0]:sep[1]]
+        else:
+            sep_text = ""
+        for k, (s, e) in enumerate(elems):
+            if not is_value(s, e):
+                continue
+            if sep_text:
+                left = sep_text[-1] if k > 0 else ""
+                right = sep_text[:2] if k + 1 < len(elems) else ""
+            else:
+                lp = rust_literal(text, ctx, *elems[k - 1]) if k > 0 else None
+                rp = rust_literal(text, ctx, *elems[k + 1]) if k + 1 < len(elems) else None
+                left = lit_last(text, *lp) if lp else ""
+                right = lit_first(text, *rp) if rp else ""
+            if glued(left, right[:1], right[1:2]):
+                add(s)
+
+
+def ts_value_glued(line):
+    """True when a renderer code line passes CLI_NAME or PRODUCT_NAME into
+    a token: a `+` beside a quoted literal, or `[...].join(sep)`."""
+    for m in TS_PLUS_AFTER.finditer(line):
+        body = m.group(1)[1:-1]
+        if body and body[0] != "\\" and glued("", body[:1], body[1:2]):
+            return True
+    for m in TS_PLUS_BEFORE.finditer(line):
+        body = m.group(1)[1:-1]
+        if body and not body.endswith("\\") and (len(body) < 2 or body[-2] != "\\") and glued(body[-1], "", ""):
+            return True
+    for m in TS_JOIN.finditer(line):
+        elems = [e.strip() for e in m.group(1).split(",")]
+        sep = m.group(2)[1:-1]
+        if sep and any(re.fullmatch(TS_VALUE, e) for e in elems) and (glued(sep[-1], "", "") or glued("", sep[:1], sep[1:2])):
+            return True
+    return False
+
+
 def rust_cli_kinds(lines, code, known, out):
     """Add the command's kinds of one Rust file to `out`. `lines` is the
     file up to its test module, `code` the indexes of its code lines."""
@@ -303,6 +605,13 @@ def rust_cli_kinds(lines, code, known, out):
         a = rust_literal_start(text, ctx, m.end())
         if (b and glued(b, "", "")) or (a and glued("", a[:1], a[1:2])):
             hits.setdefault("glued", set()).add(i)
+
+    def add_value(pos):
+        i = line_of(pos)
+        if i in code:
+            hits.setdefault("glued", set()).add(i)
+
+    rust_value_glued(text, ctx, add_value)
     for kind, rows in hits.items():
         out[kind] = [(i + 1, lines[i].strip()) for i in sorted(rows)]
 
@@ -360,6 +669,8 @@ def ts_cli_kinds(lines, code, known, out):
             if glued(line[m.start() - 1:m.start()] if m.start() else "", a[:1], a[1:2]):
                 hits.setdefault("glued", []).append(i)
                 break
+        if i not in hits.get("glued", []) and ts_value_glued(line[:end]):
+            hits.setdefault("glued", []).append(i)
     for kind, rows in hits.items():
         out[kind] = [(i + 1, lines[i].strip()) for i in rows]
 

@@ -299,6 +299,35 @@ glued crates/b/src/g.rs 'fn g() -> String { format!("{CLI_NAME}:{id}") }'
 glued crates/b/src/g.rs 'const P: &str = concat!(cli_name!(), "skn_");'
 glued crates/b/src/g.rs 'const P: &str = concat!("https://x/", product_name!());'
 glued src/renderer/lib/g.ts 'export const bin = `${CLI_NAME}-cli`'
+# The name passed as a value is glued the same way (C4): a format hole by
+# position, index or name, a `+` beside a literal, concat and join.
+glued crates/b/src/g.rs 'fn g() -> String { format!("X-{}-Sig", PRODUCT_NAME) }'
+glued crates/b/src/g.rs 'fn g(id: &str) -> String { format!("{1}_{0}", id, k2_core::brand::CLI_NAME) }'
+glued crates/b/src/g.rs 'fn g() -> String { format!("{n}skn_", n = crate::brand::BRAND_ID) }'
+glued crates/b/src/g.rs 'fn g(w: &mut String) { let _ = write!(w, "{}.sock", &BRAND_ID); }'
+glued crates/b/src/g.rs 'fn g() -> String { format!("/run/{}app", cli_name!()) }'
+glued crates/b/src/g.rs 'fn g() -> String { CLI_NAME.to_string() + "_session" }'
+glued crates/b/src/g.rs 'fn g() -> String { "X-".to_string() + PRODUCT_NAME }'
+glued crates/b/src/g.rs 'fn g() -> String { String::from("__Host-") + &BRAND_ID }'
+glued crates/b/src/g.rs 'fn g() -> String { [CLI_NAME, "-cli.fish"].concat() }'
+glued crates/b/src/g.rs 'fn g() -> String { ["x", BRAND_ID, "v1"].join("-") }'
+glued src/renderer/lib/g.ts "export const k = 'X-' + PRODUCT_NAME"
+glued src/renderer/lib/g.ts "export const k = brand.CLI_NAME + '_session'"
+glued src/renderer/lib/g.ts "export const p = [CLI_NAME, 'cli'].join('-')"
+# Prose beside the name is not glued, nor is a name passed as a value with
+# a space, a stop or an escape beside it.
+cat > "$C/crates/b/src/v.rs" <<'RS'
+fn v(id: &str) -> Vec<String> { vec![format!("run {} app list", CLI_NAME), format!("Use {}.", k2_core::brand::CLI_NAME), format!("{0}: {1}", CLI_NAME, id), format!("in {p}, ok", p = PRODUCT_NAME), format!("\n{}\t", CLI_NAME)] }
+fn w() -> String { CLI_NAME.to_string() + " study" }
+fn x() -> String { [CLI_NAME, "app", "list"].join(" ") }
+fn y() -> String { format!("{}-{}", id, other) }
+RS
+cat > "$C/src/renderer/lib/v.ts" <<'TS'
+export const a = 'Run ' + CLI_NAME + ' study.'
+export const b = [CLI_NAME, 'app', 'list'].join(' ')
+TS
+crun 0 "0 value, 0 glued lines in 0 rows"
+rm "$C/crates/b/src/v.rs" "$C/src/renderer/lib/v.ts"
 # Prose beside the name is not glued.
 cat > "$C/crates/b/src/g.rs" <<'RS'
 fn p() -> Vec<String> { vec![format!("run {CLI_NAME} app list"), format!("Use {CLI_NAME}."), format!("{CLI_NAME}: no such command"), format!("in {PRODUCT_NAME}, ok")] }

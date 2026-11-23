@@ -765,6 +765,9 @@
 1 value crates/k2-signer/src/trust.rs keeper: outside; k2sign's project id for this repo's releases
 1 value crates/k5-cli/src/families/firewall.rs keeper: wire; the managedBy the daemon's firewall view sends (crates/k2-daemon/src/firewall)
 1 glued crates/k5-cli/src/families/hostchat/apps.rs keeper: wire; the Sew home answer's sew.k2ManagedAvatar flag (sew/home.rs:342), as the shell's Python reads it
+1 glued crates/k5-cli/src/families/domain/dom.rs keeper: prose; a person reads "<product>-hosted DNS" in the domain list, built from the brand, not a token
+1 glued crates/k5-cli/src/families/hostmail/admin.rs keeper: prose; a person reads "no <product>-planted certificate yet" in hostmail status, built from the brand, not a token
+1 glued crates/k5-cli/src/families/workspace/verbs/other.rs keeper: prose; a person reads "<product>-generated" beside a file in the listing, built from the brand, not a token
 1 value crates/k5-cli/src/families/hostchat.rs keeper: wire; the Sew enable request's identity (--identity, sew/routes.rs:463), as the shell's
 1 value crates/k5-cli/src/families/postal.rs keeper: wire; a label the Postal plane reserves (its list), never the command
 1 value crates/k5-cli/src/families/schema.rs keeper: wire; the --schema manifest's tool key, the CLI catalog's key that programs read (schema-head.sh prints the same)

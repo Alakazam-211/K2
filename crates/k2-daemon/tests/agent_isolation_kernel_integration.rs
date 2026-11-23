@@ -1264,3 +1264,314 @@ echo "done" >> $R; exec sleep 3600
     assert!(denied(&r2["through_link"]), "the next fenced start can't read through it: {}", r2["through_link"]);
     assert!(!r2["write_through_link"].starts_with('0') && !ssh.join("planted").exists(), "nor write: {}", r2["write_through_link"]);
 }
+
+// ── M2: the Unix-socket block (review-agent-isolation-m2-unix-socket-block) ──
+
+/// What a fenced session's probes run (python3 on the box): one `key value`
+/// line each. Args: temp folder, user bus, owner's tmux socket, the
+/// supervisor's pid, the daemon's port.
+const SOCKBLOCK_PROBE: &str = r#"import ctypes, os, platform, socket, sys
+libc = ctypes.CDLL(None, use_errno=True)
+NR = {"x86_64": {"seccomp": 317, "uring": 425}, "aarch64": {"seccomp": 277, "uring": 425}}[platform.machine()]
+def row(k, v): print(f"{k} {v}", flush=True)
+def err(): return ctypes.get_errno()
+def conn(path):
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(path); return "ok"
+    except OSError as e:
+        return f"err {e.errno}"
+    finally:
+        s.close()
+tmp, bus, tmux, sup, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+p = os.path.join(tmp, "own.sock")
+if os.path.lexists(p): os.unlink(p)
+srv = socket.socket(socket.AF_UNIX); srv.bind(p); srv.listen(8)
+row("tmp_socket", conn(p))
+l = os.path.join(tmp, "buslink")
+if os.path.lexists(l): os.unlink(l)
+os.symlink(bus, l)
+row("tmp_link", conn(l))
+up = tmp + "/.." * (tmp.strip("/").count("/") + 1) + bus
+row("tmp_dotdot", conn(up))
+h = os.path.join(tmp, "hard")
+try:
+    os.link(tmux, h); row("tmp_hardlink_made", "yes"); row("tmp_hardlink", conn(h))
+except OSError as e:
+    row("tmp_hardlink_made", f"err {e.errno}")
+try:
+    socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).close(); row("dgram", "ok")
+except OSError as e:
+    row("dgram", f"err {e.errno}")
+params = ctypes.create_string_buffer(120)
+r = libc.syscall(NR["uring"], 1, params)
+row("uring", "ok" if r >= 0 else f"err {err()}")
+pid = os.fork()
+if pid == 0:
+    class F(ctypes.Structure): _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte), ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint)]
+    class P(ctypes.Structure): _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.POINTER(F))]
+    f = F(6, 0, 0, 0x7fff0000); prog = P(1, ctypes.pointer(f))
+    libc.prctl(38, 1, 0, 0, 0)
+    r = libc.syscall(NR["seccomp"], 1, 8, ctypes.byref(prog))
+    os._exit(0 if r >= 0 else err())
+_, st = os.waitpid(pid, 0)
+rc = os.waitstatus_to_exitcode(st)
+row("s2_listener", "ok" if rc == 0 else f"err {rc}")
+libc.ptrace.restype = ctypes.c_long
+r = libc.ptrace(16, sup, None, None)
+row("ptrace_supervisor", "ok" if r == 0 else f"err {err()}")
+if r == 0: libc.ptrace(17, sup, None, None)
+class IOV(ctypes.Structure): _fields_ = [("base", ctypes.c_void_p), ("len", ctypes.c_size_t)]
+buf = ctypes.create_string_buffer(8)
+loc = IOV(ctypes.cast(buf, ctypes.c_void_p), 8); rem = IOV(0x400000, 8)
+libc.process_vm_readv.restype = ctypes.c_ssize_t
+libc.process_vm_readv.argtypes = [ctypes.c_int, ctypes.POINTER(IOV), ctypes.c_ulong, ctypes.POINTER(IOV), ctypes.c_ulong, ctypes.c_ulong]
+r = libc.process_vm_readv(sup, ctypes.byref(loc), 1, ctypes.byref(rem), 1, 0)
+row("vm_read_supervisor", "ok" if r >= 0 else f"err {err()}")
+for name in ["environ", "mem"]:
+    try:
+        open(f"/proc/{sup}/{name}", "rb").read(1); row(f"{name}_supervisor", "ok")
+    except OSError as e:
+        row(f"{name}_supervisor", f"err {e.errno}")
+try:
+    os.listdir(f"/proc/{sup}/fd"); row("fds_supervisor", "ok")
+except OSError as e:
+    row("fds_supervisor", f"err {e.errno}")
+s = socket.socket()
+try:
+    s.connect(("127.0.0.1", port)); row("tcp", "ok")
+except OSError as e:
+    row("tcp", f"err {e.errno}")
+"#;
+
+/// The shell side of the block's rows in a fenced session (rows 4, P2, P7
+/// and the review's section 7), then `probe.py`, then (when `prlimit`) the
+/// supervisor's open-file limit set to zero and one more connect.
+fn sockblock_script(a: &Path, cli: &Path, bus: &Path, tmux: &Path, port: u16, prlimit: bool) -> String {
+    let rt = bus.parent().expect("runtime dir");
+    format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid; echo $PPID > {a}/ppid
+export XDG_RUNTIME_DIR={rt} DBUS_SESSION_BUS_ADDRESS=unix:path={bus}
+echo "tmpdir $TMPDIR" >> $R; echo "hook_sock $K2_HOOK_SOCK" >> $R
+echo "supervisor_comm $(cat /proc/$PPID/comm)" >> $R
+busctl --system call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId > {a}/o1 2>&1; echo "system_bus $? $(head -c 200 {a}/o1 | tr '\n' ' ')" >> $R
+busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus GetId > {a}/o2 2>&1; echo "user_bus $? $(head -c 200 {a}/o2 | tr '\n' ' ')" >> $R
+systemd-run --user --quiet --collect --wait --pipe -- true > {a}/o3 2>&1; echo "user_run $? $(head -c 300 {a}/o3 | tr '\n' ' ')" >> $R
+systemd-run --user --quiet --scope -- true > {a}/o4 2>&1; echo "user_scope $? $(head -c 300 {a}/o4 | tr '\n' ' ')" >> $R
+tmux -S {tmux} new-window -d "touch {a}/p7" > {a}/o5 2>&1; echo "tmux_new_window $? $(head -c 200 {a}/o5 | tr '\n' ' ')" >> $R
+sleep 2; test -e {a}/p7; echo "tmux_window_ran $?" >> $R
+code=$(curl -s -o {a}/o6 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "hook $code" >> $R
+bash {cli} whoami --json > {a}/o7 2>&1; echo "whoami $? $(head -c 200 {a}/o7 | tr '\n' ' ')" >> $R
+( ( sleep 1; curl -s -o /dev/null -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities > {a}/df 2>&1 ) & )
+sleep 3; echo "doublefork $(cat {a}/df 2>/dev/null || echo none)" >> $R
+if command -v node > /dev/null; then
+  node -e "const n=require('net');const c=n.connect({{path:process.env.K2_HOOK_SOCK}});c.on('connect',()=>{{console.log('ok');process.exit(0)}});c.on('error',e=>{{console.log('err '+e.code);process.exit(1)}})" > {a}/o8 2>&1; echo "node_hook $(head -c 100 {a}/o8)" >> $R
+  node -e "const n=require('net');const c=n.connect({{port:{port},host:'127.0.0.1'}});c.on('connect',()=>{{console.log('ok');process.exit(0)}});c.on('error',e=>{{console.log('err '+e.code);process.exit(1)}})" > {a}/o9 2>&1; echo "node_tcp $(head -c 100 {a}/o9)" >> $R
+else
+  echo "node_hook no-node" >> $R; echo "node_tcp no-node" >> $R
+fi
+python3 {a}/probe.py "$TMPDIR" {bus} {tmux} $PPID {port} >> $R 2> {a}/probe.err; echo "probe_rc $? $(head -c 300 {a}/probe.err | tr '\n' ' ')" >> $R
+if [ {prlimit} = 1 ]; then
+  prlimit --pid $PPID --nofile=0:0 > {a}/o10 2>&1; echo "prlimit $? $(head -c 200 {a}/o10)" >> $R
+  code=$(curl -s -o /dev/null -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "after_prlimit_hook $code" >> $R
+  code=$(curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{port}/boot-status); echo "after_prlimit_tcp $code" >> $R
+fi
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a.display(),
+        rt = rt.display(),
+        bus = bus.display(),
+        tmux = tmux.display(),
+        cli = cli.display(),
+        port = port,
+        prlimit = u8::from(prlimit),
+    )
+}
+
+/// A fenced session of a new workspace `name` running [`sockblock_script`];
+/// its results, its pid and its supervisor's.
+fn sockblock_session(d: &mut Daemon, name: &str, bus: &Path, tmux: &Path, prlimit: bool) -> (HashMap<String, String>, PathBuf, i32, i32) {
+    let (id, ws) = d.workspace(name);
+    d.set_fence(&id, true);
+    std::fs::write(ws.join("probe.py"), SOCKBLOCK_PROBE).unwrap();
+    let script = sockblock_script(&ws, &d.k2.join("bin/k2"), bus, tmux, d.port, prlimit);
+    d.spawn(&format!("tab-{name}"), &ws, &script);
+    let r = results(&ws.join("results"), "done");
+    let pid: i32 = std::fs::read_to_string(ws.join("pid")).unwrap().trim().parse().unwrap();
+    let sup: i32 = std::fs::read_to_string(ws.join("ppid")).unwrap().trim().parse().unwrap();
+    d.pids.extend([pid, sup]);
+    (r, ws, pid, sup)
+}
+
+fn rc_of(v: &str) -> &str {
+    v.split_whitespace().next().unwrap_or("")
+}
+
+/// The block in ENFORCE mode (`K2_AGENT_SOCKBLOCK=enforce`), written
+/// fail-first from rows 4, P2 and P7: a fenced session can't reach the
+/// system or the user bus, can't `systemd-run --user`, can't drive the
+/// owner's tmux; it still reaches its own hook socket (curl, `k2 whoami`,
+/// node) and a socket it made in its own temp folder. Plus the review's
+/// section 7 rows a session can check: its own listener refused (S2),
+/// io_uring `ENOSYS`, the link / `..` / hard-link forms refused, datagram
+/// sockets refused, a double-forked child connects, no descriptor above 2,
+/// the supervisor non-dumpable (ptrace, memory, environ, fds refused) and,
+/// last, its open-file limit set to zero: then even the hook socket is
+/// refused. Then the supervisor killed: the session ends.
+#[test]
+#[ignore = "needs a delegated unit, a user manager and the owner's tmux: scripts/agent-isolation-b4-prerows.sh (its K2_ISO_USER_BUS and K2_ISO_TMUX_SOCK)"]
+fn sockblock_enforced_rows_4_p2_p7_and_section_7() {
+    let _unit = preflight();
+    let bus = input("K2_ISO_USER_BUS").expect("K2_ISO_USER_BUS: the K2 user's bus socket (lingering on)");
+    let tmux = input("K2_ISO_TMUX_SOCK").expect("K2_ISO_TMUX_SOCK: the owner's tmux socket (the script starts it)");
+    assert!(std::fs::metadata(&bus).is_ok(), "no user bus at {}", bus.display());
+    let mut d = Daemon::new("sbenf");
+    d.env.push(("K2_AGENT_SOCKBLOCK".into(), "enforce".into()));
+    d.start();
+    let st = d.boot_status();
+    assert_eq!(st["agentIsolation"]["sockblock"]["mode"], "enforce", "/boot-status says the block's mode: {}", st["agentIsolation"]["sockblock"]);
+    assert_eq!(st["agentIsolation"]["sockblock"]["kernel"], "ok", "{}", st["agentIsolation"]["sockblock"]);
+    let (r, _ws, pid, sup) = sockblock_session(&mut d, "A", &bus, &tmux, true);
+    println!("sockblock enforce: {r:?}");
+    // The supervisor is the program's parent, in the same cgroup.
+    assert_eq!(r["supervisor_comm"], "k2-daemon", "the exec helper stays as the supervisor");
+    assert_eq!(cgroup_of(sup), cgroup_of(pid), "the supervisor is in the session's cgroup");
+    // Rows 4, P2, P7: refused now.
+    for row in ["system_bus", "user_bus", "user_run", "user_scope", "tmux_new_window"] {
+        assert_ne!(rc_of(&r[row]), "0", "{row} is refused under the block: {}", r[row]);
+    }
+    assert_ne!(r["tmux_window_ran"], "0", "the owner's tmux ran nothing");
+    // What it still reaches.
+    assert_eq!(r["hook"], "200", "its own hook socket");
+    assert!(r["whoami"].starts_with("0 ") || r["whoami"].contains("cannot determine identity"), "k2 whoami over its socket: {}", r["whoami"]);
+    assert_eq!(r["doublefork"], "200", "a double-forked child still connects (row 7)");
+    assert_eq!(r["tmp_socket"], "ok", "a socket it made in its own temp folder (row 3; through /proc/self/fd, row 4)");
+    assert_eq!(r["tcp"], "ok", "TCP");
+    if r["node_hook"] != "no-node" {
+        assert_eq!((r["node_hook"].as_str(), r["node_tcp"].as_str()), ("ok", "ok"), "an event-loop client (row 10)");
+    }
+    // Section 7.
+    assert_eq!(rc_of(&r["probe_rc"]), "0", "the probes ran: {}", r["probe_rc"]);
+    assert_eq!(r["tmp_link"], "err 111", "a link in its temp folder to the bus (row 3)");
+    assert_eq!(r["tmp_dotdot"], "err 111", ".. out of its temp folder (row 3)");
+    if r["tmp_hardlink_made"] == "yes" {
+        assert_eq!(r["tmp_hardlink"], "err 111", "a hard link of the owner's tmux socket");
+    }
+    println!("row 3 (hard link of the owner's tmux socket into the temp folder): {}", r["tmp_hardlink_made"]);
+    assert_eq!(r["dgram"], "err 1", "Unix datagram sockets can't be made (row 5)");
+    assert_eq!(r["uring"], "err 38", "io_uring_setup: ENOSYS (row 2)");
+    assert_eq!(r["s2_listener"], "err 1", "its own notification listener: refused (row 1)");
+    for row in ["ptrace_supervisor", "vm_read_supervisor", "environ_supervisor", "mem_supervisor", "fds_supervisor"] {
+        assert!(r[row].starts_with("err "), "{row}: the supervisor is non-dumpable (row 8): {}", r[row]);
+    }
+    // Row 9: nothing above 2 in the program (read from outside).
+    let fds: Vec<String> = std::fs::read_dir(format!("/proc/{pid}/fd")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(fds.iter().all(|f| matches!(f.as_str(), "0" | "1" | "2")), "the program holds only 0-2: {fds:?}");
+    // Row 8: prlimit to zero, then nothing opens.
+    assert_eq!(rc_of(&r["prlimit"]), "0", "prlimit on the supervisor is allowed for the same user: {}", r["prlimit"]);
+    assert_eq!(r["after_prlimit_hook"], "000", "then even the hook socket is refused");
+    assert_eq!(r["after_prlimit_tcp"], "000", "and TCP");
+    let logs = sockblock_logs(&d.k2);
+    println!("──── sockblock.log ────\n{logs}");
+    assert!(logs.contains("\"applied\":\"refused\"") && logs.contains("/bus"), "the refusals are in the owner's log");
+    // The supervisor killed: the session ends (the program goes with it).
+    let (_, _, pid_b, sup_b) = sockblock_session(&mut d, "B", &bus, &tmux, false);
+    // SAFETY: the test's own session's supervisor.
+    unsafe { libc::kill(sup_b, libc::SIGKILL) };
+    wait_for("the program to end with its supervisor", Duration::from_secs(10), || (!Path::new(&format!("/proc/{pid_b}")).exists()).then_some(()));
+}
+
+/// Every `sockblock.log` under `~/.k2/agents`.
+fn sockblock_logs(k2: &Path) -> String {
+    let mut out = String::new();
+    for e in std::fs::read_dir(k2.join("agents")).into_iter().flatten().flatten() {
+        if let Ok(t) = std::fs::read_to_string(e.path().join("sockblock.log")) {
+            out.push_str(&t);
+        }
+    }
+    out
+}
+
+/// Record mode (the default) lets the same session through and logs what
+/// enforce would refuse; with the block off (the bite) the session has no
+/// supervisor and its own listener filter goes in.
+#[test]
+#[ignore = "needs a delegated unit, a user manager and the owner's tmux: scripts/agent-isolation-b4-prerows.sh (its K2_ISO_USER_BUS and K2_ISO_TMUX_SOCK)"]
+fn sockblock_record_logs_and_off_is_the_bite() {
+    let _unit = preflight();
+    let bus = input("K2_ISO_USER_BUS").expect("K2_ISO_USER_BUS");
+    let tmux = input("K2_ISO_TMUX_SOCK").expect("K2_ISO_TMUX_SOCK");
+    let mut d = Daemon::new("sbrec");
+    d.start();
+    assert_eq!(d.boot_status()["agentIsolation"]["sockblock"]["mode"], "record", "record is the default");
+    let (r, _, _, _) = sockblock_session(&mut d, "A", &bus, &tmux, false);
+    println!("sockblock record: {r:?}");
+    assert_eq!(r["supervisor_comm"], "k2-daemon");
+    assert_eq!(rc_of(&r["user_bus"]), "0", "record lets the user bus through: {}", r["user_bus"]);
+    assert_eq!(r["hook"], "200");
+    assert_eq!(r["tmp_link"], "ok", "record lets the link through");
+    let logs = sockblock_logs(&d.k2);
+    println!("──── sockblock.log ────\n{logs}");
+    let lines: Vec<Value> = logs.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}"))).collect();
+    assert!(lines.iter().any(|l| l["event"] == "start" && l["mode"] == "record"), "a start line");
+    let bus_s = bus.display().to_string();
+    let bus_line = lines.iter().find(|l| l["path"].as_str() == Some(bus_s.as_str())).expect("a line for the user bus");
+    assert_eq!((bus_line["verdict"].as_str(), bus_line["applied"].as_str()), (Some("refuse"), Some("allowed")), "{bus_line}");
+    assert!(lines.iter().any(|l| l["path"].as_str().is_some_and(|p| p.ends_with(".sock")) && l["verdict"] == "allow"), "its hook socket: allow");
+    drop(d);
+    let mut off = Daemon::new("sboff");
+    off.env.push(("K2_AGENT_SOCKBLOCK".into(), "off".into()));
+    off.start();
+    assert_eq!(off.boot_status()["agentIsolation"]["sockblock"]["mode"], "off");
+    let (r, _, _, _) = sockblock_session(&mut off, "A", &bus, &tmux, false);
+    println!("sockblock off: {r:?}");
+    assert_ne!(r["supervisor_comm"], "k2-daemon", "no supervisor with the block off");
+    assert_eq!(rc_of(&r["user_bus"]), "0", "the bite: the user bus is reachable without the block");
+    assert_eq!(r["s2_listener"], "ok", "the bite: its own listener goes in without the block");
+    assert_eq!(r["dgram"], "ok");
+}
+
+/// Inventory, record only (review section 5): what common tools try to
+/// reach from a fenced session. Asserts only that the probes ran; prints
+/// each probe's result and every decision the log saw.
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn sockblock_inventory_record_only() {
+    let _unit = preflight();
+    let mut d = Daemon::new("sbinv");
+    d.start();
+    let (id, ws) = d.workspace("A");
+    d.set_fence(&id, true);
+    let script = format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid; cd {a}
+p() {{ k=$1; shift; timeout 60 "$@" > {a}/out.$k 2>&1; echo "$k $? $(head -c 200 {a}/out.$k | tr '\n' ' ')" >> $R; }}
+p id id
+p getent_passwd getent passwd "$(id -un)"
+p getent_hosts getent hosts example.com
+p git_ls_remote git ls-remote https://github.com/git/git HEAD
+if command -v gpg-connect-agent > /dev/null; then p gpg_agent gpg-connect-agent /bye; else echo "gpg_agent absent" >> $R; fi
+p ssh_control_home ssh -o BatchMode=yes -S "$HOME/.ssh/cm-k2iso" -O check localhost
+p ssh_control_tmp ssh -o BatchMode=yes -S "$TMPDIR/cm-k2iso" -O check localhost
+git init -q fsm && git -C fsm config core.fsmonitor true && p git_fsmonitor git -C fsm status
+git -C fsm fsmonitor--daemon stop > /dev/null 2>&1
+B=""; for b in chromium chromium-browser google-chrome; do command -v $b > /dev/null && B=$b && break; done
+if [ -n "$B" ]; then p chromium $B --headless=new --no-sandbox --user-data-dir="$TMPDIR/chr" --dump-dom about:blank; else echo "chromium absent" >> $R; fi
+B32=""
+for f in /usr/bin/* /usr/lib32/*; do [ -f "$f" ] && [ -x "$f" ] && [ "$(head -c 5 "$f" | od -An -tx1 | tr -d ' \n')" = "7f454c4601" ] && B32=$f && break; done
+if [ -n "$B32" ]; then p bin32 "$B32" --version; echo "bin32_path $B32" >> $R; else echo "bin32 absent" >> $R; fi
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = ws.display(),
+    );
+    d.spawn("tab-a", &ws, &script);
+    let r = results(&ws.join("results"), "done");
+    d.pids.push(std::fs::read_to_string(ws.join("pid")).unwrap().trim().parse().unwrap());
+    let mut keys: Vec<_> = r.keys().collect();
+    keys.sort();
+    for k in keys {
+        println!("inventory {k}: {}", r[k]);
+    }
+    let logs = sockblock_logs(&d.k2);
+    println!("──── sockblock.log (record) ────\n{logs}");
+    assert!(logs.contains("\"event\":\"start\""), "the session ran under the block in record mode");
+}

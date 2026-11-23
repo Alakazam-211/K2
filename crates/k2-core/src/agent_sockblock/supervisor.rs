@@ -478,8 +478,12 @@ impl Sup {
 
 /// The caller's descriptor `fd`, by a copy (its thread's process).
 fn fetch(tid: u32, fd: RawFd) -> io::Result<OwnedFd> {
-    let tgid = sys::tgid_of(tid)?;
-    let pidfd = sys::pidfd_open(tgid)?;
+    // A process's main thread: its own id. Another thread (6.8 opens no
+    // pidfd on a thread): its process, read from /proc.
+    let pidfd = match sys::pidfd_open(tid as i32) {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => sys::pidfd_open(sys::tgid_of(tid)?)?,
+        r => r?,
+    };
     sys::pidfd_getfd(&pidfd, fd)
 }
 

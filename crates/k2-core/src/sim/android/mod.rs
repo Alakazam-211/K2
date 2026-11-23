@@ -519,10 +519,9 @@ impl SimLane for AndroidLane {
         .stdout(log)
         .stderr(log2);
         proc::clean_env(&mut cmd, &self.env(Some(&req.data_dir)));
-        // Its own process group: the device outlives a daemon restart and is
-        // re-adopted (M-A15).
-        #[cfg(unix)]
-        // Its own session (bg_proc), so its own process group.
+        // On Unix its own session (bg_proc), so its own process group: the
+        // device outlives a daemon restart and is re-adopted (M-A15). On
+        // Windows a plain windowless child, as before.
         let mut child = cmd.spawn().map_err(|e| LaneError::tool(format!("start the emulator: {e}")))?;
         let t0 = Instant::now();
         let fail = |child: &mut std::process::Child, msg: String| {

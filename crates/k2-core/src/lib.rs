@@ -108,7 +108,8 @@ pub mod cli_usage;
 /// `k2` on the person's PATH with no admin prompt (0.46.11): links
 /// `~/.local/bin/k2` and adds one marked PATH block. Lives in k2-client so
 /// the app runs the same code; the tests here use `test_env::TempHome`.
-#[cfg(unix)]
+/// On every OS (the Linux stage, `cli_stage`, names its types); the links
+/// and the PATH heal inside it are Unix only.
 pub use k2_client::cli_install;
 #[cfg(all(test, unix))]
 #[path = "cli_install_tests.rs"]

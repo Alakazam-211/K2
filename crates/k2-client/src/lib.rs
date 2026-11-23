@@ -51,8 +51,11 @@ pub mod cli_alias;
 /// The Linux desktop app's copy of the `k2` script (never through a link).
 #[cfg(unix)]
 pub mod cli_copy;
-/// `k2` on the person's PATH with no admin prompt (0.46.11).
-#[cfg(unix)]
+/// `k2` on the person's PATH with no admin prompt (0.46.11). Builds on
+/// every OS: the names, what the commands run ([`cli_install::Choice`])
+/// and the binary check are shared; the links, the PATH heal and the swap
+/// are Unix only (Windows keeps its Install CLI, `k2.cmd` in
+/// `%LOCALAPPDATA%\K2\bin`).
 pub mod cli_install;
 pub mod daemon_lifecycle;
 pub mod download_file;

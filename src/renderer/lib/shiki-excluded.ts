@@ -1,5 +1,5 @@
-// Parser for the code viewer's left-out shiki list (shiki-excluded.txt, or
-// the notices list file that replaces it). Pure: the Vite plugin reads the
+// Parser for the code viewer's left-out shiki list
+// (scripts/notices/shiki-excluded.txt, from the notices generator). Pure: the Vite plugin reads the
 // file with fs at build time, the renderer reads it through `?raw`, and both
 // parse it here, so the two always agree on the set.
 //

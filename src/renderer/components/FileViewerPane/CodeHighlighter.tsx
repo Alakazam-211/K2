@@ -10,7 +10,7 @@ import { loadAllowedShikiLang, resolveShikiLang, shikiThemeLoader } from '@/lib/
 // ── Language detection ──────────────────────────────────────────────
 
 // Every name below goes through the allowlist, so an entry whose grammar
-// isn't allowed (yaml, toml, terraform, hcl, nginx...) detects nothing and
+// isn't allowed (toml, terraform, hcl, nginx...) detects nothing and
 // the file renders as plain text. It highlights again on its own once the
 // grammar is allowed.
 const EXT_TO_LANG: Record<string, string> = {

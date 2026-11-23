@@ -19,7 +19,7 @@ async function settle(): Promise<void> {
 }
 
 describe('CodeHighlighter: left-out languages render plain', () => {
-  it.each(['nginx', 'terraform', 'tf', 'hcl', 'yaml', 'yml', 'racket', 'conf'])('fence %s renders plain escaped text', async (lang) => {
+  it.each(['nginx', 'terraform', 'tf', 'hcl', 'toml', 'glsl', 'racket', 'conf'])('fence %s renders plain escaped text', async (lang) => {
     expect(resolveFenceLang(lang)).toBeUndefined()
     const { container } = render(<HighlightedCodeBlock code={NGINX} language={lang} />)
     await settle()
@@ -30,7 +30,7 @@ describe('CodeHighlighter: left-out languages render plain', () => {
     expect(container.querySelector('b')).toBeNull()
   })
 
-  it.each(['nginx.conf', 'main.tf', 'vars.hcl', 'config.yaml', 'Cargo.toml', 'mix.ex', 'site.nginx'])('file %s detects no language and renders plain', async (path) => {
+  it.each(['nginx.conf', 'main.tf', 'vars.hcl', 'Cargo.toml', 'site.nginx'])('file %s detects no language and renders plain', async (path) => {
     expect(detectLanguage(path)).toBeUndefined()
     const { container } = render(<CodeViewer code={NGINX} language={detectLanguage(path)} />)
     await settle()
@@ -58,6 +58,12 @@ describe('CodeHighlighter: allowlisted languages still highlight', () => {
     expect(await highlightToHtml('puts "hi"', 'ruby')).toContain('class="shiki')
     expect(detectLanguage('src/a.cpp')).toBe('cpp')
     expect(detectLanguage('Gemfile')).toBe('ruby')
+  })
+
+  it('yaml is allowed: yaml files and fences highlight', async () => {
+    expect(detectLanguage('config.yaml')).toBe('yaml')
+    expect(resolveFenceLang('yml')).toBe('yaml')
+    expect(await highlightToHtml('a: 1', 'yaml')).toContain('class="shiki')
   })
 
   it('text fences use the plain renderer', async () => {

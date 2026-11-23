@@ -8,7 +8,7 @@
 // A language that isn't allowed (or an alias of one) has no loader, so the
 // caller renders the code as plain text.
 
-import excludedText from './shiki-excluded.txt?raw'
+import excludedText from '../../../scripts/notices/shiki-excluded.txt?raw'
 import { parseShikiExcluded } from './shiki-excluded'
 import {
   GENERATED_LANG_ALIASES,

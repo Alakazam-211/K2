@@ -108,9 +108,9 @@ describe('shiki allowlist: nothing outside it is importable', () => {
     for (const id of OUT_THEMES) expect(shikiThemeLoader(id), `theme ${id}`).toBeUndefined()
   })
 
-  it("aliases of left-out grammars resolve to nothing (tf, tfvars, yml, kql...)", () => {
+  it("aliases of left-out grammars resolve to nothing (tf, tfvars, kql...)", () => {
     const outAliases = bundledLanguagesInfo.filter((l) => OUT_LANGS.includes(l.id)).flatMap((l) => l.aliases ?? [])
-    expect(outAliases).toEqual(expect.arrayContaining(['tf', 'tfvars', 'yml']))
+    expect(outAliases).toEqual(expect.arrayContaining(['tf', 'tfvars']))
     for (const a of outAliases) expect(resolveShikiLang(a), `alias ${a}`).toBeUndefined()
     for (const a of ['TF', 'Terraform', 'NGINX', 'conf', 'hcl']) expect(resolveShikiLang(a), `alias ${a}`).toBeUndefined()
   })
@@ -164,7 +164,9 @@ describe('shiki allowlist: build plugin', () => {
   it('stubs left-out modules on every path and leaves kept ones alone', () => {
     const fromCpp = join(langsDist, 'cpp.mjs')
     expect(leftOutShikiModule(SHIKI_EXCLUDED, './glsl.mjs', fromCpp)).toEqual({ kind: 'lang', id: 'glsl' })
-    expect(leftOutShikiModule(SHIKI_EXCLUDED, './yaml.mjs', join(langsDist, 'ruby.mjs'))).toEqual({ kind: 'lang', id: 'yaml' })
+    expect(leftOutShikiModule(SHIKI_EXCLUDED, './glsl.mjs', join(langsDist, 'elm.mjs'))).toEqual({ kind: 'lang', id: 'glsl' })
+    // yaml is allowed: ruby's embedded yaml is a real grammar, not a stub.
+    expect(leftOutShikiModule(SHIKI_EXCLUDED, './yaml.mjs', join(langsDist, 'ruby.mjs'))).toBeUndefined()
     expect(leftOutShikiModule(SHIKI_EXCLUDED, 'shiki/langs/nginx.mjs', '/x/src/a.ts')).toEqual({ kind: 'lang', id: 'nginx' })
     expect(leftOutShikiModule(SHIKI_EXCLUDED, '@shikijs/langs/terraform', '/x/a.ts')).toEqual({ kind: 'lang', id: 'terraform' })
     expect(leftOutShikiModule(SHIKI_EXCLUDED, '@shikijs/themes/aurora-x', '/x/a.ts')).toEqual({ kind: 'theme', id: 'aurora-x' })
@@ -189,8 +191,8 @@ describe('shiki allowlist: build plugin', () => {
       }
     }
     for (const id of SHIKI_LANG_IDS) visit(id)
-    // cpp/elm/julia embed glsl; ruby/rst/handlebars/mdc embed yaml.
-    expect([...reached].sort()).toEqual(expect.arrayContaining(['glsl', 'yaml']))
+    // cpp/elm/julia/es-tag-glsl embed glsl.
+    expect([...reached]).toContain('glsl')
     for (const id of reached) expect(SHIKI_EXCLUDED.langs.has(id), id).toBe(true)
   })
 })

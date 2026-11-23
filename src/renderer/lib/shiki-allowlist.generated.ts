@@ -2,8 +2,8 @@
 //
 // The shiki grammars and themes the code viewer may bundle: every id in
 // shiki 4.0.2's bundledLanguagesInfo / bundledThemesInfo minus every id in
-// src/renderer/lib/shiki-excluded.txt (39 grammars, 1 theme left out).
-// Kept: 196 of 235 grammars, 64 of 65 themes.
+// scripts/notices/shiki-excluded.txt (19 grammars, 1 theme left out).
+// Kept: 216 of 235 grammars, 64 of 65 themes.
 // Regenerate with `node scripts/gen-shiki-allowlist.mjs` after a shiki upgrade
 // or a change to the left-out list. Only shiki-allowlist.ts imports this.
 
@@ -16,7 +16,11 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'actionscript-3': () => import('shiki/langs/actionscript-3.mjs'),
   'angular-html': () => import('shiki/langs/angular-html.mjs'),
   'angular-ts': () => import('shiki/langs/angular-ts.mjs'),
+  'apache': () => import('shiki/langs/apache.mjs'),
+  'apex': () => import('shiki/langs/apex.mjs'),
+  'apl': () => import('shiki/langs/apl.mjs'),
   'ara': () => import('shiki/langs/ara.mjs'),
+  'asciidoc': () => import('shiki/langs/asciidoc.mjs'),
   'asm': () => import('shiki/langs/asm.mjs'),
   'astro': () => import('shiki/langs/astro.mjs'),
   'awk': () => import('shiki/langs/awk.mjs'),
@@ -46,6 +50,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'csharp': () => import('shiki/langs/csharp.mjs'),
   'css': () => import('shiki/langs/css.mjs'),
   'csv': () => import('shiki/langs/csv.mjs'),
+  'cue': () => import('shiki/langs/cue.mjs'),
   'cypher': () => import('shiki/langs/cypher.mjs'),
   'd': () => import('shiki/langs/d.mjs'),
   'dart': () => import('shiki/langs/dart.mjs'),
@@ -54,6 +59,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'docker': () => import('shiki/langs/docker.mjs'),
   'dotenv': () => import('shiki/langs/dotenv.mjs'),
   'edge': () => import('shiki/langs/edge.mjs'),
+  'elixir': () => import('shiki/langs/elixir.mjs'),
   'elm': () => import('shiki/langs/elm.mjs'),
   'emacs-lisp': () => import('shiki/langs/emacs-lisp.mjs'),
   'erlang': () => import('shiki/langs/erlang.mjs'),
@@ -87,6 +93,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'html': () => import('shiki/langs/html.mjs'),
   'html-derivative': () => import('shiki/langs/html-derivative.mjs'),
   'http': () => import('shiki/langs/http.mjs'),
+  'hurl': () => import('shiki/langs/hurl.mjs'),
   'hxml': () => import('shiki/langs/hxml.mjs'),
   'hy': () => import('shiki/langs/hy.mjs'),
   'imba': () => import('shiki/langs/imba.mjs'),
@@ -106,15 +113,19 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'just': () => import('shiki/langs/just.mjs'),
   'kdl': () => import('shiki/langs/kdl.mjs'),
   'kotlin': () => import('shiki/langs/kotlin.mjs'),
+  'kusto': () => import('shiki/langs/kusto.mjs'),
   'latex': () => import('shiki/langs/latex.mjs'),
   'lean': () => import('shiki/langs/lean.mjs'),
   'less': () => import('shiki/langs/less.mjs'),
   'liquid': () => import('shiki/langs/liquid.mjs'),
+  'llvm': () => import('shiki/langs/llvm.mjs'),
   'log': () => import('shiki/langs/log.mjs'),
   'lua': () => import('shiki/langs/lua.mjs'),
+  'luau': () => import('shiki/langs/luau.mjs'),
   'make': () => import('shiki/langs/make.mjs'),
   'markdown': () => import('shiki/langs/markdown.mjs'),
   'marko': () => import('shiki/langs/marko.mjs'),
+  'matlab': () => import('shiki/langs/matlab.mjs'),
   'mdc': () => import('shiki/langs/mdc.mjs'),
   'mdx': () => import('shiki/langs/mdx.mjs'),
   'mermaid': () => import('shiki/langs/mermaid.mjs'),
@@ -124,6 +135,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'narrat': () => import('shiki/langs/narrat.mjs'),
   'nextflow': () => import('shiki/langs/nextflow.mjs'),
   'nextflow-groovy': () => import('shiki/langs/nextflow-groovy.mjs'),
+  'nim': () => import('shiki/langs/nim.mjs'),
   'nix': () => import('shiki/langs/nix.mjs'),
   'nushell': () => import('shiki/langs/nushell.mjs'),
   'objective-c': () => import('shiki/langs/objective-c.mjs'),
@@ -145,6 +157,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'proto': () => import('shiki/langs/proto.mjs'),
   'pug': () => import('shiki/langs/pug.mjs'),
   'puppet': () => import('shiki/langs/puppet.mjs'),
+  'purescript': () => import('shiki/langs/purescript.mjs'),
   'python': () => import('shiki/langs/python.mjs'),
   'qml': () => import('shiki/langs/qml.mjs'),
   'qmldir': () => import('shiki/langs/qmldir.mjs'),
@@ -154,6 +167,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'razor': () => import('shiki/langs/razor.mjs'),
   'reg': () => import('shiki/langs/reg.mjs'),
   'regexp': () => import('shiki/langs/regexp.mjs'),
+  'rel': () => import('shiki/langs/rel.mjs'),
   'riscv': () => import('shiki/langs/riscv.mjs'),
   'ron': () => import('shiki/langs/ron.mjs'),
   'rosmsg': () => import('shiki/langs/rosmsg.mjs'),
@@ -161,6 +175,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'ruby': () => import('shiki/langs/ruby.mjs'),
   'rust': () => import('shiki/langs/rust.mjs'),
   'sas': () => import('shiki/langs/sas.mjs'),
+  'sass': () => import('shiki/langs/sass.mjs'),
   'scala': () => import('shiki/langs/scala.mjs'),
   'scheme': () => import('shiki/langs/scheme.mjs'),
   'scss': () => import('shiki/langs/scss.mjs'),
@@ -171,6 +186,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'smalltalk': () => import('shiki/langs/smalltalk.mjs'),
   'solidity': () => import('shiki/langs/solidity.mjs'),
   'soy': () => import('shiki/langs/soy.mjs'),
+  'sparql': () => import('shiki/langs/sparql.mjs'),
   'splunk': () => import('shiki/langs/splunk.mjs'),
   'sql': () => import('shiki/langs/sql.mjs'),
   'stata': () => import('shiki/langs/stata.mjs'),
@@ -184,8 +200,10 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'tasl': () => import('shiki/langs/tasl.mjs'),
   'templ': () => import('shiki/langs/templ.mjs'),
   'tex': () => import('shiki/langs/tex.mjs'),
+  'ts-tags': () => import('shiki/langs/ts-tags.mjs'),
   'tsv': () => import('shiki/langs/tsv.mjs'),
   'tsx': () => import('shiki/langs/tsx.mjs'),
+  'turtle': () => import('shiki/langs/turtle.mjs'),
   'twig': () => import('shiki/langs/twig.mjs'),
   'typescript': () => import('shiki/langs/typescript.mjs'),
   'typespec': () => import('shiki/langs/typespec.mjs'),
@@ -205,8 +223,10 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'wgsl': () => import('shiki/langs/wgsl.mjs'),
   'wikitext': () => import('shiki/langs/wikitext.mjs'),
   'wit': () => import('shiki/langs/wit.mjs'),
+  'wolfram': () => import('shiki/langs/wolfram.mjs'),
   'xml': () => import('shiki/langs/xml.mjs'),
   'xsl': () => import('shiki/langs/xsl.mjs'),
+  'yaml': () => import('shiki/langs/yaml.mjs'),
   'zenscript': () => import('shiki/langs/zenscript.mjs'),
   'zig': () => import('shiki/langs/zig.mjs'),
 }
@@ -280,6 +300,7 @@ export const GENERATED_THEME_LOADERS: Readonly<Record<string, ShikiThemeLoader>>
 
 /** Alias -> grammar id, for kept grammars only. */
 export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
+  'adoc': 'asciidoc',
   'batch': 'bat',
   'be': 'berry',
   '1c': 'bsl',
@@ -322,6 +343,7 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   'jl': 'julia',
   'kt': 'kotlin',
   'kts': 'kotlin',
+  'kql': 'kusto',
   'lean4': 'lean',
   'makefile': 'make',
   'md': 'markdown',
@@ -354,6 +376,7 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   'styl': 'stylus',
   'surql': 'surrealql',
   'talon': 'talonscript',
+  'lit': 'ts-tags',
   'ts': 'typescript',
   'cts': 'typescript',
   'mts': 'typescript',
@@ -366,4 +389,6 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   '文言': 'wenyan',
   'mediawiki': 'wikitext',
   'wiki': 'wikitext',
+  'wl': 'wolfram',
+  'yml': 'yaml',
 }

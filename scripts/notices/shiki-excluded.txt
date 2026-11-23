@@ -1,0 +1,27 @@
+# Shiki grammars and themes the code viewer must not bundle: the Kessel Steward's ruling on the 40
+# tm-grammars and tm-themes record no permissive licence for (the other 20 were read upstream at their
+# pinned commits: scripts/notices/shiki-resolved.toml). One per line, the format K2's renderer parses
+# (src/renderer/lib/shiki-excluded.ts):
+#   shiki <lang|theme> <id>: <licence> (<source>): <note>
+# <note> starts with the group: dropped, pending Rosson or pending the Steward. The notices generator
+# (scripts/notices/npm_notices.py) fails a build whose Vite module graph has any of them.
+shiki lang abap: TextMate grant (https://github.com/pvl/abap.tmbundle/blob/92e17e62a9449d2a6f87bfb30b4f920986c24018/Syntaxes/ABAP.tmLanguage): pending Rosson: the TextMate bundle grant (README.md at 92e17e62a944)
+shiki lang ada: GPL-3.0 (https://github.com/AdaCore/ada_language_server/blob/9329f709cf1aef897bfca679c54e0c3d17f2205f/integration/vscode/ada/advanced/ada.tmLanguage.json): dropped: GPL-3.0
+shiki lang applescript: TextMate grant (https://github.com/textmate/applescript.tmbundle/blob/4947cad7494eba084c21cfe04689b4efce96700f/Syntaxes/AppleScript.tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at 4947cad7494e)
+shiki lang bird2: MPL-2.0 (https://github.com/bird-chinese-community/BIRD-tm-language-grammar/blob/1aa378ed0add766bee2271acece94d5068cf3de9/grammars/bird2.tmLanguage.json): pending Rosson: MPL-2.0
+shiki lang dax: none (https://github.com/huyza/dax-language/blob/7fd39aa84552617daa258189b2550dcdbd14149a/syntaxes/dax.grammer.json): dropped: no licence file, README section or package.json field at the pinned commit
+shiki lang dream-maker: none (https://github.com/gbasood/vscode-atomic-dreams/blob/22d2bf0325f65697ea542856280f66e9e098f4a2/syntaxes/dm.tmLanguage.json): dropped: no licence file, README section or package.json field at the pinned commit
+shiki lang erb: TextMate grant (https://github.com/textmate/ruby.tmbundle/blob/ecf0f1df23984bcff9b51552e35d9696cb0d9539/Syntaxes/HTML%20(Ruby%20-%20ERB).tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at ecf0f1df2398)
+shiki lang glsl: none (https://github.com/polym0rph/GLSL.tmbundle/blob/6998d3bbd204e26746a5ca580cda4c650b9057b1/Syntaxes/GLSL.tmLanguage): dropped: no licence file, README section or package.json field at the pinned commit
+shiki lang gnuplot: GPL-3.0 (https://github.com/MarioSchwalbe/vscode-gnuplot/blob/c62c1a61c9b6b4658b43d76c397dc2ad43523b6a/syntaxes/gnuplot.tmLanguage): dropped: GPL-3.0
+shiki lang hcl: MPL-2.0 (https://github.com/hashicorp/syntax/blob/2ec7cd10c9d6134e836bf85eb0f5aa010512bff4/syntaxes/hcl.tmGrammar.json): pending Rosson: MPL-2.0
+shiki lang logo: TextMate grant (https://github.com/textmate/logo.tmbundle/blob/3205e987ed2a2aa11accdd55a7d094832441f89c/Syntaxes/Logo.tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at 3205e987ed2a)
+shiki lang mipsasm: TextMate grant (https://github.com/textmate/mips.tmbundle/blob/eb7601016a109bf912a48a1c21988f3c4a59fb3a/Syntaxes/MIPS.tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at eb7601016a10)
+shiki lang nginx: GPL-3.0 (https://github.com/hangxingliu/vscode-nginx-conf-hint/blob/49159c02fd09dce264ded7802c9499a0f09646f5/src/syntax/nginx.tmLanguage): dropped: GPL-3.0
+shiki lang po: TextMate grant (https://github.com/textmate/gettext.tmbundle/blob/08bb69558d82ada8d4f36b8869f871ce69014749/Syntaxes/Gettext.tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at 08bb69558d82)
+shiki lang racket: GPL-3.0 (https://github.com/Eugleo/magic-racket/blob/1b850db7f6e7c3ba8a1b47fe2781800a21f669a8/syntaxes/racket.tmLanguage.json): dropped: GPL-3.0
+shiki lang ssh-config: TextMate grant (https://github.com/textmate/ssh-config.tmbundle/blob/212a0000c50e0c877303b2c4fcead539d2af2670/Syntaxes/SSH-Config.tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at 212a0000c50e)
+shiki lang tcl: none (https://github.com/sleutho/tcl/blob/f18820ad14678bc033f0a35524820c90fe50f18b/syntaxes/tcl.tmLanguage): dropped: no licence file, README section or package.json field at the pinned commit
+shiki lang terraform: MPL-2.0 (https://github.com/hashicorp/syntax/blob/cc2b4d4fe389f14b8a13937f4e0d7b2811b57588/syntaxes/terraform.tmGrammar.json): pending Rosson: MPL-2.0
+shiki lang toml: TextMate grant (https://github.com/textmate/toml.tmbundle/blob/e82b64c1e86396220786846201e9aa3f0a2d9ca2/Syntaxes/TOML.tmLanguage): pending Rosson: the TextMate bundle grant (README.mdown at e82b64c1e863)
+shiki theme aurora-x: GPL-3.0 (https://github.com/marqu3ss/Aurora-X/blob/118727efadf48872adcd81f6c00be580097d6592/themes/Aurora%20X-color-theme.json): dropped: GPL-3.0

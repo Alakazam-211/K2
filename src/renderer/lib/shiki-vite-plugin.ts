@@ -1,7 +1,7 @@
 // Build-time half of the code viewer's shiki allowlist (shiki-allowlist.ts is
 // the runtime half). A kept grammar can still import a left-out one as an
-// embedded language (cpp and elm embed glsl; ruby, handlebars and rst embed
-// yaml), and a plain import would carry the left-out grammar into the bundle.
+// embedded language (cpp, elm, julia and es-tag-glsl embed glsl), and a plain
+// import would carry the left-out grammar into the bundle.
 // This plugin swaps every left-out grammar or theme module, however it is
 // reached, for an empty module, so none of them can land in a built chunk.
 // The highlighter drops the matching `embeddedLangs` names, so the kept
@@ -21,7 +21,7 @@ import { parseShikiExcluded, type ShikiExcluded } from './shiki-excluded'
  * imports the same file with `?raw`, and scripts/gen-shiki-allowlist.mjs reads
  * this constant. Repoint both together (the allowlist test checks they match).
  */
-export const SHIKI_EXCLUDED_FILE = 'src/renderer/lib/shiki-excluded.txt'
+export const SHIKI_EXCLUDED_FILE = 'scripts/notices/shiki-excluded.txt'
 
 const STUB_PREFIX = '\0k2-shiki-left-out:'
 

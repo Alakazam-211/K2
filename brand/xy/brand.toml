@@ -12,6 +12,11 @@ schema = 1
 
 [names]
 product = "Globex Desk"
+short = "Globex"
+company = "Globex Corporation"
+lockup = "Globex Desk by Globex Corporation"
+server = "Globex Desk Server"
+login = "Globex Account"
 
 [cli]
 name = "xy"
@@ -33,3 +38,38 @@ gui_binary = "globex-desk"
 keys = [
     { role = "primary", key_id = "9A9083330F2E87CE", pubkey = "RWTOhy4PM4OQmqEdBiOv60pb9gFH30gUg9TGTOxA5sRaWb5ABsLhTcwY" },
 ]
+
+# The fields a hosted box needs (brand/k2 says what each is). Neutral
+# placeholders: names under example.invalid, which nobody owns. Left out
+# on purpose, so they are brand/k2's (ours): [control] (the control
+# endpoints stay ours), [pins] (the root helper's keys), [machine] (a
+# brand may not rename those yet) and [phone] (xy has no phone app).
+[zones]
+label = "desk.example.invalid"
+internal = false
+
+[feeds]
+daemon = "https://updates.example.invalid/daemon-latest.json"
+downloads = "https://updates.example.invalid/download"
+
+# The icons folder comes with the packaging step; nothing reads it yet.
+[look]
+icons = "assets/icons"
+accent = "#3A6FF7"
+
+[links]
+site = "https://desk.example.invalid"
+support_email = "help@desk.example.invalid"
+support_url = "https://desk.example.invalid/support"
+terms = "https://desk.example.invalid/terms"
+privacy = "https://desk.example.invalid/privacy"
+dashboard = ""
+feedback = ""
+
+[mail]
+system_from = "noreply@desk.example.invalid"
+system_from_name = "Globex Desk"
+postal = false
+
+[sew]
+call_name = "Globex Desk"

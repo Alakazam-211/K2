@@ -20,6 +20,14 @@
 //! helper's part: `helper_name!("agent")` is `k2-agent` in the default
 //! brand. It is a macro only, a literal for `concat!` and `const`s.
 //!
+//! The brand file's other tables come out as one module each
+//! ([`names`], [`zones`], [`control`], [`feeds`], [`pins`], [`machine`],
+//! [`look`], [`links`], [`mail`], [`phone`], [`sew`]): what a hosted box
+//! of the brand needs, each value the brand's own, the default brand's
+//! (`brand/k2`), or made from the brand's names. Most have no reader in
+//! the code yet; code that still spells a value moves to these as it is
+//! tended.
+//!
 //! The text forms are macros as well as consts, so a `const` sentence can
 //! be built with `concat!` and still be one `&'static str`. Inside this
 //! crate the macros are named by their bare names only, after the
@@ -54,6 +62,18 @@ pub struct RetiredName {
     pub block_end: &'static str,
     /// Its fish startup file, in fish's `conf.d`.
     pub fish_conf: &'static str,
+}
+
+/// One signing key a brand trusts (`[pins] keys`): a minisign public key
+/// line and its id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BrandKey {
+    /// `primary` or `backup`.
+    pub role: &'static str,
+    /// minisign's key id, 16 upper hex.
+    pub key_id: &'static str,
+    /// The base64 line of a `minisign.pub` file.
+    pub pubkey: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/brand.rs"));
@@ -165,6 +185,65 @@ mod tests {
     fn the_macros_build_const_sentences() {
         const LINE: &str = concat!("run ", cli_name!(), " msg in ", product_name!());
         assert_eq!(LINE, format!("run {CLI_NAME} msg in {PRODUCT_NAME}"));
+    }
+
+    /// The other fields keep the shapes the reader checked, in any brand.
+    #[test]
+    fn the_compiled_fields_have_their_shapes() {
+        assert!(brand_file::is_domain(zones::LABEL), "{}", zones::LABEL);
+        assert!(
+            brand_file::is_domain(control::RELAY_HOST),
+            "{}",
+            control::RELAY_HOST
+        );
+        for url in [
+            control::CONNECT,
+            control::CERT,
+            control::PUSH,
+            control::RELAY_LIST,
+            control::WEB_API,
+            feeds::DAEMON,
+            feeds::DOWNLOADS,
+            links::SITE,
+        ] {
+            assert!(brand_file::is_https_url(url), "{url}");
+        }
+        for url in [
+            links::SUPPORT_URL,
+            links::TERMS,
+            links::PRIVACY,
+            links::DASHBOARD,
+            links::FEEDBACK,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(brand_file::is_https_url(url), "{url}");
+        }
+        assert_eq!(pins::KEYS.first().map(|k| k.role), Some("primary"));
+        for k in pins::KEYS {
+            assert_eq!(
+                brand_file::minisign_key_id(k.pubkey).as_deref(),
+                Some(k.key_id),
+                "{}",
+                k.pubkey
+            );
+        }
+        for name in [
+            names::SHORT,
+            names::COMPANY,
+            names::LOCKUP,
+            names::SERVER,
+            names::LOGIN,
+            mail::SYSTEM_FROM_NAME,
+            sew::CALL_NAME,
+        ] {
+            assert!(!name.is_empty() && name.trim() == name, "{name:?}");
+        }
+        assert!(mail::SYSTEM_FROM.contains('@') && links::SUPPORT_EMAIL.contains('@'));
+        assert!(machine::HOME_DIR_NAME.starts_with('.'));
+        assert!(brand_file::is_command_name(machine::BINARY_PREFIX));
+        assert!(brand_file::is_command_name(machine::UNIT_PREFIX));
     }
 
     /// A helper's name is the command's name, a dash and the part, as a

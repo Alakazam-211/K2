@@ -6,6 +6,11 @@ schema = 1
 
 [names]
 product = "K2"
+short = "K2"
+company = "Alakazam Labs"
+lockup = "K2 by Alakazam Labs"
+server = "K2 Server"
+login = "K2 Connect"
 
 [cli]
 name = "k2"
@@ -32,3 +37,77 @@ keys = [
     { role = "primary", key_id = "76CA14D3B7EE2B69", pubkey = "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv" },
     { role = "backup", key_id = "5101A5781A5102A4", pubkey = "RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y" },
 ]
+
+# The fields a hosted box of a brand needs (crates/k2-brand reads them).
+# This file is the default brand: a field another brand's file leaves out
+# takes the value here, so it spells every field, and each value is what
+# the code uses today. Shapes: URLs https, domains in lower case, keys
+# minisign lines, colours #RRGGBB; "" means none (no link, or off).
+
+# Where boxes are named. label: the zone a box's name is under
+# (<label>.<zone>) until the enrolment answer names it. internal: a box
+# also gets a name under our own zone.
+[zones]
+label = "k2.dev"
+internal = true
+
+# Our control endpoints. A brand that leaves these out uses ours.
+[control]
+connect = "https://connect.k2.dev"
+cert = "https://cert.k2.dev/cert"
+push = "https://push.k2.dev"
+relay = "relay.k2.dev"
+relay_list = "https://k2.dev/api/tunnel/relays"
+web_api = "https://k2.dev"
+
+# Where updates come from, besides [package] update_feed (the app's):
+# the headless daemon's manifest, and where a release's files are.
+[feeds]
+daemon = "https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
+downloads = "https://github.com/Alakazam-211/K2/releases/download"
+
+# The keys that sign the root helper and what it installs (the Sew pins
+# ride in the helper): today's root-helper release keys, primary first.
+[pins]
+keys = [
+    { role = "primary", key_id = "18DB69584200F795", pubkey = "RWSV9wBCWGnbGBvUcoZDJWucBgmvxNmRbApWopWr+kUOYbmuZ7+kSYI1" },
+    { role = "backup", key_id = "E9C2D2CAD052297A", pubkey = "RWR6KVLQytLC6Yiiy/nCzF6HFJXp5OwkF+AjtMhlznwZfucjf0DoDY5W" },
+]
+
+# The names ops scripts find on a box: the home folder, what the programs'
+# file names start with (k2-daemon), and what the systemd units' names
+# start with (k2-daemon.service). Every brand has these for now.
+[machine]
+home = ".k2"
+binary_prefix = "k2"
+unit_prefix = "k2"
+
+# Icons and colours. icons: a folder from the brand folder; left out, the
+# app's own (src-tauri/icons). accent: #RRGGBB; left out, the style's own.
+[look]
+
+# Where people are sent.
+[links]
+site = "https://k2.dev"
+support_email = "support@k2.dev"
+support_url = ""
+terms = ""
+privacy = ""
+dashboard = "https://k2.dev/dashboard"
+feedback = "https://feedback.akzm.k2.dev"
+
+# System mail, and whether the brand's boxes may join Postal.
+[mail]
+system_from = "noreply@k2.dev"
+system_from_name = "K2"
+postal = true
+
+# The phone app the brand's boxes pair with.
+[phone]
+bundle_id = "com.alakazamlabs.k2so.companion"
+team_id = "36B8R93HXV"
+push_topic = "com.alakazamlabs.k2so.companion"
+
+# What calls and chat name the service.
+[sew]
+call_name = "K2"

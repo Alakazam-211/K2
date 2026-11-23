@@ -3,8 +3,10 @@
 //!
 //! The brand folder is `K2_BRAND_DIR` when it is set (a relative path is
 //! read from the workspace root), else `brand/k2` at the workspace root.
-//! A brand file this build can't use stops the build with a line that
-//! names the file and the field.
+//! A field the brand file leaves out takes the default brand's value
+//! (`brand/k2`), so this reads that file too. A brand file this build
+//! can't use stops the build with a line that names the file and the
+//! field.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
@@ -20,13 +22,15 @@ fn main() {
         .parent()
         .and_then(Path::parent)
         .expect("k2-brand lives at crates/k2-brand in the workspace");
+    let default = root.join("brand").join("k2").join("brand.toml");
     let dir = match env::var_os("K2_BRAND_DIR") {
         Some(d) if !d.is_empty() => root.join(d),
         _ => root.join("brand").join("k2"),
     };
     let file = dir.join("brand.toml");
     println!("cargo:rerun-if-changed={}", file.display());
-    let brand = match brand_file::load(&file) {
+    println!("cargo:rerun-if-changed={}", default.display());
+    let brand = match brand_file::load(&file, &default) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("{e}");

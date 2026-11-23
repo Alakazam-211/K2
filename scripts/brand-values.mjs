@@ -37,8 +37,9 @@
 // for anything typed or copied). The app's shown name is the product's.
 //
 // The reader takes the brand file's own small shape (top-level keys,
-// [tables], strings, integers, a list of inline tables) and refuses
-// anything else, naming the file and the field, the way k2-brand does.
+// [tables], strings, integers, true and false, a list of inline tables)
+// and refuses anything else, naming the file and the field, the way
+// k2-brand does.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -75,13 +76,15 @@ function fail(file, msg) {
   throw new Error(`brand file ${shown(file)}: ${msg}`)
 }
 
-/** One value: a "string", an integer, or a list of { k = "v", ... } tables
- *  (the list may span lines; the caller joined them). */
+/** One value: a "string", an integer, true or false, or a list of
+ *  { k = "v", ... } tables (the list may span lines; the caller joined
+ *  them). */
 function parseValue(file, field, text) {
   const t = text.trim()
   let m = t.match(/^"([^"\\]*)"$/)
   if (m) return m[1]
   if (/^-?[0-9]+$/.test(t)) return Number(t)
+  if (t === 'true' || t === 'false') return t === 'true'
   if (t.startsWith('[') && t.endsWith(']')) {
     const body = t.slice(1, -1).trim().replace(/,$/, '').trim()
     if (!body) return []
@@ -105,7 +108,7 @@ function parseValue(file, field, text) {
     }
     return items
   }
-  fail(file, `${field} is not a string, an integer or a list of tables: ${t}`)
+  fail(file, `${field} is not a string, an integer, true or false, or a list of tables: ${t}`)
 }
 
 /** The brand file as { top: {...}, tables: { name: {...} } }. */

@@ -181,6 +181,20 @@ mod tests {
         assert!(RELEASE_REPO_NAMES.contains(&RELEASE_REPO), "the repo releases come from is one of its names");
     }
 
+    /// Drift: the brand file's fields that have a const here today hold
+    /// the same values (the default brand's file; these tests run on it).
+    #[test]
+    fn brand_file_fields_are_these_consts() {
+        assert_eq!(k2_brand::names::COMPANY, COMPANY_NAME);
+        assert_eq!(k2_brand::names::LOCKUP, PRODUCT_LOCKUP);
+        assert_eq!(k2_brand::links::SITE, PUBLIC_SITE);
+        assert_eq!(k2_brand::links::SUPPORT_EMAIL, SUPPORT_EMAIL);
+        assert_eq!(k2_brand::feeds::DAEMON, DAEMON_FEED_URL);
+        assert_eq!(k2_brand::feeds::DOWNLOADS, RELEASE_DOWNLOAD_BASE);
+        assert_eq!(k2_brand::zones::LABEL, INFRA_ZONE);
+        assert_eq!(HOSTED_ZONES, &[k2_brand::zones::LABEL]);
+    }
+
     /// Both of the repo's names count as the repo, as Cargo writes its git
     /// URL; a third name, a longer name, another owner with the same repo
     /// name, a path before or after the name, another case and another

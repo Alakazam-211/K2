@@ -162,6 +162,21 @@ mod tests {
         assert_eq!(WEB_APP_HOST_SUFFIX, ".app.k2.dev");
     }
 
+    /// Drift: the brand file's fields that have a const here today hold
+    /// the same values (the default brand's file; these tests run on it).
+    #[test]
+    fn brand_file_fields_are_these_consts() {
+        assert_eq!(k2_brand::zones::LABEL, PRIMARY_ZONE);
+        assert_eq!(k2_brand::links::DASHBOARD, Some(DASHBOARD_URL));
+        assert_eq!(k2_brand::links::FEEDBACK, Some(FEEDBACK_ENDPOINT));
+        assert_eq!(k2_brand::control::CONNECT, CONNECT_BASE);
+        assert_eq!(k2_brand::control::CERT, CERT_BROKER_URL);
+        assert_eq!(k2_brand::control::PUSH, PUSH_GATEWAY_URL);
+        assert_eq!(k2_brand::control::RELAY_HOST, RELAY_HOST);
+        assert_eq!(k2_brand::control::RELAY_LIST, RELAY_LIST_URL);
+        assert_eq!(k2_brand::control::WEB_API, WEB_API_BASE);
+    }
+
     #[test]
     fn box_host_adds_the_zone_and_nothing_else() {
         assert_eq!(box_host("acme"), "acme.k2.dev");

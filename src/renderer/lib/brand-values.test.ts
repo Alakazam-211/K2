@@ -214,6 +214,13 @@ describe('a brand file the build can\'t use stops it, naming the field', () => {
   it('a missing folder names K2_BRAND_DIR', () => {
     expect(refused(['renderer', '--print', '--brand', join(scratch, 'nowhere')])).toContain('K2_BRAND_DIR names the folder')
   })
+
+  it('reads true and false (the hosted fields use them), and still refuses another bare word', () => {
+    const dir = brandFolder('bools', `${GOOD}[zones]\ninternal = true\n[mail]\npostal = false\n`)
+    expect(run(['renderer', '--print', '--brand', dir])).toContain("export const CLI_NAME: string = 'ab'")
+    const bad = brandFolder('bare-word', `${GOOD}[zones]\ninternal = yes\n`)
+    expect(refused(['renderer', '--print', '--brand', bad])).toContain('zones.internal is not a string, an integer, true or false, or a list of tables: yes')
+  })
 })
 
 describe('the update keys', () => {

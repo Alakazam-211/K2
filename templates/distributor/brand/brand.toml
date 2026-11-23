@@ -3,12 +3,15 @@
 #
 # The K5 build reads this file when K2_BRAND_DIR names its folder (the
 # pipeline sets it; you never edit K5's own brand/ folder). It knows the
-# fields below and nothing else yet: a key it does not know inside [cli]
+# tables and keys below and nothing else: a table or key it does not know
 # stops the build, so add only what K5's release notes say a brand file
-# may hold.
+# may hold. A field you leave out is K5's own value (brand/k2 in K5's
+# repo); the README's field guide says which ones you must set.
 #
-# Before you ship, `bash scripts/brand.sh lint <this folder> --live` must
-# pass on the K5 tag you build (the pipeline runs it on every build).
+# Before you ship, `bash scripts/brand.sh lint <this folder> --live
+# --hosted` must pass on the K5 tag you build (the pipeline runs the lint
+# on every build). --hosted refuses a brand that leaves out a field a
+# hosted box of yours needs, or sets one of them to K5's own value.
 
 # The brand's id: lowercase letters and digits, a letter first, 2 to 12
 # long. Programs read it, people never type it. It is stamped into every
@@ -30,6 +33,16 @@ schema = 1
 # from it: a build that prints one where the other belongs fails the
 # output judges.
 product = "Globex Studio"
+# The name where space is short (left out: the product's).
+short = "Globex"
+# Your company, and the product with its maker (left out:
+# "<product> by <company>").
+company = "Globex Corporation"
+lockup = "Globex Studio by Globex Corporation"
+# What a box is called (left out: "<product> Server").
+server = "Globex Studio Server"
+# The account your users sign in with.
+login = "Globex Account"
 
 [cli]
 # The command people and agents type, and the CLI's file name. Lowercase
@@ -50,3 +63,69 @@ name = "gy"
 # A new brand has none. To rename your command later, put the old name
 # here as "notice", then "tombstone" a release or two after.
 aliases = []
+
+# Packaging values. bundle_id: the macOS bundle id. update_feed: the
+# desktop app's update manifest (https). desktop_id: the Linux .desktop
+# file's and icon's name. gui_binary: the Linux GUI program's name.
+[package]
+bundle_id = "example.globex.studio"
+update_feed = "https://updates.globex.example/studio/latest.json"
+desktop_id = "globex-studio"
+gui_binary = "globex-studio"
+
+# The update keys your build trusts: minisign public key lines, primaries
+# first, your backup last, and the same key as update_pubkey in
+# distributor.conf. Never one of K5's (the build refuses that). This one
+# is a placeholder made only for tests: its private half never existed.
+[update]
+keys = [
+    { role = "primary", key_id = "E5A48B9699901B0F", pubkey = "RWQPG5CZlouk5cumw8FmJEvxMK5bNan2q2fBqrqyCWOY7/rp5kSjA9Ri" },
+]
+
+# Where your boxes are named: <subdomain>.<label>. internal: a box also
+# gets a name under K5's own zone (true or false; ask us which your
+# agreement says).
+[zones]
+label = "studio.example.invalid"
+internal = false
+
+# Where your updates come from, besides [package] update_feed: the
+# headless daemon's manifest, and the folder a release's files are in.
+[feeds]
+daemon = "https://updates.globex.example/studio/daemon-latest.json"
+downloads = "https://updates.globex.example/studio/download"
+
+# Your icons and colour. icons: a folder in this brand folder. accent:
+# #RRGGBB, or leave it out for the style's own.
+[look]
+icons = "assets/icons"
+accent = "#2F6FE0"
+
+# Where your users are sent. Every link is https; dashboard and feedback
+# may be "" (no account page; the Send feedback button off).
+[links]
+site = "https://studio.example.invalid"
+support_email = "help@studio.example.invalid"
+support_url = "https://studio.example.invalid/support"
+terms = "https://studio.example.invalid/terms"
+privacy = "https://studio.example.invalid/privacy"
+dashboard = ""
+feedback = ""
+
+# The address system mail to your users comes from, and the name on it.
+# postal: whether your boxes may join Postal (true or false).
+[mail]
+system_from = "noreply@studio.example.invalid"
+system_from_name = "Globex Studio"
+postal = false
+
+# What calls and chat name the service.
+[sew]
+call_name = "Globex Studio"
+
+# Left out, so they are K5's own: [control] (Connect, the certificate
+# broker, push and the relays are ours), [pins] (the keys that sign the
+# root helper), [machine] (the home folder, program and unit names: a
+# brand may not rename them yet) and [phone] (your boxes pair with our
+# phone app unless you have your own: then set bundle_id, team_id and
+# push_topic).

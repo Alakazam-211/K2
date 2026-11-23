@@ -26,7 +26,7 @@ use super::super::render::{self, Cx};
 use super::super::writes::{self, dumps, object, str_value, wait, Cp, Words};
 use super::{bytes, distro, gpu_arg, head8, runs, secs, SRC};
 use crate::exit::Exit;
-use crate::families::{py_space, raised, Raise};
+use crate::families::{py_space, Raise};
 use crate::out;
 use crate::out::json::{Text, Value};
 use k2_client::{brand::CLI_NAME, cli_name, product_name};
@@ -50,6 +50,15 @@ pub const AFTER_DASHES: &str = concat!(
     "usage: put the command after --: ",
     cli_name!(),
     " compute run [<node>] -- <command…>"
+);
+/// The job reader's one line where it raises (the hook on its first line
+/// in the shell), never a traceback.
+pub const BAD_RESPONSE: &str = concat!(
+    "{\"error\": \"bad_response\", \"hint\": \"",
+    cli_name!(),
+    " compute can't read the daemon's answer (a daemon on another ",
+    product_name!(),
+    " version?)\"}"
 );
 pub const UNKNOWN: &str = concat!(
     "usage: unknown flag '%s' (",
@@ -1023,8 +1032,8 @@ macro_rules! line {
 }
 
 /// The reader after the submit: its notes on stderr as it goes, then its
-/// one line (`$(…)`, split at the tabs as the shell does). A raise is its
-/// traceback and exit 1.
+/// one line (`$(…)`, split at the tabs as the shell does). A raise is
+/// [`BAD_RESPONSE`] and exit 1.
 pub fn info(body: &[u8]) -> Result<Info, Exit> {
     let cx = Cx::new(0);
     let mut err = String::new();
@@ -1043,7 +1052,10 @@ pub fn info(body: &[u8]) -> Result<Info, Exit> {
                 placed: placed.to_string(),
             })
         }
-        Err(e) => Err(raised(String::new(), String::new(), &e).print()),
+        Err(_) => {
+            out::stderr_line(BAD_RESPONSE);
+            Err(Exit::Error)
+        }
     }
 }
 

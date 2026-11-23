@@ -1416,7 +1416,10 @@ fn two(a: &[u8], b: &[u8], f: impl FnOnce(&mut Pr, &Value, &Value) -> R<()>) -> 
 }
 
 fn watching(body: &[u8]) -> Result<(), Exit> {
-    let mut pr = Pr::default();
+    let mut pr = Pr {
+        plain: true,
+        ..Pr::default()
+    };
     let r = py::load(body, 1).and_then(|v| {
         pr.eline(&format!(
             "watching {} at v{} (Ctrl-C to stop)",

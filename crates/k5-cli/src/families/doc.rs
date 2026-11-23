@@ -722,7 +722,10 @@ impl Ctx {
                 Err(e) => out::after_stdout_error(&e),
             };
         }
-        let mut pr = Pr::default();
+        let mut pr = Pr {
+            plain: true,
+            ..Pr::default()
+        };
         let r = py::load(body, 3).and_then(|v| reader(&mut pr, &v));
         pr.finish(r)
     }

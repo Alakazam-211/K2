@@ -159,6 +159,29 @@ fn surrogate_escapes(s: &str) -> Cow<'_, str> {
 pub struct Pr {
     pub out: Vec<u8>,
     pub err: String,
+    /// A reader of a daemon answer that starts with `_DOC_PY_PLAIN`
+    /// (`_doc_print_json_or`'s, the watch line): a raise prints
+    /// [`plain_lines`], not a traceback.
+    pub plain: bool,
+}
+
+/// `_DOC_PY_PLAIN`'s lines where a reader raises: `_doc_die`'s two, code
+/// `bad_response`. Never a traceback.
+pub fn plain_lines() -> String {
+    let hint = format!(
+        "{} doc can't read the daemon's answer (a daemon on another {} version?)",
+        k2_client::brand::CLI_NAME,
+        k2_client::brand::PRODUCT_NAME
+    );
+    let obj = Value::Object(vec![(
+        Text::from("error"),
+        Value::Object(vec![
+            (Text::from("code"), Value::Str(Text::from("bad_response"))),
+            (Text::from("hint"), Value::Str(Text::from(hint.as_str()))),
+        ]),
+    )]);
+    let line = json::to_string(&obj, &Options::default()).unwrap_or_default();
+    format!("Error: {hint}\n{line}\n")
 }
 
 impl Pr {
@@ -186,11 +209,12 @@ impl Pr {
         }
     }
 
-    /// Writes what was printed (and the traceback when the reader
-    /// raised); the reader's exit.
+    /// Writes what was printed (and, when the reader raised, the plain
+    /// lines or the traceback); the reader's exit.
     pub fn finish(self, r: R<Exit>) -> Exit {
         let (exit, tb) = match r {
             Ok(e) => (e, String::new()),
+            Err(_) if self.plain => (Exit::Error, plain_lines()),
             Err(raise) => (Exit::Error, raise.text()),
         };
         if !self.out.is_empty() {

@@ -49,10 +49,11 @@
 //! Where this differs from the shell: an answer that is not UTF-8 is read
 //! with U+FFFD for each bad byte, and a string with half of a surrogate
 //! pair is printed as `\udXXX`, as [`super::inbox`] says. The daemon
-//! sends neither. Where the shell's Python raises, the traceback is
-//! Python 3.12's, without source lines.
+//! sends neither. Where the shell's Python raises (an answer it can't
+//! read), it prints the "unexpected answer" line ([`unexpected`]) and
+//! exits 1, never a traceback.
 
-use super::{curl_port, get, hook_sock, py_iter, py_len, raised, without_nuls, Raise, Shown};
+use super::{curl_port, get, hook_sock, py_iter, py_len, without_nuls, Raise, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
 use crate::families::remind::shared::{
@@ -847,6 +848,20 @@ fn get_obj<'a>(o: &'a Value, key: &str) -> Option<&'a Value> {
     }
 }
 
+/// `_ORG_PY`'s line for an answer it can't read: one that is no object,
+/// or one it raises on.
+fn unexpected(status: u16, raw: &str) -> String {
+    format!(
+        concat!(
+            "Error: unexpected answer from the ",
+            k2_client::product_name!(),
+            " daemon (HTTP {}): {}\n"
+        ),
+        status,
+        head300(raw)
+    )
+}
+
 /// The shell's Python (`_ORG_PY`) on an answer: `body` is what `$(…)`
 /// held of it (NULs gone), `status` its HTTP status.
 pub fn render(verb: &str, status: u16, body: &[u8], as_json: bool) -> Shown {
@@ -855,15 +870,7 @@ pub fn render(verb: &str, status: u16, body: &[u8], as_json: bool) -> Shown {
     let v = json::parse(&raw).ok();
     let Some(Value::Object(mut pairs)) = v else {
         return Shown::err(
-            format!(
-                concat!(
-                    "Error: unexpected answer from the ",
-                    k2_client::product_name!(),
-                    " daemon (HTTP {}): {}\n"
-                ),
-                status,
-                head300(&raw)
-            ),
+            unexpected(status, &raw),
             if rc == Exit::Ok { Exit::Error } else { rc },
         );
     };
@@ -919,7 +926,11 @@ pub fn render(verb: &str, status: u16, body: &[u8], as_json: bool) -> Shown {
             stderr: String::new(),
             exit: done,
         },
-        Err(r) => raised(p.out, String::new(), &r),
+        Err(_) => Shown {
+            stdout: p.out,
+            stderr: unexpected(status, &raw),
+            exit: Exit::Error,
+        },
     }
 }
 

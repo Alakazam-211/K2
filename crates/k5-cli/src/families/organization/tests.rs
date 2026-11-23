@@ -800,9 +800,14 @@ fn refusals_and_odd_answers() {
     );
 }
 
-fn raises(verb: &str, body: &str, frames: &[(u32, &str)], exception: &str, stdout: &str) {
+/// The renderer raises on `body`: what it printed before, then the
+/// "unexpected answer" line (never a traceback), exit 1.
+fn raises(verb: &str, body: &str, stdout: &str) {
     let s = shown(verb, 200, body, false);
-    let want = traceback(frames, exception);
+    let want = format!(
+        "Error: unexpected answer from the {} daemon (HTTP 200): {body}\n",
+        k2_client::brand::PRODUCT_NAME
+    );
     assert_eq!(
         (s.stdout.as_str(), s.stderr.as_str(), s.exit),
         (stdout, want.as_str(), Exit::Error),
@@ -810,179 +815,47 @@ fn raises(verb: &str, body: &str, frames: &[(u32, &str)], exception: &str, stdou
     );
 }
 
-use super::super::traceback;
-
 #[test]
 fn where_the_python_raises() {
-    let m = |n: u32| vec![(n, "<module>")];
-    raises(
-        "bulletin",
-        r#"{"text":5}"#,
-        &m(line::WRITE_TEXT),
-        "TypeError: write() argument must be str, not int",
-        "",
-    );
-    raises(
-        "bulletin",
-        r#"{"text":null}"#,
-        &m(line::WRITE_TEXT),
-        "TypeError: write() argument must be str, not NoneType",
-        "",
-    );
-    raises(
-        "list",
-        r#"{"orgs":3}"#,
-        &m(line::LIST_ORGS),
-        "TypeError: 'int' object is not iterable",
-        "",
-    );
-    raises(
-        "list",
-        r#"{"orgs":["x"]}"#,
-        &[(line::LIST_LINES, "<module>"), (line::OL_HEAD, "org_lines")],
-        "AttributeError: 'str' object has no attribute 'get'",
-        "",
-    );
+    raises("bulletin", r#"{"text":5}"#, "");
+    raises("bulletin", r#"{"text":null}"#, "");
+    raises("list", r#"{"orgs":3}"#, "");
+    raises("list", r#"{"orgs":["x"]}"#, "");
     raises(
         "list",
         r#"{"orgs":[{"name":"A","members":[{"isHead":true}]}]}"#,
-        &[
-            (line::LIST_LINES, "<module>"),
-            (line::OL_JOIN, "org_lines"),
-            (line::OL_JOIN, "<genexpr>"),
-        ],
-        "KeyError: 'handle'",
         "A · head: none yet\n",
     );
     raises(
         "list",
         r#"{"orgs":[{"name":"A","members":[{"handle":1}]}]}"#,
-        &[(line::LIST_LINES, "<module>"), (line::OL_JOIN, "org_lines")],
-        "TypeError: sequence item 0: expected str instance, int found",
         "A · head: none yet\n",
     );
     raises(
         "list",
         r#"{"orgs":[{"name":"A","bulletin":["x"]}]}"#,
-        &[
-            (line::LIST_LINES, "<module>"),
-            (line::OL_LINES, "org_lines"),
-        ],
-        "AttributeError: 'list' object has no attribute 'get'",
         "A · head: none yet\n  Members: none yet\n",
     );
     raises(
         "show",
         r#"{"org":{"name":"A","lines":[{"a":{}}]}}"#,
-        &m(line::SHOW_LINE),
-        "KeyError: 'name'",
         "A · head: none yet\n  Members: none yet\n  Bulletin: none yet\n",
     );
-    raises(
-        "mine",
-        r#"{"next":5}"#,
-        &m(line::MINE_NEXT),
-        "TypeError: unsupported operand type(s) for +: 'int' and 'str'",
-        "",
-    );
-    raises(
-        "mine",
-        r#"{"next":[1]}"#,
-        &m(line::MINE_NEXT),
-        "TypeError: can only concatenate list (not \"str\") to list",
-        "",
-    );
-    raises(
-        "mine",
-        r#"{"org":[1],"isHead":true}"#,
-        &m(line::MINE_HEAD),
-        "TypeError: list indices must be integers or slices, not str",
-        "",
-    );
-    raises(
-        "mine",
-        r#"{"org":"o"}"#,
-        &m(line::MINE_NO_HEAD),
-        "TypeError: string indices must be integers, not 'str'",
-        "",
-    );
-    raises(
-        "mine",
-        r#"{"org":{"x":1},"head":1}"#,
-        &m(line::MINE_NOT_CONNECTED),
-        "KeyError: 'name'",
-        "",
-    );
-    raises(
-        "reach",
-        r#"{"text":{"a":1}}"#,
-        &m(line::REACH),
-        "TypeError: unsupported operand type(s) for +: 'dict' and 'str'",
-        "",
-    );
-    raises(
-        "night",
-        r#"{"governor":[1]}"#,
-        &m(line::NIGHT_MACHINE),
-        "AttributeError: 'list' object has no attribute 'get'",
-        "",
-    );
-    raises(
-        "updates",
-        r#"{"updates":[{"from":"x"}]}"#,
-        &m(line::UPDATES_ROW),
-        "TypeError: string indices must be integers, not 'str'",
-        "",
-    );
-    raises(
-        "ask",
-        r#"{"asked":5}"#,
-        &m(line::ASK_ASKED),
-        "TypeError: can only join an iterable",
-        "",
-    );
-    raises(
-        "ask",
-        r#"{"asked":[1]}"#,
-        &m(line::ASK_ASKED),
-        "TypeError: sequence item 0: expected str instance, int found",
-        "",
-    );
-    raises(
-        "update",
-        r#"{"head":"h"}"#,
-        &m(line::UPDATE_HEAD),
-        "AttributeError: 'str' object has no attribute 'get'",
-        "",
-    );
-    raises(
-        "bulletin-set",
-        r#"{"lines":4}"#,
-        &m(line::SET_LEN),
-        "TypeError: object of type 'int' has no len()",
-        "",
-    );
-    raises(
-        "bulletin-set",
-        r#"{}"#,
-        &m(line::SET_ORG),
-        "KeyError: 'org'",
-        "",
-    );
-    raises(
-        "link",
-        r#"{"line":{"a":null}}"#,
-        &m(line::LINK_ROW),
-        "AttributeError: 'NoneType' object has no attribute 'get'",
-        "",
-    );
-    raises(
-        "delete",
-        r#"{"deleted":null}"#,
-        &m(line::DELETE),
-        "TypeError: 'NoneType' object is not subscriptable",
-        "",
-    );
+    raises("mine", r#"{"next":5}"#, "");
+    raises("mine", r#"{"next":[1]}"#, "");
+    raises("mine", r#"{"org":[1],"isHead":true}"#, "");
+    raises("mine", r#"{"org":"o"}"#, "");
+    raises("mine", r#"{"org":{"x":1},"head":1}"#, "");
+    raises("reach", r#"{"text":{"a":1}}"#, "");
+    raises("night", r#"{"governor":[1]}"#, "");
+    raises("updates", r#"{"updates":[{"from":"x"}]}"#, "");
+    raises("ask", r#"{"asked":5}"#, "");
+    raises("ask", r#"{"asked":[1]}"#, "");
+    raises("update", r#"{"head":"h"}"#, "");
+    raises("bulletin-set", r#"{"lines":4}"#, "");
+    raises("bulletin-set", r#"{}"#, "");
+    raises("link", r#"{"line":{"a":null}}"#, "");
+    raises("delete", r#"{"deleted":null}"#, "");
 }
 
 #[test]

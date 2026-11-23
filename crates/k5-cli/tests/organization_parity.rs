@@ -606,10 +606,6 @@ fn organization_stops_as_the_shell_does() {
 #[test]
 fn organization_answers_as_the_shell_does() {
     let rig = Rig::new(VERB, "answers");
-    let traceback = |c: Case| Case {
-        compare: Compare::Traceback,
-        ..c
-    };
     let v = vec![
         case(
             "a refusal with a card",
@@ -705,7 +701,7 @@ fn organization_answers_as_the_shell_does() {
             0,
             1,
         ),
-        traceback(case(
+        case(
             "Python raises part way",
             &["list"],
             &[],
@@ -713,8 +709,8 @@ fn organization_answers_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "Python raises on a text that is no string",
             &["bulletin"],
             &[],
@@ -722,8 +718,8 @@ fn organization_answers_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "night with a governor that is a list",
             &["night"],
             &[],
@@ -731,7 +727,7 @@ fn organization_answers_as_the_shell_does() {
             owner_and_port,
             1,
             1,
-        )),
+        ),
         case(
             "many orgs",
             &["list"],

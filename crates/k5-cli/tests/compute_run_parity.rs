@@ -463,7 +463,7 @@ fn compute_run_detached_and_planned() {
             1,
             1,
         ))),
-        traceback(case(
+        case(
             "the job's reader raises",
             &["run", "--detach", "--", "x"],
             &[],
@@ -471,8 +471,8 @@ fn compute_run_detached_and_planned() {
             owner_and_port,
             1,
             1,
-        )),
-        traceback(case(
+        ),
+        case(
             "an id that is no string",
             &["run", "--detach", "--", "x"],
             &[],
@@ -482,7 +482,7 @@ fn compute_run_detached_and_planned() {
             owner_and_port,
             1,
             1,
-        )),
+        ),
         traceback(case(
             "the plan's reader raises",
             &["run", "--plan", "--", "x"],

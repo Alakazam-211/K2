@@ -546,6 +546,8 @@ mod tests {
 
     const LEADER_CHILD_READY: &str = "leader-child-ready";
 
+    // Sessions (setsid/getsid) are Unix-only; spawn_own_session is too.
+    #[cfg(unix)]
     #[test]
     fn a_job_run_leads_its_own_session() {
         let mut c = std::process::Command::new("sleep");

@@ -401,6 +401,13 @@ fn template_hire_with_no_dir_goes_under_the_hire_root() {
     let home = setup();
     let root = home.path().join("hire-root");
     fs::create_dir_all(&root).unwrap();
+    // Only this user can change the home and the root, whatever the umask
+    // (a hire root another user could change is refused).
+    #[cfg(unix)]
+    for d in [home.path(), root.as_path()] {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(d, fs::Permissions::from_mode(0o700)).expect("chmod");
+    }
     let auth = crate::hire::converge::ConvergeAuthority { new_workspace_root: Some(root.clone()), ..crate::hire::converge::ConvergeAuthority::unrestricted() };
     let name = uniq("Max");
     let mut r = ApplyRequest::new("writer");

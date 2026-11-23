@@ -552,6 +552,88 @@ fn heal_skips_and_refusals() {
     assert!(f.updates.borrow().is_empty());
 }
 
+/// Signed assets for `version` whose ELF is padded to `elf_len` bytes.
+fn signed_assets_sized(version: &str, elf_len: usize) -> HashMap<String, Vec<u8>> {
+    let mut elf = fake_elf("x86_64", &format_marker(version, 4, "x86_64"));
+    assert!(elf_len >= elf.len());
+    elf.resize(elf_len, 0);
+    let sig = sign_with_test_key(&elf, &trusted_comment("x86_64", version, 4));
+    let url = format!("{BASE}/v{version}/k2-root-helper-linux-x86_64");
+    HashMap::from([(url.clone(), elf), (format!("{url}.sig"), sig.into_bytes())])
+}
+
+fn plan_for(version: &str) -> Plan {
+    Plan {
+        daemon_version: version.into(),
+        ..plan()
+    }
+}
+
+#[test]
+fn heal_sends_a_pre_0_46_18_helper_nothing_over_its_8_mib_cap() {
+    use k2_root_proto::verbs::{CAP_SELF_UPDATE, CAP_SELF_UPDATE_LEGACY};
+    // 0.46.17's real x86_64 helper: 8,836,200 bytes. A 0.46.16 helper
+    // refuses it, so heal refuses first, without a root call, and names
+    // the installer.
+    let f = fake(vec![root_at("0.46.16", 18)], signed_assets_sized("0.46.17", 8_836_200));
+    let out = heal_with(&f, &plan_for("0.46.17"));
+    let Outcome::Retry { reason } = &out else { panic!("{out:?}") };
+    assert!(reason.contains("install-root-helper.sh as root"), "{reason}");
+    assert!(reason.contains("/v0.46.17/install-root-helper.sh"), "{reason}");
+    assert!(reason.contains(&CAP_SELF_UPDATE_LEGACY.to_string()), "{reason}");
+    assert!(reason.contains("(v0.46.16)"), "{reason}");
+    assert!(f.updates.borrow().is_empty(), "no self-update was sent");
+    // Unknown version: treated as old.
+    let mut st = root_at("0.46.16", 18);
+    st.version = None;
+    let f = fake(vec![st], signed_assets_sized("0.46.17", 8_836_200));
+    assert!(matches!(heal_with(&f, &plan_for("0.46.17")), Outcome::Retry { .. }));
+    assert!(f.updates.borrow().is_empty());
+
+    // Under 8 MiB with the signature: an old helper takes it.
+    let elf_len = CAP_SELF_UPDATE_LEGACY - 4096;
+    let f = fake(
+        vec![root_at("0.46.16", 18), root_at("0.46.18", 18)],
+        signed_assets_sized("0.46.18", elf_len),
+    );
+    assert_eq!(
+        heal_with(&f, &plan_for("0.46.18")),
+        Outcome::Updated { from: "0.46.16".into(), to: "0.46.18".into() }
+    );
+    let sent = f.updates.borrow()[0];
+    assert!(sent <= CAP_SELF_UPDATE_LEGACY && sent > elf_len, "{sent}");
+
+    // One byte over 8 MiB, payload and all: refused for an old helper...
+    let sig_len = {
+        let a = signed_assets_sized("0.46.18", elf_len);
+        a[&format!("{BASE}/v0.46.18/k2-root-helper-linux-x86_64.sig")].len()
+    };
+    let over = CAP_SELF_UPDATE_LEGACY - 4 - sig_len + 1;
+    let f = fake(vec![root_at("0.46.17", 18)], signed_assets_sized("0.46.18", over));
+    assert!(matches!(heal_with(&f, &plan_for("0.46.18")), Outcome::Retry { .. }));
+    assert!(f.updates.borrow().is_empty());
+    // ...exactly 8 MiB goes.
+    let f = fake(
+        vec![root_at("0.46.17", 18), root_at("0.46.18", 18)],
+        signed_assets_sized("0.46.18", over - 1),
+    );
+    assert!(matches!(heal_with(&f, &plan_for("0.46.18")), Outcome::Updated { .. }));
+    assert_eq!(f.updates.borrow()[0], CAP_SELF_UPDATE_LEGACY);
+
+    // A 0.46.18+ helper takes the big cap: 9 MiB goes.
+    let f = fake(
+        vec![root_at("0.46.18", 19), root_at("0.46.19", 19)],
+        signed_assets_sized("0.46.19", 9 * 1024 * 1024),
+    );
+    assert!(matches!(heal_with(&f, &plan_for("0.46.19")), Outcome::Updated { .. }));
+    // ...but not over 32 MiB.
+    let f = fake(vec![root_at("0.46.18", 19)], signed_assets_sized("0.46.19", CAP_SELF_UPDATE));
+    let out = heal_with(&f, &plan_for("0.46.19"));
+    let Outcome::Retry { reason } = &out else { panic!("{out:?}") };
+    assert!(reason.contains(&CAP_SELF_UPDATE.to_string()), "{reason}");
+    assert!(f.updates.borrow().is_empty());
+}
+
 #[test]
 fn heal_takes_the_mail_latch_only_for_the_install_window() {
     // Up to date: never asks for the latch.

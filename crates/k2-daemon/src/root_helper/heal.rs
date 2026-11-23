@@ -166,12 +166,35 @@ pub fn heal_with(ops: &dyn HealOps, plan: &Plan) -> Outcome {
             ),
         };
     }
+    // The installed helper reads at most its own cap from stdin (8 MiB
+    // before 0.46.18): never send it a payload it will refuse. Only a
+    // root install can move such a helper past it.
+    let cap = k2_root_proto::verbs::self_update_cap_of(st.version.as_deref());
+    let size = encode_payload(&sig, &elf).len();
+    if size > cap {
+        return Outcome::Retry {
+            reason: too_big_reason(&st, want, size, cap, &plan.base_url),
+        };
+    }
     if !ops.begin_busy() {
         return Outcome::Deferred;
     }
     let out = install_window(ops, &st, want, &sig, &elf);
     ops.end_busy();
     out
+}
+
+/// Why heal won't send a payload over the installed helper's cap, and the
+/// one root step that gets past it.
+fn too_big_reason(st: &RootHelperState, want: Semver, size: usize, cap: usize, base_url: &str) -> String {
+    format!(
+        "the signed v{want} helper update is {size} bytes, over the {cap} bytes the installed helper (v{have}) \
+         takes by self-update ({mib} MiB), so it can't update itself: install with install-root-helper.sh as root \
+         (curl -fsSL {base}/v{want}/install-root-helper.sh | sudo bash -s -- --version {want})",
+        have = st.version.as_deref().unwrap_or("?"),
+        mib = cap / (1024 * 1024),
+        base = base_url.trim_end_matches('/'),
+    )
 }
 
 /// self-update → re-check → rollback, inside the busy latch.
@@ -348,9 +371,11 @@ impl HealOps for LiveOps {
             return Err(FetchError::Other(format!("HTTP {}", resp.status())));
         }
         let b = resp.bytes().map_err(|e| FetchError::Other(e.to_string()))?;
+        // A bound on the download: no helper takes more. heal_with checks
+        // the installed helper's own cap (8 MiB before 0.46.18).
         if b.len() > k2_root_proto::verbs::CAP_SELF_UPDATE {
             return Err(FetchError::Other(
-                "asset larger than the self-update cap".into(),
+                "asset larger than any helper's self-update cap".into(),
             ));
         }
         Ok(b.to_vec())

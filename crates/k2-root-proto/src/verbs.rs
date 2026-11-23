@@ -27,7 +27,30 @@ pub mod exit {
 pub const CAP_TEMPLATE: usize = 64 * 1024;
 pub const CAP_SQL: usize = 64 * 1024;
 pub const CAP_INSTALL_BIN: usize = 256 * 1024 * 1024;
-pub const CAP_SELF_UPDATE: usize = 8 * 1024 * 1024;
+/// `helper self-update` (`<u32 BE sig len><sig><ELF>`) in helpers from
+/// [`SELF_UPDATE_BIG_CAP_FROM`] on. Helpers before it enforce
+/// [`CAP_SELF_UPDATE_LEGACY`]; the daemon sends each helper only what its
+/// own cap takes ([`self_update_cap_of`]).
+pub const CAP_SELF_UPDATE: usize = 32 * 1024 * 1024;
+/// The self-update cap of every helper up to 0.46.17. Their stdin read
+/// refuses more, so a release's helper must fit it while such helpers are
+/// in the field (scripts/lib/root-helper-size.sh gates the build).
+pub const CAP_SELF_UPDATE_LEGACY: usize = 8 * 1024 * 1024;
+/// The first helper version whose self-update takes [`CAP_SELF_UPDATE`].
+pub const SELF_UPDATE_BIG_CAP_FROM: crate::version::Semver = crate::version::Semver(0, 46, 18);
+/// What the release gate keeps free under a cap for the signature and its
+/// length prefix (a minisign signature is about 300 bytes).
+pub const SELF_UPDATE_SIG_ROOM: usize = 4096;
+
+/// The self-update payload cap of an installed helper that reported
+/// `version` (`helper version`). Unknown or unreadable: the legacy cap (a
+/// helper that can't say it is new is treated as old).
+pub fn self_update_cap_of(version: Option<&str>) -> usize {
+    match version.and_then(crate::version::Semver::parse) {
+        Some(v) if v >= SELF_UPDATE_BIG_CAP_FROM => CAP_SELF_UPDATE,
+        _ => CAP_SELF_UPDATE_LEGACY,
+    }
+}
 /// `apps install-engine`: `<u32 BE sig len><sig><ELF>` of k2-app-engine.
 pub const CAP_ENGINE: usize = 64 * 1024 * 1024;
 /// `engine sew rotate-master`: 43 base64url chars + an optional `\n`.
@@ -2843,6 +2866,37 @@ mod tests {
         assert_eq!(Verb::parse(&["creds", "bind", "a.service", "v"]).unwrap().stdin_cap(), None);
         assert!(!Verb::parse(&["creds", "status"]).unwrap().takes_lock());
         assert!(Verb::parse(&["creds", "put", "v"]).unwrap().takes_lock());
+    }
+
+    #[test]
+    fn self_update_cap_follows_the_installed_helper() {
+        assert_eq!(CAP_SELF_UPDATE, 32 * 1024 * 1024);
+        assert_eq!(CAP_SELF_UPDATE_LEGACY, 8 * 1024 * 1024);
+        // Every fielded helper up to 0.46.17 has the 8 MiB cap.
+        for v in ["0.46.17", "0.46.16", "0.45.0", "0.40.124"] {
+            assert_eq!(self_update_cap_of(Some(v)), CAP_SELF_UPDATE_LEGACY, "{v}");
+        }
+        for v in ["0.46.18", "0.46.19", "0.47.0", "1.0.0"] {
+            assert_eq!(self_update_cap_of(Some(v)), CAP_SELF_UPDATE, "{v}");
+        }
+        // Can't tell: old.
+        for v in [None, Some(""), Some("dev"), Some("0.47"), Some("0.47.0-rc1")] {
+            assert_eq!(self_update_cap_of(v), CAP_SELF_UPDATE_LEGACY, "{v:?}");
+        }
+    }
+
+    /// The release gate's numbers are these constants (it can't read Rust).
+    #[test]
+    fn release_size_gate_matches_the_legacy_cap() {
+        let gate = include_str!("../../../scripts/lib/root-helper-size.sh");
+        assert!(
+            gate.contains(&format!("\nK2_ROOT_HELPER_FIELDED_CAP={CAP_SELF_UPDATE_LEGACY}\n")),
+            "scripts/lib/root-helper-size.sh: K2_ROOT_HELPER_FIELDED_CAP must be {CAP_SELF_UPDATE_LEGACY}"
+        );
+        assert!(
+            gate.contains(&format!("\nK2_ROOT_HELPER_SIG_ROOM={SELF_UPDATE_SIG_ROOM}\n")),
+            "scripts/lib/root-helper-size.sh: K2_ROOT_HELPER_SIG_ROOM must be {SELF_UPDATE_SIG_ROOM}"
+        );
     }
 
     #[test]

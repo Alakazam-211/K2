@@ -936,6 +936,13 @@ pub struct Plan {
     /// Never stripped on the way to a node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<crate::jobnet::JobNet>,
+    /// 0.46.18, `--userns` ([`crate::userns`]): the job may make user
+    /// namespaces (the node's owner granted its workspace that, on a node
+    /// its own server owns). False unless asked, so every other plan and
+    /// digest is unchanged; sent only to nodes offering
+    /// [`crate::userns::FEATURE_JOB_USERNS`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub userns: bool,
 }
 
 impl Plan {
@@ -1963,6 +1970,7 @@ mod tests {
             setup: Vec::new(),
             cpus_burst: None, provenance: None,
             network: None,
+            userns: false,
         }
     }
 

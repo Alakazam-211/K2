@@ -61,6 +61,7 @@ fn job(conn: &rusqlite::Connection, id: &str, node_id: &str, ended_ago: Option<i
         cpus_burst: None,
         provenance: None,
         network: None,
+        userns: false,
         with: Vec::new(),
     };
     store::insert_job(

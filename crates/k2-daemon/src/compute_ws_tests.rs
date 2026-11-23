@@ -31,6 +31,7 @@ pub(super) fn job_on(conn: &rusqlite::Connection, id: &str, node: &str) -> store
         cache: None,
         src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
         network: None,
+        userns: false,
         with: Vec::new(),
     };
     store::insert_job(

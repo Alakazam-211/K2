@@ -92,5 +92,6 @@ pub mod sim;
 pub mod stall;
 pub mod ticket;
 pub mod tiers;
+pub mod userns;
 
 pub use frames::PROTOCOL;

@@ -51,6 +51,7 @@ fn plan(id: &str, env: &[(&str, &str)], created_at: i64) -> Plan {
         cpus_burst: None,
         provenance: None,
         network: None,
+        userns: false,
         with: Vec::new(),
     }
 }

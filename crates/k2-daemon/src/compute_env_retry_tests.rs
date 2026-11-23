@@ -46,6 +46,7 @@ fn plan(id: &str) -> Plan {
         cpus_burst: None,
         provenance: None,
         network: None,
+        userns: false,
         with: Vec::new(),
     }
 }

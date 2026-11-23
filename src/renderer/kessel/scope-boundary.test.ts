@@ -194,6 +194,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // window's own server, like every other window-level route.
   'components/SendFeedback/SendFeedbackDialog.tsx',
   'components/Settings/sections/SendFeedbackRows.tsx',
+  // Settings, Getting started: restart and Kessel's welcome on the
+  // window's own server, like the setup list it restarts.
+  'components/Settings/sections/GettingStartedSection.tsx',
   'components/Settings/sections/HeartbeatsSection.tsx',
   'components/Settings/sections/K2ConnectSection.tsx',
   'components/Settings/sections/LocalGrokBotsSection.tsx',

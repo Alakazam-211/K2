@@ -154,6 +154,45 @@ pub fn git_dirs(workspace: &Path) -> Vec<PathBuf> {
 /// separate from the owner's secrets (the home folder itself, or a folder
 /// holding `~/.k2`).
 pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
+    default_view_in(i, &secrets_roots())
+}
+
+/// The session's own secrets folder (`$K2_SECRETS_DIR`, set by the vault at
+/// spawn) as an environment variable name.
+pub const SECRETS_DIR_ENV: &str = "K2_SECRETS_DIR";
+
+/// Where K2 keeps per-session secrets folders and its runtime files on this
+/// box (the vault's and the runtime dir's chains), those that exist: the
+/// daemon's `$K2_RUNTIME_DIR`, the unit's `RuntimeDirectory`,
+/// `$XDG_RUNTIME_DIR/k2`, `/run/user/<uid>/k2`, `/run/k2`,
+/// `/dev/shm/k2-<uid>`. A fenced view leaves them all out but the session's
+/// own folder: they hold other sessions' secret files, passports and
+/// ssh-agent sockets, and `/run` and `/dev/shm` are otherwise open.
+pub fn secrets_roots() -> Vec<PathBuf> {
+    #[cfg(unix)]
+    // SAFETY: geteuid has no failure mode.
+    let uid = unsafe { libc::geteuid() };
+    #[cfg(not(unix))]
+    let uid = 0u32;
+    let env = |k: &str| std::env::var_os(k).filter(|x| !x.is_empty()).map(PathBuf::from);
+    let mut v: Vec<PathBuf> = Vec::new();
+    v.extend(env(crate::runtime_dir::RUNTIME_DIR_ENV));
+    v.extend(crate::runtime_dir::systemd_runtime_directory());
+    v.extend(env("XDG_RUNTIME_DIR").map(|x| x.join("k2")));
+    v.push(PathBuf::from(format!("/run/user/{uid}/k2")));
+    v.push(PathBuf::from("/run/k2"));
+    v.push(PathBuf::from(format!("/dev/shm/k2-{uid}")));
+    // The vault's ssh-agent folders when no memory root fits
+    // (`/tmp/k2a-<uid>-<n>/…/a.sock`).
+    let agent_prefix = format!("k2a-{uid}-");
+    if let Ok(rd) = std::fs::read_dir("/tmp") {
+        v.extend(rd.flatten().filter(|e| e.file_name().to_string_lossy().starts_with(&agent_prefix)).map(|e| e.path()));
+    }
+    v.into_iter().filter(|p| p.is_absolute() && p.exists()).collect()
+}
+
+/// [`default_view`] with the secrets roots given (tests).
+pub fn default_view_in(i: &ViewInputs, secrets: &[PathBuf]) -> Result<FenceView, String> {
     if !i.workspace.is_absolute() {
         return Err(format!("the workspace path {} isn't absolute", i.workspace.display()));
     }
@@ -197,8 +236,10 @@ pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
     for rel in HOME_CACHES_RW {
         v.rw.push(s(&i.home.join(rel)));
     }
-    // The CLI and the daemon's port (never the token files).
+    // The CLI and the daemon's port (never the token files), and K2's own
+    // hook scripts (notify, status line), read and run, nothing else there.
     v.ro.push(s(&i.k2_home.join("bin")));
+    v.ro.push(s(&i.k2_home.join("hooks")));
     v.ro.push(s(&i.k2_home.join("daemon.port")));
     v.ro.push(s(&i.k2_home.join("heartbeat.port")));
     // The harness logins this session runs on: exactly its own slot when
@@ -208,9 +249,18 @@ pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
     // No rule may cover the home folder or ~/.k2 as a whole (a home under
     // /tmp, or under /var, would sit inside a system rule): such a rule is
     // replaced by its contents minus the path down to them.
-    let avoid: Vec<PathBuf> = [i.home, i.k2_home].iter().map(|p| canon(p)).collect();
+    // Nor K2's secrets roots (other sessions' secret files, passports and
+    // ssh-agent sockets): the session's own folder is opened again by name,
+    // read-only, when it is one of theirs.
+    let mut avoid: Vec<PathBuf> = [i.home, i.k2_home].iter().map(|p| canon(p)).collect();
+    let roots: Vec<PathBuf> = secrets.iter().map(|p| canon(p)).collect();
+    avoid.extend(roots.iter().cloned());
     v.ro = carve_all(&v.ro, &avoid);
     v.rw = carve_all(&v.rw, &avoid);
+    let own = i.env.get(SECRETS_DIR_ENV).filter(|d| !d.is_empty()).map(|d| canon(Path::new(d)));
+    if let Some(own) = own.filter(|o| roots.iter().any(|r| o.starts_with(r) && o != r)) {
+        v.ro.push(s(&own));
+    }
     Ok(v)
 }
 
@@ -918,9 +968,54 @@ mod tests {
         let v = view(&ws).expect("git folders inside the workspace are fine");
         for p in v.rw.iter().chain(&v.ro) {
             let p = canon(Path::new(p));
-            assert!(!p.starts_with(canon(&k2)) || p.starts_with(canon(&tmp)) || p.ends_with("bin") || p.ends_with("daemon.port") || p.ends_with("heartbeat.port"), "{}", p.display());
+            assert!(!p.starts_with(canon(&k2)) || p.starts_with(canon(&tmp)) || p.ends_with("bin") || p.ends_with("hooks") || p.ends_with("daemon.port") || p.ends_with("heartbeat.port"), "{}", p.display());
             assert!(!p.starts_with(canon(&home.join(".ssh"))), "{}", p.display());
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The secrets roots leave a fenced view (other sessions' secret files,
+    /// passports and ssh-agent sockets), except the session's own folder,
+    /// opened read-only by name; the rest of the folder holding a root stays
+    /// open; `~/.k2/hooks` is read and run.
+    #[test]
+    fn a_fenced_view_leaves_other_sessions_secrets_out() {
+        let root = std::env::temp_dir().join(format!("k2-secview-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let k2 = home.join(".k2");
+        let ws = home.join("DevProjects/A");
+        let tmp = k2.join("agents/ws-a/tmp");
+        let secrets = root.join("run-k2");
+        let (own, other) = (secrets.join("own-1"), secrets.join("other-2"));
+        let beside = root.join("beside");
+        for d in [&ws, &tmp, &own, &other, &beside] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(other.join(".k2-passport"), "P").unwrap();
+        // A system-wide rule covering the root, the way `/run` and `/dev/shm` do.
+        let base = canon(&root);
+        let mut env = BTreeMap::new();
+        env.insert(SECRETS_DIR_ENV.to_string(), own.display().to_string());
+        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env };
+        let mut v = default_view_in(&i, &[secrets.clone()]).unwrap();
+        v.ro.push(base.display().to_string());
+        let avoid: Vec<PathBuf> = [canon(&home), canon(&k2), canon(&secrets)].to_vec();
+        v.ro = carve_all(&v.ro, &avoid);
+        v.ro.push(canon(&own).display().to_string());
+        let covers = |rules: &[String], p: &Path| rules.iter().any(|r| canon(p).starts_with(canon(Path::new(r))));
+        for (name, rules) in [("ro", &v.ro), ("rw", &v.rw)] {
+            assert!(!covers(rules, &other.join(".k2-passport")), "{name}: another session's folder stays out: {rules:?}");
+            assert!(!covers(rules, &other), "{name}: {rules:?}");
+        }
+        assert!(covers(&v.ro, &own), "the session's own folder is read: {:?}", v.ro);
+        assert!(covers(&v.ro, &beside), "what sits beside the roots stays open: {:?}", v.ro);
+        assert!(covers(&v.ro, &k2.join("hooks")), "the hooks are read and run: {:?}", v.ro);
+        // An own folder outside every root opens nothing more.
+        env.insert(SECRETS_DIR_ENV.to_string(), other.display().to_string());
+        let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env };
+        let v = default_view_in(&i, &[own.clone()]).unwrap();
+        assert!(!covers(&v.ro, &other) && !covers(&v.rw, &other), "{:?}", v.ro);
         let _ = std::fs::remove_dir_all(&root);
     }
 

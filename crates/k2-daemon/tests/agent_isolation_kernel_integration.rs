@@ -295,6 +295,23 @@ impl Daemon {
         assert_eq!(s, 200, "v2 spawn {key}: {resp}");
         serde_json::from_str::<Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string()
     }
+
+    /// [`Daemon::spawn`] with environment variables the owner sets.
+    fn spawn_env(&mut self, key: &str, ws: &Path, script: &str, env: Value) -> String {
+        let body = json!({
+            "agent_name": key,
+            "cwd": ws.to_string_lossy(),
+            "command": "/bin/sh",
+            "args": ["-c", script],
+            "cols": 100,
+            "rows": 30,
+            "env": env,
+        })
+        .to_string();
+        let (s, resp) = http(self.port, "POST", &format!("/cli/sessions/v2/spawn?token={}", self.token()), &body);
+        assert_eq!(s, 200, "v2 spawn {key}: {resp}");
+        serde_json::from_str::<Value>(&resp).unwrap()["sessionId"].as_str().expect("sessionId").to_string()
+    }
 }
 
 /// What a session script wrote: `key value…` lines.
@@ -1136,4 +1153,55 @@ echo "done" >> $R; exec sleep 3600
     println!("row P2b: systemd-run --user --scope from a fenced session: {}", r["user_scope"]);
     println!("row P7a: the owner's tmux socket visible to the fenced session (0 = yes): {}", r["tmux_socket_visible"]);
     println!("row P7b: tmux new-window on the owner's server: {} · the window read the key: {}", r["tmux_new_window"], r["tmux_window_ran"]);
+}
+
+/// A fenced session can't read another session's secrets folder (its
+/// secret files and passport) under one of K2's secrets roots, here
+/// `/dev/shm/k2-<uid>`, which the view otherwise opens read-write; its own
+/// folder (`$K2_SECRETS_DIR`) still reads. (Connecting to another folder's
+/// ssh-agent socket is the Unix-socket block's, not this test's.)
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn a_fenced_session_reads_no_other_sessions_secrets() {
+    let _unit = preflight();
+    // SAFETY: no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let root = PathBuf::from(format!("/dev/shm/k2-{uid}"));
+    let other = root.join(format!("k2isotest-other-{}", std::process::id()));
+    let own = root.join(format!("k2isotest-own-{}", std::process::id()));
+    for d in [&other, &own] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(other.join("STRIPE_KEY"), "OTHER SECRET\n").unwrap();
+    std::fs::write(other.join(".k2-passport"), "OTHER PASSPORT\n").unwrap();
+    std::fs::write(own.join("MY_KEY"), "MY SECRET\n").unwrap();
+    let mut d = Daemon::new("secrets");
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    d.set_fence(&a_id, true);
+    let script = format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid
+cat {o}/STRIPE_KEY > {a}/o1 2>&1; echo "other_secret $? $(head -c 120 {a}/o1)" >> $R
+cat {o}/.k2-passport > {a}/o2 2>&1; echo "other_passport $? $(head -c 120 {a}/o2)" >> $R
+ls {o} > {a}/o3 2>&1; echo "other_list $? $(head -c 120 {a}/o3 | tr '\n' ' ')" >> $R
+cat {m}/MY_KEY > {a}/o4 2>&1; echo "own_secret $? $(head -c 120 {a}/o4)" >> $R
+echo "secrets_dir $K2_SECRETS_DIR" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        o = other.display(),
+        m = own.display(),
+    );
+    d.spawn_env("tab-a", &a_ws, &script, json!({ "K2_SECRETS_DIR": own.display().to_string() }));
+    let r = results(&a_ws.join("results"), "done");
+    let a_pid: i32 = std::fs::read_to_string(a_ws.join("pid")).unwrap().trim().parse().unwrap();
+    d.pids.push(a_pid);
+    let _ = std::fs::remove_dir_all(&other);
+    let _ = std::fs::remove_dir_all(&own);
+    println!("secrets: {r:?}");
+    assert_eq!(r["secrets_dir"], own.display().to_string(), "the session got its own folder");
+    for row in ["other_secret", "other_passport", "other_list"] {
+        assert!(denied(&r[row]), "{row}: another session's folder can't be read: {}", r[row]);
+    }
+    assert!(r["own_secret"].starts_with("0 MY SECRET"), "the session's own folder reads: {}", r["own_secret"]);
 }

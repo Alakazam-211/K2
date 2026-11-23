@@ -6,6 +6,9 @@ Manage this workspace's connections to other workspaces (agents).
                     --users also prints humans on this host (do not k2 msg those names).
   add <name>        Connect to another workspace (name, path, or <agent>::<host>)
                     Legacy <agent>@<host> still accepted.
+    [--note "…"]    A short note (one line, at most 500 characters) K2 delivers
+                    once to both agents' inboxes: "Connected to @x by …. Note: …"
+                    (a workspace on this server; nothing when already connected).
   remove <name>     Disconnect from a workspace
 
 AGENT GATE (create / remove)
@@ -19,7 +22,7 @@ AGENT GATE (create / remove)
 TWO OTHER WORKSPACES
   An agent never connects two other workspaces itself. It asks a person, by
   exact handle: k2 permission request connections.add-between from=<handle>
-  to=<handle> --why "…". The card names both, with folder and connection
+  to=<handle> [note="…"] --why "…". The card names both, with folder and connection
   count (a hub shows); an owner or admin allows it.
 
 MSG / READ PEER GATE

@@ -21,6 +21,8 @@
 // - A pick arms a one-line confirm ("Connect A ↔ B?"); the same row again
 //   (click or Enter) or Connect adds it, Cancel drops it. A wrong
 //   connection is an isolation leak, so nothing connects on one click.
+// - A connection on this server may carry a short note (0.46.18 papercut
+//   8): K2 delivers it once to both agents' inboxes.
 // - Adding keeps the picker open; the row turns checked once the
 //   connection lists reload. Errors show in the footer.
 // - Esc, or a press anywhere outside the picker and its + button, closes
@@ -62,8 +64,9 @@ export interface AddConnectionPickerProps {
   connectedLocalIds: ReadonlySet<string>
   /** Remote `agent::host` addresses it already connects to (lowercase). */
   connectedRemoteAddrs: ReadonlySet<string>
-  /** Add a local connection. Throws to report an error. */
-  onAddLocal: (targetProjectId: string) => Promise<void>
+  /** Add a local connection, with the note for both agents when one was
+   *  written. Throws to report an error. */
+  onAddLocal: (targetProjectId: string, note?: string) => Promise<void>
   /** Add a federated connection to `agent::host`. Throws to report an
    *  error; a returned string is a warning to show. */
   onAddRemote: (target: string) => Promise<string | null>
@@ -150,6 +153,8 @@ export function AddConnectionPicker({
   const [note, setNote] = useState<Note | null>(null)
   /** The pick waiting for its confirm. */
   const [armed, setArmed] = useState<string | null>(null)
+  /** The note for both agents (a connection on this server only). */
+  const [noteText, setNoteText] = useState('')
   const alive = useRef(true)
   const loadSeq = useRef(0)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -448,6 +453,8 @@ export function AddConnectionPicker({
       return
     }
     setArmed(null)
+    const sentNote = noteText.trim() || undefined
+    setNoteText('')
     setBusy((prev) => new Set(prev).add(value))
     setNote(null)
     const done = (): void => {
@@ -458,7 +465,7 @@ export function AddConnectionPicker({
         return next
       })
     }
-    const run = pick.kind === 'local' ? onAddLocal(pick.id).then(() => null) : onAddRemote(pick.target)
+    const run = pick.kind === 'local' ? onAddLocal(pick.id, sentNote).then(() => null) : onAddRemote(pick.target)
     void run
       .then((warning) => {
         if (alive.current && warning) setNote({ tone: 'muted', text: warning })
@@ -501,6 +508,23 @@ export function AddConnectionPicker({
               </strong>
             )}
           </span>
+          {armedPick.kind === 'local' && (
+            <input
+              type="text"
+              className="no-drag min-w-0 w-40 px-1.5 py-0.5 border border-[var(--color-border)] bg-transparent"
+              placeholder="Note for both (optional)"
+              aria-label="Note for both agents"
+              maxLength={500}
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  onPick(armed)
+                }
+              }}
+            />
+          )}
           <button
             type="button"
             className="no-drag px-2 py-0.5 border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
@@ -511,7 +535,10 @@ export function AddConnectionPicker({
           <button
             type="button"
             className="no-drag px-2 py-0.5 hover:text-[var(--color-text-primary)] cursor-pointer"
-            onClick={() => setArmed(null)}
+            onClick={() => {
+              setArmed(null)
+              setNoteText('')
+            }}
           >
             Cancel
           </button>

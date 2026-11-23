@@ -945,6 +945,8 @@ struct RelationCreateBody {
     source_project_id: String,
     target_project_id: String,
     relation_type: Option<String>,
+    /// 0.46.18 papercut 8: a short note K2 delivers once to both agents.
+    note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1384,14 +1386,22 @@ pub fn handle_relations_create(body: &[u8], actor_is_privileged: bool) -> CliRes
     if let Err(r) = gate_relations_mutate(&b.source_project_id, actor_is_privileged) {
         return r;
     }
+    let note = match crate::connection_note::checked(b.note.as_deref()) {
+        Ok(n) => n,
+        Err(e) => return CliResponse::bad_request(e),
+    };
     match k2_core::workspace::relations::workspace_relations_create(
         b.source_project_id,
         b.target_project_id,
         b.relation_type,
     ) {
-        Ok(rel) => CliResponse::ok_json(
-            serde_json::to_string(&rel).unwrap_or_else(|_| "{}".to_string()),
-        ),
+        Ok(rel) => {
+            if let Some(n) = note.as_deref() {
+                let by = crate::connection_note::by_words(&rel.source_project_id, false, actor_is_privileged);
+                crate::connection_note::deliver(&rel.source_project_id, &rel.target_project_id, n, &by);
+            }
+            CliResponse::ok_json(serde_json::to_string(&rel).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }

@@ -513,8 +513,21 @@ else:
 " <<< "$raw"
             ;;
         add)
-            local target="${1:-}"
+            local target="${1:-}" note=""
             [[ -z "$target" ]] && { echo "Usage: k2 connections add <workspace-name>" >&2; exit 1; }
+            # 0.46.18: --note "…" after the name: K2 delivers it once to
+            # both agents' inboxes (a connection on this server). Any other
+            # word after the name is not read, as before.
+            shift
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --note) _need_value "$@"; note="${2-}"; shift 2 ;;
+                    --note=*) note="${1#--note=}"; shift ;;
+                    *) shift ;;
+                esac
+            done
+            local note_pair=""
+            [[ -n "$note" ]] && note_pair="&note=$(urlencode "$note")"
             # 0.39.45 (#32): NEVER exit silently. Errors used to go to
             # stderr and then get eaten by a 2>/dev/null on this pipe —
             # a failed add looked identical to success with no output.
@@ -522,7 +535,7 @@ else:
             # Settings path (agents_create_connections_disabled).
             # 0.46.16: every error goes to stderr; stdout carries only the
             # result lines. Exit codes are unchanged.
-            cli_request_post "/cli/connections" "action=add&target=$(urlencode "$target")" | python3 -c "
+            cli_request_post "/cli/connections" "action=add&target=$(urlencode "$target")$note_pair" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
 try:

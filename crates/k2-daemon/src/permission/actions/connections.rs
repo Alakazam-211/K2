@@ -111,6 +111,8 @@ pub(crate) static ADD_BETWEEN: ActionSpec = ActionSpec {
     params: &[
         ParamSpec { key: "from", kind: ParamKind::Workspace, required: true, list: false, choices: &[] },
         ParamSpec { key: "to", kind: ParamKind::Workspace, required: true, list: false, choices: &[] },
+        // 0.46.18 papercut 8: a short note K2 delivers once to both agents.
+        ParamSpec { key: "note", kind: ParamKind::Text, required: false, list: false, choices: &[] },
     ],
     floor: Floor::Admin,
     direction: Direction::Loosen,
@@ -121,7 +123,7 @@ pub(crate) static ADD_BETWEEN: ActionSpec = ActionSpec {
         setting: "Connections",
         what_changes: "Connect {from} to {to}",
         consequences: "{from_detail} and {to_detail} can message each other. {ws} asked for it and gets no connection itself. \
-            Check both: a wrong workspace, or a hub, gives it many peers at once.",
+            Check both: a wrong workspace, or a hub, gives it many peers at once.{note_words}",
         scope: "{from} and {to}",
         duration: "once",
         retry: "",
@@ -267,10 +269,18 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
         };
         out.params.insert(format!("{key}_detail"), serde_json::Value::String(words));
     }
+    let note_words = match crate::connection_note::checked(param(ctx, "note")) {
+        Ok(Some(n)) => format!(" {} tells both agents once: \"{n}\"", k2_core::brand::PRODUCT_NAME),
+        _ => String::new(),
+    };
+    out.params.insert("note_words".to_string(), serde_json::Value::String(note_words));
     Some(out)
 }
 
 fn check_add_between(ctx: &Ctx) -> Check {
+    if let Err(e) = crate::connection_note::checked(param(ctx, "note")) {
+        return Check::Moved(e);
+    }
     match between(ctx) {
         Ok((from, to)) => check_state(true, k2_core::connections::are_local_peers(&from.0, &to.0)),
         Err(m) => Check::Moved(m),
@@ -282,7 +292,8 @@ fn apply_add_between(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Appli
         Ok(x) => x,
         Err(m) => return Applied::Refused { code: "workspace_not_found".into(), message: m },
     };
-    applied(&crate::misc_routes::connections_add_entry(who, &from.1, &to.2), format!("Connected {} to {}.", from.2, to.2))
+    let note = param(ctx, "note");
+    applied(&crate::misc_routes::connections_add_entry(who, &from.1, &to.2, note), format!("Connected {} to {}.", from.2, to.2))
 }
 
 fn check_add(ctx: &Ctx) -> Check {
@@ -296,7 +307,7 @@ fn apply_add(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     let (Some(p), Some(to)) = (ws_path(&ctx.workspace_id), param(ctx, "to")) else {
         return Applied::Refused { code: "workspace_not_found".into(), message: GONE.into() };
     };
-    applied(&crate::misc_routes::connections_add_entry(who, &p, to), format!("Connected {} to {to}.", ctx.workspace_handle))
+    applied(&crate::misc_routes::connections_add_entry(who, &p, to, None), format!("Connected {} to {to}.", ctx.workspace_handle))
 }
 
 pub(crate) fn actions() -> Vec<Registered> {

@@ -126,7 +126,7 @@ const ok = (body: unknown): Handler => async (route) => {
 function Harness(props: {
   remote?: string[]
   local?: string[]
-  onAddLocal?: (id: string) => Promise<void>
+  onAddLocal?: (id: string, note?: string) => Promise<void>
   onAddRemote?: (t: string) => Promise<string | null>
   onClose?: () => void
 }): React.JSX.Element {
@@ -141,8 +141,9 @@ function Harness(props: {
       projectId={SELF}
       connectedLocalIds={localSet}
       connectedRemoteAddrs={remoteSet}
-      onAddLocal={async (id) => {
-        await (props.onAddLocal ?? (async () => undefined))(id)
+      onAddLocal={async (id, note) => {
+        const add = props.onAddLocal ?? (async () => undefined)
+        await (note === undefined ? add(id) : add(id, note))
         setLocal((l) => [...l, id])
       }}
       onAddRemote={async (t) => {
@@ -405,8 +406,10 @@ describe('AddConnectionPicker: who each row is, and the confirm (0.46.18)', () =
     expect(document.querySelector('[data-picker-confirm]')).toBeNull()
     expect(onAddLocal).not.toHaveBeenCalled()
     fireEvent.click(hubRow)
+    // A note for both agents rides the connection (papercut 8).
+    fireEvent.change(screen.getByLabelText('Note for both agents'), { target: { value: '  brief only  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
-    await waitFor(() => expect(onAddLocal).toHaveBeenCalledWith('ws-cortana'))
+    await waitFor(() => expect(onAddLocal).toHaveBeenCalledWith('ws-cortana', 'brief only'))
     expect(onAddLocal).toHaveBeenCalledTimes(1)
   })
 })

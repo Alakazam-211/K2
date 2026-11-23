@@ -650,15 +650,23 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 // Scoped principal (agent) can never claim privilege via
                 // a client-supplied flag — stamp is server-only, but a
                 // body/query spoof of actor_privileged must not elevate.
-                let actor_is_privileged = if crate::caller_workspace::principal_from_params(params)
-                    .is_some()
-                {
+                let is_agent = crate::caller_workspace::principal_from_params(params).is_some();
+                let actor_is_privileged = if is_agent {
                     false
                 } else {
                     params
                         .get("actor_privileged")
                         .map(|s| s == "1" || s.eq_ignore_ascii_case("true"))
                         .unwrap_or(false)
+                };
+                // 0.46.18 papercut 8: an add's note, checked before the add.
+                let note = if action == "add" {
+                    match crate::connection_note::checked(params.get("note").map(String::as_str)) {
+                        Ok(n) => n,
+                        Err(e) => return Some(CliResponse::bad_request(e)),
+                    }
+                } else {
+                    None
                 };
                 match k2_core::connections::connections_for_actor(
                     &p,
@@ -668,6 +676,16 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     actor_is_privileged,
                 ) {
                     Ok(body) => {
+                        // The note, once, to both agents of a NEW local
+                        // connection (never on a noop or a remote add).
+                        if let Some(n) = note.as_deref() {
+                            let v: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                            if v["success"] == serde_json::Value::Bool(true) && v.get("noop").is_none() {
+                                if let Some(id) = v["id"].as_str() {
+                                    crate::connection_note::deliver_for_relation(id, n, is_agent, actor_is_privileged);
+                                }
+                            }
+                        }
                         // A7 / CA8: a remote add binds to the peer workspace
                         // when the peer answers (warn, never refuse).
                         let remote_target = target
@@ -1668,17 +1686,22 @@ pub(crate) fn connections_add_entry(
     who: &crate::permission::actions::Answerer,
     project_path: &str,
     target: &str,
+    note: Option<&str>,
 ) -> CliResponse {
     if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/connections") {
         return r;
     }
     let privileged = crate::permission::actions::switches::owner_or_admin(who);
-    let p = entry_params(&[
+    let mut pairs = vec![
         ("project", project_path),
         ("action", "add"),
         ("target", target),
         ("actor_privileged", if privileged { "1" } else { "0" }),
-    ]);
+    ];
+    if let Some(n) = note {
+        pairs.push(("note", n));
+    }
+    let p = entry_params(&pairs);
     dispatch("/cli/connections", &p).unwrap_or_else(CliResponse::not_found)
 }
 

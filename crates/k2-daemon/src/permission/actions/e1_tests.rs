@@ -632,6 +632,45 @@ fn connections_add_between_connects_two_other_workspaces_by_handle() {
         other => panic!("a Member connected two workspaces: {other:?}"),
     }
     assert!(!k2_core::connections::are_local_peers(&a.id, &c.id));
+
+    // 0.46.18 papercut 8: a note rides the connection, delivered once to
+    // both agents' inboxes; the card says so.
+    let d = seed("e1be");
+    let note = "Don't share the partners' information with this agent.";
+    let spec = actions::find("connections.add-between").expect("registered").spec;
+    let words = crate::permission::present::words(spec, &ctx(&asker, json!({ "from": c.handle, "to": d.handle, "note": note })));
+    assert!(words.consequences.contains(note), "{}", words.consequences);
+    ask_and_allow(&asker, "connections.add-between", json!({ "from": c.handle, "to": d.handle, "note": note }), "owner");
+    for (me, other) in [(&c, &d), (&d, &c)] {
+        let items = k2_core::inbox::list_root(std::path::Path::new(&me.path));
+        let mine: Vec<_> = items.iter().filter(|i| i.title == format!("Connected to @{}", other.handle)).collect();
+        assert_eq!(mine.len(), 1, "{} gets the note once: {items:?}", me.handle);
+        let body = k2_core::inbox::read_by_id(std::path::Path::new(&me.path), &mine[0].id).expect("read");
+        assert!(body.contains(&format!("Connected to @{} by the owner or an admin. Note: {note}", other.handle)), "{body}");
+    }
+    assert!(k2_core::inbox::list_root(std::path::Path::new(&asker.path)).iter().all(|i| !i.title.starts_with("Connected to @")), "the asker gets no note");
+}
+
+/// The note's rules on the Settings route and `k2 connections add --note`:
+/// too long is refused before anything changes; a noop delivers nothing.
+#[test]
+fn a_connection_note_is_checked_first_and_delivered_once() {
+    let _env = env();
+    let (a, b) = (seed("e1na"), seed("e1nb"));
+    let long = "x".repeat(crate::connection_note::MAX + 1);
+    let r = crate::agents_routes::handle_relations_create(
+        json!({ "source_project_id": a.id, "target_project_id": b.id, "note": long }).to_string().as_bytes(),
+        true,
+    );
+    assert!(r.status.starts_with("400"), "{}", r.body);
+    assert!(!k2_core::connections::are_local_peers(&a.id, &b.id), "nothing connected");
+    let r = crate::agents_routes::handle_relations_create(
+        json!({ "source_project_id": a.id, "target_project_id": b.id, "note": "brief only" }).to_string().as_bytes(),
+        true,
+    );
+    assert!(r.status.starts_with("200"), "{}", r.body);
+    let titles = |w: &Ws| k2_core::inbox::list_root(std::path::Path::new(&w.path)).into_iter().filter(|i| i.title.starts_with("Connected to @")).count();
+    assert_eq!((titles(&a), titles(&b)), (1, 1));
 }
 
 // ── GardenOwner (§5.2.1) ────────────────────────────────────────────

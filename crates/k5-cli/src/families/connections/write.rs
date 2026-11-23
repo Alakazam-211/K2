@@ -104,10 +104,14 @@ pub mod line {
 }
 
 /// The call and its reader, after the checks: `target` is the word after
-/// the verb.
-pub fn send(client: &mut Client, verb: Verb, target: &str) -> Exit {
+/// the verb; `note` the `--note` of an add ([`note`]).
+pub fn send(client: &mut Client, verb: Verb, target: &str, note: Option<&str>) -> Exit {
     let mut closing = Closing::default();
-    let target_pair = format!("target={}", quote(target));
+    // The shell's one "action=…&target=…[&note=…]" string, in its parts.
+    let target_pair = match note {
+        Some(n) => format!("target={}&note={}", quote(target), quote(n)),
+        None => format!("target={}", quote(target)),
+    };
     let action = format!("action={}", verb.word());
     let left = request_post_piped_tcp(
         client,
@@ -319,6 +323,36 @@ pub fn target<'a>(verb: Verb, rest: &[&'a str]) -> Result<&'a str, String> {
         Some(t) if !t.is_empty() => Ok(t),
         _ => Err(verb.usage()),
     }
+}
+
+/// `add`'s `--note <text>` or `--note=<text>` after the target (0.46.18),
+/// as the shell's loop reads them: the last one wins, any other word is
+/// skipped, an empty note is none. `--note` as the last word is the
+/// shell's `_need_value` line (`Err`, exit 2). `remove` reads none.
+pub fn note(verb: Verb, rest: &[&str]) -> Result<Option<String>, String> {
+    if verb != Verb::Add {
+        return Ok(None);
+    }
+    let mut note = String::new();
+    let mut i = 1;
+    while i < rest.len() {
+        let a = rest[i];
+        if a == "--note" {
+            match rest.get(i + 1) {
+                Some(v) => {
+                    note = (*v).to_string();
+                    i += 2;
+                }
+                None => return Err("Error: --note takes a value".to_string()),
+            }
+        } else {
+            if let Some(v) = a.strip_prefix("--note=") {
+                note = v.to_string();
+            }
+            i += 1;
+        }
+    }
+    Ok((!note.is_empty()).then_some(note))
 }
 
 /// Prints the usage line: exit 1.

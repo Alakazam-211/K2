@@ -4356,11 +4356,13 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
   // The picker stays open after an add (like Home's); it shows errors in
   // its own footer, so these throw instead of setting the panel errors.
   const handleAddLocal = useCallback(
-    async (targetProjectId: string) => {
+    async (targetProjectId: string, note?: string) => {
       setLocalError(null)
       await daemonCliPost(primaryScope(), 'relations/create', {
         source_project_id: projectId,
         target_project_id: targetProjectId,
+        // 0.46.18: K2 delivers the note once to both agents.
+        ...(note ? { note } : {}),
       })
       await fetchRelations()
     },

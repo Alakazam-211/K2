@@ -214,7 +214,13 @@ fn run_with(
             return Exit::Usage;
         }
         Form::Write(verb, rest) => match write::target(verb, &rest) {
-            Ok(t) => (Ask::default(), Some((verb, t))),
+            Ok(t) => match write::note(verb, &rest) {
+                Ok(n) => (Ask::default(), Some((verb, t, n))),
+                Err(line) => {
+                    out::stderr_line(&line);
+                    return Exit::Usage;
+                }
+            },
             Err(_) => return write::usage(verb),
         },
         Form::Unknown => {
@@ -241,8 +247,8 @@ fn run_with(
             return Exit::Error;
         }
     };
-    if let Some((verb, target)) = write {
-        return write::send(&mut client, verb, target);
+    if let Some((verb, target, note)) = write {
+        return write::send(&mut client, verb, target, note.as_deref());
     }
     let mut closing = Closing::default();
     let passport = client.passport().is_some();

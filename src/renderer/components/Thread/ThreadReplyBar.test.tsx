@@ -135,7 +135,7 @@ describe('reply bar: on the ear', () => {
 })
 
 describe('reply bar: Glass', () => {
-  it("the message box's own material and text colour: tile fill, sheen and shadow, no frost", () => {
+  it("the message box's own material and its placeholder colour: tile fill, sheen and shadow, no frost", () => {
     withSheets()
     for (const scheme of ['dark', 'light'] as const) {
       const { bar } = mount({ style: 'glass', scheme })
@@ -144,8 +144,8 @@ describe('reply bar: Glass', () => {
       expect(cs.backdropFilter === '' || cs.backdropFilter === 'none').toBe(true)
       expect(THREAD_REPLY_BAR_CSS).toContain('background: var(--tile-fill) !important;')
       expect(THREAD_REPLY_BAR_CSS).toContain('box-shadow: var(--tile-sheen), var(--tile-shadow);')
-      // The box's text colour (the box's textarea reads --zen-text), every word.
-      expect(cs.color).toBe('var(--zen-text)')
+      // The box's placeholder colour, every word: no brighter than the box's own hint.
+      expect(cs.color).toBe('var(--zen-compose-hint, var(--zen-text-muted))')
       for (const el of Array.from(bar.querySelectorAll('[data-reply-chip-who], [data-reply-chip-text], [data-reply-cancel]'))) {
         expect(getComputedStyle(el).color, el.outerHTML).not.toBe('var(--k2-jump-ink)')
       }

@@ -14,8 +14,10 @@
 // - Glass: the message box's own material (owner, 2026-11-22: the same
 //   glass as the box under it, and the box's text colour): the tile fill,
 //   sheen and shadow, the box's edge (the soft tile edge in dark Glass, the
-//   control edge in Veil), and the box's text colour. Opaque, so the words
-//   read the same over any message. The pill's size and type stay.
+//   control edge in Veil), and the words in the box's own placeholder
+//   colour, so the bar reads no brighter than the box's "Message the
+//   agent…" beside it. Opaque, so the words read the same over any message.
+//   The pill's size and type stay.
 // - Terminal: a solid raised surface, the control edge, cut corners.
 //
 // Home's DMs and channels use this bar too (ThreadChatComposer's `chips`).
@@ -50,7 +52,7 @@ ${B} [data-reply-cancel] { display: inline-flex; flex: none; align-items: center
 ${B} [data-reply-cancel]:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
 ${B} [data-reply-cancel]:focus-visible { outline: 2px solid ${RING}; outline-offset: 1px; }
 ${CHAMFER_SCOPE} ${B} [data-reply-cancel] { border-radius: 0; }
-${GLASS} ${B} { min-height: var(--k2-jump-h); padding: 0 4px 0 var(--k2-jump-pad); color: var(--zen-text); font-size: var(--k2-jump-type); font-weight: 400; background: var(--tile-fill) !important; --ch-fill: var(--tile-fill) !important; border: 1px solid var(--zen-control-edge, var(--zen-border)); box-shadow: var(--tile-sheen), var(--tile-shadow); }
+${GLASS} ${B} { min-height: var(--k2-jump-h); padding: 0 4px 0 var(--k2-jump-pad); color: var(--zen-compose-hint, var(--zen-text-muted)); font-size: var(--k2-jump-type); font-weight: 400; background: var(--tile-fill) !important; --ch-fill: var(--tile-fill) !important; border: 1px solid var(--zen-control-edge, var(--zen-border)); box-shadow: var(--tile-sheen), var(--tile-shadow); }
 ${GLASS_DARK} ${B} { border-color: var(--tile-edge); }
 `
 

@@ -1294,18 +1294,18 @@ fn phone_at_the_computer_and_nobody_answers() {
             &[],
             3,
         ),
-        // The shell's _vault_fail on the card's 200 exits 0 with no token,
-        // and the step goes on with a null confirmToken (a bash bug, copied).
+        // The card's 200 can't be read, so there is no token: both print
+        // no_confirm_token's line after the reader's traceback, exit 3, and
+        // send no step (before, the step went on with a null confirmToken).
         traceback(rekey(
             "rekey, nobody answers and the phone card's answer is unreadable",
             vec![
                 ok(OFFERED),
                 Reply::Answer(409, UNANSWERED.into()),
                 ok("not json"),
-                ok("{}"),
             ],
             &[],
-            0,
+            3,
         )),
         traceback(rekey(
             "rekey, a 409 that isn't JSON: no phone card",

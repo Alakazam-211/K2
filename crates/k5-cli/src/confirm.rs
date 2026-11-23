@@ -361,6 +361,9 @@ pub const NO_METHOD: &str = concat!(
     " vault confirm-password set"
 );
 
+/// `_vault_token_out`'s line: a confirm answer with no token in it.
+pub const NO_TOKEN: &str = "no_confirm_token: the confirm answer had no token, so nothing was sent";
+
 /// The setting's name is the one the shell reads (a stored name, not the
 /// brand's).
 pub const NO_PASSWORD_FOR_METHOD: &str = concat!(
@@ -419,31 +422,26 @@ fn text_field(v: &Result<Value, Raise>, key: &str, join: bool) -> String {
     }
 }
 
-/// `print(json.load(sys.stdin)["token"])`: the token, or the traceback
-/// (printed) and `None`.
-fn token_of(body: &[u8]) -> Option<String> {
-    let v = load(body);
-    let r = match &v {
-        Ok(Value::Object(pairs)) => match get(pairs, "token") {
-            Some(t) => return Some(py::str_of(t)),
-            None => Raise::at(1, "KeyError: 'token'"),
-        },
-        Ok(Value::Array(_)) => Raise::at(
-            1,
-            "TypeError: list indices must be integers or slices, not str",
-        ),
-        Ok(Value::Str(_)) => Raise::at(1, "TypeError: string indices must be integers, not 'str'"),
-        Ok(other) => Raise::at(
-            1,
-            format!(
-                "TypeError: '{}' object is not subscriptable",
-                py::type_name(other)
-            ),
-        ),
-        Err(r) => r.clone(),
+/// `_vault_token_out`, the reader of a confirm/finish answer: `Confirmed
+/// on your phone.` when the phone answered (`confirmedOn`), then the token.
+/// An answer with no token (missing, null, empty, not text, or not JSON):
+/// [`NO_TOKEN`] and `None`, so the caller ends the command and nothing is
+/// sent (before, a null token went out as the word "None").
+fn token_out(body: &[u8]) -> Option<String> {
+    let pairs = match load(body) {
+        Ok(Value::Object(pairs)) => pairs,
+        _ => Vec::new(),
     };
-    out::stderr_line(r.text().trim_end_matches('\n'));
-    None
+    if matches!(get(&pairs, "confirmedOn"), Some(Value::Str(t)) if *t == Text::from("phone")) {
+        out::stderr_line("Confirmed on your phone.");
+    }
+    match get(&pairs, "token") {
+        Some(t @ Value::Str(_)) if py::truthy(t) => Some(py::str_of(t)),
+        _ => {
+            out::stderr_line(NO_TOKEN);
+            None
+        }
+    }
 }
 
 /// What a confirm needs: the client, the vault socket, the caller's
@@ -641,12 +639,14 @@ pub fn confirm_token_with(
         out::stderr_line("Nobody answered on this computer.");
         let r = phone_raise(c, action, secret_id, label, extra);
         if r.req.is_empty() {
-            // `_vault_fail` on the phone card's own answer: a 200 there
-            // (its reader raised) exits 0 with no token.
-            return match fail(&r.split, c.closing, c.passport) {
-                Exit::Ok => Some(String::new()),
-                _ => None,
-            };
+            // No card: `_vault_fail` on the card's own answer, or, on a 200
+            // (its reader raised), no token.
+            if r.split.ok() {
+                out::stderr_line(NO_TOKEN);
+            } else {
+                fail(&r.split, c.closing, c.passport);
+            }
+            return None;
         }
         out::stderr_line(&format!(
             "Approve on your phone: {}. Waiting for your phone… (5 minutes)",
@@ -659,29 +659,7 @@ pub fn confirm_token_with(
         fail(&s, c.closing, c.passport);
         return None;
     }
-    token_after(&s.body)
-}
-
-/// The finish's reader: `Confirmed on your phone.` when the phone
-/// answered (`confirmedOn`), then the token; or the traceback (printed)
-/// and `None`.
-fn token_after(body: &[u8]) -> Option<String> {
-    let r = match load(body) {
-        Ok(Value::Object(pairs)) => {
-            if matches!(get(&pairs, "confirmedOn"), Some(Value::Str(t)) if *t == Text::from("phone"))
-            {
-                out::stderr_line("Confirmed on your phone.");
-            }
-            match get(&pairs, "token") {
-                Some(t) => return Some(py::str_of(t)),
-                None => Raise::at(6, "KeyError: 'token'"),
-            }
-        }
-        Ok(other) => Raise::no_attribute(4, &other, "get"),
-        Err(r) => Raise::at(3, r.exception),
-    };
-    out::stderr_line(r.text().trim_end_matches('\n'));
-    None
+    token_out(&s.body)
 }
 
 /// `no_phone_confirm` when the phone was asked for and isn't offered.
@@ -964,7 +942,7 @@ pub fn confirm_token_plan(
     drop(finish);
     let s = c.post("confirm/finish", body.expose()).ok()?;
     drop(body);
-    token_of(&s.body)
+    token_out(&s.body)
 }
 
 /// `case " $methods " in *" <word> "*)`.
@@ -1140,7 +1118,16 @@ mod tests {
         .unwrap();
         for l in OWNER_ONLY
             .iter()
-            .chain([NO_METHOD, NO_PASSWORD_FOR_METHOD, NO_PHONE_HERE, WINDOWS_HELLO_STAYS].iter())
+            .chain(
+                [
+                    NO_METHOD,
+                    NO_PASSWORD_FOR_METHOD,
+                    NO_PHONE_HERE,
+                    WINDOWS_HELLO_STAYS,
+                    NO_TOKEN,
+                ]
+                .iter(),
+            )
             .chain(
                 [
                     "where_word=\"this Mac (Touch ID or your login password)\"",
@@ -1178,5 +1165,32 @@ mod tests {
         .unwrap();
         assert!(job.contains("ask='Your K2 Connect password: '"));
         assert!(job.contains("_k2_read_hidden pw \"$ask\""));
+        // Both confirms read the token with the one reader.
+        assert!(job.contains("printf '%s' \"$_SC_BODY\" | _vault_token_out\n}"));
+        assert!(src.contains("printf '%s' \"$_SC_BODY\" | _vault_token_out\n}"));
+    }
+
+    #[test]
+    fn an_answer_with_no_token_is_none() {
+        assert_eq!(
+            token_out(br#"{"token": "tok-1", "expiresIn": 60}"#).as_deref(),
+            Some("tok-1")
+        );
+        assert_eq!(
+            token_out(br#"{"token": "tok-2", "confirmedOn": "phone"}"#).as_deref(),
+            Some("tok-2")
+        );
+        for body in [
+            &br#"{"expiresIn": 60}"#[..],
+            br#"{"token": null}"#,
+            br#"{"token": ""}"#,
+            br#"{"token": 7}"#,
+            br#"{"token": ["a"]}"#,
+            br#"["tok"]"#,
+            b"not json",
+            b"",
+        ] {
+            assert_eq!(token_out(body), None, "{}", String::from_utf8_lossy(body));
+        }
     }
 }

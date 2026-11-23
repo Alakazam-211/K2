@@ -216,6 +216,21 @@ fn an_agent_made_widget_pays_the_apps_budget() {
     assert_eq!((st, code(&v)), (429, "rate_limited"), "no confirm sheet past the budget: {v}");
 }
 
+/// An empty confirm token is no token: the first call with one counts
+/// against the App's budget like a call with none, so a widget can't skip
+/// the budget by sending `confirmToken: ""` (it is refused either way).
+#[test]
+fn an_empty_confirm_token_pays_the_apps_budget() {
+    let d = desk(&["guests:rooms"], "gr-budget-empty-token");
+    gr::grant(&d.jobs, &[], "owner").unwrap();
+    for i in 0..gr::RATE_PER_MIN {
+        gr::rate_take(&d.jobs).unwrap_or_else(|e| panic!("App call {i}: {e:?}"));
+    }
+    d.stamp(MadeBy::Agent { project_id: "w-builder".into() });
+    let (st, v) = d.raw("guests.setRooms", json!({ "app": d.jobs, "username": "dana", "rooms": ["board-builder"] }), Some(""));
+    assert_eq!((st, code(&v)), (429, "rate_limited"), "an empty confirm token pays the App's budget: {v}");
+}
+
 /// Round-2 review B4, the other half (its own desk: stamps are
 /// first-write-wins per version): the owner's own widget still works when
 /// the App has spent its minute.

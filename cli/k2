@@ -42228,19 +42228,42 @@ print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
         && printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; sys.exit(0 if (json.load(sys.stdin).get("error") or {}).get("code") in ("confirm_unanswered", "vault_presence_required") else 1)'; then
         echo "Nobody answered on this computer." >&2
         _vault_phone_raise "$action" "$secret_id" "$label" "$phone_extra"
-        [ -n "$_VPC_REQ" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+        # No card: the refusal's line and its exit. A 200 with no request in
+        # it leaves no token (before, the command went on without one).
+        if [ -z "$_VPC_REQ" ]; then
+            [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+            _vault_token_out </dev/null
+            exit 1
+        fi
         echo "Approve on your phone: ${_VPC_LINE}. Waiting for your phone… (5 minutes)" >&2
         body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "phone", "label": sys.argv[3], "phoneRequest": sys.argv[4]}))' "$action" "$secret_id" "$label" "$_VPC_REQ")"
         _vault_sock_call POST "confirm/finish" "$body" 330
     fi
     body=""
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
-    printf '%s' "$_SC_BODY" | python3 -c '
+    printf '%s' "$_SC_BODY" | _vault_token_out
+}
+
+# The token of a confirm/finish answer (on stdin), printed. An answer with no
+# token (missing, null, empty, not text, or not JSON) prints one line and
+# exits 1, so the caller's `|| exit 3` ends the command and nothing is sent
+# (before, a null token went out as the word "None").
+_vault_token_out() {
+    python3 -c '
 import json, sys
-v = json.load(sys.stdin)
+try:
+    v = json.load(sys.stdin)
+except ValueError:
+    v = None
+if not isinstance(v, dict):
+    v = {}
 if v.get("confirmedOn") == "phone":
     print("Confirmed on your phone.", file=sys.stderr)
-print(v["token"])'
+t = v.get("token")
+if not isinstance(t, str) or not t:
+    print("no_confirm_token: the confirm answer had no token, so nothing was sent", file=sys.stderr)
+    sys.exit(1)
+print(t)'
 }
 
 # k2 vault fetch — K2 makes the HTTPS call and adds the secret where its
@@ -45036,7 +45059,7 @@ _vault_confirm_token_plan() {
     _vault_sock_call POST "confirm/finish" "$body"
     body=""
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
-    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+    printf '%s' "$_SC_BODY" | _vault_token_out
 }
 
 # k2 vault placement add|done|rm …, k2 vault placements [NAME]

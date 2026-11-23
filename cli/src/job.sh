@@ -380,7 +380,7 @@ _vault_confirm_token_plan() {
     _vault_sock_call POST "confirm/finish" "$body"
     body=""
     [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
-    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
+    printf '%s' "$_SC_BODY" | _vault_token_out
 }
 
 # k2 vault placement add|done|rm …, k2 vault placements [NAME]

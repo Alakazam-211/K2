@@ -220,8 +220,10 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
     };
     // The confirm-less first call checks everything and counts against
     // the App's rate too (an agent-made widget's; see `garden_budget`), so
-    // a widget can't flood the person with sheets.
-    if b.confirm_token.is_none() {
+    // a widget can't flood the person with sheets. An empty token is no
+    // token: it counts too (it is refused below like a missing one).
+    let token = b.confirm_token.as_deref().filter(|t| !t.is_empty());
+    if token.is_none() {
         garden_budget(&maker, || gr::rate_take(&t.service_id)).map_err(core)?;
     }
     let (plan, ids) = gr::plan(&t.service_id, &username, &rooms, &ceiling).map_err(core)?;
@@ -229,7 +231,7 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
         return serde_json::to_value(plan.view).map_err(|e| no(500, "failed", e.to_string(), None));
     }
     let secret = secret_id(&w.garden, &w.placement, &t.service_id, &plan.view.username, &ids);
-    let Some(token) = b.confirm_token.as_deref().filter(|t| !t.is_empty()) else {
+    let Some(token) = token else {
         let change = json!({
             "app": t.service_id,
             "appName": t.name,

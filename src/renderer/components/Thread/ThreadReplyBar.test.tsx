@@ -135,46 +135,29 @@ describe('reply bar: on the ear', () => {
 })
 
 describe('reply bar: Glass', () => {
-  it("the pill's glass: computed blur on the painted element, its scrim fill, rim and ink, nothing above it cutting the backdrop off", () => {
+  it("the message box's own material and text colour: tile fill, sheen and shadow, no frost", () => {
     withSheets()
     for (const scheme of ['dark', 'light'] as const) {
       const { bar } = mount({ style: 'glass', scheme })
-      expect(bar.getAttribute('data-material')).toBe('frost')
+      expect(bar.getAttribute('data-material')).not.toBe('frost')
       const cs = getComputedStyle(bar)
-      // Veil's frost also dims the backdrop a little (the phone's light glass).
-      expect(cs.backdropFilter).toBe(scheme === 'dark' ? 'blur(var(--material-blur)) saturate(var(--material-saturate))' : 'var(--k2-veil-frost-filter)')
-      expect(cs.getPropertyValue('background')).toBe('linear-gradient(var(--k2-jump-tint) 0 0), var(--k2-jump-scrim)')
-      // jsdom can't compute a border colour from var(): the rim rule must match the bar.
-      const rim = THREAD_REPLY_BAR_CSS.split('\n').find((l) => l.includes('border-color: var(--k2-jump-edge)'))
-      expect(rim).toBeDefined()
-      expect(bar.matches(rim!.slice(0, rim!.indexOf('{')).trim())).toBe(true)
-      expect(cs.color).toBe('var(--k2-jump-ink)')
-      expect(cs.minHeight).toBe('var(--k2-jump-h)')
-      expect(bar.style.background).toBe('')
-      expect(bar.style.color).toBe('')
-      for (let e: Element | null = bar; e && e !== document.documentElement; e = e.parentElement) {
-        const s = getComputedStyle(e)
-        expect(s.opacity === '' || s.opacity === '1', `${e.tagName} opacity ${s.opacity}`).toBe(true)
-        for (const prop of ['filter', 'mask-image', 'clip-path', 'mix-blend-mode', 'will-change'] as const) {
-          const v = s.getPropertyValue(prop)
-          expect(v === '' || v === 'none' || v === 'normal' || v === 'auto', `${e.tagName} ${prop} ${v}`).toBe(true)
-        }
-        if (e !== bar) expect(s.backdropFilter === '' || s.backdropFilter === 'none', `${e.tagName} backdrop-filter`).toBe(true)
-      }
-      // Every word in the ink (the muted grey misses 4.5:1 over your bubble).
+      expect(cs.backdropFilter === '' || cs.backdropFilter === 'none').toBe(true)
+      expect(THREAD_REPLY_BAR_CSS).toContain('background: var(--tile-fill) !important;')
+      expect(THREAD_REPLY_BAR_CSS).toContain('box-shadow: var(--tile-sheen), var(--tile-shadow);')
+      // The box's text colour (the box's textarea reads --zen-text), every word.
+      expect(cs.color).toBe('var(--zen-text)')
       for (const el of Array.from(bar.querySelectorAll('[data-reply-chip-who], [data-reply-chip-text], [data-reply-cancel]'))) {
-        expect(getComputedStyle(el).color, el.outerHTML).toBe('var(--k2-jump-ink)')
+        expect(getComputedStyle(el).color, el.outerHTML).not.toBe('var(--k2-jump-ink)')
       }
       cleanup()
     }
   })
 
-  it('reduced transparency: the solid tile, no scrim', () => {
-    withSheets()
-    const { bar } = mount({ style: 'glass', frost: 'tile' })
-    const cs = getComputedStyle(bar)
-    expect(cs.getPropertyValue('background')).toBe('var(--tile-raised)')
-    expect(cs.backdropFilter).toBe('none')
+  it("the box's edge: the soft tile edge in dark Glass, the control edge in Veil", () => {
+    const dark = THREAD_REPLY_BAR_CSS.split('\n').find((l) => l.includes('border-color: var(--tile-edge)'))
+    expect(dark).toBeDefined()
+    expect(dark).toContain(':not([data-scheme="light"])')
+    expect(THREAD_REPLY_BAR_CSS).toContain('border: 1px solid var(--zen-control-edge, var(--zen-border)); box-shadow')
   })
 })
 

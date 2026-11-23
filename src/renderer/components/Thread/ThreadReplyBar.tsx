@@ -11,11 +11,11 @@
 // - What: "Replying to <name>" (or "…part of…"), the quoted message's first
 //   line in whole words (a tail that doesn't fit goes as a whole phrase,
 //   then "…"), and ×. × or Esc cancels (Esc from the box: TerminalComposeBar).
-// - Glass: the Jump to bottom pill's glass (the shared Frost, the pill's
-//   scrim, rim and ink, `--k2-jump-*` in globals.css), so the words read
-//   at 4.5:1 over any message; every word in the ink, since the muted grey
-//   misses 4.5:1 over your blue bubble. Reduced transparency: the Frost's
-//   solid tile.
+// - Glass: the message box's own material (owner, 2026-11-22: the same
+//   glass as the box under it, and the box's text colour): the tile fill,
+//   sheen and shadow, the box's edge (the soft tile edge in dark Glass, the
+//   control edge in Veil), and the box's text colour. Opaque, so the words
+//   read the same over any message. The pill's size and type stay.
 // - Terminal: a solid raised surface, the control edge, cut corners.
 //
 // Home's DMs and channels use this bar too (ThreadChatComposer's `chips`).
@@ -26,6 +26,7 @@ import { threadReplyFirstLine, threadReplyQuote, type ThreadReplyTarget } from '
 import { ReplyGlyph } from './ThreadMessageMenu'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferVars } from './chamfer'
 import { useFittedLine } from './replyFit'
+import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 
 /** The ear's side inset on the desktop Thread's box (px): the activity
  *  bar's and the stash's row (TerminalComposeBar), and this bar's. */
@@ -35,11 +36,11 @@ export const THREAD_REPLY_BAR_GAP = 8
 
 const B = '[data-thread-reply-bar]'
 const GLASS = 'html[data-style="glass"] [data-k2-thread-zen]'
-const FROST = `html[data-style="glass"]:not([data-frost="tile"]) [data-k2-thread-zen] ${B}[data-material="frost"]`
+const GLASS_DARK = 'html[data-style="glass"]:not([data-scheme="light"]) [data-k2-thread-zen]'
 const RING = 'var(--zen-focus-ring, var(--zen-accent))'
 
 /** The bar's rules. Terminal paints through its chamfer layers; Glass takes
- *  the shared Frost and the pill's tokens. */
+ *  the message box's tile (fill, edge, sheen, text) at the pill's size. */
 export const THREAD_REPLY_BAR_CSS = `
 ${B} { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 28px; box-sizing: border-box; margin: 0; padding: 0 4px 0 10px; background: var(--zen-surface-raised); border: 1px solid var(--zen-control-edge, var(--zen-border)); border-radius: var(--zen-pill-radius, 999px); color: var(--zen-text); font-size: var(--zen-type-sm, 0.8em); line-height: 16px; white-space: nowrap; }
 ${B} [data-reply-chip-who] { flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: inherit; }
@@ -49,9 +50,8 @@ ${B} [data-reply-cancel] { display: inline-flex; flex: none; align-items: center
 ${B} [data-reply-cancel]:hover { background: color-mix(in srgb, currentColor 14%, transparent); }
 ${B} [data-reply-cancel]:focus-visible { outline: 2px solid ${RING}; outline-offset: 1px; }
 ${CHAMFER_SCOPE} ${B} [data-reply-cancel] { border-radius: 0; }
-${GLASS} ${B} { min-height: var(--k2-jump-h); padding: 0 4px 0 var(--k2-jump-pad); color: var(--k2-jump-ink); font-size: var(--k2-jump-type); font-weight: 400; }
-${GLASS} ${B} :is([data-reply-chip-who], [data-reply-chip-text], [data-reply-cancel]) { color: var(--k2-jump-ink); }
-${FROST} { background: linear-gradient(var(--k2-jump-tint) 0 0), var(--k2-jump-scrim); border-color: var(--k2-jump-edge); }
+${GLASS} ${B} { min-height: var(--k2-jump-h); padding: 0 4px 0 var(--k2-jump-pad); color: var(--zen-text); font-size: var(--k2-jump-type); font-weight: 400; background: var(--tile-fill) !important; --ch-fill: var(--tile-fill) !important; border: 1px solid var(--zen-control-edge, var(--zen-border)); box-shadow: var(--tile-sheen), var(--tile-shadow); }
+${GLASS_DARK} ${B} { border-color: var(--tile-edge); }
 `
 
 // The quote line fits its slot in whole words (replyFit).
@@ -75,8 +75,7 @@ export function ThreadReplyBar({ target, onCancel }: { target: ThreadReplyTarget
         data-zen-reply-chip=""
         data-thread-reply-bar=""
         data-reply-part={target.part ? '' : undefined}
-        data-material="frost"
-        data-frost-shape="pill"
+        {...ZEN_TILE_RAISED_PROPS}
         data-chamfer=""
         role="note"
         aria-label={`${who}: ${line}`}

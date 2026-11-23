@@ -232,7 +232,7 @@ pub fn seal(env: &[(String, Vec<u8>)], epk_n_b64: &str, b: &Binding) -> Result<(
         let e_c = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng).map_err(|_| ())?;
         let epk_c = e_c.compute_public_key().map_err(|_| ())?.as_ref().to_vec();
         let info = b.info(&epk_n, &epk_c);
-        let key = agreement::agree_ephemeral(e_c, &agreement::UnparsedPublicKey::new(&agreement::X25519, &epk_n), (), |shared| key_for(shared, &info))?;
+        let key = agreement::agree_ephemeral(e_c, agreement::UnparsedPublicKey::new(&agreement::X25519, &epk_n), (), |shared| key_for(shared, &info))?;
         let mut in_out = body.clone();
         key.seal_in_place_append_tag(aead::Nonce::assume_unique_for_key([0u8; 12]), aead::Aad::from(&info), &mut in_out).map_err(|_| ())?;
         let ct = crypto::b64(&in_out);
@@ -276,7 +276,7 @@ impl NodeKey {
             return Err(bad());
         }
         let info = b.info(&self.public, &epk_c);
-        let key = agreement::agree_ephemeral(self.key, &agreement::UnparsedPublicKey::new(&agreement::X25519, &epk_c), (), |shared| key_for(shared, &info)).map_err(|_| bad())?;
+        let key = agreement::agree_ephemeral(self.key, agreement::UnparsedPublicKey::new(&agreement::X25519, &epk_c), (), |shared| key_for(shared, &info)).map_err(|_| bad())?;
         let r = match key.open_in_place(aead::Nonce::assume_unique_for_key([0u8; 12]), aead::Aad::from(&info), &mut ct) {
             Ok(plain) => parse_payload(plain),
             Err(_) => Err(bad()),

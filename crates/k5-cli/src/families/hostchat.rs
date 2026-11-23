@@ -28,8 +28,8 @@
 //!
 //! A value flag as the last word is the shell's `_need_value` line, exit 2
 //! ([`takes_value`]). One with an empty value is one plain line, exit 2
-//! ([`needs_value`]; the shell stops on `${2:?…}` with a line
-//! naming its own path).
+//! ([`needs_value`]; the shell stops on `_need_nonempty_value`'s line,
+//! which names its own path, exit 1).
 //!
 //! `media`, `people` and `approvals` with one help flag after them read
 //! it as their sub-command, as the shell's do (`media`'s help page, exit
@@ -139,7 +139,7 @@ pub fn takes_value(flag: &str) -> Plan {
 }
 
 /// A value flag with an empty value there. The shell stops on its own
-/// `"${2:?<flag> <what>}"` line (the script's path and line in it, exit 1);
+/// `_need_nonempty_value` line (the script's path and line in it, exit 1);
 /// the binary says what is missing and exits 2, as for the whole
 /// class (`scripts/cli-parity.sh`'s named difference `edge-usage-exit-2`).
 pub fn needs_value(flag: &str) -> Plan {

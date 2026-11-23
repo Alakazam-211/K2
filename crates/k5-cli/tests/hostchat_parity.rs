@@ -785,9 +785,9 @@ fn hostchat_hands_these_to_the_shell() {
 
 /// A value flag as the last word: both print the shell's `_need_value`
 /// line, "Error: <flag> takes a value", and exit 2. With an empty value:
-/// bash stops on its own `${2:?…}` line (`<path to cli/k2>: line <n>: 2:
-/// <flag> <what>`) and exits 1; the binary prints one plain line and
-/// exits 2 (`scripts/cli-parity.sh`'s named difference
+/// bash stops on its own empty-value line (`<path to cli/k2>: line <n>: 2:
+/// <flag> <what>`) and exits 1 on every bash; the binary prints one
+/// plain line and exits 2 (`scripts/cli-parity.sh`'s named difference
 /// `edge-usage-exit-2`). Neither sends anything.
 #[test]
 fn hostchat_value_flag_with_no_value_is_the_d6_line() {
@@ -896,8 +896,8 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
         );
         let name = c.name;
         // The flag as the last word: both print the shell's _need_value
-        // line and exit 2. An empty value: bash's own `${2:?…}` line and
-        // exit 1, the binary's one plain line and exit 2.
+        // line and exit 2. An empty value: bash's own empty-value line
+        // and exit 1, the binary's one plain line and exit 2.
         let last = args.last() == Some(&flag);
         rig.prepare(Side::Bash, &c);
         let b = rig.run(true, &c);
@@ -906,13 +906,9 @@ fn hostchat_value_flag_with_no_value_is_the_d6_line() {
             assert_eq!(b.code, Some(2), "{name}: bash's exit: {b:?}");
             assert_eq!(b.stderr, format!("Error: {flag} takes a value\n"), "{name}");
         } else {
-            // macOS's /bin/bash 3.2 ends 0 there: under set -e with an EXIT
-            // trap set (cli/k2's _permission_note_flush), a failed
-            // `${2:?…}` exits with the trap's status. For K2 to rule on
-            // (`bash32-expansion-exit`); the row fails, saying the mark
-            // goes, once the shell exits 1 there too.
-            let want = if bash_version() < (4, 0) { 0 } else { 1 };
-            assert_eq!(b.code, Some(want), "{name}: bash's exit: {b:?}");
+            // Exit 1 on every bash, macOS's 3.2 too: the shell checks an
+            // empty value itself, not with `${2:?…}`.
+            assert_eq!(b.code, Some(1), "{name}: bash's exit: {b:?}");
             assert_eq!(b.stderr.lines().count(), 1, "{name}: bash's stderr: {b:?}");
             assert!(
                 b.stderr.ends_with(&format!(": 2: {hint}\n")),

@@ -18,8 +18,8 @@
 //! Handed to the shell, before anything is printed or sent: a value flag
 //! (`--room`, `--after`, `--limit`, `--recording`, `--call`, `--notice`,
 //! `--require-recording`, `--start-level`) as the last word or with an
-//! empty value (the shell stops on `${2:?…}` with a line naming its own
-//! path: one of bash's own edges); `set rooms` with
+//! empty value (the shell stops on `_need_nonempty_value`'s line, which names
+//! its own path, exit 1 on every bash: one of bash's own edges); `set rooms` with
 //! a count longer than 18 digits (the shell's `test` can't read it); a
 //! variable `_compute_fail` or `_compute_json` reads from the environment
 //! ([`self::sew::env_shell`]); and the forms every family hands back.
@@ -141,7 +141,7 @@ pub fn parse(words: &[&str]) -> Plan {
         };
         match slot {
             Some(slot) => {
-                // `${2:?…}`: the shell's own failure, its path in it.
+                // `_need_nonempty_value`: the shell's own line, its path in it.
                 match rest.get(i + 1) {
                     Some(&v) if !v.is_empty() => *slot = v,
                     _ => return Plan::Shell,

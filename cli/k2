@@ -91376,6 +91376,18 @@ cmd_mail_access() {
 # `k2 settings set voiceRoomsPreview true`. The daemon (/cli/voice/*) owns the rooms, who's in
 # them and the hosting state; this CLI only reads and asks.
 
+# _need_nonempty_value <value> <hint>: a value flag given an empty value
+# ('') stops here, after _need_value has made sure the value is there. It
+# prints the line and exits 1 as bash 5's own `${2:?<hint>}` does
+# ("<cli path>: line <n>: 2: <hint>"). Written out because macOS's
+# /bin/bash 3.2, under set -e with cli/k2's EXIT trap set, exits 0 after a
+# failed `${2:?}` (tests/cli/bash32_guard_exit.sh).
+_need_nonempty_value() {
+    [ -z "$1" ] || return 0
+    echo "${BASH_SOURCE[0]:-$0}: line ${BASH_LINENO[0]}: 2: $2" >&2
+    exit 1
+}
+
 _voice_usage() {
     cat <<'EOF'
 Usage: k2 voice <command> [args] [--json]
@@ -91701,14 +91713,14 @@ cmd_voice() {
         case "$1" in
             --json) as_json=1; shift ;;
             --now) now=1; shift ;;
-            --room) _need_value "$@"; vt_room="${2:?--room <room>}"; shift 2 ;;
-            --after) _need_value "$@"; vt_after="${2:?--after <id>}"; shift 2 ;;
-            --limit) _need_value "$@"; vt_limit="${2:?--limit N}"; shift 2 ;;
-            --recording) _need_value "$@"; vt_rec="${2:?--recording <id>}"; shift 2 ;;
-            --call) _need_value "$@"; call="${2:?--call <callId>}"; shift 2 ;;
-            --notice) _need_value "$@"; notice="${2:?--notice <version>}"; shift 2 ;;
-            --require-recording) _need_value "$@"; rec_req="${2:?--require-recording on|off|inherit}"; shift 2 ;;
-            --start-level) _need_value "$@"; rec_level="${2:?--start-level none|moderator|member|inherit}"; shift 2 ;;
+            --room) _need_value "$@"; _need_nonempty_value "$2" "--room <room>"; vt_room="$2"; shift 2 ;;
+            --after) _need_value "$@"; _need_nonempty_value "$2" "--after <id>"; vt_after="$2"; shift 2 ;;
+            --limit) _need_value "$@"; _need_nonempty_value "$2" "--limit N"; vt_limit="$2"; shift 2 ;;
+            --recording) _need_value "$@"; _need_nonempty_value "$2" "--recording <id>"; vt_rec="$2"; shift 2 ;;
+            --call) _need_value "$@"; _need_nonempty_value "$2" "--call <callId>"; call="$2"; shift 2 ;;
+            --notice) _need_value "$@"; _need_nonempty_value "$2" "--notice <version>"; notice="$2"; shift 2 ;;
+            --require-recording) _need_value "$@"; _need_nonempty_value "$2" "--require-recording on|off|inherit"; rec_req="$2"; shift 2 ;;
+            --start-level) _need_value "$@"; _need_nonempty_value "$2" "--start-level none|moderator|member|inherit"; rec_level="$2"; shift 2 ;;
             -*) _voice_bad "unknown flag $1" ;;
             *) pos+=("$1"); shift ;;
         esac
@@ -92708,24 +92720,24 @@ cmd_hostchat() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
-            --tarball) _need_value "$@"; tarball="${2:?--tarball FILE}"; shift 2 ;;
-            --recovery-key-file) _need_value "$@"; recovery="${2:?--recovery-key-file FILE}"; shift 2 ;;
-            --identity) _need_value "$@"; identity="${2:?--identity k2|standalone}"; shift 2 ;;
+            --tarball) _need_value "$@"; _need_nonempty_value "$2" "--tarball FILE"; tarball="$2"; shift 2 ;;
+            --recovery-key-file) _need_value "$@"; _need_nonempty_value "$2" "--recovery-key-file FILE"; recovery="$2"; shift 2 ;;
+            --identity) _need_value "$@"; _need_nonempty_value "$2" "--identity k2|standalone"; identity="$2"; shift 2 ;;
             --voice) voice=1; voice_flag=1; shift ;;
-            --voice-url) _need_value "$@"; voice=1; voice_flag=1; voice_url="${2:?--voice-url wss://HOST}"; shift 2 ;;
-            --media-tarball) _need_value "$@"; voice=1; media_tarball="${2:?--media-tarball FILE}"; shift 2 ;;
-            --node-ip) _need_value "$@"; node_ip="${2:?--node-ip IP}"; shift 2 ;;
+            --voice-url) _need_value "$@"; voice=1; voice_flag=1; _need_nonempty_value "$2" "--voice-url wss://HOST"; voice_url="$2"; shift 2 ;;
+            --media-tarball) _need_value "$@"; voice=1; _need_nonempty_value "$2" "--media-tarball FILE"; media_tarball="$2"; shift 2 ;;
+            --node-ip) _need_value "$@"; _need_nonempty_value "$2" "--node-ip IP"; node_ip="$2"; shift 2 ;;
             --no-wait) wait=0; shift ;;
             --health) health=1; shift ;;
             --dry-run) dry=1; shift ;;
             --confirm) confirm=1; shift ;;
             --drop-grants) drop_grants=1; shift ;;
             --drop-prev) drop_prev=1; shift ;;
-            --accept-binary) _need_value "$@"; accept_binary="${2:?--accept-binary SHA256}"; shift 2 ;;
+            --accept-binary) _need_value "$@"; _need_nonempty_value "$2" "--accept-binary SHA256"; accept_binary="$2"; shift 2 ;;
             --accept-data-loss) accept_loss=1; shift ;;
             --keep-backups) keep_backups=1; shift ;;
-            --confirm-hostname) _need_value "$@"; host="${2:?--confirm-hostname HOST}"; shift 2 ;;
-            --public-url) _need_value "$@"; public_url="${2:?--public-url https://HOST}"; shift 2 ;;
+            --confirm-hostname) _need_value "$@"; _need_nonempty_value "$2" "--confirm-hostname HOST"; host="$2"; shift 2 ;;
+            --public-url) _need_value "$@"; _need_nonempty_value "$2" "--public-url https://HOST"; public_url="$2"; shift 2 ;;
             --print) print_only=1; shift ;;
             --setup-url)
                 echo '{"error":"usage","hint":"Sew builds setup links as <public-url>/setup: k2 hostchat config --public-url https://HOST"}' >&2
@@ -93575,13 +93587,13 @@ _hostchat_media() {
             --yes|-y)
                 [ "$sub" = "uninstall" ] || { echo "{\"error\":\"usage\",\"hint\":\"$1 only applies to k2 hostchat media uninstall\"}" >&2; exit 2; }
                 yes=1; shift ;;
-            --url|--voice-url|--public-url) _need_value "$@"; url="${2:?--url wss://HOST}"; shift 2 ;;
-            --node-ip) _need_value "$@"; node_ip="${2:?--node-ip IP}"; shift 2 ;;
-            --tarball|--media-tarball) _need_value "$@"; tarball="${2:?--tarball FILE}"; shift 2 ;;
+            --url|--voice-url|--public-url) _need_value "$@"; _need_nonempty_value "$2" "--url wss://HOST"; url="$2"; shift 2 ;;
+            --node-ip) _need_value "$@"; _need_nonempty_value "$2" "--node-ip IP"; node_ip="$2"; shift 2 ;;
+            --tarball|--media-tarball) _need_value "$@"; _need_nonempty_value "$2" "--tarball FILE"; tarball="$2"; shift 2 ;;
             --no-wait) wait=0; shift ;;
-            --udp) _need_value "$@"; udp="${2:?--udp ok|fail}"; shift 2 ;;
-            --tcp) _need_value "$@"; tcp="${2:?--tcp ok|fail}"; shift 2 ;;
-            --turn-tls) _need_value "$@"; tls="${2:?--turn-tls ok|fail}"; shift 2 ;;
+            --udp) _need_value "$@"; _need_nonempty_value "$2" "--udp ok|fail"; udp="$2"; shift 2 ;;
+            --tcp) _need_value "$@"; _need_nonempty_value "$2" "--tcp ok|fail"; tcp="$2"; shift 2 ;;
+            --turn-tls) _need_value "$@"; _need_nonempty_value "$2" "--turn-tls ok|fail"; tls="$2"; shift 2 ;;
             -h|--help) _hostchat_usage; return 0 ;;
             -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat --help)\"}" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
@@ -93651,9 +93663,9 @@ _hostchat_users() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
-            --display-name) _need_value "$@"; display="${2:?--display-name NAME}"; shift 2 ;;
-            --role) _need_value "$@"; role="${2:?--role member|admin|guest}"; shift 2 ;;
-            --email) _need_value "$@"; email="${2:?--email EMAIL}"; shift 2 ;;
+            --display-name) _need_value "$@"; _need_nonempty_value "$2" "--display-name NAME"; display="$2"; shift 2 ;;
+            --role) _need_value "$@"; _need_nonempty_value "$2" "--role member|admin|guest"; role="$2"; shift 2 ;;
+            --email) _need_value "$@"; _need_nonempty_value "$2" "--email EMAIL"; email="$2"; shift 2 ;;
             --admin) role="admin"; shift ;;
             -h|--help) _hostchat_usage; return 0 ;;
             -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat --help)\"}" >&2; exit 2 ;;

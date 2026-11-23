@@ -402,7 +402,7 @@ fn the_shell_s_lines() {
         r#"            -*) _voice_bad "unknown flag $1" ;;"#,
         r#"    if [ $# -eq 0 ] || _wants_help "$@"; then _voice_usage; return 0; fi"#,
         r#"    case "$sub" in help) _voice_usage; return 0 ;; esac"#,
-        r#"            --room) _need_value "$@"; vt_room="${2:?--room <room>}"; shift 2 ;;"#,
+        r#"            --room) _need_value "$@"; _need_nonempty_value "$2" "--room <room>"; vt_room="$2"; shift 2 ;;"#,
         r#"    raw="$(_compute_send "$@")""#,
         r#"    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY""#,
         r#"        printf '%s\n' "$_CP_BODY""#,

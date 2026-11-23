@@ -26,7 +26,8 @@ use k2_node::wall::{write_exec_spec, ExecSpec};
 
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_k2-node"))
+    // A copied box run (scripts/ci/node-userns-root-e2e.sh) names its copy.
+    std::env::var_os("K2_NODE_E2E_BIN").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_k2-node")))
 }
 
 fn root(tag: &str) -> PathBuf {

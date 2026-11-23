@@ -85,7 +85,7 @@ fn rig(tag: &str) -> Rig {
     k2_node::admin::jobs::write_jobs_file(&config, "nobody", &node_user).expect("nobody is a job user");
     std::fs::create_dir_all(base.join("bin")).unwrap();
     let bin = base.join("bin/k2-node");
-    std::fs::copy(env!("CARGO_BIN_EXE_k2-node"), &bin).unwrap();
+    std::fs::copy(node_bin(), &bin).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let socket = PathBuf::from(format!("/run/k2na-test-{}.sock", &id[..10]));
     let exec = Executor::new(

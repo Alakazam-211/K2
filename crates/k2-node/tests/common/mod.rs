@@ -446,6 +446,14 @@ pub async fn tenant_opened(n: &TestNode, slot: u8) -> Arc<k2_node::node::Tenant>
     panic!("the servers loop never opened slot {slot}");
 }
 
+/// The `k2-node` binary the root tests copy into their rig: this build's,
+/// or, on a box the tests were copied to (scripts/ci/node-userns-root-e2e.sh),
+/// the copy `K2_NODE_E2E_BIN` names.
+#[allow(dead_code)]
+pub fn node_bin() -> std::path::PathBuf {
+    std::env::var_os("K2_NODE_E2E_BIN").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_BIN_EXE_k2-node")))
+}
+
 pub fn plan(job: &str, argv: &[&str]) -> Plan {
     Plan {
         class: None,

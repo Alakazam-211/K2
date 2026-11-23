@@ -125,6 +125,8 @@ part_web() {
     step "the CLI name rewrite, on a copy";        bash tests/garden/cli-name-flip.sh
     step "the dispatcher arm reader";              bash tests/garden/dispatcher-arms.sh
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh
+    step "Zen library licence banners (the rule)"; node scripts/zen-lib/check-banners.mjs --self-test
+    step "Zen library licence banners (each file)"; node scripts/zen-lib/check-banners.mjs
     step "k2 on a virtual desktop never acts as the owner"; bash tests/cli/virtual_desktop_owner_guard.sh
     step "k2 desktop on a Linux server (stub daemon)"; bash tests/cli/desktop_virtual_cli.sh
     step "k2 desktop ask and the Mac's permission steps (stub daemon)"; bash tests/cli/desktop_ask_cli.sh

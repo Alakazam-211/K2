@@ -206,6 +206,15 @@ jobs:
       - name: k2 zen widget CLI (no daemon)
         run: bash tests/cli/zen_widget_offline.sh
 
+      # The Kessel Steward's ruling: every Zen widget library file the
+      # daemon serves (zen_lib_bundled.rs) starts with a licence banner
+      # naming its package and SPDX licence.
+      - name: Zen widget library licence banners (the rule)
+        run: node scripts/zen-lib/check-banners.mjs --self-test
+
+      - name: Zen widget library licence banners (every served file)
+        run: node scripts/zen-lib/check-banners.mjs
+
       # Hosted SPA production build (vite.config.web.ts). Build-only — no R2
       # publish. Catches Vite graph / asset / CSS regressions typecheck misses.
       - name: Vite build hosted web

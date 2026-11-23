@@ -34,6 +34,11 @@ use crate::fs_atomic::atomic_write_str;
 pub const SKILL_BEGIN_MARKER: &str = "<!-- K2:MANAGED:BEGIN -->";
 pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 
+/// The line [`wrap_managed_skill`] writes under the managed region: what a
+/// person writes below it is theirs.
+pub const SKILL_YOURS_LINE: &str =
+    "<!-- Content below this line is yours — K2 will never modify it. -->";
+
 // ── Version constants ────────────────────────────────────────────────
 
 /// Bumped to 2 in 0.39.0: Phase 2.1 A25 canonical CLI verbs replace
@@ -443,10 +448,65 @@ pub fn wrap_managed_skill(
         .map(|s| format!("\n{}", s.trim_end()))
         .unwrap_or_default();
     format!(
-        "---\nk2_skill: {skill_type}\nskill_version: {version}\nskill_checksum: {checksum}{extras}\n---\n\n{begin}\n{trimmed}\n{end}\n\n<!-- Content below this line is yours — K2 will never modify it. -->\n",
+        "---\nk2_skill: {skill_type}\nskill_version: {version}\nskill_checksum: {checksum}{extras}\n---\n\n{begin}\n{trimmed}\n{end}\n\n{yours}\n",
         begin = SKILL_BEGIN_MARKER,
         end = SKILL_END_MARKER,
+        yours = SKILL_YOURS_LINE,
     )
+}
+
+/// What follows the managed region, split into the "yours" lines our
+/// writes put at its top and the person's part: `(how many "yours" lines,
+/// the person's part)`. Several lines are the old upgrade's doing: each
+/// upgrade kept the line and wrote it again. The person's part is the
+/// bytes after the last of them, as they are; with none, the text after
+/// the leading blank lines.
+fn split_footer(after_end: &str) -> (usize, &str) {
+    let mut count = 0;
+    let mut rest = after_end;
+    while let Some(r) = rest.trim_start().strip_prefix(SKILL_YOURS_LINE) {
+        count += 1;
+        rest = r
+            .strip_prefix("\r\n")
+            .or_else(|| r.strip_prefix('\n'))
+            .unwrap_or(r);
+    }
+    if count == 0 {
+        (0, after_end.trim_start())
+    } else {
+        (count, rest)
+    }
+}
+
+/// `wrapped` (a fresh file, which ends with one "yours" line) with the
+/// person's part of the old file's `after_end` below it, untouched.
+fn with_persons_part(wrapped: String, after_end: &str) -> String {
+    let (_, persons) = split_footer(after_end);
+    if persons.trim().is_empty() {
+        wrapped
+    } else {
+        wrapped + persons
+    }
+}
+
+/// A current file whose footer holds the "yours" line more than once (the
+/// old upgrade's doing) gets one line again. Only that footer changes:
+/// the managed region above and the person's part below stay as they are.
+fn collapse_footer(skill_path: &Path, existing: &str, parsed: &ParsedSkill) {
+    if !parsed.has_markers {
+        return;
+    }
+    let (count, persons) = split_footer(&parsed.after_end);
+    if count < 2 {
+        return;
+    }
+    let head = &existing[..existing.len() - parsed.after_end.len()];
+    let fixed = format!("{head}\n\n{SKILL_YOURS_LINE}\n{persons}");
+    log_if_err(
+        "collapse the skill footer",
+        skill_path,
+        atomic_write_str(skill_path, &fixed),
+    );
 }
 
 pub struct ParsedSkill {
@@ -573,6 +633,7 @@ pub fn ensure_skill_up_to_date(
         && parsed.k2_skill.as_deref() == Some(skill_type)
         && parsed.skill_version == Some(current_version)
     {
+        collapse_footer(skill_path, &existing, &parsed);
         return SkillUpgradeOutcome::UpToDate;
     }
 
@@ -628,14 +689,10 @@ pub fn ensure_skill_up_to_date(
     );
     let stamped = parsed.skill_checksum.as_deref().unwrap_or("");
     if actual_checksum == stamped {
+        // The person's part stays as it is, under one "yours" line.
         let wrapped =
             wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
-        let tail = parsed.after_end.trim();
-        let final_content = if tail.is_empty() {
-            wrapped
-        } else {
-            format!("{}\n{}\n", wrapped.trim_end(), tail)
-        };
+        let final_content = with_persons_part(wrapped, &parsed.after_end);
         log_if_err(
             "ensure_skill_up_to_date upgrade",
             skill_path,
@@ -675,7 +732,8 @@ pub fn refresh_skill_body(
     fresh_body: &str,
     extra_frontmatter: Option<&str>,
 ) -> SkillUpgradeOutcome {
-    let parsed = fs::read_to_string(skill_path).ok().map(|s| parse_skill(&s));
+    let existing = fs::read_to_string(skill_path).ok();
+    let parsed = existing.as_deref().map(parse_skill);
     let same_contract = parsed.as_ref().is_some_and(|p| {
         p.has_markers && p.k2_skill.as_deref() == Some(skill_type) && p.skill_version == Some(current_version)
     });
@@ -684,6 +742,9 @@ pub fn refresh_skill_body(
     };
     let region = parsed.managed_region.as_deref().unwrap_or("").trim();
     if region == fresh_body.trim() {
+        if let Some(existing) = existing.as_deref() {
+            collapse_footer(skill_path, existing, &parsed);
+        }
         return SkillUpgradeOutcome::UpToDate;
     }
     let wrapped = wrap_managed_skill(skill_type, current_version, fresh_body, extra_frontmatter);
@@ -692,12 +753,9 @@ pub fn refresh_skill_body(
         log_if_err("refresh_skill_body propose", &proposed_path, atomic_write_str(&proposed_path, &wrapped));
         return SkillUpgradeOutcome::UserModified;
     }
-    // The person's tail, without the "yours" line `wrap_managed_skill`
+    // The person's part, without the "yours" line `wrap_managed_skill`
     // writes again (a flip back and forth never grows the file).
-    const YOURS: &str = "<!-- Content below this line is yours — K2 will never modify it. -->";
-    let tail = parsed.after_end.trim();
-    let tail = tail.strip_prefix(YOURS).unwrap_or(tail).trim();
-    let final_content = if tail.is_empty() { wrapped } else { format!("{}\n{}\n", wrapped.trim_end(), tail) };
+    let final_content = with_persons_part(wrapped, &parsed.after_end);
     log_if_err("refresh_skill_body", skill_path, atomic_write_str(skill_path, &final_content));
     SkillUpgradeOutcome::Upgraded
 }
@@ -759,6 +817,151 @@ mod tests {
         let wrapped = wrap_managed_skill("workspace", 1, "# K2 body", None);
         assert!(wrapped.contains("k2_skill: workspace"));
         assert!(!wrapped.contains("k2so_skill"));
+    }
+
+    // ── The footer: one "yours" line, the person's part untouched ────
+
+    fn scratch_skill(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "k2-skill-footer-{tag}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).expect("make the scratch folder");
+        dir.join("SKILL.md")
+    }
+
+    /// What a person wrote under the "yours" line: a blank line first, no
+    /// newline at the end, so any trim would show.
+    const PERSONS: &str = "\nmy notes\n\n- keep this  \n  indented";
+
+    fn yours_count(text: &str) -> usize {
+        text.matches(SKILL_YOURS_LINE).count()
+    }
+
+    #[test]
+    fn wrap_ends_with_one_yours_line() {
+        let wrapped = wrap_managed_skill("workspace", 3, "# K2 body\n", None);
+        let want = format!(
+            "---\nk2_skill: workspace\nskill_version: 3\nskill_checksum: {}\n---\n\n{SKILL_BEGIN_MARKER}\n# K2 body\n{SKILL_END_MARKER}\n\n{SKILL_YOURS_LINE}\n",
+            skill_checksum_hex(b"# K2 body")
+        );
+        assert_eq!(wrapped, want);
+    }
+
+    /// A file through five upgrades: after each one the "yours" line is
+    /// there once, the managed text is the new version's, and the
+    /// person's part is byte for byte what they wrote.
+    #[test]
+    fn five_upgrades_keep_one_yours_line_and_the_persons_part() {
+        let path = scratch_skill("five");
+        let first = wrap_managed_skill("workspace", 1, "body v1", None);
+        fs::write(&path, format!("{first}{PERSONS}")).expect("write the first version");
+        for v in 2..=6 {
+            let body = format!("body v{v}");
+            let out = ensure_skill_up_to_date(&path, "workspace", v, &body, None);
+            assert!(
+                matches!(out, SkillUpgradeOutcome::Upgraded),
+                "v{v}: {out:?}"
+            );
+            let text = fs::read_to_string(&path).expect("read the skill");
+            assert_eq!(yours_count(&text), 1, "v{v}:\n{text}");
+            assert!(
+                text.ends_with(&format!("{SKILL_YOURS_LINE}\n{PERSONS}")),
+                "v{v}:\n{text}"
+            );
+            let parsed = parse_skill(&text);
+            assert_eq!(parsed.skill_version, Some(v));
+            assert_eq!(parsed.managed_region.as_deref(), Some(body.as_str()));
+        }
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// An unedited file with nothing below the line, through five
+    /// upgrades: each time it is exactly the fresh file.
+    #[test]
+    fn five_upgrades_with_no_persons_part_write_the_fresh_file() {
+        let path = scratch_skill("bare");
+        fs::write(&path, wrap_managed_skill("workspace", 1, "a", None)).expect("write the file");
+        for v in 2..=6 {
+            let body = format!("body v{v}");
+            ensure_skill_up_to_date(&path, "workspace", v, &body, None);
+            assert_eq!(
+                fs::read_to_string(&path).expect("read the skill"),
+                wrap_managed_skill("workspace", v, &body, None),
+                "v{v}"
+            );
+        }
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// A file the old upgrade left with the line four times: a start at the
+    /// same version collapses them to one, upgrading or not, and leaves the
+    /// managed region and the person's part as they were.
+    #[test]
+    fn several_yours_lines_collapse_to_one() {
+        let path = scratch_skill("collapse");
+        let fresh = wrap_managed_skill("workspace", 3, "same", None);
+        let extra = format!("{SKILL_YOURS_LINE}\n").repeat(3);
+        let old = format!("{fresh}{extra}{PERSONS}");
+        assert_eq!(yours_count(&old), 4);
+        fs::write(&path, &old).expect("write the old file");
+        let out = ensure_skill_up_to_date(&path, "workspace", 3, "same", None);
+        assert!(matches!(out, SkillUpgradeOutcome::UpToDate), "{out:?}");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read the skill"),
+            format!("{fresh}{PERSONS}")
+        );
+
+        // refresh_skill_body's same-text path does the same.
+        fs::write(&path, &old).expect("write the old file again");
+        let out = refresh_skill_body(&path, "workspace", 3, "same", None);
+        assert!(matches!(out, SkillUpgradeOutcome::UpToDate), "{out:?}");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read the skill"),
+            format!("{fresh}{PERSONS}")
+        );
+
+        // A body change at the same version (refresh_skill_body) writes the
+        // line once.
+        fs::write(&path, &old).expect("write the old file again");
+        let out = refresh_skill_body(&path, "workspace", 3, "other", None);
+        assert!(matches!(out, SkillUpgradeOutcome::Upgraded), "{out:?}");
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert_eq!(yours_count(&text), 1, "{text}");
+        assert!(
+            text.ends_with(&format!("{SKILL_YOURS_LINE}\n{PERSONS}")),
+            "{text}"
+        );
+
+        // And an upgrade from it writes the line once.
+        fs::write(&path, &old).expect("write the old file again");
+        ensure_skill_up_to_date(&path, "workspace", 4, "new", None);
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert_eq!(yours_count(&text), 1, "{text}");
+        assert!(
+            text.ends_with(&format!("{SKILL_YOURS_LINE}\n{PERSONS}")),
+            "{text}"
+        );
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
+    }
+
+    /// A person's own copy of the line further down is theirs: only the
+    /// lines at the top of the footer are ours.
+    #[test]
+    fn a_yours_line_inside_the_persons_part_stays() {
+        let path = scratch_skill("inner");
+        let persons = format!("notes\n{SKILL_YOURS_LINE}\nmore\n");
+        let first = wrap_managed_skill("workspace", 1, "a", None);
+        fs::write(&path, format!("{first}{persons}")).expect("write the file");
+        ensure_skill_up_to_date(&path, "workspace", 2, "b", None);
+        let text = fs::read_to_string(&path).expect("read the skill");
+        assert!(
+            text.ends_with(&format!("{SKILL_YOURS_LINE}\n{persons}")),
+            "{text}"
+        );
+        assert_eq!(yours_count(&text), 2);
+        fs::remove_dir_all(path.parent().expect("a folder")).ok();
     }
 
     #[test]

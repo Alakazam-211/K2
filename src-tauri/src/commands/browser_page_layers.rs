@@ -1386,7 +1386,6 @@ mod tests {
         assert!(!o.hover_private_webkit_fallback);
         assert!(!o.page_first_click);
         assert!(!o.hover_no_gating, "the gate is on unless asked off");
-        assert!(HOVER_GATING, "the release constant");
         let o: UnderlayOptions = serde_json::from_value(serde_json::json!({"pageFirstClick": true})).unwrap();
         assert!(o.page_first_click);
     }

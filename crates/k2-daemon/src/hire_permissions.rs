@@ -386,7 +386,7 @@ fn cards_row(inp: &StepIn<'_>, ctx: &mut RowCtx<'_>, out: &mut StepOut) {
     }
     let reach = cards_reach(h);
     let refuse = |out: &mut StepOut, c: Cant| {
-        let hint = refused_hint(CARDS_ROW, SETTING, switches::AGENT_TAB.path, Floor::Admin, handle);
+        let hint = refused_hint(CARDS_ROW, SETTING, switches::PERMISSIONS_TAB.path, Floor::Admin, handle);
         out.rows.push(Decision::new(CARDS_ROW, "refused", Some(c.why.clone()), Some(hint.clone())));
         out.refused.push(Refusal { action: CARDS_ROW.into(), code: c.code.clone(), hint });
         record(inp, &t.cloned(), CARDS_ROW, &format!("refused:{}", c.code), None);

@@ -18,7 +18,20 @@
 //! delivered, so it never goes twice. A lock written before the field
 //! existed has no `hello_pending`: an agent made then never gets a
 //! surprise hello. Later starts send nothing.
+//!
+//! The hello goes as the owner, so the lock alone never decides it:
+//!
+//! - only a hello K2's hire wrote is taken: the hire records its sha256
+//!   in the daemon's database (`hire::template::hello_record`), and the
+//!   take matches the lock's text against it and removes the record. A
+//!   lock put in a folder by hand, or changed after the hire, is never
+//!   delivered;
+//! - nothing is taken while the folder-trust gate holds or denies the
+//!   workspace's folder ([`folder_trusted`]). The hello stays pending: no
+//!   AI tool starts there until a person trusts the folder (the spawn door
+//!   asks the same gate), and the first start after that sends it.
 
+use k2_core::cli_folder_trust::gate;
 use k2_core::hire::template::lock;
 use k2_core::hire::{links, HireCaller};
 
@@ -29,11 +42,30 @@ use crate::hire_routes::Sender;
 #[cfg(test)]
 pub(crate) static TEST_HELLOS: std::sync::Mutex<Vec<(String, String, Option<String>)>> = std::sync::Mutex::new(Vec::new());
 
-/// Take the workspace's pending hello (recorded as sent first). `None`:
-/// nothing to send, or the lock couldn't be updated (then nothing is sent,
-/// so it can never go twice).
-pub(crate) fn take(path: &str) -> Option<String> {
-    match lock::take_pending_hello(path) {
+/// The folder-trust gate lets K2 start programs in `path` now (look only:
+/// no grant written, no card). Held, denied or not checkable: false. A
+/// test build's non-temp HOME skip passes, as at the spawn door.
+fn folder_trusted(path: &str) -> bool {
+    match gate::check(path) {
+        gate::Outcome::Granted { .. } => true,
+        gate::Outcome::Skipped(why) if why == gate::SKIP_TEST_HOME => true,
+        other => {
+            k2_core::log_debug!("[template-hello] {path}: the folder isn't trusted now ({}); the hello waits", other.to_json()["state"]);
+            false
+        }
+    }
+}
+
+/// Take the pending hello of the workspace `workspace_id` at `path`
+/// (recorded as sent first). `None`: nothing to send, the folder isn't
+/// trusted now (it stays pending), the hello isn't one K2's hire wrote,
+/// or the lock couldn't be updated (then nothing is sent, so it can never
+/// go twice).
+pub(crate) fn take(workspace_id: &str, path: &str) -> Option<String> {
+    if !lock::has_pending_hello(path) || !folder_trusted(path) {
+        return None;
+    }
+    match lock::take_pending_hello(workspace_id, path) {
         Ok(h) => h,
         Err(e) => {
             k2_core::log_debug!("[template-hello] {path}: {}", e.hint);
@@ -121,10 +153,7 @@ pub(crate) fn launch_hello(workspace: &str) -> bool {
         links::resolve_workspace(&conn, workspace)
     };
     let Some(ws) = ws else { return false };
-    if !lock::has_pending_hello(&ws.path) {
-        return false;
-    }
-    let Some(hello) = take(&ws.path) else { return false };
+    let Some(hello) = take(&ws.id, &ws.path) else { return false };
     let from = k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken);
     send(&ws.path, &ws.handle, hello, None, from, Sender::from_hire_caller(&HireCaller::Owner, None));
     true

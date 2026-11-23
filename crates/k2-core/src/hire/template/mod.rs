@@ -19,6 +19,7 @@
 
 pub mod apply;
 pub mod format;
+pub mod hello_record;
 pub mod lock;
 pub mod permissions;
 pub mod render;

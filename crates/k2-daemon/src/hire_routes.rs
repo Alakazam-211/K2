@@ -1233,7 +1233,7 @@ fn cli_template_hire(
             // once, ahead of `onboard`.
             let mut delivered = false;
             if !out.dry_run && launch {
-                if let Some(hello) = crate::template_hello::take(&out.path) {
+                if let Some(hello) = crate::template_hello::take(&out.workspace_id, &out.path) {
                     queue_hello(&out.path, &out.handle, hello, onboard.clone(), who, caller);
                     delivered = true;
                 }

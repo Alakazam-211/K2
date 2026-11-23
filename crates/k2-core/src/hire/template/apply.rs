@@ -686,6 +686,16 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         },
         hello_sent_at: prev.as_ref().and_then(|l| l.hello_sent_at),
     };
+    // A hello this first apply puts in the lock: its sha256 goes in the
+    // daemon's record, the only proof at the first start that K2 wrote it.
+    if let (false, None, Some(h)) = (dry, prev.as_ref(), next.hello_pending.as_deref()) {
+        let ws = converge::lookup_project_row(inp.path)
+            .map(|(_, r)| r.id)
+            .ok_or_else(|| HireError::internal(format!("{}: not registered; the hello can't be recorded", inp.path)))?;
+        let db = crate::db::shared();
+        let conn = db.lock();
+        super::hello_record::record(&conn, &ws, h, super::super::now_secs()).map_err(HireError::internal)?;
+    }
     let lock_changed = prev.as_ref().is_none_or(|p| !p.same_content(&next));
     let wrote_something = rows.iter().any(|r| r.status == "done");
     if lock_changed || (wrote_something && !dry) {

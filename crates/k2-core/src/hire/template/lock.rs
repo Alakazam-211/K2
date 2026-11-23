@@ -103,13 +103,27 @@ pub fn has_pending_hello(workspace: &str) -> bool {
     matches!(read(workspace), Ok(Some(l)) if l.hello_pending.as_deref().is_some_and(|h| !h.trim().is_empty()))
 }
 
-/// Take the pending hello: clear it and record `hello_sent_at` in the lock
-/// FIRST, then return its text for the caller to deliver. `None` when
-/// there is no lock, the lock predates the field, or it went already.
-pub fn take_pending_hello(workspace: &str) -> Result<Option<String>, HireError> {
+/// Take the pending hello of the workspace `workspace_id` at `workspace`:
+/// only one K2's hire wrote (its sha256 is in the daemon's record,
+/// [`super::hello_record`], which is taken in the same step), then clear it
+/// and record `hello_sent_at` in the lock, then return its text for the
+/// caller to deliver. `None` when there is no lock, the lock predates the
+/// field, it went already, or the daemon holds no record for this text (a
+/// lock put in the folder by hand, or changed after the hire: the lock is
+/// left as it is).
+pub fn take_pending_hello(workspace_id: &str, workspace: &str) -> Result<Option<String>, HireError> {
     let _g = HELLO_TAKE.lock().unwrap_or_else(|p| p.into_inner());
     let Some(mut l) = read(workspace)? else { return Ok(None) };
     let Some(text) = l.hello_pending.take().filter(|h| !h.trim().is_empty()) else { return Ok(None) };
+    let recorded = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        super::hello_record::take(&conn, workspace_id, &text).map_err(HireError::internal)?
+    };
+    if !recorded {
+        crate::log_debug!("[template-hello] {workspace}: the lock's hello is not one K2's hire wrote; not sent");
+        return Ok(None);
+    }
     l.hello_sent_at = Some(super::super::now_secs());
     write(workspace, &l)?;
     Ok(Some(text))

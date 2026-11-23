@@ -8,7 +8,7 @@
 //! Every handler is a thin wrapper around `k2_core::inbox::*`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::cli_response::CliResponse;
 
@@ -479,20 +479,20 @@ pub fn handle_deliver_post(params: &HashMap<String, String>) -> CliResponse {
         Err(r) => return r,
     };
     // M2 (S0): the daemon reads the sources for the caller, so an agent
-    // hands over only what it may read itself.
+    // hands over only what it may read itself, each from the handle that
+    // was checked (the snapshot's copies; it goes when this returns).
+    let snapshot = match agent_snapshot(params, &source_paths) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let source_paths: Vec<PathBuf> = snapshot.as_ref().map(|s| s.paths.clone()).unwrap_or(source_paths);
     if let Some((agent, host)) = split_federated_user_target(&target_token) {
-        if let Some(refusal) = agent_reach_refusal(params, &source_paths, None) {
-            return refusal;
-        }
         return deliver_federated_files(params, &agent, &host, &source_paths);
     }
     let Some(resolved_path) = crate::workspace_msg::resolve_workspace_allowing_handle(&target_token)
     else {
         return crate::workspace_routes::workspace_not_found_response(&target_token);
     };
-    if let Some(refusal) = agent_reach_refusal(params, &source_paths, Some(Path::new(&resolved_path))) {
-        return refusal;
-    }
     let principal = crate::caller_workspace::principal_from_params(params);
     match crate::comms::gate_cross_workspace(principal.as_ref(), &resolved_path) {
         Ok(()) => {}
@@ -569,9 +569,11 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
         );
     }
     let bundle_path = PathBuf::from(&path_str);
-    if let Some(refusal) = agent_reach_refusal(params, std::slice::from_ref(&bundle_path), Some(Path::new(&resolved_path))) {
-        return refusal;
-    }
+    let snapshot = match agent_snapshot(params, std::slice::from_ref(&bundle_path)) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let bundle_path = snapshot.as_ref().and_then(|s| s.paths.first().cloned()).unwrap_or(bundle_path);
     let title = opt_param(params, "title");
     let from = opt_param(params, "from");
     let source = opt_param(params, "source");
@@ -595,19 +597,13 @@ pub fn handle_deliver_bundle_post(params: &HashMap<String, String>) -> CliRespon
 }
 
 /// An agent's (scoped caller's) delivery reads only files it may read
-/// itself (`agent_isolation::reach_refusal`); the owner and logins as before.
-/// A file the CLI staged into the target's own inbox staging folder
-/// (`<target>/.k2/tmp/msg-inbox/`, the upload it was allowed to make) stays
-/// in that workspace, so it is not the caller's to check.
-fn agent_reach_refusal(params: &HashMap<String, String>, paths: &[PathBuf], target: Option<&Path>) -> Option<CliResponse> {
-    let principal = crate::caller_workspace::principal_from_params(params)?;
-    let staging = target.and_then(|t| std::fs::canonicalize(t.join(".k2").join("tmp").join("msg-inbox")).ok());
-    let checked: Vec<PathBuf> = paths
-        .iter()
-        .filter(|p| !staging.as_ref().is_some_and(|s| std::fs::canonicalize(p).is_ok_and(|c| c.starts_with(s))))
-        .cloned()
-        .collect();
-    crate::agent_isolation::reach_refusal(&principal.workspace_uuid, &checked, "deliver")
+/// itself, each copied from the handle that was checked
+/// (`agent_isolation::snapshot_for_agent`); `Ok(None)`: the owner or a
+/// login, as before. No exception for the CLI's staging folder: an agent's
+/// passport can't stage (the upload routes take the owner or a login).
+fn agent_snapshot(params: &HashMap<String, String>, paths: &[PathBuf]) -> Result<Option<crate::agent_isolation::AgentSnapshot>, CliResponse> {
+    let Some(principal) = crate::caller_workspace::principal_from_params(params) else { return Ok(None) };
+    crate::agent_isolation::snapshot_for_agent(&principal.workspace_uuid, paths, "deliver").map(Some)
 }
 
 /// Resolve `paths` (JSON array) and/or `path` (single) into source file list.
@@ -1034,7 +1030,7 @@ mod tests {
             conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![id, "deliver-a", ws.to_string_lossy().as_ref()]).unwrap();
         }
         let principal = HookPrincipal { workspace_uuid: id.clone(), agent_address: "agent".into() };
-        let deliver = |src: &Path, as_agent: bool| -> CliResponse {
+        let deliver = |src: &std::path::Path, as_agent: bool| -> CliResponse {
             let mut params = HashMap::new();
             params.insert("workspace".to_string(), ws.display().to_string());
             params.insert("path".to_string(), src.display().to_string());
@@ -1068,6 +1064,21 @@ mod tests {
         assert_eq!(landed(), before, "nothing landed");
         let r = deliver(&ws.join("brief.md"), true);
         assert_eq!(r.status, "200 OK", "fenced: its own workspace: {}", r.body);
+        // Review F1: the CLI's staging folder made a link to K2's folder buys
+        // nothing: the owner token is still refused, and nothing lands.
+        let staging = ws.join(".k2/tmp");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::os::unix::fs::symlink(&k2, staging.join("msg-inbox")).unwrap();
+        let before = landed();
+        let r = deliver(&staging.join("msg-inbox/daemon.token"), true);
+        assert_eq!(r.status, "403 Forbidden", "through the staging link: {}", r.body);
+        let r = deliver(&k2.join("daemon.token"), true);
+        assert_eq!(r.status, "403 Forbidden", "by its own name, with the staging link in place: {}", r.body);
+        assert_eq!(landed(), before, "nothing landed");
+        // What lands is the checked copy: the cover names the file, and K2's
+        // read folder is empty again.
+        let reads = k2.join("run/agent-reads");
+        assert!(std::fs::read_dir(&reads).map(|d| d.count() == 0).unwrap_or(true), "the daemon's copies are gone");
         let r = deliver(&elsewhere.join("todo.md"), false);
         assert_eq!(r.status, "200 OK", "the owner delivers as before: {}", r.body);
     }

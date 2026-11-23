@@ -51,32 +51,55 @@ pub fn workspace_and_fence(ws: &str) -> (Option<PathBuf>, bool) {
         .query_row("SELECT path, isolation_mode FROM projects WHERE id = ?1", [ws], |r| Ok((r.get(0)?, r.get(1)?)))
         .ok();
     match row {
-        Some((path, mode)) => (Some(PathBuf::from(path)), mode == "fence"),
+        // M2 review L2: anything but `off` is fenced (a later mode name is never
+        // read as no fence).
+        Some((path, mode)) => (Some(PathBuf::from(path)), mode.trim() != "off"),
         None => (None, false),
     }
 }
 
 // ── what the daemon reads for an agent (M2, v2 §1.5 S0) ──────────────
 
-/// The refusal when the daemon would read `paths` for agent `ws` (to hand
-/// them to an inbox, publish or ship them) and one is outside the agent's
-/// reach ([`k2_core::agent_fence::reach_refusal`]): 403 `path_out_of_reach`
-/// naming the path, audited. `None`: every path is the agent's to read.
-pub fn reach_refusal(ws: &str, paths: &[PathBuf], what: &str) -> Option<crate::cli_response::CliResponse> {
-    let ws = ws.trim();
-    let (workspace, fenced) = workspace_and_fence(ws);
-    let home = k2_core::paths::home_dir()?;
-    let k2_home = k2_core::paths::k2_home();
-    let tmp = agent_cgroup::valid_ws(ws).then(|| k2_home.join("agents").join(ws).join("tmp"));
-    let workspace = match workspace {
-        Some(w) => w,
+/// Agent `ws`'s reach: its home, K2's home, workspace, temp dir and
+/// whether its fence is on. No home folder: refused (review L1, never open).
+struct Reach {
+    home: PathBuf,
+    k2_home: PathBuf,
+    workspace: PathBuf,
+    tmp: Option<PathBuf>,
+    fenced: bool,
+}
+
+impl Reach {
+    fn of(ws: &str, what: &str) -> Result<Reach, crate::cli_response::CliResponse> {
+        let ws = ws.trim();
+        let (workspace, fenced) = workspace_and_fence(ws);
+        let Some(home) = k2_core::paths::home_dir() else {
+            return Err(out_of_reach_response(ws, what, None, "this server has no home folder to check the path against".into()));
+        };
+        let k2_home = k2_core::paths::k2_home();
+        let tmp = agent_cgroup::valid_ws(ws).then(|| k2_home.join("agents").join(ws).join("tmp"));
         // No row for the caller's workspace: nothing is its own.
-        None => PathBuf::from("/nonexistent-k2-workspace"),
-    };
-    let reach = k2_core::agent_fence::AgentReach { home: &home, k2_home: &k2_home, workspace: &workspace, tmp_dir: tmp.as_deref(), fenced };
-    let (path, why) = paths.iter().find_map(|p| k2_core::agent_fence::reach_refusal(&reach, p).map(|w| (p, w)))?;
-    audit_refusal("agent.path_out_of_reach", ws, "-", &format!("{what}: {}", path.display()), "daemon");
-    Some(crate::cli_response::CliResponse {
+        let workspace = workspace.unwrap_or_else(|| PathBuf::from("/nonexistent-k2-workspace"));
+        Ok(Reach { home, k2_home, workspace, tmp, fenced })
+    }
+
+    fn view(&self) -> k2_core::agent_fence::AgentReach<'_> {
+        k2_core::agent_fence::AgentReach {
+            home: &self.home,
+            k2_home: &self.k2_home,
+            workspace: &self.workspace,
+            tmp_dir: self.tmp.as_deref(),
+            fenced: self.fenced,
+        }
+    }
+}
+
+/// 403 `path_out_of_reach` (audited).
+fn out_of_reach_response(ws: &str, what: &str, path: Option<&Path>, why: String) -> crate::cli_response::CliResponse {
+    let shown = path.map(|p| p.display().to_string()).unwrap_or_else(|| "-".into());
+    audit_refusal("agent.path_out_of_reach", ws, "-", &format!("{what}: {shown}"), "daemon");
+    crate::cli_response::CliResponse {
         status: "403 Forbidden",
         content_type: "application/json",
         body: serde_json::json!({
@@ -84,11 +107,85 @@ pub fn reach_refusal(ws: &str, paths: &[PathBuf], what: &str) -> Option<crate::c
             "error": {
                 "code": "path_out_of_reach",
                 "hint": format!("{why}, so K2 won't {what} it for an agent. Copy what you mean to share into your workspace first. It can't be requested."),
-                "path": path.display().to_string(),
+                "path": shown,
             },
         })
         .to_string(),
-    })
+    }
+}
+
+/// The refusal when the daemon would read `paths` for agent `ws` (to hand
+/// them to an inbox, publish or ship them) and one is outside the agent's
+/// reach ([`k2_core::agent_fence::reach_refusal`]): 403 `path_out_of_reach`
+/// naming the path, audited. `None`: every path is the agent's to read.
+pub fn reach_refusal(ws: &str, paths: &[PathBuf], what: &str) -> Option<crate::cli_response::CliResponse> {
+    let reach = match Reach::of(ws, what) {
+        Ok(r) => r,
+        Err(resp) => return Some(resp),
+    };
+    let v = reach.view();
+    let (path, why) = paths.iter().find_map(|p| k2_core::agent_fence::reach_refusal(&v, p).map(|w| (p, w)))?;
+    Some(out_of_reach_response(ws.trim(), what, Some(path), why))
+}
+
+/// Files the daemon read for an agent, each from the handle it checked
+/// (review F3), copied into a folder only the daemon writes
+/// (`~/.k2/run/agent-reads/<uuid>/<n>/<file name>`, 0700). The copies keep
+/// the files' names; the folder goes when this is dropped.
+pub struct AgentSnapshot {
+    dir: PathBuf,
+    pub paths: Vec<PathBuf>,
+}
+
+impl Drop for AgentSnapshot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Open each of `paths` once for agent `ws`, check the file it opened
+/// ([`k2_core::agent_fence::open_for_agent`]) and copy it from that handle
+/// into an [`AgentSnapshot`]: whatever the daemon then reads is what was
+/// checked, whatever the agent does to the names afterwards.
+#[cfg(unix)]
+pub fn snapshot_for_agent(ws: &str, paths: &[PathBuf], what: &str) -> Result<AgentSnapshot, crate::cli_response::CliResponse> {
+    use std::os::unix::fs::DirBuilderExt;
+    let reach = Reach::of(ws, what)?;
+    let v = reach.view();
+    let dir = reach.k2_home.join("run").join("agent-reads").join(uuid::Uuid::new_v4().to_string());
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .map_err(|e| crate::cli_response::CliResponse::internal_error(format!("the daemon's read folder: {e}")))?;
+    let mut snap = AgentSnapshot { dir, paths: Vec::with_capacity(paths.len()) };
+    for (n, p) in paths.iter().enumerate() {
+        let (mut f, _real) = k2_core::agent_fence::open_for_agent(&v, p).map_err(|why| out_of_reach_response(ws.trim(), what, Some(p), why))?;
+        let name = p.file_name().map(|s| s.to_os_string()).unwrap_or_else(|| "attachment".into());
+        let slot = snap.dir.join(n.to_string());
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&slot)
+            .map_err(|e| crate::cli_response::CliResponse::internal_error(format!("the daemon's read folder: {e}")))?;
+        let copy = slot.join(name);
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&copy)
+            .map_err(|e| crate::cli_response::CliResponse::internal_error(format!("copy {}: {e}", p.display())))?;
+        std::io::copy(&mut f, &mut out).map_err(|e| crate::cli_response::CliResponse::internal_error(format!("copy {}: {e}", p.display())))?;
+        snap.paths.push(copy);
+    }
+    Ok(snap)
+}
+
+/// Windows has no fence: the reach check by name, and the files as given.
+#[cfg(not(unix))]
+pub fn snapshot_for_agent(ws: &str, paths: &[PathBuf], what: &str) -> Result<AgentSnapshot, crate::cli_response::CliResponse> {
+    if let Some(resp) = reach_refusal(ws, paths, what) {
+        return Err(resp);
+    }
+    Ok(AgentSnapshot { dir: PathBuf::new(), paths: paths.to_vec() })
 }
 
 /// The isolation for a new terminal session of workspace `ws` (`cwd` when

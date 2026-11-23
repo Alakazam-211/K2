@@ -53,8 +53,34 @@ pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, Strin
                 root.display()
             ));
         }
+        // M2 review F4: the workspace's `.git` is the agent's own file, so its
+        // git folders must be inside the workspace too, and borrow no objects.
+        for (what, dir) in [("git dir", git_dir(&root)?), ("shared git dir", common_dir(&root)?)] {
+            let d = dunce::canonicalize(&dir).map_err(|e| format!("the {what}: {e}"))?;
+            if !d.starts_with(&w) {
+                return Err(format!(
+                    "the workspace's {what} is outside it ({}), and its folder fence is on, so K2 won't ship it",
+                    dir.display()
+                ));
+            }
+            for alt in ["objects/info/alternates", "objects/info/http-alternates"] {
+                if d.join(alt).exists() {
+                    return Err(format!(
+                        "the workspace's repo borrows objects from another repo ({}), and its folder fence is on, so K2 won't ship it",
+                        d.join(alt).display()
+                    ));
+                }
+            }
+        }
     }
     Ok(root)
+}
+
+/// The repo's own git dir (`.git`, or the folder a `.git` file names).
+pub(crate) fn git_dir(root: &Path) -> Result<PathBuf, String> {
+    let mut c = git(root);
+    c.args(["rev-parse", "--absolute-git-dir"]);
+    run(c, "find the git dir").map(PathBuf::from)
 }
 
 /// The shared git dir (a worktree's `.git` is a file pointing here).
@@ -711,6 +737,22 @@ mod tests {
         assert!(e.contains("inside a larger git repo") && e.contains("--repo"), "{e}");
         // A workspace that is its own repo ships it, fenced or not.
         assert_eq!(canon(&workspace_repo_root(&parent, true).unwrap()), canon(&parent));
+        // Review F4: a `.git` file planted to name another repo's git dir
+        // keeps the top level here, but the git dir is outside: refused.
+        let other = d.join("other");
+        nested(&other, "secret.rs");
+        let planted = d.join("planted");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::write(planted.join(".git"), format!("gitdir: {}\n", other.join(".git").display())).unwrap();
+        assert!(workspace_repo_root(&planted, false).is_ok(), "unfenced: as before");
+        let e = workspace_repo_root(&planted, true).unwrap_err();
+        assert!(e.contains("outside it"), "{e}");
+        // Borrowed objects (alternates) are refused too.
+        let borrow = d.join("borrow");
+        nested(&borrow, "b.rs");
+        std::fs::write(borrow.join(".git/objects/info/alternates"), format!("{}\n", other.join(".git/objects").display())).unwrap();
+        let e = workspace_repo_root(&borrow, true).unwrap_err();
+        assert!(e.contains("borrows objects"), "{e}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

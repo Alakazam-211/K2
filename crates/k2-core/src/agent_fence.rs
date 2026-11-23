@@ -177,9 +177,18 @@ pub fn default_view(i: &ViewInputs) -> Result<FenceView, String> {
     v.rw.extend(DEVICES_RW.iter().map(|p| p.to_string()));
     v.rw.push(s(ws));
     v.rw.push(s(i.tmp_dir));
+    // M2 review F2: the workspace's `.git` file is the agent's own, so the
+    // git dirs it names are never opened from it. One that resolves inside
+    // the workspace is already open; one outside (a worktree of an outside
+    // repo, or a file planted to name another folder) refuses the fence.
     for d in git_dirs(ws) {
-        if !under(&d, i.k2_home) {
-            v.rw.push(s(&d));
+        let dc = canon(&d);
+        if !dc.starts_with(ws) {
+            return Err(format!(
+                "the workspace's .git names a git folder outside it ({}); a fence opens only the workspace, \
+                 so give the agent a clone of its own instead of a worktree",
+                d.display()
+            ));
         }
     }
     for rel in HOME_RO {
@@ -246,13 +255,15 @@ pub fn carve(entry: &Path, avoid: &[PathBuf]) -> Vec<PathBuf> {
 
 // ── what the daemon reads for an agent (M2, v2 §1.5 S0) ──────────────
 
-/// Folders under `$HOME` the daemon never reads for an agent (to hand over
-/// to another agent's inbox, publish or ship), fenced or not: the usual
-/// credential stores. K2's own home is never read either (except the
-/// agent's own private temp dir).
+/// Folders and files under `$HOME` the daemon never reads for an agent (to
+/// hand over to another agent's inbox, publish or ship), fenced or not: the
+/// usual credential stores and the harness logins. K2's own home is never
+/// read either (except the agent's own private temp dir).
 pub const HOME_NEVER: &[&str] = &[
     ".ssh", ".aws", ".azure", ".gnupg", ".config/gh", ".config/gcloud", ".config/op", ".docker", ".kube",
     ".netrc", ".git-credentials", ".npmrc", ".pypirc", ".password-store", ".local/share/keyrings",
+    ".claude", ".claude.json", ".codex", ".grok", ".gemini", ".cargo/credentials", ".cargo/credentials.toml",
+    "Library/Keychains",
 ];
 
 /// Who the daemon reads for: one agent's folders.
@@ -267,38 +278,108 @@ pub struct AgentReach<'a> {
     pub fenced: bool,
 }
 
-/// Why the daemon may not read `path` for this agent; `None`: it may. A
-/// fenced agent's reach is its workspace (and the git dirs it commits
-/// into) and its private temp dir. Any agent's excludes K2's home and
-/// [`HOME_NEVER`]. Links are followed first, so a link in the workspace to
-/// a secret is the secret.
+/// Why the daemon may not read `path` for this agent; `None`: it may. The
+/// path is resolved (links followed) first; one that can't be resolved is
+/// refused. Then [`resolved_refusal`].
 pub fn reach_refusal(r: &AgentReach, path: &Path) -> Option<String> {
     if !path.is_absolute() {
         return Some(format!("{} isn't an absolute path", path.display()));
     }
-    let resolved = std::fs::canonicalize(path).ok();
-    let p = resolved.clone().unwrap_or_else(|| path.to_path_buf());
-    if r.tmp_dir.is_some_and(|t| under(&p, &canon(t))) {
-        return None;
+    match std::fs::canonicalize(path) {
+        Ok(p) => resolved_refusal(r, &p, path),
+        Err(e) => Some(format!("{} can't be resolved ({})", path.display(), e.kind())),
     }
-    if [canon(r.k2_home), r.k2_home.to_path_buf()].iter().any(|k| under(&p, k)) {
-        return Some(format!("{} is in K2's own folder, which K2 never reads for an agent", path.display()));
+}
+
+/// [`reach_refusal`] for a path already resolved (`real`; `shown` names it
+/// in the reason). Refusals first, in this order, before anything is
+/// allowed: K2's own folder (except the agent's own temp dir), a folder
+/// holding it, a credential folder of [`HOME_NEVER`] (by where it resolves
+/// too) or a folder holding one. Then a fenced agent reads only inside its
+/// workspace and its temp dir. Nothing is taken from the agent's own files
+/// (a repo pointer file in the workspace naming another folder counts for
+/// nothing here).
+pub fn resolved_refusal(r: &AgentReach, real: &Path, shown: &Path) -> Option<String> {
+    let k2 = canon(r.k2_home);
+    // The temp dir counts only where it really is, inside K2's folder.
+    let tmp = r.tmp_dir.map(canon).filter(|t| t.starts_with(&k2));
+    let in_tmp = tmp.as_ref().is_some_and(|t| under(real, t));
+    if !in_tmp && (under(real, &k2) || under(real, r.k2_home)) {
+        return Some(format!("{} is in K2's own folder, which K2 never reads for an agent", shown.display()));
     }
-    let ws = canon(r.workspace);
-    if under(&p, &ws) || git_dirs(&ws).iter().any(|d| under(&p, &canon(d))) {
-        return None;
+    if k2.starts_with(real) || r.k2_home.starts_with(real) {
+        return Some(format!("{} holds K2's own folder, which K2 never reads for an agent", shown.display()));
     }
     let home = canon(r.home);
-    if let Some(rel) = HOME_NEVER.iter().find(|rel| under(&p, &home.join(rel)) || under(&p, &r.home.join(rel))) {
-        return Some(format!("{} is in ~/{rel}, a credential folder K2 never reads for an agent (secrets go through the vault)", path.display()));
-    }
-    if r.fenced {
-        if resolved.is_none() {
-            return Some(format!("{} can't be resolved, and this agent's folder fence is on", path.display()));
+    for rel in HOME_NEVER {
+        let spots = [home.join(rel), r.home.join(rel), canon(&r.home.join(rel))];
+        if spots.iter().any(|c| under(real, c)) {
+            return Some(format!("{} is in ~/{rel}, a credential folder K2 never reads for an agent (secrets go through the vault)", shown.display()));
         }
-        return Some(format!("{} is outside this agent's workspace, and its folder fence is on", path.display()));
+        if spots.iter().any(|c| c.starts_with(real) && c.as_path() != real) {
+            return Some(format!("{} holds ~/{rel}, a credential folder K2 never reads for an agent", shown.display()));
+        }
+    }
+    if r.fenced && !in_tmp && !under(real, &canon(r.workspace)) {
+        return Some(format!("{} is outside this agent's workspace, and its folder fence is on", shown.display()));
     }
     None
+}
+
+/// Open `path` once for the daemon to read for this agent, and check the
+/// file it actually opened: links are followed by the kernel at the open,
+/// the opened file's own path is read back from the handle and checked
+/// ([`resolved_refusal`]), and the caller reads from the handle, never by
+/// name again (a swap after the check changes nothing). Only a regular
+/// file; never blocks on a FIFO. `Ok((file, real path))`.
+#[cfg(unix)]
+pub fn open_for_agent(r: &AgentReach, path: &Path) -> Result<(std::fs::File, PathBuf), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if !path.is_absolute() {
+        return Err(format!("{} isn't an absolute path", path.display()));
+    }
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOCTTY)
+        .open(path)
+        .map_err(|e| format!("{} can't be opened ({})", path.display(), e.kind()))?;
+    let meta = f.metadata().map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{} isn't a regular file", path.display()));
+    }
+    let real = fd_path(&f).ok_or_else(|| format!("{}: can't read where the opened file is", path.display()))?;
+    if let Some(why) = resolved_refusal(r, &real, path) {
+        return Err(why);
+    }
+    Ok((f, real))
+}
+
+/// The path of an open file, from the handle (Linux: `/proc/self/fd`;
+/// macOS: `F_GETPATH`).
+#[cfg(unix)]
+pub fn fd_path(f: &std::fs::File) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())).ok().filter(|p| p.is_absolute())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: F_GETPATH writes at most PATH_MAX bytes into `buf`.
+        let rc = unsafe { libc::fcntl(f.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+        if rc == -1 {
+            return None;
+        }
+        let n = buf.iter().position(|b| *b == 0)?;
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(&buf[..n])))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = f.as_raw_fd();
+        None
+    }
 }
 
 /// The harness logins this session runs on: exactly its own slot when
@@ -772,6 +853,105 @@ mod tests {
         // Another agent's temp dir is K2's folder to this one.
         let r = AgentReach { home: &home, k2_home: &k2, workspace: &other, tmp_dir: Some(&k2.join("agents/ws-b/tmp")), fenced: false };
         assert!(reach_refusal(&r, &tmp.join("bundle.tar.gz")).is_some(), "another agent's temp dir");
+        // M2 review: a folder holding K2's folder or a credential folder (the
+        // home, the root) is refused; an unresolvable path is refused for
+        // every agent (L4).
+        for fenced in [false, true] {
+            let r = AgentReach { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: Some(&tmp), fenced };
+            assert!(reach_refusal(&r, &home).is_some(), "the home folder");
+            assert!(reach_refusal(&r, Path::new("/")).is_some(), "the root");
+            assert!(reach_refusal(&r, &ws.join("gone.md")).is_some(), "an unresolvable path");
+        }
+        // L3: a credential folder that is itself a link is matched by where it resolves.
+        let vault_dir = root.join("elsewhere-aws");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        std::fs::write(vault_dir.join("credentials"), "x").unwrap();
+        std::os::unix::fs::symlink(&vault_dir, home.join(".aws")).unwrap();
+        let r = AgentReach { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: Some(&tmp), fenced: false };
+        assert!(reach_refusal(&r, &home.join(".aws/credentials")).is_some(), "~/.aws through its link");
+        assert!(reach_refusal(&r, &vault_dir.join("credentials")).is_some(), "~/.aws's target by its own name");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// M2 review F2: the workspace's `.git` file is the agent's own. A git
+    /// folder it names counts for nothing in the reach check, and the fence
+    /// refuses one outside the workspace (a planted `.git` naming `~/.ssh`,
+    /// or a `commondir` of `../../../.k2`) instead of opening it.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_git_file_opens_nothing() {
+        let root = std::env::temp_dir().join(format!("k2-gitfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let k2 = home.join(".k2");
+        let ws = home.join("DevProjects/A");
+        let tmp = k2.join("agents/ws-a/tmp");
+        for d in [&ws, &tmp, &home.join(".ssh"), &ws.join("g")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.join(".ssh/id_ed25519"), "KEY").unwrap();
+        std::fs::write(k2.join("daemon.token"), "TOKEN").unwrap();
+        let env = BTreeMap::new();
+        let view = |ws: &Path| default_view(&ViewInputs { home: &home, k2_home: &k2, workspace: ws, tmp_dir: &tmp, env: &env });
+        // `.git` naming ~/.ssh.
+        std::fs::write(ws.join(".git"), format!("gitdir: {}\n", home.join(".ssh").display())).unwrap();
+        let r = AgentReach { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: Some(&tmp), fenced: true };
+        assert!(reach_refusal(&r, &home.join(".ssh/id_ed25519")).is_some(), "a git dir named by the agent opens nothing");
+        let e = view(&ws).expect_err("the fence refuses a git folder outside the workspace");
+        assert!(e.contains("outside it"), "{e}");
+        // `.git` naming a folder inside, whose commondir climbs to ~/.k2.
+        std::fs::write(ws.join(".git"), "gitdir: g\n").unwrap();
+        std::fs::write(ws.join("g/commondir"), "../../../.k2\n").unwrap();
+        let e = view(&ws).expect_err("a commondir out to ~/.k2 refuses the fence");
+        assert!(e.contains("outside it"), "{e}");
+        // Both inside the workspace: the fence is the workspace's, nothing more.
+        std::fs::create_dir_all(ws.join("main.git")).unwrap();
+        std::fs::write(ws.join("g/commondir"), "../main.git\n").unwrap();
+        let v = view(&ws).expect("git folders inside the workspace are fine");
+        for p in v.rw.iter().chain(&v.ro) {
+            let p = canon(Path::new(p));
+            assert!(!p.starts_with(canon(&k2)) || p.starts_with(canon(&tmp)) || p.ends_with("bin") || p.ends_with("daemon.port") || p.ends_with("heartbeat.port"), "{}", p.display());
+            assert!(!p.starts_with(canon(&home.join(".ssh"))), "{}", p.display());
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// M2 review F3: the daemon reads a file for an agent from the handle it
+    /// checked. A link out is refused by where it opens; a swap after the
+    /// open changes nothing; only regular files.
+    #[cfg(unix)]
+    #[test]
+    fn the_daemon_reads_from_the_handle_it_checked() {
+        use std::io::Read;
+        let root = std::env::temp_dir().join(format!("k2-handle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let k2 = home.join(".k2");
+        let ws = home.join("DevProjects/A");
+        let tmp = k2.join("agents/ws-a/tmp");
+        for d in [&ws, &tmp, &home.join(".ssh")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(home.join(".ssh/id_ed25519"), "KEY").unwrap();
+        std::fs::write(ws.join("x"), "PLAIN").unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh/id_ed25519"), ws.join("key")).unwrap();
+        let r = AgentReach { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: Some(&tmp), fenced: true };
+        let e = open_for_agent(&r, &ws.join("key")).expect_err("a link out is checked where it opens");
+        assert!(e.contains(".ssh"), "{e}");
+        let (mut f, real) = open_for_agent(&r, &ws.join("x")).expect("its own file");
+        assert_eq!(real, canon(&ws.join("x")), "the handle's own path");
+        // The agent swaps the name for a link to the key after the check.
+        std::fs::remove_file(ws.join("x")).unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh/id_ed25519"), ws.join("x")).unwrap();
+        let mut got = String::new();
+        f.read_to_string(&mut got).unwrap();
+        assert_eq!(got, "PLAIN", "the read comes from the checked handle, never the name");
+        // Not a regular file: refused, without blocking.
+        let fifo = ws.join("pipe");
+        let c = std::ffi::CString::new(fifo.to_string_lossy().as_bytes()).unwrap();
+        // SAFETY: a NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(open_for_agent(&r, &fifo).unwrap_err().contains("regular file"));
         let _ = std::fs::remove_dir_all(&root);
     }
 

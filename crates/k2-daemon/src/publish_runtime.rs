@@ -1533,6 +1533,23 @@ fn start_inner(
         )));
     }
 
+    // M2 review F5: every start (`publish start`, the boot relaunch, an
+    // approved re-run) checks the stored folder again for a fenced
+    // workspace's service: a folder that became a link out since it was
+    // published is refused, not followed.
+    if crate::agent_isolation::workspace_and_fence(project_id).1 {
+        let mut folders = vec![PathBuf::from(&row.cwd)];
+        if !row.skin_root.trim().is_empty() {
+            folders.push(PathBuf::from(&row.cwd).join(row.skin_root.trim()));
+        }
+        if let Some(refusal) = crate::agent_isolation::reach_refusal(project_id, &folders, "start") {
+            let why = serde_json::from_str::<serde_json::Value>(&refusal.body)
+                .ok()
+                .and_then(|v| v["error"]["hint"].as_str().map(str::to_string))
+                .unwrap_or_else(|| "the service's folder is outside the agent's reach".into());
+            return Err(PublishError::bad(why));
+        }
+    }
     let cwd = PathBuf::from(&row.cwd);
     let (child, pid, job) = if row.kind == KIND_SKIN {
         spawn_skin_helper(&row, project_id, name).map_err(PublishError::fail)?

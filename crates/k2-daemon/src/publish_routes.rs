@@ -1025,15 +1025,34 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     // caller, so an agent's (a session passport's) folder is one it may read
     // itself: never K2's home or a credential folder, and inside its
     // workspace when its folder fence is on.
-    if let Some((ws, _)) = who.passport() {
-        let mut folders = vec![cwd.clone()];
-        if !skin_root.trim().is_empty() {
-            folders.push(cwd.join(skin_root.trim()));
-        }
-        if let Some(refusal) = crate::agent_isolation::reach_refusal(ws, &folders, "publish") {
-            return refusal;
-        }
+    // Review F5: a caller that didn't classify (an API session, nothing)
+    // can't publish at all; the reach check keys on the request's principal
+    // when it has one, else the passport's workspace. The folder is stored
+    // as it resolved when checked, and checked again at every start
+    // (`publish_runtime::start_inner`).
+    if matches!(who, crate::compute_routes::Who::Wrong | crate::compute_routes::Who::Invalid) {
+        return CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({ "ok": false, "error": { "code": "forbidden", "hint": "this credential can't publish a service" } }).to_string(),
+        };
     }
+    let reach_ws = crate::caller_workspace::principal_from_params(params)
+        .map(|p| p.workspace_uuid)
+        .or_else(|| who.passport().map(|(ws, _)| ws.to_string()));
+    let cwd = match reach_ws {
+        Some(ws) => {
+            let mut folders = vec![cwd.clone()];
+            if !skin_root.trim().is_empty() {
+                folders.push(cwd.join(skin_root.trim()));
+            }
+            if let Some(refusal) = crate::agent_isolation::reach_refusal(&ws, &folders, "publish") {
+                return refusal;
+            }
+            std::fs::canonicalize(&cwd).unwrap_or(cwd)
+        }
+        None => cwd,
+    };
     // K5 (§8.2): a NEW --cmd label, or a re-run of an open-path folder App,
     // runs on the open path when this box has it; an existing --cmd
     // service is untouched in 0.46.1.
@@ -1561,6 +1580,26 @@ mod tests {
         }
         let r = run(&elsewhere);
         assert!(out_of_reach(&r), "fenced: outside the workspace: {} {}", r.status, r.body);
+        // Review F5: a caller that didn't classify can't publish at all.
+        for who in [crate::compute_routes::Who::Wrong, crate::compute_routes::Who::Invalid] {
+            let params: HashMap<String, String> = [("project", ws.display().to_string()), ("name", "m2probe".into()), ("cmd", "true".into()), ("port", "45999".into())]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            let r = dispatch_post_as("/cli/publish/run", &params, who);
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        }
+        // Review F5: a start re-checks the stored folder. A service published
+        // from the workspace whose folder is now a link out is not started.
+        let site = ws.join("site");
+        std::os::unix::fs::symlink(&k2, &site).unwrap();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::published_services::insert(&conn, &id, "m2start", "true", &site.display().to_string(), 45998, k2_core::published_services::EXPOSE_LOCAL, k2_core::published_services::DESIRED_STOPPED, k2_core::published_services::KIND_CMD, "").unwrap();
+        }
+        let e = publish_runtime::start(&id, "m2start").expect_err("a folder that links out isn't started");
+        assert!(format!("{e:?}").contains("K2's own folder"), "{e:?}");
     }
 
     /// DM-5: a dev server has no wall, so an agent's first one is held on
@@ -2246,7 +2285,7 @@ mod tests {
             ("probeTimeoutMs", "900001", "at most 15m"),
             ("probeTimeoutMs", "0", "at most 15m"),
         ] {
-            let r = dispatch_post("/cli/publish/run", &params(&[(k, v)]));
+            let r = dispatch_post_as("/cli/publish/run", &params(&[(k, v)]), crate::compute_routes::Who::Owner);
             assert_eq!(r.status, "400 Bad Request", "{k}={v}: {}", r.body);
             assert!(r.body.contains(want), "{k}={v}: {}", r.body);
             let db = k2_core::db::shared();
@@ -2260,7 +2299,7 @@ mod tests {
         let get = dispatch("/cli/publish/run", &params(&[("probeTimeout", "2m")])).expect("GET twin");
         assert_eq!(get.status, "405 Method Not Allowed", "POST-only guard: {}", get.body);
 
-        let r = dispatch_post("/cli/publish/run", &params(&[("probeTimeout", "2m")]));
+        let r = dispatch_post_as("/cli/publish/run", &params(&[("probeTimeout", "2m")]), crate::compute_routes::Who::Owner);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
         assert_eq!(v["probeTimeoutMs"], 120_000, "{v}");
@@ -2291,13 +2330,13 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(300));
 
         // probeTimeoutMs wins; then `default` clears it.
-        let r = dispatch_post("/cli/publish/run", &params(&[("probeTimeoutMs", "90000")]));
+        let r = dispatch_post_as("/cli/publish/run", &params(&[("probeTimeoutMs", "90000")]), crate::compute_routes::Who::Owner);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
         assert_eq!(v["probeTimeoutMs"], 90_000, "{v}");
         publish_runtime::stop(&ws, &name).expect("stop");
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let r = dispatch_post("/cli/publish/run", &params(&[("probeTimeout", "default")]));
+        let r = dispatch_post_as("/cli/publish/run", &params(&[("probeTimeout", "default")]), crate::compute_routes::Who::Owner);
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
         assert!(v["probeTimeoutMs"].is_null(), "{v}");

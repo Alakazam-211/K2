@@ -631,7 +631,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
     let decided = if inp.permissions_by_door {
         super::permissions::suggest_only(&step_in, Some("granted by the route that made this agent"))
     } else {
-        super::permissions::run(&step_in)
+        super::permissions::run(&step_in)?
     };
     let union = |before: Vec<String>, now: &[String]| {
         let mut v = before;

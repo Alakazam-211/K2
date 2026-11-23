@@ -96,18 +96,23 @@ pub struct StepOut {
     pub refused: Vec<Refusal>,
 }
 
-static STEP: OnceLock<fn(&StepIn<'_>) -> StepOut> = OnceLock::new();
+/// The installed step. An error stops the hire: the daemon's record of
+/// earlier declines couldn't be read, and deciding without it could grant
+/// what a person declined.
+pub type Step = fn(&StepIn<'_>) -> Result<StepOut, HireError>;
+
+static STEP: OnceLock<Step> = OnceLock::new();
 
 /// The daemon installs the real step at start. Later calls are ignored.
-pub fn install(f: fn(&StepIn<'_>) -> StepOut) {
+pub fn install(f: Step) {
     let _ = STEP.set(f);
 }
 
 /// Run the installed step, or report every suggestion as `suggest`.
-pub(crate) fn run(inp: &StepIn<'_>) -> StepOut {
+pub(crate) fn run(inp: &StepIn<'_>) -> Result<StepOut, HireError> {
     match STEP.get() {
         Some(f) => f(inp),
-        None => suggest_only(inp, None),
+        None => Ok(suggest_only(inp, None)),
     }
 }
 

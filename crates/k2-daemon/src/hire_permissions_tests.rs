@@ -190,7 +190,8 @@ fn a_decline_is_held_by_the_daemon_and_undone_only_by_name() {
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        assert_eq!(records::declined(&conn, &id), vec!["compute.use"], "the daemon holds it");
+        assert_eq!(records::declined(&conn, &id).unwrap(), vec!["compute.use"], "the daemon holds it");
+        assert_eq!(records::decline_rank(&conn, &id, "compute.use").unwrap(), Some(records::RANK_OWNER), "with who declined it");
     }
     // The agent rewrites its own lock: no effect.
     let lock_path = Path::new(&path).join(".k2/agent/template.lock");
@@ -213,6 +214,73 @@ fn a_decline_is_held_by_the_daemon_and_undone_only_by_name() {
     assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
     let (st, e) = cli(Who::Owner, json!({ "path": plain, "allowPermissions": ["compute.use"] }));
     assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
+}
+
+/// `--allow` lifts a held decline only for a caller who could grant the
+/// switch itself, with a role at least the decliner's, and reach is
+/// checked before the record is touched: a Member's `--allow` and an
+/// Admin's on an Owner's decline are refused and the decline stays (a later
+/// re-run still leaves it off); the Owner lifts it. An Admin lifts a
+/// Member's decline.
+#[test]
+fn allow_lifts_a_decline_only_for_a_role_at_least_the_decliners() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    install();
+    set_cards(Some(false));
+    let rank = |id: &str| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        records::decline_rank(&conn, id, "compute.use").unwrap()
+    };
+    let name = uniq("Dev");
+    let (st, out) = cli(Who::Owner, json!({ "template": "developer", "name": name, "declinePermissions": ["compute.use"], "launch": false }));
+    assert_eq!(st, 200, "{out}");
+    let id = out["id"].as_str().unwrap().to_string();
+    assert_eq!(rank(&id), Some(records::RANK_OWNER));
+
+    // A Member can't grant it: refused, the decline stays, nothing on.
+    let member = login(Role::Member);
+    let (st, v) = cli(member, json!({ "template": "developer", "name": name, "allowPermissions": ["compute.use"] }));
+    assert_eq!(st, 200, "the hire itself goes ahead: {v}");
+    assert_eq!(status(&v, "compute.use"), "refused", "{v}");
+    assert!(row(&v, "compute.use")["hint"].as_str().unwrap().contains("--allow compute.use"), "{v}");
+    assert_eq!(rank(&id), Some(records::RANK_OWNER), "the record is unchanged");
+    assert!(!crate::first_run_grants::switch_on(&id, "compute"));
+    assert_eq!(events(&id, "compute.use", "refused:allow_role"), 1, "{v}");
+
+    // An Admin could grant it, but an Owner declined it: refused.
+    let admin = login(Role::Admin);
+    let (st, v) = cli(admin.clone(), json!({ "template": "developer", "name": name, "allowPermissions": ["compute.use"] }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(status(&v, "compute.use"), "refused", "{v}");
+    assert!(row(&v, "compute.use")["reason"].as_str().unwrap().contains("an owner declined it"), "{v}");
+    assert_eq!(rank(&id), Some(records::RANK_OWNER));
+    assert!(!crate::first_run_grants::switch_on(&id, "compute"));
+    assert_eq!(events(&id, "compute.use", "refused:allow_decliner_outranks"), 1);
+
+    // A later plain re-run by the Owner still leaves it off.
+    let (_, v) = cli(Who::Owner, json!({ "template": "developer", "name": name }));
+    assert_eq!(status(&v, "compute.use"), "declined", "{v}");
+    assert!(!crate::first_run_grants::switch_on(&id, "compute"));
+
+    // The Owner names it: lifted and granted.
+    let (_, v) = cli(Who::Owner, json!({ "template": "developer", "name": name, "allowPermissions": ["compute.use"] }));
+    assert_eq!(status(&v, "compute.use"), "done", "{v}");
+    assert_eq!(rank(&id), None, "lifted");
+    assert!(crate::first_run_grants::switch_on(&id, "compute"));
+
+    // A Member's decline: an Admin lifts it.
+    let name2 = uniq("Dev");
+    let member = login(Role::Member);
+    let (st, out) = cli(member, json!({ "template": "developer", "name": name2, "declinePermissions": ["compute.use"], "launch": false }));
+    assert_eq!(st, 200, "{out}");
+    let id2 = out["id"].as_str().unwrap().to_string();
+    assert_eq!(rank(&id2), Some(records::RANK_MEMBER));
+    let (_, v) = cli(admin, json!({ "template": "developer", "name": name2, "allowPermissions": ["compute.use"] }));
+    assert_eq!(status(&v, "compute.use"), "done", "{v}");
+    assert_eq!(rank(&id2), None);
+    set_cards(None);
 }
 
 /// An agent passes on only what it holds, never an Owner-floor switch it
@@ -271,7 +339,7 @@ fn an_agent_passes_on_only_what_it_holds_never_owner_switches_or_compute() {
     let caller = HireCaller::Agent { workspace_id: ws.clone() };
     let suggested = vec!["organization.manage".to_string(), "compute.use".to_string()];
     let path = ws_path(&new_id);
-    let got = step_with(&StepIn { caller: &caller, path: &path, template_name: "Lead", cards: false, suggested: &suggested, declined: &[], allowed: &[], dry_run: false }, false);
+    let got = step_with(&StepIn { caller: &caller, path: &path, template_name: "Lead", cards: false, suggested: &suggested, declined: &[], allowed: &[], dry_run: false }, false).expect("step");
     let st: Vec<(&str, &str, &str)> = got.refused.iter().map(|r| (r.action.as_str(), r.code.as_str(), "")).collect();
     assert_eq!(st, vec![("organization.manage", "not_passable", ""), ("compute.use", "not_passable", "")], "{got:?}");
     assert!(!crate::first_run_grants::switch_on(&new_id, "org_chart_manage") && !crate::first_run_grants::switch_on(&new_id, "compute"));
@@ -337,6 +405,36 @@ fn agents_and_keys_hire_only_into_a_new_folder() {
     assert_eq!((st, e["error"]["code"].as_str()), (403, Some("existing_workspace")), "{e}");
     let (st, v) = v1w(&key, json!({ "path": peer }));
     assert_eq!(st, 200, "a plain converge of a granted workspace stays: {v}");
+}
+
+/// A shell tab in a cell hires as its agent, so it is held to the agent's
+/// rule (T3 re-review B): only inside the hire root, only into a new
+/// folder, never its own workspace or a peer's. An agent can type into a
+/// shell tab it opened.
+#[test]
+fn a_shell_tab_hires_only_into_a_new_folder_under_the_hire_root() {
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    install();
+    let (ws, _agent) = hiring_agent("shellown");
+    let shell = Who::Shell { project_id: ws.clone(), session_id: uniq("tab") };
+    let peer = root.join(uniq("peer")).to_string_lossy().into_owned();
+    let (st, v) = cli(Who::Owner, json!({ "path": peer, "name": "Peer" }));
+    assert_eq!(st, 200, "{v}");
+    for path in [ws_path(&ws), peer] {
+        let (st, e) = cli(shell.clone(), json!({ "template": "writer", "path": path, "launch": false }));
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("existing_workspace")), "{path}: {e}");
+        let (st, e) = cli(shell.clone(), json!({ "path": path, "name": "Again" }));
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("existing_workspace")), "{path} plain: {e}");
+    }
+    // Beside the hire root, not inside it.
+    let away = root.parent().unwrap().join(uniq("away")).to_string_lossy().into_owned();
+    let (st, e) = cli(shell.clone(), json!({ "path": away, "name": "Away" }));
+    assert_eq!((st, e["error"]["code"].as_str()), (403, Some("outside_hire_root")), "{e}");
+    assert!(!Path::new(&away).exists(), "nothing made outside the root");
+    let fresh = root.join(uniq("fresh")).to_string_lossy().into_owned();
+    let (st, v) = cli(shell, json!({ "path": fresh, "name": "Fresh" }));
+    assert_eq!(st, 200, "a new folder under the root is fine: {v}");
 }
 
 /// The real hire → the daemon's record → the first start: a card the

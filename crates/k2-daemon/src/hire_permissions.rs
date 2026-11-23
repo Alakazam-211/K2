@@ -42,7 +42,7 @@
 
 use k2_core::hire::starter_permissions::{owner_floor, standing_switch};
 use k2_core::hire::template::permissions::{targets, Decision, Refusal, StepIn, StepOut, CARDS_ROW};
-use k2_core::hire::HireCaller;
+use k2_core::hire::{HireCaller, HireError};
 use k2_core::permission::catalog::{Floor, Grant};
 use serde_json::json;
 
@@ -59,7 +59,7 @@ pub fn install() {
 
 /// The installed step: the server's own Beta switch decides whether cards
 /// can be filed.
-fn step(inp: &StepIn<'_>) -> StepOut {
+fn step(inp: &StepIn<'_>) -> Result<StepOut, HireError> {
     step_with(inp, server_cards_on())
 }
 
@@ -202,19 +202,66 @@ fn may_give(h: &Hirer, action: &str, floor: Floor) -> Result<(), Cant> {
     }
 }
 
+/// The hirer's rank, recorded with a decline: a decline is lifted only by
+/// a role at least as high (an Owner's decline needs an Owner).
+fn rank_of(h: &Hirer) -> i64 {
+    match h {
+        Hirer::Person { owner: true, .. } => records::RANK_OWNER,
+        Hirer::Person { admin: true, .. } => records::RANK_ADMIN,
+        Hirer::Person { .. } => records::RANK_MEMBER,
+        Hirer::Agent { .. } | Hirer::ApiKey => records::RANK_AGENT,
+    }
+}
+
+/// May this hirer turn on "Can ask for permission cards" for the hire?
+fn cards_reach(h: &Hirer) -> Result<(), Cant> {
+    match h {
+        Hirer::Person { admin: true, .. } => Ok(()),
+        Hirer::Person { .. } => Err(cant("role", "your role can't turn it on (an owner or admin can)")),
+        Hirer::Agent { workspace_id } if k2_core::permission::gate::agent_switch_on(workspace_id) => Ok(()),
+        Hirer::Agent { .. } => Err(cant("hirer_lacks", "the hiring agent doesn't have it itself, and it is never asked on a card")),
+        Hirer::ApiKey => Err(cant("api_key", "an API key turns on no switches")),
+    }
+}
+
+/// Could this hirer grant `target` itself (not on a card)? `--allow` lifts
+/// a held decline only then.
+fn can_grant(h: &Hirer, target: &str) -> Result<(), Cant> {
+    if target == CARDS_ROW {
+        return cards_reach(h);
+    }
+    match crate::permission::actions::find(target) {
+        Some(reg) => may_give(h, target, reg.spec.floor),
+        None => Err(cant("unknown", "K2 doesn't know this permission")),
+    }
+}
+
+/// The record couldn't be read: the hire stops, loudly. Deciding without
+/// it could grant what a person declined.
+fn records_error(handle: &str, e: String) -> HireError {
+    HireError::new(
+        500,
+        "permission_records",
+        format!("K2 couldn't read what was declined or asked at earlier hires of {handle} ({e}), so the hire stopped and nothing was granted. Try again; if it repeats, the daemon log has the cause."),
+    )
+}
+
 /// The step with the server's Beta switch given (unit tests pass it; lib
 /// tests never flip the process switch).
-pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
+pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> Result<StepOut, HireError> {
     let hirer = hirer_of(inp.caller);
     let target = target_of(inp.path);
     let handle = handle_for(inp.path, target.as_ref());
     // The daemon's record of earlier hires of this workspace (0309), never
     // the agent's own lock: what was declined, and what was asked.
+    // A failed read stops the hire (never an empty list).
     let (held_declines, asked) = match target.as_ref() {
         Some(t) => {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            (records::declined(&conn, &t.id), records::asked(&conn, &t.id))
+            let d = records::declined(&conn, &t.id).map_err(|e| records_error(&t.handle, e))?;
+            let a = records::asked(&conn, &t.id).map_err(|e| records_error(&t.handle, e))?;
+            (d, a)
         }
         None => (Vec::new(), Vec::new()),
     };
@@ -236,9 +283,8 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
             if let (false, Some(t)) = (inp.dry_run, target.as_ref()) {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
-                if let Err(e) = records::record_declined(&conn, &t.id, &want, inp.template_name, &inp.caller.actor(), now()) {
-                    k2_core::log_debug!("[hire-permissions] {}: {e}", t.handle);
-                }
+                records::record_declined(&conn, &t.id, &want, inp.template_name, &inp.caller.actor(), rank_of(&hirer), now())
+                    .map_err(|e| records_error(&t.handle, e))?;
             }
             record(inp, &target, &want, "declined", None);
             continue;
@@ -248,12 +294,36 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
                 out.rows.push(Decision::new(want.clone(), "declined", Some("declined at an earlier hire; name it with --allow to decide it again".into()), None));
                 continue;
             }
+            // Reach first, the record after: --allow lifts a decline only
+            // for a caller who could grant the switch itself, with a role
+            // at least the decliner's. Otherwise the decline stays.
+            let decliner = match target.as_ref() {
+                Some(t) => {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    records::decline_rank(&conn, &t.id, &want).map_err(|e| records_error(&t.handle, e))?.unwrap_or(records::RANK_AGENT)
+                }
+                None => records::RANK_AGENT,
+            };
+            let lift = can_grant(&hirer, &want).and_then(|()| {
+                if rank_of(&hirer) >= decliner {
+                    Ok(())
+                } else {
+                    Err(cant("decliner_outranks", format!("{} declined it, and your role is lower", records::rank_word(decliner))))
+                }
+            });
+            if let Err(c) = lift {
+                let who = if decliner >= records::RANK_OWNER { "the server's owner" } else { "an owner or admin who can turn it on" };
+                let hint = format!("the decline stays; {who} can allow it again by re-running the hire with --allow {want}");
+                out.rows.push(Decision::new(want.clone(), "refused", Some(format!("declined at an earlier hire; --allow refused: {}", c.why)), Some(hint.clone())));
+                out.refused.push(Refusal { action: want.clone(), code: format!("allow_{}", c.code), hint });
+                record(inp, &target, &want, &format!("refused:allow_{}", c.code), None);
+                continue;
+            }
             if let (false, Some(t)) = (inp.dry_run, target.as_ref()) {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
-                if let Err(e) = records::undecline(&conn, &t.id, &want) {
-                    k2_core::log_debug!("[hire-permissions] {}: {e}", t.handle);
-                }
+                records::undecline(&conn, &t.id, &want).map_err(|e| records_error(&t.handle, e))?;
             }
             record(inp, &target, &want, "allowed-again", None);
         }
@@ -263,7 +333,7 @@ pub(crate) fn step_with(inp: &StepIn<'_>, cards_on: bool) -> StepOut {
             switch_row(inp, &ctx, &want, &mut out);
         }
     }
-    out
+    Ok(out)
 }
 
 /// What every row of one apply shares.
@@ -296,13 +366,7 @@ fn cards_row(inp: &StepIn<'_>, ctx: &mut RowCtx<'_>, out: &mut StepOut) {
         out.rows.push(Decision::new(CARDS_ROW, "skip", Some("already on".into()), None));
         return;
     }
-    let reach = match h {
-        Hirer::Person { admin: true, .. } => Ok(()),
-        Hirer::Person { .. } => Err(cant("role", "your role can't turn it on (an owner or admin can)")),
-        Hirer::Agent { workspace_id } if k2_core::permission::gate::agent_switch_on(workspace_id) => Ok(()),
-        Hirer::Agent { .. } => Err(cant("hirer_lacks", "the hiring agent doesn't have it itself, and it is never asked on a card")),
-        Hirer::ApiKey => Err(cant("api_key", "an API key turns on no switches")),
-    };
+    let reach = cards_reach(h);
     let refuse = |out: &mut StepOut, c: Cant| {
         let hint = refused_hint(CARDS_ROW, SETTING, switches::AGENT_TAB.path, Floor::Admin, handle);
         out.rows.push(Decision::new(CARDS_ROW, "refused", Some(c.why.clone()), Some(hint.clone())));

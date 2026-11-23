@@ -78,7 +78,10 @@ FLAGS
                           decline: a re-run leaves it off.
   --allow <permission>    On a re-run by a person: decide a permission that
                           was declined at an earlier hire again (repeatable).
-                          Without it a decline holds.
+                          Without it a decline holds. Only someone who could
+                          turn it on, with a role at least the decliner's
+                          (an owner's decline needs an owner); else the line
+                          says refused and the decline stays.
   --answer <id>=<text>    Answer one of the template's first-conversation
                           questions now (repeatable). Each built-in asks its
                           person 3–5 short questions (a writer: audience,

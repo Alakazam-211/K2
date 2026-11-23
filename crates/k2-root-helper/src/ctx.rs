@@ -186,6 +186,11 @@ pub struct Ctx {
     /// True in production: chown files to root, chown Stalwart trees, check
     /// owners. False in tests (they never run as root).
     pub real_owners: bool,
+    /// The uid whose files count as root's where a check reads an owner
+    /// from an open handle (`agents adopt`'s old cgroup): 0 in production;
+    /// tests, which never run as root, name the runner's own uid (or
+    /// another, to see the refusal).
+    pub root_uid: u32,
     pub euid: u32,
     pub arch: &'static str,
     /// The running binary (`/proc/self/exe`).
@@ -223,6 +228,7 @@ impl Ctx {
         Ctx {
             root: PathBuf::from("/"),
             real_owners: true,
+            root_uid: 0,
             // SAFETY: geteuid has no preconditions.
             euid: unsafe { libc::geteuid() },
             arch: std::env::consts::ARCH,

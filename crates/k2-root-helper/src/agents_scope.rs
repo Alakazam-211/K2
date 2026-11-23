@@ -11,29 +11,37 @@
 //!   delegated. The kind's slice must exist and be root's. Then root asks
 //!   systemd (`StartTransientUnit`, mode `fail`) for
 //!   `k2-agent-<ws>:<id>.scope` with `PIDs=[pid]`, `Delegate=false`,
-//!   `CollectMode=inactive-or-failed` and the caps as numbers, and checks
-//!   `/proc/<pid>/cgroup` names that scope while the held process lives;
-//!   otherwise the scope is stopped and the call refused.
+//!   `CollectMode=inactive-or-failed`, a 10 s stop timeout and the caps as
+//!   numbers, and checks `/proc/<pid>/cgroup` names that scope while the
+//!   held process lives and its start time is still `<start>`; otherwise
+//!   the scope is stopped and the call refused.
 //! - `agents adopt <ws> <id> <open|fenced>` (daemon): every process of the
-//!   daemon's user left in `<unit>/agents/a-<ws>` (a session that lived
-//!   through an update) into one new scope.
+//!   daemon's user left in a **root-owned** `<unit>/agents/a-<ws>` (a
+//!   session M1b placed that lived through an update) into one new scope.
+//!   The folder and its `cgroup.procs` are read through one handle; a
+//!   folder the server user owns is never adopted (anyone of that user
+//!   could have written into it).
 //! - `agents stop <ws> <id>` / `agents stop-all` (daemon): `systemctl stop
 //!   --no-block` for names the classifier accepts, found under the two
-//!   slices only; then a bounded wait for the cgroups to go (12 s), and
-//!   `systemctl kill --signal=KILL` for any still there.
+//!   slices only, and an answer at once: the helper's lock is never held
+//!   while a scope ends (systemd's own 10 s stop timeout escalates to a
+//!   kill).
 //! - `agents layout` (daemon): report only, with the P1 probe run as the
 //!   daemon's user.
-//! - `agents setup` (open) / `agents teardown` (daemon): the slice and
-//!   anchor units.
+//! - `agents setup` / `agents teardown` (daemon): the slice and anchor
+//!   units.
 
+use std::ffi::OsStr;
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use k2_root_proto::agent_cgroup::{argv1, pid_ok, start_of_stat, AgentWs, AGENTS_LEAF, EXEC_HELPER_ARG, PREFIX};
+use k2_root_proto::agent_cgroup::{argv1, pid_ok, start_of_stat, AgentWs, AGENTS_LEAF, DAEMON_LEAF, EXEC_HELPER_ARG, PREFIX};
 use k2_root_proto::agent_scope::{
     classify_probe, may_scope_from, parse_scope_name, probe_scope_name, scope_cgroup, scope_name, slice_cgroup, start_transient_argv, unit_files,
-    Caps, Kind, Level, Probe, ScopeId, ScopeVerb, ADOPT_MAX_PIDS, OPEN_SLICE, SLEEP_PATHS,
+    Caps, Kind, Level, Probe, ScopeId, ScopeVerb, ADOPT_MAX_PIDS, OPEN_SLICE, SLEEP_PATHS, TOP_SLICE,
 };
+use k2_root_proto::apps::ENV;
 use k2_root_proto::creds::{parse_unit_path, BUSCTL};
 use k2_root_proto::paths::{RUNUSER, SYSTEMCTL, SYSTEMD_RUN, SYSTEMD_SYSTEM_DIR};
 use serde_json::json;
@@ -48,15 +56,21 @@ type J = serde_json::Value;
 /// job is queued (polled; the first look is immediate).
 const MOVE_WAIT_TRIES: u32 = 25;
 const MOVE_WAIT_STEP: Duration = Duration::from_millis(20);
-/// How often `agents stop` looks whether a stopped scope's cgroup is gone.
+/// How often `agents teardown` looks whether a stopped scope's cgroup is
+/// gone, and how long it looks again after a kill.
 const STOP_WAIT_STEP: Duration = Duration::from_millis(50);
+const AFTER_KILL_WAIT: Duration = Duration::from_millis(1000);
+/// ptyd's process name (= k2-core `agents_leaf`'s check): never adopted.
+const PTYD_COMM: &str = "k2-ptyd";
+/// Most bytes read from one old cgroup's `cgroup.procs`.
+const PROCS_CAP: u64 = 1 << 20;
 
 pub fn run(ctx: &Ctx, v: &ScopeVerb, who: &Caller) -> HResult<J> {
     match v {
         ScopeVerb::Scope { ws, id, pid, start, kind, caps } => scope(ctx, who, ws, id, *pid, *start, *kind, caps),
         ScopeVerb::Adopt { ws, id, kind } => adopt(ctx, who, ws, id, *kind),
         ScopeVerb::Stop { ws, id } => stop(ctx, ws, id),
-        ScopeVerb::StopAll => stop_all(ctx).map(|(n, k)| json!({ "ok": true, "stopped": n, "killed": k })),
+        ScopeVerb::StopAll => stop_all(ctx),
         ScopeVerb::Layout => layout(ctx, who),
         ScopeVerb::Setup => setup(ctx),
         ScopeVerb::Teardown => teardown(ctx),
@@ -73,6 +87,11 @@ fn read_proc(ctx: &Ctx, abs: &str) -> HResult<Vec<u8>> {
 
 fn cgroup_of(ctx: &Ctx, pid: u32) -> Option<String> {
     std::fs::read(ctx.p(&format!("/proc/{pid}/cgroup"))).ok().and_then(|b| cgroup_line(&String::from_utf8_lossy(&b)))
+}
+
+/// Field 22 of `/proc/<pid>/stat`; `None` when it can't be read (gone).
+fn start_now(ctx: &Ctx, pid: u32) -> Option<u64> {
+    std::fs::read(ctx.p(&format!("/proc/{pid}/stat"))).ok().and_then(|b| start_of_stat(&String::from_utf8_lossy(&b)))
 }
 
 fn is_dir(p: &std::path::Path) -> bool {
@@ -138,8 +157,14 @@ fn wait_moved(ctx: &Ctx, pids: &[u32], want: &str) -> Vec<u32> {
     moved
 }
 
+/// A scope this call just made and is refusing: ended at once (its
+/// processes are this call's to end).
 fn stop_unit(ctx: &Ctx, name: &str) -> HResult<()> {
     ctx.run_ok(SYSTEMCTL, &["stop", name], None).map(|_| ())
+}
+
+fn stop_no_block(ctx: &Ctx, name: &str) -> HResult<()> {
+    ctx.run_ok(SYSTEMCTL, &["stop", "--no-block", name], None).map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -151,58 +176,134 @@ fn scope(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, pid: u32, start: u
     let want = scope_cgroup(kind, ws, id);
     start_scope(ctx, &name, kind, &[pid], caps)?;
     let placed = wait_moved(ctx, &[pid], &want) == [pid];
-    if !placed || !held.alive() {
+    // systemd got a number: the process in the scope must still be the one
+    // that started at `start` (review R3).
+    let same = placed && start_now(ctx, pid) == Some(start);
+    if !placed || !held.alive() || !same {
         let _ = stop_unit(ctx, &name);
-        return Err(Fail::state(if placed {
+        return Err(Fail::state(if !placed {
+            "agents scope refused: the process is not in its scope after the start (scope stopped)"
+        } else if !held.alive() {
             "agents scope refused: the process exited during the move (scope stopped)"
         } else {
-            "agents scope refused: the process is not in its scope after the start (scope stopped)"
+            "agents scope refused: the process's start time changed during the move (scope stopped)"
         }));
     }
     Ok(json!({ "ok": true, "cgroup": want, "pid": pid, "scope": name, "kind": kind.as_str() }))
+}
+
+/// An old-layout cgroup as read through one handle: who owns the folder and
+/// its `cgroup.procs` (each `fstat`ed on the open handle), and the pids
+/// listed.
+struct OldCgroup {
+    owner: u32,
+    procs_owner: u32,
+    pids: Vec<String>,
+}
+
+impl OldCgroup {
+    fn root_owned(&self, ctx: &Ctx) -> bool {
+        self.owner == ctx.root_uid && self.procs_owner == ctx.root_uid
+    }
+}
+
+/// Open `abs` (every component without following a link, `O_DIRECTORY`),
+/// `fstat` it, open `cgroup.procs` beneath that handle (no link), `fstat`
+/// it and read it. `Ok(None)` when the folder is not there.
+fn read_old(ctx: &Ctx, abs: &str) -> HResult<Option<OldCgroup>> {
+    let d = match ctx.dir(abs) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Fail::io_err("agents adopt refused: open the old-layout cgroup", e)),
+    };
+    let st = d.stat_self().map_err(|e| Fail::io_err("stat the old-layout cgroup", e))?;
+    let (f, pst) = d
+        .open_regular(OsStr::new("cgroup.procs"))
+        .map_err(|e| Fail::io_err("open the old cgroup's cgroup.procs", e))?
+        .ok_or_else(|| Fail::state("agents adopt refused: the old-layout cgroup has no cgroup.procs"))?;
+    let mut text = String::new();
+    f.take(PROCS_CAP).read_to_string(&mut text).map_err(|e| Fail::io_err("read the old cgroup's cgroup.procs", e))?;
+    Ok(Some(OldCgroup { owner: st.st_uid, procs_owner: pst.st_uid, pids: text.split_whitespace().map(str::to_string).collect() }))
+}
+
+/// Pids that are never adopted: the caller (the daemon's main process),
+/// whatever sits in the unit's root or its `daemon/` leaf, and ptyd.
+fn never_adopted(ctx: &Ctx, who: &Caller, unit: &str, pid: u32) -> bool {
+    if i64::from(pid) == i64::from(who.pid) {
+        return true;
+    }
+    let in_unit = [cg(unit), cg(&format!("{unit}/{DAEMON_LEAF}"))].iter().any(|d| pids_in(&ctx.p(d)).iter().any(|p| *p == pid.to_string()));
+    let comm = std::fs::read_to_string(ctx.p(&format!("/proc/{pid}/comm"))).unwrap_or_default();
+    in_unit || comm.trim() == PTYD_COMM
 }
 
 fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HResult<J> {
     let (_, unit, uid) = daemon_unit(ctx, who)?;
     require_slice(ctx, kind)?;
     let old_rel = format!("{unit}/{AGENTS_LEAF}/{}", ws.cgroup_name());
-    let old = ctx.p(&cg(&old_rel));
-    if !is_dir(&old) {
-        return Err(Fail::state("agents adopt refused: no old-layout cgroup for this workspace"));
+    let old = read_old(ctx, &cg(&old_rel))?.ok_or_else(|| Fail::state("agents adopt refused: no old-layout cgroup for this workspace"))?;
+    // Review R1: only a cgroup root made (M1b's helper-placed ones). One
+    // the server user owns may hold anything that user put there.
+    if !old.root_owned(ctx) {
+        return Err(Fail::state(if old.owner == uid || old.procs_owner == uid {
+            "agents adopt refused: old layout, not adopted: the cgroup is the server user's"
+        } else {
+            "agents adopt refused: old layout, not adopted: the cgroup is not root's"
+        }));
     }
-    let listed = pids_in(&old);
-    if listed.is_empty() {
+    if old.pids.is_empty() {
         return Err(Fail::state("agents adopt refused: the old-layout cgroup is empty"));
     }
-    if listed.len() > ADOPT_MAX_PIDS {
+    if old.pids.len() > ADOPT_MAX_PIDS {
         return Err(Fail::state("agents adopt refused: more processes than one adopt moves"));
     }
-    let mut held: Vec<(u32, Box<dyn ProcHandle>)> = Vec::new();
-    for p in &listed {
+    let mut listed = Vec::with_capacity(old.pids.len());
+    for p in &old.pids {
         let n = pid_ok(p).ok_or_else(|| Fail::state("agents adopt refused: the old cgroup lists something that is not a pid"))?;
+        if never_adopted(ctx, who, &unit, n) {
+            return Err(Fail::state("agents adopt refused: the old cgroup lists the daemon's own process or ptyd; nothing moved"));
+        }
+        listed.push(n);
+    }
+    // Held, the daemon user's, and each one's start time before the move.
+    let mut held: Vec<(u32, Box<dyn ProcHandle>, u64)> = Vec::new();
+    for n in listed {
         // One that exited since the list was read is skipped.
         let Some(h) = ctx.procs.hold(n as i32) else { continue };
+        let Some(start) = start_now(ctx, n) else { continue };
         match ctx.procs.ruid_of(n as i32) {
             None => continue,
-            Some(u) if u == uid => held.push((n, h)),
+            Some(u) if u == uid => held.push((n, h, start)),
             Some(_) => return Err(Fail::state("agents adopt refused: a process there is not the daemon user's")),
         }
     }
     if held.is_empty() {
         return Err(Fail::state("agents adopt refused: every process there has exited"));
     }
-    let pids: Vec<u32> = held.iter().map(|(p, _)| *p).collect();
+    let pids: Vec<u32> = held.iter().map(|(p, _, _)| *p).collect();
     let name = scope_name(ws, id);
     let want = scope_cgroup(kind, ws, id);
     start_scope(ctx, &name, kind, &pids, &Caps::default())?;
-    let alive: Vec<u32> = held.iter().filter(|(_, h)| h.alive()).map(|(p, _)| *p).collect();
+    let alive: Vec<u32> = held.iter().filter(|(_, h, _)| h.alive()).map(|(p, _, _)| *p).collect();
     let moved = wait_moved(ctx, &alive, &want);
     if moved.is_empty() {
         let _ = stop_unit(ctx, &name);
         return Err(Fail::state("agents adopt refused: no process is in the new scope after the start (scope stopped)"));
     }
+    // Review R3: a number systemd moved must still be the process read
+    // before the move.
+    let mismatched: Vec<u32> =
+        held.iter().filter(|(p, _, s)| moved.contains(p) && start_now(ctx, *p) != Some(*s)).map(|(p, _, _)| *p).collect();
+    if !mismatched.is_empty() {
+        let _ = stop_unit(ctx, &name);
+        let list: Vec<String> = mismatched.iter().map(u32::to_string).collect();
+        return Err(Fail::state(format!(
+            "agents adopt refused: \"mismatched\":[{}] (start time changed during the move; scope stopped)",
+            list.join(",")
+        )));
+    }
     let not_moved: Vec<u32> = alive.iter().copied().filter(|p| !moved.contains(p)).collect();
-    let left = pids_in(&old).len();
+    let left = pids_in(&ctx.p(&cg(&old_rel))).len();
     Ok(json!({
         "ok": true,
         "scope": name,
@@ -211,6 +312,7 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
         "moved": moved.len(),
         "pids": moved,
         "notMoved": not_moved,
+        "mismatched": [],
         "left": left,
     }))
 }
@@ -233,52 +335,68 @@ fn live_scopes(ctx: &Ctx) -> Vec<(Kind, AgentWs, ScopeId, PathBuf)> {
     v
 }
 
-/// Stop `scopes` (name, cgroup dir): `systemctl stop --no-block` each, wait
-/// up to `ctx.agent_stop_wait_ms` for their cgroups to go, then `systemctl
-/// kill --signal=KILL` any still there. A failed call counts only when the
-/// scope is still there after it (one that ended on its own in between is
-/// as good as stopped). `Ok(the names killed)`; refuses, after trying them
-/// all, when any call failed on a scope that is still there.
-fn stop_scopes(ctx: &Ctx, scopes: &[(String, PathBuf)]) -> HResult<Vec<String>> {
-    let mut failed = 0;
-    for (name, _) in scopes {
-        // A refusal here still gets the wait and the kill below.
-        let _ = ctx.run_ok(SYSTEMCTL, &["stop", "--no-block", name], None);
-    }
-    let deadline = std::time::Instant::now() + Duration::from_millis(ctx.agent_stop_wait_ms);
-    while scopes.iter().any(|(_, d)| is_dir(d)) && std::time::Instant::now() < deadline {
-        std::thread::sleep(STOP_WAIT_STEP);
-    }
-    let mut killed = Vec::new();
-    for (name, dir) in scopes.iter().filter(|(_, d)| is_dir(d)) {
-        match ctx.run_ok(SYSTEMCTL, &["kill", "--signal=KILL", name], None) {
-            Ok(_) => killed.push(name.clone()),
-            Err(_) if is_dir(dir) => failed += 1,
-            Err(_) => {}
-        }
-    }
-    if failed > 0 {
-        return Err(Fail::state(format!("agents stop: {failed} of {} scopes did not stop", scopes.len())));
-    }
-    Ok(killed)
+fn live_scope_dirs(ctx: &Ctx) -> Vec<(String, PathBuf)> {
+    live_scopes(ctx).into_iter().map(|(_, ws, id, d)| (scope_name(&ws, &id), d)).collect()
 }
 
+/// `agents stop`: ask systemd to stop the scope and answer at once (review
+/// R2: no wait under the helper's lock; the scope's 10 s stop timeout
+/// escalates to SIGKILL inside systemd).
 fn stop(ctx: &Ctx, ws: &AgentWs, id: &ScopeId) -> HResult<J> {
     let name = scope_name(ws, id);
     let dir_of = |k: Kind| ctx.p(&cg(&scope_cgroup(k, ws, id)));
     let Some(kind) = Kind::ALL.into_iter().find(|k| is_dir(&dir_of(*k))) else {
         return Ok(json!({ "ok": true, "gone": true, "scope": name }));
     };
-    let killed = !stop_scopes(ctx, &[(name.clone(), dir_of(kind))])?.is_empty();
-    Ok(json!({ "ok": true, "gone": false, "scope": name, "kind": kind.as_str(), "killed": killed }))
+    if let Err(f) = stop_no_block(ctx, &name) {
+        // Ended on its own in between: as good as stopped.
+        if is_dir(&dir_of(kind)) {
+            return Err(f);
+        }
+        return Ok(json!({ "ok": true, "gone": true, "scope": name }));
+    }
+    Ok(json!({ "ok": true, "gone": false, "stopping": true, "scope": name, "kind": kind.as_str() }))
 }
 
-/// Stop every scope the classifier accepts under both slices; anchors and
-/// slices keep running. `Ok((stopped, killed))`.
-fn stop_all(ctx: &Ctx) -> HResult<(usize, usize)> {
-    let scopes: Vec<(String, PathBuf)> = live_scopes(ctx).into_iter().map(|(_, ws, id, d)| (scope_name(&ws, &id), d)).collect();
-    let killed = stop_scopes(ctx, &scopes)?;
-    Ok((scopes.len(), killed.len()))
+/// `agents stop-all`: `--no-block` for every scope the classifier accepts
+/// under both slices, answered at once; anchors and slices keep running.
+/// Refuses, after asking for them all, when a call failed on a scope that
+/// is still there.
+fn stop_all(ctx: &Ctx) -> HResult<J> {
+    let scopes = live_scope_dirs(ctx);
+    let failed = scopes.iter().filter(|(n, d)| stop_no_block(ctx, n).is_err() && is_dir(d)).count();
+    if failed > 0 {
+        return Err(Fail::state(format!("agents stop-all: systemd refused to stop {failed} of {} scopes", scopes.len())));
+    }
+    Ok(json!({ "ok": true, "stopping": scopes.len() }))
+}
+
+/// Teardown only (uninstall, where a wait is fine): `--no-block` stop for
+/// each, wait up to `ctx.agent_stop_wait_ms` for the cgroups to go,
+/// `systemctl kill --signal=KILL` any still there, then look again.
+/// `(killed, still there)`.
+fn stop_and_wait(ctx: &Ctx, scopes: &[(String, PathBuf)]) -> (Vec<String>, Vec<String>) {
+    for (name, _) in scopes {
+        // A refusal here still gets the wait and the kill below.
+        let _ = stop_no_block(ctx, name);
+    }
+    let deadline = std::time::Instant::now() + Duration::from_millis(ctx.agent_stop_wait_ms);
+    while scopes.iter().any(|(_, d)| is_dir(d)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(STOP_WAIT_STEP);
+    }
+    let mut killed = Vec::new();
+    for (name, _) in scopes.iter().filter(|(_, d)| is_dir(d)) {
+        let _ = ctx.run_ok(SYSTEMCTL, &["kill", "--signal=KILL", name], None);
+        killed.push(name.clone());
+    }
+    if !killed.is_empty() {
+        let deadline = std::time::Instant::now() + AFTER_KILL_WAIT;
+        while scopes.iter().any(|(_, d)| is_dir(d)) && std::time::Instant::now() < deadline {
+            std::thread::sleep(STOP_WAIT_STEP);
+        }
+    }
+    let still: Vec<String> = scopes.iter().filter(|(_, d)| is_dir(d)).map(|(n, _)| n.clone()).collect();
+    (killed, still)
 }
 
 fn busctl_json(ctx: &Ctx, args: &[&str]) -> Option<serde_json::Value> {
@@ -298,7 +416,8 @@ fn delegate_of(ctx: &Ctx, unit_name: &str) -> Option<bool> {
 }
 
 /// P1: as the daemon's user, ask systemd on the system bus for a scope in
-/// the open slice, named like an agent's. It must be refused.
+/// the open slice, named like an agent's. It must be refused. `LC_ALL=C`
+/// so systemd's refusal reads in the words the classifier knows.
 fn probe(ctx: &Ctx, user: &str) -> (Probe, String) {
     let mut b = [0u8; 8];
     if ctx.rand.fill(&mut b).is_err() {
@@ -308,11 +427,26 @@ fn probe(ctx: &Ctx, user: &str) -> (Probe, String) {
     let Some(name) = probe_scope_name(&hex) else { return (Probe::Unknown, "probe name".into()) };
     let slice = format!("--slice={OPEN_SLICE}");
     let unit = format!("--unit={name}");
-    let args: Vec<String> =
-        ["-u", user, "--", SYSTEMD_RUN, "--system", "--scope", "--quiet", "--collect", "--no-ask-password", slice.as_str(), unit.as_str(), "--", "true"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+    let args: Vec<String> = [
+        "-u",
+        user,
+        "--",
+        ENV,
+        "LC_ALL=C",
+        SYSTEMD_RUN,
+        "--system",
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--no-ask-password",
+        slice.as_str(),
+        unit.as_str(),
+        "--",
+        "true",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     match ctx.exec.run(RUNUSER, &args, None) {
         Ok(out) => {
             let err: String = String::from_utf8_lossy(&out.stderr).trim().chars().take(200).collect();
@@ -356,10 +490,16 @@ fn layout(ctx: &Ctx, who: &Caller) -> HResult<J> {
         names.sort();
         for n in names {
             let Some(ws) = n.strip_prefix(PREFIX).and_then(AgentWs::parse) else { continue };
-            let d = unit_dir.join(AGENTS_LEAF).join(&n);
-            let count = if is_dir(&d) { pids_in(&d).len() } else { 0 };
-            if count > 0 {
-                survivors.push(json!({ "ws": ws.as_str(), "cgroup": format!("{unit}/{AGENTS_LEAF}/{n}"), "pids": count }));
+            let rel = format!("{unit}/{AGENTS_LEAF}/{n}");
+            let Ok(Some(old)) = read_old(ctx, &cg(&rel)) else { continue };
+            if !old.pids.is_empty() {
+                survivors.push(json!({
+                    "ws": ws.as_str(),
+                    "cgroup": rel,
+                    "pids": old.pids.len(),
+                    "owner": old.owner,
+                    "adoptable": old.root_owned(ctx),
+                }));
             }
         }
     }
@@ -412,8 +552,12 @@ fn setup(ctx: &Ctx) -> HResult<J> {
     }))
 }
 
+/// Uninstall: every scope stopped (waiting is fine here, unlike `stop`),
+/// the anchors disabled, `k2agents.slice` stopped (best effort), the six
+/// files removed. `ok` is false when a scope is still there at the end.
 fn teardown(ctx: &Ctx) -> HResult<J> {
-    let (stopped, killed) = stop_all(ctx)?;
+    let scopes = live_scope_dirs(ctx);
+    let (killed, _) = stop_and_wait(ctx, &scopes);
     let present: Vec<&str> = Level::ALL
         .iter()
         .map(|l| l.anchor())
@@ -424,6 +568,7 @@ fn teardown(ctx: &Ctx) -> HResult<J> {
         a.extend(&present);
         ctx.run_ok(SYSTEMCTL, &a, None)?;
     }
+    let slice_stopped = is_dir(&ctx.p(&cg(&Level::Top.cgroup()))).then(|| ctx.run_ok(SYSTEMCTL, &["stop", TOP_SLICE], None).is_ok());
     let mut removed = 0;
     for l in Level::ALL {
         for name in [l.anchor(), l.slice()] {
@@ -435,5 +580,13 @@ fn teardown(ctx: &Ctx) -> HResult<J> {
     if removed > 0 {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }
-    Ok(json!({ "ok": true, "stopped": stopped, "killed": killed, "removed": removed }))
+    let still: Vec<String> = scopes.iter().filter(|(_, d)| is_dir(d)).map(|(n, _)| n.clone()).collect();
+    Ok(json!({
+        "ok": still.is_empty(),
+        "stopped": scopes.len(),
+        "killed": killed.len(),
+        "stillThere": still,
+        "sliceStopped": slice_stopped,
+        "removed": removed,
+    }))
 }

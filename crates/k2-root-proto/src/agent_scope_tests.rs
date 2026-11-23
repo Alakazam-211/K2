@@ -328,11 +328,11 @@ fn agent_scope_verbs_round_trip_and_are_classed() {
         &["agents", "stop", "ws-1", id],
         &["agents", "stop-all"],
         &["agents", "layout"],
+        &["agents", "setup"],
         &["agents", "teardown"],
     ] {
         assert_eq!(class(a), Class::Daemon, "{a:?}");
     }
-    assert_eq!(class(&["agents", "setup"]), Class::Open);
     // M1b's verbs keep their own shapes.
     assert!(matches!(Verb::parse(&["agents", "check"]), Ok(Verb::AgentsCheck)));
     assert!(matches!(Verb::parse(&["agents", "place", "ws-1", "4242", "1"]), Ok(Verb::AgentsPlace { .. })));

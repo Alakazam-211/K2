@@ -154,6 +154,11 @@ pub fn may_scope_from(unit: &str, ws: &AgentWs, current: &str) -> bool {
         (Some(AGENTS_LEAF), None) => true,
         (Some(AGENTS_LEAF), Some(name)) => name == ws.cgroup_name(),
         (Some(DAEMON_LEAF), _) => true,
+        // Any other child of the unit is allowed too: where the process
+        // sits is not what proves it is the daemon's new session. The
+        // held pidfd, the start time, the daemon user's ruid and the exec
+        // helper's argv carry that; this check only keeps out another
+        // workspace's old cgroup and everything outside the unit.
         (Some(p), _) => !p.is_empty(),
         _ => false,
     }
@@ -451,15 +456,12 @@ impl ScopeVerb {
         }
     }
 
-    /// `setup` converges to the layout K2 sets anyway and loosens nothing
-    /// (like `pg install-ram-fence`): open, so the installer can run it.
-    /// Everything else moves, stops or reports on agents' processes: the
-    /// daemon's alone.
+    /// All the daemon's alone. `setup` loosens nothing, but it switches the
+    /// box to scope placement at the next daemon start, which is the
+    /// owner's choice: the daemon runs it only on an owner action (review).
+    /// The rest move, stop or report on agents' processes.
     pub fn class(&self) -> crate::verbs::Class {
-        match self {
-            ScopeVerb::Setup => crate::verbs::Class::Open,
-            _ => crate::verbs::Class::Daemon,
-        }
+        crate::verbs::Class::Daemon
     }
 
     /// `layout` changes nothing (its probe is refused or reported), so it

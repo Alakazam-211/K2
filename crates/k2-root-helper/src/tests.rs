@@ -320,6 +320,8 @@ fn box_root() -> T {
     let ctx = Ctx {
         root: root.clone(),
         real_owners: false,
+        // SAFETY: getuid has no preconditions.
+        root_uid: unsafe { libc::getuid() },
         euid: 0,
         arch: "x86_64",
         self_exe: under(&root, HELPER_PATH),

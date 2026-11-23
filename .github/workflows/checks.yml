@@ -209,6 +209,12 @@ jobs:
       - name: Distributor pipeline template, offline
         run: bash tests/garden/distributor-template.sh
 
+      # The interop step's comparer (C4), on fixture captures, no sockets;
+      # the two-brand run itself is tests/interop/two-brands.sh, on K2
+      # Compute.
+      - name: Interop wire comparer on fixtures
+        run: python3 -B tests/interop/test_wire_compare.py
+
       - name: private-docs gate (cloud-business docs stay in the private repo)
         run: bash scripts/private-docs-gate.sh
 

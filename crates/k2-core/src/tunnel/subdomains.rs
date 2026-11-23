@@ -986,7 +986,7 @@ mod tests {
         );
         assert_eq!(map.route_for_host("alice.k2.dev"), Route::Daemon);
         // Case + trailing dot + port are all normalised.
-        assert_eq!(map.route_for_host("ROSSON.k2.dev:443"), Route::Daemon);
+        assert_eq!(map.route_for_host("ALICE.k2.dev:443"), Route::Daemon);
         assert_eq!(map.route_for_host("alice.k2.dev."), Route::Daemon);
     }
 
@@ -1078,13 +1078,13 @@ mod tests {
     #[test]
     fn from_rows_lowercases_labels_and_primary() {
         let map = SubdomainMap::from_rows(
-            "Rosson",
+            "Alice",
             vec![row("STAGING", Some("localhost:3000"), false)],
         );
         assert_eq!(map.primary, "alice");
         // Lookup is case-insensitive because both store + query lowercase.
         assert_eq!(
-            map.route_for_host("Staging.Rosson.K2.dev"),
+            map.route_for_host("Staging.Alice.K2.dev"),
             Route::Internal("localhost:3000".to_string())
         );
     }
@@ -1484,7 +1484,7 @@ mod tests {
             Route::Daemon,
             "nothing loaded yet: no primary known → daemon"
         );
-        assert_eq!(load_persisted("Rosson"), Some(1));
+        assert_eq!(load_persisted("Alice"), Some(1));
         assert_eq!(
             current().route_for_host("app.alice.k2.dev"),
             Route::Internal("localhost:4321".to_string())
@@ -1552,7 +1552,7 @@ mod tests {
         assert_eq!(tier_view_at("alice", t0), TierView::Unknown, "nothing read yet");
         assert!(!tier_view_at("alice", t0).is_pro(), "unknown is not Pro");
 
-        note_tier_at("Rosson", Some("pro".into()), t0);
+        note_tier_at("Alice", Some("pro".into()), t0);
         let v = tier_view_at("alice", t0 + 10);
         assert!(matches!(v, TierView::Fresh(_)) && v.is_pro(), "{v:?}");
         assert_eq!(v.state(), "fresh");

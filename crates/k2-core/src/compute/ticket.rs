@@ -500,10 +500,11 @@ mod tests {
     }
 
     /// The spec's reference vector (`.k2/prds/compute-polish-v1-notes.md`):
+    /// its fields are the spec's own, byte for byte (the subject included).
     /// seed 32×0x07, these fields → this exact public key and signature.
     #[test]
     fn reference_vector_for_the_control_plane_spec() {
-        let (pubk, tk) = mint_with_seed(&[7u8; 32], FIRST_KID, "alice", &"ab".repeat(32), "mini-1", 1_800_000_600, "AAAAAAAAAAAAAAAAAAAAAA").unwrap();
+        let (pubk, tk) = mint_with_seed(&[7u8; 32], FIRST_KID, "rosson", &"ab".repeat(32), "mini-1", 1_800_000_600, "AAAAAAAAAAAAAAAAAAAAAA").unwrap();
         let t = Ticket::decode(&tk).unwrap();
         assert_eq!(pubk, "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=");
         // Cross-checked with Python `cryptography` (Ed25519, same message).
@@ -511,7 +512,7 @@ mod tests {
         let mut keys = HashMap::new();
         keys.insert(FIRST_KID.to_string(), decode_pub(&pubk).unwrap());
         let home = Home::new();
-        assert!(verify_with_store(&keys, &mut home.store(), &tk, "alice", &"ab".repeat(32), "mini-1", 1_800_000_000).is_ok());
+        assert!(verify_with_store(&keys, &mut home.store(), &tk, "rosson", &"ab".repeat(32), "mini-1", 1_800_000_000).is_ok());
     }
 
     #[test]

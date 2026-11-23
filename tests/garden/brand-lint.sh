@@ -149,6 +149,12 @@ brand f-why q8 q8 "Initech Hub"
 printf '\n[links]\nsite = "http://example.invalid"\n' >> "$T/f-why/brand.toml"
 lint "$T/f-why"
 [[ "$out" == *"brand lint: q8: field links.site: shape: must be an https URL"* ]] || die "a shape finding's line: $out"; ok
+# A root-helper key is refused with the reason, and only once.
+brand f-rh q8 q8 "Initech Hub"
+printf '\n[root_helper]\nkeys = []\n' >> "$T/f-rh/brand.toml"
+lint "$T/f-rh"
+[ "$rc" = 1 ] && [[ "$out" == *"field root_helper: roothelper: the root helper runs as root and is signed only by K5's release keys; partner builds ship ours (a new owner decision is needed if a partner runs its own servers)"* ]] \
+    && [[ "$out" == *"REFUSED (1 finding(s))"* ]] || die "a root-helper table: $out"; ok
 
 # ── --hosted: what a hosted box of a brand needs ──────────────────────
 lint "$HERE/brand/xy" --hosted

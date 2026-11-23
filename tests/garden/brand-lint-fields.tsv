@@ -4,7 +4,8 @@
 #   <table.key> <the value, as TOML> <answer>
 # The answer is ok, or the rule of the field's finding: unknown (a table
 # or key the reader does not know), shape, machine (a machine name other
-# than the default brand's) or control ([control] is all six or none).
+# than the default brand's), control ([control] is all six or none) or
+# roothelper (no brand names a root-helper key: every build ships ours).
 # A [control] row starts from a whole [control] table and sets the one key
 # to the value; - leaves that key out. The reader in crates/k2-brand refuses
 # the same shapes; the lint is stricter only on .. in look.icons.
@@ -87,3 +88,6 @@ sew.call_name	"Hub Calls"	ok
 sew.call_name	""	shape
 links.website	"https://example.invalid"	unknown
 colours.accent	"#3A6FF7"	unknown
+root_helper.keys	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	roothelper
+update.root_helper	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	roothelper
+pins.root_helper	[{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]	roothelper

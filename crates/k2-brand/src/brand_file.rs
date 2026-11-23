@@ -77,6 +77,15 @@ const TABLE_KEYS: &[(&str, &[&str])] = &[
     ("sew", &["call_name"]),
 ];
 
+/// Why a brand file may name no root-helper key (K2's ruling): every
+/// brand's build ships our signed root helper.
+const ROOT_HELPER_REFUSED: &str = "the root helper runs as root and is signed only by K5's release keys; partner builds ship ours (a new owner decision is needed if a partner runs its own servers)";
+
+/// A table or key about the root helper's keys: `root_helper`, `root_helper_keys`, ...
+fn names_root_helper(key: &str) -> bool {
+    key.starts_with("root_helper")
+}
+
 /// `[control]`: all six or none (K2's ruling: a brand never mixes our
 /// control endpoints with its own).
 const CONTROL_KEYS: &[&str] = &["relay", "relay_list", "connect", "cert", "push", "web_api"];
@@ -309,6 +318,16 @@ fn parse(text: &str, base: Option<&Fields>) -> Result<Brand, String> {
         Some(toml::Value::Integer(SCHEMA)) => {}
         Some(v) => return Err(format!("schema must be {SCHEMA}, not {v}")),
         None => return Err(format!("schema is missing; it must be {SCHEMA}")),
+    }
+    for (key, value) in &doc {
+        if names_root_helper(key) {
+            return Err(format!("{key}: {ROOT_HELPER_REFUSED}"));
+        }
+        if let toml::Value::Table(t) = value {
+            if let Some(inner) = t.keys().find(|k| names_root_helper(k)) {
+                return Err(format!("{key}.{inner}: {ROOT_HELPER_REFUSED}"));
+            }
+        }
     }
     if let Some(key) = doc.keys().find(|k| !TOP_KEYS.contains(&k.as_str())) {
         return Err(format!(
@@ -1998,6 +2017,26 @@ call_name = "Hub Calls"
         {
             refused(&format!("shape-{i}"), &full_with(from, to), want);
         }
+        for (tag, text, want) in [
+            (
+                "rh-table",
+                format!("{GOOD}[root_helper]\nkeys = []\n"),
+                "root_helper: ",
+            ),
+            (
+                "rh-key",
+                format!("{GOOD}[update]\nroot_helper = []\n"),
+                "update.root_helper: ",
+            ),
+            (
+                "rh-top",
+                format!("root_helper_keys = []\n{GOOD}"),
+                "root_helper_keys: ",
+            ),
+        ] {
+            refused(tag, &text, &format!("{want}{ROOT_HELPER_REFUSED}"));
+        }
+        assert!(ROOT_HELPER_REFUSED.contains("signed only by K5's release keys"));
         refused(
             "look-text",
             &format!("look = \"blue\"\n{GOOD}"),

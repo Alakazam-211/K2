@@ -74,6 +74,10 @@ case, emails, minisign key lines, colours #RRGGBB, relative folders), and a
 [machine] name other than the default brand's (machine: the code still
 uses those names everywhere).
 
+A table or key about the root helper's keys (root_helper, root_helper_keys,
+...) is refused (roothelper): every brand's build ships our signed root
+helper.
+
 [control] is all six keys or none (control). On our brands it is held to
 the bash CLI's own copy of the Connect address (cli/src/connect.sh): only
 brand/k2 may set it, and its connect must be the bash copy's (bash), until
@@ -341,6 +345,10 @@ HOSTED_NOT_OURS = (
     "feeds.daemon", "feeds.downloads", "links.site", "links.support_email", "links.support_url",
     "links.terms", "links.privacy", "links.dashboard", "links.feedback",
 )
+# Every brand's build ships our signed root helper (K2's ruling): a brand
+# file names no root-helper key.
+ROOT_HELPER_REFUSED = ("the root helper runs as root and is signed only by K5's release keys; partner "
+                       "builds ship ours (a new owner decision is needed if a partner runs its own servers)")
 # [control] is all six or none (K2's ruling).
 CONTROL = ("relay", "relay_list", "connect", "cert", "push", "web_api")
 # The bash CLI's own copy of control.connect: only our default brand runs
@@ -520,6 +528,13 @@ def field_findings(doc, ours, hosted, default):
     shapes, the machine names, and with `hosted` what a hosted box needs."""
     out = []
     for key, value in doc.items():
+        if key.startswith("root_helper"):
+            out.append((key, "roothelper", ROOT_HELPER_REFUSED))
+            continue
+        if isinstance(value, dict):
+            for k in value:
+                if k.startswith("root_helper"):
+                    out.append((f"{key}.{k}", "roothelper", ROOT_HELPER_REFUSED))
         if key in ("id", "schema"):
             continue
         if key not in TABLES:
@@ -532,7 +547,7 @@ def field_findings(doc, ours, hosted, default):
         if known is None:
             continue
         for k in value:
-            if k not in known:
+            if k not in known and not k.startswith("root_helper"):
                 out.append((f"{key}.{k}", "unknown", f"a key [{key}] does not hold (it knows {', '.join(known)})"))
     for field, shape in FIELD_SHAPES.items():
         present, v = field_value(doc, field)

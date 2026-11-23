@@ -111,7 +111,9 @@ pub fn is_under(path: &Path, base: &Path) -> bool {
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return false;
     }
-    let base_c = dunce::canonicalize(&base).unwrap_or_else(|_| base.to_path_buf());
+    // Both sides the same way: a root that doesn't exist yet still resolves
+    // its existing ancestors (on macOS /tmp and /var are symlinks).
+    let base_c = resolve_existing_prefix(base);
     let resolved = resolve_existing_prefix(path);
     resolved != base_c && resolved.starts_with(&base_c)
 }
@@ -170,5 +172,29 @@ mod tests {
             let _ = std::fs::remove_file(&link);
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A hire root that doesn't exist yet, under a folder reached through a
+    /// symlink (macOS's /tmp and /var are symlinks to /private/...): a new
+    /// workspace inside it is inside, whichever spelling each side uses.
+    #[cfg(unix)]
+    #[test]
+    fn is_under_a_root_not_made_yet_under_a_symlinked_folder() {
+        let top = std::env::temp_dir().join(format!("k2-hire-root-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        let real = top.join("real");
+        std::fs::create_dir_all(&real).expect("mkdir real");
+        let link = top.join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        for base in [link.join("k2-agents"), real.join("k2-agents")] {
+            assert!(!base.exists(), "the root isn't made yet");
+            for path in [link.join("k2-agents/hire-b"), real.join("k2-agents/hire-b"), link.join("k2-agents/team/hire-c")] {
+                assert!(is_under(&path, &base), "{} is inside {}", path.display(), base.display());
+            }
+            assert!(!is_under(&base, &base), "the root itself is not a workspace folder");
+            assert!(!is_under(&real.join("other/hire-b"), &base), "a sibling folder is outside");
+            assert!(!is_under(&link.join("k2-agents/../other"), &base));
+        }
+        let _ = std::fs::remove_dir_all(&top);
     }
 }

@@ -65,23 +65,25 @@ pub fn in_zone(host: &str) -> bool {
 // ── K2's own services ────────────────────────────────────────────────
 // These are fixed hosts, not names under a box's label. They do not
 // follow ZONE: if boxes ever answer under a second zone, these stay.
+// The control endpoints come from the brand file's [control] table, which
+// is ours unless a brand sets its own (the test below spells them out).
 
 /// The default relay a tunnel dials.
-pub const RELAY_HOST: &str = "relay.k2.dev";
+pub const RELAY_HOST: &str = k2_brand::control::RELAY_HOST;
 /// The list of relays (K2 Web serves it).
-pub const RELAY_LIST_URL: &str = "https://k2.dev/api/tunnel/relays";
+pub const RELAY_LIST_URL: &str = k2_brand::control::RELAY_LIST;
 /// K2 Connect's control plane.
-pub const CONNECT_BASE: &str = "https://connect.k2.dev";
+pub const CONNECT_BASE: &str = k2_brand::control::CONNECT;
 /// The certificate broker's endpoint.
-pub const CERT_BROKER_URL: &str = "https://cert.k2.dev/cert";
+pub const CERT_BROKER_URL: &str = k2_brand::control::CERT;
 /// The push gateway.
-pub const PUSH_GATEWAY_URL: &str = "https://push.k2.dev";
+pub const PUSH_GATEWAY_URL: &str = k2_brand::control::PUSH;
 /// The download host for App updates.
 pub const DL_BASE: &str = "https://dl.k2.dev";
 /// Where product feedback is sent.
 pub const FEEDBACK_ENDPOINT: &str = "https://feedback.akzm.k2.dev";
 /// The website's API base (`/api/dns/*` lives there).
-pub const WEB_API_BASE: &str = "https://k2.dev";
+pub const WEB_API_BASE: &str = k2_brand::control::WEB_API;
 /// Where a person upgrades their plan.
 pub const DASHBOARD_URL: &str = "https://k2.dev/dashboard";
 /// What an App's edge-terminated web host ends with (`<sub>.app.k2.dev`).
@@ -164,17 +166,13 @@ mod tests {
 
     /// Drift: the brand file's fields that have a const here today hold
     /// the same values (the default brand's file; these tests run on it).
+    /// The control endpoints read [control] and are spelled out in
+    /// `the_service_addresses_are_what_they_were`.
     #[test]
     fn brand_file_fields_are_these_consts() {
         assert_eq!(k2_brand::zones::LABEL, PRIMARY_ZONE);
         assert_eq!(k2_brand::links::DASHBOARD, Some(DASHBOARD_URL));
         assert_eq!(k2_brand::links::FEEDBACK, Some(FEEDBACK_ENDPOINT));
-        assert_eq!(k2_brand::control::CONNECT, CONNECT_BASE);
-        assert_eq!(k2_brand::control::CERT, CERT_BROKER_URL);
-        assert_eq!(k2_brand::control::PUSH, PUSH_GATEWAY_URL);
-        assert_eq!(k2_brand::control::RELAY_HOST, RELAY_HOST);
-        assert_eq!(k2_brand::control::RELAY_LIST, RELAY_LIST_URL);
-        assert_eq!(k2_brand::control::WEB_API, WEB_API_BASE);
     }
 
     #[test]

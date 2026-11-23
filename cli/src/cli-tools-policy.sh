@@ -2316,11 +2316,15 @@ _k2_hidden_restore() {
 }
 # _k2_hidden_signal SIG TRAP: the settings back, TRAP (what `trap -p SIG`
 # printed before, or none) in place again, then SIG once more to this
-# very shell (a subshell too: sh's parent is it).
+# shell with the kill builtin (a child sending it would count as one that
+# handled the signal, and bash 4+ would go on). Bash 3.2 has no BASHPID,
+# so in a subshell there $$ is the parent: with no trap of its own, the
+# subshell then ends as the signal would (128 + its number).
 _k2_hidden_signal() {
     _k2_hidden_restore
     if [ -n "$2" ]; then eval "$2"; else trap - "$1"; fi
-    sh -c 'kill -'"$1"' "$PPID"'
+    kill -"$1" "${BASHPID:-$$}"
+    [ -n "$2" ] || exit $((128 + $(kill -l "$1")))
 }
 _k2_read_hidden() {
     local __k2h_v="" __k2h_int="" __k2h_term="" __k2h_hup=""

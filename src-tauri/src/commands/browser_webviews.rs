@@ -383,6 +383,7 @@ mod real {
     }
 
     /// Every page of one K2 window: (registry key, webview).
+    #[cfg(target_os = "macos")]
     pub fn views_of_window(app: &AppHandle, label: &str) -> Vec<(String, Webview)> {
         let prefix = format!("{label}\0");
         views(app).0.lock().unwrap().iter().filter(|(k, _)| k.starts_with(&prefix)).map(|(k, v)| (k.clone(), v.clone())).collect()
@@ -1007,6 +1008,7 @@ mod real {
     }
 
     /// The page for a registry key (`parent\0item`), for the underlay.
+    #[cfg(target_os = "macos")]
     pub fn view_by_key(app: &AppHandle, key: &str) -> Option<Webview> {
         views(app).0.lock().unwrap().get(key).cloned()
     }

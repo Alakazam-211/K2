@@ -36,7 +36,11 @@ vi.mock('@/stores/session-events', () => ({
     }
   },
 }))
-vi.mock('@/lib/desktop-chrome', () => ({ isMacPlatform: () => true, desktopOsFromNavigator: () => 'mac' }))
+vi.mock('@/lib/desktop-chrome', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/desktop-chrome')>()),
+  isMacPlatform: () => true,
+  desktopOsFromNavigator: () => 'mac',
+}))
 vi.mock('@/stores/settings', () => ({ useSettingsStore: { getState: () => ({ setSection: () => {} }) } }))
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: (sel: (s: unknown) => unknown) =>

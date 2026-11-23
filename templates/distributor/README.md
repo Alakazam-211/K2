@@ -72,6 +72,7 @@ that leaves out a field marked **must**, or sets one to K5's own value.
 Shapes: every URL is `https://<domain>[/<path>]`; domains are lower case;
 an email is `<name>@<domain>`; a key is a minisign public key line (the
 base64 line of its `.pub` file) with its key id; a colour is `#RRGGBB`;
+`mail.system_from` may use `{server}` for its domain;
 `""` means none (no link, or off). A table or key K5 does not know stops
 the build, naming it.
 
@@ -88,13 +89,12 @@ the build, naming it.
 | `cli.name`, `cli.aliases` | the command and its other names ("Your brand's names" above) | **must** (aliases may be `[]`) |
 | `package.bundle_id`, `desktop_id`, `gui_binary` | the app's ids on macOS and Linux | **must** for app builds |
 | `package.update_feed` | the desktop app's update manifest | **must** |
-| `update.keys` | the update keys your build trusts, primary first; never K5's | **must** |
+| `update.keys` | the update keys your build trusts, primary first; never K5's. They sign your daemon, so they are also the trust root of the Sew pins it carries (there is no separate Sew signer). The template's key is a test-only placeholder that `--hosted` refuses | **must**, your own |
 | `zones.label` | the zone your boxes are named under, `<subdomain>.<label>` | **must** |
 | `zones.internal` | `true` or `false`: a box also gets a name under K5's own zone | **must** (your agreement says which) |
-| `control.connect`, `cert`, `push`, `relay`, `relay_list`, `web_api` | Connect, the certificate broker, the push gateway, the relays, the website's API | leave out: they are ours |
+| `control.connect`, `cert`, `push`, `relay`, `relay_list`, `web_api` | Connect, the certificate broker, the push gateway, the relays, the website's API | leave out: they are ours. A brand that sets `[control]` sets all six |
 | `feeds.daemon` | the headless daemon's update manifest | **must** |
 | `feeds.downloads` | the folder a release's files are downloaded from | **must** |
-| `pins.keys` | the keys that sign the root helper and what it installs (the Sew pins ride in it) | leave out: ours |
 | `machine.home`, `binary_prefix`, `unit_prefix` | the home folder (`.k2`), what programs and systemd units are named after (`k2-daemon`, `k2-daemon.service`); ops scripts find your boxes by these | leave out: a brand may not rename them yet |
 | `look.icons` | your icons folder, inside your brand folder | **must** |
 | `look.accent` | your accent colour | may (left out: the style's own) |
@@ -103,7 +103,7 @@ the build, naming it.
 | `links.support_url`, `terms`, `privacy` | your support page, terms of service and privacy policy | **must**, not `""` |
 | `links.dashboard` | where a user manages their account | **must**, may be `""` (none) |
 | `links.feedback` | where Send feedback goes | **must**, may be `""` (the button is off) |
-| `mail.system_from` | the address system mail to your users comes from | **must** |
+| `mail.system_from` | the address system mail comes from. There is no fleet-wide sender: each box sends from its own server name through its own hostmail, so `{server}` stands for the box's name (`noreply@{server}` is `noreply@box.partner.example` for the box `box.partner.example`). SPF, DKIM and DMARC go on each box's server name, never on your apex domain | may (left out: `noreply@{server}`) |
 | `mail.system_from_name` | the name on it | may (left out: the product's) |
 | `mail.postal` | `true` or `false`: your boxes may join Postal | **must** |
 | `phone.bundle_id`, `team_id`, `push_topic` | the phone app your boxes pair with | leave out unless you have your own app |

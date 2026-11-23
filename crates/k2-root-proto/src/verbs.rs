@@ -3090,6 +3090,9 @@ mod tests {
                         // Daemon-class so no other caller can loop it (A-L3);
                         // read-only, and the drain polls it mid cut-over.
                         | Verb::PgDual { op: crate::pg_dual::DualOp::Status, .. }
+                        // Report only (its probe is refused or reported), and
+                        // a running placement must not make it "busy".
+                        | Verb::AgentScope(crate::agent_scope::ScopeVerb::Layout)
                 )
             {
                 assert!(v.takes_lock(), "{v:?}");

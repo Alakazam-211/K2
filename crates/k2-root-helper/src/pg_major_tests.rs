@@ -1859,7 +1859,8 @@ fn restarts_of(t: &T, unit: &str) -> usize {
 fn version_announces_pgarchive_on_protocol_18() {
     let t = box_root();
     let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
-    assert!(v["protocol"].as_u64() >= Some(u64::from(k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL)), "{v}");
+    // Protocols are additive: 19 still carries 18's pg wal-archive.
+    assert!(v["protocol"].as_u64().expect("number") >= u64::from(k2_root_proto::version::PGARCHIVE_MIN_PROTOCOL), "{v}");
     assert_eq!(v["namespaces"]["pgarchive"], true, "{v}");
     assert_eq!(v["namespaces"]["pgnamed"], true, "protocols are additive");
 }

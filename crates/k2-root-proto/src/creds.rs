@@ -182,6 +182,12 @@ pub const K2_OWN_UNITS: &[&str] = &[
     // Xvfb and the window-manager session, run as K2's user.
     "k2-desktop-virtual-x.service",
     "k2-desktop-virtual-session.service",
+    // The agent slices' anchors (crates/k2-root-proto/src/agent_scope.rs,
+    // written by the root helper's `agents setup`, protocol 19): one idle
+    // process each that keeps a slice's cgroup alive.
+    "k2agents-anchor.service",
+    "k2agents-open-anchor.service",
+    "k2agents-fenced-anchor.service",
 ];
 
 /// K2's generated families, as (prefix, middle) patterns: the stem starts

@@ -758,12 +758,26 @@ _doc_one_path() {
     _DOC_PATH="$(_doc_path "${_DOC_ARGS[0]}")"
 }
 
+# The first lines of a doc reader of a daemon answer: one that raises
+# prints _doc_die's two lines (code bad_response) and exits 1, never a
+# traceback.
+_DOC_PY_PLAIN='import sys
+def _doc_plain(t, e, tb):
+    if issubclass(t, KeyboardInterrupt):
+        return
+    import json
+    hint = "k2 doc can\x27t read the daemon\x27s answer (a daemon on another K2 version?)"
+    sys.stderr.write("Error: %s\n%s\n" % (hint, json.dumps({"error": {"code": "bad_response", "hint": hint}})))
+sys.excepthook = _doc_plain
+'
+
 _doc_print_json_or() {
     if [ "${_DOC_JSON:-0}" = "1" ]; then
         printf '%s\n' "$_DOC_BODY"
         return 0
     fi
-    printf '%s' "$_DOC_BODY" | python3 -c "$1" "${@:2}"
+    printf '%s' "$_DOC_BODY" | _DOC_READER="$1" python3 -c "$_DOC_PY_PLAIN"'import os
+exec(os.environ["_DOC_READER"])' "${@:2}"
 }
 
 _doc_who() {
@@ -837,7 +851,7 @@ _doc_watch() {
     fi
     _doc_call POST /cli/docs/tool "$(_doc_body "$path" argv '["cat"]')"
     last="$_DOC_BODY"
-    printf '%s' "$last" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("watching %s at v%s (Ctrl-C to stop)" % (v["doc"]["path"], v.get("version")), file=sys.stderr)'
+    printf '%s' "$last" | python3 -c "$_DOC_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); print("watching %s at v%s (Ctrl-C to stop)" % (v["doc"]["path"], v.get("version")), file=sys.stderr)'
     while :; do
         sleep 1
         _doc_call GET /cli/docs/status "$(_doc_query "$path")"
@@ -876,7 +890,7 @@ _doc_watch_any() {
     local path="$1" last
     _doc_call GET /cli/docs/status "$(_doc_query "$path")"
     last="$_DOC_BODY"
-    printf '%s' "$last" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("watching %s at v%s (Ctrl-C to stop)" % (v["doc"]["path"], v.get("version")), file=sys.stderr)'
+    printf '%s' "$last" | python3 -c "$_DOC_PY_PLAIN"'import json,sys; v=json.load(sys.stdin); print("watching %s at v%s (Ctrl-C to stop)" % (v["doc"]["path"], v.get("version")), file=sys.stderr)'
     while :; do
         sleep 1
         _doc_call GET /cli/docs/status "$(_doc_query "$path")"

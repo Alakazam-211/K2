@@ -438,8 +438,10 @@ print(json.dumps(v, indent=2))'
         exit 0
     fi
     local info
+    # A reader that raises prints one line, {"error": "bad_response", ...},
+    # and exits 1, never a traceback (the hook on its first line).
     info="$(printf '%s' "$_CP_BODY" | python3 -c '
-import json, sys
+import json, sys; sys.excepthook = lambda t, e, tb: None if issubclass(t, KeyboardInterrupt) else sys.stderr.write(json.dumps({"error": "bad_response", "hint": "k2 compute can\x27t read the daemon\x27s answer (a daemon on another K2 version?)"}) + "\n")
 v = json.load(sys.stdin)
 j = v["job"]
 c = (j.get("srcCommit") or "")[:8]

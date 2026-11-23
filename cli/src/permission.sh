@@ -619,11 +619,14 @@ EOF
 }
 
 # The renderer: the answer's body on stdin, K2_OV verb, K2_OS status, K2_OJ
-# json (1/0). Prints, then exits with the documented code.
+# json (1/0). Prints, then exits with the documented code. Where it raises
+# (an answer it can't read), the hook after `raw` prints the same
+# "unexpected answer" line as an answer that is no object, exit 1, never a
+# traceback.
 _ORG_PY='
 import json, os, sys
 verb, status, as_json = os.environ["K2_OV"], int(os.environ["K2_OS"]), os.environ["K2_OJ"] == "1"
-raw = sys.stdin.read()
+raw = sys.stdin.read(); sys.excepthook = lambda t, e, tb: None if issubclass(t, KeyboardInterrupt) else sys.stderr.write("Error: unexpected answer from the K2 daemon (HTTP %d): %s\n" % (status, raw[:300]))
 try:
     v = json.loads(raw)
 except Exception:

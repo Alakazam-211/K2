@@ -15245,10 +15245,11 @@ WHAT A TEMPLATE IS
   hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
     would grant  the hirer may give it: the owner any, an admin what an
                  admin can, an agent only what it has on itself.
-    card         a person is asked on a card on the new agent's Thread.
-    refused      cards are off here: the next line says who can turn it
-                 on and how. The hire goes ahead; tell your person.
-    skip / declined   already on / left off with --decline <perm>.
+    card         an owner or admin is asked on a card on its Thread.
+    refused      no card can ask for it: the next line says who can turn
+                 it on and how. The hire goes ahead; tell your person.
+    skip / declined   already on / left off with --decline <perm> (kept
+                      off on a re-run too).
 
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
@@ -79737,21 +79738,30 @@ WHO MAY
 
 PERMISSIONS (a template's suggested switches)
   Who hires decides what the new agent gets. Each permission line says:
-    would grant / granted  turned on now. The owner may give any switch,
+    would grant / granted  turned on by the hire (would grant: once you
+                           run it without --dry-run). The owner may give any switch,
                            an admin login the ones an admin can turn on,
                            an agent only switches it has on itself (never
                            database access); a member login or an API key
                            gives none.
-    card                   the hirer can't give it, so a person is asked on
-                           a permission card on the new agent's Thread (when
-                           the agent first starts, if it has no Thread yet).
-    refused                the hirer can't give it and permission cards are
-                           off on this server: the line after it says who
-                           can turn it on and how (a Settings path or a
-                           k2 command). The hire still goes ahead; tell
-                           your person.
-    skip                   already on (or cards are off: permission-cards).
-    declined               left off with --decline.
+    card                   the hirer can't give it, so K2 asks an owner or
+                           admin (the owner, for an owner-only switch) on a
+                           permission card on the new agent's Thread, when
+                           it first starts if it has no Thread yet. K2 files
+                           it for the hire, so it comes even when the new
+                           agent can't ask for cards itself.
+    refused                the hirer can't give it and no card can ask for
+                           it: permission cards are off on this server, or
+                           it is permission-cards itself (never asked on a
+                           card). The line after it says who can turn it on
+                           and how. The hire still goes ahead; tell your
+                           person.
+    skip                   already on (some switches are on for every new
+                           agent), or permission-cards while cards are off.
+    declined               left off with --decline: not turned on, not
+                           asked, and a re-run leaves it off too. The agent
+                           can still ask for it later like any switch, and
+                           a person can turn it on in Settings.
   permission-cards is "Can ask for permission cards" for the new agent.
   A re-run turns on what is still off and allowed; it never turns a
   switch off and never asks twice.
@@ -81295,8 +81305,10 @@ def finish(changed):
              failed[0].get("exitCode") or exit_code_for(first.get("code")))
     sys.exit(0)
 
-TEMPLATE_PERMS_NOTE = ("refused permissions stay off and the hire goes ahead: tell your person, "
-                       "or leave one off with --decline <permission>")
+CARDS_WAIT_NOTE = ("card: an owner or admin answers it on the new agent's Thread (at its first start "
+                   "if it has none yet); tell your person it is waiting")
+TEMPLATE_PERMS_NOTE = ("refused permissions stay off; the hire goes ahead. Tell your person which, "
+                       "and who can turn each on (the line under it)")
 
 def take_template_rows(a, resp, applied):
     """Attach the daemon's template rows to the apply-template action."""
@@ -81308,8 +81320,13 @@ def take_template_rows(a, resp, applied):
         # A template dry run skips "Let this agent hire agents" (so the
         # agent can show its person the hire); the real hire needs it.
         a["hireSwitch"] = resp["hireSwitch"]
+    notes = []
+    if any(r.get("step") == "permission" and r.get("status") == "card" for r in a["rows"]):
+        notes.append(CARDS_WAIT_NOTE)
     if a["permissions"].get("refused"):
-        a["permissionsNote"] = TEMPLATE_PERMS_NOTE
+        notes.append(TEMPLATE_PERMS_NOTE)
+    if notes:
+        a["permissionsNote"] = "\n      ".join(notes)
     busy = [r for r in a["rows"] if r.get("status") in ("write", "done", "grant") and r.get("step") not in ("folder", "register")]
     if applied:
         a["status"] = "done" if busy else "skipped"

@@ -2146,8 +2146,10 @@ def finish(changed):
              failed[0].get("exitCode") or exit_code_for(first.get("code")))
     sys.exit(0)
 
-TEMPLATE_PERMS_NOTE = ("refused permissions stay off and the hire goes ahead: tell your person, "
-                       "or leave one off with --decline <permission>")
+CARDS_WAIT_NOTE = ("card: an owner or admin answers it on the new agent's Thread (at its first start "
+                   "if it has none yet); tell your person it is waiting")
+TEMPLATE_PERMS_NOTE = ("refused permissions stay off; the hire goes ahead. Tell your person which, "
+                       "and who can turn each on (the line under it)")
 
 def take_template_rows(a, resp, applied):
     """Attach the daemon's template rows to the apply-template action."""
@@ -2159,8 +2161,13 @@ def take_template_rows(a, resp, applied):
         # A template dry run skips "Let this agent hire agents" (so the
         # agent can show its person the hire); the real hire needs it.
         a["hireSwitch"] = resp["hireSwitch"]
+    notes = []
+    if any(r.get("step") == "permission" and r.get("status") == "card" for r in a["rows"]):
+        notes.append(CARDS_WAIT_NOTE)
     if a["permissions"].get("refused"):
-        a["permissionsNote"] = TEMPLATE_PERMS_NOTE
+        notes.append(TEMPLATE_PERMS_NOTE)
+    if notes:
+        a["permissionsNote"] = "\n      ".join(notes)
     busy = [r for r in a["rows"] if r.get("status") in ("write", "done", "grant") and r.get("step") not in ("folder", "register")]
     if applied:
         a["status"] = "done" if busy else "skipped"

@@ -71,10 +71,11 @@ WHAT A TEMPLATE IS
   hirer may give (k2 agent hire --help, PERMISSIONS). Each line says:
     would grant  the hirer may give it: the owner any, an admin what an
                  admin can, an agent only what it has on itself.
-    card         a person is asked on a card on the new agent's Thread.
-    refused      cards are off here: the next line says who can turn it
-                 on and how. The hire goes ahead; tell your person.
-    skip / declined   already on / left off with --decline <perm>.
+    card         an owner or admin is asked on a card on its Thread.
+    refused      no card can ask for it: the next line says who can turn
+                 it on and how. The hire goes ahead; tell your person.
+    skip / declined   already on / left off with --decline <perm> (kept
+                      off on a re-run too).
 
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run

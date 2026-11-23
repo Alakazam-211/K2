@@ -845,9 +845,45 @@ fn jail_wiki_id(id: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-/// Write one note under `<workspace>/.k2/wiki/`. Confined. Overwrite OK.
-/// Seeds the wiki vault if missing. Returns the workspace-relative path
-/// (e.g. `.k2/wiki/Interview.md`).
+/// `.k2` and `.k2/wiki` under the workspace root are real folders (or not
+/// there yet), never links: the wiki is written only inside the workspace.
+fn refuse_linked_wiki(root: &Path) -> Result<(), String> {
+    let mut cur = root.to_path_buf();
+    for part in Path::new(WIKI_REL).components() {
+        cur.push(part);
+        match fs::symlink_metadata(&cur) {
+            Ok(m) if is_link(&m) => {
+                return Err(format!(
+                    "{} is a link; the wiki is written only inside the workspace",
+                    cur.display()
+                ))
+            }
+            Ok(m) if !m.is_dir() => return Err(format!("{} is not a folder", cur.display())),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("{}: {e}", cur.display())),
+        }
+    }
+    Ok(())
+}
+
+fn is_link(m: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        // FILE_ATTRIBUTE_REPARSE_POINT: a symlink or a junction.
+        if m.file_attributes() & 0x400 != 0 {
+            return true;
+        }
+    }
+    m.file_type().is_symlink()
+}
+
+/// Write one note under `<workspace>/.k2/wiki/`. Confined: checked against
+/// the workspace root, `.k2` and `.k2/wiki` must not be links, and the
+/// write never follows a link below the root ([`crate::confined_fs`]).
+/// Overwrite OK. Seeds the wiki vault if missing. Returns the
+/// workspace-relative path (e.g. `.k2/wiki/Interview.md`).
 pub fn write_note(workspace: &Path, id: &str, body: &str) -> Result<String, String> {
     let id = jail_wiki_id(id)?;
     if (body.len() as u64) > MAX_NOTE_BYTES {
@@ -862,27 +898,9 @@ pub fn write_note(workspace: &Path, id: &str, body: &str) -> Result<String, Stri
     seed_wiki(workspace)?;
     let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
-    let wiki = root.join(WIKI_REL);
-    fs::create_dir_all(&wiki).map_err(|e| format!("mkdir wiki: {e}"))?;
-    let wiki_canon = dunce::canonicalize(&wiki)
-        .map_err(|e| format!("wiki path: {e}"))?;
-    let dest = wiki_canon.join(&id);
-    if !dest.starts_with(&wiki_canon) {
-        return Err("note path escapes wiki root".into());
-    }
-    if dest.exists() {
-        let abs = dunce::canonicalize(&dest)
-            .map_err(|e| format!("note path: {e}"))?;
-        if !abs.starts_with(&wiki_canon) {
-            return Err("note path escapes wiki root".into());
-        }
-    } else if let Some(parent) = dest.parent() {
-        if !parent.starts_with(&wiki_canon) {
-            return Err("note path escapes wiki root".into());
-        }
-        fs::create_dir_all(parent).map_err(|e| format!("mkdir wiki note parent: {e}"))?;
-    }
-    fs::write(&dest, body).map_err(|e| format!("write note: {e}"))?;
+    refuse_linked_wiki(&root)?;
+    crate::confined_fs::write_file(&root, &Path::new(WIKI_REL).join(&id), body.as_bytes(), None)
+        .map_err(|e| format!("write note: {e}"))?;
     Ok(Path::new(WIKI_REL)
         .join(&id)
         .to_string_lossy()
@@ -927,17 +945,20 @@ Add one line per note as the wiki grows.
 pub fn seed_wiki(workspace: &Path) -> Result<Vec<String>, String> {
     let root = dunce::canonicalize(&workspace)
         .map_err(|e| format!("workspace path: {e}"))?;
-    let wiki = root.join(WIKI_REL);
-    fs::create_dir_all(&wiki).map_err(|e| format!("mkdir wiki: {e}"))?;
+    // Made and written inside the workspace only: never through a linked
+    // `.k2` or `.k2/wiki`, and a seed file is only ever a new file.
+    refuse_linked_wiki(&root)?;
+    let wiki_rel = Path::new(WIKI_REL);
+    crate::confined_fs::create_dir_all(&root, wiki_rel).map_err(|e| format!("mkdir wiki: {e}"))?;
     let mut created = Vec::new();
-    let home = wiki.join("Home.md");
-    if !home.exists() {
+    {
         let name = root
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "workspace".into());
-        fs::write(
-            &home,
+        let made = crate::confined_fs::write_new_file(
+            &root,
+            &wiki_rel.join("Home.md"),
             format!(
                 r#"---
 title: Home
@@ -956,14 +977,17 @@ connect ideas. Open **View Wiki** in K2 to explore the map.
 ## Add notes
 Create new `.md` files under `.k2/wiki/` and link them with `[[Note Title]]`.
 "#
-            ),
+            )
+            .as_bytes(),
         )
         .map_err(|e| format!("write Home.md: {e}"))?;
-        created.push("Home.md".into());
+        if made {
+            created.push("Home.md".into());
+        }
     }
-    let index = wiki.join("_Index.md");
-    if !index.exists() {
-        fs::write(&index, SEED_INDEX_MD).map_err(|e| format!("write _Index.md: {e}"))?;
+    if crate::confined_fs::write_new_file(&root, &wiki_rel.join("_Index.md"), SEED_INDEX_MD.as_bytes())
+        .map_err(|e| format!("write _Index.md: {e}"))?
+    {
         created.push("_Index.md".into());
     }
     // Deterministic host registration — best-effort (DB may be empty in unit tests).
@@ -1335,5 +1359,32 @@ mod tests {
         let err = write_note(&ws, "Big.md", &too).expect_err("too large");
         assert_eq!(err, "note too large");
         let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// A note lands inside the workspace only: a linked `.k2`, a linked
+    /// `.k2/wiki`, or a link below the wiki is refused, and nothing is
+    /// written where the link points (the seed notes included).
+    #[cfg(unix)]
+    #[test]
+    fn write_note_stays_inside_the_workspace_when_wiki_parts_are_links() {
+        use std::os::unix::fs::symlink;
+        let cases: [(&str, &str, &str); 3] = [
+            (".k2/wiki", "X.md", "is a link"),
+            (".k2", "X.md", "is a link"),
+            (".k2/wiki/sub", "sub/X.md", "not followed"),
+        ];
+        for (linked, id, want) in cases {
+            let ws = temp_ws("write-note-linked");
+            let outside = temp_ws("write-note-linked-outside");
+            let link = ws.join(linked);
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            symlink(&outside, &link).unwrap();
+            let err = write_note(&ws, id, "x").expect_err(linked);
+            assert!(err.contains(want), "{linked}: {err}");
+            let written: Vec<_> = fs::read_dir(&outside).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(written.is_empty(), "{linked}: nothing written outside the workspace, found {written:?}");
+            let _ = fs::remove_dir_all(&ws);
+            let _ = fs::remove_dir_all(&outside);
+        }
     }
 }

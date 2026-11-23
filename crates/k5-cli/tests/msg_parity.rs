@@ -310,6 +310,28 @@ fn msg_sends_as_the_shell_does() {
             3,
             1,
         ),
+        // The two refusals Link now brought: exit 3, as the shell's tuple.
+        plain(
+            "Postal mail, this server can't accept",
+            &["a::abc.postal.bot", "hi"],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"postal_cant_accept","hint":"the owner runs Link now"}}"#
+                    .into(),
+            )],
+            3,
+            1,
+        ),
+        plain(
+            "Postal mail, the approval token is lost",
+            &["a::abc.postal.bot", "hi"],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"postal_link_lost","hint":"the owner runs Link now"}}"#.into(),
+            )],
+            3,
+            1,
+        ),
         plain(
             "Postal mail, asked",
             &["a::abc.postal.bot", "hi"],

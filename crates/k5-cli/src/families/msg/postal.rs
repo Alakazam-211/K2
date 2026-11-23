@@ -224,6 +224,8 @@ const EXITS: &[(&str, i32)] = &[
     ("postal_route_louder", 3),
     ("postal_owner_link_missing", 3),
     ("postal_rekey_pending", 3),
+    ("postal_cant_accept", 3),
+    ("postal_link_lost", 3),
     ("not_found", 4),
     ("postal_no_address", 4),
     ("postal_no_code", 4),
@@ -280,13 +282,13 @@ pub mod line {
     pub const CARD: u32 = 25;
     pub const HINT: u32 = 26;
     pub const CAPITAL: u32 = 27;
-    pub const HANDLE: u32 = 33;
-    pub const WORKSPACE: u32 = 34;
-    pub const STATUS: u32 = 36;
-    pub const SENT: u32 = 37;
-    pub const BADGE: u32 = 38;
-    pub const RECORD: u32 = 39;
-    pub const QUEUED: u32 = 40;
+    pub const HANDLE: u32 = 43;
+    pub const WORKSPACE: u32 = 44;
+    pub const STATUS: u32 = 46;
+    pub const SENT: u32 = 47;
+    pub const BADGE: u32 = 48;
+    pub const RECORD: u32 = 49;
+    pub const QUEUED: u32 = 50;
 }
 
 /// In a session, after the error line: [`PERSON_LINE`] for a person's

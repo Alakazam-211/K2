@@ -675,6 +675,44 @@ fn postal_mail_in_a_session() {
     ] {
         assert!(at(n).starts_with(starts), "line {n}: {}", at(n));
     }
+    // Every code in the shell's refusal tuple is exit 3, and every code in
+    // its map is that map's exit, as the shell's lines name them.
+    let perm = at(postal::line::EXIT - 1)
+        .strip_prefix("perm = (")
+        .and_then(|l| l.strip_suffix(')'))
+        .expect("the perm tuple");
+    let map = at(postal::line::EXIT)
+        .split_once("else {")
+        .and_then(|(_, m)| m.split_once("}.get(code, 1))"))
+        .expect("the exit map")
+        .0;
+    let quoted = |t: &str| t.trim().trim_matches('"').to_string();
+    let mut rows: Vec<(String, Exit)> = perm
+        .split(", ")
+        .map(|c| (quoted(c), Exit::Refused))
+        .collect();
+    for pair in map.split(", ") {
+        let (code, n) = pair.split_once(": ").expect("code: exit");
+        rows.push((quoted(code), Exit::from_curl(n.parse().expect("a number"))));
+    }
+    assert!(rows.iter().any(|(c, _)| c == "postal_cant_accept"));
+    assert!(rows.iter().any(|(c, _)| c == "postal_link_lost"));
+    for (code, exit) in rows {
+        let body = format!(r#"{{"error":{{"code":"{code}","hint":"h"}}}}"#);
+        let r = postal::reader(body.as_bytes(), false, false);
+        assert_eq!(
+            (r.stderr, r.exit),
+            (format!("Error: {code}: h\n"), exit),
+            "{code}"
+        );
+    }
+    // A workspace that isn't an object raises on its line.
+    let r = postal::reader(br#"{"workspace":5}"#, false, false);
+    let want = format!(
+        "line {}, in <module>\nAttributeError: 'int' object has no attribute 'get'\n",
+        postal::line::WORKSPACE
+    );
+    assert!(r.stderr.ends_with(&want), "{}", r.stderr);
 }
 
 #[test]

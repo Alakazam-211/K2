@@ -687,19 +687,16 @@ fn init_then_first_commit_and_unstage_without_head() {
     write(&d, "readme.md", "hi\n");
     write(&d, "notes.txt", "n\n");
     crate::git::init_repo(s(&d)).expect("init");
-    let repo = Repository::open(&d).expect("open");
-    assert!(repo.head().is_err(), "no commits yet");
+    assert!(d.join(".git").is_dir(), "a .git folder");
+    assert!(fx::git_cmd(&d).args(["rev-parse", "--verify", "-q", "HEAD"]).output().expect("rev-parse").stdout.is_empty(), "no commits yet");
     assert!(crate::git::init_repo(s(&d)).is_err(), "no re-init");
-    let mut cfg = repo.config().expect("config");
-    cfg.set_str("user.name", "K2 Test").expect("user.name");
-    cfg.set_str("user.email", "k2-test@example.com").expect("user.email");
+    fx::git(&d, &["config", "user.name", "K2 Test"]);
+    fx::git(&d, &["config", "user.email", "k2-test@example.com"]);
     let sn = snap(&d, None);
     assert!(sn.unborn, "unborn snapshot");
-    let want = git2::Config::open_default()
-        .ok()
-        .and_then(|c| c.get_string("init.defaultBranch").ok())
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or_else(|| "main".to_string());
+    // init.defaultBranch as the person's git reads it, else main.
+    let configured = crate::git_safe::run_write(&d, &["config", "--get", "init.defaultBranch"]).expect("git runs");
+    let want = Some(configured.stdout.trim().to_string()).filter(|b| configured.ok() && !b.is_empty()).unwrap_or_else(|| "main".to_string());
     assert_eq!(sn.branch.as_deref(), Some(want.as_str()));
 
     crate::git::stage_file(s(&d), "readme.md").expect("stage");
@@ -710,10 +707,10 @@ fn init_then_first_commit_and_unstage_without_head() {
     assert_eq!(row(&sn, "untracked", "notes.txt").status, "U");
 
     let c = crate::git::commit(s(&d), "first").expect("first commit");
-    let head = repo.head().expect("head now").peel_to_commit().expect("commit");
-    assert_eq!(head.id().to_string(), c.oid);
-    assert_eq!(head.parent_count(), 0);
-    assert_eq!(repo.head().expect("head").shorthand(), Some(want.as_str()));
+    assert_eq!(fx::git(&d, &["rev-parse", "HEAD"]), c.oid);
+    assert_eq!(fx::git(&d, &["rev-list", "--count", "HEAD"]), "1", "no parent");
+    assert_eq!(fx::git(&d, &["log", "-1", "--format=%B"]), "first");
+    assert_eq!(head_branch(&Repo(d.clone())), want);
     let sn = snap(&d, None);
     assert!(!sn.unborn);
     assert_eq!(sn.counts.staged, 0);

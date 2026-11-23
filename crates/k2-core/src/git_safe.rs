@@ -102,6 +102,146 @@ pub fn git(dir: impl AsRef<Path>) -> Command {
     c
 }
 
+// ── K2's own writes (0.46.18: libgit2 → the person's git) ──────────────
+
+/// The `-c` pairs K2's own writes add on top of [`harden_args`]: no commit
+/// signing (libgit2 never signed, and a signing prompt would hang a
+/// daemon), no rerere (it would resolve conflicts quietly), conflict
+/// markers in git's plain `merge` style (what libgit2 wrote), identity
+/// from config only (libgit2 refused without `user.name`/`user.email`;
+/// git would invent one from the host name), and no background `gc` or
+/// maintenance started from a daemon.
+pub fn write_args() -> [&'static str; 14] {
+    [
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "tag.gpgSign=false",
+        "-c",
+        "rerere.enabled=false",
+        "-c",
+        "merge.conflictStyle=merge",
+        "-c",
+        "user.useConfigOnly=true",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
+    ]
+}
+
+/// The `git_not_installed` hint for this machine.
+pub fn not_installed_hint() -> String {
+    let what = match availability() {
+        GitProbe::Broken { error, .. } => return format!("git is installed but doesn't run ({error}); fix it and try again"),
+        _ if cfg!(target_os = "macos") => {
+            "Install Apple's command line tools (the Changes tab offers the install, or run xcode-select --install in Terminal)"
+                .to_string()
+        }
+        _ if cfg!(windows) => "Install Git for Windows (git-scm.com)".to_string(),
+        _ => format!(
+            "Install it with: {}",
+            crate::git_tools::linux_install_command(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+        ),
+    };
+    format!("this needs git, which isn't installed on this machine. {what}, then try again")
+}
+
+/// `Ok` when git runs here; else `git_not_installed: <hint>` (never runs a
+/// program to find out, never Apple's shim).
+pub fn require_git() -> Result<(), String> {
+    if availability().is_ready() {
+        return Ok(());
+    }
+    Err(format!("{}: {}", crate::git::refusal::GIT_NOT_INSTALLED, not_installed_hint()))
+}
+
+/// A hardened `git` for K2's own writes in `dir`: [`git`]'s hardening
+/// (no hooks, no fsmonitor) plus [`write_args`], literal pathspecs (a file
+/// named `*.rs` is only itself), no editor, and none of the daemon's own
+/// inherited `GIT_*` variables (`GIT_DIR`, `GIT_INDEX_FILE`,
+/// `GIT_AUTHOR_*`, `GIT_CONFIG_*`, …) or `EMAIL`, so nothing outside the repository
+/// redirects a write. The person's global and system config still apply
+/// (identity, filters such as LFS), as they would for their own git. Never
+/// `safe.directory`: git's refusal of another user's repo stands.
+pub fn write_command(dir: impl AsRef<Path>) -> Command {
+    let mut c = crate::bg_proc::command(program());
+    for (k, _) in std::env::vars_os() {
+        if k.to_string_lossy().starts_with("GIT_") {
+            c.env_remove(&k);
+        }
+    }
+    // libgit2 took the identity from config only; so does a K2 commit.
+    c.env_remove("EMAIL");
+    c.args(harden_args())
+        .args(write_args())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .env("GIT_MERGE_AUTOEDIT", "no")
+        .current_dir(dir.as_ref())
+        .stdin(Stdio::null());
+    c
+}
+
+/// What a K2 write's git said.
+#[derive(Debug, Clone)]
+pub struct WriteOutput {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl WriteOutput {
+    pub fn ok(&self) -> bool {
+        self.code == Some(0)
+    }
+    /// stderr, else stdout, trimmed (git puts some failures on stdout).
+    pub fn said(&self) -> String {
+        let e = self.stderr.trim();
+        if e.is_empty() { self.stdout.trim().to_string() } else { e.to_string() }
+    }
+}
+
+/// Tries while another git holds `index.lock`, then gives up.
+const LOCK_RETRIES: u32 = 5;
+const LOCK_DELAY: Duration = Duration::from_millis(50);
+
+/// Run one K2 write (`git <args>` in `dir`) after [`require_git`]. While
+/// another process holds the index lock it retries a few times; then the
+/// last answer stands (`index.lock` named in it).
+pub fn run_write(dir: &Path, args: &[&str]) -> Result<WriteOutput, String> {
+    require_git()?;
+    let mut last = None;
+    for attempt in 0..LOCK_RETRIES {
+        let out = write_command(dir).args(args).output().map_err(|e| format!("couldn't run git {}: {e}", args.join(" ")))?;
+        let o = WriteOutput {
+            code: out.status.code(),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        };
+        let locked = !o.ok() && o.stderr.contains("index.lock");
+        if locked && attempt + 1 < LOCK_RETRIES {
+            std::thread::sleep(LOCK_DELAY);
+            last = Some(o);
+            continue;
+        }
+        return Ok(o);
+    }
+    Ok(last.expect("at least one attempt"))
+}
+
+/// [`run_write`] that must succeed: `Err("<what>: <git said>")` otherwise.
+pub fn run_write_ok(dir: &Path, what: &str, args: &[&str]) -> Result<WriteOutput, String> {
+    let o = run_write(dir, args)?;
+    if o.ok() {
+        Ok(o)
+    } else {
+        Err(format!("{what}: {}", o.said()))
+    }
+}
+
 /// The resolved git with none of the `-c` hardening: only for a throwaway
 /// bare repo K2 just made itself (compute bundles), never a workspace.
 pub fn plain() -> Command {
@@ -465,6 +605,29 @@ pub(crate) mod tests {
             .collect();
         assert!(ran.is_empty(), "repo-named programs ran through git_safe: {ran:?}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn write_command_carries_the_write_flags_and_drops_inherited_git_env() {
+        let _env = crate::test_env::lock();
+        let _a = crate::test_env::EnvVar::set("GIT_DIR", "/elsewhere/.git");
+        let _b = crate::test_env::EnvVar::set("GIT_INDEX_FILE", "/elsewhere/index");
+        let _c = crate::test_env::EnvVar::set("GIT_AUTHOR_NAME", "Someone Else");
+        let c = write_command("/tmp");
+        let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(&args[..8], &harden_args().map(String::from)[..]);
+        assert_eq!(&args[8..22], &write_args().map(String::from)[..]);
+        assert!(args.iter().any(|a| a == NULL_HOOKS), "hooks off: {args:?}");
+        assert!(!args.iter().any(|a| a.starts_with("safe.directory")), "never safe.directory: {args:?}");
+        let envs: Vec<(String, Option<String>)> = c
+            .get_envs()
+            .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+            .collect();
+        for k in ["GIT_DIR", "GIT_INDEX_FILE", "GIT_AUTHOR_NAME"] {
+            assert!(envs.contains(&(k.to_string(), None)), "{k} removed: {envs:?}");
+        }
+        assert!(envs.contains(&("GIT_LITERAL_PATHSPECS".into(), Some("1".into()))), "{envs:?}");
+        assert!(envs.contains(&("GIT_TERMINAL_PROMPT".into(), Some("0".into()))), "{envs:?}");
     }
 
     #[test]

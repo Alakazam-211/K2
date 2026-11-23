@@ -29,17 +29,19 @@ fn ok_serialized<T: serde::Serialize>(value: T) -> CliResponse {
     }
 }
 
+/// An error with a [`git::refusal`] code (`git_not_installed` from a
+/// write, for one) keeps its code on the wire; any other is a plain 400.
 fn serialized<T: serde::Serialize>(r: Result<T, String>) -> CliResponse {
     match r {
         Ok(v) => ok_serialized(v),
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => git_error(e),
     }
 }
 
 fn unit_ok(r: Result<(), String>) -> CliResponse {
     match r {
         Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => git_error(e),
     }
 }
 
@@ -169,6 +171,10 @@ pub fn handle_git_init(is_post: bool, body: &[u8]) -> CliResponse {
         };
     }
     if let Err(e) = git::init_repo(&root) {
+        // No git here → 409 `git_not_installed` with the install hint.
+        if git::refusal::code_of(&e).is_some() {
+            return git_error(e);
+        }
         return CliResponse::internal_error(e);
     }
     crate::fs_live::resync_watches();

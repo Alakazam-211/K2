@@ -400,9 +400,20 @@ pub mod refusal {
     pub const NO_MERGE_IN_PROGRESS: &str = "no_merge_in_progress";
     /// Resolve asked for a file that is not in conflict.
     pub const NOT_IN_CONFLICT: &str = "not_in_conflict";
+    /// A write that runs the person's `git` (stage, unstage, commit,
+    /// discard, init, branch delete, merge, abort, resolve) while no git
+    /// runs on this machine. The hint says how to install it. Reads never
+    /// need git.
+    pub const GIT_NOT_INSTALLED: &str = "git_not_installed";
 
-    const ALL: [&str; 5] =
-        [NOT_A_REPO, NOT_A_WORKTREE_OF_PROJECT, MAIN_HAS_UNCOMMITTED_CHANGES, NO_MERGE_IN_PROGRESS, NOT_IN_CONFLICT];
+    const ALL: [&str; 6] = [
+        NOT_A_REPO,
+        NOT_A_WORKTREE_OF_PROJECT,
+        MAIN_HAS_UNCOMMITTED_CHANGES,
+        NO_MERGE_IN_PROGRESS,
+        NOT_IN_CONFLICT,
+        GIT_NOT_INSTALLED,
+    ];
 
     /// The refusal code an error from this module starts with, if any.
     pub fn code_of(err: &str) -> Option<&'static str> {
@@ -817,128 +828,84 @@ pub(crate) fn write_index_with_retry(index: &mut git2::Index) -> Result<(), Stri
     Err("Index locked after retries".to_string())
 }
 
-/// HEAD names a branch with no commits yet (or no HEAD at all).
-fn is_unborn(e: &git2::Error) -> bool {
-    matches!(e.code(), git2::ErrorCode::UnbornBranch | git2::ErrorCode::NotFound)
+// ── Writes: the person's git (0.46.18) ──────────────────────────────────
+//
+// Every write below runs the installed `git` through
+// `git_safe::run_write` (no hooks, no fsmonitor, no signing prompt, no
+// editor, literal pathspecs, none of the daemon's own GIT_* variables) and
+// gix only for the reads around it. git edits its own index, so the
+// cached-tree, split-index and same-second rules are git's. With no git
+// installed each one refuses with `git_not_installed` and runs nothing.
+
+/// The work tree of the repository holding `repo_path`.
+fn workdir_of(repo_path: &str) -> Result<(gix::Repository, std::path::PathBuf), String> {
+    let repo = crate::gitx::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+    let wd = repo.workdir().map(Path::to_path_buf).ok_or_else(|| format!("Not a git repository: {repo_path} is a bare repository"))?;
+    Ok((repo, wd))
 }
 
-/// `git init` at exactly `path` (libgit2: a `.git` folder, no commit; the
-/// first branch follows `init.defaultBranch`, else `main`). The caller
-/// checks that no repository already holds `path`.
+/// `git init` at exactly `path` (a `.git` folder, no commit; the first
+/// branch follows `init.defaultBranch`, else `main`). The caller checks
+/// that no repository already holds `path`; a `.git` already there is
+/// refused, never re-initialized.
 pub fn init_repo(path: &str) -> Result<(), String> {
-    let mut opts = git2::RepositoryInitOptions::new();
-    opts.no_reinit(true).mkdir(false).external_template(false);
-    let branch = git2::Config::open_default()
-        .ok()
-        .and_then(|c| c.get_string("init.defaultBranch").ok())
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or_else(|| "main".to_string());
-    opts.initial_head(&branch);
-    Repository::init_opts(path, &opts).map(|_| ()).map_err(|e| format!("git init {path}: {e}"))
+    let dir = Path::new(path);
+    if std::fs::symlink_metadata(dir.join(".git")).is_ok() {
+        return Err(format!("git init {path}: already a git repository"));
+    }
+    crate::git_safe::require_git()?;
+    let configured = crate::git_safe::run_write(dir, &["config", "--get", "init.defaultBranch"])?;
+    let branch = Some(configured.stdout.trim().to_string()).filter(|b| configured.ok() && !b.is_empty()).unwrap_or_else(|| "main".to_string());
+    if !crate::gitx::valid_branch_name(&branch) {
+        return Err(format!("git init {path}: init.defaultBranch \"{branch}\" isn't a valid branch name"));
+    }
+    crate::git_safe::run_write_ok(dir, &format!("git init {path}"), &["init", "-q"])?;
+    crate::git_safe::run_write_ok(dir, &format!("git init {path}"), &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")])?;
+    Ok(())
 }
 
 // ── Staging Functions ────────────────────────────────────────────────────
 
 /// Stage a file (git add). A folder (the Changes tab's collapsed untracked
 /// `x/` row) is added recursively like `git add x/`: every file under it
-/// that .gitignore does not exclude.
+/// that .gitignore does not exclude. A path gone from the work tree stages
+/// its deletion.
 pub fn stage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-    let mut index = get_index_with_retry(&repo)?;
-
+    let (_, workdir) = workdir_of(repo_path)?;
     let rel = file_path.trim_end_matches('/');
+    if rel.is_empty() {
+        return Err("Failed to stage file: empty path".to_string());
+    }
     // `file_path` is repo-relative (the routes normalise it); resolve it
     // against the work tree, not the workspace folder (which may be a
     // sub-folder of the repo).
-    let workdir = repo.workdir().map(Path::to_path_buf).unwrap_or_else(|| Path::new(repo_path).to_path_buf());
-    let dir = workdir.join(rel);
-    if !rel.is_empty() && dir.is_dir() && !dir.is_symlink() {
-        let prefix = format!("{rel}/");
-        let spec = crate::git_changes::pathspec_literal(rel);
-        let mut only_under = |p: &Path, _spec: &[u8]| -> i32 {
-            // 0 = add, 1 = skip: never anything outside the folder.
-            if p.to_str().is_some_and(|s| s.starts_with(&prefix)) { 0 } else { 1 }
-        };
-        index
-            .add_all([spec.as_str()].iter(), git2::IndexAddOption::DEFAULT, Some(&mut only_under))
-            .map_err(|e| format!("Failed to stage folder: {e}"))?;
-        return write_index_with_retry(&mut index);
-    }
-
-    let full_path = workdir.join(file_path);
-    if full_path.exists() {
-        index.add_path(Path::new(file_path)).map_err(|e| format!("Failed to stage file: {e}"))?;
+    let full = workdir.join(rel);
+    if std::fs::symlink_metadata(&full).is_ok() {
+        crate::git_safe::run_write_ok(&workdir, "Failed to stage file", &["add", "--", rel])?;
     } else {
-        index.remove_path(Path::new(file_path)).map_err(|e| format!("Failed to stage deletion: {e}"))?;
+        crate::git_safe::run_write_ok(&workdir, "Failed to stage deletion", &["rm", "-q", "--cached", "--ignore-unmatch", "--", rel])?;
     }
-
-    write_index_with_retry(&mut index)
+    Ok(())
 }
 
-/// Unstage a file (git reset HEAD -- file).
+/// Unstage a file (git reset HEAD -- file). With no commit yet, the path
+/// just leaves the index.
 pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-
-    let head = match repo.head() {
-        Ok(h) => h,
-        // No commits yet: unstaging = dropping the path from the index.
-        Err(e) if is_unborn(&e) => {
-            let mut index = get_index_with_retry(&repo)?;
-            index.remove_path(Path::new(file_path)).map_err(|e| format!("Failed to unstage file: {e}"))?;
-            return write_index_with_retry(&mut index);
-        }
-        Err(e) => return Err(format!("Failed to get HEAD: {e}")),
-    };
-    let head_commit = head.peel_to_commit().map_err(|e| format!("Failed to get HEAD commit: {e}"))?;
-    let head_tree = head_commit.tree().map_err(|e| format!("Failed to get HEAD tree: {e}"))?;
-
-    let mut index = get_index_with_retry(&repo)?;
-
-    // Check if the file exists in HEAD
-    match head_tree.get_path(Path::new(file_path)) {
-        Ok(entry) => {
-            // File exists in HEAD — restore index entry to HEAD version
-            let blob = repo.find_blob(entry.id()).map_err(|e| format!("Failed to find blob: {e}"))?;
-            let index_entry = git2::IndexEntry {
-                ctime: git2::IndexTime::new(0, 0),
-                mtime: git2::IndexTime::new(0, 0),
-                dev: 0,
-                ino: 0,
-                mode: entry.filemode() as u32,
-                uid: 0,
-                gid: 0,
-                file_size: blob.size() as u32,
-                id: entry.id(),
-                flags: 0,
-                flags_extended: 0,
-                path: file_path.as_bytes().to_vec(),
-            };
-            index.add(&index_entry).map_err(|e| format!("Failed to unstage: {e}"))?;
-        }
-        Err(_) => {
-            // File doesn't exist in HEAD — remove from index
-            index.remove_path(Path::new(file_path)).map_err(|e| format!("Failed to unstage: {e}"))?;
-        }
+    let (repo, workdir) = workdir_of(repo_path)?;
+    let rel = file_path.trim_end_matches('/');
+    if crate::gitx::head_info(&repo).unborn {
+        crate::git_safe::run_write_ok(&workdir, "Failed to unstage file", &["rm", "-q", "--cached", "--ignore-unmatch", "-r", "--", rel])?;
+    } else {
+        crate::git_safe::run_write_ok(&workdir, "Failed to unstage", &["reset", "-q", "--", rel])?;
     }
-
-    write_index_with_retry(&mut index)
+    Ok(())
 }
 
 /// Stage all changes (git add -A).
 pub fn stage_all(repo_path: &str) -> Result<(), String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-    let mut index = get_index_with_retry(&repo)?;
-
-    index
-        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
-        .map_err(|e| format!("Failed to stage all: {e}"))?;
-
-    // Also remove deleted files from index
-    index
-        .update_all(["*"].iter(), None)
-        .map_err(|e| format!("Failed to update index: {e}"))?;
-
-    write_index_with_retry(&mut index)
+    let (_, workdir) = workdir_of(repo_path)?;
+    crate::git_safe::run_write_ok(&workdir, "Failed to stage all", &["add", "-A"])?;
+    Ok(())
 }
 
 // ── Commit Function ──────────────────────────────────────────────────────
@@ -950,29 +917,24 @@ pub struct CommitResult {
     pub message: String,
 }
 
-/// Create a commit from the current index.
+/// Create a commit from the current index (the message kept as written;
+/// an empty index change still commits, as before). The identity comes
+/// from git config only.
 pub fn commit(repo_path: &str, message: &str) -> Result<CommitResult, String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-
-    let sig = repo.signature().map_err(|e| format!("Failed to get signature (set git user.name and user.email): {e}"))?;
-
-    let mut index = get_index_with_retry(&repo)?;
-    let tree_oid = index.write_tree().map_err(|e| format!("Failed to write tree: {e}"))?;
-    let tree = repo.find_tree(tree_oid).map_err(|e| format!("Failed to find tree: {e}"))?;
-
-    // A repo with no commits yet (fresh `git init`, the Changes tab's
-    // Initialize repository): the first commit has no parent.
-    let parent = match repo.head() {
-        Ok(head) => Some(head.peel_to_commit().map_err(|e| format!("Failed to get parent commit: {e}"))?),
-        Err(e) if is_unborn(&e) => None,
-        Err(e) => return Err(format!("Failed to get HEAD: {e}")),
-    };
-    let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
-
-    let oid = repo
-        .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
-        .map_err(|e| format!("Failed to create commit: {e}"))?;
-
+    let (_, workdir) = workdir_of(repo_path)?;
+    let o = crate::git_safe::run_write(
+        &workdir,
+        &["commit", "-q", "--no-verify", "--allow-empty", "--allow-empty-message", "--cleanup=verbatim", "-m", message],
+    )?;
+    if !o.ok() {
+        let said = o.said();
+        if said.contains("user.useConfigOnly") || said.contains("tell me who you are") || said.contains("empty ident") {
+            return Err(format!("Failed to get signature (set git user.name and user.email): {said}"));
+        }
+        return Err(format!("Failed to create commit: {said}"));
+    }
+    let repo = crate::gitx::discover(&workdir).map_err(|e| format!("Not a git repository: {e}"))?;
+    let oid = crate::gitx::head_info(&repo).oid.ok_or("Failed to read the new commit")?;
     Ok(CommitResult {
         oid: oid.to_string(),
         message: message.to_string(),
@@ -1248,15 +1210,15 @@ pub fn resolve_conflict(repo_path: &str, file_path: &str, resolution: &str) -> R
     stage_file(workdir.to_string_lossy().as_ref(), file_path)
 }
 
-/// Delete a local branch.
+/// Delete a local branch (merged or not). git refuses a branch checked out
+/// in any worktree, and drops its `[branch "<name>"]` config with it.
 pub fn delete_branch(repo_path: &str, branch_name: &str) -> Result<(), String> {
-    let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
-
-    let mut branch = repo
-        .find_branch(branch_name, BranchType::Local)
-        .map_err(|e| format!("Branch '{branch_name}' not found: {e}"))?;
-
-    branch.delete().map_err(|e| format!("Failed to delete branch '{branch_name}': {e}"))
+    let (repo, workdir) = workdir_of(repo_path)?;
+    if branch_name.starts_with('-') || crate::gitx::local_branch_tip(&repo, branch_name).is_none() {
+        return Err(format!("Branch '{branch_name}' not found"));
+    }
+    crate::git_safe::run_write_ok(&workdir, &format!("Failed to delete branch '{branch_name}'"), &["branch", "-D", branch_name])?;
+    Ok(())
 }
 
 /// Collect a JSON snapshot of the repo's current state for the AI
@@ -1328,3 +1290,7 @@ mod merge_guard_tests;
 #[cfg(test)]
 #[path = "git_revspec_guard_tests.rs"]
 mod revspec_guard_tests;
+
+#[cfg(test)]
+#[path = "git_write_tests.rs"]
+mod write_tests;

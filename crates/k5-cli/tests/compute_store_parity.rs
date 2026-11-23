@@ -241,7 +241,9 @@ fn compute_pin_and_unpin() {
             "unpin",
             &["unpin", "abcd1234"],
             &[],
-            vec![ok(r#"{"job":"abcd1234","pinned":false,"text":["unpinned abcd1234"]}"#)],
+            vec![ok(
+                r#"{"job":"abcd1234","pinned":false,"text":["unpinned abcd1234"]}"#,
+            )],
             owner_and_port,
             0,
             1,
@@ -295,15 +297,7 @@ fn compute_pin_and_unpin() {
             3,
             1,
         ),
-        case(
-            "no job",
-            &["pin"],
-            &[],
-            vec![],
-            owner_and_port,
-            2,
-            0,
-        ),
+        case("no job", &["pin"], &[], vec![], owner_and_port, 2, 0),
         case(
             "--json only",
             &["unpin", "--json"],

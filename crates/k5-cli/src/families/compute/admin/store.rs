@@ -209,7 +209,10 @@ pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
         }
         Ask::Retention { json } => (cp.call(false, RETENTION, "", true), *json),
         Ask::RetentionSet { max_age, cap, json } => {
-            let payload = body(vec![("maxAge", str_value(max_age)), ("cap", str_value(cap))]);
+            let payload = body(vec![
+                ("maxAge", str_value(max_age)),
+                ("cap", str_value(cap)),
+            ]);
             (cp.call(true, RETENTION_SET, &payload, true), *json)
         }
     };
@@ -319,7 +322,10 @@ mod tests {
             Ask::Retention { json: true }
         );
         assert_eq!(
-            ask(parse("retention", &["set", "--cap", "auto", "--max-age", "14d"])),
+            ask(parse(
+                "retention",
+                &["set", "--cap", "auto", "--max-age", "14d"]
+            )),
             Ask::RetentionSet {
                 max_age: "14d".into(),
                 cap: "auto".into(),

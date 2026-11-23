@@ -66105,7 +66105,7 @@ _setup_usage() {
 k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-] skipped
 k2 setup hide           hide the list in the app (k2 setup still prints it)
 k2 setup show           bring the list back, skipped steps included, even after it finished
-k2 setup skip <step>    skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
+k2 setup skip <step>    skip one step: dev_tools, llm_sign_in, agent_reports, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
 k2 setup restart [--kessel]
                         start your setup again: the list back, skipped steps
                         included, and the Meet Kessel offer again. The owner

@@ -241,11 +241,25 @@ describe('parseFirstRunDoc', () => {
       kesselDefaults: null,
       kesselFirstRun: false,
       kesselSeat: null,
+      offers: [],
     }
     expect(parseFirstRunDoc(null)).toEqual(off)
     expect(
-      parseFirstRunDoc({ enabled: 'yes', rows: 'x', offer: 7, kessel: 'x', kesselDefaults: [], kesselFirstRun: 'yes', kesselSeat: { exists: 'no' } }),
+      parseFirstRunDoc({ enabled: 'yes', rows: 'x', offer: 7, kessel: 'x', kesselDefaults: [], kesselFirstRun: 'yes', kesselSeat: { exists: 'no' }, offers: 'x' }),
     ).toEqual(off)
+  })
+
+  it('takes the agent_reports row and offer, and drops offers it does not know', () => {
+    const doc = parseFirstRunDoc({
+      enabled: true,
+      rows: [
+        { id: 'llm_sign_in', state: 'done', opens: 'llm_sign_in' },
+        { id: 'agent_reports', state: 'todo', opens: 'agent_reports' },
+      ],
+      offers: ['nope', 'agent_reports', 7],
+    })
+    expect(doc.rows[1]).toEqual({ id: 'agent_reports', state: 'todo', opens: 'agent_reports', note: null })
+    expect(doc.offers).toEqual(['agent_reports'])
   })
 
   it('reads kesselFirstRun and kesselSeat whatever the switch (Settings → Getting started)', () => {

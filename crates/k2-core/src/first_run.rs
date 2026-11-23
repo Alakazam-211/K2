@@ -12,6 +12,7 @@
 //! |---|---|---|
 //! | `dev_tools` | git runs (macOS: only while Apple's Command Line Tools are missing, or once an install started here finished; Linux: only while git is missing) | macOS: the owner token; Linux: owner token, Owner, Admin |
 //! | `llm_sign_in` | a claude, codex or grok login is `signed_in`, or is an API key | owner token, Owner, Admin |
+//! | `agent_reports` | a person answered whether agents may report problems (`agentsAsked` in `product_feedback::settings`); a skip leaves it unanswered, so off | owner token, Owner, Admin |
 //! | `first_agent` | a workspace exists besides the audit sentinels (and Kessel's) | everyone |
 //! | `chief_of_staff` | the seat names a live Chief of Staff | owner token, Owner, Admin; **in place of `first_agent` while `kesselFirstRun` is on** |
 //! | `tunnel` | subdomain set, token held (file or vault), enabled ("running" is not asked) | owner token, Owner login; never in air-gap mode |
@@ -39,6 +40,16 @@
 //! `kesselSeat` (`{exists, workspaceId?, name?}`, whatever the switch), so
 //! the tab draws its state from one read; and [`Action::Restart`] is
 //! `show` plus the "Not now" on Meet Kessel cleared.
+//!
+//! **Agent reports** (plan-agent-reports-opt-in-app-v1). The row opens
+//! `agent_reports` (the app's card). Every status also carries `offers`,
+//! `["agent_reports"]` while nobody has answered, the caller is the owner
+//! token, an Owner or an Admin, this person's list isn't in progress (the
+//! server switch is off, or their list finished) and they haven't skipped
+//! the row: the same card, once, on a server that was already in use. "Ask
+//! me later" on it (`/cli/first-run/offer/dismiss {"offer":
+//! "agent_reports"}`) is the row's skip, so `show` and `restart` ask again.
+//! Absent when there is nothing to offer.
 //!
 //! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`),
 //! all behind the owner's `kesselFirstRun` switch (off by default, on for a new server). On, the
@@ -77,16 +88,25 @@ use crate::notify_prefs::{People, OWNER};
 /// `k2_cli` ("Try the k2 command") was dropped 11-10; a skip of it stored
 /// before then changes nothing.
 /// `meet_kessel` became the offer (`offer: "meet_kessel"`), never a row.
-pub const ROW_IDS: &[&str] =
-    &["dev_tools", "llm_sign_in", "meet_kessel", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
+pub const ROW_IDS: &[&str] = &[
+    "dev_tools",
+    "llm_sign_in",
+    "agent_reports",
+    "meet_kessel",
+    "first_agent",
+    "chief_of_staff",
+    "tunnel",
+    "phone",
+    "own_sign_in",
+];
 
 /// The rows this version computes with `kesselFirstRun` off, when git runs.
 /// While it doesn't, `dev_tools` comes before them ([`DevTools`]).
-pub const V1_ROWS: &[&str] = &["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"];
+pub const V1_ROWS: &[&str] = &["llm_sign_in", "agent_reports", "first_agent", "tunnel", "phone", "own_sign_in"];
 
 /// The rows with `kesselFirstRun` on: `chief_of_staff` in `first_agent`'s place
 /// (and `dev_tools` first while git doesn't run).
-pub const KESSEL_ROWS: &[&str] = &["llm_sign_in", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
+pub const KESSEL_ROWS: &[&str] = &["llm_sign_in", "agent_reports", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
 
 /// `phone.note` when the tunnel isn't on yet.
 pub const NOTE_NEEDS_TUNNEL: &str = "needs_tunnel";
@@ -99,6 +119,9 @@ pub const NOTE_INSTALLING: &str = "installing";
 
 /// The offer the LLM sign-in sheet leads to.
 pub const OFFER_MEET_KESSEL: &str = "meet_kessel";
+
+/// The agent-reports row, and the offer of the same card (`offers`).
+pub const AGENT_REPORTS: &str = "agent_reports";
 
 /// One row's state on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -120,7 +143,7 @@ impl State {
 pub struct Row {
     pub id: &'static str,
     pub state: State,
-    /// What the row opens: `dev_tools` | `llm_sign_in` | `add_workspace` |
+    /// What the row opens: `dev_tools` | `llm_sign_in` | `agent_reports` | `add_workspace` |
     /// `tunnel` | `phone` | `owner_account_prompt` | `kessel_sheet` |
     /// `kessel_thread_cos`. Null for a row with nothing to open (Linux's
     /// `dev_tools`, whose note is the command to run).
@@ -147,6 +170,10 @@ pub struct Status {
     /// The server's Kessel, sent either way (Settings → Getting started).
     #[serde(rename = "kesselSeat")]
     pub kessel_seat: KesselSeat,
+    /// The cards to offer this person whatever the switches
+    /// ([`AGENT_REPORTS`]); not sent when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub offers: Vec<&'static str>,
     /// This call wrote `finished_at` (the route sends `first_run_changed`).
     #[serde(skip)]
     pub newly_finished: bool,
@@ -246,6 +273,8 @@ pub struct Facts {
     pub kessel_default_path: String,
     /// Git and Apple's installer ([`dev_tools_from`]).
     pub dev_tools: DevTools,
+    /// A person answered whether agents may report problems.
+    pub agents_asked: bool,
 }
 
 /// What the `dev_tools` row knows: git, and Apple's installer.
@@ -446,6 +475,8 @@ pub fn rows(viewer: Viewer, facts: &Facts, skipped: &BTreeSet<String>) -> Vec<Ro
     }
     if viewer.at_least(Role::Admin) {
         out.push(Row { id: "llm_sign_in", state: state("llm_sign_in", facts.llm_signed_in), opens: Some("llm_sign_in"), note: None });
+        // Only a person at the Admin floor may answer for the server.
+        out.push(Row { id: AGENT_REPORTS, state: state(AGENT_REPORTS, facts.agents_asked), opens: Some(AGENT_REPORTS), note: None });
     }
     if facts.kessel_first_run {
         // Kessel at first run: the Chief of Staff in `first_agent`'s place, for
@@ -575,6 +606,7 @@ pub fn status_on(
         finished = true;
         newly_finished = true;
     }
+    let offers = offers(viewer, facts, &skipped, enabled, finished);
     Ok(Status {
         enabled,
         hidden,
@@ -583,8 +615,24 @@ pub fn status_on(
         kessel,
         kessel_first_run: facts.kessel_first_run,
         kessel_seat: KesselSeat::of(facts.kessel.as_ref()),
+        offers,
         newly_finished,
     })
+}
+
+/// The cards to offer (module docs, Agent reports): the agent-reports card
+/// while nobody answered, for the Admin floor, while this person's list
+/// isn't in progress (its row asks then) and they haven't skipped the row
+/// or said "Ask me later".
+pub fn offers(viewer: Viewer, facts: &Facts, skipped: &BTreeSet<String>, enabled: bool, finished: bool) -> Vec<&'static str> {
+    let list_in_progress = enabled && !finished;
+    let agent_reports =
+        viewer.at_least(Role::Admin) && !facts.agents_asked && !skipped.contains(AGENT_REPORTS) && !list_in_progress;
+    if agent_reports {
+        vec![AGENT_REPORTS]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The `offer`, `kessel` and `kesselDefaults` part, `None` while `kesselFirstRun` is off.
@@ -716,6 +764,7 @@ pub fn load_facts(conn: &Connection, people: &People, settings: &crate::app_sett
         chief_of_staff,
         kessel_default_path,
         dev_tools: dev_tools_now(),
+        agents_asked: crate::product_feedback::settings::load().agents_asked(),
     })
 }
 

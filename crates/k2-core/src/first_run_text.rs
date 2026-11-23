@@ -5,13 +5,20 @@
 //! is for. The wording is the CLI's (byte for byte); both renderers are
 //! pure.
 
-use crate::first_run::{State, Status, NOTE_INSTALLING, NOTE_NEEDS_KESSEL, NOTE_NEEDS_TUNNEL, OFFER_MEET_KESSEL};
+use crate::cli_name;
+use crate::first_run::{State, Status, AGENT_REPORTS, NOTE_INSTALLING, NOTE_NEEDS_KESSEL, NOTE_NEEDS_TUNNEL, OFFER_MEET_KESSEL};
+
+/// The agent-reports row's words while nobody has answered
+/// (plan-agent-reports-opt-in-app-v1), after its label.
+pub const AGENT_REPORTS_TODO: &str =
+    concat!(": not answered, so agents send none. Answer: ", cli_name!(), " setup agent-reports --agents off|cli|all");
 
 /// A row's label; an id with none is printed as it is.
 pub fn label(id: &str) -> &str {
     match id {
         "dev_tools" => "Install developer tools",
         "llm_sign_in" => "Sign in to an AI tool",
+        "agent_reports" => "Agent reports",
         "first_agent" => "Make your first agent",
         "chief_of_staff" => "Hire your Chief of Staff",
         "tunnel" => "Link your subdomain",
@@ -46,6 +53,9 @@ pub fn render_text(s: &Status) -> String {
     out.push(format!("Setup: {done} of {} done", s.rows.len()));
     for r in &s.rows {
         let mut line = format!("  {} {}", mark(r.state), label(r.id));
+        if r.id == AGENT_REPORTS && r.state != State::Done {
+            line.push_str(AGENT_REPORTS_TODO);
+        }
         let mut note: Option<String> = r.note.and_then(note_text).map(str::to_string);
         if r.id == "dev_tools" && r.opens.is_none() && r.note.is_some_and(|n| !n.is_empty()) {
             // Linux: the note is the install line to run.

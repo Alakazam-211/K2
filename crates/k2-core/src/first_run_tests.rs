@@ -65,6 +65,7 @@ fn all_done() -> Facts {
         airgap: false,
         owner_linked: true,
         phones: 1,
+        agents_asked: true,
         ..Facts::default()
     }
 }
@@ -75,12 +76,13 @@ fn all_done() -> Facts {
 fn each_row_is_todo_until_its_state_is_there_then_done() {
     let empty = Facts::default();
     let rows0 = rows(Viewer::OwnerToken, &empty, &none());
-    assert_eq!(ids(&rows0), vec!["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"]);
+    assert_eq!(ids(&rows0), vec!["llm_sign_in", "agent_reports", "first_agent", "tunnel", "phone", "own_sign_in"]);
     for r in &rows0 {
         assert_eq!(r.state, State::Todo, "{}", r.id);
     }
-    let cases: [(&str, Facts); 4] = [
+    let cases: [(&str, Facts); 5] = [
         ("llm_sign_in", Facts { llm_signed_in: true, ..Facts::default() }),
+        ("agent_reports", Facts { agents_asked: true, ..Facts::default() }),
         ("first_agent", Facts { has_agent: true, ..Facts::default() }),
         ("tunnel", Facts { tunnel_done: true, ..Facts::default() }),
         ("phone", Facts { phones: 2, ..Facts::default() }),
@@ -105,6 +107,7 @@ fn opens_targets_are_the_contracts() {
         opens,
         vec![
             ("llm_sign_in", "llm_sign_in"),
+            ("agent_reports", "agent_reports"),
             ("first_agent", "add_workspace"),
             ("tunnel", "tunnel"),
             ("phone", "phone"),
@@ -148,14 +151,17 @@ fn the_phone_row_points_at_the_tunnel_first_when_the_caller_can_turn_it_on() {
 fn each_role_sees_only_the_rows_it_can_act_on() {
     let f = Facts::default();
     assert_eq!(ids(&rows(Viewer::Login(Role::Member), &f, &none())), vec!["first_agent", "phone"]);
-    assert_eq!(ids(&rows(Viewer::Login(Role::Admin), &f, &none())), vec!["llm_sign_in", "first_agent", "phone"]);
+    assert_eq!(
+        ids(&rows(Viewer::Login(Role::Admin), &f, &none())),
+        vec!["llm_sign_in", "agent_reports", "first_agent", "phone"]
+    );
     assert_eq!(
         ids(&rows(Viewer::Login(Role::Owner), &f, &none())),
-        vec!["llm_sign_in", "first_agent", "tunnel", "phone"]
+        vec!["llm_sign_in", "agent_reports", "first_agent", "tunnel", "phone"]
     );
     assert_eq!(
         ids(&rows(Viewer::OwnerToken, &f, &none())),
-        vec!["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"],
+        vec!["llm_sign_in", "agent_reports", "first_agent", "tunnel", "phone", "own_sign_in"],
         "only the owner token sees own_sign_in"
     );
     assert!(rows(Viewer::Login(Role::VoiceChat), &f, &none()).is_empty(), "Voice & Chat never gets the list");
@@ -165,7 +171,7 @@ fn each_role_sees_only_the_rows_it_can_act_on() {
 fn air_gap_hides_the_tunnel_row_and_its_note() {
     let f = Facts { airgap: true, ..Facts::default() };
     let rs = rows(Viewer::OwnerToken, &f, &none());
-    assert_eq!(ids(&rs), vec!["llm_sign_in", "first_agent", "phone", "own_sign_in"]);
+    assert_eq!(ids(&rs), vec!["llm_sign_in", "agent_reports", "first_agent", "phone", "own_sign_in"]);
     assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("phone"), None));
 }
 
@@ -288,7 +294,7 @@ fn skip_refuses_a_row_the_caller_does_not_see() {
     let conn = db();
     let p = people();
     let f = Facts::default();
-    for bad in ["tunnel", "llm_sign_in", "own_sign_in", "meet_kessel", "k2_cli", "nope", ""] {
+    for bad in ["tunnel", "llm_sign_in", "agent_reports", "own_sign_in", "meet_kessel", "k2_cli", "nope", ""] {
         let e = apply_on(&conn, &p, "anna", Viewer::Login(Role::Member), &f, true, &Action::Skip(bad.into()), 1)
             .expect_err(bad);
         assert_eq!(e, Error::UnknownRow(bad.to_string()));
@@ -371,13 +377,15 @@ fn the_wire_shape_is_the_contracts() {
             "finished": false,
             "rows": [
                 { "id": "llm_sign_in", "state": "todo", "opens": "llm_sign_in" },
+                { "id": "agent_reports", "state": "todo", "opens": "agent_reports" },
                 { "id": "first_agent", "state": "done", "opens": "add_workspace" },
                 { "id": "tunnel", "state": "todo", "opens": "tunnel" },
                 { "id": "phone", "state": "todo", "opens": "tunnel", "note": "needs_tunnel" },
                 { "id": "own_sign_in", "state": "todo", "opens": "owner_account_prompt" }
             ],
             "kesselFirstRun": false,
-            "kesselSeat": { "exists": false }
+            "kesselSeat": { "exists": false },
+            "offers": ["agent_reports"]
         })
     );
 }
@@ -664,12 +672,12 @@ fn the_kessel_wire_shape_is_the_contracts_and_absent_with_the_flag_off() {
     assert_eq!(v["offer"], serde_json::json!("meet_kessel"));
     assert_eq!(v["kessel"], serde_json::Value::Null);
     assert_eq!(v["kesselDefaults"], serde_json::json!({ "name": "Kessel", "handle": "kessel", "path": "/home/r/k2-agents/kessel" }));
-    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "kessel_sheet", "note": "needs_kessel" }));
+    assert_eq!(v["rows"][2], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "kessel_sheet", "note": "needs_kessel" }));
     let f = Facts { kessel: Some(kessel_live()), ..f };
     let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 3).expect("on")).expect("json");
     assert_eq!(v["offer"], serde_json::Value::Null);
     assert_eq!(v["kessel"], serde_json::json!({ "workspaceId": "w-kessel", "name": "Kessel", "path": "/home/r/k2-agents/kessel" }));
-    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "kessel_thread_cos" }));
+    assert_eq!(v["rows"][2], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "kessel_thread_cos" }));
 }
 
 /// The facts read the seat: Kessel doesn't count as the person's first agent,
@@ -763,7 +771,7 @@ fn the_dev_tools_row_is_absent_while_git_runs() {
 fn on_a_mac_the_dev_tools_row_is_first_todo_and_the_owner_tokens_only() {
     let f = Facts { dev_tools: DevTools::AppleMissing { installing: false }, ..Facts::default() };
     let rs = rows(Viewer::OwnerToken, &f, &none());
-    assert_eq!(ids(&rs), vec!["dev_tools", "llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"]);
+    assert_eq!(ids(&rs), vec!["dev_tools", "llm_sign_in", "agent_reports", "first_agent", "tunnel", "phone", "own_sign_in"]);
     assert_eq!(rs[0], Row { id: "dev_tools", state: State::Todo, opens: Some("dev_tools"), note: None });
     // Apple's installer opens on the daemon's own screen: no login gets it.
     for role in [Role::Owner, Role::Admin, Role::Member] {
@@ -836,4 +844,71 @@ fn load_facts_takes_an_injected_dev_tools_fact() {
         }
         assert_eq!(dev_tools_now(), d, "the inner guard restores the outer one");
     }
+}
+
+// ── agent reports (plan-agent-reports-opt-in-app-v1) ─────────────────
+
+#[test]
+fn the_agent_reports_row_is_the_admin_floors_and_done_once_answered() {
+    for v in [Viewer::OwnerToken, Viewer::Login(Role::Owner), Viewer::Login(Role::Admin)] {
+        let rs = rows(v, &Facts::default(), &none());
+        let pos = ids(&rs).iter().position(|id| *id == "agent_reports").unwrap_or_else(|| panic!("{v:?}: {rs:?}"));
+        assert_eq!(ids(&rs)[pos - 1], "llm_sign_in", "{v:?}: right after llm_sign_in");
+        assert_eq!(row(&rs, "agent_reports"), &Row { id: "agent_reports", state: State::Todo, opens: Some("agent_reports"), note: None });
+        let asked = rows(v, &Facts { agents_asked: true, ..Facts::default() }, &none());
+        assert_eq!(row(&asked, "agent_reports").state, State::Done, "{v:?}");
+        // Before Kessel's rows too.
+        let k = rows(v, &Facts { kessel_first_run: true, ..Facts::default() }, &none());
+        assert_eq!(ids(&k)[..2].to_vec(), vec!["llm_sign_in", "agent_reports"], "{v:?}");
+    }
+    for v in [Viewer::Login(Role::Member), Viewer::Login(Role::VoiceChat)] {
+        assert!(!ids(&rows(v, &Facts::default(), &none())).contains(&"agent_reports"), "{v:?}");
+    }
+    // A skip leaves it unanswered: skipped, never done.
+    let skipped: BTreeSet<String> = ["agent_reports".to_string()].into();
+    assert_eq!(row(&rows(Viewer::OwnerToken, &Facts::default(), &skipped), "agent_reports").state, State::Skipped);
+}
+
+#[test]
+fn the_agent_reports_offer_needs_the_admin_floor_no_answer_and_no_list_in_progress() {
+    let f = Facts::default();
+    let admin_floor = [Viewer::OwnerToken, Viewer::Login(Role::Owner), Viewer::Login(Role::Admin)];
+    for v in admin_floor {
+        // The list switched off (every server already in use): offered.
+        assert_eq!(offers(v, &f, &none(), false, false), vec![AGENT_REPORTS], "{v:?}");
+        // The list finished: offered.
+        assert_eq!(offers(v, &f, &none(), true, true), vec![AGENT_REPORTS], "{v:?}");
+        // The list in progress: its row asks instead.
+        assert!(offers(v, &f, &none(), true, false).is_empty(), "{v:?}");
+        // Answered by anyone: gone for everyone.
+        assert!(offers(v, &Facts { agents_asked: true, ..f.clone() }, &none(), false, false).is_empty(), "{v:?}");
+        // Ask me later (the row's skip): gone for this person.
+        let later: BTreeSet<String> = ["agent_reports".to_string()].into();
+        assert!(offers(v, &f, &later, false, false).is_empty(), "{v:?}");
+    }
+    for v in [Viewer::Login(Role::Member), Viewer::Login(Role::VoiceChat)] {
+        assert!(offers(v, &f, &none(), false, false).is_empty(), "{v:?}");
+    }
+}
+
+#[test]
+fn the_agent_reports_offer_rides_the_status_and_its_skip_is_per_person() {
+    let conn = db();
+    let p = people();
+    let f = Facts::default();
+    let admin = Viewer::Login(Role::Admin);
+    let o = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, false, 1).expect("owner");
+    assert_eq!(o.offers, vec![AGENT_REPORTS]);
+    assert!(status_on(&conn, &p, "anna", Viewer::Login(Role::Member), &f, false, 2).expect("anna").offers.is_empty());
+    // julie says "Ask me later": hers only.
+    let j = apply_on(&conn, &p, "julie", admin, &f, false, &Action::Skip(AGENT_REPORTS.into()), 3).expect("later");
+    assert!(j.offers.is_empty(), "{j:?}");
+    assert_eq!(row(&j.rows, "agent_reports").state, State::Skipped);
+    assert_eq!(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, false, 4).expect("owner").offers, vec![AGENT_REPORTS]);
+    // A Member can't skip a row it doesn't see.
+    let e = apply_on(&conn, &p, "anna", Viewer::Login(Role::Member), &f, false, &Action::Skip(AGENT_REPORTS.into()), 5);
+    assert_eq!(e, Err(Error::UnknownRow(AGENT_REPORTS.into())));
+    // Restart asks julie again.
+    let j = apply_on(&conn, &p, "julie", admin, &f, false, &Action::Restart, 6).expect("restart");
+    assert_eq!(j.offers, vec![AGENT_REPORTS]);
 }

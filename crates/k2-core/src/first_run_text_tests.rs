@@ -17,6 +17,7 @@ fn status(rows: Vec<Row>) -> Status {
         kessel: None,
         kessel_first_run: false,
         kessel_seat: crate::first_run::KesselSeat::default(),
+        offers: Vec::new(),
         newly_finished: false,
     }
 }
@@ -44,11 +45,11 @@ fn first_run_text_each_state_and_the_count() {
 
 #[test]
 fn first_run_text_every_label_and_an_unknown_id() {
-    let ids = ["dev_tools", "llm_sign_in", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in", "k2_cli"];
+    let ids = ["dev_tools", "llm_sign_in", "agent_reports", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in", "k2_cli"];
     let s = status(ids.iter().map(|id| row(id, State::Done, None, None)).collect());
     assert_eq!(
         render_text(&s),
-        "Setup: 8 of 8 done\n  [x] Install developer tools\n  [x] Sign in to an AI tool\n  [x] Make your first agent\n  [x] Hire your Chief of Staff\n  [x] Link your subdomain\n  [x] Connect your phone\n  [x] Make your own sign-in\n  [x] k2_cli\n"
+        "Setup: 9 of 9 done\n  [x] Install developer tools\n  [x] Sign in to an AI tool\n  [x] Agent reports\n  [x] Make your first agent\n  [x] Hire your Chief of Staff\n  [x] Link your subdomain\n  [x] Connect your phone\n  [x] Make your own sign-in\n  [x] k2_cli\n"
     );
 }
 
@@ -159,4 +160,25 @@ fn first_run_text_made_kessel_and_chief_of_staff() {
         render_made_text(Made::ChiefOfStaff, "Ada", "ada", "/Users/me/k2-agents/ada", &[], &[]),
         "Made your Chief of Staff: Ada (ada) at /Users/me/k2-agents/ada\nTell your person on your Thread, and point them to Ada (k2 msg ada).\n"
     );
+}
+
+#[test]
+fn first_run_text_agent_reports_says_how_to_answer_until_answered() {
+    let s = status(vec![
+        row("agent_reports", State::Todo, Some("agent_reports"), None),
+        row("first_agent", State::Done, Some("add_workspace"), None),
+    ]);
+    assert_eq!(
+        render_text(&s),
+        concat!(
+            "Setup: 1 of 2 done\n  [ ] Agent reports: not answered, so agents send none. Answer: ",
+            crate::cli_name!(),
+            " setup agent-reports --agents off|cli|all\n  [x] Make your first agent\n"
+        )
+    );
+    // Skipped is still unanswered (off); done needs no words.
+    let s = status(vec![row("agent_reports", State::Skipped, Some("agent_reports"), None)]);
+    assert!(render_text(&s).contains("  [-] Agent reports: not answered, so agents send none."), "{}", render_text(&s));
+    let s = status(vec![row("agent_reports", State::Done, Some("agent_reports"), None)]);
+    assert_eq!(render_text(&s), "Setup: 1 of 1 done\n  [x] Agent reports\n");
 }

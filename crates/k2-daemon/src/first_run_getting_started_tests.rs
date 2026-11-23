@@ -348,10 +348,10 @@ fn files_but_the_lock(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 /// K2's own bookkeeping markers in a workspace's `.k2/`, written by its
-/// background regen whenever a workspace is touched (the AGENTS.md generate
-/// flag, the skill regen stamp), on a timer of their own after Kessel is
-/// made. They are not Kessel's notes, chats or permissions, and the welcome
-/// never writes them, so the check leaves them out by name.
+/// regen whenever a workspace is touched (the AGENTS.md generate flag, the
+/// skill regen stamp). They are not Kessel's notes, chats or permissions,
+/// and the welcome never writes them, so the check leaves them out by name.
+/// AGENTS.md and the context packs stay checked.
 const K2_MARKERS: &[&str] = &[".agents-md-generate", ".last-skill-regen"];
 
 fn is_k2_marker(rel: &str) -> bool {
@@ -407,6 +407,12 @@ fn the_welcome_is_sent_once_per_call_from_the_lock_and_nothing_else_changes() {
     let (id, path, handle) = make_kessel();
     std::fs::create_dir_all(Path::new(&path).join(".k2/wiki")).expect("wiki");
     std::fs::write(Path::new(&path).join(".k2/wiki/Kessel's notes.md"), "# Notes\n\nThe bakery opens at six.\n").expect("note");
+    // Everything the test itself changes comes before the snapshot: adding a
+    // login rewrites every agent's people roster (AGENTS.md and the
+    // `users-roster` pack), which is the test's doing, not the welcome's.
+    let julie = login("julie", Role::Admin);
+    // Even with the switch off since: it replays a Kessel that exists.
+    k2_core::app_settings::update(json!({ "kesselFirstRun": false })).expect("off");
     let files = files_but_the_lock(Path::new(&path));
     let seat = {
         let db = k2_core::db::shared();
@@ -417,8 +423,6 @@ fn the_welcome_is_sent_once_per_call_from_the_lock_and_nothing_else_changes() {
     let before = k2_core::hire::template::lock::read(&path).expect("lock").expect("a lock");
     let sent_before = hellos_for(&handle).len();
 
-    // Even with the switch off since: it replays a Kessel that exists.
-    k2_core::app_settings::update(json!({ "kesselFirstRun": false })).expect("off");
     let r = post(KESSEL_WELCOME_PATH, json!({}), &Actor::owner_token());
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert_eq!(json_of(&r), json!({ "ok": true, "workspaceId": id, "sent": true }));
@@ -427,7 +431,6 @@ fn the_welcome_is_sent_once_per_call_from_the_lock_and_nothing_else_changes() {
     let hello = sent.last().expect("sent").clone();
     assert!(!hello.trim().is_empty() && !hello.contains("{{"), "{hello}");
 
-    let julie = login("julie", Role::Admin);
     let r = handle_as(true, KESSEL_WELCOME_PATH, b"", &julie, true);
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert!(r.body.contains(&format!("thread {handle}")), "{}", r.body);

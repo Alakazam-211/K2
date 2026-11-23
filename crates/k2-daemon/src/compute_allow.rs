@@ -32,8 +32,23 @@ use k2_core::compute::{self as compute, store};
 use k2_core::brand::PRODUCT_NAME;
 use k2_core::brand::{CLI_SLOT, PRODUCT_SLOT};
 
-use crate::compute_routes::{audit, b, json_body, named_no, need_credential, no, owner_only, resolve_node_for, s, target_ws, Who, Ws, R};
+use crate::compute_routes::{audit, b, json_body, need_credential, no, owner_only, resolve_node_for, s, target_ws, Refusal, Who, Ws, R};
 use k2_core::brand::CLI_NAME;
+
+/// [`no`] for a hint that names the command or the product: `template`
+/// holds [`k2_core::brand::CLI_SLOT`] and [`k2_core::brand::PRODUCT_SLOT`]
+/// where they go. The hint is the template with this server's names, and
+/// the template rides beside it as `hintTemplate`, so a CLI of another
+/// brand prints its own names there (white-label C5). An older CLI reads
+/// the hint as before.
+fn named_no(code: &'static str, status: u16, template: impl Into<String>) -> Refusal {
+    let template = template.into();
+    let hint = k2_core::brand::fill_names(&template);
+    if hint == template {
+        return no(code, status, hint);
+    }
+    no(code, status, hint).with("hintTemplate", template)
+}
 
 /// `GET` the list (`k2 compute allow-nodes`).
 pub const SHOW: &str = "/cli/compute/allow-nodes";

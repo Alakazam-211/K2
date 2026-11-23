@@ -366,21 +366,6 @@ pub(crate) fn no(code: &'static str, status: u16, hint: impl Into<String>) -> Re
     Refusal { code, status, hint: hint.into(), extra: None }
 }
 
-/// [`no`] for a hint that names the command or the product: `template`
-/// holds [`k2_core::brand::CLI_SLOT`] and [`k2_core::brand::PRODUCT_SLOT`]
-/// where they go. The hint is the template with this server's names, and
-/// the template rides beside it as `hintTemplate`, so a CLI of another
-/// brand prints its own names there (white-label C5). An older CLI reads
-/// the hint as before.
-pub(crate) fn named_no(code: &'static str, status: u16, template: impl Into<String>) -> Refusal {
-    let template = template.into();
-    let hint = k2_core::brand::fill_names(&template);
-    if hint == template {
-        return no(code, status, hint);
-    }
-    no(code, status, hint).with("hintTemplate", template)
-}
-
 pub(crate) fn refusal_response(r: &Refusal) -> CliResponse {
     let mut error = serde_json::json!({ "code": r.code, "hint": r.hint });
     if let (Some(extra), Some(e)) = (r.extra.as_ref(), error.as_object_mut()) {

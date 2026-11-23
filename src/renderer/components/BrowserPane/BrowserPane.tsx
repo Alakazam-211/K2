@@ -371,7 +371,12 @@ export function BrowserPane({
   const appearanceRef = useRef<DockAppearance | null>(null)
   const readAppearance = useCallback((): DockAppearance | null => {
     const el = contentRef.current
-    return el ? nativeAppearance(dockAppearance(el), appZoom()) : null
+    if (!el) return null
+    const look = nativeAppearance(dockAppearance(el), appZoom())
+    // Underlay: the page hole's shape (`radii`, sent in PageLayers) is the
+    // one source of the page's corners; the page layer gets no radius of
+    // its own (it rounded all four corners). Legacy keeps its layer radius.
+    return underlayRef.current ? { ...look, cornerRadius: 0, corners: [false, false, false, false] } : look
   }, [])
 
   const createView = useCallback(async (targetUrl: string): Promise<void> => {

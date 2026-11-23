@@ -138,8 +138,20 @@ describe('Browser pane in the macOS underlay', () => {
     look = { background: null, cornerRadius: 16, corners: [false, false, true, true], radii: [0, 0, 16, 16] }
     await mount()
     expect(sets().at(-1)?.layers[0].rect.radius).toEqual([0, 0, 16, 16])
-    // The native layer's own corners (the backup) come with create.
+    // The hole is the one source of the corners: the page layer gets no
+    // radius of its own in underlay (it rounded all four corners).
     const create = calls().find((c) => c[0] === 'browser_create')?.[1] as { appearance: { cornerRadius: number; corners: boolean[] } }
+    expect(create.appearance.cornerRadius).toBe(0)
+    expect(create.appearance.corners).toEqual([false, false, false, false])
+    expect(calls().filter((c) => c[0] === 'browser_set_appearance').map((c) => (c[1] as { appearance: { cornerRadius: number } }).appearance.cornerRadius)).not.toContain(16)
+  })
+
+  it('the legacy path keeps the page layer radius (the bottom corners only)', async () => {
+    useBrowserLayeringStore.setState({ mode: 'legacy', failed: null })
+    look = { background: null, cornerRadius: 16, corners: [false, false, true, true], radii: [0, 0, 16, 16] }
+    await mount()
+    const create = calls().find((c) => c[0] === 'browser_create')?.[1] as { appearance: { cornerRadius: number; corners: boolean[] }; layering?: string }
+    expect(create.layering).toBeUndefined()
     expect(create.appearance.cornerRadius).toBe(16)
     expect(create.appearance.corners).toEqual([false, false, true, true])
   })

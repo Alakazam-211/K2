@@ -410,13 +410,26 @@ pw_case_native "users add" /cli/users/add users add alice --password-stdin
 pw_case_native "users set-password" /cli/users/set-password users set-password alice --password-stdin
 pw_case_native "users pair-phone" /cli/auth/device/pair-code users pair-phone
 # k2 connect login asks with getpass, which reads stdin when there is no
-# terminal: setsid drops the controlling terminal so the test can type.
-# (The k5 binary reads it there itself, with its own warning line: the
-# named difference getpass-no-tty-warning. So it starts no child.)
-SETSID="$(command -v setsid)" || { echo "FAIL: setsid not found (util-linux)" >&2; exit 1; }
+# terminal: a new session drops the controlling terminal so the test can
+# type. (The k5 binary reads it there itself, with its own warning line:
+# the named difference getpass-no-tty-warning. So it starts no child.)
+# no_ctty CMD ARGS...: CMD in a new session, as util-linux `setsid -w`
+# does, waiting for it and exiting with its code. Python's os.setsid, so
+# it runs the same on Linux and macOS (which has no setsid command). The
+# real python3, not the logging wrapper: it is the test's, not a child of
+# k2's. It forks first, since a process group leader can't start a session.
+no_ctty() {
+    "$REAL_PY" -c 'import os, sys
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os.execvp(sys.argv[1], sys.argv[1:])
+_, st = os.waitpid(pid, 0)
+sys.exit(os.WEXITSTATUS(st) if os.WIFEXITED(st) else 128 + os.WTERMSIG(st))' "$@"
+}
 fresh
 printf '%s\n' "$PASS_SENTINEL" | K2_CONNECT_DB_URL="http://127.0.0.1:$(cat "$W/tcp-port")/" \
-    "$SETSID" -w "$K2_CLI" connect login --email a@example.test --subdomain acme >/dev/null 2>&1 || true
+    no_ctty "$K2_CLI" connect login --email a@example.test --subdomain acme >/dev/null 2>&1 || true
 assert_tcp_got "connect login" /auth/v1/token "password" "$PASS_SENTINEL"
 assert_children_native "connect login"
 assert_off_children "connect login" "password" "$PASS_SENTINEL"

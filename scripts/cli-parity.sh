@@ -12,7 +12,7 @@
 # cli/k2 as source, which a binary can't stand in for).
 #
 # Each run gets a fresh temp HOME, no K2_*, K5_* or K2SO_* variable but
-# K5_CLI_UNDER_TEST, stdin from /dev/null, and at most
+# K5_CLI_UNDER_TEST and K2_APPROVE_BIN, stdin from /dev/null, and at most
 # CLI_PARITY_TIMEOUT seconds (default 900) when `timeout` is there.
 #
 # A test that passes on bash and fails on the binary fails the gate: its
@@ -155,8 +155,15 @@ run_one() {
     local t="$1" mode="$2" home rc=0
     home="$(mktemp -d "$WORK/home.XXXXXX")"
     (
+        # K2_APPROVE_BIN passes through, and no other: it names a built
+        # k2-approve, which tests/cli/approve_verify.sh needs and has no
+        # other way to find. It reaches no daemon, so it can't leak a
+        # port or a token into a run.
         while IFS= read -r v; do
-            case "$v" in K2_*|K5_*|K2SO_*) unset "$v" ;; esac
+            case "$v" in
+                K2_APPROVE_BIN) ;;
+                K2_*|K5_*|K2SO_*) unset "$v" ;;
+            esac
         done < <(compgen -e)
         export HOME="$home"
         if [ "$mode" = binary ]; then export K5_CLI_UNDER_TEST="$WORK/bin/k2"; fi

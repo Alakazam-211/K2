@@ -21,6 +21,7 @@ pub mod gens;
 pub mod gpu;
 pub mod identity;
 pub mod install;
+pub mod jobsec;
 pub mod jobstat;
 pub mod jobtree;
 pub mod journal;

@@ -390,6 +390,12 @@ pub enum ShimEnd {
     /// nothing ran; the message for stderr; the shim exits
     /// [`LOOPBACK_EXIT`] (recorded in the rc file when the spec has one).
     NoLoopback(String),
+    /// The job's syscall wall couldn't be put up ([`crate::jobsec`],
+    /// 0.46.18: the user-namespace limit root sets never came, or the
+    /// seccomp filter was refused): nothing ran; the message for stderr;
+    /// the shim exits [`crate::jobsec::WALL_EXIT`] (recorded in the rc file
+    /// when the spec has one).
+    NoSyscallWall(String),
     /// The command ran as the shim's child and ended so (recorded in the
     /// rc file when it could be: `rc_error` says why not). The shim exits
     /// the same way.
@@ -592,6 +598,14 @@ pub fn job_exec(spec_path: &Path) -> ShimEnd {
             let _ = write_rc(rc, &k2_node_proto::frames::ExitInfo { code: Some(i32::from(LOOPBACK_EXIT)), signal: None });
         }
         return ShimEnd::NoLoopback(e);
+    }
+    // 0.46.18: the job's syscall wall (no user namespaces unless root said
+    // `--userns`; the denylist always), before anything of the job runs.
+    if let Err(e) = crate::jobsec::shim_wall() {
+        if let Some(rc) = &spec.rc_file {
+            let _ = write_rc(rc, &k2_node_proto::frames::ExitInfo { code: Some(i32::from(crate::jobsec::WALL_EXIT)), signal: None });
+        }
+        return ShimEnd::NoSyscallWall(e);
     }
     match job_command(&spec) {
         Err(e) => ShimEnd::Failed(e),

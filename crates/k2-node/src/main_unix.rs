@@ -1425,6 +1425,10 @@ pub fn main() -> ExitCode {
                 eprintln!("{e}");
                 return ExitCode::from(k2_node::wall::LOOPBACK_EXIT);
             }
+            k2_node::wall::ShimEnd::NoSyscallWall(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(k2_node::jobsec::WALL_EXIT);
+            }
             k2_node::wall::ShimEnd::Ended { exit, rc_error } => {
                 if let Some(e) = rc_error {
                     eprintln!("k2-node job-exec: couldn't record the exit: {e}");

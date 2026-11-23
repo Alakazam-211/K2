@@ -187,6 +187,9 @@ cell() { clean_env K2_PORT="$PORT" K2_HOOK_TOKEN="$SCOPED" K2_HOOK_SOCK="$SOCK" 
 # ── 1. config quoting round-trips through the real curl ───────────────
 echo "== curl config quoting round-trip =="
 # shellcheck disable=SC1090
+# The prelude's two names first, as the CLI sets them: the curl block's
+# hint fill reads both.
+eval "$(grep -E '^_K2_(CLI|PRODUCT)_NAME=' "$K2_CLI")"
 eval "$(sed -n '/^# BEGIN_CLI_CURL_CFG/,/^# END_CLI_CURL_CFG/p' "$K2_CLI")"
 roundtrip() { # roundtrip <label> <value>
     local label="$1" value="$2" _K2_CFG=""

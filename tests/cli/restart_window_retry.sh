@@ -179,7 +179,10 @@ fi
 echo "== an @- in the URL keeps the retries; a body from stdin doesn't =="
 echo "$P1" >"$HOME/.k2/daemon.port"
 CURL_LIB="$WORK/curl-lib.sh"
-awk '/^# BEGIN_CLI_CURL_CFG$/{on=1} on{print} /^# END_CLI_CURL_CFG$/{exit}' "$CLI_BASH_SOURCE" >"$CURL_LIB"
+# The prelude's two names first, as the CLI sets them: the curl block's
+# hint fill reads both.
+grep -E '^_K2_(CLI|PRODUCT)_NAME=' "$CLI_BASH_SOURCE" >"$CURL_LIB"
+awk '/^# BEGIN_CLI_CURL_CFG$/{on=1} on{print} /^# END_CLI_CURL_CFG$/{exit}' "$CLI_BASH_SOURCE" >>"$CURL_LIB"
 grep -q '^_k2_curl() {' "$CURL_LIB" || { echo "FAIL: no _k2_curl in $CLI_BASH_SOURCE" >&2; exit 1; }
 # _k2_curl with K2_PORT=$DEAD, the rest of its argv as given.
 curl_dead() {

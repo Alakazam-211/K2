@@ -268,7 +268,10 @@ echo "== X-K5-Cli-Noun: a word the daemon would not take is sent as other =="
 # _k5_headers on its own, from the bash source, for nouns no router arm
 # reaches a daemon with.
 LIB="$WORK/k5-headers.sh"
-sed -n '/^# BEGIN_CLI_CURL_CFG$/,/^# END_CLI_CURL_CFG$/p' "$K2_CLI" >"$LIB"
+# The prelude's two names first, as the CLI sets them: the curl block's
+# hint fill reads both.
+grep -E '^_K2_(CLI|PRODUCT)_NAME=' "$K2_CLI" >"$LIB"
+sed -n '/^# BEGIN_CLI_CURL_CFG$/,/^# END_CLI_CURL_CFG$/p' "$K2_CLI" >>"$LIB"
 grep -q '^_k5_headers() {' "$LIB" || { echo "FAIL: no _k5_headers in the curl block of $K2_CLI" >&2; exit 1; }
 # noun_of <noun>: the X-K5-Cli-Noun value _k5_headers gives it.
 noun_of() {

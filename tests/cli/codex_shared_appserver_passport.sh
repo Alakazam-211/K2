@@ -613,8 +613,13 @@ assert_refused "explain with a Markdown kit id"
 
 # ── 9. Where the headers come from ───────────────────────────────────
 echo "== header sources =="
+# The prelude's two names first, as the CLI sets them: the curl block's
+# hint fill reads both.
+eval "$(grep -E '^_K2_(CLI|PRODUCT)_NAME=' "$K2_CLI")"
 eval "$(sed -n '/^# BEGIN_CLI_CURL_CFG/,/^# END_CLI_CURL_CFG/p' "$K2_CLI")"
-eval "$(sed -n '/^# BEGIN_CLI_CODEX_TAB_BIND/,/^# END_CLI_CODEX_TAB_BIND/p' "$K2_CLI")"
+# The marker lines exactly: a comment inside the curl block names the
+# begin marker too.
+eval "$(sed -n '/^# BEGIN_CLI_CODEX_TAB_BIND$/,/^# END_CLI_CODEX_TAB_BIND$/p' "$K2_CLI")"
 got="$(CODEX_THREAD_ID=thread-1; CODEX_SESSION_ID=root-1; _k2_codex_cfg; printf '%s' "$_K2_CODEX_CFG")"
 assert_eq "_k2_codex_cfg: both headers as config lines" "$got" \
     "$(printf 'header = "X-K2-Conversation: root-1"\nheader = "X-K2-Thread: thread-1"')"

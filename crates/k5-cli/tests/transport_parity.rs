@@ -52,7 +52,8 @@ const PROJECT: &str = "/tmp/k5 parity/ws é&=+";
 const BODY: &str = "{\"name\":\"bob\",\"note\":\"a \\\"q\\\" \\\\ b\\nline2 é\"}";
 const REFUSED: &str = r#"{"error":"Invalid or missing auth token"}"#;
 
-/// The shell's transport, from the built `cli/k2`: the env reader, the
+/// The shell's transport, from the built `cli/k2`: the prelude's two
+/// names, the env reader, the
 /// healed passport, the curl config and `_k2_curl`, the socket-first
 /// senders' TCP credential, the request
 /// functions, `urlencode`, `cli_post_form`, the cell-socket arms and the
@@ -66,6 +67,9 @@ fn bash_lib() -> String {
         .expect("the block ends with its last line")
         .to_string();
     [
+        // The command's and the product's names, first, as the prelude
+        // sets them: the curl block's hint fill reads both.
+        names(&k2),
         common::block(&k2, "_envn_into() {", "}"),
         common::block(
             &k2,
@@ -94,6 +98,25 @@ fn bash_lib() -> String {
         common::block(&k2, "_compute_in_session() {", "}"),
     ]
     .join("\n")
+}
+
+/// The prelude's two name lines (`_K2_CLI_NAME=`, `_K2_PRODUCT_NAME=`),
+/// as the built CLI has them.
+fn names(k2: &str) -> String {
+    ["_K2_CLI_NAME=", "_K2_PRODUCT_NAME="]
+        .iter()
+        .map(|v| {
+            let found: Vec<&str> = k2.lines().filter(|l| l.starts_with(v)).collect();
+            assert_eq!(
+                found.len(),
+                1,
+                "the line {v}... is there {} times, wanted once",
+                found.len()
+            );
+            found[0].to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A scratch folder, and the stub with its socket under `/tmp` (a socket

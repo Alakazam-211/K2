@@ -36,17 +36,6 @@ fn function(text: &str, name: &str) -> String {
     body[..end + 3].to_string()
 }
 
-/// Lines `from` to `to` of `text`, both included.
-fn block(text: &str, from: &str, to: &str) -> String {
-    let a = text
-        .find(from)
-        .unwrap_or_else(|| panic!("no {from} in cli/k2"));
-    let b = text[a..]
-        .find(to)
-        .unwrap_or_else(|| panic!("no {to} in cli/k2"));
-    text[a..a + b + to.len()].to_string()
-}
-
 fn cli_text() -> String {
     let p = common::parity::cli_k2();
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
@@ -66,7 +55,9 @@ fn harness(dir: &std::path::Path) -> PathBuf {
          echo \"PASS anc=$_K2_ANC_STATE held=$_K2_PERMISSION_ON/$_K2_SF_AGENTS_OFF\"\n",
         function(&text, "_envn_into"),
         function(&text, "_cli_codex_bind_on"),
-        block(
+        // The marker lines exactly: a comment inside the curl block names
+        // the begin marker too, and is not where the block starts.
+        common::block(
             &text,
             "# BEGIN_CLI_CODEX_TAB_BIND",
             "# END_CLI_CODEX_TAB_BIND"

@@ -52,7 +52,10 @@ mkdir -p "$W/home/.k2" "$W/bin"
 
 # The functions under test: the curl config block and the HTTP helper.
 LIB="$W/lib.sh"
-sed -n '/^# BEGIN_CLI_CURL_CFG$/,/^# END_CLI_CURL_CFG$/p' "$CLI_BASH_SOURCE" >"$LIB"
+# The prelude's two names first, as the CLI sets them: the curl block's
+# hint fill reads both.
+grep -E '^_K2_(CLI|PRODUCT)_NAME=' "$CLI_BASH_SOURCE" >"$LIB"
+sed -n '/^# BEGIN_CLI_CURL_CFG$/,/^# END_CLI_CURL_CFG$/p' "$CLI_BASH_SOURCE" >>"$LIB"
 sed -n '/^# HTTP helper$/,/^# BEGIN_CLI_NO_ANSWER$/p' "$CLI_BASH_SOURCE" >>"$LIB"
 for f in _k2_curl _cli_curl _cli_transport_failure _cli_connect_none; do
     grep -q "^$f() {" "$LIB" || { echo "FAIL: no $f in $CLI_BASH_SOURCE" >&2; exit 1; }

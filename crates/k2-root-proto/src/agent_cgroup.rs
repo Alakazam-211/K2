@@ -151,7 +151,7 @@ mod tests {
         for bad in [
             format!("{UNIT}/agents/a-B"),
             format!("{UNIT}/agents/a-B/a-A"),
-            format!("{UNIT}"),
+            UNIT.to_string(),
             "/user.slice/user-1000.slice/session-2.scope".to_string(),
             format!("{UNIT}x/daemon"),
             "/system.slice/other.service/daemon".to_string(),

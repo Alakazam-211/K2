@@ -33,6 +33,7 @@ vi.mock('@/hooks/useTerminalShortcuts', () => ({ useTerminalShortcuts: () => {} 
 vi.mock('@/hooks/useResolvedAgentCommand', () => ({ useRoomResolvedAgentCommand: () => null }))
 
 import { TerminalArea } from './TerminalArea'
+import { BACKGROUND_TAB_DELAY_MS } from './backgroundTabs'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 
@@ -65,8 +66,15 @@ afterEach(() => {
   h.unmounts = []
 })
 
+/** The next paint plus BACKGROUND_TAB_DELAY_MS: the background tabs load. */
+async function backgroundLoad(): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, BACKGROUND_TAB_DELAY_MS + 100))
+  })
+}
+
 describe('TerminalArea retained view', () => {
-  it('keeps every tab mounted, shows only the active one, and switching remounts nothing', () => {
+  it('keeps every tab mounted, shows only the active one, and switching remounts nothing', async () => {
     const store: StoreApi<FakeTabs> = createStore<FakeTabs>((set) => ({
       tabs: [
         { id: 'a', title: 'A' },
@@ -82,6 +90,9 @@ describe('TerminalArea retained view', () => {
     }))
     const room = testRoom({ tabs: store, scope: fakeScope('local', { remote: false }), isPrimary: false, cwd: '/ws' })
     const { container } = renderInRoom(room, <TerminalArea cwd="/ws" />)
+    // The tab on screen first; the others once it has painted.
+    expect(h.mounts).toEqual(['b'])
+    await backgroundLoad()
 
     const shown = (): Record<string, [string, string | null, string | undefined]> =>
       Object.fromEntries(
@@ -109,5 +120,46 @@ describe('TerminalArea retained view', () => {
     expect(probe(container, 'a')).toBe(nodeA)
     expect(h.mounts).toHaveLength(3)
     expect(h.unmounts).toEqual([])
+  })
+
+  it('a workspace switch mounts only the tab on screen first, then the rest; a click on a waiting tab mounts it at once', async () => {
+    const store: StoreApi<FakeTabs> = createStore<FakeTabs>((set) => ({
+      tabs: [{ id: 'a', title: 'A' }],
+      activeTabId: 'a',
+      extraGroups: [],
+      splitCount: 1,
+      activeGroupIndex: 0,
+      activeWorkspaceKey: 'p1:w1',
+      setActiveGroup: (i) => set({ activeGroupIndex: i }),
+    }))
+    const room = testRoom({ tabs: store, scope: fakeScope('local', { remote: false }), isPrimary: false, cwd: '/ws' })
+    const { container } = renderInRoom(room, <TerminalArea cwd="/ws" />)
+    expect(h.mounts).toEqual(['a'])
+
+    // Switch: another workspace's three tabs, its Chat ('x') on screen.
+    act(() =>
+      store.setState({
+        tabs: [
+          { id: 'x', title: 'Chat' },
+          { id: 'y', title: 'Y' },
+          { id: 'z', title: 'Z' },
+        ],
+        activeTabId: 'x',
+        activeWorkspaceKey: 'p2:w1',
+      }),
+    )
+    expect(h.mounts).toEqual(['a', 'x'])
+    // The waiting tabs keep their wrapper (the tab id is in the DOM), not their tree.
+    expect(wrapper(container, 'y').childElementCount).toBe(0)
+
+    // A click on a waiting tab mounts it at once.
+    act(() => store.setState({ activeTabId: 'z' }))
+    expect(h.mounts).toEqual(['a', 'x', 'z'])
+    // 'x' was shown, so it stays mounted when hidden.
+    expect(h.unmounts).toEqual(['a'])
+
+    await backgroundLoad()
+    expect(h.mounts.sort()).toEqual(['a', 'x', 'y', 'z'])
+    expect(h.unmounts).toEqual(['a'])
   })
 })

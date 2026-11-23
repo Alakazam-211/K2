@@ -1,4 +1,5 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { useBackgroundTabLoad } from './backgroundTabs'
 import { TabBar } from '@/components/TabBar/TabBar'
 import { PaneLayout } from '@/components/PaneLayout/PaneLayout'
 import { PresetsBar } from '@/components/PresetsBar/PresetsBar'
@@ -177,6 +178,11 @@ function TabGroupColumn({
   const room = useRoom()
   const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs) ?? NO_TABS
   const activeTabId = useRoomTabs((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
+  const workspaceKey = useRoomTabs((s) => s.activeWorkspaceKey)
+  const tabIds = useMemo(() => tabs.map((t) => t.id), [tabs])
+  // The tab on screen mounts now; the rest after it has painted
+  // (backgroundTabs.ts).
+  const isLoaded = useBackgroundTabLoad(tabIds, activeTabId, workspaceKey)
   const dragState = useTabDragState()
 
   // Show drop highlight when dragging a tab from a different group
@@ -201,7 +207,9 @@ function TabGroupColumn({
           stays mounted so scroll/cursor/focus state lives naturally on
           the DOM across tab switches. Only the active tab is visible;
           the rest are hidden via display:none, which preserves their
-          state without consuming paint cycles.
+          state without consuming paint cycles. After a workspace switch
+          the hidden ones load only once the tab on screen has painted
+          (useBackgroundTabLoad).
         */}
         {tabs.map((tab) => {
           const isActiveTab = tab.id === activeTabId
@@ -213,7 +221,7 @@ function TabGroupColumn({
                 style={{ display: isActiveTab ? 'block' : 'none' }}
                 aria-hidden={!isActiveTab}
               >
-                <PaneLayout tabId={tab.id} />
+                {isLoaded(tab.id) ? <PaneLayout tabId={tab.id} /> : null}
               </div>
             </TabVisibilityContext.Provider>
           )

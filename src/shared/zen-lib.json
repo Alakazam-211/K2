@@ -13,7 +13,8 @@
       "line": "0.186",
       "fingerprints": [
         "Three.js Authors",
-        "/*! three.js "
+        "/*! three.js ",
+        "/*! three 0."
       ],
       "title": "three.js",
       "global": "THREE",
@@ -24,8 +25,8 @@
       "files": [
         {
           "name": "three.js",
-          "bytes": 981964,
-          "sha256": "3e8e4f010b93d8309a0534a0e53722813962da1cafa58645d1eabe375a9fc832"
+          "bytes": 982041,
+          "sha256": "0846aa1ea6dda11f34df25bbf38575d2c8bffe236f3abbadfb718af4aeb77dde"
         }
       ],
       "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=THREE --minify --target=es2020,safari15 --legal-comments=eof (three.js; entry in scripts/zen-lib/libs.ts)",
@@ -47,8 +48,8 @@
       "files": [
         {
           "name": "globe.gl.min.js",
-          "bytes": 1885160,
-          "sha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c",
+          "bytes": 1885259,
+          "sha256": "5492be614e11ecf4469f7f696ba9f8c3f8af2cb07f877900961688563904b41d",
           "upstreamSha256": "2c3e445c04d121215910a89688b96091c8a72071c122a4f830081a39b636c94c"
         }
       ],
@@ -67,8 +68,8 @@
       "files": [
         {
           "name": "cannon-es.js",
-          "bytes": 123989,
-          "sha256": "6795d934632fc000130d23ed44793933aa4be6333813d89c151219f0b169c894"
+          "bytes": 124066,
+          "sha256": "1112db3ff67b5940687c52af789c77e6aa190ec35ee088e963ddd99da66da098"
         }
       ],
       "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=CANNON --minify --target=es2020,safari15 --legal-comments=eof (cannon-es.js; entry in scripts/zen-lib/libs.ts)"
@@ -89,14 +90,14 @@
       "files": [
         {
           "name": "pixi.min.js",
-          "bytes": 828284,
-          "sha256": "47c542b4038968bece0effdc8025c5c7df8f5a5b717ebddc58617f22571cf77d",
+          "bytes": 828398,
+          "sha256": "c852db82c9078233514af3ea0d981e6a1dab45f3b927b69e5b5f972a1c789643",
           "upstreamSha256": "c6d9d4c897b15576cce0055d0ba4382021181c99cdf08a446be9d61e16833db0"
         },
         {
           "name": "unsafe-eval.min.js",
-          "bytes": 15701,
-          "sha256": "fa8d42a545150a1f38ea98a5aff6da5b4ef1b2fcc0e917a90bad962a6d08b03d",
+          "bytes": 15815,
+          "sha256": "577fed1b59eb4c3223a21b79c3af3c741261c17d44e4824fe42b81d1bb2e1f11",
           "upstreamSha256": "95b16558c615575f08d6b9e2b518b0edc4d446673b3307d967e2e59fab0464cd"
         }
       ],
@@ -115,8 +116,8 @@
       "files": [
         {
           "name": "phaser.min.js",
-          "bytes": 1375976,
-          "sha256": "66348b1b5141e49b7d5ebbe688cddcb502eab1cb00f21c538686a5b2c5abe4de",
+          "bytes": 1376090,
+          "sha256": "3a750fa559e00097fa0538ddae3194ab7dcc7f9520099f56c61667560adaaa1a",
           "upstreamSha256": "66348b1b5141e49b7d5ebbe688cddcb502eab1cb00f21c538686a5b2c5abe4de"
         }
       ],
@@ -135,8 +136,8 @@
       "files": [
         {
           "name": "kaplay.js",
-          "bytes": 189050,
-          "sha256": "710f0696e0a867f530c1be204464e288d5326870f2de5c0fd114e7c33315a933",
+          "bytes": 189164,
+          "sha256": "f92cc35fcde3c4e9be232c10a2c62086d0fc343acf8fce03f314b7506696dfdb",
           "upstreamSha256": "88a946eafc4161f83505449d830b87c7bc15822bb0dae8ce03b2437506ef4a4b"
         }
       ]
@@ -157,8 +158,8 @@
       "files": [
         {
           "name": "matter.min.js",
-          "bytes": 83476,
-          "sha256": "72d30be0f579eb02ce1e0b6f9d359a4f392e6837e5a26ba8be5dbee7f88e24ae",
+          "bytes": 83587,
+          "sha256": "ad73aec05ef18bff7533c04e7eb4a40150a4c9bb72fbd45de030c04ab4273115",
           "upstreamSha256": "72d30be0f579eb02ce1e0b6f9d359a4f392e6837e5a26ba8be5dbee7f88e24ae"
         }
       ]
@@ -179,14 +180,14 @@
       "files": [
         {
           "name": "d3.min.js",
-          "bytes": 279706,
-          "sha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539",
+          "bytes": 279796,
+          "sha256": "888c42ce7737727a8e545c4955fea5c52a253d65b594ad528d12e6dbb14d8e5b",
           "upstreamSha256": "f2094bbf6141b359722c4fe454eb6c4b0f0e42cc10cc7af921fc158fceb86539"
         },
         {
           "name": "d3-k2.js",
-          "bytes": 536,
-          "sha256": "9c7375902513e1b1bd1ca358114c0f0827d4ca7e64205c5c63f5ccf85c11338a"
+          "bytes": 650,
+          "sha256": "095137444a7240c56f47258f61963bd7985241c7afe09ae65e5659803ee027ef"
         }
       ],
       "notes": "d3.json/d3.csv fetch over the network and are blocked; parse inline text instead. d3.csvParse and d3.tsvParse are K2 versions with the same results (upstream builds a function from text, which the widget security policy blocks); d3.dsvFormat(…).parse still needs eval, so use its parseRows."
@@ -227,8 +228,8 @@
       "files": [
         {
           "name": "echarts.min.js",
-          "bytes": 1121883,
-          "sha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0",
+          "bytes": 1122037,
+          "sha256": "9e5467baad6c8fbd3d33003e8ab156317a1b86c548918eb6e0f674c6c8ee8571",
           "upstreamSha256": "b66b25aeb4df84e33199dc21694014d336d222cbd9deb0e5a7c14bd6aa0d0fd0"
         }
       ]
@@ -249,14 +250,14 @@
       "files": [
         {
           "name": "uPlot.iife.min.js",
-          "bytes": 51081,
-          "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f",
+          "bytes": 51174,
+          "sha256": "1c5a09c211f96c25f38344d074a317b8559af207b144013725794eb6c72a776d",
           "upstreamSha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
         },
         {
           "name": "uplot-style.js",
-          "bytes": 2102,
-          "sha256": "fa2184990360f8b3c3ea6b964e268c36ee46851e6dad62dbc55edc96dd0828d9"
+          "bytes": 2225,
+          "sha256": "74189d4d49d797eef7e3fb0c89cf0cc4266c96be595f21a353ade2914ba9ed47"
         }
       ],
       "notes": "Small and fast time series (about 50 KB): sparklines and history lines for source trends. Give it a width and height; data is [xs, ...ys] with xs in seconds."
@@ -277,8 +278,8 @@
       "files": [
         {
           "name": "anime.umd.min.js",
-          "bytes": 118043,
-          "sha256": "8d5b3a58a1f64023a04a4cedeef135a2263b18da04b35177ac13438a0bad033b",
+          "bytes": 118139,
+          "sha256": "3a14a41763142d57b266583adba71b5d1076bab87bef86bb33ab60d73fee7f46",
           "upstreamSha256": "8d5b3a58a1f64023a04a4cedeef135a2263b18da04b35177ac13438a0bad033b"
         }
       ]
@@ -296,8 +297,8 @@
       "files": [
         {
           "name": "lottie.min.js",
-          "bytes": 305704,
-          "sha256": "2eb762973aec914d981f426123040bfac9d26217239605e225ddc7cee17618ac",
+          "bytes": 305799,
+          "sha256": "256cf105e2db9e0794f2818015148364ebe56689006bdb2fc3ceb2b26a7e848b",
           "upstreamSha256": "2eb762973aec914d981f426123040bfac9d26217239605e225ddc7cee17618ac"
         }
       ],
@@ -316,8 +317,8 @@
       "files": [
         {
           "name": "perfect-freehand.js",
-          "bytes": 5135,
-          "sha256": "1d4ef35cc06f113a2e533196bf62680a411b9866e19aae5cded31a928d3ca533"
+          "bytes": 5211,
+          "sha256": "62a3f5eb5ac5e8764ec833dd331b1a01875fcca2eb06c262d3b4b6fafda74b83"
         }
       ],
       "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=PerfectFreehand --minify --target=es2020,safari15 --legal-comments=eof (perfect-freehand.js; entry in scripts/zen-lib/libs.ts)",
@@ -336,8 +337,8 @@
       "files": [
         {
           "name": "rough.js",
-          "bytes": 27762,
-          "sha256": "6853af8619532f3939b156cd16824d2e14f31e71d3df306ad5558eeafacab194",
+          "bytes": 27855,
+          "sha256": "ec3106923959a668d96ba98f0c541de85773f8d3cf6eaa15c764a8a388f16715",
           "upstreamSha256": "6853af8619532f3939b156cd16824d2e14f31e71d3df306ad5558eeafacab194"
         }
       ]
@@ -381,8 +382,8 @@
       "files": [
         {
           "name": "Tone.js",
-          "bytes": 345468,
-          "sha256": "6b1d53712892f2ef423d7b2dd2bbb122c4520205cfa7404a97b0d354bd8a883c",
+          "bytes": 345564,
+          "sha256": "537d1a7a705e8e4044a160627de7834cf200a7f60534a2978d3dfb8291c69403",
           "upstreamSha256": "e290952fa43d9a7a780182a83c6fccf44d79cb7ae2cba102ef1f2b9d98124e22"
         }
       ],
@@ -404,19 +405,19 @@
       "files": [
         {
           "name": "leaflet.js",
-          "bytes": 147517,
-          "sha256": "dc71f8a6880bc3ca1bd9fa8dc5f1af48c702dc510b0a78240a07c5feed7ce935",
+          "bytes": 147669,
+          "sha256": "169221c62a240e924ab55b5a9c66c41f83f91b83cf386d8d41bc67a2afee506b",
           "upstreamSha256": "db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a"
         },
         {
           "name": "leaflet-style.js",
-          "bytes": 21351,
-          "sha256": "9284948b86925e44a1f461685ea69275cb71fb5070b57b9e1084c927874bd02c"
+          "bytes": 21535,
+          "sha256": "4db61e5982f5a2a7019d970d8094c3b1e8abc4cd971d7358a90985b23a5ebf14"
         },
         {
           "name": "leaflet-k2.js",
-          "bytes": 6385,
-          "sha256": "e9ec0cef4ef68846b6888b0b06d47bb1a69e3053776b004e4f874ffc5712332c"
+          "bytes": 6566,
+          "sha256": "bb7ed362c0c6692d51993fdd87bde0a06d576da4d9692bdba2462a73c93839db"
         }
       ],
       "notes": "Limited: no map tiles (they come from the network). Use local image overlays (L.imageOverlay with a data: URL), GeoJSON and vector layers."
@@ -437,8 +438,8 @@
       "files": [
         {
           "name": "marked.umd.js",
-          "bytes": 46855,
-          "sha256": "d577478a6e64341800388a528847255715d04ad35fcc03fdd9b1290c37acd592",
+          "bytes": 47084,
+          "sha256": "7b1cb35cddc5a1ba847bef6a6897c2d070f9d1b89e72c72255050a490d2c35fd",
           "upstreamSha256": "21568877a938d2c4e7d74e27f18e60da96bb73a68809610ca39216e1efebae62"
         }
       ],
@@ -460,8 +461,8 @@
       "files": [
         {
           "name": "purify.min.js",
-          "bytes": 29796,
-          "sha256": "b08361de6f15903fc076dd17e1b3482457f3e50bc0d9e2118b3d529d4ed59e93",
+          "bytes": 29902,
+          "sha256": "02cbc28787d8422609ed965ae533b40b5389691bed59acfa9d4df20953f58117",
           "upstreamSha256": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
         }
       ],
@@ -489,8 +490,8 @@
         },
         {
           "name": "highlight-style.js",
-          "bytes": 2918,
-          "sha256": "003b13c8db872b84da92a9890f03c2c4994c3e31fc4db29d0018aaae1c6c7c81"
+          "bytes": 3065,
+          "sha256": "cfb20a5d79ce716652a49f0524e09662cc25b4c9b9d2a77f4429518760a869f4"
         }
       ],
       "notes": "The common languages are built in. GitHub light and dark themes follow the Garden scheme."
@@ -508,20 +509,20 @@
       "files": [
         {
           "name": "katex.min.js",
-          "bytes": 272755,
-          "sha256": "155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2",
+          "bytes": 272876,
+          "sha256": "54e296715b3fc0a7fb4cb61ba4ca51ea60b77faa8e3143f777ad278bbd05eef8",
           "upstreamSha256": "155f6c2d673c5912e3b48f45d8830eaad18ae1953915939ceb648ea8b9c3e7e2"
         },
         {
           "name": "auto-render.min.js",
-          "bytes": 3486,
-          "sha256": "e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4",
+          "bytes": 3607,
+          "sha256": "d0a6ba516925b41abd468453834252f484e7c1fbb6923833ce4f619e69a5d180",
           "upstreamSha256": "e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4"
         },
         {
           "name": "katex-style.js",
-          "bytes": 369255,
-          "sha256": "4f6b011942fe4bd107178613250721ec0a34f2f5a1e640a9838fbedc02fda317"
+          "bytes": 369406,
+          "sha256": "010aadf8a1611fdbae2284eea694f8c7930e5711f6e44c74dfd380b458013cae"
         }
       ],
       "notes": "Fonts are inlined (woff2). Also defines renderMathInElement (auto-render)."
@@ -539,8 +540,8 @@
       "files": [
         {
           "name": "preact-htm.js",
-          "bytes": 17187,
-          "sha256": "b59c65de67cd5ff55e680a328617baba681873092fa99f8cc8a3bc9a93d714d9"
+          "bytes": 17289,
+          "sha256": "3581d9f1df24a0ef1d8a915ff553a7e6d8c3bc08af002aeee1188652e9f4bd23"
         }
       ],
       "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=preact --minify --target=es2020,safari15 --legal-comments=eof (preact-htm.js; entry in scripts/zen-lib/libs.ts)",
@@ -559,8 +560,8 @@
       "files": [
         {
           "name": "lit.js",
-          "bytes": 23533,
-          "sha256": "d67cea30f72127e7773c2145df9009efc8cb750e5c468cbd4399c2ddc8126560"
+          "bytes": 23625,
+          "sha256": "e9aeb6e437a1534b95431a973631d6c5e81066ce33fdc6394de9ec9b1f62232d"
         }
       ],
       "prebundled": "esbuild 0.28.2 --bundle --format=iife --global-name=Lit --minify --target=es2020,safari15 --legal-comments=eof (lit.js; entry in scripts/zen-lib/libs.ts)",
@@ -579,13 +580,13 @@
       "files": [
         {
           "name": "caveat-style.js",
-          "bytes": 185821,
-          "sha256": "1408f694a8ae389c2dcf7f40362bee647876f5980006963ec97e6ac1db119998"
+          "bytes": 186012,
+          "sha256": "e111f606b4adffe9ff1d173652d58036944e144aedf4eac500a1635866367f98"
         },
         {
           "name": "caveat-k2.js",
-          "bytes": 67,
-          "sha256": "d3fa2cb0b45044b304e517533bae666956b201e7469612a8b6ce10b7b18ba149"
+          "bytes": 255,
+          "sha256": "debcf2098eaf483cedbd3ee3485b3cdf71ca3cc596fce1559fe03aff4d2ecfce"
         }
       ],
       "notes": "Adds the font family 'Caveat' (weights 400 and 700, Latin). Use font-family: Caveat; K2Fonts.caveat holds the name."

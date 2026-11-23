@@ -1,3 +1,4 @@
+/*! marked 18.0.14 | MIT | Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/); Copyright (c) 2011-2018, Christopher Jeffrey (https://github.com/chjj/); Copyright © 2004, John Gruber | full text: Third-party notices */
 /**
  * marked v18.0.14 - a markdown parser
  * Copyright (c) 2018-2026, MarkedJS. (MIT License)

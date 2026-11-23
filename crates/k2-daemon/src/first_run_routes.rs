@@ -275,8 +275,15 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
     if is_post_only(path) != is_post {
         return CliResponse::method_not_allowed();
     }
-    let agent_reports_dismiss =
-        path == OFFER_DISMISS_PATH && matches!(dismissed_offer(body), Ok(first_run::AGENT_REPORTS));
+    // offer/dismiss: which offer first. A body that names none we know is
+    // 400 usage whatever the switches; agent_reports isn't Kessel's.
+    let mut agent_reports_dismiss = false;
+    if path == OFFER_DISMISS_PATH {
+        match dismissed_offer(body) {
+            Ok(o) => agent_reports_dismiss = o == first_run::AGENT_REPORTS,
+            Err(r) => return r,
+        }
+    }
     if is_kessel_route(path) && !agent_reports_dismiss && !k2_core::app_settings::load().kessel_first_run {
         return kessel_off();
     }

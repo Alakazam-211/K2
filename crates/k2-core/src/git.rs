@@ -71,13 +71,13 @@ pub fn get_git_info(path: &str) -> GitInfo {
     // Count changed and untracked files. We deliberately do NOT
     // `recurse_untracked_dirs(true)` here even though it would
     // give a more precise per-file untracked count. The recurse
-    // makes libgit2 walk into every untracked directory — most
+    // makes the status walk into every untracked directory — most
     // notably `node_modules/`, `target/`, `dist/`, `.next/`, etc.
     // — which on a JS/TS workspace with 100k+ files inside
     // node_modules turns each poll into a multi-hundred-thousand
     // stat-and-attribute-load loop. With this hook polled every
     // 5 seconds (`useGit::useGitInfo`), that pegs the Tauri main
-    // process at ~200% CPU. Without recurse, libgit2 reports the
+    // process at ~200% CPU. Without recurse, the status reports the
     // untracked directory as a single entry — which is exactly
     // what the sidebar's "is this workspace dirty?" indicator
     // needs anyway. Per-file detail is available on demand via
@@ -171,7 +171,7 @@ pub fn list_branches(path: &str) -> BranchList {
 // ── List Worktrees ────────────────────────────────────────────────────────
 
 pub fn list_worktrees(path: &str) -> Vec<WorktreeInfo> {
-    // Use git CLI for worktree list since git2 worktree support is limited
+    // Worktree list stays on the git CLI (it reports prunable worktrees)
     let output = match crate::git_safe::git(path)
         .args(["worktree", "list", "--porcelain"])
         .output()
@@ -703,7 +703,7 @@ pub fn diff_between_branches(
 
 /// Refuse a caller's revision spec that searches commit messages:
 /// `:/text` or `<rev>^{/text}`. Every place that resolves a caller's
-/// ref, base or sha calls this right before handing it to libgit2 or
+/// ref, base or sha calls this right before handing it to gix or
 /// `git rev-parse`. The whole string is checked, not only its start, so
 /// `main:/x` and `HEAD~1^{/fix}` are refused too. `<rev>:<path>` (a colon
 /// with no slash right after it) is still allowed.
@@ -1112,7 +1112,7 @@ pub fn delete_branch(repo_path: &str, branch_name: &str) -> Result<(), String> {
 
 /// Collect a JSON snapshot of the repo's current state for the AI
 /// commit workflow. Runs a few tiny `git` subprocesses with a 5-second
-/// per-command timeout — libgit2 would need 5 separate code paths for
+/// per-command timeout — gix would need 5 separate code paths for
 /// the same info, and the AI-commit terminal wants the raw CLI output
 /// anyway. Returns an empty object-fields if `project_path` isn't a
 /// repo or if a command times out.

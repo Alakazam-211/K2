@@ -1583,7 +1583,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/projects/get-icon" => crate::project_icons::project_icon(params),
         "/cli/projects/get-editors" => crate::db_routes::handle_projects_get_editors(),
         "/cli/projects/get-all-editors" => crate::db_routes::handle_projects_get_all_editors(),
-        // Git GETs — libgit2 operations. Per F5, these can block the
+        // Git GETs — gix reads. Per F5, these can block the
         // accept loop on large repos. The dispatch is sync (matches
         // existing fs/* pattern). Acceptable today; if a slow handler
         // starves the accept loop in practice, lift to spawn_blocking

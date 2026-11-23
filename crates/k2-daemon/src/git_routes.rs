@@ -1,7 +1,7 @@
 //! Phase 2 Unit 4 — daemon-side `/cli/git/*` route handlers.
 //!
-//! libgit2 operations on large repos (status, diff, log) can take 100s
-//! of ms. Per F5, these handlers run inside `tokio::task::spawn_blocking`
+//! git reads (gix) on large repos (status, diff, log) can take 100s
+//! of ms, and writes run the person's git. Per F5, these handlers run inside `tokio::task::spawn_blocking`
 //! so they don't stall the accept loop. The dispatch in `main.rs`
 //! wraps `dispatch_unit4_git_post` accordingly; the GET branches in
 //! `cli::dispatch` do the same wrap inline.
@@ -85,7 +85,7 @@ fn checked_rel(path: &str, file_path: &str) -> Result<String, CliResponse> {
 // GET handlers
 // ══════════════════════════════════════════════════════════════════════
 //
-// These are blocking (libgit2) — main.rs::cli::dispatch wraps the
+// These are blocking (gix reads) — main.rs::cli::dispatch wraps the
 // call site in spawn_blocking; the handler itself is sync.
 
 pub fn handle_git_info(params: &HashMap<String, String>) -> CliResponse {
@@ -96,10 +96,12 @@ pub fn handle_git_info(params: &HashMap<String, String>) -> CliResponse {
     let mut v = serde_json::to_value(git::get_git_info(&path)).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = v.as_object_mut() {
         // Changes tab (C5 scope add): the + menu offers Changes for every
-        // workspace while this server can do git. Status, diff, stage,
-        // commit, discard and `git/init` use the linked libgit2, so that is
-        // always true here; `gitCli` says whether the `git` binary (used for
-        // worktree create/remove/prune) is on PATH.
+        // workspace while this server can do git. Status and diffs read
+        // the repo with the linked gix, so that is always true here;
+        // `gitCli` says whether the `git` binary runs. Writes (stage,
+        // unstage, commit, discard, init, merge, abort, resolve, branch
+        // delete, worktrees) need it and answer `git_not_installed`
+        // without it.
         obj.insert("gitAvailable".into(), serde_json::Value::Bool(true));
         obj.insert("gitCli".into(), serde_json::Value::Bool(git_cli_present()));
     }
@@ -120,7 +122,7 @@ struct InitBody {
 }
 
 /// Changes tab (C5 scope add) — `POST /cli/git/init` `{path}`: make the
-/// workspace root a git repository (libgit2 `git init`: a `.git` folder,
+/// workspace root a git repository (`git init`: a `.git` folder,
 /// no commit). Only a registered K2 workspace root (never a folder above
 /// or below one) and only when no repository already holds it (409
 /// `already_a_repo`). Then `git_changed` fires and the watcher picks up

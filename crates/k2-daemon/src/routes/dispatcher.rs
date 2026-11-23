@@ -7368,7 +7368,7 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
-        // Phase 2 Unit 4 — POST routes for git (libgit2 ops). F5:
+        // Phase 2 Unit 4 — POST routes for git (the person's git). F5:
         // spawn_blocking because diff/merge/status on large repos
         // can block for 100s of ms.
         p if is_post && post_allowed && p.starts_with("/cli/git/") => {

@@ -346,7 +346,7 @@ fn cell_git_routes_take_only_a_branch_tag_or_commit_id_for_base() {
     let d = repo("agent-base");
     let own = s(&d);
     std::fs::write(d.join("a.txt"), "one\ntwo\nthree\n").expect("edit a");
-    let sha = git2::Repository::open(&d).expect("open").head().expect("head").target().expect("oid").to_string();
+    let sha = k2_core::git_fixture::git(&d, &["rev-parse", "HEAD"]);
     let snap = |base: &str| handle_agent_route("/cli/git/snapshot", false, &params(&[("base", base)]), b"", &own);
     let diff = |base: &str| {
         handle_agent_route("/cli/git/diff-file", false, &params(&[("file_path", "a.txt"), ("sides", "1"), ("base", base)]), b"", &own)

@@ -782,7 +782,7 @@ pub fn projects_add_from_path_ex(
         .unwrap_or_else(|| path.to_string());
 
     // While git doesn't run (a Mac without the Command Line Tools), read
-    // the repo with libgit2 instead, so Add workspace never needs the git
+    // the repo with gix instead, so Add workspace never needs the git
     // binary (0.46.4).
     let git_ready = crate::git_safe::availability().is_ready();
     let git_dir = p.join(".git");

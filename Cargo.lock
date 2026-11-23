@@ -3294,19 +3294,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "git2"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b903b73e45dc0c6c596f2d37eccece7c1c8bb6e4407b001096387c63d0d93724"
-dependencies = [
- "bitflags 2.13.2",
- "libc",
- "libgit2-sys",
- "log",
- "url",
-]
-
-[[package]]
 name = "gix"
 version = "0.90.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5675,7 +5662,6 @@ dependencies = [
  "flate2",
  "fontdue",
  "getrandom 0.2.17",
- "git2",
  "gix",
  "h2",
  "hpke 0.12.0",
@@ -5758,7 +5744,6 @@ dependencies = [
  "flate2",
  "futures-util",
  "getrandom 0.2.17",
- "git2",
  "hickory-resolver",
  "hmac 0.12.1",
  "http-body-util",
@@ -6484,18 +6469,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libgit2-sys"
-version = "0.17.0+1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10472326a8a6477c3c20a64547b0059e4b0d086869eee31e6d7da728a8eb7224"
-dependencies = [
- "cc",
- "libc",
- "libz-sys",
- "pkg-config",
-]
-
-[[package]]
 name = "libloading"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6537,18 +6510,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
-name = "libz-sys"
-version = "1.1.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fee3f59f4321dab0c78d828942e7aa09d0bd8ad6e78a501977e6bf3d02938045"
-dependencies = [
- "cc",
- "libc",
  "pkg-config",
  "vcpkg",
 ]

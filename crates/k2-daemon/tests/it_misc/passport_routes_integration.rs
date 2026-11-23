@@ -457,23 +457,21 @@ impl Drop for CardsOn {
 
 /// A git repo in `ws` with one commit on its current branch and, for each
 /// name, a branch one commit ahead. Returns (base commit, branch tips).
-fn repo_with_branches(ws: &Path, branches: &[&str]) -> (git2::Oid, Vec<git2::Oid>) {
-    let repo = git2::Repository::init(ws).expect("git init");
-    let sig = git2::Signature::now("Acme Dev", "dev@example.com").expect("signature");
-    let blob = repo.blob(b"base\n").expect("blob");
-    let mut tb = repo.treebuilder(None).expect("tree");
-    tb.insert("base.txt", blob, 0o100644).expect("insert");
-    let tree = repo.find_tree(tb.write().expect("write tree")).expect("tree");
-    let base = repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[]).expect("base commit");
-    let parent = repo.find_commit(base).expect("base");
+/// Made by the real git CLI (`k2_core::git_fixture`).
+fn repo_with_branches(ws: &Path, branches: &[&str]) -> (String, Vec<String>) {
+    use k2_core::git_fixture as fx;
+    fx::init_at(ws);
+    std::fs::write(ws.join("base.txt"), "base\n").expect("base.txt");
+    let base = fx::commit_all(ws, "base");
+    let main = fx::git(ws, &["symbolic-ref", "--short", "HEAD"]);
     let tips = branches
         .iter()
         .map(|b| {
-            let blob = repo.blob(b.as_bytes()).expect("blob");
-            let mut tb = repo.treebuilder(Some(&tree)).expect("tree");
-            tb.insert(format!("{}.txt", b.replace('/', "-")), blob, 0o100644).expect("insert");
-            let t = repo.find_tree(tb.write().expect("write tree")).expect("tree");
-            repo.commit(Some(&format!("refs/heads/{b}")), &sig, &sig, b, &t, &[&parent]).expect("branch commit")
+            fx::git(ws, &["checkout", "-q", "-b", b, &base]);
+            std::fs::write(ws.join(format!("{}.txt", b.replace('/', "-"))), b.as_bytes()).expect("branch file");
+            let tip = fx::commit_all(ws, b);
+            fx::git(ws, &["checkout", "-q", &main]);
+            tip
         })
         .collect();
     (base, tips)
@@ -481,21 +479,16 @@ fn repo_with_branches(ws: &Path, branches: &[&str]) -> (git2::Oid, Vec<git2::Oid
 
 /// Check `branch` out in a worktree at `at` (an agent's worktree).
 fn add_worktree(ws: &Path, branch: &str, at: &Path) {
-    let repo = git2::Repository::open(ws).expect("open");
-    let reference = repo.find_reference(&format!("refs/heads/{branch}")).expect("branch ref");
-    let mut opts = git2::WorktreeAddOptions::new();
-    opts.reference(Some(&reference));
-    repo.worktree(&branch.replace('/', "-"), at, Some(&opts)).expect("add worktree");
+    k2_core::git_fixture::git(ws, &["worktree", "add", "-q", at.to_str().expect("utf8"), branch]);
 }
 
-fn head_of(ws: &Path) -> git2::Oid {
-    git2::Repository::open(ws).expect("open").head().expect("head").target().expect("head target")
+fn head_of(ws: &Path) -> String {
+    k2_core::git_fixture::git(ws, &["rev-parse", "HEAD"])
 }
 
-fn branch_tip(ws: &Path, b: &str) -> Option<git2::Oid> {
-    let repo = git2::Repository::open(ws).expect("open");
-    let found = repo.find_branch(b, git2::BranchType::Local).ok();
-    found.and_then(|br| br.get().target())
+fn branch_tip(ws: &Path, b: &str) -> Option<String> {
+    let out = k2_core::git_fixture::git_cmd(ws).args(["rev-parse", "--verify", "-q", &format!("refs/heads/{b}")]).output().expect("rev-parse");
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// A merge of the agent's own work is a person's: approving its own branch,
@@ -537,7 +530,7 @@ async fn its_own_merge_is_a_card_for_a_person() {
         assert!(command.contains(&format!("branch={branch}")), "{label}: {command}");
         assert_eq!(head_of(ws), base, "{label}: nothing merged");
     }
-    assert_eq!(branch_tip(ws, "agent/d1-agent/own-task"), Some(tips[0]), "its own branch is still there");
+    assert_eq!(branch_tip(ws, "agent/d1-agent/own-task"), Some(tips[0].clone()), "its own branch is still there");
 
     let r = http(e.port, "POST", &format!("/cli/commit-merge?project={own}&message=wip"), Some(e.passport.as_str()));
     assert_eq!(r.status, 403, "commit --merge: {}", r.raw);

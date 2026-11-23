@@ -116,7 +116,7 @@ pub fn rev_key_for_path(path: &str) -> Option<String> {
 }
 
 /// `(rev_key, repo_root)` for the non-bare repo holding `path`.
-/// `repo_root` is the workdir as git2 reports it, no trailing `/`.
+/// `repo_root` is the workdir as gix reports it, no trailing `/`.
 pub fn repo_key_and_root(path: &str) -> Option<(String, String)> {
     let repo = crate::gitx::discover(path).ok()?;
     let workdir = repo.workdir()?;
@@ -1097,7 +1097,7 @@ pub struct RepoDirs {
 
 /// Every spelling of `p`: as given, canonical, and — when it sits under
 /// the canonical `alias.0` — re-rooted at `alias.1` (the workspace path as
-/// the caller spells it; git2 may report `/private/var/…` for `/var/…`).
+/// the caller spells it; git may report `/private/var/…` for `/var/…`).
 fn forms(p: &Path, alias: Option<&(String, String)>) -> Vec<String> {
     let mut v = forms_raw(p, alias);
     // Windows: one '/' spelling (classify_git_path and worktree_rel fold
@@ -1218,7 +1218,7 @@ pub fn worktree_rel<'a>(path: &'a str, dirs: &RepoDirs) -> Option<std::borrow::C
     }
 }
 
-/// `path` with Windows' '\' folded to '/' (libgit2 and the dir forms use
+/// `path` with Windows' '\' folded to '/' (gix and the dir forms use
 /// '/' there; a file watcher reports '\'). Unchanged elsewhere.
 fn fold_slashes(path: &str) -> std::borrow::Cow<'_, str> {
     if cfg!(windows) && path.contains('\\') {

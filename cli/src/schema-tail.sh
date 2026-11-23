@@ -31,7 +31,7 @@
     {
       "name": "cli status",
       "usage": "k2 cli status [--json]",
-      "description": "Answered by the k5 binary only (the shell CLI says so and exits 2): which command families the binary answers itself (native), from their --schema entry (spec) or hands to the shell CLI (bash), and its version. For the owner, how many calls of each family fell through to the shell CLI (GET /cli/cli-usage); with a passport, or the daemon down, the table alone and one line on stderr. Exit 0. New k5 command (Beta): off by default; the owner turns it on in Settings → General → Server → Advanced. Not on Windows yet.",
+      "description": "Answered by the k2 CLI binary only (the shell CLI says so and exits 2): which command families the binary answers itself (native), from their --schema entry (spec) or hands to the shell CLI (bash), and its version. For the owner, how many calls of each family fell through to the shell CLI (GET /cli/cli-usage); with a passport, or the daemon down, the table alone and one line on stderr. Exit 0. The binary is in Beta: off by default; the owner turns it on in Settings → General → Server → Advanced. Not on Windows yet.",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "One JSON document: {version, native, spec, bash, counts (shown, owner-only or unavailable), families: [{family, words, owner, fallthroughs, verbs}]}."}

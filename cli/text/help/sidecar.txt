@@ -49,10 +49,11 @@ person retires. You can't move an existing sidecar into a worktree: start a new 
            uncommitted files; --discard throws those away (files to the Trash).
            --keep-branch keeps the branch.
 Only people land and retire. An agent that runs them exits 3. With permission
-cards on, the error ends with the full command to ask with ("Ask with: k2
-permission request git.land sidecar=<name> tip=<sha> --why …", or sidecar.retire):
-run it as printed, adding only --why. When a person allows the card, K2 lands
-(or retires) it as that person and tells you. With cards off, ask your human on
-your Thread (k2 thread ask): they run k2 sidecar land <workspace>/<name>.
+cards on, the error ends with the full command to ask with ("Ask with:
+k2 permission request git.land sidecar=<name> tip=<sha> --why …", or
+sidecar.retire): run it as printed, adding only --why. When a person
+allows the card, K2 lands (or retires) it as that person and tells you.
+With cards off, ask your human on your Thread (k2 thread ask): they run
+k2 sidecar land <workspace>/<name>.
 See also: k2 sessions (everyone in this workspace, past conversations)
 More: k2 study sidecars

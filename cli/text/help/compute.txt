@@ -657,8 +657,8 @@ Node admin (agents need "Let this agent operate compute nodes"):
                    the latest rollout and each node's state: pending (not sent
                    yet; waiting_turn: its kind's slots are full; waiting_idle:
                    see below), offered (installing), healthy, rolled_back
-                   (failed its 120 s health check and went back by itself: k2
-                   compute node health <node>), refused / failed (the node's
+                   (failed its 120 s health check and went back by itself:
+                   k2 compute node health <node>), refused / failed (the node's
                    reason), timed_out (no answer in 10 min, or 10 min past its
                    drain), skipped (why); settled = neither pending nor
                    offered. The first rolled_back pauses it (nodes already sent

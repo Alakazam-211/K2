@@ -1240,7 +1240,7 @@ exit: 0
     {
       "name": "db run",
       "usage": "k2 db run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>",
-      "description": "Run one command with the connection string, password included, in its environment as DATABASE_URL (or --as NAME), where the command and anything it starts can read it, the way k2 vault run hands a secret: never on argv, never printed or logged. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
+      "description": "Run one command with the connection string, password included, in its environment as DATABASE_URL (or --as NAME), where the command and anything it starts can read it, the way k2 vault run hands a secret: never on argv, never printed or logged. The command runs in the CLI's place (its exit code is the command's). Same database rules as k2 db dsn.",
       "args": [{"name": "command", "required": true}],
       "flags": [
         {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (default: the workspace's default)."},
@@ -8185,7 +8185,7 @@ exit: 0
     {
       "name": "cli status",
       "usage": "k2 cli status [--json]",
-      "description": "Answered by the k5 binary only (the shell CLI says so and exits 2): which command families the binary answers itself (native), from their --schema entry (spec) or hands to the shell CLI (bash), and its version. For the owner, how many calls of each family fell through to the shell CLI (GET /cli/cli-usage); with a passport, or the daemon down, the table alone and one line on stderr. Exit 0. New k5 command (Beta): off by default; the owner turns it on in Settings → General → Server → Advanced. Not on Windows yet.",
+      "description": "Answered by the k2 CLI binary only (the shell CLI says so and exits 2): which command families the binary answers itself (native), from their --schema entry (spec) or hands to the shell CLI (bash), and its version. For the owner, how many calls of each family fell through to the shell CLI (GET /cli/cli-usage); with a passport, or the daemon down, the table alone and one line on stderr. Exit 0. The binary is in Beta: off by default; the owner turns it on in Settings → General → Server → Advanced. Not on Windows yet.",
       "args": [],
       "flags": [
         {"name": "--json", "arg": null, "description": "One JSON document: {version, native, spec, bash, counts (shown, owner-only or unavailable), families: [{family, words, owner, fallthroughs, verbs}]}."}

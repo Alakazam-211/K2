@@ -6,7 +6,7 @@ _update_usage() {
 Usage: k2 update [--app|--cli [--check]|--list]
 
   k2 update, k2 update --app
-                 Show this k2's version and the newest K2 release on GitHub,
+                 Show this CLI's version and the newest K2 release on GitHub,
                  with the page to download it from.
   k2 update --list
                  List the ten newest K2 releases on GitHub.
@@ -140,7 +140,7 @@ _app_update_get() {
     rm -rf "$tmp"
 }
 
-# `k2 update` / `--app`: this k2's version and the latest release's tag,
+# `k2 update` / `--app`: this CLI's version and the latest release's tag,
 # with its download page. `k2 update --list`: the ten newest releases.
 # cmd_update_v2 is the only caller, with --list or with nothing.
 # GitHub out of reach: one line on stderr and exit 1 (_app_update_get).

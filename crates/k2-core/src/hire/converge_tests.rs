@@ -339,3 +339,36 @@ fn a_key_hire_makes_its_root_when_it_isnt_there_yet() {
         assert!(out.created && registered(&path), "{tag}");
     }
 }
+
+/// The umask, put back on drop (nextest runs each test in its own process).
+struct Umask(libc::mode_t);
+
+impl Drop for Umask {
+    fn drop(&mut self) {
+        // SAFETY: umask has no preconditions.
+        unsafe { libc::umask(self.0) };
+    }
+}
+
+/// A new workspace under a 0700 hire root is still 0755, whatever the
+/// umask, so a sandbox's mirror of it can read it: a key's hire (the folders
+/// it makes above the workspace too) and an agent's.
+#[test]
+fn a_new_workspace_under_a_0700_root_is_0755() {
+    let st = setup();
+    assert_eq!(mode_of(&st.root), 0o700);
+    // SAFETY: umask has no preconditions.
+    let _umask = Umask(unsafe { libc::umask(0o077) });
+    let plain = st.root.join("plain");
+    key_hire(&st.root, &plain, false).expect("a key's plain hire");
+    let nested = st.root.join("team").join("tpl");
+    key_hire(&st.root, &nested, true).expect("a key's template hire");
+    let agent = st.root.join("by-agent");
+    let req: ConvergeRequest = serde_json::from_value(serde_json::json!({ "path": s(&agent) })).expect("body");
+    let auth = ConvergeAuthority { create_only: true, new_workspace_root: Some(st.root.clone()), ..ConvergeAuthority::unrestricted() };
+    converge(&req, &HireCaller::Agent { workspace_id: uniq("hirer") }, &auth).expect("an agent's hire");
+    for p in [&plain, &st.root.join("team"), &nested, &agent] {
+        assert_eq!(mode_of(p), 0o755, "{}", p.display());
+    }
+    assert_eq!(mode_of(&st.root), 0o700, "the root keeps its mode");
+}

@@ -352,7 +352,7 @@ pub fn claim_new_folder(path: &str) -> Result<(), HireError> {
     // Again, now the parents exist: none of them is a symlink.
     refuse_symlinks(p)?;
     match fs::create_dir(p) {
-        Ok(()) => Ok(()),
+        Ok(()) => super::folder_walk::set_new_folder_mode(p).map_err(|e| HireError::usage(format!("create {}: {e}", p.display()))),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists_refusal(p, "already exists")),
         Err(e) => Err(HireError::usage(format!("create {}: {e}", p.display()))),
     }

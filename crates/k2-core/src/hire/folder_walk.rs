@@ -33,8 +33,10 @@ pub(crate) struct Reached {
 }
 
 /// Walk from `root` (the owner's folder, opened as named) down `rel`. With
-/// `make_last`, the last part must not exist and is made (mode 0755 before
-/// the umask); missing parts above it are made the same way.
+/// `make_last`, the last part must not exist and is made; missing parts
+/// above it are made the same way. A folder the walk makes is mode 0755,
+/// set after making it (never left to the umask), as a new workspace
+/// folder has always been: a sandbox's mirror reads it.
 #[cfg(unix)]
 pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Reached, WalkError> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -57,6 +59,7 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
         let last = i + 1 == rel.len();
         let cn = std::ffi::CString::new(name.as_bytes()).map_err(|_| WalkError::NotAFolder(at.clone()))?;
         made = false;
+        let mut made_here = false;
         if last && make_last {
             // SAFETY: a valid dirfd and C string.
             if unsafe { libc::mkdirat(cur.as_raw_fd(), cn.as_ptr(), 0o755) } != 0 {
@@ -64,6 +67,7 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
                 return Err(if e.raw_os_error() == Some(libc::EEXIST) { WalkError::AlreadyThere(at) } else { WalkError::Io(at, e) });
             }
             made = true;
+            made_here = true;
         }
         // SAFETY: a valid dirfd and C string.
         let mut fd = unsafe { libc::openat(cur.as_raw_fd(), cn.as_ptr(), flags) };
@@ -75,6 +79,8 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
                 if e.raw_os_error() != Some(libc::EEXIST) {
                     return Err(WalkError::Io(at, e));
                 }
+            } else {
+                made_here = true;
             }
             // SAFETY: as above.
             fd = unsafe { libc::openat(cur.as_raw_fd(), cn.as_ptr(), flags) };
@@ -89,6 +95,10 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
         }
         // SAFETY: openat returned a new fd that nothing else owns.
         let next = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: a valid fd.
+        if made_here && unsafe { libc::fchmod(next.as_raw_fd(), 0o755) } != 0 {
+            return Err(WalkError::Io(at, std::io::Error::last_os_error()));
+        }
         let st = fstat(&next).map_err(|e| WalkError::Io(at.clone(), e))?;
         // The folder itself is the server user's; a folder above it may be
         // root's too.
@@ -174,4 +184,30 @@ pub(crate) fn walk(root: &Path, rel: &[OsString], make_last: bool) -> Result<Rea
         }
     }
     Err(WalkError::NotAFolder(at))
+}
+
+/// A new workspace folder's mode, 0755, set on the folder itself (a link
+/// put in its place is not followed), never left to the umask.
+#[cfg(unix)]
+pub(crate) fn set_new_folder_mode(dir: &Path) -> std::io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // SAFETY: a valid C string; the fd is owned below.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: open returned a new fd that nothing else owns.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: a valid fd.
+    if unsafe { libc::fchmod(fd.as_raw_fd(), 0o755) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn set_new_folder_mode(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
 }

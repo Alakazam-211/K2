@@ -702,20 +702,26 @@ Queued 1 · running 0 · done 3 · skipped 1 · failed 2\n\
 This computer: None at a time (None cores, 0.0 GiB free).\n\
 Queued 0 · running 0 · done 0 · skipped 0\n"
     );
-    let big = shown(
-        "night",
-        200,
-        &format!(
-            r#"{{"governor":{{"machine":{{"availableBytes":1{}}}}}}}"#,
-            "0".repeat(400)
-        ),
-        false,
+    // A free size too big for a float raises after the first line: the
+    // "unexpected answer" line with the first 300 characters of the
+    // answer, never a traceback.
+    let body = format!(
+        r#"{{"governor":{{"machine":{{"availableBytes":1{}}}}}}}"#,
+        "0".repeat(400)
     );
-    assert_eq!(big.exit, Exit::Error);
-    assert!(big.stderr.ends_with(&format!(
-        "line {}, in <module>\nOverflowError: int too large to convert to float\n",
-        line::NIGHT_FREE_GIB
-    )));
+    let big = shown("night", 200, &body, false);
+    assert_eq!(
+        (big.stdout.as_str(), big.stderr, big.exit),
+        (
+            "Last night (night of None, None): runs spread None-None, last call None, new day None.\n",
+            format!(
+                "Error: unexpected answer from the {} daemon (HTTP 200): {}\n",
+                k2_client::brand::PRODUCT_NAME,
+                body.chars().take(300).collect::<String>()
+            ),
+            Exit::Error
+        )
+    );
 }
 
 #[test]

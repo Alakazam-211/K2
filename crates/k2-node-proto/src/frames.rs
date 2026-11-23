@@ -2406,7 +2406,7 @@ mod tests {
         v.as_object_mut().unwrap().remove("tier");
         let dropped: Plan = serde_json::from_value(v).unwrap();
         assert_ne!(dropped.digest().unwrap(), q.digest().unwrap());
-        assert!(PROTOCOL >= PROTOCOL_TIERS && PROTOCOL_TIERS > PROTOCOL_SECRETS);
+        const { assert!(PROTOCOL >= PROTOCOL_TIERS && PROTOCOL_TIERS > PROTOCOL_SECRETS) };
     }
 
     /// Protocol 6: a plan without a cache is byte-identical to a 0.46.5
@@ -2426,7 +2426,7 @@ mod tests {
         v.as_object_mut().unwrap().remove("cache");
         let dropped: Plan = serde_json::from_value(v).unwrap();
         assert_ne!(dropped.digest().unwrap(), q.digest().unwrap());
-        assert!(PROTOCOL >= PROTOCOL_CACHE && PROTOCOL_CACHE > PROTOCOL_TIERS);
+        const { assert!(PROTOCOL >= PROTOCOL_CACHE && PROTOCOL_CACHE > PROTOCOL_TIERS) };
     }
 
     /// Protocol 11: sim frames seal and open on the attach socket in their
@@ -2448,7 +2448,7 @@ mod tests {
             assert_eq!(f.direction(), Direction::ControllerToNode, "{}", f.kind());
             assert!(f.kind().starts_with("sim_"));
         }
-        assert!(PROTOCOL == PROTOCOL_SIM && PROTOCOL_SIM == PROTOCOL_GENS + 1);
+        const { assert!(PROTOCOL == PROTOCOL_SIM && PROTOCOL_SIM == PROTOCOL_GENS + 1) };
     }
 
     /// `--with`: absent when unused (the 0.46.5 digest), bound when used.

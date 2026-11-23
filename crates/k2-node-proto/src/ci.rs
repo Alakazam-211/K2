@@ -585,8 +585,8 @@ mod tests {
     #[test]
     fn protocol_ci_is_the_next_protocol() {
         assert_eq!(crate::frames::PROTOCOL_CI, 9);
-        assert!(crate::frames::PROTOCOL_CI > crate::frames::PROTOCOL_GIT);
-        assert!(crate::frames::PROTOCOL >= crate::frames::PROTOCOL_CI);
+        const { assert!(crate::frames::PROTOCOL_CI > crate::frames::PROTOCOL_GIT) };
+        const { assert!(crate::frames::PROTOCOL >= crate::frames::PROTOCOL_CI) };
     }
 
     #[test]

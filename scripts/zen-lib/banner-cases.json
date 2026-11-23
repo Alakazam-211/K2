@@ -1,5 +1,5 @@
 {
-  "about": "Cases for the Zen widget library licence-banner rule (scripts/zen-lib/banners.mjs). Every port of the rule must give `pass` for each case: scripts/zen-lib/check-banners.mjs --self-test and the partner build's licence-allow.py read this file. A case's input is `text`, with `{{pad}}` replaced by `pad.unit` repeated `pad.times` times when `pad` is given. `id` is the zen-lib.json id, `licence` the row's SPDX expression. Byte offsets are UTF-8.",
+  "about": "Cases for the Zen widget library licence-banner rule (scripts/zen-lib/banners.mjs). Every port of the rule must give `pass` for each case: scripts/zen-lib/check-banners.mjs --self-test and the partner build's licence-allow.py read this file. A case's input is `text`, with `{{pad}}` replaced by `pad.unit` repeated `pad.times` times when `pad` is given. `id` is the zen-lib.json id, `licence` the row's SPDX expression. Byte offsets are UTF-8. The rule is ASCII only: whitespace between comments is space, \\t, \\n, \\v, \\f, \\r; a byte-order mark only at offset 0; word characters are [A-Za-z0-9_]; case folds only A-Z to a-z; a line comment ends at \\n only. Non-ASCII is written as \\u escapes.",
   "window_bytes": 4096,
   "cases": [
     {
@@ -74,7 +74,7 @@
     },
     {
       "name": "a byte-order mark, whitespace and the id in capitals",
-      "text": "﻿  \n/*! ACME 1.0 | MIT | Copyright (c) 2020 Acme */",
+      "text": "\ufeff  \n/*! ACME 1.0 | MIT | Copyright (c) 2020 Acme */",
       "id": "acme",
       "licence": "MIT",
       "pass": true
@@ -118,7 +118,7 @@
       "licence": "MIT",
       "pass": true,
       "pad": {
-        "unit": "é",
+        "unit": "\u00e9",
         "times": 2044
       }
     },
@@ -183,7 +183,7 @@
       "licence": "MIT",
       "pass": false,
       "pad": {
-        "unit": "é",
+        "unit": "\u00e9",
         "times": 2045
       }
     },
@@ -305,6 +305,160 @@
       "id": "acme",
       "licence": "MIT",
       "pass": false
+    },
+    {
+      "name": "\\x1c between comments (not whitespace)",
+      "text": "/* a */\u001c/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "\\x85 between comments (not whitespace)",
+      "text": "/* a */\u0085/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "U+00A0 between comments (not whitespace)",
+      "text": "/* a */\u00a0/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a byte-order mark between comments",
+      "text": "/* a */\ufeff/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "U+2028 between comments (not whitespace)",
+      "text": "/* a */\u2028/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "\\v and \\f between comments",
+      "text": "/* a */\u000b\f/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a byte-order mark at offset 0",
+      "text": "\ufeff/*! acme 1.0.0 | MIT | Copyright (c) 2020 Acme */\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "the Kelvin sign inside the id",
+      "text": "/*! \u212aestrel 1.0.0 | MIT | (c) 2020 Globex */",
+      "id": "kestrel",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "the long s inside the id",
+      "text": "/*! \u017fprocket 1.0.0 | MIT | (c) 2020 Globex */",
+      "id": "sprocket",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "the Kelvin sign in the id from zen-lib.json",
+      "text": "/*! kestrel 1.0.0 | MIT | (c) 2020 Globex */",
+      "id": "\u212aestrel",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a dotless i inside 'copyright' (no other mark)",
+      "text": "/*! acme 1.0.0 | MIT | copyr\u0131ght 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a dotted capital I inside 'COPYRIGHT' (no other mark)",
+      "text": "/*! acme 1.0.0 | MIT | COPYR\u0130GHT 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "the Kelvin sign and long s next to 'copyright' (no other mark)",
+      "text": "/*! acme 1.0.0 | MIT | \u212a\u017fcopyright 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "the Kelvin sign and long s around a mark that is not 'copyright'",
+      "text": "/*! acme 1.0.0 | MIT | \u212acopy\u017fright 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "an uppercase ASCII id and COPYRIGHT",
+      "text": "/*! ACME 1.0.0 | MIT | COPYRIGHT 2020 Globex */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "an uppercase (C)",
+      "text": "/*! acme 1.0.0 | MIT | (C) 2020 Globex */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a literal \u00a9 as the mark",
+      "text": "/*! acme 1.0.0 | MIT | \u00a9 2020 Globex */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a non-ASCII letter just before the id",
+      "text": "/*! \u00e9acme 1.0.0 | MIT | (c) 2020 Globex */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a non-ASCII letter just before 'copyright'",
+      "text": "/*! acme 1.0.0 | MIT | \u00e9copyright 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "'copyright' inside an ASCII word (no other mark)",
+      "text": "/*! acme 1.0.0 | MIT | nocopyrights 2020 Acme */",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": false
+    },
+    {
+      "name": "a line comment runs past U+2028 to \\n",
+      "text": "//! acme 1.0.0 MIT\u2028(c) 2020 Globex\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
+    },
+    {
+      "name": "a line comment ended by \\r\\n",
+      "text": "//! acme 1.0.0 | MIT | (c) 2020 Globex\r\ncode()",
+      "id": "acme",
+      "licence": "MIT",
+      "pass": true
     }
   ]
 }

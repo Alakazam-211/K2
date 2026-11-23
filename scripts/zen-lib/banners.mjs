@@ -9,8 +9,15 @@
 // before it), starting in its first BANNER_WINDOW bytes, that is a `/*!` or
 // `//!` comment, or a block or line comment with `@license` or `@preserve`
 // (what minifiers keep). That one comment must name the library's id from
-// src/shared/zen-lib.json as a whole word (any case), every SPDX id of its
-// licence literally, and a copyright ("copyright", "(c)" or "©", any case).
+// src/shared/zen-lib.json as a whole word (ASCII case-insensitive), every
+// SPDX id of its licence literally, and a copyright mark ("copyright" as a
+// word or "(c)", ASCII case-insensitive, or a literal "©").
+//
+// ASCII only, so every port agrees (no language's Unicode rules apply):
+// whitespace between comments is exactly space, \t, \n, \v, \f and \r;
+// a byte-order mark is allowed only at offset 0; a word character is
+// [A-Za-z0-9_] (and `-` around the id); case folds only A-Z to a-z. A line
+// comment ends at \n only.
 // A bare `/*!`, one with a URL and no SPDX id, or K2's old "pre-bundled for
 // K2" header (no copyright) is not a banner. This is the partner build's
 // licence-gate rule, made stricter: there the comment may be anywhere in
@@ -23,6 +30,35 @@
 /** A banner starts within this many bytes (UTF-8) of the file's start. */
 export const BANNER_WINDOW = 4096
 
+/** Space, \t, \n, \v, \f, \r: the only whitespace between comments. */
+function isSpace(code) {
+  return code === 32 || (code >= 9 && code <= 13)
+}
+
+/** A-Z to a-z, nothing else (no Unicode case folding). */
+function asciiLower(s) {
+  return s.replace(/[A-Z]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 32))
+}
+
+/** Whether `ch` (one UTF-16 unit, or '' at an end) is in the ASCII set `set`. */
+function inSet(ch, set) {
+  return ch !== '' && set.includes(ch)
+}
+
+const WORD = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_'
+
+/** Whether `needle` occurs in `hay` with no character of `before` just
+ *  before it and none of `after` just after it. */
+function occursAlone(hay, needle, before, after) {
+  if (!needle) return false
+  for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + 1)) {
+    const prev = i > 0 ? hay[i - 1] : ''
+    const next = i + needle.length < hay.length ? hay[i + needle.length] : ''
+    if (!inSet(prev, before) && !inSet(next, after)) return true
+  }
+  return false
+}
+
 /** The comments a text starts with: [{ block, bang, body, at }], `at` the
  *  comment's start in UTF-8 bytes. Stops at the first character that is
  *  neither whitespace nor a comment. */
@@ -31,7 +67,7 @@ export function leadingComments(text) {
   let i = text.charCodeAt(0) === 0xfeff ? 1 : 0
   const at = (j) => Buffer.byteLength(text.slice(0, j), 'utf8')
   for (;;) {
-    while (i < text.length && /\s/.test(text[i])) i++
+    while (i < text.length && isSpace(text.charCodeAt(i))) i++
     if (text.startsWith('/*', i)) {
       const end = text.indexOf('*/', i + 2)
       if (end < 0) return out
@@ -48,31 +84,31 @@ export function leadingComments(text) {
   }
 }
 
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
 /** The SPDX ids an expression names (`MIT AND Apache-2.0` -> MIT, Apache-2.0). */
 export function licenceIds(expr) {
   return expr
     .replace(/[()]/g, ' ')
-    .split(/\s+/)
+    .split(/[ \t\n\v\f\r]+/)
     .filter((t) => t && t !== 'AND' && t !== 'OR' && t !== 'WITH')
 }
 
-/** Whether `body` names `id` as a whole word (any case). */
+/** Whether `body` names `id` as a whole word, ASCII case-insensitive: no
+ *  [A-Za-z0-9_-] just before or after it. */
 export function namesPackage(body, id) {
-  return new RegExp(`(?<![A-Za-z0-9_-])${escapeRe(id)}(?![A-Za-z0-9_-])`, 'i').test(body)
+  return occursAlone(asciiLower(body), asciiLower(id), WORD + '-', WORD + '-')
 }
 
-/** Whether `body` names the SPDX id `spdx` literally, as a whole word. */
+/** Whether `body` names the SPDX id `spdx` literally: no [A-Za-z0-9.+-]
+ *  just before it and no [A-Za-z0-9+-] just after it. */
 export function namesLicence(body, spdx) {
-  return new RegExp(`(?<![A-Za-z0-9.+-])${escapeRe(spdx)}(?![A-Za-z0-9+-])`).test(body)
+  return occursAlone(body, spdx, WORD.slice(0, -1) + '.+-', WORD.slice(0, -1) + '+-')
 }
 
-/** Whether `body` names a copyright: "copyright", "(c)" or "©", any case. */
+/** Whether `body` names a copyright: "copyright" as a word ([A-Za-z0-9_]
+ *  on neither side) or "(c)", ASCII case-insensitive, or a literal "©". */
 export function namesCopyright(body) {
-  return /\bcopyright\b|\(c\)|©/i.test(body)
+  const low = asciiLower(body)
+  return occursAlone(low, 'copyright', WORD, WORD) || low.includes('(c)') || body.includes('\u00a9')
 }
 
 /** A legal comment (what minifiers keep: `/*!`, `//!`, or `@license` or

@@ -110,7 +110,9 @@ def census_module():
 
 SHIFT = re.compile(r"(?:^\s*|[;&|{]\s*|\bthen\s+|\bdo\s+|\belse\s+)shift(?:\s+(\d+)(?![\d>]))?\b")
 CALL = re.compile(r"(?:^\s*|[;&|({]\s*|\bthen\s+|\bdo\s+|\belse\s+|\)\s+)((?:cmd|_)[A-Za-z0-9_]*)((?:\s+[^\s;|&]+)*?)\s+\"\$(?:@|\{@(?::(\d+))?\})\"")
-CASE = re.compile(r"""^\s*case\s+"?(\$\{?[A-Za-z0-9_]+(?:\[\d\])?(?::-[^}"]*)?\}?)"?\s+in\b(.*)$""")
+# A loop's `case "$_dd$1" in` (an App verb, 0.46.17: `_dd` is empty until
+# a bare `--`) reads its word as `case "$1" in` does before the `--`.
+CASE = re.compile(r"""^\s*case\s+"?(?:\$_dd)?(\$\{?[A-Za-z0-9_]+(?:\[\d\])?(?::-[^}"]*)?\}?)"?\s+in\b(.*)$""")
 
 
 def code_of(line):

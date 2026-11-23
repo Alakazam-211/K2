@@ -229,6 +229,7 @@ fn start_rw(r: &Rig, slot: Slot, name: &str, script: &str, env: &[(&str, &str)],
         gpu: None,
         cpu_weight: None,
         netns_dummies: vec![],
+        userns: false,
     };
     let a = server::job_request(&r.socket, &JobOp::Start(s), &raw, Duration::from_secs(60)).map_err(|e| format!("{}: {}", e.code, e.message))?;
     drop((w1, w2));

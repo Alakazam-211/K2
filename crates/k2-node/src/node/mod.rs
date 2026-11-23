@@ -136,6 +136,10 @@ pub struct NodeOptions {
     /// (`Ready.netns`, 0.46.14)? `None` = ask it with `exec_stdin` (tests
     /// set it).
     pub exec_netns: Option<bool>,
+    /// Does the executor wall user namespaces in every unit and run a
+    /// `userns` start for the owner (`Ready.userns`, 0.46.18)? `None` =
+    /// ask it with `exec_stdin` (tests set it).
+    pub exec_userns: Option<bool>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
     /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
@@ -217,6 +221,7 @@ impl NodeOptions {
             cache_gens: None,
             exec_cpu_weight: None,
             exec_netns: None,
+            exec_userns: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
@@ -255,6 +260,9 @@ pub struct ExecCaps {
     /// Runs `network_none` units with working loopback and makes a job's
     /// own namespace with dummy interfaces (0.46.14).
     pub netns: bool,
+    /// Walls user namespaces in every unit; runs the owner's `--userns`
+    /// jobs without that wall (0.46.18).
+    pub userns: bool,
 }
 
 /// What the executor's `Ready` says it can do. An older one says none of
@@ -274,6 +282,7 @@ pub async fn probe_exec_caps(admin_socket: &Path) -> ExecCaps {
             gens_wall,
             cpu_weight,
             netns,
+            userns,
             ..
         })) => ExecCaps {
             stdin,
@@ -283,6 +292,7 @@ pub async fn probe_exec_caps(admin_socket: &Path) -> ExecCaps {
             gens_wall,
             cpu_weight,
             netns,
+            userns,
         },
         _ => ExecCaps::default(),
     }
@@ -524,6 +534,9 @@ pub struct Node {
     /// Without it a Linux node offers neither `job-network` nor
     /// `netns-dummy`.
     pub exec_netns: std::sync::atomic::AtomicBool,
+    /// 0.46.18: the executor's `Ready.userns` (asked with `exec_stdin`).
+    /// Without it the node offers no `job-userns`.
+    pub exec_userns: std::sync::atomic::AtomicBool,
     /// Job caches running jobs hold (module `job_cache`).
     job_caches_busy: Mutex<job_cache::Busy>,
     /// Which running attempt holds which job cache, by (slot, job, gen):
@@ -680,6 +693,7 @@ impl Node {
         let gens = gens_run::open_gens(opts.cache_gens.as_ref().unwrap_or(&Default::default()), &wall, exec_gens_wall, &layout.home, gens_exempt);
         let exec_cpu_weight = opts.exec_cpu_weight.unwrap_or(probed.cpu_weight);
         let exec_netns = opts.exec_netns.unwrap_or(probed.netns);
+        let exec_userns = opts.exec_userns.unwrap_or(probed.userns);
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -726,6 +740,7 @@ impl Node {
             exec_gens_wall: std::sync::atomic::AtomicBool::new(exec_gens_wall),
             exec_cpu_weight: std::sync::atomic::AtomicBool::new(exec_cpu_weight),
             exec_netns: std::sync::atomic::AtomicBool::new(exec_netns),
+            exec_userns: std::sync::atomic::AtomicBool::new(exec_userns),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
@@ -805,7 +820,7 @@ impl Node {
         if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
             return false;
         }
-        let ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns } = probe_exec_caps(&self.opts.admin_socket).await;
+        let ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall, cpu_weight, netns, userns } = probe_exec_caps(&self.opts.admin_socket).await;
         let mut changed = self.exec_stdin.swap(stdin, std::sync::atomic::Ordering::SeqCst) != stdin;
         if self.opts.exec_job_uid.is_none() {
             changed |= self.exec_job_uid.swap(job_uid, std::sync::atomic::Ordering::SeqCst) != job_uid;
@@ -831,7 +846,43 @@ impl Node {
         if self.opts.exec_netns.is_none() {
             changed |= self.exec_netns.swap(netns, std::sync::atomic::Ordering::SeqCst) != netns;
         }
+        if self.opts.exec_userns.is_none() {
+            changed |= self.exec_userns.swap(userns, std::sync::atomic::Ordering::SeqCst) != userns;
+        }
         changed
+    }
+
+    /// 0.46.18: does this node wall user namespaces in its jobs and run its
+    /// owner's `--userns` jobs without that wall? Linux job wall and an
+    /// executor that says `userns`; never a Mac (no user namespaces).
+    pub fn offers_job_userns(&self) -> bool {
+        cfg!(target_os = "linux")
+            && matches!(self.wall, Wall::JobUser { .. })
+            && self.exec_userns.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 0.46.18: why this node won't run `plan`'s `--userns` for `t`, or
+    /// `None` (no ask, or it can). Only the node owner's own server
+    /// (slot 0) may, never a tenant's, whatever its trust; root checks
+    /// the slot again. Checked at assign and again as the job starts.
+    pub fn job_userns_refusal(&self, t: &Tenant, plan: &k2_node_proto::frames::Plan) -> Option<(&'static str, String)> {
+        use k2_node_proto::userns::codes;
+        if !plan.userns {
+            return None;
+        }
+        if !t.is_owner() {
+            return Some((
+                codes::USERNS_OWNER_ONLY,
+                "--userns is only for the node owner's own server: this job's server is a tenant of this node, so its jobs can't make user namespaces here".into(),
+            ));
+        }
+        if !self.offers_job_userns() {
+            return Some((
+                codes::USERNS_NEEDS_UPDATE,
+                format!("this node can't run a --userns job now (job wall: {}; it needs a 0.46.18 root executor)", self.wall.label()),
+            ));
+        }
+        None
     }
 
     /// 0.46.14: can this node run a job at `--network none` whatever its

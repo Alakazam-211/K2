@@ -817,3 +817,40 @@ fn a_walled_job_keeps_running_through_a_node_restart_and_is_adopted() {
     rt_b.shutdown_timeout(std::time::Duration::from_secs(5));
 }
 
+/// 0.46.18: a job unit makes no user namespace (`unshare -U` fails), runs
+/// in one of its own whose `max_user_namespaces` root set to 0, and the
+/// machine's own limit never changes. The owner's `--userns` job may make
+/// one and sees the machine's limit. The node offers `job-userns`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd: run on a Linux box with --ignored"]
+async fn a_job_makes_no_user_namespace_unless_userns_and_its_limit_is_its_own() {
+    let machine = std::fs::read_to_string("/proc/sys/user/max_user_namespaces").unwrap().trim().to_string();
+    assert_ne!(machine, "0", "this box allows user namespaces (the control)");
+    assert!(std::process::Command::new("unshare").args(["-U", "true"]).status().unwrap().success(), "control: root makes one");
+    let r = rig("userns");
+    let mut fake = Fake::start().await;
+    let n = walled_node(&fake, &r, "").await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let offer = n.node.offer(&n.node.owner());
+    assert!(offer.features.iter().any(|f| f == k2_node_proto::userns::FEATURE_JOB_USERNS), "{:?}", offer.features);
+    let script = "unshare -U true; echo unshare=$?; echo max=$(cat /proc/sys/user/max_user_namespaces)";
+    c.send(Frame::Assign(assign(plan("ns1", &["/bin/sh", "-c", script]), 1)));
+    let fr = run_to_receipt(&mut c, "ns1").await;
+    assert_eq!(last(&fr, "ns1").state, JobState::Done, "{fr:?}");
+    let out = text(&logs_of(&fr, "ns1"), LogStream::Out);
+    assert!(out.contains("unshare=1"), "a job made a user namespace: {out}");
+    assert!(out.contains("max=0\n"), "the job's own namespace allows none: {out}");
+    let after = std::fs::read_to_string("/proc/sys/user/max_user_namespaces").unwrap().trim().to_string();
+    assert_eq!(after, machine, "the machine's limit never changes");
+    let mut p = plan("ns2", &["/bin/sh", "-c", script]);
+    p.userns = true;
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "ns2").await;
+    assert_eq!(last(&fr, "ns2").state, JobState::Done, "{fr:?}");
+    let out = text(&logs_of(&fr, "ns2"), LogStream::Out);
+    assert!(out.contains("unshare=0"), "--userns: the owner's job may: {out}");
+    assert!(out.contains(&format!("max={machine}\n")), "--userns: no namespace of its own: {out}");
+    drop(n);
+}
+

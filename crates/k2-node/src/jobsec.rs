@@ -460,7 +460,8 @@ pub fn shim_wall() -> Result<(), String> {
     if mode == ShimMode::DenyLimit {
         wait_for_limit(LIMIT_WAIT).map_err(|e| no_wall(&e))?;
     }
-    let _ = mode;
+    #[cfg(target_os = "linux")]
+    install(mode == ShimMode::Allow).map_err(|e| no_wall(&format!("its syscall filter: {e}")))?;
     Ok(())
 }
 

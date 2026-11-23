@@ -306,6 +306,11 @@ impl Node {
         {
             f.push(k2_node_proto::jobnet::FEATURE_NETNS_DUMMY.to_string());
         }
+        // 0.46.18: user namespaces are walled in every job here, and the
+        // owner's `--userns` jobs run without that wall.
+        if t.speaks_gens() && self.offers_job_userns() && !f.iter().any(|x| x == k2_node_proto::userns::FEATURE_JOB_USERNS) {
+            f.push(k2_node_proto::userns::FEATURE_JOB_USERNS.to_string());
+        }
         // O2 (protocol 10): `Outputs.stats`, the job's 5 s series.
         if t.speaks_gens() && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_JOB_STATS) {
             f.push(k2_node_proto::gens::FEATURE_JOB_STATS.to_string());
@@ -627,6 +632,37 @@ mod job_network_tests {
             "{:?}",
             off.features
         );
+    }
+
+    /// 0.46.18 `--userns`: offered only with the Linux job wall and an
+    /// executor that says `userns`; refused for a tenant whatever the node
+    /// offers (the node owner's own server's alone); no ask, no refusal.
+    #[tokio::test]
+    async fn userns_is_the_owners_alone_and_needs_a_new_executor() {
+        use k2_node_proto::userns::{codes as ucodes, FEATURE_JOB_USERNS};
+        let n = node("userns-offer", Some(Wall::JobUser { user: "k2job".into() }), true).await;
+        let owner = n.owner();
+        owner.protocol.store(PROTOCOL_GENS, Ordering::SeqCst);
+        let offered = |n: &Node, t: &Tenant| n.session_features(t).iter().any(|x| x == FEATURE_JOB_USERNS);
+        let mut p = crate::ledger::tests::assign("u", 1).plan;
+        assert_eq!(n.job_userns_refusal(&owner, &p), None, "no ask, nothing to refuse");
+        p.userns = true;
+        // An older executor (no `userns` in Ready).
+        assert!(!offered(&n, &owner));
+        assert_eq!(n.job_userns_refusal(&owner, &p).map(|r| r.0), Some(ucodes::USERNS_NEEDS_UPDATE));
+        n.exec_userns.store(true, Ordering::SeqCst);
+        let tenant = n.add_tenant(2).await.unwrap();
+        tenant.protocol.store(PROTOCOL_GENS, Ordering::SeqCst);
+        let r = n.job_userns_refusal(&tenant, &p).unwrap();
+        assert_eq!(r.0, ucodes::USERNS_OWNER_ONLY, "{}", r.1);
+        assert!(r.1.contains("tenant"), "a named reason: {}", r.1);
+        if cfg!(target_os = "linux") {
+            assert!(offered(&n, &owner) && offered(&n, &tenant), "every server learns the node walls user namespaces");
+            assert_eq!(n.job_userns_refusal(&owner, &p), None);
+        } else {
+            assert!(!offered(&n, &owner), "a Mac has no user namespaces to wall");
+            assert_eq!(n.job_userns_refusal(&owner, &p).map(|r| r.0), Some(ucodes::USERNS_NEEDS_UPDATE));
+        }
     }
 
     /// An older root executor (no `netns` in Ready): neither is offered, and

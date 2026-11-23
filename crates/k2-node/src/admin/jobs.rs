@@ -352,6 +352,13 @@ pub struct JobStart {
     /// when empty (today's start, byte for byte).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub netns_dummies: Vec<k2_node_proto::jobnet::Dummy>,
+    /// 0.46.18 (`--userns`, [`k2_node_proto::userns`]): the job may make
+    /// user namespaces (its unit skips the namespace rules of
+    /// [`crate::jobsec`]; the denylist stays). The owner's slot only: root
+    /// refuses it for any other. Sent only when `Ready` said `userns`;
+    /// absent when false (today's start, byte for byte).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub userns: bool,
 }
 
 /// systemd's `CPUWeight` range.
@@ -441,6 +448,13 @@ pub enum JobAnswer {
         /// then offers neither `job-network` nor `netns-dummy`.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         netns: bool,
+        /// 0.46.18: every unit this executor starts walls user namespaces
+        /// and the syscall denylist ([`crate::jobsec`]), and a start that
+        /// says `userns` (the owner's slot only) skips the namespace rules.
+        /// An older one omits it (false): the node then never offers
+        /// `job-userns`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        userns: bool,
     },
     Started {
         unit: String,
@@ -761,6 +775,19 @@ pub struct UnitPlan {
     /// says. The owner's and `own` tenants' units keep them (Chromium's
     /// sandbox in Playwright tests needs a user namespace).
     pub restrict_userns: bool,
+    /// 0.46.18 (`--userns`, the owner's slot only): the unit skips the
+    /// user-namespace rules ([`crate::jobsec`]); the denylist stays. Never
+    /// with `restrict_userns`.
+    pub userns: bool,
+    /// 0.46.18, without `userns`: the job runs in a user namespace of its
+    /// own (`PrivateUsers=yes`) whose `max_user_namespaces` root sets to 0
+    /// as the unit starts ([`set_job_userns_limit`]): that namespace only,
+    /// never the node's sysctl. Off where systemd can't make one
+    /// ([`Executor::own_userns_ready`]); the filter still refuses.
+    pub own_userns: bool,
+    /// systemd ≥ 247: the denylist's entries say `:EPERM` (refused); an
+    /// older systemd kills the process instead (still a refusal).
+    pub syscall_errno: bool,
     /// `RuntimeMaxSec` (already clamped), or none.
     pub runtime_max_secs: Option<u64>,
     /// GPU jobs (0.46.11): the leased device, or none (then the argv is
@@ -786,6 +813,9 @@ pub fn runtime_max(max_secs: Option<u64>) -> Option<u64> {
 /// user-namespace and network-namespace code is reachable from inside
 /// them, so another server's jobs keep away from it on every node.
 pub const TEAM_RESTRICT_NAMESPACES: &str = "RestrictNamespaces=~user net";
+
+/// Every other unit without `--userns` (0.46.18): no user namespaces.
+pub const RESTRICT_USER_NAMESPACES: &str = "RestrictNamespaces=~user";
 
 /// The `IPAddressAllow=` every job unit with an address filter gets
 /// (`none` and `no-lan`): systemd's `localhost` is 127.0.0.0/8 and ::1,
@@ -850,6 +880,16 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         // job root.
         a.push(format!("--setenv={}={}", k2_node_proto::gpu::ENV_RUNTIME_DIR, p.root.join(k2_node_proto::gpu::RUNTIME_DIR).display()));
     }
+    // 0.46.18: which syscall rules the `job-exec` shim installs (root's
+    // word, in the unit's own env).
+    let shim_mode = if p.userns {
+        crate::jobsec::USERNS_ALLOW
+    } else if p.own_userns {
+        crate::jobsec::USERNS_DENY_LIMIT
+    } else {
+        crate::jobsec::USERNS_DENY
+    };
+    a.push(format!("--setenv={}={shim_mode}", crate::jobsec::ENV_USERNS));
     let mut prop = |s: String| {
         a.push("-p".into());
         a.push(s);
@@ -894,8 +934,21 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         // A secret job's memory never lands in a core file (SE22).
         prop("LimitCORE=0".into());
     }
+    // 0.46.18: no user namespaces unless the job has `--userns` (a team
+    // tenant's unit never makes network namespaces either). One
+    // `RestrictNamespaces=` line: clone3 → ENOSYS, clone/unshare with
+    // CLONE_NEWUSER → EPERM.
     if p.restrict_userns {
         prop(TEAM_RESTRICT_NAMESPACES.into());
+    } else if !p.userns {
+        prop(RESTRICT_USER_NAMESPACES.into());
+    }
+    if !p.userns && p.own_userns {
+        // The job's own user namespace, whose limit root sets to 0.
+        prop("PrivateUsers=yes".into());
+    }
+    for s in crate::jobsec::unit_props(p.userns, p.syscall_errno) {
+        prop(s);
     }
     prop(format!("TimeoutStopSec={}", p.stop_grace_secs.clamp(1, 600)));
     if let Some(m) = p.runtime_max_secs {
@@ -987,6 +1040,119 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
 /// last one, so its absence fails the test rather than passing it.
 pub const WALL_SELFTEST_SCRIPT: &str =
     "test ! -e /proc/1/cmdline && test -z \"$(ls -A /dev/shm)\" && command -v unshare >/dev/null && ! unshare -U true 2>/dev/null && echo k2-wall-ok";
+
+/// 0.46.18: `--userns` is the node owner's own server's (slot 0) alone,
+/// never a tenant's, whatever its trust.
+pub fn userns_slot_check(userns: bool, tenant: Slot) -> Result<(), AdminRefusal> {
+    if userns && tenant != OWNER_SLOT {
+        return Err(refuse(
+            k2_node_proto::userns::codes::USERNS_OWNER_ONLY,
+            format!("--userns is only for the node owner's own server's jobs; slot {tenant} is a tenant of this node"),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a `/proc/<pid>/uid_map` is a namespace of its own: anything
+/// but the initial namespace's one line `0 0 4294967295`.
+pub fn own_uid_map(map: &str) -> bool {
+    let lines: Vec<Vec<&str>> = map.lines().map(|l| l.split_whitespace().collect::<Vec<&str>>()).filter(|w| !w.is_empty()).collect();
+    !lines.is_empty() && lines != [vec!["0", "0", "4294967295"]]
+}
+
+/// 0.46.18: set `max_user_namespaces` to 0 in a job unit's own user
+/// namespace (`PrivateUsers=yes`), as root, right after the unit starts;
+/// the shim waits for it before it runs anything. Only that namespace:
+/// the unit's main process must be in the unit's cgroup and in a user
+/// namespace other than root's own, or nothing is written (the machine's
+/// sysctl is never touched: rootless Podman for Apps and the sandbox need
+/// it). A unit whose shim already ended needs nothing.
+#[cfg(not(target_os = "linux"))]
+pub fn set_job_userns_limit(_unit: &str, _timeout: Duration) -> Result<(), String> {
+    Err("user namespaces are Linux's".into())
+}
+
+/// The Linux half of [`set_job_userns_limit`] (see there).
+#[cfg(target_os = "linux")]
+pub fn set_job_userns_limit(unit: &str, timeout: Duration) -> Result<(), String> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::process::CommandExt;
+    let t0 = Instant::now();
+    let pid: u32 = loop {
+        let text = systemctl(&["show", "--property=MainPID", unit])?;
+        let pid = text.lines().find_map(|l| l.strip_prefix("MainPID=")).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+        if pid > 0 {
+            break pid;
+        }
+        if unit_status(unit).is_ok_and(|s| s.ended()) {
+            return Ok(());
+        }
+        if t0.elapsed() > timeout {
+            return Err(format!("{unit} has no main process after {}s", timeout.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let ns_path = format!("/proc/{pid}/ns/user");
+    let c_ns = std::ffi::CString::new(ns_path.clone()).map_err(|e| e.to_string())?;
+    // SAFETY: open(2) on a NUL-terminated path; the fd is owned below.
+    let raw = unsafe { libc::open(c_ns.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if raw < 0 {
+        let e = std::io::Error::last_os_error();
+        if unit_status(unit).is_ok_and(|s| s.ended()) {
+            return Ok(());
+        }
+        return Err(format!("open {ns_path}: {e}"));
+    }
+    // SAFETY: a fresh fd from open(2), owned from here on. Held open, it
+    // names that process's namespace even if the pid goes; the checks
+    // below prove the process was the unit's and the namespace isn't
+    // root's own.
+    let ns = std::fs::File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) });
+    let ns_ino = ns.metadata().map_err(|e| format!("stat {ns_path}: {e}"))?.ino();
+    let own_ino = std::fs::metadata("/proc/self/ns/user").map_err(|e| format!("stat /proc/self/ns/user: {e}"))?.ino();
+    let init_ino = std::fs::metadata("/proc/1/ns/user").map_err(|e| format!("stat /proc/1/ns/user: {e}"))?.ino();
+    if ns_ino == own_ino || ns_ino == init_ino {
+        return Err(format!("{unit}'s process {pid} is in the machine's own user namespace; its limit is never set there"));
+    }
+    let cg = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).map_err(|e| format!("read /proc/{pid}/cgroup: {e}"))?;
+    if !cg.lines().any(|l| l.ends_with(&format!("/{unit}"))) {
+        return Err(format!("process {pid} isn't {unit}'s any more"));
+    }
+    let c_sysctl = std::ffi::CString::new(crate::jobsec::MAX_USER_NAMESPACES).map_err(|e| e.to_string())?;
+    let fd = ns.as_raw_fd();
+    let mut cmd = std::process::Command::new(find_program("true").ok_or("true not found")?);
+    cmd.env_clear().current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: only async-signal-safe syscalls between fork and exec: the
+    // child (one thread) joins the job's user namespace, where root has
+    // every capability, and writes the sysctl there (/proc/sys/user/* is
+    // the caller's own namespace's).
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setns(fd, libc::CLONE_NEWUSER) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let f = libc::open(c_sysctl.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
+            if f < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let n = libc::write(f, b"0\n".as_ptr().cast(), 2);
+            let e = std::io::Error::last_os_error();
+            libc::close(f);
+            if n != 2 {
+                return Err(e);
+            }
+            Ok(())
+        });
+    }
+    let what = format!("set {} in {unit}'s user namespace", crate::jobsec::MAX_USER_NAMESPACES);
+    let st = cmd.status().map_err(|e| format!("{what}: {e}"))?;
+    if !st.success() {
+        return Err(format!("{what}: {st}"));
+    }
+    drop(ns);
+    Ok(())
+}
 
 /// Whether a slot's unit gets [`TEAM_RESTRICT_NAMESPACES`]: every tenant
 /// unless its `servers.toml` line says `own`. The owner (slot 0) and `own`
@@ -1294,6 +1460,65 @@ impl Executor {
         self.wall_selftest().map_err(|e| refuse(share::codes::TEAM_NEEDS_TENANT_WALL, format!("the tenant wall's self-test failed: {e}")))
     }
 
+    /// 0.46.18: can systemd give a job unit a user namespace of its own
+    /// (`PrivateUsers=yes`) here? A throwaway unit as the owner's job user
+    /// must see a uid map that isn't the machine's whole range. Asked once
+    /// per executor process. Without it job units get no namespace of
+    /// their own (and no per-namespace limit); the seccomp rules still
+    /// refuse user namespaces, so no job loses that wall, and no job fails
+    /// for a namespace systemd can't make.
+    pub fn own_userns_ready(&self) -> bool {
+        static READY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *READY.get_or_init(|| match self.own_userns_selftest() {
+            Ok(()) => true,
+            Err(e) => {
+                crate::nlog!("job user namespaces: no namespace of the job's own here ({e}); the syscall filter alone refuses them");
+                false
+            }
+        })
+    }
+
+    fn own_userns_selftest(&self) -> Result<(), String> {
+        if !cfg!(target_os = "linux") {
+            return Err("not Linux".into());
+        }
+        let ids = self.job_ids(OWNER_SLOT).map_err(|e| e.message)?;
+        let prog = find_program("systemd-run").ok_or("systemd-run not found")?;
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unit = format!("{UNIT_PREFIX}userns-selftest-{}-{}.service", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let a: Vec<String> = vec![
+            format!("--unit={unit}"),
+            "--quiet".into(),
+            "--wait".into(),
+            "--collect".into(),
+            "--pipe".into(),
+            format!("--uid={}", ids.uid),
+            format!("--gid={}", ids.gid),
+            "-p".into(),
+            "NoNewPrivileges=yes".into(),
+            "-p".into(),
+            "PrivateUsers=yes".into(),
+            "-p".into(),
+            "RuntimeMaxSec=20".into(),
+            "--".into(),
+            "/bin/cat".into(),
+            "/proc/self/uid_map".into(),
+        ];
+        let out = std::process::Command::new(prog)
+            .args(&a)
+            .env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+            .current_dir("/")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("systemd-run: {e}"))?;
+        let map = String::from_utf8_lossy(&out.stdout);
+        if !out.status.success() {
+            return Err(format!("{}: {}", out.status, String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        own_uid_map(&map).then_some(()).ok_or_else(|| format!("the unit's uid map is the machine's ({})", map.trim()))
+    }
+
     /// The wall's runtime check, as root, once per executor process (only
     /// a pass is remembered): a throwaway unit with the tenant template's
     /// sandbox (`ProtectProc=invisible`, `PrivateIPC`, a private
@@ -1437,6 +1662,7 @@ impl Executor {
                     gens_wall: true,
                     cpu_weight: cfg!(target_os = "linux"),
                     netns: cfg!(target_os = "linux") && super::netns::selftest().map_err(|e| crate::nlog!("job network namespaces: self-test failed: {e}")).is_ok(),
+                    userns: cfg!(target_os = "linux"),
                 })
             }
             // No job starts while an owner change is unfinished (its trees
@@ -1618,6 +1844,9 @@ impl Executor {
             .map_err(|e| refuse(code::BAD_ARGS, format!("netns_dummies: {e}")))?;
         }
         let restrict_userns = team_unit(s.tenant, entry.as_ref().map(|e| e.trust));
+        // 0.46.18: `--userns` is the node owner's own server's alone, never
+        // a tenant's, whatever its trust (root decides; the node only asks).
+        userns_slot_check(s.userns, s.tenant)?;
         let v = systemd();
         if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
             return Err(refuse(share::codes::TENANT_WALL_MISSING, format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: no tenant jobs here")));
@@ -1641,6 +1870,9 @@ impl Executor {
             lan_extra: if network == Network::NoLan { lan_deny_extra() } else { Vec::new() },
             no_core: s.stdin,
             restrict_userns,
+            userns: s.userns,
+            own_userns: !s.userns && self.own_userns_ready(),
+            syscall_errno: v >= MIN_SYSTEMD_PROTECT_PROC,
             runtime_max_secs: runtime_max(s.max_secs),
             gpu: None,
             netns: None,
@@ -1713,7 +1945,7 @@ impl Executor {
                 event: "job".into(),
                 // `stdin` only says a secret-env pipe was relayed; root never
                 // sees what is in it.
-                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "job_uid": uid_index, "gpu": gpu, "netns": netns, "netns_dummies": s.netns_dummies.iter().map(|d| d.line()).collect::<Vec<_>>()}),
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns, "userns": s.userns, "job_uid": uid_index, "gpu": gpu, "netns": netns, "netns_dummies": s.netns_dummies.iter().map(|d| d.line()).collect::<Vec<_>>()}),
                 ..Default::default()
             },
             self.now(),
@@ -1774,7 +2006,17 @@ impl Executor {
         std::thread::spawn(move || {
             let _ = child.wait();
         });
-        started
+        started?;
+        // 0.46.18: the job's own user namespace gets its limit (0) before
+        // the shim runs anything (it waits for it). A unit whose limit
+        // can't be set is stopped: never a job without it.
+        if plan.own_userns && !plan.userns {
+            if let Err(e) = set_job_userns_limit(unit, Duration::from_secs(15)) {
+                let _ = systemctl(&["stop", unit]);
+                return Err(refuse(code::FAILED, format!("the job's user-namespace limit: {e}; the unit was stopped")));
+            }
+        }
+        Ok(())
     }
 
     /// `wall.enable` (Linux; operate at `policy` since 0.46.4, owner-approved
@@ -2008,6 +2250,9 @@ mod tests {
             lan_extra: Vec::new(),
             no_core: false,
             restrict_userns: false,
+            userns: false,
+            own_userns: true,
+            syscall_errno: true,
             runtime_max_secs: None,
             gpu: None,
             netns: None,
@@ -2030,6 +2275,8 @@ mod tests {
             "--uid=990",
             "--gid=991",
             "--working-directory=/var/lib/k2node/jobs/j1-g1",
+            // 0.46.18: the shim's syscall wall, and its own user namespace.
+            "--setenv=K2_JOB_USERNS=deny-limit",
             "-p", "RemainAfterExit=yes",
             "-p", "KillMode=control-group",
             "-p", "OOMPolicy=stop",
@@ -2050,6 +2297,9 @@ mod tests {
             "-p", "LimitNOFILE=65536",
             "-p", "TemporaryFileSystem=/dev/shm:mode=1777",
             "-p", "RemoveIPC=yes",
+            "-p", "RestrictNamespaces=~user",
+            "-p", "PrivateUsers=yes",
+            "-p", "SystemCallFilter=~bpf:EPERM perf_event_open:EPERM userfaultfd:EPERM keyctl:EPERM add_key:EPERM request_key:EPERM io_uring_setup:EPERM io_uring_enter:EPERM io_uring_register:EPERM kexec_load:EPERM kexec_file_load:EPERM init_module:EPERM finit_module:EPERM delete_module:EPERM open_by_handle_at:EPERM mount:EPERM umount:EPERM umount2:EPERM pivot_root:EPERM setns:EPERM",
             "-p", "TimeoutStopSec=10",
             "-p", "BindPaths=/var/lib/k2node/jobs/j1-g1/tmp:/tmp /var/lib/k2node/jobs/j1-g1/var-tmp:/var/tmp",
             "-p", "ReadWritePaths=/var/lib/k2node/jobs/j1-g1 /var/lib/k2node/cache/pk/target-1",
@@ -2090,7 +2340,7 @@ mod tests {
         assert_eq!(job_cpu_weight(1), 1, "never 0");
         assert_eq!(job_cpu_weight(1_024_000), 10_000);
         // The wire: absent unless asked; an older executor's Ready says no.
-        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400), netns_dummies: vec![] };
+        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400), netns_dummies: vec![], userns: false };
         assert!(serde_json::to_string(&JobOp::Start(s.clone())).unwrap().contains(r#""cpu_weight":400"#));
         let none = JobStart { cpu_weight: None, ..s };
         assert!(!serde_json::to_string(&JobOp::Start(none)).unwrap().contains("cpu_weight"));
@@ -2180,22 +2430,74 @@ mod tests {
         assert!(!team_unit(2, Some(share::Trust::Own)), "own-trust server");
         assert!(team_unit(2, Some(share::Trust::Team)), "team server");
         assert!(team_unit(2, None), "a tenant with no known trust fails closed");
+        // 0.46.18: an owner's unit makes no user namespaces either (no
+        // `--userns`); a team tenant's also no network namespaces.
         let plain = systemd_run_argv(&plan());
-        assert!(!plain.iter().any(|x| x.starts_with("RestrictNamespaces")), "owner unit: {plain:?}");
+        let ns: Vec<&String> = plain.iter().filter(|x| x.starts_with("RestrictNamespaces")).collect();
+        assert_eq!(ns, [RESTRICT_USER_NAMESPACES], "owner unit: {plain:?}");
         let mut p = plan();
         p.restrict_userns = true;
         let a = systemd_run_argv(&p);
-        assert!(a.iter().any(|x| x == "RestrictNamespaces=~user net"), "{a:?}");
+        let ns: Vec<&String> = a.iter().filter(|x| x.starts_with("RestrictNamespaces")).collect();
+        assert_eq!(ns, [TEAM_RESTRICT_NAMESPACES], "one line, the team's: {a:?}");
         let i = a.iter().position(|x| x == "RestrictNamespaces=~user net").unwrap();
         assert_eq!(a[i - 1], "-p", "passed as a unit property");
         let mut b = a.clone();
         b.retain(|x| x != TEAM_RESTRICT_NAMESPACES && x != "-p");
         let mut c = plain.clone();
-        c.retain(|x| x != "-p");
+        c.retain(|x| x != RESTRICT_USER_NAMESPACES && x != "-p");
         assert_eq!(b, c, "only RestrictNamespaces differs");
         assert!(WALL_SELFTEST_SCRIPT.contains("! unshare -U true"), "the self-test proves the limit holds");
         assert!(WALL_SELFTEST_SCRIPT.contains("command -v unshare"), "a missing unshare fails the self-test");
         assert!(TENANT_TOOLS.contains(&"unshare"));
+    }
+
+    /// 0.46.18 `--userns` (the owner's slot only): no namespace rules, no
+    /// namespace of its own, the shim told so; the denylist and
+    /// `LockPersonality` stay. Without systemd ≥ 247 the denylist has no
+    /// errno (systemd kills instead); without a namespace systemd can
+    /// make, the shim isn't told to wait for a limit.
+    #[test]
+    fn a_userns_unit_skips_only_the_namespace_rules() {
+        let plain = systemd_run_argv(&plan());
+        let mut p = plan();
+        p.userns = true;
+        let a = systemd_run_argv(&p);
+        assert!(a.iter().any(|x| x == "--setenv=K2_JOB_USERNS=allow"), "{a:?}");
+        for gone in ["RestrictNamespaces", "PrivateUsers"] {
+            assert!(!a.iter().any(|x| x.starts_with(gone)), "{gone}: {a:?}");
+        }
+        let f: Vec<&String> = a.iter().filter(|x| x.starts_with("SystemCallFilter=")).collect();
+        assert_eq!(f.len(), 1, "{a:?}");
+        assert!(!f[0].contains("setns") && f[0].contains("bpf:EPERM") && f[0].contains("pivot_root:EPERM"), "{f:?}");
+        assert!(a.iter().any(|x| x == "LockPersonality=yes") && a.iter().any(|x| x == "NoNewPrivileges=yes"));
+        assert!(plain.iter().any(|x| x.starts_with("SystemCallFilter=") && x.contains("setns:EPERM")), "{plain:?}");
+        let mut old = plan();
+        old.syscall_errno = false;
+        let o = systemd_run_argv(&old);
+        assert!(o.iter().any(|x| x.starts_with("SystemCallFilter=~bpf perf_event_open") && x.ends_with(" setns")), "{o:?}");
+        let mut no_ns = plan();
+        no_ns.own_userns = false;
+        let n = systemd_run_argv(&no_ns);
+        assert!(n.iter().any(|x| x == "--setenv=K2_JOB_USERNS=deny"), "{n:?}");
+        assert!(!n.iter().any(|x| x == "PrivateUsers=yes") && n.iter().any(|x| x == RESTRICT_USER_NAMESPACES), "{n:?}");
+        assert!(own_uid_map("         0     990          1\n       990     990          1\n"));
+        assert!(!own_uid_map("         0          0 4294967295\n"));
+        assert!(!own_uid_map(""));
+        // Root's slot check: the owner's slot only.
+        assert!(userns_slot_check(true, OWNER_SLOT).is_ok());
+        assert!(userns_slot_check(false, 3).is_ok());
+        for slot in 1..=7 {
+            let e = userns_slot_check(true, slot).unwrap_err();
+            assert_eq!(e.code, k2_node_proto::userns::codes::USERNS_OWNER_ONLY, "slot {slot}");
+        }
+        // The wire: absent unless asked.
+        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false };
+        assert!(!serde_json::to_string(&s).unwrap().contains("userns"));
+        let u = JobStart { userns: true, ..s };
+        let t = serde_json::to_string(&JobOp::Start(u.clone())).unwrap();
+        assert!(t.contains(r#""userns":true"#), "{t}");
+        assert_eq!(serde_json::from_str::<JobOp>(&t).unwrap(), JobOp::Start(u));
     }
 
     /// SE22: a secret-env unit gets `LimitCORE=0`; every other unit's
@@ -2454,6 +2756,7 @@ mod tests {
                 name: "sewlane0".into(),
                 addr: "10.254.254.1/32".into(),
             }],
+            userns: false,
         };
         let text = serde_json::to_string(&JobOp::Start(s.clone())).unwrap();
         assert!(
@@ -2773,9 +3076,9 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![] }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None, netns_dummies: vec![] }),
-            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None, netns_dummies: vec![] }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false }),
+            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None, netns_dummies: vec![], userns: false }),
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: Some("--dev".into()) },
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: None },
             JobOp::Tenants,
@@ -2796,18 +3099,18 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![] });
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None, netns_dummies: vec![], userns: false });
         let text = serde_json::to_string(&plain).unwrap();
         assert!(!text.contains("stdin") && !text.contains("job_uid") && !text.contains("gpu") && !text.contains("netns"), "{text}");
         // An older executor's Ready (no stdin) reads as "can't relay stdin",
         // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false, netns: false });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false, netns: false, userns: false });
         // GPU jobs S6: a newer executor says it reads a job's GPU memory; a
         // Ready without it is 0.46.10's bytes.
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false, netns: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false, netns: false, userns: false };
         assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"answer":"ready","job_user":"k2job","stdin":true}"#);
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false, cpu_weight: false, netns: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false, cpu_weight: false, netns: false, userns: false };
         let back: JobAnswer = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
         let u = JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes: 3 << 30, gtt_bytes: 3 << 30, clients: 1, pids: 2, ..Default::default() });

@@ -146,6 +146,11 @@ impl Node {
                 .send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(&detail)));
             return None;
         }
+        // 0.46.18: `--userns` only for the node owner's own server.
+        if let Some((code, detail)) = self.job_userns_refusal(t, &a.plan) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(code), Some(&detail)));
+            return None;
+        }
         // Build statements: a version this node doesn't sign, or a session
         // that was never offered `provenance-v1`.
         if let Some(detail) = self.provenance_refusal(t, &a.plan) {

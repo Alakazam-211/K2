@@ -776,6 +776,12 @@ impl Node {
                 network.min(Network::None)
             }
         };
+        // 0.46.18: `--userns` only for the node owner's own server, and only
+        // where root walls user namespaces (checked again as it starts).
+        if let Some((code, detail)) = self.job_userns_refusal(&t, &a.plan) {
+            self.finish_job(&t, &a, None, JobState::Failed, Some(code), Some(&detail), None, None, None, None, None).await;
+            return;
+        }
         // Build statements: the network and isolation it starts under.
         self.set_prov_start(&t, &job, gen, &a.plan, network);
         // A secret job (secret-env, review B-H1) keeps nothing where another
@@ -2107,6 +2113,9 @@ impl Node {
                 .as_ref()
                 .map(|n| n.dummies.clone())
                 .unwrap_or_default(),
+            // 0.46.18: root skips the user-namespace rules for this unit
+            // (the owner's slot only; `job_userns_refusal` checked it).
+            userns: a.plan.userns,
         };
         // The write ends (and the stdin read end) go to root (and the
         // unit); ours close with the call.

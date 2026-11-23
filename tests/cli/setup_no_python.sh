@@ -108,7 +108,10 @@ ERRORS = {
     "two_groups": (400, refusal("ambiguous_focus_group", 'more than one focus group is named "Ops": send its id'), "application/json"),
     "store": (500, refusal("store", "disk full\twhile saving \\ the list"), "application/json"),
     "garbage": (502, "<html>bad gateway</html>", "text/html"),
+    "no_kessel": (404, refusal("no_kessel", "this server has no Kessel, so there is no welcome to send again"), "application/json"),
+    "asked": (403, json.dumps({"ok": False, "error": {"code": "role_required", "hint": "only the owner or an admin can turn the setup list on, so they were asked on a ticket. Your setup starts again here when they say yes"}, "asked": {"ticketId": "t-1", "already": False}}, separators=(",", ":")), "application/json"),
 }
+WELCOME = "Kessel is starting its welcome again on its Thread: k2 thread kessel\n"
 
 class H(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype):
@@ -149,6 +152,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(STATUS, separators=(",", ":")), "application/json")
         if u.path in ("/cli/first-run/kessel", "/cli/first-run/chief-of-staff"):
             return self._send(200, MADE, "text/plain; charset=utf-8")
+        if u.path == "/cli/first-run/kessel/welcome":
+            return self._send(200, WELCOME, "text/plain; charset=utf-8")
         return self._send(200, LIST, "text/plain; charset=utf-8")
 
     def do_GET(self):
@@ -224,6 +229,31 @@ done
 run setup dismiss-offer
 assert_eq "dismiss-offer: exit 0" "$rc" "0"
 assert_eq "dismiss-offer: POST {}" "$(last_request)" "POST /cli/first-run/offer/dismiss $Q {}"
+
+echo "== restart and kessel-welcome (Settings -> Getting started) =="
+run setup restart
+assert_eq "restart: exit 0" "$rc" "0"
+assert_eq "restart: POST {}" "$(last_request)" "POST /cli/first-run/restart $Q {}"
+assert_eq "restart: the list" "$out" "$LIST"
+run setup restart --kessel
+assert_eq "restart --kessel: exit 0" "$rc" "0"
+assert_eq "restart --kessel: kessel true" "$(last_request)" "POST /cli/first-run/restart $Q {\"kessel\": true}"
+: >"$LOG_FILE"
+run setup --kessel restart
+assert_eq "--kessel before restart: exit 2" "$rc" "2"
+assert_eq "--kessel before restart: says so" "$err" "k2 setup: --kessel goes with k2 setup restart"
+run setup show --kessel
+assert_eq "--kessel off restart: exit 2" "$rc" "2"
+assert_eq "--kessel: nothing sent" "$(cat "$LOG_FILE")" ""
+run setup kessel-welcome
+assert_eq "kessel-welcome: exit 0" "$rc" "0"
+assert_eq "kessel-welcome: POST {}" "$(last_request)" "POST /cli/first-run/kessel/welcome $Q {}"
+assert_eq "kessel-welcome: the daemon's line" "$out" "Kessel is starting its welcome again on its Thread: k2 thread kessel"
+run setup kessel-welcome --json
+assert_eq "kessel-welcome --json: no format" "$(last_request)" "POST /cli/first-run/kessel/welcome  {}"
+run setup help
+case "$out" in *"k2 setup restart [--kessel]"*) ok "help: k2 setup restart" ;; *) bad "help: no k2 setup restart" ;; esac
+case "$out" in *"k2 setup kessel-welcome"*) ok "help: k2 setup kessel-welcome" ;; *) bad "help: no k2 setup kessel-welcome" ;; esac
 
 echo "== kessel and chief-of-staff =="
 run setup kessel
@@ -337,6 +367,8 @@ refused no_group 4 'Error: unknown_focus_group: no focus group is "Nope": nothin
 refused two_groups 4 'Error: ambiguous_focus_group: more than one focus group is named "Ops": send its id' chief-of-staff --name A --about b --tool claude --focus-group Ops
 refused store 1 "$(printf 'Error: store: disk full\twhile saving \\ the list')"
 refused garbage 1 "Error: the daemon sent something k2 setup does not understand: <html>bad gateway</html>"
+refused no_kessel 4 "Error: no_kessel: this server has no Kessel, so there is no welcome to send again" kessel-welcome
+refused asked 3 "Error: role_required: only the owner or an admin can turn the setup list on, so they were asked on a ticket. Your setup starts again here when they say yes" restart
 echo agent >"$MODE_FILE"
 run setup --json
 assert_eq "agent --json: exit 3" "$rc" "3"

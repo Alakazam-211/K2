@@ -146,7 +146,16 @@ pub struct UnderlayOptions {
     /// page. Off by default (Design: it only activates the window).
     #[serde(default)]
     pub page_first_click: bool,
+    /// No hover gating at all: both views get pointer moves, nothing is
+    /// lifted (`k2.browserHoverRoute` = `none`).
+    #[serde(default)]
+    pub hover_no_gating: bool,
 }
+
+/// The release fallback, one constant: false = no hover gating anywhere
+/// (both views get moves; WebKit's tracking areas are never lifted),
+/// whatever the setting says.
+pub const HOVER_GATING: bool = true;
 
 /// Caps on what the renderer may send (it is not trusted to be sane).
 pub const MAX_LAYERS: usize = 32;
@@ -548,6 +557,8 @@ pub mod mac {
         static SIZED: RefCell<HashMap<usize, Instant>> = RefCell::new(HashMap::new());
         /// The hover route last installed (None = not yet).
         static HOVER: RefCell<Option<bool>> = const { RefCell::new(None) };
+        /// The hover gate last set (None = not yet).
+        static GATING: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         /// Pages held hidden across a UI reload (see `Holds`).
         static HOLDS: RefCell<super::Holds> = RefCell::new(super::Holds::default());
         /// Sets in a row measured at a viewport other than the UI view's
@@ -758,6 +769,14 @@ pub mod mac {
         }
     }
 
+    fn set_hover_gating(on: bool) {
+        let changed = GATING.with(|g| g.replace(Some(on)) != Some(on));
+        underlay::set_hover_gating(on);
+        if changed {
+            say!(info, "[browser-underlay] hover gate {}", if on { "on (WebKit's pointer areas only)" } else { "off: no gating, both views get moves" });
+        }
+    }
+
     fn transaction(begin: bool) {
         let Some(tx) = AnyClass::get(c"CATransaction") else { return };
         unsafe {
@@ -777,6 +796,7 @@ pub mod mac {
             return Err("underlay: apply off the main thread".into());
         }
         set_hover_route(opts.hover_private_webkit_fallback);
+        set_hover_gating(super::HOVER_GATING && !opts.hover_no_gating);
         underlay::set_page_first_mouse(opts.page_first_click);
         let ui = UIS.with(|m| m.borrow().get(parent).cloned()).ok_or("underlay: UI view not known")?;
         // SAFETY: AppKit getter on the main thread.
@@ -1365,6 +1385,8 @@ mod tests {
         let o: UnderlayOptions = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(!o.hover_private_webkit_fallback);
         assert!(!o.page_first_click);
+        assert!(!o.hover_no_gating, "the gate is on unless asked off");
+        assert!(HOVER_GATING, "the release constant");
         let o: UnderlayOptions = serde_json::from_value(serde_json::json!({"pageFirstClick": true})).unwrap();
         assert!(o.page_first_click);
     }

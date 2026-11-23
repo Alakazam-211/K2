@@ -9,6 +9,8 @@ import {
   readBrowserLayering,
   readHoverPrivateFallback,
   readPageFirstClick,
+  readHoverNoGating,
+  LS_BROWSER_HOVER_ROUTE,
   layeringStatus,
   underlayActive,
   useBrowserLayeringStore,
@@ -74,6 +76,14 @@ describe('browserLayering', () => {
   it('macOS with no stored key reads underlay; the Settings row reads the same store', () => {
     localStorage.removeItem(LS_BROWSER_LAYERING)
     expect(readBrowserLayering(true)).toBe('underlay')
+  })
+
+  it('hover gating stays on unless the route is stored as none', () => {
+    expect(readHoverNoGating()).toBe(false)
+    localStorage.setItem(LS_BROWSER_HOVER_ROUTE, 'gate')
+    expect(readHoverNoGating()).toBe(false)
+    localStorage.setItem(LS_BROWSER_HOVER_ROUTE, 'none')
+    expect(readHoverNoGating()).toBe(true)
   })
 
   it('the first click on a page is off unless stored as 1', () => {

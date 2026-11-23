@@ -252,6 +252,8 @@ export interface UnderlayOptions {
   hoverPrivateWebkitFallback: boolean
   /** The first click on a page in an inactive window reaches the page. Off. */
   pageFirstClick: boolean
+  /** No hover gating at all (the release fallback). Off. */
+  hoverNoGating?: boolean
 }
 
 let epochCount = 0

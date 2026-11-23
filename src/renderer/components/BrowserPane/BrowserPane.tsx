@@ -141,7 +141,7 @@ pageLayersSync.configure({
   active: underlayOn,
   options: () => {
     const s = useBrowserLayeringStore.getState()
-    return { hoverPrivateWebkitFallback: s.hoverPrivateFallback, pageFirstClick: s.pageFirstClick }
+    return { hoverPrivateWebkitFallback: s.hoverPrivateFallback, pageFirstClick: s.pageFirstClick, hoverNoGating: s.hoverNoGating }
   },
   fail: (reason) => {
     useBrowserLayeringStore.getState().markFailed(reason)

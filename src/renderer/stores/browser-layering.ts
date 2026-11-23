@@ -27,6 +27,9 @@ export const LS_BROWSER_HOVER_PRIVATE_FALLBACK = 'k2.browserHoverPrivateWebkitFa
 /** '1' = the first click on a page in an inactive window also reaches the
  *  page. Off by default (Design: that click only activates the window). */
 export const LS_BROWSER_PAGE_FIRST_CLICK = 'k2.browserPageFirstClick'
+/** 'none' = no hover gating at all (both pages and K2 get pointer moves);
+ *  anything else: the gate. */
+export const LS_BROWSER_HOVER_ROUTE = 'k2.browserHoverRoute'
 
 export type BrowserLayering = 'underlay' | 'legacy'
 
@@ -72,6 +75,15 @@ export function readPageFirstClick(): boolean {
   return readFlag(LS_BROWSER_PAGE_FIRST_CLICK)
 }
 
+export function readHoverNoGating(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false
+    return localStorage.getItem(LS_BROWSER_HOVER_ROUTE) === 'none'
+  } catch {
+    return false
+  }
+}
+
 interface BrowserLayeringState {
   /** The person's choice (or this system's default). */
   mode: BrowserLayering
@@ -79,6 +91,7 @@ interface BrowserLayeringState {
   failed: string | null
   hoverPrivateFallback: boolean
   pageFirstClick: boolean
+  hoverNoGating: boolean
   setMode: (mode: BrowserLayering) => void
   /** The underlay failed at run time: legacy until K2 restarts. */
   markFailed: (reason: string) => void
@@ -89,6 +102,7 @@ export const useBrowserLayeringStore = create<BrowserLayeringState>((set, get) =
   failed: null,
   hoverPrivateFallback: readHoverPrivateFallback(),
   pageFirstClick: readPageFirstClick(),
+  hoverNoGating: readHoverNoGating(),
   setMode: (mode) => {
     writeBrowserLayering(mode)
     set({ mode })

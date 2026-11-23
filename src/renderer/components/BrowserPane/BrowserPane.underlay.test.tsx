@@ -130,7 +130,7 @@ describe('Browser pane in the macOS underlay', () => {
     })
     expect(last?.viewport).toEqual([window.innerWidth, window.innerHeight])
     const opts = calls().find((c) => c[0] === 'browser_set_page_layers')?.[1] as { options: unknown }
-    expect(opts.options).toEqual({ hoverPrivateWebkitFallback: false, pageFirstClick: false })
+    expect(opts.options).toEqual({ hoverPrivateWebkitFallback: false, pageFirstClick: false, hoverNoGating: false })
     expect(typeof last?.epoch).toBe('string')
   })
 

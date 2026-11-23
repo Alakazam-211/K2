@@ -93,8 +93,11 @@ thread_local! {
   /// Windows whose new child webviews are inserted below the UI view: the
   /// window's UI view, by NSWindow pointer.
   static BELOW: RefCell<HashMap<usize, Retained<NSView>>> = RefCell::new(HashMap::new());
-  /// Tracking areas lifted off a view while it isn't the pointer's owner.
-  static GATED: RefCell<HashMap<usize, Vec<Retained<NSTrackingArea>>>> = RefCell::new(HashMap::new());
+  /// WebKit's pointer areas lifted off a view while it isn't the pointer's
+  /// owner (never AppKit's; see logic::gateable).
+  static GATED: RefCell<HashMap<usize, Lifted>> = RefCell::new(HashMap::new());
+  /// Logged once: which areas the gate lifts and which it leaves.
+  static GATE_LOGGED: Cell<bool> = const { Cell::new(false) };
   static MASKS: RefCell<HashMap<usize, Mask>> = RefCell::new(HashMap::new());
   /// Set while an event is being forwarded, so the receiver runs it as is.
   static IN_FWD: Cell<bool> = const { Cell::new(false) };
@@ -205,6 +208,20 @@ static PAGE_FIRST_MOUSE: AtomicBool = AtomicBool::new(false);
 /// Hover route: false = public (tracking areas lifted), true = the private
 /// `WKMouseTrackingObserver` fallback.
 static HOVER_PRIVATE: AtomicBool = AtomicBool::new(false);
+/// The hover gate at all. Off = no gating: both views get moves and nothing
+/// is removed (the release fallback if the gate isn't proven).
+static HOVER_GATING: AtomicBool = AtomicBool::new(true);
+
+/// Turn the hover gate on or off (off: every lifted area goes back now).
+pub fn set_hover_gating(on: bool) {
+  let was = HOVER_GATING.swap(on, Ordering::Relaxed);
+  if was && !on {
+    let views: Vec<Retained<NSView>> = all_views().into_iter().map(|(_, v)| v).collect();
+    for v in &views {
+      ungate(v);
+    }
+  }
+}
 
 fn ptr<T: ?Sized>(v: &T) -> usize {
   v as *const T as *const c_void as usize
@@ -625,8 +642,9 @@ fn apply_gates(key: usize, own: usize) {
       .unwrap_or_default()
   });
   let private = HOVER_PRIVATE.load(Ordering::Relaxed);
+  let gating = HOVER_GATING.load(Ordering::Relaxed);
   for v in &views {
-    if private || ptr(&**v) == own {
+    if private || !gating || ptr(&**v) == own {
       ungate(v);
     } else {
       gate(v);
@@ -634,48 +652,117 @@ fn apply_gates(key: usize, own: usize) {
   }
 }
 
+/// One lifted view: what is stashed, and the area objects by identity.
+#[derive(Default)]
+struct Lifted {
+  stash: logic::GateStash,
+  objs: HashMap<usize, Retained<NSTrackingArea>>,
+}
+
+/// (gateable, owner identity) for one area on `v`.
+fn area_kind(v: &NSView, area: &NSTrackingArea) -> (bool, usize) {
+  let Some(owner) = area.owner() else { return (false, 0) };
+  let op = Retained::as_ptr(&owner) as usize;
+  let class = owner.class().name().to_string_lossy().into_owned();
+  let ok = logic::gateable(&class, op == ptr(v), area.options().0 as usize);
+  (ok, op)
+}
+
+fn log_gated_once(v: &NSView, areas: &[Retained<NSTrackingArea>]) {
+  if GATE_LOGGED.with(|c| c.replace(true)) {
+    return;
+  }
+  let mut taken = Vec::new();
+  let mut left = Vec::new();
+  for a in areas {
+    let class = a.owner().map(|o| o.class().name().to_string_lossy().into_owned()).unwrap_or_else(|| "nil".into());
+    let line = format!("{class} (options {:#x})", a.options().0);
+    if area_kind(v, a).0 {
+      taken.push(line);
+    } else {
+      left.push(line);
+    }
+  }
+  eprintln!("wry underlay: hover gate lifts {} and leaves {}", taken.join(", "), left.join(", "));
+}
+
 fn gate(v: &NSView) {
   let p = ptr(v);
   let areas = v.trackingAreas();
   let list: Vec<Retained<NSTrackingArea>> = (0..areas.count()).map(|i| areas.objectAtIndex(i)).collect();
+  log_gated_once(v, &list);
+  let mut take = Vec::new();
   GATED.with(|g| {
     let mut g = g.borrow_mut();
     let e = g.entry(p).or_default();
     for a in &list {
-      if !e.iter().any(|x| Retained::as_ptr(x) == Retained::as_ptr(a)) {
-        e.push(a.clone());
+      let (ok, owner) = area_kind(v, a);
+      if !ok {
+        continue;
       }
+      let id = Retained::as_ptr(a) as usize;
+      if let Some(old) = e.stash.lift(id, owner) {
+        e.objs.remove(&old);
+      }
+      e.objs.insert(id, a.clone());
+      take.push(a.clone());
     }
   });
   let was = IN_GATE.with(|c| c.replace(true));
-  for a in &list {
+  for a in &take {
     v.removeTrackingArea(a);
   }
   IN_GATE.with(|c| c.set(was));
 }
 
+/// Give a view its pointer areas back: WebKit's own update first; then only
+/// WebKit's current area for an owner it did not put back itself. AppKit's
+/// areas were never touched.
 fn ungate(v: &NSView) {
-  let Some(list) = GATED.with(|g| g.borrow_mut().remove(&ptr(v))) else { return };
+  let Some(lifted) = GATED.with(|g| g.borrow_mut().remove(&ptr(v))) else { return };
   let was = IN_GATE.with(|c| c.replace(true));
-  for a in &list {
-    v.addTrackingArea(a);
+  v.updateTrackingAreas();
+  let present: Vec<usize> = {
+    let areas = v.trackingAreas();
+    (0..areas.count())
+      .map(|i| areas.objectAtIndex(i))
+      .filter_map(|a| {
+        let (ok, owner) = area_kind(v, &a);
+        ok.then_some(owner)
+      })
+      .collect()
+  };
+  let Lifted { stash, objs } = lifted;
+  for id in stash.restore(&present) {
+    if let Some(a) = objs.get(&id) {
+      v.addTrackingArea(a);
+    }
   }
   IN_GATE.with(|c| c.set(was));
 }
 
-/// `addTrackingArea:` on a lifted view (WebKit re-adding its own): kept
-/// aside until the view owns the pointer again. True = handled, skip super.
+/// `addTrackingArea:` on a lifted view: WebKit adding one of its pointer
+/// areas is kept aside (newest per owner); anything else (AppKit's) goes
+/// through. True = handled, skip super.
 pub(crate) fn tracking_area_added(v: &NSView, area: &NSTrackingArea) -> bool {
   if IN_GATE.with(|c| c.get()) {
+    return false;
+  }
+  if !GATED.with(|g| g.borrow().contains_key(&ptr(v))) {
+    return false;
+  }
+  let (ok, owner) = area_kind(v, area);
+  if !ok {
     return false;
   }
   GATED.with(|g| {
     let mut g = g.borrow_mut();
     let Some(e) = g.get_mut(&ptr(v)) else { return false };
-    let ap = area as *const NSTrackingArea;
-    if !e.iter().any(|x| Retained::as_ptr(x) == ap) {
-      e.push(area.retain());
+    let id = area as *const NSTrackingArea as usize;
+    if let Some(old) = e.stash.lift(id, owner) {
+      e.objs.remove(&old);
     }
+    e.objs.insert(id, area.retain());
     true
   })
 }
@@ -688,13 +775,15 @@ pub(crate) fn tracking_area_removed(v: &NSView, area: &NSTrackingArea) {
   }
   GATED.with(|g| {
     if let Some(e) = g.borrow_mut().get_mut(&ptr(v)) {
-      let ap = area as *const NSTrackingArea;
-      e.retain(|x| Retained::as_ptr(x) != ap);
+      let id = area as *const NSTrackingArea as usize;
+      e.stash.dropped(id);
+      e.objs.remove(&id);
     }
   });
 }
 
-/// After `updateTrackingAreas` on a lifted view, lift whatever came back.
+/// After `updateTrackingAreas` on a lifted view: lift WebKit's fresh pointer
+/// areas (the newest replaces the stashed one, which is never re-added).
 pub(crate) fn tracking_areas_updated(v: &NSView) {
   if IN_GATE.with(|c| c.get()) {
     return;
@@ -726,7 +815,7 @@ fn send_exit(key: usize, prev: usize, src: &NSEvent) {
   };
   GATED.with(|g| {
     if let Some(e) = g.borrow().get(&prev) {
-      areas.extend(e.iter().cloned());
+      areas.extend(e.objs.values().cloned());
     }
   });
   for area in areas {

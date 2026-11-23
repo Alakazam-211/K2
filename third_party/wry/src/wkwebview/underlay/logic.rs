@@ -174,7 +174,60 @@ pub fn owner<Id: Copy>(pages: &[PageAt<'_, Id>], claims: &[Shape], ux: f64, uy: 
   None
 }
 
-/// NSEventPhase bits (also momentumPhase).
+/// NSTrackingAreaOptions bits the hover gate reads.
+pub const TA_ENTERED_EXITED: usize = 0x01;
+pub const TA_MOVED: usize = 0x02;
+
+/// May the hover gate lift this tracking area off a view that doesn't own
+/// the pointer? Only WebKit's own pointer areas: the owner is a WebKit
+/// object (`WK…`, e.g. WKMouseTrackingObserver) or the view itself, and it
+/// tracks moves or enter/exit. Never AppKit's (tooltips, cursor rects:
+/// `NS…` / `_NS…` owners) and never a cursor-update-only area: AppKit
+/// rebuilds those itself (a live resize does), and a lifted one of them
+/// came back stale and crashed the app.
+pub fn gateable(owner_class: &str, owner_is_view: bool, options: usize) -> bool {
+  if options & (TA_MOVED | TA_ENTERED_EXITED) == 0 {
+    return false;
+  }
+  if owner_class.starts_with("NS") || owner_class.starts_with("_NS") {
+    return false;
+  }
+  owner_is_view || owner_class.starts_with("WK")
+}
+
+/// What the gate keeps for one lifted view, by area and owner identity.
+/// Newest wins per owner: when WebKit adds a fresh area (it re-creates its
+/// own on an update), the old one is forgotten and never re-added.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct GateStash {
+  /// (area, owner), at most one per owner.
+  pub areas: Vec<(usize, usize)>,
+}
+
+impl GateStash {
+  /// An area was lifted (or WebKit added one while lifted). Returns the
+  /// area it replaces for the same owner, if any (drop that object).
+  pub fn lift(&mut self, area: usize, owner: usize) -> Option<usize> {
+    if self.areas.iter().any(|(a, _)| *a == area) {
+      return None;
+    }
+    let old = self.areas.iter().position(|(_, o)| *o == owner).map(|i| self.areas.remove(i).0);
+    self.areas.push((area, owner));
+    old
+  }
+
+  /// WebKit removed one of its own while lifted: it must not come back.
+  pub fn dropped(&mut self, area: usize) {
+    self.areas.retain(|(a, _)| *a != area);
+  }
+
+  /// Ungating, after WebKit's own updateTrackingAreas: `present` are the
+  /// owners whose pointer area is on the view again. Re-add only what
+  /// WebKit did not put back (its own, still-current area per owner).
+  pub fn restore(self, present: &[usize]) -> Vec<usize> {
+    self.areas.into_iter().filter(|(_, o)| !present.contains(o)).map(|(a, _)| a).collect()
+  }
+}
 pub const PH_BEGAN: usize = 1;
 pub const PH_ENDED: usize = 8;
 pub const PH_CANCELLED: usize = 16;
@@ -392,6 +445,35 @@ mod tests {
     assert!(m);
     assert_eq!(h.len(), 2);
     assert_eq!((h[0].x, h[0].y, h[0].w, h[0].h), (0.0, 0.0, 15.0, 15.0));
+  }
+
+  #[test]
+  fn the_gate_takes_only_webkits_pointer_areas() {
+    let both = TA_MOVED | TA_ENTERED_EXITED;
+    assert!(gateable("WKMouseTrackingObserver", false, both));
+    assert!(gateable("WKMouseTrackingObserver", false, TA_MOVED));
+    assert!(gateable("WryWebView", true, TA_ENTERED_EXITED), "the view's own pointer area");
+    assert!(!gateable("NSToolTipManager", false, both), "AppKit's tooltips never");
+    assert!(!gateable("_NSTrackingAreaAKViewHelper", false, both), "AppKit's helpers never");
+    assert!(!gateable("NSView", true, both), "an NS-class owner never, even the view");
+    assert!(!gateable("WKMouseTrackingObserver", false, 0x04), "cursor-update only: AppKit's to rebuild");
+    assert!(!gateable("SomeOtherObserver", false, both), "only WebKit's or the view's");
+  }
+
+  #[test]
+  fn a_stashed_area_is_never_re_added_once_webkit_made_a_fresh_one() {
+    let mut s = GateStash::default();
+    assert_eq!(s.lift(10, 1), None);
+    // An update while lifted: WebKit adds a fresh area for the same owner.
+    assert_eq!(s.lift(11, 1), Some(10), "the old object is dropped");
+    assert_eq!(s.lift(11, 1), None, "the same area twice is one");
+    // Ungate: WebKit didn't put one back itself, so the newest is re-added.
+    assert_eq!(s.clone().restore(&[]), vec![11]);
+    // Ungate: WebKit's update already put its area back: nothing replayed.
+    assert_eq!(s.clone().restore(&[1]), Vec::<usize>::new());
+    // WebKit removed its own while lifted: it doesn't come back.
+    s.dropped(11);
+    assert_eq!(s.restore(&[]), Vec::<usize>::new());
   }
 
   #[test]

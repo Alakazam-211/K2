@@ -1745,9 +1745,9 @@ fn cli_json(o: &crate::Outcome) -> serde_json::Value {
 
 #[test]
 fn cli_refresh_replaces_only_an_older_k2_cli_and_is_idempotent() {
-    use crate::core::{cli_version_of, CLI_CONTENT};
+    use crate::core::{cli_text, cli_version_of};
     let t = box_root();
-    let to = cli_version_of(CLI_CONTENT.as_bytes()).expect("embedded CLI has a version");
+    let to = cli_version_of(cli_text().as_bytes()).expect("embedded CLI has a version");
     std::fs::create_dir_all(t.p(CLI_DIR)).unwrap();
     let cli = t.p(CLI_PATH);
 
@@ -1763,7 +1763,7 @@ fn cli_refresh_replaces_only_an_older_k2_cli_and_is_idempotent() {
     assert_eq!(v["result"], "updated", "{v}");
     assert_eq!(v["from"], "0.40.148");
     assert_eq!(v["to"].as_str(), Some(to.as_str()));
-    assert_eq!(std::fs::read_to_string(&cli).unwrap(), CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(&cli).unwrap(), cli_text());
     assert_eq!(std::fs::metadata(&cli).unwrap().permissions().mode() & 0o7777, 0o755);
     let line: serde_json::Value =
         serde_json::from_str(&t.audit.0.borrow().last().unwrap().clone()).unwrap();
@@ -1829,7 +1829,7 @@ fn cli_refresh_is_the_daemons_call_and_takes_no_argv_or_stdin() {
     assert_eq!(v["namespaces"]["cli"], true);
     assert_eq!(
         v["cliVersion"].as_str(),
-        crate::core::cli_version_of(crate::core::CLI_CONTENT.as_bytes()).as_deref()
+        crate::core::cli_version_of(crate::core::cli_text().as_bytes()).as_deref()
     );
 }
 
@@ -1852,15 +1852,36 @@ fn skipped_for(t: &T) -> String {
 
 #[test]
 fn cli_build_carries_the_product_version_and_its_hash() {
-    use crate::core::{cli_version_of, CLI_CONTENT, CLI_SHA256, VERSION};
+    use crate::core::{cli_text, cli_version_of, CLI_SHA256, VERSION};
     use sha2::Digest;
     // build.rs refuses a mismatch; this says so once more at test time.
-    assert_eq!(cli_version_of(CLI_CONTENT.as_bytes()).as_deref(), Some(VERSION));
-    let sha: String = sha2::Sha256::digest(CLI_CONTENT.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(cli_version_of(cli_text().as_bytes()).as_deref(), Some(VERSION));
+    let sha: String = sha2::Sha256::digest(cli_text().as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(CLI_SHA256, sha);
     let v = cli_json(&box_root().call(&["helper", "version"]));
     assert_eq!(v["cliSha256"], sha);
     assert_eq!(v["cliVersion"], VERSION);
+}
+
+/// 0.46.18: the CLI rides compressed (the raw script put 0.46.17's helper
+/// over fielded helpers' 8 MiB self-update cap). It must inflate to
+/// cli/k2 byte for byte, and `helper version` reads its version from the
+/// inflated head alone.
+#[test]
+fn embedded_cli_is_compressed_and_inflates_to_cli_k2() {
+    use crate::core::{cli_deflated_len, cli_text, embedded_cli_version, VERSION};
+    let raw = include_str!("../../../cli/k2");
+    assert_eq!(cli_text(), raw, "the embedded CLI is cli/k2, byte for byte");
+    assert_eq!(embedded_cli_version().as_deref(), Some(VERSION));
+    let packed = cli_deflated_len();
+    assert!(
+        packed * 3 < raw.len(),
+        "the embedded CLI should deflate to under a third of {} bytes, got {packed}",
+        raw.len()
+    );
+    // What the helper spends on the CLI stays well inside the 8 MiB cap,
+    // with room for the code (about 2.6 MB in 0.46.17).
+    assert!(packed < 3 * 1024 * 1024, "embedded CLI is {packed} bytes compressed");
 }
 
 #[test]
@@ -1983,7 +2004,7 @@ fn cli_refresh_never_writes_through_a_hard_link() {
     let t = stale_box();
     std::fs::hard_link(t.p(CLI_PATH), t.p("/etc/other-k2")).unwrap();
     assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "updated");
-    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::cli_text());
     assert_eq!(std::fs::read_to_string(t.p("/etc/other-k2")).unwrap(), STALE_CLI, "the other link keeps its bytes");
 }
 
@@ -2000,7 +2021,7 @@ fn cli_refresh_writes_only_its_own_name() {
     }
     let v = cli_json(&t.call(&["helper", "cli-refresh"]));
     assert_eq!(v["result"], "updated", "{v}");
-    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::cli_text());
     for p in &others {
         assert_eq!(std::fs::read_to_string(p).unwrap(), STALE_CLI, "{} is not the helper's", p.display());
     }
@@ -2016,7 +2037,7 @@ fn cli_refresh_with_a_planted_temp_name() {
     symlink(t.p("/etc/victim"), t.p(&tmp)).unwrap();
     assert_eq!(cli_json(&t.call(&["helper", "cli-refresh"]))["result"], "updated");
     assert_eq!(std::fs::read_to_string(t.p("/etc/victim")).unwrap(), "keep");
-    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::cli_text());
     assert!(std::fs::symlink_metadata(t.p(&tmp)).is_err(), "temp name gone");
     // A planted directory: the call fails, nothing written, the
     // directory and what is in it stay.
@@ -2159,7 +2180,7 @@ fn cli_refresh_as_root() {
     assert_eq!((v["result"].as_str(), v["from"].as_str()), (Some("updated"), Some("0.40.148")), "{v}");
     let m = std::fs::metadata(t.p(CLI_PATH)).unwrap();
     assert_eq!((m.uid(), m.gid(), m.mode() & 0o7777), (0, 0, 0o755));
-    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(t.p(CLI_PATH)).unwrap(), crate::core::cli_text());
     // A directory owned by a user: refused.
     chown(&t.p(CLI_DIR), 65534);
     assert_eq!(skipped_for(&t), "directory not root-owned");

@@ -43,6 +43,9 @@ tar = "0.4.45"
 [build-dependencies]
 # build.rs hashes the embedded K2 CLI (`helper version` cliSha256).
 sha2 = "0.10"
+# ...and deflates it (the helper must fit fielded helpers' 8 MiB
+# self-update cap; the raw CLI alone is ~6 MB).
+flate2 = "1.1.9"
 
 [dev-dependencies]
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }

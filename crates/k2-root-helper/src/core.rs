@@ -113,7 +113,7 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "testKeys": ctx.test_keys,
         "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true, "cli": true, "pgmajor": true, "creds": true, "pgdual": true, "sewreconf": true, "sewrbloss": true, "front80": true, "sewtunnel": true, "sewmirror": true, "sewboxbackup": true, "sewtunnelclear": true, "pgnamed": true, "sewrecording": true, "desktop": true, "mailmodes": true, "pgarchive": true},
         // `helper cli-refresh` (protocol 9): the K2 CLI this helper carries.
-        "cliVersion": cli_version_of(CLI_CONTENT.as_bytes()),
+        "cliVersion": embedded_cli_version(),
         // ...and its sha256: the daemon refreshes only when this equals
         // the hash of the CLI the daemon itself embeds.
         "cliSha256": CLI_SHA256,
@@ -329,12 +329,56 @@ pub fn legacy_retire(ctx: &Ctx, which: Legacy) -> HResult<serde_json::Value> {
 
 // ── helper cli-refresh (protocol 9) ────────────────────────────────────
 
-/// The K2 CLI (`cli/k2`), compiled into the signed helper: `cli-refresh`
-/// writes only these bytes, never anything from the caller. build.rs
-/// refuses a CLI whose `K2_CLI_VERSION` is not this build's version.
-pub const CLI_CONTENT: &str = include_str!("../../../cli/k2");
-/// sha256 of [`CLI_CONTENT`] (build.rs): `helper version` → `cliSha256`.
+/// The K2 CLI (`cli/k2`), compiled into the signed helper deflate-
+/// compressed (build.rs): `cli-refresh` writes only these bytes, never
+/// anything from the caller. build.rs refuses a CLI whose `K2_CLI_VERSION`
+/// is not this build's version. Compressed since 0.46.18: the raw script
+/// (~6 MB) put 0.46.17's helper over the 8 MiB self-update cap of the
+/// helpers already on boxes.
+const CLI_DEFLATED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/k2-cli.deflate"));
+/// sha256 of the CLI (build.rs, of the uncompressed script):
+/// `helper version` → `cliSha256`.
 pub const CLI_SHA256: &str = env!("K2_CLI_SHA256");
+
+/// The embedded CLI, inflated once and checked against [`CLI_SHA256`].
+/// `None` only if the embedded bytes don't inflate to the CLI build.rs
+/// hashed (never in a build from this tree).
+pub fn cli_content() -> Option<&'static str> {
+    static CLI: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    CLI.get_or_init(|| {
+        use sha2::Digest;
+        use std::io::Read;
+        let mut s = String::new();
+        flate2::read::DeflateDecoder::new(CLI_DEFLATED).read_to_string(&mut s).ok()?;
+        let hex: String = sha2::Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+        (hex == CLI_SHA256).then_some(s)
+    })
+    .as_deref()
+}
+
+/// The embedded CLI's version, inflating only its first
+/// [`CLI_HEAD_BYTES`] (`helper version` runs often; the whole CLI is MBs).
+pub fn embedded_cli_version() -> Option<String> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(CLI_HEAD_BYTES);
+    flate2::read::DeflateDecoder::new(CLI_DEFLATED)
+        .take(CLI_HEAD_BYTES as u64)
+        .read_to_end(&mut head)
+        .ok()?;
+    cli_version_of(&head)
+}
+
+/// Tests: the embedded CLI, which must inflate.
+#[cfg(test)]
+pub(crate) fn cli_text() -> &'static str {
+    cli_content().expect("the embedded CLI inflates to the script build.rs hashed")
+}
+
+/// Tests: the compressed bytes, for the size check.
+#[cfg(test)]
+pub(crate) fn cli_deflated_len() -> usize {
+    CLI_DEFLATED.len()
+}
 
 pub use k2_root_proto::cli::cli_version_of;
 use k2_root_proto::cli::{CLI_HEAD_BYTES, CLI_MAX_BYTES};
@@ -405,7 +449,8 @@ pub fn cli_refresh_with(
     who: &crate::caller::Caller,
     names: &CliNames,
 ) -> HResult<serde_json::Value> {
-    let to = cli_version_of(CLI_CONTENT.as_bytes())
+    let cli = cli_content().ok_or_else(|| Fail::state("this helper's embedded K2 CLI doesn't inflate to its cliSha256"))?;
+    let to = cli_version_of(cli.as_bytes())
         .and_then(|v| Semver::parse(&v))
         .ok_or_else(|| Fail::state("this helper carries no versioned K2 CLI"))?;
     // The directory first: a walk that never follows a link, then its own
@@ -470,7 +515,7 @@ pub fn cli_refresh_with(
     } else {
         // A new inode renamed over the name: a hard link elsewhere to the
         // old file keeps the old bytes (never written through).
-        base.write_atomic(name, CLI_CONTENT.as_bytes(), 0o755, ctx.root_owner())
+        base.write_atomic(name, cli.as_bytes(), 0o755, ctx.root_owner())
             .map_err(|e| Fail::io_err("write /usr/local/bin/k2", e))?;
         serde_json::json!({"result": "updated", "from": from.to_string(), "to": to.to_string()})
     };

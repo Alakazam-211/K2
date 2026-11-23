@@ -5,7 +5,8 @@
 //! refuses a CLI whose `K2_CLI_VERSION` is not the product version (a
 //! helper must never write an off-version CLI as root), and exports the
 //! CLI's sha256 (`helper version` → `cliSha256`, which the daemon compares
-//! with its own embedded copy before it asks for a refresh).
+//! with its own embedded copy before it asks for a refresh). The CLI goes
+//! in deflate-compressed (`$OUT_DIR/k2-cli.deflate`, see core.rs).
 use std::fs;
 
 use sha2::Digest;
@@ -48,4 +49,14 @@ fn main() {
     let sha = sha2::Sha256::digest(&cli);
     let hex: String = sha.iter().map(|b| format!("{b:02x}")).collect();
     println!("cargo:rustc-env=K2_CLI_SHA256={hex}");
+
+    // The helper carries the CLI deflate-compressed (0.46.18): raw, the
+    // ~6 MB script was most of 0.46.17's 8.8 MB helper, over the 8 MiB
+    // self-update cap every helper up to 0.46.17 enforces. Deterministic
+    // (miniz_oxide, fixed level), so every builder makes the same bytes.
+    let mut z = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+    std::io::Write::write_all(&mut z, &cli).expect("deflate cli/k2");
+    let packed = z.finish().expect("deflate cli/k2");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    fs::write(out.join("k2-cli.deflate"), &packed).expect("write k2-cli.deflate");
 }

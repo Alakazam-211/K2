@@ -6,7 +6,7 @@
 use super::*;
 use k2_root_proto::verbs::Verb;
 
-use crate::core::{cli_refresh_with, CliNames, CLI_CONTENT};
+use crate::core::{cli_refresh_with, cli_text, CliNames};
 
 /// A helper built as `xy`: no aliases.
 const XY: CliNames = CliNames { name: "xy", aliases: &[] };
@@ -62,7 +62,7 @@ fn an_xy_helper_tends_no_alias_and_leaves_other_brands_files() {
     let v = refresh(&t, &XY);
     assert_eq!(v["result"], "updated", "{v}");
     assert!(v.get("aliases").is_none(), "{v}");
-    assert_eq!(std::fs::read_to_string(bin(&t, "xy")).unwrap(), CLI_CONTENT);
+    assert_eq!(std::fs::read_to_string(bin(&t, "xy")).unwrap(), cli_text());
     assert_eq!(target(&t, "k2"), "xy");
     assert_eq!(target(&t, "k2so"), "/opt/k2/cli/k2so");
     assert_eq!(std::fs::read_to_string(bin(&t, "k5")).unwrap(), STALE_CLI);
@@ -111,7 +111,7 @@ fn a_k5_helper_removes_a_tombstone_alias_link() {
         assert_eq!(v["result"], "updated", "{v}");
         assert_eq!(v["aliases"], serde_json::json!([{"name": "k2", "result": "removed", "from": old}]), "{old}");
         assert!(std::fs::symlink_metadata(bin(&t, "k2")).is_err(), "{old}: the link is gone");
-        assert_eq!(std::fs::read_to_string(bin(&t, "k5")).unwrap(), CLI_CONTENT, "{old}");
+        assert_eq!(std::fs::read_to_string(bin(&t, "k5")).unwrap(), cli_text(), "{old}");
         assert_eq!(target(&t, "k2so"), "/usr/local/bin/k5", "{old}: a silent alias is left alone");
         // Nothing at the name: nothing to say.
         assert!(refresh(&t, &K5_TOMBSTONE).get("aliases").is_none());

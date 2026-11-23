@@ -1499,6 +1499,9 @@ pub(crate) async fn send_response_with_cookie_and_location(
     // agent passport.
     let explained = crate::skin_routes::explain_skin_room(status, body);
     let body: &str = &explained;
+    // Who this terminal acts as, on an App or role refusal (0.46.18).
+    let acting = crate::acting_as::stamp_tcp(status, body);
+    let body: &str = &acting;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
     // The Org Chart's feed field (an agent that hasn't read today's
@@ -1565,6 +1568,8 @@ pub(crate) async fn send_response_with_headers(
     // Permission cards: as in `send_response_with_cookie_and_location`.
     let explained = crate::skin_routes::explain_skin_room(status, body);
     let body: &str = &explained;
+    let acting = crate::acting_as::stamp_tcp(status, body);
+    let body: &str = &acting;
     let taught = crate::permission::walls::teach_tcp(status, body);
     let body: &str = &taught;
     // The Org Chart's feed field (an agent that hasn't read today's

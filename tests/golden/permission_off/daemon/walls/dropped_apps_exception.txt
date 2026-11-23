@@ -4,10 +4,10 @@
 > body: {"on":true}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"owner_only","hint":"moving an App out of its guarded container is the server owner's call, in person: ask your owner to run `k2 app exception <app> on [--device …]` from a terminal outside K2 (it asks for an owner confirm)"}}
+{"error":{"actingAs":"agent:pog-billing","code":"owner_only","hint":"moving an App out of its guarded container is the server owner's call, in person: ask your owner to run `k2 app exception <app> on [--device …]` from a terminal outside K2 (it asks for an owner confirm) This terminal acts as agent @pog-billing (its passport), even when you type here: the owner approves in the K2 app, or runs it from a terminal outside K2."}}
 ## cell socket (same passport)
 > POST /cli/app/exception
 > body: {"on":true}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"owner_only","hint":"moving an App out of its guarded container is the server owner's call, in person: ask your owner to run `k2 app exception <app> on [--device …]` from a terminal outside K2 (it asks for an owner confirm)"}}
+{"error":{"actingAs":"agent:pog-billing","code":"owner_only","hint":"moving an App out of its guarded container is the server owner's call, in person: ask your owner to run `k2 app exception <app> on [--device …]` from a terminal outside K2 (it asks for an owner confirm) This terminal acts as agent @pog-billing (its passport), even when you type here: the owner approves in the K2 app, or runs it from a terminal outside K2."}}

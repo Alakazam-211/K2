@@ -11871,7 +11871,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         An App's own agent: any room on any role of its own App, at once
                                         with "Let this agent manage its Apps' users" on; with it off, one
                                         held request with a card for the owner on your Thread (exit 2).
-                                        A box-wide role, or another workspace's App's, stays the owner's.
+                                        A box-wide role: one Owner-only card (an admin can't approve it; an App
+                                        role of your own is better). Another workspace's App's stays the owner's.
+                                        In a K2 terminal you act as its agent, even when the owner types there.
   k2 app role room <role> <handle> --clear
                                         Drop that room from the role
   k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload Inbox/] [--upload-dir jobs/J1/in]

@@ -521,6 +521,15 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
     };
     let v = json_body(body)?;
     let r = find(s(&v, "request"))?;
+    // A box-wide role's change is the owner's alone (0.46.18): never an Admin.
+    if super::role_room_hold::owner_only(&r) && confirm_stamp(who).is_none() {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            "only the owner approves a change to a box-wide role (every login holding it gets it, box logins too): \
+             an admin can't. The owner approves it in the K2 app (Settings → App Approvals) or with k2 app approve <id> from a terminal outside K2.",
+        ));
+    }
     // The confirm comes first (bound to this request, single use); the
     // decision then refuses a request that is no longer pending.
     let Some(token) = s(&v, "confirmToken") else {
@@ -868,6 +877,9 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             }
             // A role of the agent's own App: the room line it showed, as the
             // owner who approved it (`role_room_hold`).
+            if route == super::role_room_hold::BOX_APPLY_ROUTE {
+                return super::role_room_hold::apply_box_wide(r, by);
+            }
             if route == super::role_room_hold::APPLY_ROUTE {
                 return super::role_room_hold::apply(r, by);
             }

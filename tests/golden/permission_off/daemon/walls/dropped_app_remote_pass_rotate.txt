@@ -4,7 +4,7 @@
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"owner_only","hint":"only the server's owner mints a remote App pass (a long-lived credential) (the owner token or an Owner login; never an agent or a K2 terminal tab)"}}
+{"error":{"actingAs":"agent:pog-billing","code":"owner_only","hint":"only the server's owner mints a remote App pass (a long-lived credential) (the owner token or an Owner login; never an agent or a K2 terminal tab) This terminal acts as agent @pog-billing (its passport), even when you type here: the owner approves in the K2 app, or runs it from a terminal outside K2."}}
 ## cell socket (same passport)
 > POST /cli/app/remote-pass/rotate
 > body: {}

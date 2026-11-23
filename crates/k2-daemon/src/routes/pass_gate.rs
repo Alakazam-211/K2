@@ -86,7 +86,15 @@ pub fn set_fenced(on: bool) {
         let mut r = r.borrow_mut();
         r.current = r.pending.take();
         r.current_pass = r.pending_pass.take();
+        r.current_hook = r.pending_hook.take();
     });
+}
+
+/// The non-pass token of the current request on an App or role route
+/// (`/cli/skin/…`, `/cli/app/…`), whatever the switches say
+/// (`crate::acting_as`, 0.46.18): read only when it answers a refusal.
+pub(crate) fn request_hook_token() -> Option<String> {
+    REQUEST.try_with(|r| r.borrow().current_hook.clone()).ok().flatten()
 }
 
 /// The `k2skn_` pass the current request carries, whatever the permission
@@ -126,11 +134,18 @@ struct Noted {
     /// [`request_pass`]: noted with the switch on or off.
     pending_pass: Option<String>,
     current_pass: Option<String>,
+    /// [`request_hook_token`]: noted with the switches on or off.
+    pending_hook: Option<String>,
+    current_hook: Option<String>,
 }
 
 fn note_request(method: &str, path: &str, query: &str) {
     if let Some(tok) = super::http::extract_token(query).filter(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
         let _ = REQUEST.try_with(|r| r.borrow_mut().pending_pass = Some(tok.to_string()));
+    } else if crate::acting_as::covers(path) {
+        if let Some(tok) = super::http::extract_token(query).filter(|t| !t.is_empty()) {
+            let _ = REQUEST.try_with(|r| r.borrow_mut().pending_hook = Some(tok.to_string()));
+        }
     }
     // The refusal wrapper reads it while permission cards are on; the Org
     // Chart's feed field (`org_chart::feed::stamp_tcp`) while it is on.

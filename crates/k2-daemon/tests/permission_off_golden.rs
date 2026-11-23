@@ -65,6 +65,12 @@
 //! App answer (`walls/v1_apps_*`) now carries K2's own `apps.approve` card
 //! in `card` (raised, on its Thread, who it went to) with the Beta off, and
 //! its hints name the card. Still no `permission` object.
+//! Re-captured on purpose (0.46.18, App role papercut 1, `acting_as`): an
+//! `owner_only` / `app_users_off` refusal on `/cli/skin/…` or `/cli/app/…`
+//! to a passport adds `error.actingAs` and ends its hint with "This terminal
+//! acts as agent @<handle> …" (`a2_apps_approve`, `a3_app_role_caps`,
+//! `dropped_app_remote_pass_rotate`, `dropped_apps_exception`,
+//! `dropped_app_room_names`). Still no `permission` object.
 //!
 //! No vault, keychain, real `~/.k2` or running daemon is touched: `$HOME` is
 //! a short temp dir under /tmp (Unix socket paths are length-capped).

@@ -4,7 +4,7 @@
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"owner_only","hint":"requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app. To let this workspace's agent manage Apps: Settings → Workspaces / Agents → (this workspace) → Permissions → Apps → \"Build and run Apps\"."},"ok":false}
+{"error":{"actingAs":"agent:pog-billing","code":"owner_only","hint":"requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app. To let this workspace's agent manage Apps: Settings → Workspaces / Agents → (this workspace) → Permissions → Apps → \"Build and run Apps\". This terminal acts as agent @pog-billing (its passport), even when you type here: the owner approves in the K2 app, or runs it from a terminal outside K2."},"ok":false}
 ## cell socket (same passport)
 > POST /cli/skin/roles/room
 > body: {}

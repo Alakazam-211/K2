@@ -723,6 +723,8 @@ mod unix_impl {
             )
         });
 
+        // Who this terminal acts as, on an App or role refusal (0.46.18).
+        let out = crate::acting_as::stamp_cell(&status, path, &out, &feed_principal).unwrap_or(out);
         // Permission cards (PRD rev 3.1 §3.1): an agent verb's refusal (or
         // hold) gains its `permission` object while both switches are on.
         let out = match &teach_input {

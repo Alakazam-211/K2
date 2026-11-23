@@ -87,6 +87,9 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         return json!({ "card": null });
     };
     let handle = present::workspace_handle(ws);
+    // A box-wide role's change: the owner's alone (0.46.18), never an Admin.
+    let owner_floor = super::role_room_hold::owner_only(r);
+    let floor = if owner_floor { k2_core::permission::catalog::Floor::Owner } else { reg.spec.floor };
     // The Thread of the session that asked (a sidecar's own, 0.46.6 client
     // papercut 12), else the pinned Chat.
     let own = r
@@ -116,7 +119,7 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
         text_hash: present::text_hash_of(reg.spec, &ctx),
         why: why_of(r),
         state: RequestState::Pending,
-        floor: present::floor_str(reg.spec.floor).to_string(),
+        floor: present::floor_str(floor).to_string(),
         held_ref: Some(r.id.clone()),
         batch_id: None,
         ask_number: limits::ask_number(ws, ACTION, &hash, at),
@@ -137,7 +140,9 @@ pub(crate) fn present_for(r: &reqs::AppRequest) -> J {
     }
     // Who it asks: the agent's --assign (0.46.17), else the owner's default
     // (0.46.16), else everyone at the floor.
-    if let Some(names) = assigned() {
+    // An owner-only card asks only people who may answer it.
+    let names = assigned().filter(|n| !owner_floor || approvers::check_named(n, floor).is_ok());
+    if let Some(names) = names {
         if let Err(e) = approvers::set(req.id.as_str(), &names) {
             k2_core::log_debug!("[app-cards] assign for {}: {e}", r.id);
             let _ = store::cas_open_to(req.id.as_str(), RequestState::Failed);
@@ -370,7 +375,8 @@ pub(crate) fn open_cards_to_admins() -> usize {
         }
     };
     let mut moved = 0;
-    for req in open.iter().filter(|r| r.action == ACTION && r.floor == "owner") {
+    // A box-wide role's card stays the owner's (0.46.18).
+    for req in open.iter().filter(|r| r.action == ACTION && r.floor == "owner" && !held_of(r).is_some_and(|h| super::role_room_hold::owner_only(&h))) {
         let hash = present::text_hash_of(reg.spec, &present::ctx_of(req));
         match store::lower_floor(req.id.as_str(), "owner", to, &hash) {
             Ok(true) => moved += 1,

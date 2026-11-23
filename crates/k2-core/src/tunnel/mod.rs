@@ -27,6 +27,8 @@
 //!   * [`relay_list`] — 0.45.7: keeps `relays` current from k2.dev
 //!                     (`GET /api/tunnel/relays`) at boot, every
 //!                     `refresh_s`, after relay switches and pairing.
+//!   * [`names`]     : multi-zone A1, this box's names from the same
+//!                     answer, parsed and stored; read-only, unused yet.
 //!   * [`watchdog`]  — pure mid-session relay-death detection: frpc never
 //!                     exits when an ESTABLISHED session's relay dies (it
 //!                     reconnect-retries internally), so the connector
@@ -59,6 +61,7 @@ pub(crate) mod frpc_proc;
 pub mod identity;
 pub mod ingress;
 pub mod lease;
+pub mod names;
 pub mod relay_list;
 pub mod render;
 pub mod subdomains;

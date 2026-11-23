@@ -27,6 +27,11 @@
 //! Unknown fields stay ignored (no `deny_unknown_fields`), so older
 //! daemons read the new body unchanged.
 //!
+//! **Names (multi-zone A1)**: additive under `v:1` too: `names`,
+//! `primaryZone`, `namesVersion`, `namesStatus` carry this box's names.
+//! [`super::names`] parses and stores them; a bad or missing names block
+//! never touches the relay list, and nothing uses the names yet.
+//!
 //! **When** — at daemon start (after the vault holder is installed, before
 //! the tunnel auto-start), every `refresh_s` (default 6 h, ± 10 %), right
 //! after any relay switch ([`request_refresh`] from the connector), and
@@ -131,6 +136,9 @@ pub struct Readiness {
     pub relays: String,
     /// [`HEADER_RELAY_SOURCE`].
     pub source: &'static str,
+    /// Multi-zone A1: the stored `namesVersion`, sent as
+    /// [`super::names::HEADER_NAMES_VERSION`] when the box holds names.
+    pub names_version: Option<u64>,
 }
 
 /// [`HEADER_RELAYS`] for `list`: `host:port,host:port`, only K2 Web's
@@ -171,6 +179,7 @@ pub fn readiness_for(cfg: &TunnelConfig) -> Readiness {
     Readiness {
         relays: relays_header_value(&effective_with(cfg, &st).relays),
         source: source_with(cfg, &st),
+        names_version: super::names::version(),
     }
 }
 
@@ -189,6 +198,16 @@ struct WireList {
     /// a malformed value only drops the hint, never the list.
     #[serde(default)]
     active_checked_at: Option<serde_json::Value>,
+    /// Multi-zone A1: this box's names ([`super::names`]). Loose types, so
+    /// a bad names block never fails the relay list.
+    #[serde(default)]
+    names: Option<serde_json::Value>,
+    #[serde(default, rename = "primaryZone")]
+    primary_zone: Option<serde_json::Value>,
+    #[serde(default, rename = "namesVersion")]
+    names_version: Option<serde_json::Value>,
+    #[serde(default, rename = "namesStatus")]
+    names_status: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,6 +239,9 @@ pub struct ValidRelayList {
     pub active: Option<RelayEndpoint>,
     /// `active_checked_at` (unix seconds) when `active` is known.
     pub active_checked_at: Option<u64>,
+    /// Multi-zone A1: what the answer said about this box's names
+    /// ([`super::names::NamesAnswer::Absent`] on every server today).
+    pub names: super::names::NamesAnswer,
 }
 
 /// The relay the `active` flags name, or `None` (unknown) unless exactly
@@ -311,6 +333,12 @@ pub fn parse_and_validate(body: &str) -> Result<ValidRelayList, String> {
         Some(s) if s > 0 => Duration::from_secs(s as u64).clamp(MIN_REFRESH, MAX_REFRESH),
         _ => DEFAULT_REFRESH,
     };
+    let names = super::names::parse(&super::names::WireNames {
+        names: wire.names,
+        primary_zone: wire.primary_zone,
+        names_version: wire.names_version,
+        names_status: wire.names_status,
+    });
     let active = active_relay(&flags, &relays);
     let active_checked_at = match (&active, wire.active_checked_at) {
         (Some(_), Some(serde_json::Value::Number(n))) => n.as_u64(),
@@ -321,6 +349,7 @@ pub fn parse_and_validate(body: &str) -> Result<ValidRelayList, String> {
         refresh,
         active,
         active_checked_at,
+        names,
     })
 }
 
@@ -361,7 +390,8 @@ impl std::fmt::Display for FetchError {
 
 /// One `GET <url>` with the bearer token, validated. Never logs the token.
 /// Redirects are not followed (the bearer must not travel elsewhere; a
-/// 3xx is just a non-200). Carries the readiness headers (0.46.6, D10).
+/// 3xx is just a non-200). Carries the readiness headers (0.46.6, D10)
+/// and, when the box holds names, their version (multi-zone A1).
 pub fn fetch(url: &str, token: &str, readiness: &Readiness) -> Result<ValidRelayList, FetchError> {
     let token = token.trim();
     let client = reqwest::blocking::Client::builder()
@@ -371,14 +401,17 @@ pub fn fetch(url: &str, token: &str, readiness: &Readiness) -> Result<ValidRelay
         .user_agent(user_agent())
         .build()
         .map_err(|e| FetchError::Network(format!("http client: {e}")))?;
-    let resp = client
+    let req = client
         .get(url)
         .header("Authorization", format!("Bearer {token}"))
         .header("Accept", "application/json")
         .header(HEADER_RELAYS, readiness.relays.as_str())
-        .header(HEADER_RELAY_SOURCE, readiness.source)
-        .send()
-        .map_err(|e| FetchError::Network(e.to_string()))?;
+        .header(HEADER_RELAY_SOURCE, readiness.source);
+    let req = match readiness.names_version {
+        Some(v) => req.header(super::names::HEADER_NAMES_VERSION, v.to_string()),
+        None => req,
+    };
+    let resp = req.send().map_err(|e| FetchError::Network(e.to_string()))?;
     let status = resp.status().as_u16();
     if status == 401 {
         return Err(FetchError::Unauthorized);
@@ -542,6 +575,9 @@ pub fn refresh_once() -> RefreshOutcome {
         Err(e) => return RefreshOutcome::Skipped(format!("tunnel.json unreadable: {e}")),
     };
     check_default_name(&cfg);
+    // Multi-zone A1: the stored names for this token, so their version
+    // goes out with the fetch. Nothing reads the names yet.
+    super::names::sync(&cfg);
     if let Some(why) = skip_reason(&cfg) {
         return RefreshOutcome::Skipped(why);
     }
@@ -563,6 +599,9 @@ pub fn refresh_once() -> RefreshOutcome {
                     list.active.clone(),
                     list.active_checked_at,
                 ));
+                // Multi-zone A1: the names count even if saving the list
+                // fails; an answer without them keeps what the box has.
+                super::names::apply(&list.names, &cfg);
                 persist_if_changed(&list.relays, &token)
                     .map(|wrote| (list, wrote))
                     .map_err(FetchError::Persist)
@@ -987,6 +1026,7 @@ pub fn status_for(cfg: &TunnelConfig) -> RelayListStatus {
 #[cfg(test)]
 pub(crate) fn reset_state_for_test() {
     *lock_state() = RefreshState::default();
+    super::names::reset_for_test();
 }
 
 /// Fetch attempts made so far (tests).
@@ -2521,6 +2561,216 @@ mod tests {
         assert!(v.len() <= 512, "{}", v.len());
         assert!(v.split(',').all(|e| e.ends_with(":7000")), "whole entries only: {v}");
         assert_eq!(v.split(',').count(), 6);
+    }
+
+    // ── multi-zone A1: this box's names ride along ──
+
+    const NAMES_V7: &str = r#""names":[{"zone":"globex.example","fqdn":"alice.globex.example","features":["e2e"]}],"primaryZone":"globex.example","namesVersion":7,"namesStatus":"ok""#;
+
+    fn good_with(names: &str) -> String {
+        GOOD.replacen(r#"{"v":1,"#, &format!(r#"{{"v":1,{names},"#), 1)
+    }
+
+    fn names_fqdns() -> Vec<String> {
+        crate::tunnel::names::current()
+            .expect("active names")
+            .entries
+            .into_iter()
+            .map(|e| e.fqdn)
+            .collect()
+    }
+
+    #[test]
+    fn an_old_shaped_answer_parses_exactly_as_before() {
+        assert_eq!(
+            parse_and_validate(GOOD).expect("valid"),
+            ValidRelayList {
+                relays: both(),
+                refresh: Duration::from_secs(21600),
+                active: None,
+                active_checked_at: None,
+                names: crate::tunnel::names::NamesAnswer::Absent,
+            }
+        );
+        let known = parse_and_validate(KNOWN).expect("valid");
+        assert_eq!(known.names, crate::tunnel::names::NamesAnswer::Absent);
+        assert_eq!(known.active, Some(ep("178.156.232.105", 7000)));
+    }
+
+    #[test]
+    fn a_bad_names_block_never_drops_the_relays() {
+        for names in [
+            r#""names":"x","namesStatus":"ok","namesVersion":1"#,
+            r#""names":[{"zone":7}],"namesStatus":"ok","namesVersion":1,"primaryZone":"globex.example""#,
+            r#""names":[],"namesStatus":"ok","namesVersion":"7""#,
+            r#""namesStatus":{"a":1}"#,
+        ] {
+            let l = parse_and_validate(&good_with(names)).expect("the relay list stays valid");
+            assert_eq!(l.relays, both(), "{names}");
+            assert!(
+                matches!(l.names, crate::tunnel::names::NamesAnswer::Malformed(_)),
+                "{names}: {:?}",
+                l.names
+            );
+        }
+        let l = parse_and_validate(&good_with(NAMES_V7)).expect("valid");
+        assert_eq!(l.relays, both());
+        assert!(
+            matches!(l.names, crate::tunnel::names::NamesAnswer::Usable { .. }),
+            "{:?}",
+            l.names
+        );
+    }
+
+    #[test]
+    fn the_fetch_sends_the_names_version_back() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            let srv = FakeServer::start(200, &good_with(NAMES_V7));
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+            let first = srv.next_request().to_ascii_lowercase();
+            assert!(
+                !first.contains("x-k2-names-version"),
+                "no names held yet: {first}"
+            );
+            assert_eq!(names_fqdns(), vec!["alice.globex.example"]);
+            assert_eq!(refresh_once(), RefreshOutcome::Unchanged);
+            let second = srv.next_request().to_ascii_lowercase();
+            assert!(second.contains("\r\nx-k2-names-version: 7\r\n"), "{second}");
+            // After a restart the stored version still goes out.
+            reset_state_for_test();
+            assert_eq!(refresh_once(), RefreshOutcome::Unchanged);
+            let third = srv.next_request().to_ascii_lowercase();
+            assert!(third.contains("\r\nx-k2-names-version: 7\r\n"), "{third}");
+        });
+    }
+
+    /// Store v7 through a real fetch, then run `body` with `status` and
+    /// check the names and their store are exactly as before.
+    fn assert_names_kept(status: u16, body: &str) -> RefreshOutcome {
+        let mut out = None;
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            {
+                let srv = FakeServer::start(200, &good_with(NAMES_V7));
+                let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+                assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+                srv.next_request();
+            }
+            let held = crate::tunnel::names::state();
+            let stored = std::fs::read(crate::tunnel::names::store_path()).expect("names stored");
+            let srv = FakeServer::start(status, body);
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            out = Some(refresh_once());
+            srv.next_request();
+            assert_eq!(
+                crate::tunnel::names::state(),
+                held,
+                "status {status} body {body}"
+            );
+            assert_eq!(
+                std::fs::read(crate::tunnel::names::store_path()).expect("names stored"),
+                stored,
+                "status {status} body {body}: the store must not move"
+            );
+        });
+        out.expect("ran")
+    }
+
+    #[test]
+    fn answers_without_usable_names_keep_what_the_box_has() {
+        assert_eq!(
+            assert_names_kept(200, GOOD),
+            RefreshOutcome::Unchanged,
+            "fields absent"
+        );
+        assert_eq!(
+            assert_names_kept(200, &good_with(r#""names":[],"namesVersion":8"#)),
+            RefreshOutcome::Unchanged,
+            "an empty list without namesStatus"
+        );
+        assert_eq!(
+            assert_names_kept(
+                200,
+                &good_with(
+                    r#""names":[{"zone":"x"}],"namesVersion":8,"namesStatus":"ok","primaryZone":"x""#
+                )
+            ),
+            RefreshOutcome::Unchanged,
+            "a malformed block"
+        );
+        assert!(
+            matches!(
+                assert_names_kept(
+                    503,
+                    &good_with(r#""names":[],"namesVersion":9,"namesStatus":"none""#)
+                ),
+                RefreshOutcome::Failed(FetchError::Http(503))
+            ),
+            "a non-200, even one saying none"
+        );
+        // A 401 stays what it is today: the hard stop for the fetch.
+        assert_eq!(
+            assert_names_kept(401, r#"{"code":"tunnel_only"}"#),
+            RefreshOutcome::Failed(FetchError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn a_timeout_keeps_the_names() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            {
+                let srv = FakeServer::start(200, &good_with(NAMES_V7));
+                let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+                assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+            }
+            let held = crate::tunnel::names::state();
+            let closed = crate::test_env::ClosedPort::new();
+            let _u = crate::test_env::EnvVar::set(
+                RELAY_LIST_URL_ENV,
+                format!("http://127.0.0.1:{}/api/tunnel/relays", closed.port()),
+            );
+            assert!(matches!(
+                refresh_once(),
+                RefreshOutcome::Failed(FetchError::Network(_))
+            ));
+            assert_eq!(crate::tunnel::names::state(), held);
+            assert_eq!(names_fqdns(), vec!["alice.globex.example"]);
+        });
+    }
+
+    #[test]
+    fn names_status_none_on_a_200_revokes_the_names_and_keeps_the_relays() {
+        with_temp_home(|| {
+            reset_state_for_test();
+            seed("k2c_good");
+            {
+                let srv = FakeServer::start(200, &good_with(NAMES_V7));
+                let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+                assert_eq!(refresh_once(), RefreshOutcome::Updated(both()));
+            }
+            let srv = FakeServer::start(
+                200,
+                &good_with(r#""names":[],"namesVersion":8,"namesStatus":"none""#),
+            );
+            let _u = crate::test_env::EnvVar::set(RELAY_LIST_URL_ENV, &srv.url);
+            assert_eq!(
+                refresh_once(),
+                RefreshOutcome::Unchanged,
+                "the relays are untouched"
+            );
+            assert_eq!(crate::tunnel::names::current(), None);
+            assert_eq!(
+                crate::tunnel::names::state(),
+                Some(crate::tunnel::names::BoxNames::Revoked { version: 8 })
+            );
+            assert_eq!(config::load().expect("load").relays, both());
+        });
     }
 
     #[test]

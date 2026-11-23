@@ -260,6 +260,7 @@ mod tests {
     fn the_names_match_the_root_helpers() {
         use k2_root_proto::agent_scope as rp;
         assert_eq!(TOP_SLICE, rp::TOP_SLICE);
+        assert_eq!(ADOPTED_DESCRIPTION, rp::ADOPTED_DESCRIPTION);
         assert_eq!((SCOPE_PREFIX, SCOPE_SUFFIX, MEM_MB, CPU_PCT), (rp::SCOPE_PREFIX, rp::SCOPE_SUFFIX, rp::MEM_MB, rp::CPU_PCT));
         for (k, r) in [(Kind::Open, rp::Kind::Open), (Kind::Fenced, rp::Kind::Fenced)] {
             assert_eq!((k.as_str(), k.slice()), (r.as_str(), r.slice()));

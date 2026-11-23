@@ -380,16 +380,65 @@ fn agents_adopt_refuses_a_number_that_died_and_came_back_as_another_process() {
 /// A child a survivor forked after the move is in the scope too: adopted.
 #[test]
 fn agents_adopt_accepts_a_child_of_a_checked_process() {
-    let t = scope_box_full(true, &[], &[7150]);
+    // A grandchild: 7151 → 7150 → 7101 (checked), all in the scope.
+    let t = scope_box_full(true, &[], &[7150, 7151]);
     old_cgroup(&t, &[7101], K2_UID);
-    t.procs.0.borrow_mut().procs.insert(7150, P { exe: "/bin/sh".into(), exe_owner: 0, ppid: 7101, ruid: K2_UID, sid: 7101 });
+    child_proc(&t, 7150, 7101);
+    child_proc(&t, 7151, 7150);
     ok(&t.call(&["agents", "adopt", WS, SID, "open"]));
+    let lines: Vec<serde_json::Value> = t
+        .audit
+        .0
+        .borrow()
+        .iter()
+        .filter(|l| l.contains("scope_member_child_accepted"))
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "one line per child: {lines:?}");
+    assert_eq!((lines[0]["pid"].clone(), lines[0]["via"].clone()), (serde_json::json!(7150), serde_json::json!([7101])), "{lines:?}");
+    assert_eq!((lines[1]["pid"].clone(), lines[1]["via"].clone()), (serde_json::json!(7151), serde_json::json!([7150, 7101])), "{lines:?}");
+    assert_eq!((lines[1]["ws"].clone(), lines[1]["scope"].clone()), (serde_json::json!(WS), serde_json::json!(SCOPE)), "{lines:?}");
+    assert_eq!(lines[1]["verb"], "agents adopt", "{lines:?}");
     // An unrelated one is not.
     let t = scope_box_full(true, &[], &[7151]);
     old_cgroup(&t, &[7101], K2_UID);
     t.procs.0.borrow_mut().procs.insert(7151, P { exe: "/bin/sh".into(), exe_owner: 0, ppid: 1, ruid: K2_UID, sid: 7151 });
     let o = t.call(&["agents", "adopt", WS, SID, "open"]);
     assert!(o.code != exit::OK && o.stderr.contains("\"mismatched\":[7151]"), "{}", o.stderr);
+}
+
+fn child_proc(t: &T, pid: i32, ppid: i32) {
+    t.procs.0.borrow_mut().procs.insert(pid, P { exe: "/bin/sh".into(), exe_owner: 0, ppid, ruid: K2_UID, sid: pid });
+}
+
+/// A parent chain that leaves the scope: 7161's parent 7160 is a child of
+/// the checked 7101, but 7160 is not in the scope's member list.
+#[test]
+fn agents_adopt_refuses_a_child_whose_parent_chain_leaves_the_scope() {
+    let t = scope_box_full(true, &[], &[7161]);
+    old_cgroup(&t, &[7101], K2_UID);
+    child_proc(&t, 7160, 7101);
+    child_proc(&t, 7161, 7160);
+    let o = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert!(o.code != exit::OK && o.stderr.contains("\"mismatched\":[7161]"), "{}", o.stderr);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
+    assert!(!t.audit.0.borrow().iter().any(|l| l.contains("scope_member_child_accepted")), "no child accepted");
+}
+
+/// A chain through a held pid that failed its own check is no chain: 7170's
+/// parent is 7102, whose start time changed during the move (and 7102 is a
+/// child of the checked 7101, so only the failed hop stands in the way).
+#[test]
+fn agents_adopt_refuses_a_child_through_a_held_pid_that_failed_its_check() {
+    let t = scope_box_full(true, &[7102], &[7170]);
+    old_cgroup(&t, &[7101, 7102], K2_UID);
+    t.procs.0.borrow_mut().procs.get_mut(&7102).unwrap().ppid = 7101;
+    child_proc(&t, 7170, 7102);
+    let o = t.call(&["agents", "adopt", WS, SID, "open"]);
+    assert_ne!(o.code, exit::OK);
+    assert!(o.stderr.contains("\"mismatched\":[7102,7170]"), "{}", o.stderr);
+    assert_eq!(systemctl_calls(&t), vec![sv(&["stop", "--no-block", SCOPE])]);
+    assert!(!t.audit.0.borrow().iter().any(|l| l.contains("scope_member_child_accepted")), "no child accepted");
 }
 
 /// Review R3 for adopt: a moved number that is another process by then is

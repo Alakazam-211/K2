@@ -355,7 +355,7 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
     // the move; or a child one of those forked since (its parent chain
     // reaches a checked pid inside the scope). A number that died before
     // the move and came back as another process is caught here too.
-    let found = adopt_mismatches(ctx, &held, scope_members(ctx, kind, ws, id));
+    let (found, children) = adopt_mismatches(ctx, &held, scope_members(ctx, kind, ws, id));
     if !found.is_empty() {
         let _ = stop_no_block(ctx, &name);
         audit_mismatch(ctx, "adopt", ws, &name, &found);
@@ -366,6 +366,9 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
             list.join(",")
         )));
     }
+    // Only a scope that stands keeps a child accepted by its parent chain:
+    // one audit line each.
+    audit_children(ctx, ws, &name, &children);
     let not_moved: Vec<u32> = alive.iter().copied().filter(|p| !moved.contains(p)).collect();
     let left = pids_in(&ctx.p(&cg(&old_rel))).len();
     Ok(json!({
@@ -383,44 +386,82 @@ fn adopt(ctx: &Ctx, who: &Caller, ws: &AgentWs, id: &ScopeId, kind: Kind) -> HRe
 
 /// The adopted scope's members that aren't the processes checked before
 /// the move (see `adopt`). Unreadable members are one mismatch (pid 0).
-fn adopt_mismatches(ctx: &Ctx, held: &[(u32, Box<dyn ProcHandle>, u64)], members: Option<Vec<u32>>) -> Vec<Mismatch> {
+/// A pid the adopted scope lists that the helper didn't hold, accepted as
+/// a child of a checked process: its start time now and the parent chain
+/// (`via`, from its parent up to the checked one).
+struct ChildAccepted {
+    pid: u32,
+    start_now: Option<u64>,
+    via: Vec<u32>,
+}
+
+/// The parent chain of `pid` up to a checked process, every step inside the
+/// scope's member list (`list`) and never through a held pid (one that
+/// failed its own check is in `held` but not in `checked`). `None` when the
+/// chain leaves the scope, meets a held pid that failed, or runs past
+/// [`CHILD_HOPS`].
+fn chain_to_checked(ctx: &Ctx, pid: u32, list: &[u32], checked: &[u32], held: &[u32]) -> Option<Vec<u32>> {
+    let mut via = Vec::new();
+    let mut cur = pid as i32;
+    for _ in 0..CHILD_HOPS {
+        let pp = ctx.procs.ppid_of(cur)?;
+        if pp <= 1 || !list.contains(&(pp as u32)) {
+            return None;
+        }
+        let ppu = pp as u32;
+        via.push(ppu);
+        if checked.contains(&ppu) {
+            return Some(via);
+        }
+        if held.contains(&ppu) {
+            return None;
+        }
+        cur = pp;
+    }
+    None
+}
+
+fn audit_children(ctx: &Ctx, ws: &AgentWs, name: &str, children: &[ChildAccepted]) {
+    for c in children {
+        let line = json!({
+            "ns": "agents",
+            "verb": "agents adopt",
+            "event": "scope_member_child_accepted",
+            "ws": ws.as_str(),
+            "scope": name,
+            "pid": c.pid,
+            "startNow": c.start_now,
+            "via": c.via,
+        });
+        ctx.audit.line(&line.to_string());
+    }
+}
+
+fn adopt_mismatches(ctx: &Ctx, held: &[(u32, Box<dyn ProcHandle>, u64)], members: Option<Vec<u32>>) -> (Vec<Mismatch>, Vec<ChildAccepted>) {
     let Some(list) = members else {
-        return vec![Mismatch { pid: 0, start_before: None, start_now: None }];
+        return (vec![Mismatch { pid: 0, start_before: None, start_now: None }], vec![]);
     };
     let checked: Vec<u32> = held
         .iter()
         .filter(|(p, h, s)| list.contains(p) && h.alive() && start_now(ctx, *p) == Some(*s))
         .map(|(p, _, _)| *p)
         .collect();
+    let held_pids: Vec<u32> = held.iter().map(|(p, _, _)| *p).collect();
     let mut found = Vec::new();
+    let mut children = Vec::new();
     for p in &list {
         if checked.contains(p) {
             continue;
         }
         let before = held.iter().find(|(q, _, _)| q == p).map(|(_, _, s)| *s);
         // A held number that failed the check is never "a child".
-        let child = before.is_none() && {
-            let mut cur = *p as i32;
-            let mut ok = false;
-            for _ in 0..CHILD_HOPS {
-                match ctx.procs.ppid_of(cur) {
-                    Some(pp) if pp > 1 && list.contains(&(pp as u32)) => {
-                        if checked.contains(&(pp as u32)) {
-                            ok = true;
-                            break;
-                        }
-                        cur = pp;
-                    }
-                    _ => break,
-                }
-            }
-            ok
-        };
-        if !child {
-            found.push(Mismatch { pid: *p, start_before: before, start_now: start_now(ctx, *p) });
+        let via = if before.is_none() { chain_to_checked(ctx, *p, &list, &checked, &held_pids) } else { None };
+        match via {
+            Some(via) => children.push(ChildAccepted { pid: *p, start_now: start_now(ctx, *p), via }),
+            None => found.push(Mismatch { pid: *p, start_before: before, start_now: start_now(ctx, *p) }),
         }
     }
-    found
+    (found, children)
 }
 
 /// Every agent scope under both slices: (kind, ws, id, its cgroup dir).

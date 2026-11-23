@@ -16,7 +16,7 @@ next tag.
 
 | file | what it is | yours to change |
 |---|---|---|
-| `brand/brand.toml` | your brand: its id, product name and command, each field explained in the file | yes: this is what makes the build yours |
+| `brand/brand.toml` | your brand: its id, names, command, links, feeds and keys, each field explained in the file and in "Your brand file, field by field" below | yes: this is what makes the build yours |
 | `distributor.conf` | the pipeline's settings: K5's repo, which tags are releases, the first tag you build, your feed and your update key's public half | yes |
 | `hold.txt` | K5 tags you hold back | yes, whenever you need to |
 | `hooks/sign.sh` | signs the build with your keys | yes: fit it to your signing |
@@ -60,6 +60,58 @@ If two brands' programs ever meet on one machine anyway (one brand's
 command run in a session of another brand's server), the CLI prints a
 warning line naming both. That warning is the safety net on one machine;
 the reservation is what keeps it from happening.
+
+## Your brand file, field by field
+
+`brand/brand.toml` holds everything your build and a hosted box of yours
+need to be yours. A field you leave out is K5's own value (the default
+brand, `brand/k2` in K5's repo), or is made from your names where the
+table says so. `bash scripts/brand.sh lint brand --hosted` refuses a brand
+that leaves out a field marked **must**, or sets one to K5's own value.
+
+Shapes: every URL is `https://<domain>[/<path>]`; domains are lower case;
+an email is `<name>@<domain>`; a key is a minisign public key line (the
+base64 line of its `.pub` file) with its key id; a colour is `#RRGGBB`;
+`""` means none (no link, or off). A table or key K5 does not know stops
+the build, naming it.
+
+| field | what it is | you |
+|---|---|---|
+| id (top level) | the brand's id: stamped into every binary; pick it once | **must** |
+| `schema` | the brand file's format: `1` | **must** |
+| `names.product` | the product's name, for prose and screens | **must** |
+| `names.short` | the name where space is short | may (left out: the product's) |
+| `names.company` | your company | **must** |
+| `names.lockup` | the product with its maker | may (left out: `<product> by <company>`) |
+| `names.server` | what a box is called | may (left out: `<product> Server`) |
+| `names.login` | the account your users sign in with | **must** |
+| `cli.name`, `cli.aliases` | the command and its other names ("Your brand's names" above) | **must** (aliases may be `[]`) |
+| `package.bundle_id`, `desktop_id`, `gui_binary` | the app's ids on macOS and Linux | **must** for app builds |
+| `package.update_feed` | the desktop app's update manifest | **must** |
+| `update.keys` | the update keys your build trusts, primary first; never K5's | **must** |
+| `zones.label` | the zone your boxes are named under, `<subdomain>.<label>` | **must** |
+| `zones.internal` | `true` or `false`: a box also gets a name under K5's own zone | **must** (your agreement says which) |
+| `control.connect`, `cert`, `push`, `relay`, `relay_list`, `web_api` | Connect, the certificate broker, the push gateway, the relays, the website's API | leave out: they are ours |
+| `feeds.daemon` | the headless daemon's update manifest | **must** |
+| `feeds.downloads` | the folder a release's files are downloaded from | **must** |
+| `pins.keys` | the keys that sign the root helper and what it installs (the Sew pins ride in it) | leave out: ours |
+| `machine.home`, `binary_prefix`, `unit_prefix` | the home folder (`.k2`), what programs and systemd units are named after (`k2-daemon`, `k2-daemon.service`); ops scripts find your boxes by these | leave out: a brand may not rename them yet |
+| `look.icons` | your icons folder, inside your brand folder | **must** |
+| `look.accent` | your accent colour | may (left out: the style's own) |
+| `links.site` | your public website | **must** |
+| `links.support_email` | where your users write for help | **must** |
+| `links.support_url`, `terms`, `privacy` | your support page, terms of service and privacy policy | **must**, not `""` |
+| `links.dashboard` | where a user manages their account | **must**, may be `""` (none) |
+| `links.feedback` | where Send feedback goes | **must**, may be `""` (the button is off) |
+| `mail.system_from` | the address system mail to your users comes from | **must** |
+| `mail.system_from_name` | the name on it | may (left out: the product's) |
+| `mail.postal` | `true` or `false`: your boxes may join Postal | **must** |
+| `phone.bundle_id`, `team_id`, `push_topic` | the phone app your boxes pair with | leave out unless you have your own app |
+| `sew.call_name` | what calls and chat name the service | may (left out: the product's) |
+
+Most of these fields are read by nothing in K5 yet: K5's release notes
+say when each one starts to change what a build does. Set them now, so
+your brand is whole when they do.
 
 ## How a build starts
 

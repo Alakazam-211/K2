@@ -79,6 +79,14 @@ impl Env {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         ));
         std::fs::create_dir_all(tmp.join("home")).expect("mkdir home");
+        // The hire root goes under `tmp`: only this user can change it, and
+        // it counts as the owner's (the temp dir above it may not).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o700)).expect("chmod tmp");
+        }
+        k2_core::hire::root::set_owner_base_override(Some(tmp.clone()));
         std::env::set_var("HOME", tmp.join("home"));
         std::env::set_var("K2_API", "1");
         k2_core::hire::apply::set_trash_override(Some(tmp.join("trash")));
@@ -97,6 +105,7 @@ impl Drop for Env {
             None => std::env::remove_var("K2_API"),
         }
         k2_core::hire::apply::set_trash_override(None);
+        k2_core::hire::root::set_owner_base_override(None);
         let _ = std::fs::remove_dir_all(&self.tmp);
     }
 }

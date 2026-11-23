@@ -4,6 +4,7 @@
 //! converge doors (`/v1/w`, `k2 agent hire <dir>`): that is their own box.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::RwLock;
 
 use super::HireError;
 
@@ -62,6 +63,7 @@ pub fn set_hire_root(raw: &str) -> Result<PathBuf, HireError> {
         return Err(HireError::usage(format!("{} exists and is not a folder", expanded.display())));
     }
     let stored = dunce::canonicalize(&expanded).unwrap_or(expanded);
+    check_root_safe(&stored)?;
     let db = crate::db::shared();
     let conn = db.lock();
     conn.execute(
@@ -120,6 +122,122 @@ pub(crate) fn changeable_by_others(uid: u32, mode: u32, me: u32, root_ok: bool) 
 pub(crate) fn server_uid() -> u32 {
     // SAFETY: geteuid has no preconditions.
     unsafe { libc::geteuid() }
+}
+
+static OWNER_BASE_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Tests: one more folder that counts as the owner's base for
+/// [`unsafe_folder_on_the_way`] (a folder the test made, only its owner can
+/// write). The daemon never sets it.
+pub fn set_owner_base_override(dir: Option<PathBuf>) {
+    *OWNER_BASE_OVERRIDE.write().unwrap_or_else(|p| p.into_inner()) = dir;
+}
+
+/// Where the walk down to a hire root starts: the deepest owner's base the
+/// root is inside (the home folder), else `/`.
+fn walk_start(real: &Path) -> PathBuf {
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if let Some(h) = crate::paths::home_dir() {
+        bases.push(resolve_existing_prefix(&h));
+    }
+    if let Some(o) = OWNER_BASE_OVERRIDE.read().unwrap_or_else(|p| p.into_inner()).clone() {
+        bases.push(resolve_existing_prefix(&o));
+    }
+    bases
+        .into_iter()
+        .filter(|b| real.starts_with(b))
+        .max_by_key(|b| b.components().count())
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// The first folder from the owner's base (or `/`) down to `dir` that
+/// another user could change: not owned by the server's user or root, or
+/// writable by a group or everyone (see [`changeable_by_others`]). Only the
+/// folders that exist are looked at.
+#[cfg(unix)]
+pub fn unsafe_folder_on_the_way(dir: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let real = resolve_existing_prefix(dir);
+    let start = walk_start(&real);
+    let me = server_uid();
+    let mut cur = PathBuf::new();
+    for part in real.components() {
+        cur.push(part);
+        if !cur.starts_with(&start) {
+            continue;
+        }
+        match std::fs::symlink_metadata(&cur) {
+            Ok(m) if m.file_type().is_symlink() || changeable_by_others(m.uid(), m.mode(), me, true) => return Some(cur),
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+#[cfg(not(unix))]
+pub fn unsafe_folder_on_the_way(_dir: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// `hire_root_unsafe` when another user could change a folder on the way
+/// to `dir` (a hire root, or a key's folder in it).
+pub fn check_root_safe(dir: &Path) -> Result<(), HireError> {
+    match unsafe_folder_on_the_way(dir) {
+        Some(d) => Err(unsafe_folder_error(&d)),
+        None => Ok(()),
+    }
+}
+
+/// The hire root's doctor notes, one line each: a folder another user
+/// could change on the way to the root, each workspace already under it
+/// with the folder on its way that another user could change (with
+/// `workspaces`), and, for information, a root other users can read.
+pub fn doctor_notes(workspaces: bool) -> Vec<String> {
+    let Ok(root) = hire_root() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(d) = unsafe_folder_on_the_way(&root) {
+        out.push(format!("hire root {}: {}", root.display(), unsafe_folder_error(&d).hint));
+    } else if let Some(mode) = readable_by_others(&root) {
+        out.push(format!("hire root {}: other users can read it (mode {mode:o}); 0700 is tighter (chmod 700)", root.display()));
+    }
+    if workspaces {
+        let rows: Vec<(String, String)> = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let Ok(mut stmt) = conn.prepare("SELECT name, path FROM projects ORDER BY path") else {
+                return out;
+            };
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map(|it| it.flatten().collect())
+                .unwrap_or_default();
+            rows
+        };
+        for (name, path) in rows {
+            if !is_under(Path::new(&path), &root) {
+                continue;
+            }
+            if let Some(d) = unsafe_folder_on_the_way(Path::new(&path)) {
+                out.push(format!("workspace {name} ({path}) is under the hire root: {}", unsafe_folder_error(&d).hint));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(unix)]
+fn readable_by_others(dir: &Path) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(dir).ok()?.permissions().mode() & 0o7777;
+    (mode & 0o077 != 0).then_some(mode)
+}
+
+#[cfg(not(unix))]
+fn readable_by_others(_dir: &Path) -> Option<u32> {
+    None
 }
 
 /// `hire_root_unsafe`: `dir` can be changed by another user.

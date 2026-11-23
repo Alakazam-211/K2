@@ -814,6 +814,13 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         Some(p) => converge::expand_hire_path(p)?,
         None => default_path(req, &tpl, auth)?,
     };
+    // A new workspace inside a hire root: no other user can change a
+    // folder on the way to the root (converge checks it again).
+    if let Some(root) = auth.new_workspace_root.as_deref() {
+        if auth.create_only || converge::lookup_project_row(&path).is_none() {
+            super::super::root::check_root_safe(root)?;
+        }
+    }
     // A key's template hire makes a new workspace only, inside its
     // root; the dry run says so too, and converge checks both again.
     if auth.new_only {

@@ -299,3 +299,30 @@ fn set_hire_root_takes_a_folder_only_its_owner_can_write() {
         assert_eq!(set, st.root, "{mode:o}");
     }
 }
+
+/// The doctor names the folder another user could change on the way to the
+/// hire root, and each workspace already under it, one line each; a root
+/// others can only read gets one line saying 0700 is tighter.
+#[test]
+fn the_doctor_names_an_unsafe_hire_root_and_the_workspaces_under_it() {
+    let st = setup();
+    let _keep = KeepRoot::new();
+    chmod(&st.root, 0o700);
+    super::super::root::set_hire_root(&s(&st.root)).expect("set the root");
+    assert!(super::super::root::doctor_notes(true).is_empty(), "a 0700 root has nothing to say");
+    let ws = st.root.join(uniq("ws"));
+    let req: ConvergeRequest = serde_json::from_value(serde_json::json!({ "path": s(&ws), "name": "Under" })).expect("body");
+    converge(&req, &HireCaller::Owner, &ConvergeAuthority::unrestricted()).expect("the owner's hire");
+    chmod(&ws, 0o755);
+    chmod(&st.root, 0o755);
+    let notes = super::super::root::doctor_notes(true);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains(&s(&st.root)) && notes[0].contains("0700 is tighter"), "{notes:?}");
+    chmod(&st.root, 0o770);
+    let notes = super::super::root::doctor_notes(true);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes[0].starts_with(&format!("hire root {}", s(&st.root))) && notes[0].contains("can be changed by another user"), "{notes:?}");
+    assert!(notes[1].contains(&s(&ws)) && notes[1].contains(&format!("{} can be changed by another user", s(&st.root))), "{notes:?}");
+    assert_eq!(super::super::root::doctor_notes(false).len(), 1, "no workspace lines without them asked for");
+    chmod(&st.root, 0o700);
+}

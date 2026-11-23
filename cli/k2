@@ -115717,6 +115717,8 @@ elif view == "unlink":
     print("Unlinked %s" % d.get("link") if d.get("changed") else "Link %s was already removed" % d.get("link"))
 elif view == "root":
     print("%s%s" % (d.get("root"), "  (default)" if d.get("default") else ""))
+    for line in d.get("doctor") or []:
+        print("doctor: %s" % line)
 elif view == "who":
     s = d.get("sender") or {}
     print("Delivery %s" % d.get("id"))

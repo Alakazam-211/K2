@@ -1128,6 +1128,11 @@ fn root(d: &Value, out: &mut String) -> Result<(), Raise> {
         ""
     };
     out.push_str(&format!("{}{default}\n", sv(r)));
+    if let Some(Value::Array(lines)) = at(d, "doctor") {
+        for line in lines {
+            out.push_str(&format!("doctor: {}\n", sv(Some(line))));
+        }
+    }
     Ok(())
 }
 
@@ -1280,6 +1285,8 @@ mod tests {
         );
         let p = hire_print(r#"{"root": "/srv/h", "default": true}"#, View::Root, false);
         assert_eq!(p.stdout, "/srv/h  (default)\n");
+        let p = hire_print(r#"{"root": "/srv/h", "default": false, "doctor": ["one", "two"]}"#, View::Root, false);
+        assert_eq!(p.stdout, "/srv/h\ndoctor: one\ndoctor: two\n");
         let p = hire_print(
             r#"{"instances": [{"id": "i1", "status": "live", "members": [{"handle": "a"}, {"handle": "b"}], "apiKeyId": "abcdefghij"}]}"#,
             View::Instances,

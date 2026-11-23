@@ -1276,8 +1276,11 @@ fn hire_root(who: &Who, is_post: bool, body: &[u8]) -> CliResponse {
             let conn = db.lock();
             k2_core::hire::root::stored_root(&conn)
         };
+        // Doctor notes: a folder another user could change on the way to
+        // the root, and (for an owner or admin) each workspace under it.
+        let doctor = k2_core::hire::root::doctor_notes(who.is_admin());
         return match k2_core::hire::root::hire_root() {
-            Ok(r) => ok(serde_json::json!({ "ok": true, "root": r, "default": stored.is_none() })),
+            Ok(r) => ok(serde_json::json!({ "ok": true, "root": r, "default": stored.is_none(), "doctor": doctor })),
             Err(e) => hire_error_response(&e),
         };
     }
@@ -1363,6 +1366,14 @@ pub(crate) mod test_support {
             let base = k2_core::test_env::stable_temp_dir().join(format!("k2-hire-tests-{}", std::process::id()));
             let root = base.join("agents");
             std::fs::create_dir_all(&root).expect("mkdir hire test root");
+            // Only this user can change the base and the root; the base
+            // counts as the owner's (the temp dir above it may not).
+            #[cfg(unix)]
+            for d in [&base, &root] {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).expect("chmod hire test root");
+            }
+            k2_core::hire::root::set_owner_base_override(Some(base.clone()));
             k2_core::hire::apply::set_trash_override(Some(base.join("trash")));
             k2_core::db::init_for_tests();
             k2_core::hire::root::set_hire_root(&root.to_string_lossy()).expect("set hire root")

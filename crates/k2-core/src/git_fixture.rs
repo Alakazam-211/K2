@@ -15,7 +15,7 @@ pub const NULL_CONFIG: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 /// A plain `git` for fixtures, isolated from the machine's config.
 pub fn git_cmd(dir: &Path) -> Command {
-    let mut c = Command::new("git");
+    let mut c = crate::bg_proc::command("git");
     c.current_dir(dir)
         .args(["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
         .env("GIT_CONFIG_GLOBAL", NULL_CONFIG)

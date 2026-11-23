@@ -134,6 +134,8 @@ fn writes_run_no_hooks() {
     fx::commit_all(&d, "base");
     let marks = fx::tmp("write-hooks-marks");
     let hooks = d.join("my-hooks");
+    std::fs::create_dir_all(&hooks).expect("mkdir hooks");
+    std::fs::create_dir_all(d.join(".git/hooks")).expect("mkdir .git/hooks");
     for h in ["pre-commit", "commit-msg", "post-commit", "prepare-commit-msg", "post-index-change", "pre-merge-commit", "post-merge", "reference-transaction"] {
         crate::test_env::write_executable(&hooks.join(h), &format!("#!/bin/sh\n: > '{}'\n", marks.join(h).display()));
         crate::test_env::write_executable(&d.join(".git/hooks").join(h), &format!("#!/bin/sh\n: > '{}'\n", marks.join(format!("{h}-default")).display()));

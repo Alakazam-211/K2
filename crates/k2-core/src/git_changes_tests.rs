@@ -611,7 +611,9 @@ fn discard_restores_like_git_checkout_and_skips_submodules() {
     fx::git(&d, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", s(&sub), "sub"]);
     commit_all(&repo, "c1");
     std::fs::remove_file(d.join("crlf.txt")).expect("rm");
-    fx::git(&d, &["checkout", "--", "crlf.txt"]);
+    // The fixture's git pins core.autocrlf=false on its command line; this
+    // checkout must honour the repo's own autocrlf=true, as K2's does.
+    fx::git(&d, &["-c", "core.autocrlf=true", "checkout", "--", "crlf.txt"]);
     let checked_out = fs::read(d.join("crlf.txt")).expect("git's checkout");
     write(&d, "crlf.txt", "changed\r\n");
     write(&d, "sub/s.txt", "dirty submodule\n");

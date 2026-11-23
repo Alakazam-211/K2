@@ -25440,8 +25440,10 @@ LABELLED BY AGENT (on wherever the server can have it)
     passports, microVM cells, and terminals started before 0.46.17.
 
   Who places the sessions decides the rest. With the root helper (protocol
-  18; /boot-status agentIsolation says "identity": "on") each agent's cgroup
-  is root's: an agent can't move itself into another agent's cgroup.
+  19; /boot-status agentIsolation says "identity": "on") each agent's cgroup
+  is root's: an agent can't write itself into another agent's cgroup.
+  Until the bus policy lands, an agent without the fence can still ask
+  systemd to put a process of its own there.
   Without it ("identity": "unavailable", "traceable": true) the daemon
   places them in cgroups the server's user owns, so an agent without the
   fence can move a process into another agent's cgroup.

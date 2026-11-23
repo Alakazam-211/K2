@@ -62,7 +62,8 @@ pub const CLAIM: &str = "labelled by agent: each agent's terminals, job runs and
 
 /// The claim with the root helper placing sessions (M1b).
 pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job runs and published services run in its own \
-     root-owned cgroup, placed by the root helper, and an agent can't move itself into another agent's cgroup. A copied \
+     root-owned cgroup, placed by the root helper, and an agent can't write itself into another agent's cgroup (until the \
+     bus policy lands it can still ask systemd to put it there, kernel row 1c). A copied \
      terminal or job passport alone no longer works (App exec and microVM cell passports aren't bound and work as before). \
      An unfenced agent is still the same user as every other agent: it can make another agent's session run its commands \
      (through that agent's files, the owner token on disk, or ptrace where the kernel allows it), and it can move any \
@@ -71,12 +72,13 @@ pub const CLAIM_ROOT: &str = "labelled by agent: each agent's terminals, job run
 
 /// The claim with the root helper's scopes (B4).
 pub const CLAIM_SCOPE: &str = "labelled by agent: each agent's terminals, job runs and published services run in their own \
-     root-owned scope outside the server's own service, placed by the root helper, and no process of the server user can put \
+     root-owned scope outside the server's own service, placed by the root helper, and no process of the server user can write \
      a process into another agent's scope (checked when the server starts). Sessions from before an update may still be in \
      the old layout until they end; they get their own scope at their next start. A copied terminal or job passport alone no longer works (App exec and microVM cell \
      passports aren't bound and work as before). An unfenced agent is still the same user as every other agent: it can make \
      another agent's session run its commands (through that agent's files, the owner token on disk, or ptrace where the kernel \
-     allows it), and it may be able to move an agent's processes out of their scope, which drops that label. A fenced agent \
+     allows it), and until the bus policy lands it can ask systemd to move an agent's processes out of their scope (kernel \
+     row 2), which drops that label. A fenced agent \
      can still talk to other programs of the same user through their sockets. Fencing an agent does not protect it from an \
      unfenced one";
 

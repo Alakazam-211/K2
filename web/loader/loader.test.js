@@ -18,6 +18,7 @@ const {
   isPublicView,
   pickPointerVersion,
   resolveVersion,
+  carriedSuffix,
   MIN_SUPPORT_VERSION,
 } = require('./loader.js');
 
@@ -198,5 +199,14 @@ describe('parseSemver', () => {
       patch: 53,
       pre: '-rc.1',
     });
+  });
+});
+
+describe('carriedSuffix', () => {
+  it('keeps the query (minus v) and the hash for the bundle', () => {
+    assert.equal(carriedSuffix('?v=0.46.18&x=1', '#ticket=abc'), '?x=1#ticket=abc');
+    assert.equal(carriedSuffix('?v=0.46.18', '#home'), '#home');
+    assert.equal(carriedSuffix('', ''), '');
+    assert.equal(carriedSuffix('?x=1', '#'), '?x=1');
   });
 });

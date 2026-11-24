@@ -247,6 +247,24 @@
     });
   }
 
+  /**
+   * The query (minus the launcher's own `v`) and hash to carry onto the
+   * bundle, so a page sent here (a bundle moving itself onto the server's
+   * version, or the edge's 302 for an old `/app/<ver>/` link) keeps its
+   * route.
+   */
+  function carriedSuffix(search, hash) {
+    var rest = '';
+    try {
+      var params = new URLSearchParams(search || '');
+      params.delete('v');
+      rest = params.toString();
+    } catch (_) {
+      rest = '';
+    }
+    return (rest ? '?' + rest : '') + (hash && hash !== '#' ? hash : '');
+  }
+
   function navigateToApp(version) {
     // Land on index.html explicitly. Edge R2 is exact-key (no directory
     // index): `/app/<ver>/` 404s even when `/app/<ver>/index.html` exists.
@@ -254,6 +272,7 @@
     // so index.html is safe and correct.
     var target = '/app/' + encodeURIComponent(version) + '/index.html';
     if (typeof location !== 'undefined') {
+      target += carriedSuffix(location.search, location.hash);
       location.replace(target);
     }
     return target;
@@ -458,6 +477,7 @@
     pickPointerVersion: pickPointerVersion,
     resolveVersion: resolveVersion,
     navigateToApp: navigateToApp,
+    carriedSuffix: carriedSuffix,
     boot: boot,
     setStatus: setStatus,
   };

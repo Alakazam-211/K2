@@ -16,6 +16,14 @@
  *     shows a small non-blocking bar ("K2 was updated · Reload"), never a
  *     yank mid-typing.
  *
+ * The K2 edge (k2-connect, 0.46.18) serves `/app/<V>/index.html` only to a
+ * page the launcher started (its `k2launch` cookie, or a Referer of `/`);
+ * anything else gets a 302 to `/` with the query kept. So a HEAD from an old
+ * page that ends on `/` means "published, go through the launcher": the move
+ * is then to `/?v=<V>` with this page's query and hash, and the launcher
+ * carries the hash on. A local or self-served setup (no such edge) answers
+ * the HEAD directly and the move goes straight to the bundle.
+ *
  * No loops: one move per target per page load, a sessionStorage guard
  * across loads (unreadable storage = already tried), never onto a version
  * older than this bundle (except the ghost sign-in shell, below), and a
@@ -107,6 +115,15 @@ export function bundleTargetUrl(loc: PageLocation, version: string): string | nu
   return `/app/${encodeURIComponent(version)}/${tail}${loc.search}${loc.hash}`
 }
 
+/** The same page through the edge's launcher: `/?v=<version>` plus this
+ *  page's other query params and hash (the launcher keeps both). */
+export function launcherTargetUrl(loc: PageLocation, version: string): string {
+  const params = new URLSearchParams(loc.search)
+  params.delete('v')
+  const rest = params.toString()
+  return `/?v=${encodeURIComponent(version)}${rest ? `&${rest}` : ''}${loc.hash}`
+}
+
 export type BundleMoveReason =
   | 'not-web'
   | 'no-bundle-version'
@@ -159,7 +176,7 @@ export function planBundleMove(a: {
 // ── The bar ────────────────────────────────────────────────────────────
 
 export type BundleBar =
-  | { kind: 'updated'; version: string; target: string }
+  | { kind: 'updated'; version: string; target: string; via: 'direct' | 'launcher' }
   | { kind: 'missing'; version: string; bundleVersion: string }
 
 interface BundleBarState {
@@ -254,22 +271,41 @@ function writeGuard(env: BundleEnv, version: string): boolean {
   }
 }
 
-/** HEAD the version's index (same-origin, no-store); a static server that
- *  refuses HEAD gets a GET, like the loader. Any failure = not there. */
-export async function bundleExists(fetchFn: typeof fetch, version: string): Promise<boolean> {
+/** How a version's bundle is reached: `direct` (the HEAD answered it),
+ *  `launcher` (the edge redirected the HEAD to `/`: published, but only a
+ *  launcher-started page may load it), or `missing`. */
+export type BundleReach = 'direct' | 'launcher' | 'missing'
+
+function isLauncherPath(url: string): boolean {
+  try {
+    const path = new URL(url, 'http://x').pathname
+    return path === '/' || path === '/index.html'
+  } catch {
+    return false
+  }
+}
+
+/** HEAD the version's index (same-origin, no-store, redirects followed so
+ *  the final URL shows an edge bounce to `/`); a static server that refuses
+ *  HEAD gets a GET, like the loader. Any failure = missing. */
+export async function bundleReach(fetchFn: typeof fetch, version: string): Promise<BundleReach> {
   const url = bundleIndexPath(version)
   const init = (method: string): RequestInit => ({
     method,
     credentials: 'same-origin',
     cache: 'no-store',
+    redirect: 'follow',
     signal: AbortSignal.timeout(HEAD_TIMEOUT_MS),
   })
   try {
     let res = await fetchFn(url, init('HEAD'))
     if (res.status === 405 || res.status === 501) res = await fetchFn(url, init('GET'))
-    return res.ok
+    // A `manual` fetch elsewhere would see an opaque redirect: same answer.
+    if (res.type === 'opaqueredirect') return 'launcher'
+    if (res.redirected && isLauncherPath(res.url)) return res.ok ? 'launcher' : 'missing'
+    return res.ok ? 'direct' : 'missing'
   } catch {
-    return false
+    return 'missing'
   }
 }
 
@@ -314,31 +350,35 @@ export async function noteServerBundleVersion(
   // One HEAD (and at most one move) per target per page load.
   if (tracker.handled.has(version)) return null
   tracker.handled.add(version)
-  if (!(await bundleExists(env.fetch, version))) {
+  const reach = await bundleReach(env.fetch, version)
+  if (reach === 'missing') {
     console.warn(`[web-bundle] server web client ${version} ≠ bundle ${own}; /app/${version}/ is not published, staying`)
     bar.show({ kind: 'missing', version, bundleVersion: own })
     return { kind: 'missing', version }
   }
+  const target = reach === 'launcher' ? launcherTargetUrl(env.location, version) : plan.target
   if (plan.kind === 'redirect') {
     if (!writeGuard(env, version)) {
       // No guard means no proof against a loop: let the person choose.
-      bar.show({ kind: 'updated', version, target: plan.target })
-      return { ...plan, kind: 'prompt' }
+      bar.show({ kind: 'updated', version, target, via: reach })
+      return { ...plan, kind: 'prompt', target }
     }
-    console.warn(`[web-bundle] bundle ${own} ≠ server web client ${version}; moving to ${plan.target}`)
-    env.replace(plan.target)
-    return plan
+    console.warn(`[web-bundle] bundle ${own} ≠ server web client ${version}; moving to ${target}`)
+    env.replace(target)
+    return { ...plan, target }
   }
-  bar.show({ kind: 'updated', version, target: plan.target })
-  return plan
+  bar.show({ kind: 'updated', version, target, via: reach })
+  return { ...plan, target }
 }
 
-/** The bar's Reload: onto the offered version, keeping the route, query
- *  and hash the person is on NOW (not when the bar appeared). */
+/** The bar's Reload: onto the offered version (straight, or through the
+ *  edge's launcher), keeping the route, query and hash the person is on
+ *  NOW (not when the bar appeared). */
 export function reloadOntoOfferedBundle(
   version: string,
+  via: 'direct' | 'launcher',
   env: Pick<BundleEnv, 'replace' | 'location'> = defaultEnv(),
 ): void {
-  const target = bundleTargetUrl(env.location, version)
+  const target = via === 'launcher' ? launcherTargetUrl(env.location, version) : bundleTargetUrl(env.location, version)
   if (target) env.replace(target)
 }

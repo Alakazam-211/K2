@@ -76,7 +76,7 @@ export function WebBundleBarView({
         {bar.kind === 'updated' && (
           <button
             type="button"
-            onClick={() => reloadOntoOfferedBundle(bar.version)}
+            onClick={() => reloadOntoOfferedBundle(bar.version, bar.via)}
             style={{ ...buttonStyle, background: 'var(--color-accent, #2f6feb)', color: 'var(--color-on-accent)' }}
           >
             Reload

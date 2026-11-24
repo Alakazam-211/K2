@@ -35,13 +35,18 @@ class MemStorage {
   }
 }
 
-function makeEnv(over: Partial<BundleEnv> & { exists?: (url: string) => boolean } = {}) {
+/** `edge`: the K2 edge, which 302s a non-launcher page's `/app/<V>/` fetch
+ *  to `/` (fetch follows it: a 200 launcher page, `redirected`, url `/`). */
+function makeEnv(over: Partial<BundleEnv> & { exists?: (url: string) => boolean; edge?: boolean } = {}) {
   const replace = vi.fn<(url: string) => void>()
   const heads: string[] = []
   const exists = over.exists ?? (() => true)
+  const edge = over.edge ?? false
   const fetchFn = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
     heads.push(`${init?.method} ${String(url)} ${init?.cache}`)
-    return new Response(null, { status: exists(String(url)) ? 200 : 404 })
+    if (edge) return { ok: true, status: 200, type: 'basic', redirected: true, url: 'https://box.k2.dev/' }
+    const ok = exists(String(url))
+    return { ok, status: ok ? 200 : 404, type: 'basic', redirected: false, url: `https://box.k2.dev${String(url)}` }
   }) as unknown as typeof fetch
   const storage = new MemStorage()
   const env: BundleEnv = {
@@ -244,7 +249,7 @@ describe('web bundle version', () => {
 
     // Reload keeps the route the person is on now.
     const click = vi.fn<(url: string) => void>()
-    reloadOntoOfferedBundle('0.46.18', {
+    reloadOntoOfferedBundle('0.46.18', 'direct', {
       replace: click,
       location: { pathname: '/app/0.46.17/index.html', search: '', hash: '#moved-on' },
     })
@@ -262,6 +267,45 @@ describe('web bundle version', () => {
     await noteServerBundleVersion(FULL('0.46.18'), env)
     expect(replace).not.toHaveBeenCalled()
     expect(useWebBundleBar.getState().bar).toMatchObject({ kind: 'missing', version: '0.46.18' })
+  })
+
+  it('behind the K2 edge (HEAD bounced to /): moves through the launcher with ?v=, the query and the hash', async () => {
+    const { env, replace, heads, storage } = makeEnv({ edge: true })
+    const r = await noteServerBundleVersion(FULL('0.46.18'), env)
+    expect(heads).toEqual(['HEAD /app/0.46.18/index.html no-store'])
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveBeenCalledWith('/?v=0.46.18&x=1#ticket=abc')
+    expect(r).toMatchObject({ kind: 'redirect', version: '0.46.18', target: '/?v=0.46.18&x=1#ticket=abc' })
+    // The guard holds the version, so a bounce back to this old bundle stays.
+    expect(JSON.parse(storage.getItem(BUNDLE_MOVE_GUARD_KEY) as string)).toEqual({ '0.46.18': 1_000_000 })
+  })
+
+  it('behind the K2 edge, an opaque redirect (redirect: manual) also means "via the launcher"', async () => {
+    const { env, replace } = makeEnv()
+    env.fetch = (async () => ({ ok: false, status: 0, type: 'opaqueredirect', redirected: false, url: '' })) as unknown as typeof fetch
+    await noteServerBundleVersion(FULL('0.46.18'), env)
+    expect(replace).toHaveBeenCalledWith('/?v=0.46.18&x=1#ticket=abc')
+  })
+
+  it('behind the K2 edge, a live change offers Reload through the launcher', async () => {
+    const { env, replace } = makeEnv({ edge: true })
+    await noteServerBundleVersion(FULL('0.46.17'), env)
+    await noteServerBundleVersion(FULL('0.46.18'), env)
+    expect(replace).not.toHaveBeenCalled()
+    expect(useWebBundleBar.getState().bar).toMatchObject({ kind: 'updated', version: '0.46.18', via: 'launcher' })
+    const click = vi.fn<(url: string) => void>()
+    reloadOntoOfferedBundle('0.46.18', 'launcher', {
+      replace: click,
+      location: { pathname: '/app/0.46.17/index.html', search: '?v=0.46.17&y=2', hash: '#now' },
+    })
+    expect(click).toHaveBeenCalledWith('/?v=0.46.18&y=2#now')
+  })
+
+  it('a bounce to / that itself fails is still missing', async () => {
+    const { env, replace } = makeEnv()
+    env.fetch = (async () => ({ ok: false, status: 404, type: 'basic', redirected: true, url: 'https://box.k2.dev/' })) as unknown as typeof fetch
+    expect(await noteServerBundleVersion(FULL('0.46.18'), env)).toEqual({ kind: 'missing', version: '0.46.18' })
+    expect(replace).not.toHaveBeenCalled()
   })
 
   it('not the web client: does nothing', async () => {

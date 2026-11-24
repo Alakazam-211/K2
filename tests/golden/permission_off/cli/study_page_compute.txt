@@ -1493,6 +1493,11 @@ COMMON ERRORS
                          server is a tenant of that node; exit 3
   userns_needs_update    --userns, but no node for you runs it yet (k2-node
                          0.46.18, Linux with its job wall); exit 3
+  userns_blocked_by_apparmor  --userns on a node whose kernel restricts user
+                         namespaces (AppArmor, Ubuntu 23.10+) and couldn't
+                         load K2's k2-job-userns profile: the job fails with
+                         why. Its owner installs apparmor_parser, or runs
+                         sudo apparmor_parser -r /etc/apparmor.d/k2-job-userns
   no_addr_filter_invalid  --no-addr-filter without --userns and --network
                          none, or with --netns-dummy; or granted without
                          --userns; exit 2

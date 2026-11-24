@@ -188,7 +188,7 @@ expect_has "help: only this node's own server's workspaces" "$help" "Only this n
 expect_has "help: grant --userns" "$help" "[--userns|--no-userns]"
 study="$("$K2" study compute)"
 expect_has "study: section" "$study" "USER NAMESPACES (--userns; k2-node 0.46.18 on the node)"
-for c in userns_not_granted userns_owner_only userns_needs_update "unshare -U" "--workspace <w> --userns"; do
+for c in userns_not_granted userns_owner_only userns_needs_update userns_blocked_by_apparmor "unshare -U" "--workspace <w> --userns"; do
     expect_has "study: $c" "$study" "$c"
 done
 schema="$("$K2" --schema)"

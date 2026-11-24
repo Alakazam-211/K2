@@ -57,6 +57,13 @@ pub fn kernel_restricts() -> bool {
     restricts(std::fs::read_to_string(RESTRICT_SYSCTL).ok().as_deref())
 }
 
+/// Whether a unit gets the profile: a `--userns` unit, on a kernel that
+/// restricts user namespaces. Only on demand: nothing is written or loaded
+/// for any other unit, and never ahead of one (Steward rev 3, 2).
+pub fn needs_profile(userns: bool, restricts: bool) -> bool {
+    userns && restricts
+}
+
 /// Whether the profile is loaded (the `profiles` file: `name (mode)` lines).
 pub fn loaded_in(profiles: &str) -> bool {
     profiles.lines().any(|l| l.split(" (").next() == Some(PROFILE))
@@ -222,6 +229,17 @@ mod tests {
             assert!(check_file(f, bytes).is_err(), "{why} must not pass as ours");
         }
         assert_eq!(profile_sha256().len(), 64);
+    }
+
+    /// Fail-first (Steward rev 3, 2): on demand only. A unit without
+    /// `--userns` never gets it, on any kernel; a `--userns` unit only where
+    /// the kernel restricts.
+    #[test]
+    fn the_profile_is_for_userns_units_on_restricting_kernels_only() {
+        assert!(needs_profile(true, true));
+        assert!(!needs_profile(false, true), "no --userns unit: nothing written or loaded");
+        assert!(!needs_profile(true, false), "an unrestricted kernel needs none");
+        assert!(!needs_profile(false, false));
     }
 
     #[test]

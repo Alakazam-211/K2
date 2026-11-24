@@ -843,6 +843,11 @@ async fn a_job_makes_no_user_namespace_unless_userns_and_its_limit_is_its_own() 
     assert!(out.contains("max=0\n"), "the job's own namespace allows none: {out}");
     let after = std::fs::read_to_string("/proc/sys/user/max_user_namespaces").unwrap().trim().to_string();
     assert_eq!(after, machine, "the machine's limit never changes");
+    // On demand only (Steward rev 3, 2): a node that has run no --userns
+    // unit has no profile file and nothing loaded, on any kernel.
+    assert!(!Path::new(k2_node::admin::apparmor::PROFILE_PATH).exists(), "no profile file before any --userns unit");
+    let loaded = std::fs::read_to_string(k2_node::admin::apparmor::LOADED).unwrap_or_default();
+    assert!(!k2_node::admin::apparmor::loaded_in(&loaded), "nothing loaded before any --userns unit");
     let mut p = plan("ns2", &["/bin/sh", "-c", script]);
     p.userns = true;
     c.send(Frame::Assign(assign(p, 1)));

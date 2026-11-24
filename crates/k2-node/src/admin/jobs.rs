@@ -1910,7 +1910,7 @@ impl Executor {
         // unconfined processes, a `--userns` unit runs under K2's profile
         // that allows them (loaded now if it isn't); without it the start
         // is refused, never run without the namespace it was granted.
-        let apparmor_profile = if s.userns && cfg!(target_os = "linux") && super::apparmor::kernel_restricts() {
+        let apparmor_profile = if cfg!(target_os = "linux") && super::apparmor::needs_profile(s.userns, super::apparmor::kernel_restricts()) {
             super::apparmor::ensure_loaded()
                 .map_err(|e| refuse(k2_node_proto::userns::codes::USERNS_BLOCKED_BY_APPARMOR, super::apparmor::unavailable(&e)))?;
             Some(super::apparmor::PROFILE.to_string())

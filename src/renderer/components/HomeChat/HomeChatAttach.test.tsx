@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   blob: vi.fn(async (_s: unknown, _r: string, _p?: Record<string, unknown>): Promise<Blob> => new Blob([])),
   frames: null as null | ((f: unknown) => void),
   maxBytes: null as number | null,
+  perms: undefined as string | undefined,
 }))
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: (s: unknown, r: string, p?: Record<string, unknown>) => h.get(s, r, p),
@@ -80,6 +81,7 @@ beforeEach(() => {
   resetHomeChatViewCacheForTests()
   setFiles(true)
   h.maxBytes = null
+  h.perms = undefined
   h.get.mockReset()
   h.post.mockReset()
   h.bytes.mockReset()
@@ -99,7 +101,12 @@ beforeEach(() => {
       case 'home-chat/channels/members':
         return { ok: true, conv: '600', slug: 'c-0123456789', state: 'active', name: 'design', open: false, creator: 'k2:connect:me', people: [], agents: [] }
       case 'home-chat/messages':
-        return { ok: true, conv: '600', page: p?.before ? { items: [], has_more: false } : { items: NEWEST, has_more: false } }
+        return {
+          ok: true,
+          conv: '600',
+          page: p?.before ? { items: [], has_more: false } : { items: NEWEST, has_more: false },
+          ...(h.perms !== undefined ? { myPerms: h.perms } : {}),
+        }
       default:
         throw new Error(`unexpected GET ${route}`)
     }
@@ -218,6 +225,29 @@ describe('Home chat attachments', () => {
       h.frames?.({ type: 'attachments_updated', conv: '600', msg: '20', attachments: [PDF, CAT] })
     })
     await waitFor(() => expect(h.blob.mock.calls.some((c) => c[2]?.id === '7002' && c[2]?.v === 'thumb')).toBe(true))
+  })
+
+  it("the + follows Sew's my_perms: hidden without ATTACH_FILES (64), shown with it or when unknown", async () => {
+    h.perms = '63'
+    await open()
+    await waitFor(() => expect(screen.queryByTestId('home-chat-plus')).toBeNull())
+    // No + and no paste either.
+    await paste([new File([new Uint8Array(4)], 'x.png', { type: 'image/png' })])
+    expect(h.post.mock.calls.some((c) => c[1] === 'home-chat/uploads/create')).toBe(false)
+    // A role change gives the bit: the + is back.
+    await act(async () => {
+      h.frames?.({ type: 'perms', conv: '600', myPerms: '127' })
+    })
+    await waitFor(() => expect(screen.getByTestId('home-chat-plus')).toBeTruthy())
+    // And takes it away again.
+    await act(async () => {
+      h.frames?.({ type: 'perms', conv: '600', myPerms: '7' })
+    })
+    await waitFor(() => expect(screen.queryByTestId('home-chat-plus')).toBeNull())
+    cleanup()
+    h.perms = '64'
+    await open()
+    expect(screen.getByTestId('home-chat-plus')).toBeTruthy()
   })
 
   it('without home-chat-attachments-v1: the attach row is off and a paste uploads nothing', async () => {

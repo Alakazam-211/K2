@@ -21,7 +21,7 @@ use super::follower::{self, op};
 use super::people::{self, Caller};
 use super::{deps, now_secs};
 use crate::cli_response::CliResponse;
-use crate::voice::bff::{sew_refusal, Refusal, SewAnswer};
+use crate::voice::bff::{Refusal, SewAnswer};
 use crate::voice::routes::refuse;
 
 pub const EVENTS: &str = "/cli/home-chat/events";
@@ -252,7 +252,28 @@ pub(super) fn ok_or_refuse(a: SewAnswer) -> R<Value> {
     if said("/error/details/reason") || said("/error/code") {
         return Err(archived());
     }
-    Err(sew_refusal(&a))
+    Err(home_refusal(&a))
+}
+
+/// A Sew refusal as Home chat answers it: Sew's own status, code and hint,
+/// and Sew's `details` at the top of K2's (`missing`, the permission bits
+/// that were lacking, e.g. ATTACH_FILES 64; `max`; `reason`), with Sew's
+/// whole error under `details.sew`. Never voice's wording (`sew_refusal`
+/// speaks of the K2 Admin Space and nests the details): a phone reads
+/// `details.missing` where Sew put it.
+pub(super) fn home_refusal(a: &SewAnswer) -> Refusal {
+    let err = a.body.get("error").cloned().unwrap_or(Value::Null);
+    let code = err["code"].as_str().filter(|c| !c.is_empty()).unwrap_or("sew_error").to_string();
+    let hint = err["hint"].as_str().filter(|h| !h.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Sew answered {}", a.status));
+    let status = if a.status >= 400 { a.status } else { 502 };
+    let mut details = match &err["details"] {
+        Value::Object(o) => Value::Object(o.clone()),
+        _ => json!({}),
+    };
+    if !err.is_null() {
+        details["sew"] = err;
+    }
+    Refusal::new(status, &code, hint).details(details)
 }
 
 fn flags() -> k2_core::tool_hook::features::HomeChatFeatures {
@@ -301,6 +322,7 @@ fn channels(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
             "inviteOnly": row.as_ref().map(|r| !r.open).or_else(|| super::state::invite_only_of(&ch["visibility"])),
             "archived": ch["archived"].as_bool().unwrap_or(false) || row.as_ref().is_some_and(|r| r.state == ledger::CH_ARCHIVED),
             "home": row.is_some(), "allowAgents": row.as_ref().is_some_and(|r| r.allow_agents),
+            "myPerms": super::state::perms_of(&ch["my_perms"]),
         }));
     }
     Ok(json!({"ok": true, "channels": out, "next": body.get("next").cloned().unwrap_or(Value::Null)}))
@@ -380,7 +402,20 @@ fn settle_kinds(c: &Caller, h: &follower::Held, convs: &[String]) -> R<()> {
 /// `reference` as they are. `since` (a channel seq) reads the channel's
 /// changes feed instead; `410 resync_required` answers the newest page with
 /// `resync: true` (§14.3).
+/// `myPerms` of `conv` for the caller, as their follower last heard it.
+fn perms_in(c: &Caller, conv: &str) -> Option<String> {
+    follower::get(&c.ext).and_then(|h| h.state.lock().unwrap_or_else(|e| e.into_inner()).convs.get(conv).and_then(|x| x.my_perms.clone()))
+}
+
 fn messages(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let mut v = messages_page(c, p)?;
+    if let Some(conv) = v["conv"].as_str().map(str::to_string) {
+        v["myPerms"] = json!(perms_in(c, &conv));
+    }
+    Ok(v)
+}
+
+fn messages_page(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
     let conv = sew_id(param(p, "conv").ok_or_else(|| usage("name the conversation: conv"))?, "conv")?;
     let limit: u32 = match param(p, "limit") {
         Some(l) => l.parse().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| usage("limit is 1-100"))?,
@@ -557,12 +592,15 @@ fn dm(c: &Caller, b: DmBody) -> R<Value> {
         // forgotten and made again below, never handed back.
         let a = as_person(c, "GET", &format!("/api/v1/channels/{}", sew_id(&conv, "the kept DM")?), None)?;
         match a.status {
-            s if (200..300).contains(&s) => return Ok(json!({"ok": true, "conv": conv, "created": false})),
+            s if (200..300).contains(&s) => {
+                let ch = a.body.get("channel").unwrap_or(&a.body);
+                return Ok(json!({"ok": true, "conv": conv, "created": false, "myPerms": super::state::perms_of(&ch["my_perms"])}));
+            }
             403 | 404 => {
                 k2_core::log_debug!("[home-chat] {}: kept DM {conv} with {target} is gone from Sew ({}); making it again", c.ext, a.status);
                 skin(|conn| ledger::forget_dm_channel(conn, &conv))?;
             }
-            _ => return Err(sew_refusal(&a)),
+            _ => return Err(home_refusal(&a)),
         }
     }
     let member = people::member_id(&target)?;
@@ -573,7 +611,8 @@ fn dm(c: &Caller, b: DmBody) -> R<Value> {
         _ => return Err(super::sessions::unavailable("Sew's DM answer had no channel id")),
     };
     skin(|conn| ledger::set_dm_channel(conn, &c.ext, &target, &conv, now_secs()))?;
-    Ok(json!({"ok": true, "conv": conv, "created": true}))
+    let ch = body.get("channel").unwrap_or(&body);
+    Ok(json!({"ok": true, "conv": conv, "created": true, "myPerms": super::state::perms_of(&ch["my_perms"])}))
 }
 
 /// A DM whose other side was disabled is read-only (HP-13).

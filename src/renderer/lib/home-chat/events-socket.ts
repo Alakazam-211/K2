@@ -57,6 +57,8 @@ export type HomeChatFrame =
   /** A message's files changed (a thumbnail landed, a file was removed):
    *  `attachments` replaces its whole list (contract-home-chat-attachments-v1). */
   | { type: 'attachments_updated'; conv: string; msg: string; attachments: unknown }
+  /** The person's `my_perms` changed there (a role, an App Space's uploads). */
+  | { type: 'perms'; conv: string; myPerms: string | null }
 
 function idOf(v: unknown): string | null {
   if (typeof v === 'string' && v) return v
@@ -111,6 +113,8 @@ export function parseHomeChatFrame(data: unknown): HomeChatFrame | null {
     }
     case 'read':
       return conv ? { type: 'read', conv } : null
+    case 'perms':
+      return conv ? { type: 'perms', conv, myPerms: typeof v.myPerms === 'string' ? v.myPerms : null } : null
     case 'attachments_updated': {
       const msg = idOf(v.msg)
       return conv && msg ? { type: 'attachments_updated', conv, msg, attachments: v.attachments } : null

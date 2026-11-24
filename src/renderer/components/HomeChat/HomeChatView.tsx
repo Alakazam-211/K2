@@ -64,6 +64,7 @@ import {
   fetchHomeChatReactors,
   HOME_CHAT_ATTACHMENTS_FEATURE,
   HOME_CHAT_FILE_LIMITS_DEFAULT,
+  mayAttachFiles,
   mentionsMe,
   openHomeChatDm,
   parseHomeChatMessage,
@@ -208,6 +209,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
 
   // ── Messages ─────────────────────────────────────────────────────────
   const [messages, setMessages] = useState<HomeChatMessage[] | null>(null)
+  // Sew's `my_perms` here (the messages answer, then `perms` frames).
+  const [pagePerms, setPagePerms] = useState<string | null>(null)
   const messagesRef = useRef<HomeChatMessage[]>([])
   messagesRef.current = messages ?? []
   const [hasMore, setHasMore] = useState(true)
@@ -230,6 +233,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
           // Phone style: paint the copy, then read only what came after it.
           const delta = await fetchHomeChatMessages(scope, conv, { after: newest, limit: DELTA })
           if (!alive) return
+          setPagePerms(delta.myPerms ?? null)
           if (delta.messages.length >= DELTA) {
             const page = await fetchHomeChatMessages(scope, conv, { limit: PAGE })
             if (!alive) return
@@ -241,6 +245,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         } else {
           const page = await fetchHomeChatMessages(scope, conv, { limit: PAGE })
           if (!alive) return
+          setPagePerms(page.myPerms ?? null)
           setMessages(page.messages)
           setHasMore(page.hasMore)
         }
@@ -320,6 +325,8 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         setMessages((prev) => (prev ? markDeleted(prev, f.id) : prev))
       } else if (f.type === 'reaction') {
         setMessages((prev) => (prev ? applyReactionFrame(prev, f) : prev))
+      } else if (f.type === 'perms') {
+        setPagePerms(f.myPerms)
       } else if (f.type === 'attachments_updated') {
         // A thumbnail landed, or a file was removed: its whole list.
         setMessages((prev) => (prev ? applyAttachmentsFrame(prev, f) : prev))
@@ -644,6 +651,11 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   const blockFiles = readOnly || chatState !== null
   useEffect(() => setFilesBlocked(blockFiles), [blockFiles])
   const filesOn = filesFeature && !blockFiles
+  // The + shows unless Sew says this person can't attach here (ATTACH_FILES,
+  // bit 64, clear); unknown perms show it and Sew's answer decides.
+  const summaryPerms = host?.summary?.convs.find((r) => r.conv === conv)?.myPerms ?? null
+  const attachAllowed = !filesFeature || mayAttachFiles(pagePerms ?? summaryPerms)
+  const filesHere = filesOn && attachAllowed
 
   return (
     <div className="relative flex h-full w-full flex-1 flex-col overflow-hidden" data-testid="home-chat-view" data-kind={target.kind}>
@@ -693,7 +705,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         style={{ background: 'var(--zen-canvas)' }}
         testId="home-chat-thread"
         // A file dropped anywhere on the chat attaches, as on the box.
-        onDropFiles={filesOn ? composeFiles.onDropFiles : undefined}
+        onDropFiles={filesHere ? composeFiles.onDropFiles : undefined}
       >
         <SelectableRegion className="flex min-h-0 flex-1 flex-col">
           <div
@@ -809,6 +821,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             disabled={chatState !== null}
             canSendEmpty={composeFiles.files.length > 0}
             tools={
+              attachAllowed ? (
               <>
                 <ComposeAttachButton
                   menuOpen={plusMenu.menuOpen}
@@ -835,9 +848,10 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                 />
                 {filesOn ? composeFiles.fileInput : null}
               </>
+              ) : undefined
             }
-            onPaste={filesOn ? composeFiles.onPaste : undefined}
-            onDropFiles={filesOn ? composeFiles.onDropFiles : undefined}
+            onPaste={filesHere ? composeFiles.onPaste : undefined}
+            onDropFiles={filesHere ? composeFiles.onDropFiles : undefined}
             inputRef={inputRef}
             placeholder={dm ? `Message ${title}` : `Message #${title}`}
             onKeyDown={(e) => {

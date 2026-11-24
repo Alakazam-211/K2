@@ -171,7 +171,10 @@ fn the_size_limits_refuse_with_413() {
     follower::hold(ALEX).state.lock().unwrap().files_max_bytes = None;
     api.answer("/api/v1/channels/900/uploads", 413, json!({"error": {"code": "too_large", "hint": "too big", "details": {"max": 5}}}));
     let r = call(files::CREATE, json!({"conv": "900", "filename": "big.mov", "size": 6})).unwrap_err();
-    assert_eq!((r.status, r.code.as_str(), r.details.clone()), (413, "too_large", Some(json!({"max": 5}))));
+    assert_eq!((r.status, r.code.as_str(), r.hint.as_str()), (413, "too_large", "too big"), "Sew's own code and hint");
+    let d = r.details.clone().expect("details");
+    assert_eq!(d["max"], json!(5), "details.max at the top: {d}");
+    assert_eq!(d["sew"]["code"], json!("too_large"), "Sew's whole error beside it");
     let r = call(files::CREATE, json!({"conv": "900", "filename": "none", "size": 0})).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (400, "usage"));
 
@@ -392,5 +395,112 @@ fn an_upload_belongs_to_the_login_not_a_session_or_device() {
         .expect("the app sends the extension's upload");
     assert_eq!(m["message"]["attachments"][0]["id"], json!("5004"));
     assert!(api.calls_to("/api/v1/uploads/5004").iter().all(|c| c.0.as_deref() == Some("sews_first.x")), "always as the person");
+    done();
+}
+
+/// Sew's refusals reach the phone as Sew gave them: its status, code and
+/// hint, and its `details` at the top of K2's (`missing` is the bitset of
+/// what the person lacks: ATTACH_FILES is 64), never voice's Admin Space
+/// wording with the details nested.
+#[test]
+fn sews_refusals_pass_through_with_details_at_the_top() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    api.answer(
+        "/api/v1/channels/900/uploads",
+        403,
+        json!({"error": {"code": "missing_permission", "hint": "you can't attach files here", "details": {"missing": "64"}}}),
+    );
+    let r = call(files::CREATE, json!({"conv": "900", "filename": "a.png", "size": 4})).unwrap_err();
+    assert_eq!((r.status, r.code.as_str(), r.hint.as_str()), (403, "missing_permission", "you can't attach files here"));
+    let d = r.details.clone().expect("details");
+    assert_eq!(d["missing"], json!("64"), "{d}");
+    assert!(!r.hint.contains("Admin Space"), "{}", r.hint);
+    // The same through the HTTP shape a phone reads (top-level details).
+    let body: Value = serde_json::from_str(&crate::voice::routes::refuse(&r).body).unwrap();
+    assert_eq!((body["code"].as_str(), body["details"]["missing"].as_str()), (Some("missing_permission"), Some("64")));
+
+    api.answer("/api/v1/channels/900/uploads", 422, json!({"error": {"code": "uploads_disabled", "hint": "uploads are off in this Space", "details": {"reason": "app_uploads_off"}}}));
+    let r = call(files::CREATE, json!({"conv": "900", "filename": "a.png", "size": 4})).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (422, "uploads_disabled"));
+    assert_eq!(r.details.clone().expect("details")["reason"], json!("app_uploads_off"));
+
+    // A send with files Sew refuses: the same pass-through.
+    api.answer("/api/v1/channels/900/messages", 403, json!({"error": {"code": "missing_permission", "hint": "no files here", "details": {"missing": "64"}}}));
+    let r = call("/cli/home-chat/send", json!({"conv": "900", "text": "", "nonce": "p-1", "attachments": ["5001"]})).unwrap_err();
+    assert_eq!((r.status, r.code.as_str(), r.details.clone().expect("details")["missing"].clone()), (403, "missing_permission", json!("64")));
+
+    // An upload's bytes Sew refuses for size: details.max at the top.
+    sew_takes_upload(&api, "5009", 4);
+    call(files::CREATE, json!({"conv": "900", "filename": "b.bin", "size": 4})).expect("create");
+    api.bytes_queue.lock().unwrap().push_back((413, json!({"error": {"code": "too_large", "hint": "over the quota", "details": {"max": 3}}})));
+    let r = as_person(&alex(), files::DATA, &q(&[("id", "5009"), ("offset", "0")]), &[1u8; 4]).unwrap_err();
+    assert_eq!((r.status, r.code.as_str(), r.details.clone().expect("details")["max"].clone()), (413, "too_large", json!(3)));
+    done();
+}
+
+/// `myPerms` (Sew's `my_perms`, the decimal-string bitset, unchanged;
+/// ATTACH_FILES 64) rides every answer a client shows the + from: summary
+/// rows, the channels list, the DM answer and the messages answer; a
+/// `perms_changed` makes a `perms` frame and `summary_changed`. Absent when
+/// Sew hasn't said (the + shows and Sew's answer decides).
+#[test]
+fn my_perms_rides_the_summary_channels_dm_and_messages() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    // The summary, from the person's READY.
+    let h = follower::hold(ALEX);
+    h.state.lock().unwrap().apply_ready(&json!({
+        "member": {"id": "41"},
+        "channels": [
+            {"id": "900", "kind": "dm", "my_perms": "127"},
+            {"id": "901", "kind": "text", "space_id": "7001", "my_perms": "71"},
+            {"id": "902", "kind": "text", "space_id": "7001"},
+        ],
+    }));
+    let summary = routes::route("/cli/home-chat/summary", &alex(), &HashMap::new(), b"").expect("summary");
+    let perms = |s: &Value, conv: &str| s["convs"].as_array().unwrap().iter().find(|r| r["conv"] == conv).map(|r| r["myPerms"].clone()).expect(conv);
+    assert_eq!((perms(&summary, "900"), perms(&summary, "901"), perms(&summary, "902")), (json!("127"), json!("71"), Value::Null));
+
+    // A role change: Sew's perms_changed, a frame, the summary follows.
+    let frames = h.state.lock().unwrap().apply_event("perms_changed", &json!({"space_id": "7001", "channels": [{"channel_id": "901", "my_perms": "7"}]}), false);
+    assert_eq!(frames, vec![json!({"type": "perms", "conv": "901", "myPerms": "7"}), json!({"type": "summary_changed"})]);
+    let again = h.state.lock().unwrap().apply_event("perms_changed", &json!({"channels": [{"channel_id": "901", "my_perms": "7"}]}), false);
+    assert!(again.is_empty(), "unchanged: nothing");
+    let summary = routes::route("/cli/home-chat/summary", &alex(), &HashMap::new(), b"").expect("summary");
+    assert_eq!(perms(&summary, "901"), json!("7"));
+
+    // The messages answer, beside its page.
+    api.answer("/api/v1/channels/900/messages?limit=50", 200, json!({"items": []}));
+    let page = as_person(&alex(), "/cli/home-chat/messages", &q(&[("conv", "900")]), b"").expect("page");
+    assert_eq!(page["myPerms"], json!("127"));
+    api.answer("/api/v1/channels/903/messages?limit=50", 200, json!({"items": []}));
+    let page = as_person(&alex(), "/cli/home-chat/messages", &q(&[("conv", "903")]), b"").expect("page");
+    assert_eq!(page["myPerms"], Value::Null, "not said: absent");
+
+    // The DM answer: made now, and kept.
+    k2_core::tool_hook::map_member_for_tests("k2:owner", "50", "person", "owner", k2_core::tool_hook::members::ACTIVE).expect("owner's member");
+    api.answer("/api/v1/dms", 200, json!({"id": "930", "type": "dm", "my_perms": "127"}));
+    let r = call("/cli/home-chat/dm", json!({"ext": "k2:owner"})).expect("open");
+    assert_eq!((r["conv"].clone(), r["myPerms"].clone()), (json!("930"), json!("127")));
+    api.answer("/api/v1/channels/930", 200, json!({"channel": {"id": "930", "type": "dm", "my_perms": "63"}}));
+    let r = call("/cli/home-chat/dm", json!({"ext": "k2:owner"})).expect("open again");
+    assert_eq!((r["created"].clone(), r["myPerms"].clone()), (json!(false), json!("63")), "no ATTACH_FILES: bit 64 clear");
+
+    // The channels list, as Sew lists them.
+    k2_core::tool_hook::with_home_chat_db(|conn| {
+        conn.execute("INSERT INTO tool_admin_space (id, space_id, name, state, why, updated_at) VALUES (1, '7001', 'K5', 'ready', NULL, 1)", [])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })
+    .expect("the K5 Space");
+    api.answer(
+        "/api/v1/spaces/7001/channels?scope=browse&limit=100",
+        200,
+        json!({"items": [{"id": "901", "type": "text", "name": "design", "visibility": "public", "my_perms": "71"}, {"id": "904", "type": "text", "name": "ops"}]}),
+    );
+    let list = call("/cli/home-chat/channels", json!({})).expect("channels");
+    let rows = list["channels"].as_array().expect("rows");
+    assert_eq!((rows[0]["myPerms"].clone(), rows[1]["myPerms"].clone()), (json!("71"), Value::Null));
     done();
 }

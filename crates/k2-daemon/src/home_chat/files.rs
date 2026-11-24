@@ -109,11 +109,9 @@ fn id_str(v: &Value) -> Option<String> {
     }
 }
 
-/// Sew's refusal, with `413 too_large`'s `max` at the top of `details`.
+/// Sew's answer, or its refusal as Home chat gives it (Sew's own status,
+/// code, hint and `details` at the top: `max` of a 413, `missing` of a 403).
 fn sew_ok(a: SewAnswer) -> R<Value> {
-    if !a.ok() && a.body.pointer("/error/code").and_then(Value::as_str) == Some("too_large") {
-        return Err(too_large(a.body.pointer("/error/details/max").cloned().unwrap_or(Value::Null)));
-    }
     ok_or_refuse(a)
 }
 

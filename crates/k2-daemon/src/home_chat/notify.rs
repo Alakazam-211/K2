@@ -30,7 +30,7 @@ use super::chat_push::Env as _;
 use super::people::Caller;
 use super::routes::{ok_or_refuse, param, sew_as, sew_id};
 use super::{deps, follower};
-use crate::voice::bff::{sew_refusal, Refusal};
+use crate::voice::bff::Refusal;
 
 type R<T> = Result<T, Refusal>;
 
@@ -79,7 +79,7 @@ fn mgmt_ok(status: u16, body: Value) -> R<Value> {
     if (200..300).contains(&status) {
         return Ok(body);
     }
-    Err(sew_refusal(&crate::voice::bff::SewAnswer { status, body }))
+    Err(super::routes::home_refusal(&crate::voice::bff::SewAnswer { status, body }))
 }
 
 /// `GET /cli/home-chat/notify?conv=`.

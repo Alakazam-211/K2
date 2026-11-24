@@ -39,6 +39,20 @@ pub struct Conv {
     /// (Sew moves the poster's cursor before the message event) and says
     /// nothing of the kind: the first event that does sets it.
     pub kind_known: bool,
+    /// Sew's `my_perms` here (the person's effective permissions, a
+    /// decimal-string bitset: ATTACH_FILES 64), as Sew last said it (READY,
+    /// `me/sync`, a channel read, `perms_changed`). `None`: not said.
+    pub my_perms: Option<String>,
+}
+
+/// Sew's `my_perms` (a decimal string, or a number) as K2 passes it on:
+/// the decimal string, unchanged.
+pub fn perms_of(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => Some(s.clone()),
+        Value::Number(n) if n.is_u64() => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 /// Sew's channel `visibility` as invite-only: `private` yes, `public` no,
@@ -245,6 +259,9 @@ impl PersonState {
             }
             if let Some(m) = id_of(&ch["last_message_id"]) {
                 c.last_message_id = Some(m);
+            }
+            if let Some(p) = perms_of(&ch["my_perms"]) {
+                c.my_perms = Some(p);
             }
         }
     }
@@ -468,6 +485,26 @@ impl PersonState {
                     "threadRoot": d["thread_root_id"], "attachments": d["attachments"],
                 }));
             }
+            "perms_changed" => {
+                // A role change, or an App Space's uploads switched off: the
+                // new `my_perms` per channel (a `full` list names every one).
+                let mut changed = Vec::new();
+                for cp in d["channels"].as_array().into_iter().flatten() {
+                    let (Some(cid), Some(p)) = (id_of(&cp["channel_id"]), perms_of(&cp["my_perms"])) else { continue };
+                    if let Some(c) = self.convs.get_mut(&cid) {
+                        if c.my_perms.as_deref() != Some(p.as_str()) {
+                            c.my_perms = Some(p.clone());
+                            changed.push((cid, p));
+                        }
+                    }
+                }
+                for (cid, p) in &changed {
+                    out.push(json!({"type": "perms", "conv": cid, "myPerms": p}));
+                }
+                if !changed.is_empty() {
+                    out.push(json!({"type": "summary_changed"}));
+                }
+            }
             "install_updated" => {
                 if let Some(max) = files_max_of(d) {
                     self.files_max_bytes = Some(max);
@@ -535,6 +572,9 @@ impl PersonState {
             // Data for the row's glyph (# open, a lock invite-only); the
             // routes fill it from K2's ledger when Sew hasn't said.
             "inviteOnly": if c.dm { None } else { c.invite_only },
+            // Sew's `my_perms` as it said it; absent: show the + and let
+            // Sew's answer decide (contract-home-chat-attachments-v1).
+            "myPerms": c.my_perms,
         })
     }
 

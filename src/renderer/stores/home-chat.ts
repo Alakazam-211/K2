@@ -439,6 +439,7 @@ export function applyHomeChatFrame(hostKey: string, f: HomeChatFrame, now: numbe
       summarySoon(hostKey)
       break
     case 'summary_changed':
+    case 'perms':
     case 'read':
     case 'member_removed':
     case 'message_updated':

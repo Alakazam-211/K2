@@ -69,6 +69,9 @@ export interface HomeChatSummaryRow {
   /** A channel is invite-only (true) or open (false); null for a DM, or
    *  while the server hasn't said. Data for the row's glyph. */
   inviteOnly: boolean | null
+  /** Sew's `my_perms` here (a decimal-string bitset), or null when the
+   *  server hasn't said (`mayAttachFiles`). */
+  myPerms?: string | null
 }
 
 export interface HomeChatSummary {
@@ -195,6 +198,22 @@ export interface HomeChatPushPrefs {
 export interface HomeChatPage {
   messages: HomeChatMessage[]
   hasMore: boolean
+  /** The conversation's `myPerms`, when the server said. */
+  myPerms?: string | null
+}
+
+/** Sew's ATTACH_FILES bit in `my_perms`. */
+export const HOME_CHAT_ATTACH_FILES = 64n
+
+/** May the person attach files here? Unknown perms (null, or none said):
+ *  yes, and Sew's answer decides (contract-home-chat-attachments-v1). */
+export function mayAttachFiles(myPerms: string | null | undefined): boolean {
+  if (typeof myPerms !== 'string' || !/^[0-9]+$/.test(myPerms)) return true
+  return (BigInt(myPerms) & HOME_CHAT_ATTACH_FILES) !== 0n
+}
+
+function permsOf(v: unknown): string | null {
+  return typeof v === 'string' && /^[0-9]+$/.test(v) ? v : null
 }
 
 /** A browsable K2 text channel on a server (§7.2). */
@@ -208,6 +227,7 @@ export interface HomeChatChannel {
   /** Made from Home (K2's ledger knows it). */
   home: boolean
   allowAgents: boolean
+  myPerms?: string | null
 }
 
 export interface HomeChatMembers {
@@ -355,7 +375,11 @@ export function parseHomeChatPage(v: unknown): HomeChatPage {
   // A recording's transcript lines never join the timeline (HR-10).
   const messages = items.map(parseHomeChatMessage).filter((m): m is HomeChatMessage => m !== null && !m.transcriptOf)
   messages.sort((a, b) => compareSewIds(a.id, b.id))
-  return { messages, hasMore: !Array.isArray(page) && (page as { has_more?: unknown })?.has_more === true }
+  return {
+    messages,
+    hasMore: !Array.isArray(page) && (page as { has_more?: unknown })?.has_more === true,
+    myPerms: permsOf((v as { myPerms?: unknown } | null)?.myPerms),
+  }
 }
 
 function badgeOf(v: unknown): HomeChatBadge {
@@ -381,6 +405,7 @@ export function parseHomeChatSummary(v: unknown): HomeChatSummary {
       lastMessageId: idOf(row.lastMessageId),
       with: typeof row.with === 'string' ? row.with : null,
       inviteOnly: typeof row.inviteOnly === 'boolean' ? row.inviteOnly : null,
+      myPerms: permsOf(row.myPerms),
     })
   }
   return { chat: typeof o.chat === 'string' ? o.chat : 'unavailable', convs }
@@ -480,6 +505,7 @@ export async function fetchHomeChatChannels(scope: ServerScope, q?: string): Pro
       archived: r.archived === true,
       home: r.home === true,
       allowAgents: r.allowAgents === true,
+      myPerms: permsOf(r.myPerms),
     })
   }
   return out

@@ -13,7 +13,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import type { ServerScope } from '@/kessel/server-scope'
-import { attachmentsOf, parseHomeChatFileLimits, parseHomeChatMessage, type HomeChatAttachment, type HomeChatUpload } from './api'
+import { attachmentsOf, mayAttachFiles, parseHomeChatFileLimits, parseHomeChatMessage, parseHomeChatPage, parseHomeChatSummary, type HomeChatAttachment, type HomeChatUpload } from './api'
 import { applyAttachmentsFrame } from './chat'
 import { parseHomeChatFrame } from './events-socket'
 import { homeChatAttachmentReader, homeChatFileObjects, pictureVariant } from './file-objects'
@@ -182,5 +182,26 @@ describe('attachments on messages', () => {
     expect(part).toEqual({ base64: 'BwcHBwcH', len: 6, size: 10, eof: true })
     expect(fetchFile.mock.calls[1][2]).toEqual({ download: true, range: { offset: 4, len: 6 } })
     await expect(read('99', 0, { mode: 'thumb' })).rejects.toThrow('no longer on the message')
+  })
+})
+
+describe('myPerms (Sew my_perms)', () => {
+  it('ATTACH_FILES is bit 64; unknown perms allow, and Sew decides', () => {
+    expect(mayAttachFiles('64')).toBe(true)
+    expect(mayAttachFiles('127')).toBe(true)
+    expect(mayAttachFiles('63')).toBe(false)
+    expect(mayAttachFiles('0')).toBe(false)
+    expect(mayAttachFiles('18446744073709551551')).toBe(false)
+    expect(mayAttachFiles(null)).toBe(true)
+    expect(mayAttachFiles(undefined)).toBe(true)
+    expect(mayAttachFiles('junk')).toBe(true)
+  })
+
+  it('rides the summary rows, the messages page and the perms frame', () => {
+    const s = parseHomeChatSummary({ chat: 'live', convs: [{ conv: '900', kind: 'dm', myPerms: '127' }, { conv: '901', kind: 'channel' }] })
+    expect(s.convs.map((r) => r.myPerms)).toEqual(['127', null])
+    expect(parseHomeChatPage({ conv: '900', page: { items: [] }, myPerms: '63' }).myPerms).toBe('63')
+    expect(parseHomeChatPage({ conv: '900', page: { items: [] } }).myPerms).toBeNull()
+    expect(parseHomeChatFrame(JSON.stringify({ type: 'perms', conv: '901', myPerms: '7' }))).toEqual({ type: 'perms', conv: '901', myPerms: '7' })
   })
 })

@@ -983,6 +983,17 @@ fn template_hello_waits_for_the_first_start() {
     assert!(hellos_to(&oh).is_empty());
 }
 
+/// A folder a test makes gets its mode set, never left to the umask.
+fn set_mode_0755(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).expect("chmod 0755");
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
 /// The id and handle of the workspace registered at `path`.
 fn workspace_at(path: &str) -> (String, String) {
     let (_, row) = k2_core::hire::converge::lookup_project_row(path).expect("registered");
@@ -1009,6 +1020,7 @@ fn template_hello_waits_while_the_folder_is_held() {
     // Settings that run a command when a program starts there: held.
     let settings = Path::new(&path).join(".claude/settings.json");
     std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    set_mode_0755(settings.parent().unwrap());
     std::fs::write(&settings, r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node .claude/setup.mjs"}]}]}}"#).unwrap();
     let now = gate::check(&path);
     assert!(matches!(now, gate::Outcome::Held(_)), "the folder is held: {now:?}");
@@ -1101,6 +1113,7 @@ fn template_hello_never_goes_for_an_opened_workspace_with_a_lock() {
     // A folder that arrives with the source's lock, then is opened.
     let path = root.join(uniq("opened")).to_string_lossy().into_owned();
     std::fs::create_dir_all(&path).unwrap();
+    set_mode_0755(Path::new(&path));
     lock::write(&path, &copied).unwrap();
     k2_core::workspace::lifecycle::open_workspace_ex(&path, false, false, false).expect("open");
     let (id, handle) = workspace_at(&path);

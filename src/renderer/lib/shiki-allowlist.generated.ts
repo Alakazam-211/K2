@@ -2,8 +2,8 @@
 //
 // The shiki grammars and themes the code viewer may bundle: every id in
 // shiki 4.0.2's bundledLanguagesInfo / bundledThemesInfo minus every id in
-// scripts/notices/shiki-excluded.txt (19 grammars, 1 theme left out).
-// Kept: 216 of 235 grammars, 64 of 65 themes.
+// scripts/notices/shiki-excluded.txt (8 grammars, 1 theme left out).
+// Kept: 227 of 235 grammars, 64 of 65 themes.
 // Regenerate with `node scripts/gen-shiki-allowlist.mjs` after a shiki upgrade
 // or a change to the left-out list. Only shiki-allowlist.ts imports this.
 
@@ -13,12 +13,14 @@ export type ShikiLangLoader = () => Promise<{ default: LanguageRegistration[] }>
 export type ShikiThemeLoader = () => Promise<{ default: ThemeRegistration }>
 
 export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> = {
+  'abap': () => import('shiki/langs/abap.mjs'),
   'actionscript-3': () => import('shiki/langs/actionscript-3.mjs'),
   'angular-html': () => import('shiki/langs/angular-html.mjs'),
   'angular-ts': () => import('shiki/langs/angular-ts.mjs'),
   'apache': () => import('shiki/langs/apache.mjs'),
   'apex': () => import('shiki/langs/apex.mjs'),
   'apl': () => import('shiki/langs/apl.mjs'),
+  'applescript': () => import('shiki/langs/applescript.mjs'),
   'ara': () => import('shiki/langs/ara.mjs'),
   'asciidoc': () => import('shiki/langs/asciidoc.mjs'),
   'asm': () => import('shiki/langs/asm.mjs'),
@@ -30,6 +32,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'berry': () => import('shiki/langs/berry.mjs'),
   'bibtex': () => import('shiki/langs/bibtex.mjs'),
   'bicep': () => import('shiki/langs/bicep.mjs'),
+  'bird2': () => import('shiki/langs/bird2.mjs'),
   'blade': () => import('shiki/langs/blade.mjs'),
   'bsl': () => import('shiki/langs/bsl.mjs'),
   'c': () => import('shiki/langs/c.mjs'),
@@ -62,6 +65,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'elixir': () => import('shiki/langs/elixir.mjs'),
   'elm': () => import('shiki/langs/elm.mjs'),
   'emacs-lisp': () => import('shiki/langs/emacs-lisp.mjs'),
+  'erb': () => import('shiki/langs/erb.mjs'),
   'erlang': () => import('shiki/langs/erlang.mjs'),
   'fennel': () => import('shiki/langs/fennel.mjs'),
   'fish': () => import('shiki/langs/fish.mjs'),
@@ -88,6 +92,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'handlebars': () => import('shiki/langs/handlebars.mjs'),
   'haskell': () => import('shiki/langs/haskell.mjs'),
   'haxe': () => import('shiki/langs/haxe.mjs'),
+  'hcl': () => import('shiki/langs/hcl.mjs'),
   'hjson': () => import('shiki/langs/hjson.mjs'),
   'hlsl': () => import('shiki/langs/hlsl.mjs'),
   'html': () => import('shiki/langs/html.mjs'),
@@ -120,6 +125,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'liquid': () => import('shiki/langs/liquid.mjs'),
   'llvm': () => import('shiki/langs/llvm.mjs'),
   'log': () => import('shiki/langs/log.mjs'),
+  'logo': () => import('shiki/langs/logo.mjs'),
   'lua': () => import('shiki/langs/lua.mjs'),
   'luau': () => import('shiki/langs/luau.mjs'),
   'make': () => import('shiki/langs/make.mjs'),
@@ -129,6 +135,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'mdc': () => import('shiki/langs/mdc.mjs'),
   'mdx': () => import('shiki/langs/mdx.mjs'),
   'mermaid': () => import('shiki/langs/mermaid.mjs'),
+  'mipsasm': () => import('shiki/langs/mipsasm.mjs'),
   'mojo': () => import('shiki/langs/mojo.mjs'),
   'moonbit': () => import('shiki/langs/moonbit.mjs'),
   'move': () => import('shiki/langs/move.mjs'),
@@ -148,6 +155,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'php': () => import('shiki/langs/php.mjs'),
   'pkl': () => import('shiki/langs/pkl.mjs'),
   'plsql': () => import('shiki/langs/plsql.mjs'),
+  'po': () => import('shiki/langs/po.mjs'),
   'polar': () => import('shiki/langs/polar.mjs'),
   'postcss': () => import('shiki/langs/postcss.mjs'),
   'powerquery': () => import('shiki/langs/powerquery.mjs'),
@@ -189,6 +197,7 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'sparql': () => import('shiki/langs/sparql.mjs'),
   'splunk': () => import('shiki/langs/splunk.mjs'),
   'sql': () => import('shiki/langs/sql.mjs'),
+  'ssh-config': () => import('shiki/langs/ssh-config.mjs'),
   'stata': () => import('shiki/langs/stata.mjs'),
   'stylus': () => import('shiki/langs/stylus.mjs'),
   'surrealql': () => import('shiki/langs/surrealql.mjs'),
@@ -199,7 +208,9 @@ export const GENERATED_LANG_LOADERS: Readonly<Record<string, ShikiLangLoader>> =
   'talonscript': () => import('shiki/langs/talonscript.mjs'),
   'tasl': () => import('shiki/langs/tasl.mjs'),
   'templ': () => import('shiki/langs/templ.mjs'),
+  'terraform': () => import('shiki/langs/terraform.mjs'),
   'tex': () => import('shiki/langs/tex.mjs'),
+  'toml': () => import('shiki/langs/toml.mjs'),
   'ts-tags': () => import('shiki/langs/ts-tags.mjs'),
   'tsv': () => import('shiki/langs/tsv.mjs'),
   'tsx': () => import('shiki/langs/tsx.mjs'),
@@ -303,6 +314,7 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   'adoc': 'asciidoc',
   'batch': 'bat',
   'be': 'berry',
+  'bird': 'bird2',
   '1c': 'bsl',
   'cdc': 'cadence',
   'clj': 'clojure',
@@ -348,6 +360,7 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   'makefile': 'make',
   'md': 'markdown',
   'mmd': 'mermaid',
+  'mips': 'mipsasm',
   'mbt': 'moonbit',
   'mbti': 'moonbit',
   'nar': 'narrat',
@@ -355,6 +368,8 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   'nu': 'nushell',
   'objc': 'objective-c',
   'scad': 'openscad',
+  'pot': 'po',
+  'potx': 'po',
   'ps': 'powershell',
   'ps1': 'powershell',
   'protobuf': 'proto',
@@ -376,6 +391,8 @@ export const GENERATED_LANG_ALIASES: Readonly<Record<string, string>> = {
   'styl': 'stylus',
   'surql': 'surrealql',
   'talon': 'talonscript',
+  'tf': 'terraform',
+  'tfvars': 'terraform',
   'lit': 'ts-tags',
   'ts': 'typescript',
   'cts': 'typescript',

@@ -345,6 +345,36 @@ Changes tab shows a diff.
 | **License** | **MIT** (Copyright (C) 2018-2022 by Marijn Haverbeke and others) — full text in the package's `LICENSE` |
 | **K2 code** | Is **MIT**. This package does **not** relicense the product. |
 
+## Third-party: shiki grammars under the TextMate bundle grant and MPL-2.0
+
+The code viewer highlights code with [shiki](https://github.com/shikijs/shiki)
+(MIT) and its grammar collection, tm-grammars (MIT), which carries each
+language's grammar from its own repository at a pinned commit. Eleven of
+those grammars are under neither MIT, Apache-2.0 nor BSD: eight TextMate
+bundles under the TextMate bundle grant (the licence section of each bundle's
+README) and three under the Mozilla Public License 2.0. They ship unmodified,
+so their source is the upstream file at the commit named. Each one's licence
+text ships in the app under `resources/notices/`, byte for byte from its
+repository at that commit (the file and its sha256 below). The grammars whose
+licences don't allow shipping are left out of the bundle:
+`scripts/notices/shiki-excluded.txt`.
+
+| Grammar | Upstream, at the pinned commit | Licence, and where its text is | Text (`resources/notices/`) | sha256 |
+|--|--|--|--|--|
+| `abap` | [pvl/abap.tmbundle/Syntaxes/ABAP.tmLanguage](https://github.com/pvl/abap.tmbundle/blob/92e17e62a9449d2a6f87bfb30b4f920986c24018/Syntaxes/ABAP.tmLanguage) at `92e17e62a9449d2a6f87bfb30b4f920986c24018` | TextMate bundle grant: `README.md`, its License section to the end of the file | `shiki-abap-LICENSE` | `9638e6747d5a8aed56316a5ced9ff1ddfa91614fdd451d491519b90a6eb349c3` |
+| `applescript` | [textmate/applescript.tmbundle/Syntaxes/AppleScript.tmLanguage](https://github.com/textmate/applescript.tmbundle/blob/4947cad7494eba084c21cfe04689b4efce96700f/Syntaxes/AppleScript.tmLanguage) at `4947cad7494eba084c21cfe04689b4efce96700f` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-applescript-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `erb` | [textmate/ruby.tmbundle/Syntaxes/HTML%20(Ruby%20-%20ERB](https://github.com/textmate/ruby.tmbundle/blob/ecf0f1df23984bcff9b51552e35d9696cb0d9539/Syntaxes/HTML%20(Ruby%20-%20ERB) at `ecf0f1df23984bcff9b51552e35d9696cb0d9539` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-erb-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `logo` | [textmate/logo.tmbundle/Syntaxes/Logo.tmLanguage](https://github.com/textmate/logo.tmbundle/blob/3205e987ed2a2aa11accdd55a7d094832441f89c/Syntaxes/Logo.tmLanguage) at `3205e987ed2a2aa11accdd55a7d094832441f89c` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-logo-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `mipsasm` | [textmate/mips.tmbundle/Syntaxes/MIPS.tmLanguage](https://github.com/textmate/mips.tmbundle/blob/eb7601016a109bf912a48a1c21988f3c4a59fb3a/Syntaxes/MIPS.tmLanguage) at `eb7601016a109bf912a48a1c21988f3c4a59fb3a` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-mipsasm-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `po` | [textmate/gettext.tmbundle/Syntaxes/Gettext.tmLanguage](https://github.com/textmate/gettext.tmbundle/blob/08bb69558d82ada8d4f36b8869f871ce69014749/Syntaxes/Gettext.tmLanguage) at `08bb69558d82ada8d4f36b8869f871ce69014749` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-po-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `ssh-config` | [textmate/ssh-config.tmbundle/Syntaxes/SSH-Config.tmLanguage](https://github.com/textmate/ssh-config.tmbundle/blob/212a0000c50e0c877303b2c4fcead539d2af2670/Syntaxes/SSH-Config.tmLanguage) at `212a0000c50e0c877303b2c4fcead539d2af2670` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-ssh-config-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `toml` | [textmate/toml.tmbundle/Syntaxes/TOML.tmLanguage](https://github.com/textmate/toml.tmbundle/blob/e82b64c1e86396220786846201e9aa3f0a2d9ca2/Syntaxes/TOML.tmLanguage) at `e82b64c1e86396220786846201e9aa3f0a2d9ca2` | TextMate bundle grant: `README.mdown`, its License section to the end of the file | `shiki-toml-LICENSE` | `192c2900d6b509c3f962c377e0c46b0bb39e8615c2b97170bb6607904c2f1ff5` |
+| `bird2` | [bird-chinese-community/BIRD-tm-language-grammar/grammars/bird2.tmLanguage.json](https://github.com/bird-chinese-community/BIRD-tm-language-grammar/blob/1aa378ed0add766bee2271acece94d5068cf3de9/grammars/bird2.tmLanguage.json) at `1aa378ed0add766bee2271acece94d5068cf3de9` | MPL-2.0: `LICENSE` (the repository's `LICENSE.sample`, an MIT text, is not the grammar's licence) | `shiki-bird2-LICENSE` | `9ee744951d725ad1911f95d1021b37f5713e94e9fffc84448dc1ffd597ad17aa` |
+| `hcl` | [hashicorp/syntax/syntaxes/hcl.tmGrammar.json](https://github.com/hashicorp/syntax/blob/2ec7cd10c9d6134e836bf85eb0f5aa010512bff4/syntaxes/hcl.tmGrammar.json) at `2ec7cd10c9d6134e836bf85eb0f5aa010512bff4` | MPL-2.0: `LICENSE`, the same file at both hashicorp/syntax commits | `shiki-hcl-LICENSE` | `eeee9e927d8039479976f714644a09bb4db8e23c3ac287d75446e5ebdb9b25c3` |
+| `terraform` | [hashicorp/syntax/syntaxes/terraform.tmGrammar.json](https://github.com/hashicorp/syntax/blob/cc2b4d4fe389f14b8a13937f4e0d7b2811b57588/syntaxes/terraform.tmGrammar.json) at `cc2b4d4fe389f14b8a13937f4e0d7b2811b57588` | MPL-2.0: `LICENSE`, the same file at both hashicorp/syntax commits | `shiki-terraform-LICENSE` | `eeee9e927d8039479976f714644a09bb4db8e23c3ac287d75446e5ebdb9b25c3` |
+
+K2 code is **MIT**. These grammars do **not** relicense the product.
+
 ## Third-party: T3 Code device-frame numbers (MIT)
 
 The Mobile tab's phone frame is K2's own CSS. Its bezel and corner-radius

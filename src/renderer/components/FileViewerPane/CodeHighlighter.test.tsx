@@ -19,7 +19,7 @@ async function settle(): Promise<void> {
 }
 
 describe('CodeHighlighter: left-out languages render plain', () => {
-  it.each(['nginx', 'terraform', 'tf', 'hcl', 'toml', 'glsl', 'racket', 'conf'])('fence %s renders plain escaped text', async (lang) => {
+  it.each(['nginx', 'glsl', 'racket', 'ada', 'gnuplot', 'tcl', 'conf'])('fence %s renders plain escaped text', async (lang) => {
     expect(resolveFenceLang(lang)).toBeUndefined()
     const { container } = render(<HighlightedCodeBlock code={NGINX} language={lang} />)
     await settle()
@@ -30,7 +30,7 @@ describe('CodeHighlighter: left-out languages render plain', () => {
     expect(container.querySelector('b')).toBeNull()
   })
 
-  it.each(['nginx.conf', 'main.tf', 'vars.hcl', 'Cargo.toml', 'site.nginx'])('file %s detects no language and renders plain', async (path) => {
+  it.each(['nginx.conf', 'site.nginx'])('file %s detects no language and renders plain', async (path) => {
     expect(detectLanguage(path)).toBeUndefined()
     const { container } = render(<CodeViewer code={NGINX} language={detectLanguage(path)} />)
     await settle()
@@ -40,7 +40,21 @@ describe('CodeHighlighter: left-out languages render plain', () => {
 
   it('highlightToHtml refuses a left-out grammar', async () => {
     expect(await highlightToHtml(NGINX, 'nginx')).toBeNull()
-    expect(await highlightToHtml(NGINX, 'terraform')).toBeNull()
+    expect(await highlightToHtml(NGINX, 'racket')).toBeNull()
+  })
+})
+
+describe('CodeHighlighter: the grammars accepted with their licence texts highlight', () => {
+  it.each([['terraform', 'terraform'], ['tf', 'terraform'], ['hcl', 'hcl'], ['toml', 'toml'], ['erb', 'erb'], ['po', 'po']])(
+    'fence %s highlights as %s',
+    async (fence, id) => {
+      expect(resolveFenceLang(fence)).toBe(id)
+      expect(await highlightToHtml('a = "b"', id)).toContain('class="shiki')
+    },
+  )
+
+  it.each([['main.tf', 'terraform'], ['vars.hcl', 'hcl'], ['Cargo.toml', 'toml']])('file %s detects %s', (path, id) => {
+    expect(detectLanguage(path)).toBe(id)
   })
 })
 

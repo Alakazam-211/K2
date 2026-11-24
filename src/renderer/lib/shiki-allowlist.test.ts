@@ -8,6 +8,7 @@
 //     `node scripts/gen-shiki-allowlist.mjs`);
 //   - a kept grammar embeds a left-out one the build plugin would not stub.
 
+import { createHash } from 'crypto'
 import { readdirSync, readFileSync, statSync } from 'fs'
 import { createRequire } from 'module'
 import { dirname, join, relative, resolve } from 'path'
@@ -34,8 +35,8 @@ const RENDERER = resolve(REPO, 'src/renderer')
 // Out for good, whatever the left-out list says.
 const DROPPED_LANGS = ['ada', 'gnuplot', 'nginx', 'racket']
 const DROPPED_THEMES = ['aurora-x']
-// Out until the owner decides.
-const HELD_LANGS = ['bird2', 'hcl', 'terraform']
+// Accepted by the owner with their licence texts (NOTICE.md, resources/notices/): on the allowlist.
+const ACCEPTED_LANGS = ['abap', 'applescript', 'erb', 'logo', 'mipsasm', 'po', 'ssh-config', 'toml', 'bird2', 'hcl', 'terraform']
 
 const ALL_LANGS = bundledLanguagesInfo.map((l) => l.id)
 const ALL_THEMES = bundledThemesInfo.map((t) => t.id)
@@ -62,8 +63,8 @@ describe('shiki allowlist: the left-out list', () => {
 })
 
 describe('shiki allowlist: hard-excluded ids', () => {
-  it('never holds the dropped grammars and theme or the held grammars', () => {
-    for (const id of [...DROPPED_LANGS, ...HELD_LANGS]) {
+  it('never holds the dropped grammars and theme', () => {
+    for (const id of DROPPED_LANGS) {
       expect(SHIKI_LANG_IDS, `grammar ${id}`).not.toContain(id)
       expect(Object.keys(GENERATED_LANG_LOADERS), `generated grammar ${id}`).not.toContain(id)
       expect(Object.values(GENERATED_LANG_ALIASES), `alias target ${id}`).not.toContain(id)
@@ -73,6 +74,33 @@ describe('shiki allowlist: hard-excluded ids', () => {
       expect(SHIKI_THEME_IDS, `theme ${id}`).not.toContain(id)
       expect(Object.keys(GENERATED_THEME_LOADERS), `generated theme ${id}`).not.toContain(id)
     }
+  })
+
+  it('holds the accepted grammars, each with its loader', () => {
+    for (const id of ACCEPTED_LANGS) {
+      expect(SHIKI_EXCLUDED.langs.has(id), `left out: ${id}`).toBe(false)
+      expect(isShikiLangAllowed(id), id).toBe(true)
+      expect(shikiLangLoader(id), `grammar ${id}`).toBeDefined()
+    }
+    for (const a of ['tf', 'tfvars', 'TF', 'Terraform', 'hcl']) expect(resolveShikiLang(a), `alias ${a}`).toBeDefined()
+  })
+})
+
+describe('shiki allowlist: the accepted grammars ship their licence texts', () => {
+  const notice = readFileSync(resolve(REPO, 'NOTICE.md'), 'utf8')
+  // bundle.resources: a list of paths, or a map of path to where it lands in the app.
+  const conf = JSON.parse(readFileSync(resolve(REPO, 'src-tauri/tauri.conf.json'), 'utf8')) as { bundle: { resources: string[] | Record<string, string> } }
+  const shipped = Array.isArray(conf.bundle.resources) ? conf.bundle.resources : Object.keys(conf.bundle.resources)
+
+  it.each(ACCEPTED_LANGS)('%s: a NOTICE.md row, its text in resources/notices/ with that sha256, shipped in the app', (id) => {
+    const rows = notice.split('\n').filter((l) => l.startsWith(`| \`${id}\` |`))
+    expect(rows, `NOTICE.md rows for ${id}`).toHaveLength(1)
+    const m = /\| `(shiki-[a-z0-9-]+-LICENSE)` \| `([0-9a-f]{64})` \|$/.exec(rows[0])
+    expect(m, rows[0]).not.toBeNull()
+    const [, file, sha] = m!
+    const text = readFileSync(resolve(REPO, 'resources/notices', file))
+    expect(createHash('sha256').update(text).digest('hex'), file).toBe(sha)
+    expect(shipped, file).toContain(`../resources/notices/${file}`)
   })
 })
 
@@ -108,11 +136,10 @@ describe('shiki allowlist: nothing outside it is importable', () => {
     for (const id of OUT_THEMES) expect(shikiThemeLoader(id), `theme ${id}`).toBeUndefined()
   })
 
-  it("aliases of left-out grammars resolve to nothing (tf, tfvars, kql...)", () => {
+  it('aliases and other spellings of left-out grammars resolve to nothing', () => {
     const outAliases = bundledLanguagesInfo.filter((l) => OUT_LANGS.includes(l.id)).flatMap((l) => l.aliases ?? [])
-    expect(outAliases).toEqual(expect.arrayContaining(['tf', 'tfvars']))
     for (const a of outAliases) expect(resolveShikiLang(a), `alias ${a}`).toBeUndefined()
-    for (const a of ['TF', 'Terraform', 'NGINX', 'conf', 'hcl']) expect(resolveShikiLang(a), `alias ${a}`).toBeUndefined()
+    for (const a of ['NGINX', 'Nginx', ' nginx ', 'Racket', 'ADA', 'GnuPlot', 'conf']) expect(resolveShikiLang(a), `alias ${a}`).toBeUndefined()
   })
 
   it('a loaded grammar carries no left-out registration or embedded name', async () => {
@@ -168,7 +195,8 @@ describe('shiki allowlist: build plugin', () => {
     // yaml is allowed: ruby's embedded yaml is a real grammar, not a stub.
     expect(leftOutShikiModule(SHIKI_EXCLUDED, './yaml.mjs', join(langsDist, 'ruby.mjs'))).toBeUndefined()
     expect(leftOutShikiModule(SHIKI_EXCLUDED, 'shiki/langs/nginx.mjs', '/x/src/a.ts')).toEqual({ kind: 'lang', id: 'nginx' })
-    expect(leftOutShikiModule(SHIKI_EXCLUDED, '@shikijs/langs/terraform', '/x/a.ts')).toEqual({ kind: 'lang', id: 'terraform' })
+    expect(leftOutShikiModule(SHIKI_EXCLUDED, '@shikijs/langs/racket', '/x/a.ts')).toEqual({ kind: 'lang', id: 'racket' })
+    expect(leftOutShikiModule(SHIKI_EXCLUDED, '@shikijs/langs/terraform', '/x/a.ts')).toBeUndefined()
     expect(leftOutShikiModule(SHIKI_EXCLUDED, '@shikijs/themes/aurora-x', '/x/a.ts')).toEqual({ kind: 'theme', id: 'aurora-x' })
     expect(leftOutShikiModule(SHIKI_EXCLUDED, './c.mjs', fromCpp)).toBeUndefined()
     expect(leftOutShikiModule(SHIKI_EXCLUDED, 'shiki/langs/cpp.mjs', '/x/a.ts')).toBeUndefined()

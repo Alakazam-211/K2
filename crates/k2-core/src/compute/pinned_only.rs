@@ -21,7 +21,8 @@
 //! one it shouldn't.
 //!
 //! Who changes it is the route's business (`k2-daemon`): the owner or an
-//! Admin, never an agent.
+//! Admin, never an agent. An agent asks one of them on a permission card
+//! (`compute.node.pinned-only`, 0.46.18), and their Allow changes it.
 
 use std::collections::BTreeSet;
 

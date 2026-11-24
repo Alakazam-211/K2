@@ -1173,3 +1173,163 @@ fn compute_grant_card_goes_stale_when_the_grant_moves() {
     };
     assert_eq!(g.max_job_secs, 3 * 3600, "nothing applied");
 }
+
+// ── compute.node.pinned-only (0.46.18) ───────────────────────────────
+
+fn pinned(node_id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::pinned_only::is_on(&conn, node_id)
+}
+
+/// The node's `pinned_only` compute events: `(actor, detail)`, oldest first.
+fn pinned_events(node_id: &str) -> Vec<(String, Value)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut st = conn
+        .prepare("SELECT actor, detail_json FROM compute_events WHERE kind = 'pinned_only' AND node_id = ?1 ORDER BY id")
+        .expect("prepare");
+    let rows: Vec<(String, String)> =
+        st.query_map([node_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).expect("query").map(|x| x.expect("row")).collect();
+    rows.into_iter().map(|(a, d)| (a, serde_json::from_str(&d).expect("detail json"))).collect()
+}
+
+/// The card's Access Audit lines for one node.
+fn pinned_audit(node_name: &str) -> Vec<Value> {
+    let needle = format!("node={node_name} ");
+    k2_core::auth_audit::read_all()
+        .expect("audit")
+        .into_iter()
+        .filter(|e| e["event"] == crate::compute_node_flags::PINNED_ONLY_AUDIT && e["outcome"].as_str().unwrap_or("").contains(&needle))
+        .collect()
+}
+
+/// An Admin card (one click) whose words say the node, the change and what
+/// it does; refused values never make a card; asking for what the node
+/// already is is "already done"; compute off, nothing asks.
+#[test]
+fn pinned_only_card_names_the_node_and_the_change() {
+    let _db = k2_core::db::scoped_for_test();
+    use k2_core::permission::catalog::{Floor, Grant, Proof};
+    let r = super::super::find("compute.node.pinned-only").expect("compute.node.pinned-only registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.proof, r.spec.grant), (Floor::Admin, Proof::Click, Grant::OneTime));
+    assert!(crate::routes::route_policy::lookup(super::PINNED_ONLY_ROUTE).and_then(|x| x.post).is_some(), "the route the card stands in for");
+    assert!(super::super::not_cardable().iter().all(|n| n.id != "compute.node.pinned-only"), "a card, not a not-cardable row");
+
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pinw");
+    let (node_id, name) = list_node(&ws, "pin-a", false);
+
+    // Off already: asking for off is done; bad values never make a card.
+    let (s, v) = ask(&ws, "compute.node.pinned-only", json!({ "node": name, "on": "false" }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+    let hint = ask_refused(&ws, "compute.node.pinned-only", json!({ "node": name, "on": "yes" }));
+    assert!(hint.contains("on= is one of true, false"), "{hint}");
+    let hint = ask_refused(&ws, "compute.node.pinned-only", json!({ "node": name }));
+    assert!(hint.contains("needs on="), "{hint}");
+    let hint = ask_refused(&ws, "compute.node.pinned-only", json!({ "node": "no-such-node", "on": "true" }));
+    assert!(hint.contains("no compute node 'no-such-node'"), "{hint}");
+
+    let v = ask_ok(&ws, "compute.node.pinned-only", json!({ "node": name, "on": "true" }));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Turn on pinned jobs only for {name}."), "{vw}");
+    assert_eq!(
+        vw["consequences"],
+        format!(
+            "Automatic placement stops choosing {name}: a job runs there only when it names {name}. This is for every workspace on this server, not only {}. Jobs already queued or running on {name} are not moved. To turn it off again: k2 compute node pinned-only {name} off (the owner or an admin).",
+            ws.handle
+        ),
+        "{vw}"
+    );
+    assert_eq!(vw["setting"], "Pinned jobs only", "{vw}");
+    assert_eq!(vw["scope"], format!("{name}, for every workspace on this server"), "{vw}");
+    assert_eq!(vw["approvers"]["floor"], "admin", "{vw}");
+    let values = values_of(&vw);
+    assert_eq!(values.len(), 1, "{vw}");
+    assert_eq!(values[0].0, name, "{vw}");
+    assert!(values[0].1.starts_with("linux") && values[0].1.contains("owned by this server"), "{vw}");
+    // A Member is below the card's floor; nothing changed.
+    let member = login("pinm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
+    assert!(!pinned(&node_id));
+
+    // The off card, its own words, the node by its name though asked by
+    // id (another workspace: its own card).
+    let ws2 = seed("pinx");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::pinned_only::set(&conn, &node_id, true, "owner", 9).expect("on");
+    }
+    let v = ask_ok(&ws2, "compute.node.pinned-only", json!({ "node": node_id, "on": "false" }));
+    let vw = view(&ws2, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Turn off pinned jobs only for {name}."), "{vw}");
+    assert!(vw["consequences"].as_str().unwrap_or("").starts_with(&format!("Automatic placement may choose {name} again")), "{vw}");
+
+    // Compute off: nothing asks.
+    let _off = ComputeOn::set(false);
+    assert!(ask_refused(&ws, "compute.node.pinned-only", json!({ "node": name, "on": "false" })).contains("compute nodes are off"));
+}
+
+/// The agent can't flip it itself (the route refuses it, a compute manager
+/// too); Deny changes nothing; an Admin's Allow flips it as that Admin,
+/// audited with who asked and `via=permission-card`; the owner's Allow
+/// turns it back off.
+#[test]
+fn pinned_only_allow_flips_the_node_as_the_person_and_deny_changes_nothing() {
+    let _db = k2_core::db::scoped_for_test();
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pind");
+    let ws2 = seed("pina");
+    let (node_id, name) = list_node(&ws, "pin-b", false);
+
+    // The agent itself: refused, a compute manager too; nothing changes.
+    for manage in [false, true] {
+        set_manage(&ws, manage);
+        let e = crate::compute_node_flags::node_pinned_only(&agent(&ws), json!({ "node": name, "on": true }).to_string().as_bytes())
+            .expect_err("an agent never flips it");
+        assert_eq!((e.status, e.code), (403, "owner_only"), "manage={manage}");
+    }
+    set_manage(&ws, false);
+    assert!(!pinned(&node_id));
+    assert!(pinned_events(&node_id).is_empty());
+
+    // Deny: nothing changes, nothing is recorded.
+    let admin = login("pinadm", Role::Admin);
+    let v = ask_ok(&ws, "compute.node.pinned-only", json!({ "node": name, "on": "true" }));
+    let (s, a) = answer_as(&admin, &ws, &card_of(&v), json!({ "answer": "Deny", "reason": "not this one" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id_of(&v)).state, RequestState::Denied);
+    assert!(!pinned(&node_id), "deny changes nothing");
+    assert!(pinned_events(&node_id).is_empty() && pinned_audit(&name).is_empty(), "deny records no change");
+
+    // Allow (an Admin): on, as that Admin, with who asked.
+    let v = ask_ok(&ws2, "compute.node.pinned-only", json!({ "node": name, "on": "true" }));
+    let (s, a) = answer_as(&admin, &ws2, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");
+    assert_eq!(row(&id_of(&v)).state, RequestState::Approved);
+    assert!(pinned(&node_id), "allow turned it on");
+    let asked_by = format!("agent:{}", ws2.handle);
+    assert_eq!(pinned_events(&node_id), vec![(format!("login:{admin}"), json!({ "on": true, "askedBy": asked_by, "via": "permission-card" }))]);
+    let audit = pinned_audit(&name);
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0]["user"], format!("login:{admin}"), "{audit:?}");
+    assert_eq!(audit[0]["outcome"], format!("node={name} on=true changed=true askedBy={asked_by} via=permission-card"), "{audit:?}");
+    let turn = last_turn(&ws2);
+    assert!(turn.contains(&format!("{name} is pinned jobs only now")), "{turn}");
+    // Asked again: already done.
+    let (s, v) = ask(&ws2, "compute.node.pinned-only", json!({ "node": name, "on": "true" }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+
+    // The owner's Allow turns it back off.
+    let v = ask_ok(&ws2, "compute.node.pinned-only", json!({ "node": name, "on": "false" }));
+    let (s, a) = answer_as("owner", &ws2, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), &a["action"]["result"]["outcome"]), ("200 OK", &json!("approved")), "{a}");
+    assert!(!pinned(&node_id), "allow turned it off");
+    let last = pinned_events(&node_id).pop().expect("an event");
+    assert_eq!((last.0.as_str(), &last.1["on"], &last.1["via"]), ("owner", &json!(false), &json!("permission-card")));
+}

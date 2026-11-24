@@ -136,6 +136,9 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     if action == ALLOW_NODES_FOR.id {
         return Some(allow_for_computed(ctx));
     }
+    if action == PINNED_ONLY.id {
+        return Some(pinned_only_computed(ctx));
+    }
     if action != ADMIN_APPROVE.id {
         return None;
     }
@@ -861,6 +864,149 @@ fn apply_grant(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     super::switches::applied(&r, message)
 }
 
+// ── compute.node.pinned-only (0.46.18) ───────────────────────────────
+
+/// The route the card's Allow stands in for (`k2 compute node pinned-only`).
+pub(crate) const PINNED_ONLY_ROUTE: &str = "/cli/compute/nodes/pinned-only";
+const PINNED_ONLY_ON: [&str; 2] = ["true", "false"];
+const PINNED_ONLY_PARAMS: &[ParamSpec] = &[
+    ParamSpec { key: "node", kind: ParamKind::Node, required: true, list: false, choices: &[] },
+    ParamSpec { key: "on", kind: ParamKind::Choice, required: true, list: false, choices: &PINNED_ONLY_ON },
+];
+
+/// `compute.node.pinned-only node= on=true|false` (0.46.18, Rosson): turn
+/// a node's "pinned jobs only" mode on or off. On, automatic placement
+/// never chooses the node; only a job that names it runs there. The route
+/// is the owner's or an Admin's and refuses every agent (a compute manager
+/// too), so this is their one-tap card: Admin floor, one click. Allow runs
+/// the route's own change as the person who tapped
+/// (`compute_node_flags::node_pinned_only_card`), recorded with who asked
+/// and `via=permission-card`. The walls (`walls::ROWS`) read `on` from the
+/// refused body (a JSON boolean), so the Ask with: line carries the change
+/// the agent typed.
+pub(crate) static PINNED_ONLY: ActionSpec = ActionSpec {
+    id: "compute.node.pinned-only",
+    area: Area::Compute,
+    params: PINNED_ONLY_PARAMS,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    // `{change}` / `{effects}` from `on` (`pinned_only_computed`).
+    words: Words {
+        setting: "Pinned jobs only",
+        what_changes: "{change}",
+        consequences: "{effects}",
+        scope: "{node}, for every workspace on this server",
+        duration: "until someone changes it",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: concat!(cli_name!(), " compute node pinned-only <node> on|off (the owner or an admin)") },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: "owner_only" },
+        route_prefix: PINNED_ONLY_ROUTE,
+        method: WallMethod::Post,
+        params: &[("node", ParamFrom::Body("/node"))],
+    }],
+    coverage: WallCoverage::PrefixOnly,
+    form: None,
+    machine_hints: &[],
+};
+
+/// The asked node (any state but removed, as the route takes it) and the
+/// mode asked for.
+fn pinned_only_ask(ctx: &Ctx) -> Result<(k2_core::compute::store::NodeRow, bool), String> {
+    let name = text_param(ctx, "node").ok_or(concat!("name the node: node=<name> (", cli_name!(), " compute nodes)"))?;
+    let on = match text_param(ctx, "on") {
+        Some("true") => true,
+        Some("false") => false,
+        Some(other) => return Err(format!("on={other}: true or false")),
+        None => return Err("say which: on=true (pinned jobs only) or on=false (automatic placement may choose it again)".into()),
+    };
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let n = k2_core::compute::store::find_node(&conn, name)
+        .filter(|n| n.state != "revoked")
+        .ok_or_else(|| format!("no compute node '{name}' ({CLI_NAME} compute nodes)"))?;
+    Ok((n, on))
+}
+
+/// The card's words from `on`, the node by its name now.
+fn pinned_only_computed(ctx: &Ctx) -> Ctx {
+    let mut out = ctx.clone();
+    let node = match pinned_only_ask(ctx) {
+        Ok((n, _)) => n.name,
+        Err(_) => text_param(ctx, "node").unwrap_or("the node").to_string(),
+    };
+    let (change, effects) = if text_param(ctx, "on") == Some("true") {
+        (
+            format!("Turn on pinned jobs only for {node}"),
+            format!(
+                "Automatic placement stops choosing {node}: a job runs there only when it names {node}. This is for every workspace on this server, not only {}. Jobs already queued or running on {node} are not moved. To turn it off again: {CLI_NAME} compute node pinned-only {node} off (the owner or an admin).",
+                ctx.workspace_handle
+            ),
+        )
+    } else {
+        (
+            format!("Turn off pinned jobs only for {node}"),
+            format!(
+                "Automatic placement may choose {node} again: any workspace's job that names no node can run there, not only jobs that name {node}. To turn it on again: {CLI_NAME} compute node pinned-only {node} on (the owner or an admin)."
+            ),
+        )
+    };
+    out.params.insert("change".into(), json!(change));
+    out.params.insert("effects".into(), json!(effects));
+    out.params.insert("node".into(), json!(node));
+    out
+}
+
+fn check_pinned_only(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    match pinned_only_ask(ctx) {
+        Ok((n, on)) => {
+            let now = {
+                let h = k2_core::db::shared();
+                let conn = h.lock();
+                k2_core::compute::pinned_only::is_on(&conn, &n.id)
+            };
+            if now == on {
+                Check::AlreadyDone
+            } else {
+                Check::Needed
+            }
+        }
+        Err(m) => Check::Moved(m),
+    }
+}
+
+/// As the person who tapped, through the route's own change, with the
+/// asking agent recorded beside it (`askedBy`, `via=permission-card`).
+fn apply_pinned_only(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    if !compute_on() {
+        return Applied::Refused { code: "compute_off".into(), message: "compute nodes are off on this server".into() };
+    }
+    let (n, on) = match pinned_only_ask(ctx) {
+        Ok(x) => x,
+        Err(m) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    if let Err(r) = super::switches::route_floor(who, PINNED_ONLY_ROUTE) {
+        return super::switches::applied(&r, "");
+    }
+    let body = json!({ "node": n.id, "on": on });
+    let asked_by = format!("agent:{}", ctx.workspace_handle);
+    match crate::compute_node_flags::node_pinned_only_card(&who_of(who), body.to_string().as_bytes(), &asked_by) {
+        Ok(_) if on => Applied::Done {
+            message: format!("{} is pinned jobs only now: automatic placement no longer chooses it; a job runs there only when it names {}.", n.name, n.name),
+        },
+        Ok(_) => Applied::Done { message: format!("{} takes automatically placed jobs again (pinned jobs only is off).", n.name) },
+        Err(r) => Applied::Refused { code: r.code.to_string(), message: r.hint },
+    }
+}
+
 // ── compute.allow-nodes (0.46.8, `crate::compute_allow`) ────────────
 
 const ALLOW_SETTING: &str = "Compute node list";
@@ -1298,6 +1444,13 @@ fn apply_allow_nodes_for(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> A
 /// the card's text hash, so a node coming online between the ask and the
 /// click never makes the card stale. Empty for every other action.
 pub(crate) fn card_values(action: &str, ctx: &Ctx) -> Vec<k2_core::permission::card::KeyValue> {
+    // 0.46.18: the pinned-only card's node, the same facts.
+    if action == PINNED_ONLY.id {
+        return match pinned_only_ask(ctx) {
+            Ok((n, _)) => vec![k2_core::permission::card::KeyValue { key: n.name.clone(), value: node_facts(&n) }],
+            Err(_) => Vec::new(),
+        };
+    }
     // 0.46.18: the nodes another workspace's list would gain, the same way.
     let names = match action {
         a if a == ALLOW_NODES.id => node_names(ctx),
@@ -1979,6 +2132,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &GPU, check: check_gpu, apply: apply_gpu },
         Registered { spec: &GPU_OFF, check: check_gpu_off, apply: apply_gpu_off },
         Registered { spec: &GRANT, check: check_grant, apply: apply_grant },
+        Registered { spec: &PINNED_ONLY, check: check_pinned_only, apply: apply_pinned_only },
         Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
         Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
         Registered { spec: &ALLOW_NODES_FOR, check: check_allow_nodes_for, apply: apply_allow_nodes_for },

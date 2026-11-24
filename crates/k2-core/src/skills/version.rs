@@ -440,7 +440,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 68;
 /// "Your compute node list": new nodes join it by themselves, and another
 /// workspace's list for an agent that manages it (`compute.allow-nodes-for`);
 /// "Your email address cap" (`mail.address-cap`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 27;
+/// v28 = 0.46.18: "A compute node's pinned jobs only mode"
+/// (`compute.node.pinned-only`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 28;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

@@ -263,6 +263,7 @@ const ACTION_WORDS: Record<string, string> = {
   'compute.allow-nodes': 'use more compute machines',
   'compute.allow-nodes-for': 'change another workspace’s compute machines',
   'compute.grant': 'change its compute job limits',
+  'compute.node.pinned-only': 'switch a compute node’s pinned jobs only mode',
   'compute.packages': 'install packages on compute nodes',
   'compute.packages-policy': 'change the compute package rules',
   'compute.git-access': 'reach git from compute jobs',

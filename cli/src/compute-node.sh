@@ -58,7 +58,10 @@ print(json.dumps({"code": v["enroll"], "expiresAt": v["expiresAt"], "name": v["n
         pinned-only)
             # On: automatic placement never chooses the node; only a job
             # that names it runs there. The owner or an Admin only: the
-            # daemon refuses an agent, a managing one too.
+            # daemon refuses an agent, a managing one too. With permission
+            # cards on, that refusal ends with the daemon's Ask with: line
+            # (k2 permission request compute.node.pinned-only node=<n>
+            # on=true|false), printed by _compute_split like every other.
             local po_on=""
             case "${2:-}" in on) po_on=1 ;; off) po_on=0 ;; esac
             { [ $# -eq 2 ] && [ -n "$po_on" ]; } || { echo "usage: k2 compute node pinned-only <name> on|off" >&2; exit 2; }

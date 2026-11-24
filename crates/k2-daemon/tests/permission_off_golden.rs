@@ -759,6 +759,16 @@ const WALLS: &[Wall] = &[
     Wall { id: "v1_apps_approve_held", action: "apps.approve request=", method: "POST", path_q: "/cli/app/build", body: Some(r#"{"folder":"pog-app"}"#) },
     Wall { id: "v1_garden_proposal_approve", action: "garden.proposal.approve", method: "POST", path_q: "/cli/zen/proposals/approve", body: Some("{}") },
     Wall { id: "v1_compute_admin_approve", action: "compute.admin-approve", method: "POST", path_q: "/cli/compute/admin/approve", body: Some("{}") },
+    // 0.46.18: `k2 compute node pinned-only <node> on` by an agent (the
+    // refusal is the same `owner_only` as before; with cards on it names
+    // `compute.node.pinned-only node= on=`).
+    Wall {
+        id: "v1_compute_node_pinned_only",
+        action: "compute.node.pinned-only node= on=",
+        method: "POST",
+        path_q: "/cli/compute/nodes/pinned-only",
+        body: Some(r#"{"node":"pog-n1","on":true}"#),
+    },
     // ── dropped / covered / later rows (§5.4) ──
     Wall { id: "dropped_agent_rename", action: "(dropped: agent.rename)", method: "POST", path_q: "/cli/agent/identity", body: Some(r#"{"displayName":"Pog"}"#) },
     Wall { id: "dropped_publish_frame", action: "(dropped: publish.frame)", method: "POST", path_q: "/cli/publish/frame", body: Some("{}") },

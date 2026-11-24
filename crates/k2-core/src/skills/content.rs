@@ -1525,7 +1525,23 @@ Your grant on a node caps your jobs there: the longest job, how many run at once
 
 Run it as printed. The owner or an admin sees each limit now and the one you asked for. Allow sets exactly those limits, and your other limits there stay as they are; a new max-parallel re-sends your jobs already waiting there, in order. Then run your job again. Only your own workspace's grant, on a node you're granted (or any active node while "Let this agent use compute nodes" is on). `--ci` and `--gpu` have their own cards (`compute.ci`, `compute.gpu`).
 
-## GitHub access for compute jobs
+"#,
+    r#"## A compute node's pinned jobs only mode
+
+A pinned-only node runs only jobs that name it: automatic placement never chooses it. Switching that on or off is the owner's or an admin's, even with "Let this agent manage compute nodes" on: `"#,
+    cli_name!(),
+    r#" compute node pinned-only <node> on|off` is refused with `owner_only` (exit 3) and ends with:
+
+    "#,
+    cli_name!(),
+    r#" permission request compute.node.pinned-only node=<node> on=true --why "<what you need it for>"
+
+(`on=false` turns it off.) Run it as printed. The owner or an admin sees the node, the change and your reason, and taps Allow: "#,
+    product_name!(),
+    r#" switches it as them, for every workspace's jobs on that node. Jobs already queued or running there are not moved.
+
+"#,
+    r#"## GitHub access for compute jobs
 
 A job reads a private GitHub repo only with a grant, and every grant needs this server's GitHub credential. With none set yet, `"#, cli_name!(), r#" compute git-access grant --github <owner>/<repo>` is refused with `git_access_needs_setup` (exit 3) and ends with:
 
@@ -2702,6 +2718,8 @@ mod tests {
             "`allow_nodes_not_manager`",
             // 0.46.17: the agent's own grant's limits on a node.
             "k2 permission request compute.grant node=<node> max-time=4h",
+            // 0.46.18: a node's pinned jobs only mode.
+            "k2 permission request compute.node.pinned-only node=<node> on=true",
             // 0.46.16: who is asked, and a login's role moved in place.
             "--to <login>[,<login>…]",
             "k2 permission request permission.approvers to=",

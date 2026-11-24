@@ -365,6 +365,9 @@ pub(crate) const V1_ACTIONS: &[&str] = &[
     // Agent Isolation M2 B4: a root-owned scope for every agent session (the
     // owner's, with this computer's owner check).
     "agent.isolation-layout",
+    // 0.46.18 (Rosson): switch a compute node's "pinned jobs only" mode
+    // (`k2 compute node pinned-only`, the owner's or an Admin's).
+    "compute.node.pinned-only",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -442,6 +445,16 @@ const COMPUTE_GRANT_ROW: Row = Row {
     ..row(ask("compute.grant", Floor::Admin), code(403, "owner_only"), "/cli/compute/grants/set", POST)
 };
 
+/// The `compute.node.pinned-only` wall (0.46.18): the node the refused
+/// body named; `on` is fixed by the row that matched the body's boolean.
+const PINNED_ONLY_ROUTE: &str = super::actions::compute::PINNED_ONLY_ROUTE;
+const PINNED_ONLY_ROW: Row = Row {
+    params: &[("node", &[ParamFrom::Body("/node")])],
+    ..row(ask("compute.node.pinned-only", Floor::Admin), code(403, "owner_only"), PINNED_ONLY_ROUTE, POST)
+};
+/// A body with no `on`: the node, and `on=<on>` for the agent to fill in.
+const PINNED_ONLY_UNSAID: &[(&str, &[ParamFrom])] = &[("node", &[ParamFrom::Body("/node")]), ("on", &[ParamFrom::Body("/on")])];
+
 /// `k2 settings set ciPreview true`'s body (0.46.17), and its route.
 const CI_PREVIEW_ON: &[(&str, &str)] = &[("/ciPreview", "true")];
 const CI_SETTINGS_ROUTE: &str = super::actions::ci_preview::SETTINGS_ROUTE;
@@ -515,6 +528,14 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("compute.manage", Floor::Owner), code(403, "owner_only"), "/cli/compute/", ANY),
     // `need_owner` only: no switch admits an agent.
     row(Target::Cannot { r#where: IN_SETTINGS }, code(403, "owner_only"), "/cli/compute/nodes/remove", ANY),
+    // 0.46.18: `k2 compute node pinned-only <node> on|off` refuses every
+    // agent, a compute manager too, so compute.manage (the row above) was
+    // no answer ("already on", and still refused). It asks for its own
+    // card with the node and the mode it sent (`on` is a JSON boolean);
+    // a body without `on` still names the card, `on=<on>` to fill in.
+    Row { body_eq: &[("/on", "true")], fixed: &[("on", "true")], ..PINNED_ONLY_ROW },
+    Row { body_eq: &[("/on", "false")], fixed: &[("on", "false")], ..PINNED_ONLY_ROW },
+    Row { body_has: Some(("/on", false)), params: PINNED_ONLY_UNSAID, ..PINNED_ONLY_ROW },
     // An agent always reaches its own workspace's caches; this refusal is
     // only for another workspace's. It answered compute.manage before, and
     // that card says "already on" when the switch is on (the loop).
@@ -1732,6 +1753,9 @@ mod tests {
             (403, "POST", "/cli/compute/grants/set", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.grant"),
             (403, "POST", "/cli/compute/grants/set", vec![], Some(json!({"node":"n1","allowCi":true})), json!({"error":{"code":"owner_only"}}), "compute.use"),
             (403, "POST", "/cli/compute/grants/revoke", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.use"),
+            // 0.46.18: an agent's `k2 compute node pinned-only <node> on|off`.
+            (403, "POST", "/cli/compute/nodes/pinned-only", vec![], Some(json!({"node":"k2n4","on":true})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.node.pinned-only"),
+            (403, "POST", "/cli/compute/nodes/pinned-only", vec![], Some(json!({"node":"k2n4","on":false})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.node.pinned-only"),
             (403, "POST", "/cli/sidecar/new", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             // 0.46.12: hiring is its own switch.
@@ -2225,6 +2249,31 @@ mod tests {
         assert_eq!(p["command"], "k2 permission request compute.allow-nodes-clear --why \"<what you need it for>\"");
     }
 
+    /// 0.46.18: an agent's `k2 compute node pinned-only <node> on|off` ends
+    /// with this card's exact line (the node and the mode it sent), never
+    /// compute.manage's; the other `owner_only` node routes keep theirs.
+    #[test]
+    fn pinned_only_teaches_its_own_card_with_the_node_and_the_mode() {
+        let refused = json!({"error":{"code":"owner_only","hint":"x"}});
+        for (on, word) in [(true, "true"), (false, "false")] {
+            let p = teach_of(403, "POST", "/cli/compute/nodes/pinned-only", &[], Some(json!({"node":"k2n4","on":on})), refused.clone()).unwrap();
+            assert_eq!(action_of(&p), "compute.node.pinned-only", "{p}");
+            assert_eq!(p["approvers"], "owner or admin", "{p}");
+            assert_eq!(p["params"], json!({"node":"k2n4","on":word}), "{p}");
+            assert_eq!(p["command"], format!("k2 permission request compute.node.pinned-only node=k2n4 on={word} --why \"<what you need it for>\""), "{p}");
+        }
+        // No `on` in the body: still this card, the mode left to fill in.
+        let p = teach_of(403, "POST", "/cli/compute/nodes/pinned-only", &[], Some(json!({"node":"k2n4"})), refused.clone()).unwrap();
+        assert_eq!(p["command"], "k2 permission request compute.node.pinned-only node=k2n4 on=<on> --why \"<what you need it for>\"", "{p}");
+        // A GET, or another route's owner_only, is not this card.
+        let p = teach_of(403, "POST", "/cli/compute/nodes/pause", &[], Some(json!({"node":"k2n4","on":true})), refused.clone()).unwrap();
+        assert_eq!(action_of(&p), "compute.manage", "{p}");
+        let p = teach_of(403, "POST", "/cli/compute/nodes/retire", &[], Some(json!({"node":"k2n4"})), refused.clone()).unwrap();
+        assert_eq!(action_of(&p), "compute.manage", "{p}");
+        let p = teach_of(403, "GET", "/cli/compute/nodes/pinned-only", &[], None, refused).unwrap();
+        assert_ne!(p["action"], "compute.node.pinned-only", "{p}");
+    }
+
     /// Git access (0.46.9, GH#78): an agent's grant teaches
     /// `compute.git-access repos=<the repos>`, for the owner or an Admin.
     #[test]
@@ -2494,7 +2543,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 90);
+        assert_eq!(V1_ACTIONS.len(), 91);
         let mut seen = std::collections::HashSet::new();
         for a in V1_ACTIONS {
             assert!(seen.insert(*a), "{a} is listed twice in V1_ACTIONS");

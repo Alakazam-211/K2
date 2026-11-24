@@ -249,8 +249,8 @@ impl fmt::Display for FrontError {
             FrontError::NotOnWindows { noun } => f.write_str(&not_on_windows_line(noun)),
             FrontError::NoShellCli { noun } => write!(
                 f,
-                "{} {noun}: this command line is not built into this program, and this build has no shell CLI to run it.",
-                k2_client::brand::CLI_NAME
+                "{name} {noun}: this command line is not built into this program, and this build has no shell CLI to run it. Report it: {name} send-feedback",
+                name = k2_client::brand::CLI_NAME
             ),
             FrontError::Run { bash, err } => write!(f, "can't run {}: {err}", bash.display()),
         }
@@ -1085,7 +1085,7 @@ mod tests {
         let name = k2_client::brand::CLI_NAME;
         assert_eq!(
             err.line(),
-            format!("{name} msg: this command line is not built into this program, and this build has no shell CLI to run it.")
+            format!("{name} msg: this command line is not built into this program, and this build has no shell CLI to run it. Report it: {name} send-feedback")
         );
         assert_eq!(err.exit(), Exit::NoShellCli);
         assert_eq!(err.exit_code(), 70);

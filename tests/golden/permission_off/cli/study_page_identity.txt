@@ -66,7 +66,9 @@ SESSION ROLE
   This CLI may run inside a scoped agent cell (passport in env) or
   from a human terminal. ID/locked tools need the session passport
   in-cell. Open tools (including `k2 study`) do not mint authority.
-  See `k2 study auth`.
+  A session K2 started for you is an agent's, whatever your launch
+  runs (bash, npx, a wrapper): only a plain shell tab a person opened
+  counts as that person. See `k2 study auth`.
 
 FEDERATED SHAPE
   Live AND tray: `agent::host` (prefer ::) over the same federation

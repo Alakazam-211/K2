@@ -45,6 +45,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { threadComposeCapWidth } from '@/components/SessionView/threadTextWidth'
 import { resetHomeChatViewCacheForTests } from '@/lib/home-chat/chat'
+import { __resetServerScopesForTests, noteServerVersion } from '@/kessel/server-scope'
 import type { HomeChatTarget } from '@/lib/home-chat/address'
 import { rememberPeopleNames, resetKnownNamesForTests } from '@/lib/home-chat/known-names'
 
@@ -65,6 +66,8 @@ const NEWEST = [
   m('23', ALEX, 'answers 20', { reference: { kind: 'reply', message_id: '20', channel_id: '600' } }),
 ]
 const OLDER = [m('5', ME, 'the original question'), m('6', ALEX, 'six')]
+/** The paste tests' `myPerms` on the messages page (undefined: not said). */
+const pastePerms: { value: string | undefined } = { value: undefined }
 
 function routes(): string[] {
   return [...h.get.mock.calls.map((c) => c[1]), ...h.post.mock.calls.map((c) => c[1])]
@@ -90,7 +93,12 @@ beforeEach(() => {
       case 'home-chat/channels/members':
         return { ok: true, conv: '600', slug: 'c-0123456789', state: 'active', name: 'design', open: false, creator: 'k2:connect:me', people: [], agents: [] }
       case 'home-chat/messages':
-        return { ok: true, conv: '600', page: p?.before ? { items: OLDER, has_more: false } : { items: NEWEST, has_more: true } }
+        return {
+          ok: true,
+          conv: '600',
+          page: p?.before ? { items: OLDER, has_more: false } : { items: NEWEST, has_more: true },
+          ...(pastePerms.value !== undefined ? { myPerms: pastePerms.value } : {}),
+        }
       default:
         throw new Error(`unexpected GET ${route}`)
     }
@@ -442,11 +450,41 @@ describe('pasting into a DM or channel box', () => {
     return h.post.mock.calls.map((c) => c[1]).filter((r) => r !== 'home-chat/view' && r !== 'home-chat/ack')
   }
 
+  // Home chat attachments (0.46.18): with files on here, a paste is the
+  // compose bar's upload; the note is for a server without files, or a
+  // person without ATTACH_FILES (my_perms bit 64) in this chat.
+  function setFiles(on: boolean): void {
+    noteServerVersion('local', '0.46.18', on ? ['home-chat-v1', 'home-chat-attachments-v1'] : ['home-chat-v1'])
+  }
   beforeEach(() => {
     useToastStore.setState({ toasts: [] })
+    pastePerms.value = undefined
+    setFiles(false)
+  })
+  afterEach(() => {
+    pastePerms.value = undefined
+    __resetServerScopesForTests()
   })
 
-  it('an image item: says DMs and channels take no pictures yet; nothing sent or uploaded', async () => {
+  it('files on: a pasted picture is attached (an upload starts), no note', async () => {
+    setFiles(true)
+    await open()
+    paste({ items: [new File(['png'], 'a.png', { type: 'image/png' })] })
+    await waitFor(() => expect(h.post.mock.calls.some((c) => c[1] === 'home-chat/uploads/create')).toBe(true))
+    expect(toasts()).toEqual([])
+  })
+
+  it('files on but no ATTACH_FILES (my_perms bit 64 clear): the note, nothing uploads', async () => {
+    setFiles(true)
+    pastePerms.value = '63'
+    await open()
+    await waitFor(() => expect(screen.queryByTestId('home-chat-plus')).toBeNull())
+    expect(paste({ items: [new File(['png'], '', { type: 'image/png' })] })).toBe(false)
+    expect(toasts()).toEqual([[HOME_CHAT_NO_FILES, 'warning']])
+    expect(postsBeyondOpen()).toEqual([])
+  })
+
+  it('files off (a server without them): an image item says DMs and channels take no pictures yet; nothing sent or uploaded', async () => {
     await open()
     expect(paste({ items: [new File(['png'], '', { type: 'image/png' })] }), 'the field drops nothing of its own').toBe(false)
     expect(toasts()).toEqual([[HOME_CHAT_NO_FILES, 'warning']])

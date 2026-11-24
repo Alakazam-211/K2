@@ -471,6 +471,7 @@ mod tests {
             &["pg", "drop-drill", "17-fb_drill"][..],
         ] {
             assert!(crate::verbs::catalog().iter().any(|v| v.argv() == argv), "protocol 19 carries {argv:?}");
+        }
         assert_eq!(AGENTSCOPE_MIN_PROTOCOL, 19, "the agent scopes are protocol 19");
         for tail in ["stop-all", "layout", "setup", "teardown"] {
             assert!(

@@ -381,6 +381,9 @@ mod tests {
             )))
         );
         assert_eq!(get(n.as_ref(), "requestable"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
     fn a_card_never_carries_the_feedback_line() {
         // A refusal with a card: the card is the path, so no send-feedback.
         let n = note(

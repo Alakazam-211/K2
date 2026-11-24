@@ -42,9 +42,11 @@ describe('Hosted mail manage toggle', () => {
     )
     expect(group).toContain('<MailManageToggle project={project} />')
     expect(group).toContain('<MailAddressCapLine project={project} />')
-    const start = src.indexOf('function MailAddressCapLine')
-    expect(start).toBeGreaterThan(0)
-    const line = src.slice(start, src.indexOf('function MailAgentSendControl', start))
+    // The line lives in its own file (moved out of ProjectsSection.tsx under
+    // its ratchet, 0.46.18).
+    expect(src).toContain("import { MailAddressCapLine } from './MailAddressCapLine'")
+    const line = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'MailAddressCapLine.tsx'), 'utf8')
+    expect(line).toContain('export function MailAddressCapLine')
     expect(line).toContain("primaryScope(), 'mail/config', { workspace: project.path }")
     expect(line).toContain('d.workspace?.addressCap?.text')
     expect(line).toContain('d.supported === true')

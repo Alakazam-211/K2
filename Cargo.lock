@@ -1760,14 +1760,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "curl-proxy-env"
-version = "0.1.0"
-dependencies = [
- "rcgen 0.13.2",
- "rustls",
-]
-
-[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6346,12 +6338,12 @@ name = "k5-cli"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "curl-proxy-env",
  "flate2",
  "k2-brand",
  "k2-client",
  "k2-release-keys",
  "libc",
+ "proxy-env",
  "rcgen 0.13.2",
  "rustls",
  "rustls-native-certs",
@@ -8798,6 +8790,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost 0.13.5",
+]
+
+[[package]]
+name = "proxy-env"
+version = "0.1.0"
+dependencies = [
+ "rcgen 0.13.2",
+ "rustls",
 ]
 
 [[package]]

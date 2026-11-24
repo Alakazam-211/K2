@@ -10,7 +10,7 @@
 //! ([`super::wire::Target::Tcp`] or [`super::wire::Target::Unix`]) has
 //! no place to hold a proxy at all.
 //!
-//! curl's rule lives in the `curl-proxy-env` crate (`crates/curl-proxy-env`,
+//! curl's rule lives in the `proxy-env` crate (`crates/proxy-env`,
 //! checked against curl 8.5.0 run beside it): which variable names the
 //! proxy, `no_proxy`, the proxy URL (`http://`, `https://`, `socks4://`,
 //! `socks4a://`, `socks5://`, `socks5h://`, IPv6 hosts, a percent-decoded
@@ -49,9 +49,9 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 /// curl 5: the proxy's name doesn't resolve, or its URL can't be read.
-pub const COULDNT_RESOLVE_PROXY: i32 = curl_proxy_env::exit::COULDNT_RESOLVE_PROXY;
+pub const COULDNT_RESOLVE_PROXY: i32 = proxy_env::exit::COULDNT_RESOLVE_PROXY;
 /// curl 97: the SOCKS handshake failed.
-pub const PROXY_HANDSHAKE: i32 = curl_proxy_env::exit::PROXY;
+pub const PROXY_HANDSHAKE: i32 = proxy_env::exit::PROXY;
 /// The most of a CONNECT answer's head read (curl's limit is 100 KiB).
 const MAX_HEAD: usize = 100 * 1024;
 
@@ -110,7 +110,7 @@ pub enum Route {
 /// The proxy curl would use for a request ([`decide`]), or the setting
 /// curl refuses, which fails the request at its connect
 /// ([`through`]).
-pub type Via = Result<curl_proxy_env::ProxyUrl, curl_proxy_env::ConfigError>;
+pub type Via = Result<proxy_env::ProxyUrl, proxy_env::ConfigError>;
 
 /// A variable that is set but is not UTF-8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,12 +161,12 @@ pub fn url_host(url: &str) -> &str {
 /// The proxy for a request to `host` (as [`super::remote::base`] reads
 /// it), `https` or not: none for plain http and for this computer
 /// (`_k2_direct_url`, [`loopback`]); else curl's rule
-/// ([`curl_proxy_env::proxy_for`]) over `env`.
+/// ([`proxy_env::proxy_for`]) over `env`.
 pub fn decide(host: &str, https: bool, env: impl Fn(&str) -> Option<OsString>) -> Option<Via> {
     if !https || loopback(host) {
         return None;
     }
-    curl_proxy_env::proxy_for("https", host, env).transpose()
+    proxy_env::proxy_for("https", host, env).transpose()
 }
 
 /// The tunnel through `via` to `host:port` (the TCP connect, TLS to an
@@ -179,18 +179,18 @@ pub fn through(
     port: u16,
     user_agent: &str,
     limit: Instant,
-) -> Result<curl_proxy_env::ProxyStream, Failure> {
+) -> Result<proxy_env::ProxyStream, Failure> {
     let p = match via {
         Ok(p) => p,
-        Err(e) => return Err(failure(curl_proxy_env::Error::Config(e.clone()))),
+        Err(e) => return Err(failure(proxy_env::Error::Config(e.clone()))),
     };
-    let mut opts = curl_proxy_env::Options::new()
+    let mut opts = proxy_env::Options::new()
         .user_agent(user_agent)
         .deadline(limit);
-    if p.scheme() == curl_proxy_env::Scheme::Https {
+    if p.scheme() == proxy_env::Scheme::Https {
         opts = opts.proxy_tls(super::tls::proxy_shared()?);
     }
-    curl_proxy_env::connect(Some(p), host, port, &opts).map_err(failure)
+    proxy_env::connect(Some(p), host, port, &opts).map_err(failure)
 }
 
 /// The crate's error as the transport's [`Failure`], by curl's code: a
@@ -198,8 +198,8 @@ pub fn through(
 /// `_k2_curl` tries curl's 7), a timeout [`Failure::ConnectTimedOut`], a
 /// failed CONNECT [`Failure::Tunnel`]; every other code is
 /// [`Failure::Broken`] with nothing sent ([`super::tls::before_request`]).
-fn failure(e: curl_proxy_env::Error) -> Failure {
-    use curl_proxy_env::Error as E;
+fn failure(e: proxy_env::Error) -> Failure {
+    use proxy_env::Error as E;
     match e {
         E::Connect(io) => Failure::Connect(io),
         E::TimedOut => Failure::ConnectTimedOut,

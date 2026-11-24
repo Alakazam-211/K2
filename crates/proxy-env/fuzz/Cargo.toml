@@ -1,0 +1,47 @@
+[package]
+name = "proxy-env-fuzz"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for proxy-env: the proxy variables, the proxy URL and the no_proxy list as any bytes, and the network-facing parsers (an HTTP proxy's CONNECT answer, SOCKS5 replies and their address forms, SOCKS4 replies). A panic is a finding; so is a tunnel opened on an answer that should not open it."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repository's, so a normal build
+# doesn't pull libFuzzer.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+libfuzzer-sys = "0.4"
+proxy-env = { path = "..", default-features = false }
+
+[[bin]]
+name = "env"
+path = "fuzz_targets/env.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "connect_answer"
+path = "fuzz_targets/connect_answer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "socks5"
+path = "fuzz_targets/socks5.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "socks4"
+path = "fuzz_targets/socks4.rs"
+test = false
+doc = false
+bench = false

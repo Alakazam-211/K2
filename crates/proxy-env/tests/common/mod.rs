@@ -32,6 +32,11 @@ pub struct Pki {
 
 impl Pki {
     pub fn new() -> Pki {
+        Pki::for_names(&["localhost", "127.0.0.1", "::1"])
+    }
+
+    /// A CA of its own and a certificate for `names` alone.
+    pub fn for_names(names: &[&str]) -> Pki {
         use rcgen::{
             BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
             KeyUsagePurpose,
@@ -50,12 +55,9 @@ impl Pki {
         ];
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
-        let mut leaf_params = CertificateParams::new(vec![
-            "localhost".to_string(),
-            "127.0.0.1".to_string(),
-            "::1".to_string(),
-        ])
-        .unwrap();
+        let mut leaf_params =
+            CertificateParams::new(names.iter().map(|n| n.to_string()).collect::<Vec<_>>())
+                .unwrap();
         leaf_params
             .distinguished_name
             .push(DnType::CommonName, "localhost");

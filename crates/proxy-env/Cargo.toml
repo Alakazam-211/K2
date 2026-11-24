@@ -1,16 +1,16 @@
 [package]
-name = "curl-proxy-env"
+name = "proxy-env"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
-description = "Pick a proxy from the environment as the curl command does (http_proxy, https_proxy, all_proxy, no_proxy) and open a tunnel through it: HTTP CONNECT, an https:// proxy, SOCKS4, SOCKS4a, SOCKS5 and SOCKS5h."
+description = "Pick a proxy from the environment (http_proxy, https_proxy, all_proxy, no_proxy), following curl's proxy environment rules, and open a tunnel through it: HTTP CONNECT, an https:// proxy, SOCKS4, SOCKS4a, SOCKS5 and SOCKS5h."
 authors = ["Alakazam Labs"]
 readme = "README.md"
-homepage = "https://github.com/Alakazam-211/K2/tree/main/crates/curl-proxy-env"
-documentation = "https://docs.rs/curl-proxy-env"
+homepage = "https://github.com/Alakazam-211/K2/tree/main/crates/proxy-env"
+documentation = "https://docs.rs/proxy-env"
 repository = "https://github.com/Alakazam-211/K2"
-keywords = ["proxy", "socks5", "no-proxy", "http-connect", "curl"]
+keywords = ["proxy", "socks5", "no-proxy", "http-connect", "environment"]
 categories = ["network-programming", "web-programming::http-client"]
 # What the .crate holds: the source, README, CHANGELOG, PROVENANCE and the
 # licences. The tests (and their stub proxies and curl table), the fuzz
@@ -18,7 +18,7 @@ categories = ["network-programming", "web-programming::http-client"]
 include = ["/src/**/*.rs", "/README.md", "/CHANGELOG.md", "/PROVENANCE.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
 
 [lib]
-name = "curl_proxy_env"
+name = "proxy_env"
 
 [features]
 default = ["rustls"]

@@ -1,7 +1,7 @@
-name: curl-proxy-env
-description: A bug, a proxy setting read differently from curl, or a question about the curl-proxy-env crate.
-title: "curl-proxy-env: "
-labels: ["curl-proxy-env"]
+name: proxy-env
+description: A bug, a proxy setting read differently from curl, or a question about the proxy-env crate.
+title: "proxy-env: "
+labels: ["proxy-env"]
 body:
   - type: markdown
     attributes:

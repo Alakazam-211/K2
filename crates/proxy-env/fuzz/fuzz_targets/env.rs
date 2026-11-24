@@ -6,8 +6,8 @@
 //! Run from this folder: `cargo +nightly fuzz run env`.
 #![no_main]
 
-use curl_proxy_env::{proxy_for, NoProxy, ProxyUrl};
 use libfuzzer_sys::fuzz_target;
+use proxy_env::{proxy_for, NoProxy, ProxyUrl};
 use std::ffi::OsString;
 
 #[cfg(unix)]

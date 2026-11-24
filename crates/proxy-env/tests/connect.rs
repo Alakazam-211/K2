@@ -7,7 +7,7 @@ mod common;
 #[cfg(feature = "rustls")]
 use common::Pki;
 use common::{closed_port, shown, Mode, Stub};
-use curl_proxy_env::{connect, Error, Options, ProxyStream, ProxyUrl};
+use proxy_env::{connect, Error, Options, ProxyStream, ProxyUrl};
 use std::io::{Read, Write};
 use std::time::Duration;
 
@@ -92,6 +92,31 @@ fn an_https_proxy_is_tls_with_its_certificate_checked() {
             shown(&head)
         );
     }
+    // A certificate the CA signed for another name (`localhost` only,
+    // the proxy reached as 127.0.0.1): the handshake fails, curl's 60,
+    // and no byte of CONNECT went out. The check can't be turned off.
+    let other = Pki::for_names(&["localhost"]);
+    let named = Stub::start(Mode::https("200 OK", &other));
+    let p = proxy(&format!("https://u:p@127.0.0.1:{}", named.port()));
+    let e = connect(
+        Some(&p),
+        "box.example.invalid",
+        443,
+        &opts().proxy_tls(other.client(true)),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            e,
+            Error::Tls {
+                certificate: true,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+    assert_eq!(e.curl_exit_code(), 60);
+    assert_eq!(one(&named), b"", "nothing decrypted reached the proxy");
     // A CA nothing trusts: curl's 60, and no byte of CONNECT went out.
     let p = proxy(&format!("https://u:p@127.0.0.1:{}", stub.port()));
     let e = connect(

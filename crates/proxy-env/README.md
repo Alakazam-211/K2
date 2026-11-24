@@ -1,21 +1,22 @@
-# curl-proxy-env
+# proxy-env
 
-Picks the proxy for a request from the environment the way the `curl`
-command does (`http_proxy`, `https_proxy`, `all_proxy`, `no_proxy` and
-their upper-case forms), and opens a tunnel through it: HTTP CONNECT, an
-`https://` proxy (TLS to the proxy itself), SOCKS4, SOCKS4a, SOCKS5 and
-SOCKS5h with a user and password. A program that used to shell out to
-curl can keep its users' proxy settings working the same way without
-carrying curl.
+Picks the proxy for a request from the environment (`http_proxy`,
+`https_proxy`, `all_proxy`, `no_proxy` and their upper-case forms),
+following curl's proxy environment rules, and opens a tunnel through it:
+HTTP CONNECT, an `https://` proxy (TLS to the proxy itself), SOCKS4,
+SOCKS4a, SOCKS5 and SOCKS5h with a user and password. A program that used
+to shell out to curl can keep its users' proxy settings working the same
+way without carrying curl. It is not affiliated with the curl project.
 
-Its behaviour is checked against curl 8.5.0, run as a separate process
-on the same settings (`tests/curl_oracle.rs`): the proxy picked, the bytes
-sent to it and the exit code curl gives when it fails.
+Its behaviour is checked against curl 8.5.0, run as a separate process on
+the same settings (`tests/curl_oracle.rs`): the proxy picked, the bytes
+sent to it and the exit code curl gives when it fails. The table matched
+curl 8.5.0 on all 122 of its rows.
 
 ## Example
 
 ```rust,no_run
-use curl_proxy_env::{connect, process_env, proxy_for, Options};
+use proxy_env::{connect, process_env, proxy_for, Options};
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,9 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 An `https://` proxy needs a TLS config for the proxy's certificate:
 `Options::proxy_tls(Arc<rustls::ClientConfig>)`. The crate compiles in no
 crypto provider; the config brings its own (ring or aws-lc-rs). The
-certificate is always checked.
+certificate is always checked against the config's roots, for the
+proxy's own name: there is no option to turn the check off.
 
-## What it reads, as curl does
+## What it reads (curl's rules)
 
 - **Which variable:** `<scheme>_proxy`, then `<SCHEME>_PROXY`, then
   `all_proxy`, then `ALL_PROXY`; the lower-case one wins. `HTTP_PROXY` is
@@ -57,6 +59,14 @@ certificate is always checked.
   (`Error::curl_exit_code`).
 
 Where curl versions differ, the crate does what curl 8.5.0 does.
+
+## The one deliberate difference from curl
+
+A proxy URL whose user or password holds a control byte once
+percent-decoded (`%0a`, `%00`, any byte below 0x20): curl 8.5.0 drops that
+proxy and connects direct. This crate refuses instead
+(`ConfigError::ControlInCredentials`, curl's exit 5), because a proxy that
+is set must never be skipped. The table checks both sides of it.
 
 ## Features
 
@@ -86,6 +96,6 @@ Please report vulnerabilities privately, never in a public issue: see
 ## Issues
 
 A bug, a setting read differently from curl, or a question:
-[open an issue](https://github.com/Alakazam-211/K2/issues/new?labels=curl-proxy-env&template=curl-proxy-env.yml)
+[open an issue](https://github.com/Alakazam-211/K2/issues/new?labels=proxy-env&template=proxy-env.yml)
 with the variables you set (with any password removed), the curl version
 you compared with, and what each did.

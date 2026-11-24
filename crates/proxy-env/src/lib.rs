@@ -9,6 +9,8 @@ mod resolve;
 mod stream;
 mod url;
 
+#[doc(hidden)]
+pub use connect::fuzzing;
 pub use connect::{connect, Options, DEFAULT_CONNECT_TIMEOUT};
 pub use error::{exit, ConfigError, Error};
 pub use no_proxy::NoProxy;

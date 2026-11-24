@@ -235,8 +235,21 @@ impl Stage {
     }
 }
 
-fn send(s: &mut ProxyStream, bytes: &[u8], deadline: Instant, st: Stage) -> Result<(), Error> {
-    arm(s.tcp(), deadline)?;
+/// A connection a handshake runs on: bytes both ways, and the time left
+/// set on its reads and writes before each one ([`ProxyStream`]; the fuzz
+/// targets' bytes in memory, [`fuzzing`]).
+pub(crate) trait Wire: Read + Write {
+    fn arm(&self, deadline: Instant) -> Result<(), Error>;
+}
+
+impl Wire for ProxyStream {
+    fn arm(&self, deadline: Instant) -> Result<(), Error> {
+        arm(self.tcp(), deadline)
+    }
+}
+
+fn send<S: Wire>(s: &mut S, bytes: &[u8], deadline: Instant, st: Stage) -> Result<(), Error> {
+    s.arm(deadline)?;
     s.write_all(bytes).and_then(|()| s.flush()).map_err(|e| {
         if is_timeout(&e) {
             Error::TimedOut
@@ -246,11 +259,11 @@ fn send(s: &mut ProxyStream, bytes: &[u8], deadline: Instant, st: Stage) -> Resu
     })
 }
 
-fn recv(s: &mut ProxyStream, n: usize, deadline: Instant, st: Stage) -> Result<Vec<u8>, Error> {
+fn recv<S: Wire>(s: &mut S, n: usize, deadline: Instant, st: Stage) -> Result<Vec<u8>, Error> {
     let mut buf = vec![0u8; n];
     let mut got = 0;
     while got < n {
-        arm(s.tcp(), deadline)?;
+        s.arm(deadline)?;
         match s.read(&mut buf[got..]) {
             Ok(0) => return Err(st.fail("the proxy closed the connection".into())),
             Ok(k) => got += k,
@@ -278,8 +291,8 @@ pub(crate) fn connect_head(p: &ProxyUrl, target: &Host, port: u16, ua: Option<&s
 
 /// CONNECT, and the answer's head read byte by byte, so nothing of what
 /// follows (the target's TLS) is taken.
-fn http_connect(
-    s: &mut ProxyStream,
+fn http_connect<S: Wire>(
+    s: &mut S,
     p: &ProxyUrl,
     target: &Host,
     port: u16,
@@ -361,8 +374,8 @@ fn tls_to_proxy(
 /// SOCKS5 (RFC 1928), with user and password (RFC 1929) when the URL
 /// has a user part. `target` is an address for `socks5://`, or a name
 /// for the proxy to resolve.
-fn socks5(
-    s: &mut ProxyStream,
+fn socks5<S: Wire>(
+    s: &mut S,
     p: &ProxyUrl,
     target: &Host,
     port: u16,
@@ -480,8 +493,8 @@ fn socks5_reply(code: u8) -> String {
 }
 
 /// SOCKS4, or SOCKS4a for a name. The URL's user is the user id.
-fn socks4(
-    s: &mut ProxyStream,
+fn socks4<S: Wire>(
+    s: &mut S,
     p: &ProxyUrl,
     target: &Host,
     port: u16,
@@ -523,6 +536,85 @@ fn socks4(
         )));
     }
     Ok(())
+}
+
+/// Not API: the handshakes over bytes in memory, for the fuzz targets
+/// (`fuzz/`). Each reads the proxy's side from `answer` and checks it as
+/// [`connect`] does; nothing touches the network.
+#[doc(hidden)]
+pub mod fuzzing {
+    use super::{Error, Wire};
+    use crate::url::{Credentials, Host, ProxyUrl, Scheme};
+    use std::io::{self, Read, Write};
+    use std::time::{Duration, Instant};
+
+    /// The proxy's bytes in; ours go nowhere.
+    struct Mem {
+        answer: io::Cursor<Vec<u8>>,
+    }
+
+    impl Read for Mem {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.answer.read(buf)
+        }
+    }
+
+    impl Write for Mem {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Wire for Mem {
+        fn arm(&self, _deadline: Instant) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+
+    fn mem(answer: &[u8]) -> Mem {
+        Mem {
+            answer: io::Cursor::new(answer.to_vec()),
+        }
+    }
+
+    fn later() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
+
+    fn proxy(scheme: Scheme, password: bool) -> ProxyUrl {
+        let creds = password.then(|| Credentials::new("acme", "pw"));
+        ProxyUrl::new(scheme, Host::V4([127, 0, 0, 1].into()), 1080, creds)
+    }
+
+    /// An HTTP proxy's answer to CONNECT for `target:443`.
+    pub fn http_connect_answer(answer: &[u8], target: &str) -> Result<(), Error> {
+        let p = proxy(Scheme::Http, true);
+        super::http_connect(
+            &mut mem(answer),
+            &p,
+            &Host::parse(target),
+            443,
+            Some("fuzz/1"),
+            later(),
+        )
+    }
+
+    /// A SOCKS5 proxy's replies (its method choice, the RFC 1929 status
+    /// with `password`, then the CONNECT reply and its bound address), for
+    /// `target` sent as written (`socks5h://`: no name is resolved).
+    pub fn socks5_replies(answer: &[u8], password: bool, target: &str) -> Result<(), Error> {
+        let p = proxy(Scheme::Socks5h, password);
+        super::socks5(&mut mem(answer), &p, &Host::parse(target), 443, later())
+    }
+
+    /// A SOCKS4a proxy's reply, for `target` sent as written.
+    pub fn socks4_reply(answer: &[u8], target: &str) -> Result<(), Error> {
+        let p = proxy(Scheme::Socks4a, false);
+        super::socks4(&mut mem(answer), &p, &Host::parse(target), 443, later())
+    }
 }
 
 #[cfg(test)]

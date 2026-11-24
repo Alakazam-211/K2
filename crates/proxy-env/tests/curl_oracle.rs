@@ -3,11 +3,11 @@
 //! stub proxies. Both must pick the same proxy (or none), send it the
 //! same bytes, and fail with the same exit code.
 //!
-//! It needs curl 8.5.0 ([`curl_proxy_env::CURL_VERSION`]): `curl` on
+//! It needs curl 8.5.0 ([`proxy_env::CURL_VERSION`]): `curl` on
 //! `PATH`, or `CURL_PROXY_ENV_CURL=<path>`. Another version fails the
 //! test, naming it. It is ignored by default (it runs a program from the
 //! machine); run it with
-//! `cargo test -p curl-proxy-env --test curl_oracle -- --ignored`.
+//! `cargo test -p proxy-env --test curl_oracle -- --ignored`.
 //!
 //! The differences allowed, each named in the rows it touches:
 //!
@@ -25,7 +25,7 @@
 mod common;
 
 use common::{closed_port, shown, Mode, Pki, Stub};
-use curl_proxy_env::{connect, proxy_for, Options};
+use proxy_env::{connect, proxy_for, Options};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -394,14 +394,14 @@ fn the_crate_does_what_curl_does() {
         .next()
         .unwrap_or("")
         .to_string();
-    let want = format!("curl {} ", curl_proxy_env::CURL_VERSION);
+    let want = format!("curl {} ", proxy_env::CURL_VERSION);
     assert!(
         first.starts_with(&want),
         "this table is checked against curl {}; this curl is {first:?}",
-        curl_proxy_env::CURL_VERSION
+        proxy_env::CURL_VERSION
     );
     println!("curl: {first}");
-    let dir = std::env::temp_dir().join(format!("curl-proxy-env-oracle-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("proxy-env-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let stubs = Stubs::start(&dir);
     let mut wrong = Vec::new();

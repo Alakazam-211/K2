@@ -15,4 +15,12 @@ The first release.
   SOCKS5 and SOCKS5h with RFC 1929 user and password), or direct when
   there is none.
 - Every `Error` names curl's exit code for the same failure.
-- Checked against curl 8.5.0 (`tests/curl_oracle.rs`).
+- An `https://` proxy's certificate is always checked against the
+  caller's roots, for the proxy's own name; there is no option to turn
+  the check off.
+- One deliberate difference from curl: a user or password with a control
+  byte once decoded is refused (`ConfigError::ControlInCredentials`) where
+  curl connects direct.
+- Checked against curl 8.5.0 (`tests/curl_oracle.rs`, 122 rows, all
+  matching), and fuzzed: the variables, and the CONNECT answer and SOCKS4
+  and SOCKS5 replies (`fuzz/`).

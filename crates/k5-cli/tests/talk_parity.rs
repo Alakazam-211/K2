@@ -696,7 +696,7 @@ fn talk_at_a_remote_host_through_the_proxy() {
 /// handshake: nothing decrypted reaches it (no CONNECT, no Basic), nothing
 /// reaches the host, the same lines and exit on both, never direct. The
 /// binary's tunnel through an https:// proxy it trusts is
-/// curl-proxy-env's (tests/connect.rs and its curl table). It used to be
+/// proxy-env's (tests/connect.rs and its curl table). It used to be
 /// the shell's alone.
 #[test]
 fn talk_through_an_https_proxy() {

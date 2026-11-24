@@ -138,7 +138,7 @@ fn the_shells_direct_url_answers_the_table() {
 }
 
 /// The route for a host: this computer and plain http never use a
-/// proxy; otherwise curl's rule (`curl-proxy-env`, its own tables and its
+/// proxy; otherwise curl's rule (`proxy-env`, its own tables and its
 /// curl oracle hold the detail), every scheme and form read by the
 /// binary, and a setting curl refuses carried to the connect (never
 /// direct).
@@ -258,7 +258,7 @@ fn soon() -> Instant {
 }
 
 fn via(url: &str) -> Via {
-    curl_proxy_env::ProxyUrl::parse(url.as_bytes())
+    proxy_env::ProxyUrl::parse(url.as_bytes())
 }
 
 #[test]

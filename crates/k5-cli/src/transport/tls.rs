@@ -33,7 +33,7 @@
 //! the stream does in plain HTTP.
 
 use super::wire::{curl, Failure};
-use curl_proxy_env::ProxyStream;
+use proxy_env::ProxyStream;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io;

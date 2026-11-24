@@ -83,7 +83,7 @@ members = [
     # The proxy curl would pick from the environment, and the tunnel
     # through it (HTTP CONNECT, https://, SOCKS4/4a/5/5h); k5's transport
     # uses it. MIT OR Apache-2.0; its fuzz/ is a workspace of its own.
-    "crates/curl-proxy-env",
+    "crates/proxy-env",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos

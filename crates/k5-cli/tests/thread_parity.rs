@@ -118,6 +118,49 @@ fn thread_writes_as_the_shell_does() {
             0,
             2,
         ),
+        // thread-reply-to-v1: `replyTo=N` (the `#` off, zeros folded)
+        // after the key, and the daemon's refusal of an N not on the Thread.
+        plain(
+            "a reply to a card",
+            &[
+                "bob",
+                "--reply-to",
+                "#013664",
+                "see this",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ],
+            vec![
+                ok(ON),
+                ok(r#"{"ok":true,"id":"m2","seq":5,"from":"me","replyTo":{"seq":13664,"cardId":"c1"}}"#),
+            ],
+            0,
+            2,
+        ),
+        plain(
+            "a reply to a message not on the Thread",
+            &[
+                "bob",
+                "hi",
+                "--reply-to",
+                "77",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ],
+            vec![
+                ok(ON),
+                Reply::Answer(
+                    404,
+                    r#"{"ok":false,"error":{"code":"reply_not_found","hint":"no message or card #77 in this Thread (a read lists them as [N])"}}"#.into(),
+                ),
+            ],
+            2,
+            2,
+        ),
         plain(
             "the rename and replay notes",
             &["bob", "hi", "--from", "me", "--idempotency-key", KEY],
@@ -653,6 +696,10 @@ fn thread_stops_before_it_sends() {
         ("--seq 0", &["bob", "--seq", "0"], 1),
         ("--seq with text", &["bob", "t", "--seq", "2"], 1),
         ("--seq last", &["bob", "--seq"], 1),
+        ("--reply-to last", &["bob", "t", "--reply-to"], 1),
+        ("--reply-to 0", &["bob", "t", "--reply-to", "#0"], 1),
+        ("--reply-to x", &["bob", "t", "--reply-to", "x"], 1),
+        ("--reply-to, no words", &["bob", "--reply-to", "4"], 1),
         ("--file empty", &["bob", "--file", ""], 1),
         (
             "--idempotency-key last",

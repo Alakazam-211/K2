@@ -388,7 +388,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 66 (0.46.17): a "When the person asks → use" table at the top
 /// (reminders, schedules, secrets, decisions, files, telling the person),
 /// and K2's reminders and heartbeats, never the harness's own scheduler.
-pub const SKILL_VERSION_WORKSPACE: u32 = 66;
+/// Bumped to 67 (0.46.18): `k2 thread <addr> --reply-to '#N' "…"` replies
+/// to a message or card, to point the person at it.
+pub const SKILL_VERSION_WORKSPACE: u32 = 67;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

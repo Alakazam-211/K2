@@ -25,7 +25,7 @@ use rusqlite::Connection;
 
 use crate::product_name;
 
-pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, NoticeAction, SystemNotice, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CLOSED_DISMISSED, CLOSED_WITHDRAWN, CLOSE_REASON_MAX_CHARS, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, ReplyTo, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, NoticeAction, SystemNotice, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use approval::{mark_approval, post_approval, ApprovalCardBody};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_ask_options, parse_options_value, split_ask_options, split_options_csv, AskOptions};
@@ -261,7 +261,7 @@ pub fn post_thread_with_attachments(
     context: Option<ThreadContext>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     match post_thread_keyed(
-        conn, conversation_id, project_id, from, to, body, via, widget, author, attachments, context, None,
+        conn, conversation_id, project_id, from, to, body, via, widget, author, attachments, context, None, None,
     )? {
         ThreadPost::Posted(item, links) => Ok((item, links)),
         ThreadPost::Duplicate(_) => Err("overlay post: a keyless post found a client key".to_string()),
@@ -308,6 +308,8 @@ pub fn sweep_client_msg_ids(before_ms: i64) -> Result<usize, String> {
 /// (post-idempotency-v1): under the overlay write lock, a key already kept
 /// returns [`ThreadPost::Duplicate`] and writes nothing (no seq is taken);
 /// otherwise the key is written in the post's own redb transaction.
+/// `reply_to` (thread-reply-to-v1) is the target the daemon already found
+/// in this Thread; it is stored as the doc's `replyTo`.
 #[allow(clippy::too_many_arguments)]
 pub fn post_thread_keyed(
     conn: &Connection,
@@ -322,6 +324,7 @@ pub fn post_thread_keyed(
     attachments: Vec<ThreadAttachment>,
     context: Option<ThreadContext>,
     client: Option<&ClientMsgKey>,
+    reply_to: Option<ReplyTo>,
 ) -> Result<ThreadPost, String> {
     refuse_system_author(author.as_ref())?;
     let _guard = WRITE.lock();
@@ -347,6 +350,7 @@ pub fn post_thread_keyed(
         c
     });
     doc.client_msg_id = client.map(|c| c.client_msg_id.clone());
+    doc.reply_to = reply_to;
     let write = client.map(|c| store::ClientIdWrite { key: &c.key, at_ms: c.at_ms, body_hash: &c.body_hash });
     store::commit_write_keyed(&doc, Some((conversation_id, seq)), &[], None, write)?;
     let item = OverlayItem {
@@ -2563,7 +2567,7 @@ mod tests {
     }
 
     fn post_keyed(c: &Connection, conv: &str, project_id: &str, body: &str, k: &ClientMsgKey) -> ThreadPost {
-        post_thread_keyed(c, conv, project_id, "owner", "ovl-idem", body, "compose", None, None, Vec::new(), None, Some(k))
+        post_thread_keyed(c, conv, project_id, "owner", "ovl-idem", body, "compose", None, None, Vec::new(), None, Some(k), None)
             .expect("keyed post")
     }
 

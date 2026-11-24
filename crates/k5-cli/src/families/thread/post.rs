@@ -4,12 +4,14 @@
 //! What runs, in the shell's order:
 //!
 //! 1. The words ([`parse`]): `--json`, `--idempotency-key`, `--from`,
-//!    `--limit`, `--all`, `--before-seq`, `--seq`, `--file` (each stop in
-//!    the loop's order); the first other word is the address, the last
-//!    the text. No address is the usage block, exit 1. `--seq N` must be
-//!    a whole number of at least 1 with none of the text, `--file`,
-//!    `--limit`, `--all` or `--before-seq`; it reads the newest one
-//!    below N+1.
+//!    `--limit`, `--all`, `--before-seq`, `--seq`, `--reply-to`, `--file`
+//!    (each stop in the loop's order); the first other word is the
+//!    address, the last the text. No address is the usage block, exit 1.
+//!    `--seq N` must be a whole number of at least 1 with none of the
+//!    text, `--file`, `--limit`, `--all` or `--before-seq`; it reads the
+//!    newest one below N+1. `--reply-to #N` (or `N`, thread-reply-to-v1)
+//!    must be a whole number of at least 1, with text or files; the form
+//!    then carries `replyTo=N`.
 //! 2. The sender ([`sender`]): `--from`, a sidecar cell's
 //!    `<primary>/<sidecar>`, else the folder's handle
 //!    (`/cli/workspace/handle` over TCP, its refusal no refusal of the
@@ -72,6 +74,9 @@ pub struct Line {
     pub before_seq: String,
     /// `--seq`'s number, normalised (`$((10#N))`); empty for none.
     pub one_seq: String,
+    /// `--reply-to`'s number (a leading `#` taken off), normalised; empty
+    /// for none.
+    pub reply_to: String,
     pub idem_key: String,
     pub files: Vec<String>,
 }
@@ -115,6 +120,20 @@ fn seq_needs() -> String {
 
 fn seq_whole() -> String {
     format!("Error: --seq needs a whole number >= 1 (the [N] in {CLI_NAME} thread <addr>)\n")
+}
+
+fn reply_needs() -> String {
+    format!("Error: --reply-to needs a message or card number (#N or N: the [N] in {CLI_NAME} thread <addr>)\n")
+}
+
+fn reply_whole() -> String {
+    format!(
+        "Error: --reply-to needs #N or N, a whole number >= 1 (the [N] in {CLI_NAME} thread <addr>, or a card's number)\n"
+    )
+}
+
+fn reply_words() -> String {
+    format!("Error: --reply-to replies with your words: {CLI_NAME} thread <addr> --reply-to '#N' \"text\"\n")
 }
 
 /// `--seq` with anything else.
@@ -168,6 +187,13 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
                 }
                 _ => return stop(seq_needs(), Exit::Error),
             },
+            "--reply-to" => match next {
+                Some(v) if !v.is_empty() => {
+                    l.reply_to = v.to_string();
+                    i += 2;
+                }
+                _ => return stop(reply_needs(), Exit::Error),
+            },
             "--file" => match next {
                 Some(v) if !v.is_empty() => {
                     if !resolvable(v) {
@@ -219,6 +245,18 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
         l.one_seq = n.to_string();
         l.before_seq = n.wrapping_add(1).to_string();
         l.limit = "1".into();
+    }
+    if !l.reply_to.is_empty() {
+        // `${reply_to#\#}`: one leading `#` off.
+        let digits = l.reply_to.strip_prefix('#').unwrap_or(&l.reply_to);
+        let n = match bash_number(digits) {
+            Some(n) if n >= 1 => n,
+            _ => return stop(reply_whole(), Exit::Error),
+        };
+        if l.text.is_empty() && l.files.is_empty() {
+            return stop(reply_words(), Exit::Error);
+        }
+        l.reply_to = n.to_string();
     }
     Some(Ok(l))
 }
@@ -391,6 +429,9 @@ pub fn form(l: &Line, from: &str, key: &str, attachments: Option<&str>) -> Strin
         quote(from),
         quote(key)
     );
+    if !l.reply_to.is_empty() {
+        p.push_str(&format!("&replyTo={}", l.reply_to));
+    }
     if let Some(a) = attachments {
         p.push_str(&format!("&attachments={}", quote(a)));
     }

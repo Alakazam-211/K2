@@ -828,6 +828,9 @@ impl Rewrite<'_> {
             doc.author = None;
         }
         doc.system_notice = None;
+        // thread-reply-to-v1: the target's seq names a row of the source
+        // Thread, not this one; the reply keeps its visible header as history.
+        doc.reply_to = None;
         if let Some(t) = src.to.as_deref().and_then(|t| self.address(t)) {
             meta.to = src.to.clone();
             doc.to = Some(t);
@@ -932,6 +935,7 @@ impl Rewrite<'_> {
             notice: None,
             approval: None,
             system_notice: Some(super::doc::SystemNotice::info(super::doc::NOTICE_CODE_THREAD_IMPORTED)),
+            reply_to: None,
         };
         let key = import_key(
             project_id,

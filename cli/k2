@@ -28582,7 +28582,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--reply-to|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
                 skip_next=1
                 continue
                 ;;
@@ -28612,6 +28612,7 @@ cmd_thread() {
     local all="false"
     local before_seq=""
     local one_seq=""
+    local reply_to=""
     local idem_key=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
@@ -28627,6 +28628,9 @@ cmd_thread() {
             --seq)
                 [[ -z "${2:-}" ]] && { echo "Error: --seq needs a message number (the [N] in k2 thread <addr>)" >&2; exit 1; }
                 one_seq="$2"; shift 2 ;;
+            --reply-to)
+                [[ -z "${2:-}" ]] && { echo "Error: --reply-to needs a message or card number (#N or N: the [N] in k2 thread <addr>)" >&2; exit 1; }
+                reply_to="$2"; shift 2 ;;
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
@@ -28676,6 +28680,22 @@ cmd_thread() {
         limit=1
     fi
 
+    # --reply-to N (thread-reply-to-v1): this post replies to message or
+    # card N of this Thread (#N or N). K2 writes the `↩ #N <from>:` line and
+    # the quote from the stored message, and refuses an N that isn't here.
+    if [[ -n "$reply_to" ]]; then
+        local reply_n="${reply_to#\#}"
+        if [[ ! "$reply_n" =~ ^[0-9]+$ ]] || [[ $((10#$reply_n)) -lt 1 ]]; then
+            echo "Error: --reply-to needs #N or N, a whole number >= 1 (the [N] in k2 thread <addr>, or a card's number)" >&2
+            exit 1
+        fi
+        if [[ -z "$text" && ${#files[@]} -eq 0 ]]; then
+            echo "Error: --reply-to replies with your words: k2 thread <addr> --reply-to '#N' \"text\"" >&2
+            exit 1
+        fi
+        reply_to=$((10#$reply_n))
+    fi
+
     local from
     from="$(_thread_sender_from "$explicit_from")"
 
@@ -28692,6 +28712,9 @@ cmd_thread() {
         params="${params}&from=$(urlencode "$from")"
         params="${params}&via=thread"
         params="${params}&clientMsgId=$(urlencode "$_K2_IDEM_KEY")"
+        if [[ -n "$reply_to" ]]; then
+            params="${params}&replyTo=${reply_to}"
+        fi
         if [[ ${#files[@]} -gt 0 ]]; then
             local attachments_json
             attachments_json="$(_thread_attachments_json "${files[@]}")" || exit 1
@@ -29438,6 +29461,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> --file out/shot.png            # text is optional when a file rides
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
+  k2 thread <addr> --reply-to '#N' "text"         # reply to message or card N (#N or N)
   k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
       --option "…"       repeatable, one per button; commas inside are fine
       --options "a; b; c"  one string, split on ';' only (a comma never splits;
@@ -29522,6 +29546,14 @@ delete exits 0 (prints "[N] <id>  deleted…"; again: "already deleted"), 2 bad 
 3 refused (person_only, not_your_message, not_a_persons_message), 4 not found.
 
 Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
+
+To point your person at a card or message, reply to it:
+  k2 thread <addr> --reply-to '#<card or seq>' '…'
+K2 puts the `↩ #N <from>:` line and the start of it above your words, and the
+person clicks that line to jump to it. Quote '#N' (the shell reads a bare # as a
+comment) or give N alone. An N that isn't on this Thread is refused
+(reply_not_found) and nothing is posted. A #N in your text that names a message or
+card on this Thread is a link too.
 
 Attach the files you mention (--file): the person taps them to open (desktop and
 phone). A file is a pointer to this workspace's copy, not a copy: it shows
@@ -56465,7 +56497,7 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --option \"…\" [--option \"…\"]... | k2 thread ask <addr> \"prompt\" --options \"a; b\" | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"] | k2 thread delete <addr> <seq|id> [--json]",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread <addr> --reply-to N \"text\" | k2 thread ask <addr> \"prompt\" --option \"…\" [--option \"…\"]... | k2 thread ask <addr> \"prompt\" --options \"a; b\" | k2 thread secret <addr> --name NAME | k2 thread withdraw <addr> <card-id> [--why \"…\"] | k2 thread dismiss <addr> <card-id> [--why \"…\"] | k2 thread delete <addr> <seq|id> [--json]",
       "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); withdraw your own card only when it is obsolete (k2 thread withdraw <addr> <card-id>; void is the old name). A person may dismiss a card without answering: you get a [thread:<addr>] dismissed card <id> turn, which means not needed now (never a yes, no or denial). Closed cards stay on the Thread as Dismissed or Withdrawn. A person may delete a message they sent (k2 thread delete; people only): you get one [thread:<addr>] line saying so; never repeat, store or act on what it said. Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
@@ -56474,6 +56506,7 @@ cmd_schema() {
         {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
         {"name": "--seq", "arg": "N", "description": "Read exactly message N (the [N] in a read; a person's `↩ #N` reply names it), whole. Alone: no text, --file, --limit, --all or --before-seq."},
+        {"name": "--reply-to", "arg": "#N|N", "description": "Reply to message or card N of this Thread (the [N] in a read; a card's number). K2 writes the ↩ #N line and quote; the person clicks it to jump there. An N not on this Thread is refused (reply_not_found)."},
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label, one per button; commas inside are fine. Mix with --options is 400."},
@@ -69648,6 +69681,9 @@ REPLIES (↩ #N)
   prints; <name> wrote it). `↩ part of #N` quotes only a piece of it.
   A quote over 600 characters is cut and ends in "…".
   Read message N whole: `k2 thread <addr> --seq N`.
+  To point your person at a card or message, reply to it:
+  `k2 thread <addr> --reply-to '#<card or seq>' '…'` (they click the
+  reply line to jump there; a #N in your text links too).
 
 DELETED MESSAGES
   A person may delete a message they sent (something sensitive, sent by

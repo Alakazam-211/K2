@@ -70,6 +70,7 @@ pub const VALUE_FLAGS: &[&str] = &[
     "--limit",
     "--before-seq",
     "--seq",
+    "--reply-to",
     "--file",
     "--scope",
     "--for",

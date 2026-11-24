@@ -633,6 +633,24 @@ pub struct OverlayDoc {
     /// every other doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ticket: Option<String>,
+    /// thread-reply-to-v1 (0.46.18): the message or card in this same
+    /// Thread that this post replies to, written only by the daemon from
+    /// the stored target (`replyTo` on a post). `body` still starts with
+    /// the visible `↩ #N <from>:` header and its `> ` quote, so an older
+    /// client (and the phone before it reads this) shows the same reply.
+    /// None on every other doc and on docs from before it.
+    #[serde(default, rename = "replyTo", skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ReplyTo>,
+}
+
+/// [`OverlayDoc::reply_to`]: what a reply points at. `seq` is the target's
+/// Thread seq (a card's number is its seq); `card_id` is the card's id when
+/// the target is a card (any kind but `text`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplyTo {
+    pub seq: i64,
+    #[serde(default, rename = "cardId", skip_serializing_if = "Option::is_none")]
+    pub card_id: Option<String>,
 }
 
 /// [`SystemNotice::kind`]: something K2 says (a job was added, a reminder fired).
@@ -1014,6 +1032,7 @@ impl OverlayDoc {
             notice: None,
             approval: None,
             system_notice: None,
+            reply_to: None,
         }
     }
 
@@ -1072,6 +1091,7 @@ impl OverlayDoc {
             notice: None,
             approval: None,
             system_notice: None,
+            reply_to: None,
         }
     }
 
@@ -1132,6 +1152,7 @@ impl OverlayDoc {
             notice: None,
             approval: None,
             system_notice: None,
+            reply_to: None,
         }
     }
 
@@ -1174,6 +1195,7 @@ impl OverlayDoc {
             notice: None,
             approval: None,
             system_notice: None,
+            reply_to: None,
         }
     }
 
@@ -1238,6 +1260,7 @@ impl OverlayDoc {
             notice: None,
             approval: None,
             system_notice: None,
+            reply_to: None,
         }
     }
 
@@ -1305,6 +1328,7 @@ impl OverlayDoc {
             notice: None,
             approval: None,
             system_notice: None,
+            reply_to: None,
             client_msg_id: self.client_msg_id.clone(),
             deleted: true,
             deleted_at: Some(at),

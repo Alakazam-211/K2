@@ -4326,3 +4326,7 @@ mod card_meta;
 // with neither is refused.
 #[path = "attachment_only_tests.rs"]
 mod attachment_only;
+
+// 0.46.18: a reply to one Thread message or card (thread-reply-to-v1).
+#[path = "reply_to_tests.rs"]
+mod reply_to;

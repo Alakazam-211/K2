@@ -22,6 +22,7 @@ use crate::workspace_msg::{self, MsgTarget};
 pub(crate) mod catchup;
 pub(crate) mod message_delete;
 pub(crate) mod notice_resend;
+pub(crate) mod reply_to;
 mod system_notice;
 mod ask_once;
 mod closed_cards;
@@ -482,8 +483,15 @@ mod vc_payload_tests;
 /// label `<login> (Voice & Chat only)`, `via: compose`) and delivered to the
 /// agent's session with the GUEST stamp `[guest <login> (Voice & Chat
 /// only)]`, never `[from <login>]`, so the agent's guest rule applies (H1).
-/// `text` is what gets stored (already sanitized by the caller).
-pub(crate) fn post_voice_chat(login: &str, vc: &str, text: &str, client_msg_id: Option<&str>) -> CliResponse {
+/// `text` is what gets stored (already sanitized by the caller);
+/// `reply_to` (thread-reply-to-v1) the target the caller found in `vc`.
+pub(crate) fn post_voice_chat(
+    login: &str,
+    vc: &str,
+    text: &str,
+    client_msg_id: Option<&str>,
+    reply_to: Option<overlay::ReplyTo>,
+) -> CliResponse {
     let received_at = chrono::Utc::now().timestamp_millis();
     let client_msg_id = match crate::client_msg_id::parse(client_msg_id) {
         Ok(id) => id,
@@ -526,6 +534,7 @@ pub(crate) fn post_voice_chat(login: &str, vc: &str, text: &str, client_msg_id: 
         Vec::new(),
         None,
         client_key.as_ref(),
+        reply_to,
     ) {
         Ok(overlay::ThreadPost::Duplicate(hit)) => {
             drop(conn);
@@ -1774,6 +1783,12 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if text.is_empty() && attach_reqs.is_empty() {
         return usage("missing text");
     }
+    // thread-reply-to-v1: `replyTo` (`N` or `#N`), checked before anything
+    // is resolved; the target is found in the resolved Thread below.
+    let reply_seq = match reply_to::param(params) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let via_in = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
     // Skin 403 stays first. A skin token on this arm has no principal.
     if request_skin().is_some() && via_in == "compose" {
@@ -1788,6 +1803,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Err(e) => return e,
     };
     if ticket_addr::is_ticket(&resolved) {
+        if reply_seq.is_some() {
+            return usage("a ticket's discussion doesn't take replyTo; post the words alone");
+        }
         return ticket_addr::post(params, session_author, &resolved, client_msg_id, received_at);
     }
     if let Some(r) = refuse_if_imported(&resolved, None) {
@@ -1827,6 +1845,17 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, &from) {
         return e;
     }
+    // thread-reply-to-v1: a reply to a message or card of THIS Thread. The
+    // stored text starts with K2's own header and quote (what every client
+    // already draws); the doc keeps `replyTo` for the jump. A target that
+    // isn't here is refused and nothing is stored.
+    let (text, reply_target) = match reply_seq {
+        None => (text, None),
+        Some(seq) => match reply_to::build(&resolved.conversation_id, seq, &text) {
+            Ok((t, r)) => (t, Some(r)),
+            Err(e) => return e,
+        },
+    };
     // UWB12a: a Garden widget's post for the person carries `origin`. It is
     // only the person's own post (unbound via=compose, not an app pass, not
     // a bound agent); anything else naming an origin is refused. 0.46.1:
@@ -1967,6 +1996,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         attachments,
         context.clone(),
         client_key.as_ref(),
+        reply_target,
     ) {
         // A racer with the same key won: nothing was stored or sent.
         Ok(overlay::ThreadPost::Duplicate(hit)) => {
@@ -2070,6 +2100,11 @@ fn post_reply_json(
         // (only when it sent one).
         if let Some(id) = &item.doc.client_msg_id {
             map.insert("clientMsgId".into(), serde_json::json!(id));
+        }
+        // thread-reply-to-v1: only on a reply, so every other post's
+        // answer is byte for byte what it was.
+        if let Some(r) = &item.doc.reply_to {
+            map.insert("replyTo".into(), serde_json::json!(r));
         }
         // thread-mine-v1: a person's post is stamped from this very
         // request's credential (a repeat's key is that person's too), so
@@ -5573,6 +5608,8 @@ fn thread_post_body_type_error(body: &[u8]) -> Option<CliResponse> {
             // post-idempotency-v1: a number or boolean would merge as its
             // text and pass the id check, so only a string is an id.
             "clientMsgId" if !(v.is_string() || v.is_null()) => "a string of 1-64 A-Z, a-z, 0-9, '-' or '_'",
+            // thread-reply-to-v1: a seq, as a number or "#N".
+            "replyTo" if !(v.is_string() || v.is_number() || v.is_null()) => "a message's or card's number (N or \"#N\")",
             _ => continue,
         };
         return Some(usage(format!("{k} must be {want}, not {}", json_type_name(v))));

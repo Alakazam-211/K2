@@ -596,9 +596,12 @@ for this conversation. Same first-arg grammar as `"#, cli_name!(), r#" msg`.
 "#, cli_name!(), r#" thread secret <addr> --name NAME             # secret field; you never see the value
 "#, cli_name!(), r#" thread withdraw <addr> <card-id> [--why "…"] # take back your own card when it is obsolete
 "#, cli_name!(), r#" thread <addr> "text" --file path[:line[-end]]  # attach workspace files (repeatable, ≤10; text optional)
+"#, cli_name!(), r#" thread <addr> --reply-to '#N' "text"         # reply to message or card N (#N or N)
 ```
 
 Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
+To point your person at a card or message, reply to it: `k2 thread <addr> --reply-to '#<card or seq>' '…'`.
+They click the reply line to jump there; a `#N` in your text that names a message or card on this Thread is a link too.
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
 Post and continue; you get a later turn when they answer. Do not `--wait`. Do not emit widget JSON.

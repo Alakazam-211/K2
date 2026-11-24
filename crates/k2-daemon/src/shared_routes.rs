@@ -750,8 +750,9 @@ pub const REPLY_MARK: char = '↩';
 /// `THREAD_REPLY_QUOTE_MAX`).
 pub const REPLY_QUOTE_MAX: usize = 600;
 
-/// The stored message at `seq` in `address`'s Thread: `(from, body)`.
-fn message_at(address: &str, seq: i64) -> Option<(String, String)> {
+/// The stored message at `seq` in `address`'s Thread: `(from, body)` and
+/// its `replyTo` (thread-reply-to-v1: `cardId` on a card).
+fn message_at(address: &str, seq: i64) -> Option<(String, String, k2_core::overlay::ReplyTo)> {
     let mut q: HashMap<String, String> = HashMap::new();
     q.insert("addr".into(), address.to_string());
     q.insert("before_seq".into(), (seq + 1).to_string());
@@ -765,7 +766,9 @@ fn message_at(address: &str, seq: i64) -> Option<(String, String)> {
     let doc = &item["doc"];
     let from = doc["from"].as_str().unwrap_or_default().to_string();
     let body = doc["body"].as_str().unwrap_or_default().to_string();
-    Some((from, body))
+    let card = doc["kind"].as_str().is_some_and(|k| k != "text");
+    let card_id = item["id"].as_str().filter(|_| card).map(str::to_string);
+    Some((from, body, k2_core::overlay::ReplyTo { seq, card_id }))
 }
 
 /// The desktop's reply text (`src/renderer/lib/thread-reply.ts`), built
@@ -860,10 +863,10 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
         return refuse("400 Bad Request", "reply_header_not_allowed", "send replyTo (the message's seq) instead of a reply header; K2 writes the header");
     }
     // H1: a reply quotes only this person's own conversation.
-    let text = match b.reply_to {
-        None => text.to_string(),
+    let (text, reply_to) = match b.reply_to {
+        None => (text.to_string(), None),
         Some(seq) if seq > 0 => match message_at(&vc, seq) {
-            Some((from, body)) => reply_text(seq, &from, &body, text),
+            Some((from, body, r)) => (reply_text(seq, &from, &body, text), Some(r)),
             None => return refuse("404 Not Found", "reply_not_found", format!("no message #{seq} in this Thread")),
         },
         Some(_) => return refuse("400 Bad Request", "usage", "replyTo is a message's seq (a whole number above 0)"),
@@ -877,7 +880,7 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
         Ok(r) => r,
         Err(r) => return r,
     };
-    let r = crate::overlay_routes::post_voice_chat(login, &vc, &text, b.client_msg_id.as_deref());
+    let r = crate::overlay_routes::post_voice_chat(login, &vc, &text, b.client_msg_id.as_deref(), reply_to);
     if !r.status.starts_with('2') {
         release(reservation);
     }

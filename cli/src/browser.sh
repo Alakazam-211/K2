@@ -397,7 +397,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--reply-to|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
                 skip_next=1
                 continue
                 ;;
@@ -427,6 +427,7 @@ cmd_thread() {
     local all="false"
     local before_seq=""
     local one_seq=""
+    local reply_to=""
     local idem_key=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
@@ -442,6 +443,9 @@ cmd_thread() {
             --seq)
                 [[ -z "${2:-}" ]] && { echo "Error: --seq needs a message number (the [N] in k2 thread <addr>)" >&2; exit 1; }
                 one_seq="$2"; shift 2 ;;
+            --reply-to)
+                [[ -z "${2:-}" ]] && { echo "Error: --reply-to needs a message or card number (#N or N: the [N] in k2 thread <addr>)" >&2; exit 1; }
+                reply_to="$2"; shift 2 ;;
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
@@ -491,6 +495,22 @@ cmd_thread() {
         limit=1
     fi
 
+    # --reply-to N (thread-reply-to-v1): this post replies to message or
+    # card N of this Thread (#N or N). K2 writes the `↩ #N <from>:` line and
+    # the quote from the stored message, and refuses an N that isn't here.
+    if [[ -n "$reply_to" ]]; then
+        local reply_n="${reply_to#\#}"
+        if [[ ! "$reply_n" =~ ^[0-9]+$ ]] || [[ $((10#$reply_n)) -lt 1 ]]; then
+            echo "Error: --reply-to needs #N or N, a whole number >= 1 (the [N] in k2 thread <addr>, or a card's number)" >&2
+            exit 1
+        fi
+        if [[ -z "$text" && ${#files[@]} -eq 0 ]]; then
+            echo "Error: --reply-to replies with your words: k2 thread <addr> --reply-to '#N' \"text\"" >&2
+            exit 1
+        fi
+        reply_to=$((10#$reply_n))
+    fi
+
     local from
     from="$(_thread_sender_from "$explicit_from")"
 
@@ -507,6 +527,9 @@ cmd_thread() {
         params="${params}&from=$(urlencode "$from")"
         params="${params}&via=thread"
         params="${params}&clientMsgId=$(urlencode "$_K2_IDEM_KEY")"
+        if [[ -n "$reply_to" ]]; then
+            params="${params}&replyTo=${reply_to}"
+        fi
         if [[ ${#files[@]} -gt 0 ]]; then
             local attachments_json
             attachments_json="$(_thread_attachments_json "${files[@]}")" || exit 1

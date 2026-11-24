@@ -334,6 +334,8 @@ fn the_list_carries_look_and_activity_and_reads_strip_attachments_and_keep_the_d
     let body = r["body"].as_str().expect("body");
     assert!(body.starts_with(&format!("↩ #{seq} ")), "{body}");
     assert!(body.contains("\n> from the agent\n\n  got it"), "{body}");
+    // thread-reply-to-v1: the structured target rides beside the header.
+    assert_eq!(r["replyTo"], json!({ "seq": seq }), "{r}");
     assert!(r.get("attachments").is_none(), "{r}");
     // A seq that exists only in the agent's own Thread is not this
     // conversation's (H1): the conversation has 2 items, the Thread 6.

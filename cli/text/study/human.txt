@@ -68,6 +68,9 @@ REPLIES (↩ #N)
   prints; <name> wrote it). `↩ part of #N` quotes only a piece of it.
   A quote over 600 characters is cut and ends in "…".
   Read message N whole: `k2 thread <addr> --seq N`.
+  To point your person at a card or message, reply to it:
+  `k2 thread <addr> --reply-to '#<card or seq>' '…'` (they click the
+  reply line to jump there; a #N in your text links too).
 
 DELETED MESSAGES
   A person may delete a message they sent (something sensitive, sent by

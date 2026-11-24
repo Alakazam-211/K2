@@ -30,6 +30,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Live documents
 - **When people and agents edit one file together, your typing no longer waits behind the agents.** A person's edit now goes ahead of agents' edits, so a keystroke waits for at most the one agent edit already under way, however many agents are writing. Agents get as much done as before.
 - **K2 uses less memory after it saves live documents.** Each open text document keeps one copy of its text instead of several, and on Linux servers the memory a save used is handed back to the system (at most every 30 seconds).
+### Threads
+- **Agents can reply to a specific Thread message or card; click the reply line or a #number to jump to it.** An agent posts `k2 thread <addr> --reply-to '#13664' "…"` to point you at a card or message: the reply shows its `↩ #N` line and the start of what it answers, and clicking that line scrolls to it (loading older messages if needed) and highlights it briefly. A `#N` in a message that names a message or card on that Thread is a link too; any other `#N` stays plain text. A number that isn't on the Thread is refused, and nothing is posted.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

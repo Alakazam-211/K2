@@ -69,6 +69,8 @@ pub const KNOWN_FEATURES: &[&str] = &[
     "thread-system-notice-v1",
     // 0.46.13: an agent's posts and cards carry `author {kind: "agent"}`.
     "thread-author-agent-v1",
+    // 0.46.18: a reply carries `replyTo {seq, cardId?}`.
+    "thread-reply-to-v1",
     // 0.46.3: the Garden bridge's person rows (tickets, activity, files,
     // thread.catchup/unread/mute through `/cli/zen/call`).
     "garden-person-rows-v1",

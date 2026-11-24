@@ -82,6 +82,35 @@ fn a_write_and_a_read_read_their_words() {
     assert_eq!(post::parse(&["bob", "--file", "a\nb"]), None);
 }
 
+/// thread-reply-to-v1: `--reply-to #N` or `N`, with words; the form
+/// carries `replyTo=N` after the key, before the files.
+#[test]
+fn a_reply_names_its_target_by_number() {
+    let l = line(&["bob", "--reply-to", "#0013664", "see this"]);
+    assert_eq!((l.reply_to.as_str(), l.text.as_str()), ("13664", "see this"));
+    assert_eq!(
+        post::form(&l, "me", "k1", Some("[]")),
+        "addr=bob&text=see%20this&from=me&via=thread&clientMsgId=k1&replyTo=13664&attachments=%5B%5D"
+    );
+    assert_eq!(line(&["bob", "x", "--reply-to", "7"]).reply_to, "7");
+    assert_eq!(line(&["bob", "--reply-to", "7", "--file", "a.rs"]).reply_to, "7");
+    assert_eq!(line(&["bob", "x"]).reply_to, "");
+    assert!(!post::form(&line(&["bob", "x"]), "me", "k1", None).contains("replyTo"));
+    for bad in ["0", "#0", "x", "-1", "##4", "#", "1.5"] {
+        let (text, exit) = stop(&["bob", "t", "--reply-to", bad]);
+        assert_eq!(exit, Exit::Error, "{bad}");
+        assert!(text.starts_with("Error: --reply-to needs #N or N"), "{bad}: {text}");
+    }
+    let (text, exit) = stop(&["bob", "--reply-to"]);
+    assert_eq!(exit, Exit::Error);
+    assert!(text.starts_with("Error: --reply-to needs a message or card number"), "{text}");
+    let (text, exit) = stop(&["bob", "--reply-to", "4"]);
+    assert_eq!(exit, Exit::Error);
+    assert!(text.starts_with("Error: --reply-to replies with your words"), "{text}");
+    // The value is skipped when the verb is looked for.
+    assert_eq!(first_word(&["--reply-to", "ask", "bob", "hi"]), "bob");
+}
+
 #[test]
 fn bash_s_numbers() {
     assert_eq!(post::bash_number("10"), Some(10));

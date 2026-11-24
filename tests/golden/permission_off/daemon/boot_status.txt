@@ -40,6 +40,7 @@ features:
   thread-message-delete-v1
   thread-system-notice-v1
   thread-author-agent-v1
+  thread-reply-to-v1
   project-chat-paging-v1
   app-project-chat-v1
   app-mobile-access-v1

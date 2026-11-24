@@ -1270,6 +1270,10 @@ pub fn features() -> Vec<&'static str> {
     // sent it; an agent's carries `author {kind: "agent", login: <address>}`
     // (rows from before carry none), a person's is theirs whatever the `via`.
     out.push(crate::overlay_routes::FEATURE_THREAD_AUTHOR_AGENT);
+    // thread-reply-to-v1 (0.46.18): `POST /cli/thread/post` takes `replyTo`
+    // (a message's or card's seq in that Thread) and stores `replyTo {seq,
+    // cardId?}` on the reply, beside its visible `↩ #N <from>:` header.
+    out.push(crate::overlay_routes::reply_to::FEATURE);
     out.push(FEATURE_PROJECT_CHAT_PAGING);
     out.push(FEATURE_APP_PROJECT_CHAT);
     out.push(FEATURE_APP_MOBILE_ACCESS);
@@ -1553,6 +1557,7 @@ mod tests {
                 "thread-message-delete-v1",
                 "thread-system-notice-v1",
                 "thread-author-agent-v1",
+                "thread-reply-to-v1",
                 "project-chat-paging-v1",
                 "app-project-chat-v1",
                 "app-mobile-access-v1",

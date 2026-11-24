@@ -477,12 +477,12 @@ pub struct GrantRow {
     /// 0276 (GPU jobs, 0.46.11): this workspace may send `--gpu` jobs to
     /// this node (owner or Admin only, like `allow_ci`).
     pub allow_gpu: bool,
-    /// 0330 (0.46.18): this workspace may send `--userns` jobs to this
+    /// 0333 (0.46.18): this workspace may send `--userns` jobs to this
     /// node (jobs that may make user namespaces). Owner or Admin only, and
     /// only on a node this server owns; `granted_by` / `granted_at` say who
     /// set it and when.
     pub allow_userns: bool,
-    /// 0330 (0.46.18): this workspace's `--userns --network none` jobs may
+    /// 0333 (0.46.18): this workspace's `--userns --network none` jobs may
     /// ask `--no-addr-filter` on this node (no per-job address filter; the
     /// job's own loopback-only namespace stays). Owner or Admin only, only
     /// on a node this server owns, never without `allow_userns` (turning
@@ -530,10 +530,10 @@ pub struct GrantLimits {
     /// GPU jobs (0276): `None` keeps what the grant has (a new grant: off),
     /// like `allow_ci`.
     pub allow_gpu: Option<bool>,
-    /// `--userns` jobs (0330): `None` keeps what the grant has (a new
+    /// `--userns` jobs (0333): `None` keeps what the grant has (a new
     /// grant: off), like `allow_gpu`.
     pub allow_userns: Option<bool>,
-    /// `--no-addr-filter` (0330): `None` keeps what the grant has (a new
+    /// `--no-addr-filter` (0333): `None` keeps what the grant has (a new
     /// grant: off). Whenever `allow_userns` ends up off, this is off too.
     pub allow_no_addr_filter: Option<bool>,
 }
@@ -2678,8 +2678,8 @@ mod tests {
         assert_eq!(serde_json::to_value(&g).unwrap()["allowGpu"], serde_json::json!(false), "the routes show it as allowGpu");
     }
 
-    /// `--userns` jobs (0330): `allow_userns` is off for a new grant (and
-    /// for every grant made before 0330), set only when asked, recorded
+    /// `--userns` jobs (0333): `allow_userns` is off for a new grant (and
+    /// for every grant made before 0333), set only when asked, recorded
     /// with who set it and when, kept when re-granting limits, and
     /// independent of CI and GPU.
     #[test]
@@ -2698,12 +2698,12 @@ mod tests {
         let g = set_grant(&c, "n1", "ws", &GrantLimits { allow_userns: Some(false), ..Default::default() }, "owner", 6).unwrap();
         assert!(!g.allow_userns && g.allow_gpu, "--no-userns leaves --gpu alone");
         assert_eq!(serde_json::to_value(&g).unwrap()["allowUserns"], serde_json::json!(false), "the routes show it as allowUserns");
-        // The stored column itself (0330's), not only the row type.
+        // The stored column itself (0333's), not only the row type.
         let raw: i64 = c.query_row("SELECT allow_userns FROM compute_node_grants WHERE node_id = 'n1' AND workspace_id = 'ws'", [], |r| r.get(0)).unwrap();
         assert_eq!(raw, 0);
     }
 
-    /// `--no-addr-filter` (0330): off for a new grant, never on without
+    /// `--no-addr-filter` (0333): off for a new grant, never on without
     /// `allow_userns` (asked alone on a grant without it: stays off), kept
     /// when re-granting limits, and turned off with `--no-userns`.
     #[test]

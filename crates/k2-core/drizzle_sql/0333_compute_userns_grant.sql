@@ -1,4 +1,4 @@
--- 0330: user namespaces in compute jobs (0.46.18). `allow_userns`: this
+-- 0333: user namespaces in compute jobs (0.46.18). `allow_userns`: this
 -- workspace may send `k2 compute run --userns` jobs to this node (by default
 -- a job can't make a user namespace). Set only by the owner or an Admin
 -- (`k2 compute grant <node> --workspace WS --userns`) and only on a node this

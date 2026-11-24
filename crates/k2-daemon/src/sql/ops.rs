@@ -3061,7 +3061,8 @@ fn normalize_relations(raw: &[String]) -> Result<Vec<(String, String)>, OpsError
         // read only through K2's SECURITY DEFINER functions.
         if schema == "k2" || schema == "auth" {
             return Err(OpsError::Usage(format!(
-                "relation {trimmed:?} is in K2's own schema {schema}: it can't be granted (auth.users is read through your own SECURITY DEFINER functions)"
+                "relation {trimmed:?} is in {product}'s own schema {schema}: it can't be granted (auth.users is read through your own SECURITY DEFINER functions)",
+                product = k2_core::brand::PRODUCT_NAME
             )));
         }
         if out.iter().any(|(s, n)| s == &schema && n == &name) {

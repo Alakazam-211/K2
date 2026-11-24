@@ -225,6 +225,8 @@ pub fn auth_schema_sql(db: &str, authenticator: &str) -> Option<String> {
     let m = ident(&migrator);
     let authn = literal(authenticator);
     let mark = literal(AUTH_SCHEMA_MARK);
+    // The names in the RAISE texts and the users comment: words only.
+    let (product, cli) = (k2_brand::PRODUCT_NAME, k2_brand::CLI_NAME);
     let mut s = String::new();
     s.push_str("CREATE SCHEMA IF NOT EXISTS k2;\nGRANT USAGE ON SCHEMA k2 TO PUBLIC;\nCREATE SCHEMA IF NOT EXISTS auth;\n");
     s.push_str(&format!("COMMENT ON SCHEMA auth IS {mark};\n"));
@@ -290,14 +292,14 @@ DECLARE
 BEGIN
   parts := string_to_array(token, '.');
   IF parts IS NULL OR coalesce(array_length(parts, 1), 0) <> 3 OR parts[1] <> 'k2c1' THEN
-    RAISE EXCEPTION 'k2.set_claims: not a K2 claims token' USING ERRCODE = 'invalid_authorization_specification';
+    RAISE EXCEPTION 'k2.set_claims: not a {product} claims token' USING ERRCODE = 'invalid_authorization_specification';
   END IF;
   BEGIN
     payload := decode(parts[2], 'hex');
     mac := decode(parts[3], 'hex');
   EXCEPTION
     WHEN others THEN
-      RAISE EXCEPTION 'k2.set_claims: not a K2 claims token' USING ERRCODE = 'invalid_authorization_specification';
+      RAISE EXCEPTION 'k2.set_claims: not a {product} claims token' USING ERRCODE = 'invalid_authorization_specification';
   END;
   -- The key is a secret: only its owner (this function's definer) may
   -- read it. Refuse to sign anyone in while any other role could.
@@ -315,11 +317,11 @@ BEGIN
        WHERE m.roleid = (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname = current_user)
           OR m.roleid IN (SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname IN ('pg_read_all_data', 'pg_write_all_data')))
   THEN
-    RAISE EXCEPTION 'k2.set_claims: the claims key is readable by another role (k2 app compat on puts it back)' USING ERRCODE = 'insufficient_privilege';
+    RAISE EXCEPTION 'k2.set_claims: the claims key is readable by another role ({cli} app compat on puts it back)' USING ERRCODE = 'insufficient_privilege';
   END IF;
   SELECT ck.key INTO k FROM k2.claims_key ck WHERE ck.id = 1;
   IF k IS NULL THEN
-    RAISE EXCEPTION 'k2.set_claims: this database has no claims key (k2 app compat on)' USING ERRCODE = 'invalid_authorization_specification';
+    RAISE EXCEPTION 'k2.set_claims: this database has no claims key ({cli} app compat on)' USING ERRCODE = 'invalid_authorization_specification';
   END IF;
   -- Compared as hashes, so the time taken says nothing about the MAC.
   IF sha256(k2.hmac_sha256(k, convert_to(parts[1] || '.' || parts[2], 'UTF8'))) IS DISTINCT FROM sha256(mac) THEN
@@ -344,7 +346,7 @@ BEGIN
   ELSIF NOT EXISTS (
     {OWNER_CHECK}
   ) THEN
-    RAISE EXCEPTION 'k2.set_claims: a k2_claims_lock K2 did not write is on this connection' USING ERRCODE = 'invalid_authorization_specification';
+    RAISE EXCEPTION 'k2.set_claims: a k2_claims_lock {product} did not write is on this connection' USING ERRCODE = 'invalid_authorization_specification';
   END IF;
   DELETE FROM pg_temp.k2_claims_lock;
   INSERT INTO pg_temp.k2_claims_lock (claims) VALUES (body -> 'claims');
@@ -417,7 +419,7 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $k2fn$
 BEGIN
-  RAISE EXCEPTION 'auth.sessions and auth.refresh_tokens are not built in K2 yet: end a user''s sessions with k2 app user sessions <user> --app <app> --revoke-all'
+  RAISE EXCEPTION 'auth.sessions and auth.refresh_tokens are not built in {product} yet: end a user''s sessions with {cli} app user sessions <user> --app <app> --revoke-all'
     USING ERRCODE = 'feature_not_supported';
 END;
 $k2fn$;
@@ -429,7 +431,7 @@ VOLATILE
 SET search_path = pg_catalog, pg_temp
 AS $k2fn$
 BEGIN
-  RAISE EXCEPTION 'auth.sessions is not built in K2 yet: end a user''s sessions with k2 app user sessions <user> --app <app> --revoke-all'
+  RAISE EXCEPTION 'auth.sessions is not built in {product} yet: end a user''s sessions with {cli} app user sessions <user> --app <app> --revoke-all'
     USING ERRCODE = 'feature_not_supported';
 END;
 $k2fn$;
@@ -441,7 +443,7 @@ VOLATILE
 SET search_path = pg_catalog, pg_temp
 AS $k2fn$
 BEGIN
-  RAISE EXCEPTION 'auth.refresh_tokens is not built in K2 yet: end a user''s sessions with k2 app user sessions <user> --app <app> --revoke-all'
+  RAISE EXCEPTION 'auth.refresh_tokens is not built in {product} yet: end a user''s sessions with {cli} app user sessions <user> --app <app> --revoke-all'
     USING ERRCODE = 'feature_not_supported';
 END;
 $k2fn$;
@@ -457,7 +459,7 @@ REVOKE ALL ON auth.sessions, auth.refresh_tokens FROM PUBLIC;
 ALTER VIEW auth.sessions OWNER TO {m};
 ALTER VIEW auth.refresh_tokens OWNER TO {m};
 ALTER FUNCTION k2.sessions_not_built() OWNER TO {m};
-COMMENT ON TABLE auth.users IS 'K2 writes this table from the App''s users (k2 app compat sync-users); it is not the user store.';
+COMMENT ON TABLE auth.users IS '{product} writes this table from the App''s users ({cli} app compat sync-users); it is not the user store.';
 ALTER SCHEMA auth OWNER TO {m};
 ALTER TABLE auth.users OWNER TO {m};
 ALTER TABLE k2.claims_key OWNER TO {m};

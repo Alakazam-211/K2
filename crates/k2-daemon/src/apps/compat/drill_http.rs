@@ -174,9 +174,9 @@ pub fn differences(ours: &[Probe], theirs: &[Probe]) -> Vec<String> {
     let mut out = Vec::new();
     for a in ours {
         match theirs.iter().find(|b| b.table == a.table && b.identity == a.identity) {
-            None => out.push(format!("{} as {}: only on K2", a.table, a.identity)),
+            None => out.push(format!("{} as {}: only on {product}", a.table, a.identity, product = k2_core::brand::PRODUCT_NAME)),
             Some(b) if b != a => out.push(format!(
-                "{} as {}: K2 {} total={:?} code={:?} rows={} | other {} total={:?} code={:?} rows={}",
+                "{} as {}: {product} {} total={:?} code={:?} rows={} | other {} total={:?} code={:?} rows={}",
                 a.table,
                 a.identity,
                 a.status,
@@ -186,7 +186,8 @@ pub fn differences(ours: &[Probe], theirs: &[Probe]) -> Vec<String> {
                 b.status,
                 b.total,
                 b.code,
-                &b.digest.get(..12).unwrap_or("")
+                &b.digest.get(..12).unwrap_or(""),
+                product = k2_core::brand::PRODUCT_NAME
             )),
             Some(_) => {}
         }

@@ -42,7 +42,7 @@ pub async fn pool_of(ctx: &Ctx) -> Result<deadpool_postgres::Pool, DoorAnswer> {
     let t = super::door::blocking(move || pool::target_for(&cfg)).await;
     match t {
         Some(Ok(t)) => pool::pool_for(&t).map_err(|e| refuse(503, "db_unavailable", e, None)),
-        Some(Err(e)) => Err(refuse(503, "db_unavailable", e, Some("k2 app compat status <app>"))),
+        Some(Err(e)) => Err(refuse(503, "db_unavailable", e, Some(concat!(k2_core::cli_name!(), " app compat status <app>")))),
         None => Err(refuse(500, "failed", "worker join", None)),
     }
 }

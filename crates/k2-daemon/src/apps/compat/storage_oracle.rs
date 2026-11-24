@@ -265,14 +265,14 @@ async fn oracle_storage_diff() {
         let (kj, oj) = (norm(&body_of(&kb)), norm(&body_of(&ob)));
         let mut what = Vec::new();
         if ks != os {
-            what.push(format!("status K2 {ks} vs Supabase {os}"));
+            what.push(format!("status {product} {ks} vs Supabase {os}", product = k2_core::brand::PRODUCT_NAME));
         }
         if kj != oj {
-            what.push(format!("body\n      K2:       {kj}\n      Supabase: {oj}"));
+            what.push(format!("body\n      {product}:       {kj}\n      Supabase: {oj}", product = k2_core::brand::PRODUCT_NAME));
         }
         for h in s.compare_headers {
             if kh.get(*h) != oh2.get(*h) {
-                what.push(format!("header {h}: K2 {:?} vs Supabase {:?}", kh.get(*h), oh2.get(*h)));
+                what.push(format!("header {h}: {product} {:?} vs Supabase {:?}", kh.get(*h), oh2.get(*h), product = k2_core::brand::PRODUCT_NAME));
             }
         }
         for w in what {

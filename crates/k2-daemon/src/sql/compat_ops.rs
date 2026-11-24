@@ -24,7 +24,7 @@ pub(crate) fn owned_db(project_id: &str, name: &str) -> Result<(String, String),
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = ops::load_active_by_name(&conn, project_id, name)
-        .ok_or_else(|| OpsError::NotFound(format!("no database {name} in the App's workspace (k2 db list)")))?;
+        .ok_or_else(|| OpsError::NotFound(format!("no database {name} in the App's workspace ({cli} db list)", cli = k2_core::brand::CLI_NAME)))?;
     Ok((row.id.clone(), row.name.clone()))
 }
 
@@ -73,8 +73,10 @@ pub(crate) fn turn_on(ops: &dyn SystemOps, secrets: &dyn SecretStore, db: &str, 
             return Err(OpsError::Refused(
                 "compat_auth_schema_taken",
                 format!(
-                    "{db} already has a schema named auth that K2 didn't make ({other}): rename or drop it first \
-                     (a Supabase dump: k2 db import supabase maps it)"
+                    "{db} already has a schema named auth that {product} didn't make ({other}): rename or drop it first \
+                     (a Supabase dump: {cli} db import supabase maps it)",
+                    product = k2_core::brand::PRODUCT_NAME,
+                    cli = k2_core::brand::CLI_NAME
                 ),
             ))
         }

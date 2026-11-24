@@ -101,7 +101,7 @@ fn username_for(email: &str) -> Result<String, DoorAnswer> {
             return Ok(u);
         }
     }
-    Err(gerr(422, "username_exhausted", "no free K2 username for that email"))
+    Err(gerr(422, "username_exhausted", concat!("no free ", k2_core::product_name!(), " username for that email")))
 }
 
 /// Route one admin call (the server key, already checked).
@@ -117,7 +117,7 @@ pub fn route(req: &DoorRequest, ctx: &Ctx, key_id: &str, grant: &AppKeyGrant, q:
                 return gerr(
                     403,
                     "links_scope_required",
-                    "generate_link hands the link back to the App: the owner mints the server key with the links scope (k2 app key mint <app> --scopes service,links)",
+                    concat!("generate_link hands the link back to the App: the owner mints the server key with the links scope (", k2_core::cli_name!(), " app key mint <app> --scopes service,links)"),
                 );
             }
             generate_link(req, ctx, &actor)
@@ -134,7 +134,7 @@ pub fn route(req: &DoorRequest, ctx: &Ctx, key_id: &str, grant: &AppKeyGrant, q:
                 _ => Err(gerr(405, "method_not_allowed", "GET, PUT or DELETE")),
             }
         }
-        _ => Err(gerr(404, "not_found", format!("{} /auth/v1/admin{rest}: not supported by K2", req.method))),
+        _ => Err(gerr(404, "not_found", format!("{} /auth/v1/admin{rest}: not supported by {product}", req.method, product = k2_core::brand::PRODUCT_NAME))),
     };
     let a = r.unwrap_or_else(|a| a);
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
@@ -167,10 +167,10 @@ fn list(svc: &str, q: &HashMap<String, String>) -> Result<DoorAnswer, DoorAnswer
 fn create(svc: &str, actor: &str, req: &DoorRequest) -> Result<DoorAnswer, DoorAnswer> {
     let v = body(req)?;
     if has_metadata(&v) {
-        return Err(gerr(422, "not_supported", "user_metadata and app_metadata are not stored by K2 yet"));
+        return Err(gerr(422, "not_supported", concat!("user_metadata and app_metadata are not stored by ", k2_core::product_name!(), " yet")));
     }
     if v.get("phone").is_some() {
-        return Err(gerr(422, "not_supported", "phone users are not supported by K2"));
+        return Err(gerr(422, "not_supported", concat!("phone users are not supported by ", k2_core::product_name!())));
     }
     let email = v.get("email").and_then(Value::as_str).map(str::trim).filter(|e| !e.is_empty()).ok_or_else(|| gerr(400, "validation_failed", "email is required"))?;
     let email = skin::normalize_email(email).map_err(|e| gerr(400, "validation_failed", e))?.ok_or_else(|| gerr(400, "validation_failed", "email is required"))?;
@@ -193,7 +193,7 @@ fn create(svc: &str, actor: &str, req: &DoorRequest) -> Result<DoorAnswer, DoorA
 fn update(svc: &str, actor: &str, id: &str, req: &DoorRequest) -> Result<DoorAnswer, DoorAnswer> {
     let v = body(req)?;
     if has_metadata(&v) {
-        return Err(gerr(422, "not_supported", "user_metadata and app_metadata are not stored by K2 yet"));
+        return Err(gerr(422, "not_supported", concat!("user_metadata and app_metadata are not stored by ", k2_core::product_name!(), " yet")));
     }
     let (p, g) = one_user(svc, id)?;
     let sole = only_this_app(svc, &p.id)?;
@@ -239,7 +239,7 @@ fn generate_link(req: &DoorRequest, ctx: &Ctx, actor: &str) -> Result<DoorAnswer
     let purpose = match kind {
         "invite" => skin::invites::PURPOSE_INVITE,
         "recovery" => skin::invites::PURPOSE_RESET,
-        k => return Err(gerr(422, "not_supported", format!("generate_link type {k} is not supported by K2 (invite and recovery are)"))),
+        k => return Err(gerr(422, "not_supported", format!("generate_link type {k} is not supported by {product} (invite and recovery are)", product = k2_core::brand::PRODUCT_NAME))),
     };
     let email = v.get("email").and_then(Value::as_str).map(str::trim).filter(|e| !e.is_empty()).ok_or_else(|| gerr(400, "validation_failed", "email is required"))?;
     let email = skin::normalize_email(email).map_err(|e| gerr(400, "validation_failed", e))?.unwrap_or_default();

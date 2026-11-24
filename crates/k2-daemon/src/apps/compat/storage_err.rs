@@ -121,7 +121,7 @@ impl StorageError {
     /// K2's own refusal for a part of the API v1 doesn't carry (a 400 with
     /// a code naming the part, never a wrong answer: PRD §7.2's rule).
     pub fn unsupported(part: &str) -> Self {
-        Self::new(400, "NotSupported", "k2_unsupported", format!("{part} is not supported by K2's storage door in v1"))
+        Self::new(400, "NotSupported", "k2_unsupported", format!("{part} is not supported by {product}'s storage door in v1", product = k2_core::brand::PRODUCT_NAME))
     }
 
     /// Map a Postgres error the way Supabase Storage does.

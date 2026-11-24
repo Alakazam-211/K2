@@ -113,7 +113,7 @@ fn real_pg_compat_identity_and_policy_drill() {
     // CONNECT is walled at create (vs-live §3 item 6): a login with no grant can't connect.
     srv.su("postgres", "CREATE ROLE outsider LOGIN;");
     let out = srv.script("outsider", &db, "SELECT 1;");
-    check("k2 db create: a login with no grant can't connect", out.as_ref().err().is_some_and(|e| e.contains("permission denied for database")), &out, &mut fails);
+    check(concat!(k2_core::cli_name!(), " db create: a login with no grant can't connect"), out.as_ref().err().is_some_and(|e| e.contains("permission denied for database")), &out, &mut fails);
 
     // The App's users, in the store.
     let alice = k2_core::skin::add_principal_for_app("rpc-alice", Some("alice@example.com"), &service_id, None, "owner").expect("alice");
@@ -137,7 +137,7 @@ fn real_pg_compat_identity_and_policy_drill() {
     check("a planted member of service_role can't SET ROLE to it after compat on", o.as_ref().err().is_some_and(|e| e.contains("permission denied")), &o, &mut fails);
     let o = srv.su("postgres", "SELECT count(*) FROM pg_auth_members WHERE member = 'service_role'::regrole;");
     check("service_role is a member of nothing", o == vec!["0"], &o, &mut fails);
-    check("k2 app compat on answers", on.as_ref().is_ok_and(|v| v["ok"] == true), &on, &mut fails);
+    check(concat!(k2_core::cli_name!(), " app compat on answers"), on.as_ref().is_ok_and(|v| v["ok"] == true), &on, &mut fails);
     let on = on.unwrap_or(J::Null);
     let authn = on["compat"]["authenticator"].as_str().unwrap_or("").to_string();
     check("the door login is <db>_authenticator", authn == format!("{db}_authenticator"), &authn, &mut fails);
@@ -191,7 +191,7 @@ fn real_pg_compat_identity_and_policy_drill() {
     )
     .unwrap();
     let mig = crate::sql::routes::with_test_ops(srv, || crate::sql::ops::migrate(srv, &secrets, &ws, &path, None));
-    check("k2 db migrate takes the policies (GRANT … TO authenticated works)", mig.is_ok(), format!("{mig:?}"), &mut fails);
+    check(concat!(k2_core::cli_name!(), " db migrate takes the policies (GRANT … TO authenticated works)"), mig.is_ok(), format!("{mig:?}"), &mut fails);
     srv.su(
         &db,
         &format!(
@@ -291,7 +291,7 @@ fn real_pg_compat_identity_and_policy_drill() {
         ("the migrator (the owner; the brokered lane's login)", migrator.as_str()),
         ("the workspace agent", agent.as_str()),
         ("the App's own login (through its group)", app_login.as_str()),
-        ("a read grantee (k2 db grant / request-read)", grantee.as_str()),
+        (concat!("a read grantee (", k2_core::cli_name!(), " db grant / request-read)"), grantee.as_str()),
         ("a write grantee", writer.as_str()),
         ("the door login", authn.as_str()),
     ] {
@@ -363,19 +363,19 @@ fn real_pg_compat_identity_and_policy_drill() {
         ("another database's key", super::identity_token::mint(&db, &"cd".repeat(32), &web_alice, now).unwrap(), "bad signature"),
         ("another database", super::identity_token::mint("other_db", &key, &web_alice, now).unwrap(), "another database"),
         ("expired", super::identity_token::mint(&db, &key, &web_alice, now - 3600).unwrap(), "expired"),
-        ("not a token", "k2c1.zz.yy".to_string(), "not a K2 claims token"),
+        ("not a token", "k2c1.zz.yy".to_string(), concat!("not a ", k2_core::product_name!(), " claims token")),
     ] {
         let o = srv.script(&app_login, &db, &format!("BEGIN;\nSELECT k2.set_claims('{t}');\nCOMMIT;"));
         check(&format!("set_claims refuses {name}"), o.as_ref().err().is_some_and(|e| e.contains(want)), &o, &mut fails);
     }
     let o = srv.script(&app_login, &db, &format!("CREATE TEMP TABLE k2_claims_lock (claims jsonb);\nBEGIN;\nSELECT k2.set_claims('{tok}');\nCOMMIT;"));
-    check("set_claims refuses next to a lock K2 didn't write", o.as_ref().err().is_some_and(|e| e.contains("did not write")), &o, &mut fails);
+    check(concat!("set_claims refuses next to a lock ", k2_core::product_name!(), " didn't write"), o.as_ref().err().is_some_and(|e| e.contains("did not write")), &o, &mut fails);
     srv.su(&db, &format!("GRANT SELECT ON k2.claims_key TO \"{grantee}\";"));
     let o = srv.script(&app_login, &db, &format!("BEGIN;\nSELECT k2.set_claims('{tok}');\nCOMMIT;"));
     check("set_claims refuses while another role can read the key", o.as_ref().err().is_some_and(|e| e.contains("readable by another role")), &o, &mut fails);
     let fixed = call(srv, super::routes::ON, json!({ "app": APP, "db": db }));
     let o = srv.script(&app_login, &db, &format!("BEGIN;\nSELECT 1 FROM (SELECT k2.set_claims('{}')) s;\nCOMMIT;", fresh()));
-    check("k2 app compat on puts the key back to its owner only", fixed.is_ok() && rows(&o) == vec!["1"], (&fixed, &o), &mut fails);
+    check(concat!(k2_core::cli_name!(), " app compat on puts the key back to its owner only"), fixed.is_ok() && rows(&o) == vec!["1"], (&fixed, &o), &mut fails);
     for pre in ["pg_read_all_data", "pg_write_all_data"] {
         srv.su("postgres", &format!("GRANT {pre} TO outsider;"));
         let o = srv.script(&app_login, &db, &format!("BEGIN;\nSELECT k2.set_claims('{}');\nCOMMIT;", fresh()));
@@ -469,7 +469,7 @@ fn real_pg_compat_identity_and_policy_drill() {
     let del = format!("DELETE FROM auth.sessions WHERE user_id = '{}';", alice.id);
     for q in ["SELECT count(*) FROM auth.sessions;", del.as_str(), "DELETE FROM auth.refresh_tokens;"] {
         let o = srv.script(&format!("{db}_migrator"), &db, q);
-        check(&format!("auth.sessions / refresh_tokens say they aren't built: {q}"), o.as_ref().err().is_some_and(|e| e.contains("not built in K2 yet")), &o, &mut fails);
+        check(&format!("auth.sessions / refresh_tokens say they aren't built: {q}"), o.as_ref().err().is_some_and(|e| e.contains(concat!("not built in ", k2_core::product_name!(), " yet"))), &o, &mut fails);
     }
 
     // ── a database an older K2 made keeps PUBLIC's CONNECT: nothing at start

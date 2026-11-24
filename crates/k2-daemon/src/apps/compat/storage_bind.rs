@@ -73,8 +73,9 @@ pub async fn install_schema(db: &str) -> SResult<()> {
         .collect();
     if !missing.is_empty() {
         return Err(StorageError::unavailable(format!(
-            "the cluster has no {} role yet: turn the Supabase-compatible layer on first (k2 app compat on)",
-            missing.join(", ")
+            "the cluster has no {} role yet: turn the Supabase-compatible layer on first ({cli} app compat on)",
+            missing.join(", "),
+            cli = k2_core::brand::CLI_NAME
         )));
     }
     c.batch_execute(super::storage_sql::SCHEMA).await.map_err(super::storage_pg::pgerr)?;

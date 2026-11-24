@@ -123,11 +123,11 @@ pub fn resolve(app: &AppFacts, b: &DoorConfig, via: Via, r: &ReqAuth, look: &Loo
             .and_then(|s| serde_json::from_value(s).ok())
             .unwrap_or_default();
         if !scopes.iter().any(|s| s == SCOPE_SERVICE) {
-            return Err(StorageError::access_denied("this App key has no service scope (k2 app key … --scope service)").with_http(403));
+            return Err(StorageError::access_denied(concat!("this App key has no service scope (", k2_core::cli_name!(), " app key … --scope service)")).with_http(403));
         }
         if via == Via::Public && !b.service_key_public {
             return Err(StorageError::access_denied(
-                "the server key is taken on the App's gateway link only (k2 app compat set <app> service-key-public on allows the public host)",
+                concat!("the server key is taken on the App's gateway link only (", k2_core::cli_name!(), " app compat set <app> service-key-public on allows the public host)"),
             )
             .with_http(403));
         }
@@ -146,7 +146,7 @@ pub fn resolve(app: &AppFacts, b: &DoorConfig, via: Via, r: &ReqAuth, look: &Loo
                 let pass = (look.pass)(t).map_err(|e| StorageError::unavailable(format!("can't read sessions: {e}")))?;
                 let ok = pass.as_ref().is_some_and(|p| super::door::claims_match(raw, &super::door::session_claims(&app.app_id, p)));
                 if !ok {
-                    return Err(StorageError::invalid_jwt("the token's claims are not the ones K2 wrote for this session: sign in again"));
+                    return Err(StorageError::invalid_jwt(concat!("the token's claims are not the ones ", k2_core::product_name!(), " wrote for this session: sign in again")));
                 }
             }
             return person(app, t, look);
@@ -197,7 +197,7 @@ pub fn claims_for_pass(app: &AppFacts, pass: &k2_core::skin::SkinPass, principal
         "sub": principal,
         "role": "authenticated",
         "email": email,
-        "iss": "k2",
+        "iss": super::claims::issuer(&app.app_id),
         "aud": "authenticated",
         "session_id": pass.id,
         "app_metadata": { "k2_app": app.app_id },

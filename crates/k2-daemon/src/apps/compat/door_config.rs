@@ -69,7 +69,7 @@ impl DoorConfig {
         use crate::sql::secrets::SecretStore as _;
         crate::sql::secrets::FileSecretStore::default()
             .resolve(&self.authenticator_secret_ref)?
-            .ok_or_else(|| format!("the door login's password for {} is missing from the vault (k2 app compat on {} again)", self.app_id, self.app_id))
+            .ok_or_else(|| format!("the door login's password for {} is missing from the vault ({cli} app compat on {} again)", self.app_id, self.app_id, cli = k2_core::brand::CLI_NAME))
     }
 }
 

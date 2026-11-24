@@ -241,7 +241,7 @@ pub fn third_party_check(cfg: &DoorConfig, token: &str) -> Result<(Value, Option
     #[cfg(not(test))]
     let test_f: Option<ThirdPartyVerifier> = None;
     let Some(f) = test_f.or_else(|| verifier().get().copied()) else {
-        return Err((401, "issuer_unknown".into(), "this App trusts no third-party token issuer (k2 app identity issuer add <app> …)".into()));
+        return Err((401, "issuer_unknown".into(), concat!("this App trusts no third-party token issuer (", k2_core::cli_name!(), " app identity issuer add <app> …)").into()));
     };
     f(cfg, token)
 }
@@ -413,7 +413,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
     let app = ctx.cfg.app_id.as_str();
     let link = ctx.ingress == Ingress::Link;
     let Some(apikey) = req.header("apikey").filter(|k| !k.is_empty()) else {
-        return Err(refuse(401, "no_api_key", "No API key found in request", Some("send the App's publishable key (k2 app compat status) as the apikey header")));
+        return Err(refuse(401, "no_api_key", "No API key found in request", Some(concat!("send the App's publishable key (", k2_core::cli_name!(), " app compat status) as the apikey header"))));
     };
     let raw_bearer = req.bearer().filter(|b| *b != apikey && !is_publishable(b));
     let bearer = raw_bearer.map(unwrap_pass);
@@ -425,14 +425,14 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
     };
     if let Some(raw) = key_raw {
         let Some(key_id) = service_key(svc, raw) else {
-            return Err(refuse(401, "bad_server_key", "this key is not this App's server key", Some("the App key needs the service scope (k2 app key mint --scope service)")));
+            return Err(refuse(401, "bad_server_key", "this key is not this App's server key", Some(concat!("the App key needs the service scope (", k2_core::cli_name!(), " app key mint --scope service)"))));
         };
         if !link && !cfg.service_key_public {
             return Err(refuse(
                 401,
                 "server_key_on_public_host",
                 "the server key works on the App's gateway link only",
-                Some("call K2_GATEWAY_URL from server code, or the owner runs k2 app compat set <app> service-key-public on"),
+                Some(concat!("call K2_GATEWAY_URL from server code, or the owner runs ", k2_core::cli_name!(), " app compat set <app> service-key-public on")),
             ));
         }
         return Ok(Resolved { caller: Caller { role: DbRole::Service, claims: service_claims(app) }, who: Who::Service { key_id } });
@@ -441,7 +441,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
         return Err(refuse(401, "bad_api_key", "the apikey is neither this App's publishable key nor its server key", None));
     }
     if apikey != publishable_key(svc) {
-        return Err(refuse(401, "wrong_app_key", "this publishable key names another App", Some("use this App's key (k2 app compat status)")));
+        return Err(refuse(401, "wrong_app_key", "this publishable key names another App", Some(concat!("use this App's key (", k2_core::cli_name!(), " app compat status)"))));
     }
     if let Some(b) = bearer {
         if looks_like_jwt(b) {
@@ -474,7 +474,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
             return Err(refuse(401, "pass_invalid", "the pass is not a live session of this App", Some("sign in again")));
         };
         if !claims_match(raw_bearer.unwrap_or(b), &session_claims(app, &pass)) {
-            return Err(refuse(401, "bad_jwt", "the token's claims are not the ones K2 wrote for this session", Some("sign in again")));
+            return Err(refuse(401, "bad_jwt", concat!("the token's claims are not the ones ", k2_core::product_name!(), " wrote for this session"), Some("sign in again")));
         }
         let device = k2_core::skin::app_login::device_for_session(&pass.id).ok().flatten().is_some();
         if !link && !device {
@@ -501,7 +501,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
     if cfg.anon {
         return Ok(Resolved { caller: Caller { role: DbRole::Anon, claims: anon_claims(app) }, who: Who::Anon });
     }
-    Err(refuse(401, "anon_off", "Anonymous access is disabled", Some("sign in; or the owner turns the anon lane on: k2 app compat set <app> anon on")))
+    Err(refuse(401, "anon_off", "Anonymous access is disabled", Some(concat!("sign in; or the owner turns the anon lane on: ", k2_core::cli_name!(), " app compat set <app> anon on"))))
 }
 
 // ── origins ─────────────────────────────────────────────────────────
@@ -525,7 +525,7 @@ pub fn origin_allowed(cfg: &DoorConfig, req: &DoorRequest) -> Result<Option<Stri
     if cfg.origins.iter().any(|l| norm_origin(l) == o) {
         return Ok(Some(origin.trim().to_string()));
     }
-    Err(refuse(403, "origin_not_allowed", format!("{origin} may not call this App's data doors"), Some("the owner lists it: k2 app compat set <app> origins add <origin>")))
+    Err(refuse(403, "origin_not_allowed", format!("{origin} may not call this App's data doors"), Some(concat!("the owner lists it: ", k2_core::cli_name!(), " app compat set <app> origins add <origin>"))))
 }
 
 fn cors(a: DoorAnswer, origin: &Option<String>) -> DoorAnswer {
@@ -608,12 +608,12 @@ async fn answer(req: DoorRequest, ctx: &Ctx) -> DoorAnswer {
         Door::Rest => super::rest_door::handle(&req, ctx, &who).await,
         Door::Auth => unreachable_auth(),
         // Never reached: serve_one hands storage to serve_storage first.
-        Door::Storage => refuse(500, "failed", "the /storage/v1 door answers before this (a K2 bug)", None),
+        Door::Storage => refuse(500, "failed", concat!("the /storage/v1 door answers before this (a ", k2_core::product_name!(), " bug)"), None),
     }
 }
 
 fn unreachable_auth() -> DoorAnswer {
-    refuse(500, "failed", "the auth door answers before the caller is resolved (a K2 bug)", None)
+    refuse(500, "failed", concat!("the auth door answers before the caller is resolved (a ", k2_core::product_name!(), " bug)"), None)
 }
 
 /// Serve one door request whose head (`head_len` bytes) is next on `s`.
@@ -815,7 +815,7 @@ pub async fn link_door(stream: &mut tokio::net::TcpStream, ingress: crate::route
     let Some((cfg, service_id)) = blocking(move || config_for(&app)).await.flatten() else {
         let mut sink = vec![0u8; len];
         let _ = tokio::io::AsyncReadExt::read_exact(stream, &mut sink).await;
-        let a = refuse(404, "compat_off", "this App's Supabase-compatible doors are off", Some("the owner turns them on: k2 app compat on <app> --db <db>"));
+        let a = refuse(404, "compat_off", "this App's Supabase-compatible doors are off", Some(concat!("the owner turns them on: ", k2_core::cli_name!(), " app compat on <app> --db <db>")));
         return Some(http::write_answer(stream, &a.closing(), false, false).await);
     };
     let ctx = Ctx { cfg, service_id, ingress: Ingress::Link };

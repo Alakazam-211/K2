@@ -75,7 +75,7 @@ fn ctx_for(who: &Who, app: Option<&str>) -> R<(k2_core::deploy::store::AppRow, C
     need_build(who)?;
     let row = app_for(who, app)?;
     let cfg = storage_bind::config(&row.app_id).ok_or_else(|| {
-        no(COMPAT_OFF, 409, format!("the Supabase-compatible layer is off for {}: k2 app compat on {} --db <db>", row.app_id, row.app_id))
+        no(COMPAT_OFF, 409, format!("the Supabase-compatible layer is off for {}: {cli} app compat on {} --db <db>", row.app_id, row.app_id, cli = k2_core::brand::CLI_NAME))
     })?;
     let target = storage_bind::authenticator_target(&cfg).map_err(refuse)?;
     let ctx = Ctx { app_id: row.app_id.clone(), target, bytes: ByteStore::for_app(&row.app_id) };
@@ -91,7 +91,7 @@ fn status(who: &Who, p: &HashMap<String, String>) -> R<J> {
     let row = app_for(who, param(p, "app"))?;
     let import = storage_import::read_state(&row.app_id);
     let Some(cfg) = storage_bind::config(&row.app_id) else {
-        return Ok(json!({ "app": row.app_id, "on": false, "hint": format!("k2 app compat on {} --db <db>", row.app_id), "import": import }));
+        return Ok(json!({ "app": row.app_id, "on": false, "hint": format!("{cli} app compat on {} --db <db>", row.app_id, cli = k2_core::brand::CLI_NAME), "import": import }));
     };
     let target = storage_bind::authenticator_target(&cfg).map_err(refuse)?;
     let ctx = Ctx { app_id: row.app_id.clone(), target: target.clone(), bytes: ByteStore::for_app(&row.app_id) };
@@ -103,7 +103,7 @@ fn status(who: &Who, p: &HashMap<String, String>) -> R<J> {
     .map_err(refuse)?;
     let mut warnings = Vec::new();
     if !schema {
-        warnings.push(format!("the storage schema isn't in {} yet: k2 app storage enable {}", cfg.database, row.app_id));
+        warnings.push(format!("the storage schema isn't in {} yet: {cli} app storage enable {}", cfg.database, row.app_id, cli = k2_core::brand::CLI_NAME));
     }
     for b in buckets.as_array().into_iter().flatten() {
         if b["public"] == json!(true) {
@@ -131,7 +131,7 @@ fn enable(who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
     let row = app_for(who, s(&v, "app"))?;
     let cfg = storage_bind::config(&row.app_id)
-        .ok_or_else(|| no(COMPAT_OFF, 409, format!("turn the Supabase-compatible layer on first: k2 app compat on {} --db <db>", row.app_id)))?;
+        .ok_or_else(|| no(COMPAT_OFF, 409, format!("turn the Supabase-compatible layer on first: {cli} app compat on {} --db <db>", row.app_id, cli = k2_core::brand::CLI_NAME)))?;
     let db = cfg.database.clone();
     block(async move { storage_bind::install_schema(&db).await }).map_err(refuse)?;
     crate::apps::routes::audit_human(&row.app_id, "storage_enable", who, json!({ "database": cfg.database }));
@@ -199,7 +199,7 @@ fn import(who: &Who, body: &[u8]) -> R<J> {
     }
     let secret = s(&v, "keySecret").ok_or_else(|| no("bad_request", 400, "--key-secret <vault secret holding the project's service-role key>"))?;
     if storage_import::is_running(&row.app_id) {
-        return Err(no("import_running", 409, format!("an import is already running for {}: k2 app storage import-status {}", row.app_id, row.app_id)));
+        return Err(no("import_running", 409, format!("an import is already running for {}: {cli} app storage import-status {}", row.app_id, row.app_id, cli = k2_core::brand::CLI_NAME)));
     }
     let key = storage_import::source_key(&row.owner_workspace, secret, &from).map_err(refuse)?;
     let buckets: Vec<String> =
@@ -225,7 +225,7 @@ fn import(who: &Who, body: &[u8]) -> R<J> {
         })
         .map_err(|e| no(STORAGE_FAILED, 500, format!("start the import: {e}")))?;
     crate::apps::routes::audit_human(&row.app_id, "storage_import", who, json!({ "from": from, "keySecret": secret }));
-    Ok(json!({ "started": true, "app": row.app_id, "from": from, "status": format!("k2 app storage import-status {}", row.app_id) }))
+    Ok(json!({ "started": true, "app": row.app_id, "from": from, "status": format!("{cli} app storage import-status {}", row.app_id, cli = k2_core::brand::CLI_NAME) }))
 }
 
 fn import_status(who: &Who, p: &HashMap<String, String>) -> R<J> {

@@ -244,7 +244,7 @@ fn holder(req: &DoorRequest, ctx: &Ctx) -> Result<Option<Holder>, DoorAnswer> {
     let apikey = req.header("apikey").unwrap_or("");
     let public = matches!(ctx.ingress, Ingress::Public { .. });
     let bearer = req.bearer().filter(|b| *b != apikey && !door::is_publishable(b) && !k2_core::skin::is_api_key_prefix(b));
-    let edited = || gerr(403, "bad_jwt", "invalid JWT: its claims are not the ones K2 wrote");
+    let edited = || gerr(403, "bad_jwt", concat!("invalid JWT: its claims are not the ones ", k2_core::product_name!(), " wrote"));
     let from = |token: &str, via_bearer: bool| -> Result<Option<Holder>, DoorAnswer> {
         let raw = door::unwrap_pass(token);
         if raw.starts_with(PENDING_PREFIX) {
@@ -341,7 +341,7 @@ fn route(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             Some("password") => sign_in(req, ctx),
             Some("refresh_token") => refresh(req, ctx),
             Some("pkce") => pkce(req, ctx),
-            Some(g) => gerr(400, "unsupported_grant_type", format!("grant_type {g} is not supported by K2")),
+            Some(g) => gerr(400, "unsupported_grant_type", format!("grant_type {g} is not supported by {product}", product = k2_core::brand::PRODUCT_NAME)),
             None => gerr(400, "unsupported_grant_type", "grant_type is required"),
         },
         ("POST", "/verify") => verify_post(req, ctx),
@@ -352,7 +352,7 @@ fn route(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             None => gerr(403, "not_admin", "User not allowed: the admin routes take the App's server key (the service scope)"),
         },
         ("POST", "/signup") | ("POST", "/otp") | ("POST", "/magiclink") | ("POST", "/recover") | ("GET", "/authorize") | ("POST", "/factors") | ("GET", "/settings") => {
-            gerr(404, "not_supported", format!("{m} /auth/v1{rest} is not supported by K2 (k2 study app-rest)"))
+            gerr(404, "not_supported", format!("{m} /auth/v1{rest} is not supported by {product} ({cli} study app-rest)", product = k2_core::brand::PRODUCT_NAME, cli = k2_core::brand::CLI_NAME))
         }
         _ => gerr(404, "not_found", format!("{m} /auth/v1{rest}: no such route")),
     }
@@ -379,10 +379,10 @@ fn update_user(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
         Err(a) => return a,
     };
     if v.get("email").is_some() || v.get("phone").is_some() {
-        return gerr(422, "not_supported", "changing the email or phone through /auth/v1 is not supported by K2: the App's owner changes it");
+        return gerr(422, "not_supported", concat!("changing the email or phone through /auth/v1 is not supported by ", k2_core::product_name!(), ": the App's owner changes it"));
     }
     if v.get("data").is_some_and(|d| d.as_object().is_some_and(|o| !o.is_empty())) {
-        return gerr(422, "not_supported", "user_metadata is not stored by K2 yet");
+        return gerr(422, "not_supported", concat!("user_metadata is not stored by ", k2_core::product_name!(), " yet"));
     }
     let password = text(&v, "password");
     if let Some(pw) = password {
@@ -449,7 +449,7 @@ fn sign_in(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
         Err(a) => return a,
     };
     if v.get("phone").is_some() {
-        return gerr(400, "phone_provider_disabled", "Phone logins are not supported by K2");
+        return gerr(400, "phone_provider_disabled", concat!("Phone logins are not supported by ", k2_core::product_name!()));
     }
     let (Some(who), Some(password)) = (text(&v, "email"), v.get("password").and_then(Value::as_str)) else {
         return gerr(400, "validation_failed", "send email and password");
@@ -484,7 +484,7 @@ fn sign_in(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
         (SkinLoginOutcome::MustChange(_), _) => gerr(
             403,
             "password_change_required",
-            "someone else set this password: the person chooses their own first (the App's set-password page, or the K2 sign-in door's change-password)",
+            concat!("someone else set this password: the person chooses their own first (the App's set-password page, or the ", k2_core::product_name!(), " sign-in door's change-password)"),
         ),
         (SkinLoginOutcome::LockedOut { retry_after_secs }, _) => {
             gerr(429, "over_request_rate_limit", format!("too many wrong passwords for this person: try again in {retry_after_secs} seconds")).header("Retry-After", retry_after_secs.to_string())
@@ -585,7 +585,7 @@ fn verify_post(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
     };
     let kind = text(&v, "type").unwrap_or("");
     if !matches!(kind, "invite" | "recovery") {
-        return gerr(400, "not_supported", format!("verifyOtp type {kind} is not supported by K2 (invite and recovery are)"));
+        return gerr(400, "not_supported", format!("verifyOtp type {kind} is not supported by {product} (invite and recovery are)", product = k2_core::brand::PRODUCT_NAME));
     }
     let Some(token) = text(&v, "token_hash").or_else(|| text(&v, "token")) else {
         return gerr(400, "validation_failed", "send token_hash");

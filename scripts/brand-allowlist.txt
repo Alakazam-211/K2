@@ -499,6 +499,7 @@
 2 K2 crates/k2-node-proto/src/sim/policy.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-node/src/packages.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-node/src/sim/cli.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+2 K2 crates/k2-rest/src/error.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-helper/examples/unix/creds_live.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-proto/src/pg_dual.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-proto/src/pg_named.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -808,6 +809,7 @@
 1 K2 crates/k2-node/src/sim/host.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
 1 K2 crates/k2-node/src/toolchain.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-ptyd/src/launch.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+1 K2 crates/k2-rest/src/oracle.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-root-helper/src/pg_dual.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-root-helper/src/sew_teardown.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-root-proto/src/desktop.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first

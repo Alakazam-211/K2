@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 67
-skill_checksum: 3843db32c5e4304c
+skill_version: 68
+skill_checksum: 447ac99586393fe5
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat, remind. Use it for remind me, reminder, alarm, follow up later, at <time>, every morning, schedule, cron
 ---
@@ -115,9 +115,12 @@ k2 thread ask <addr> "prompt" --options "a; b; c" # one string, split on ';' onl
 k2 thread secret <addr> --name NAME             # secret field; you never see the value
 k2 thread withdraw <addr> <card-id> [--why "…"] # take back your own card when it is obsolete
 k2 thread <addr> "text" --file path[:line[-end]]  # attach workspace files (repeatable, ≤10; text optional)
+k2 thread <addr> --reply-to '#N' "text"         # reply to message or card N (#N or N)
 ```
 
 Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
+To point your person at a card or message, reply to it: `k2 thread <addr> --reply-to '#<card or seq>' '…'`.
+They click the reply line to jump there; a `#N` in your text that names a message or card on this Thread is a link too.
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.
 Post and continue; you get a later turn when they answer. Do not `--wait`. Do not emit widget JSON.
@@ -387,13 +390,13 @@ Topics: what, source, map, identity, send, human, people, auth, errors, context,
 db, mail, connect-boundary, apps, app-deploys, app-move, app-api, app-errors,
 live, app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
 app-runtime, app-handover, app-push, app-pairing, auth-pages, app-profile,
-app-account-deletion, app-transfers, app-transfers-http, app-chat, app-recording,
+app-account-deletion, app-transfers, app-transfers-http, app-rest, app-storage, app-chat, app-recording,
 chat-voice, chat-voice-rooms, voice-rooms, tauri, tauri-voice, skins, feedback-loop, ticket-brief, zen,
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
 publish-visibility, publish-dev, compute, compute-shared, ci, ci-release, ci-stats, provenance, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
-garden-access, garden-changes, changes, docs, sim, design, db-upgrade, app-databases, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
-email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization,
+garden-access, garden-changes, changes, docs, sim, design, db-upgrade, app-databases, supabase-compat, app-cron, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
+isolation, email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization,
 agent-templates, suite-apps, postal.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
@@ -413,4 +416,4 @@ and `--assign <user>` (a user on this server).
 To talk in this chat, `k2 thread`.
 <!-- K2:MANAGED:END -->
 
-<!-- Content below this line is yours — K2 will never modify it. -->
+<!-- Content below this line is yours: it is never changed. -->

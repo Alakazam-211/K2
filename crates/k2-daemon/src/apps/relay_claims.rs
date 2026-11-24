@@ -131,7 +131,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             let n = v.get("count").and_then(J::as_u64);
             let l = v.get("limit").and_then(J::as_u64);
             let (what, default_l) = match v.get("scope").and_then(J::as_str) {
-                Some("account") => ("this K2 account", 100),
+                Some("account") => (concat!("this ", product_name!(), " account"), 100),
                 _ => ("this server", 20),
             };
             let of = match (n, l) {
@@ -146,7 +146,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             // k2-connect names the case: another box of this account, or not.
             Some(d) if d.contains("your account") => format!("{d}. {PRODUCT_NAME} never takes a name over"),
             _ => format!(
-                "{hostname} is already verified for another K2 server or account. Whoever holds it removes it there first; {PRODUCT_NAME} never takes a name over"
+                "{hostname} is already verified for another {PRODUCT_NAME} server or account. Whoever holds it removes it there first; {PRODUCT_NAME} never takes a name over"
             ),
         },
         "verify_token_not_accepted" => {

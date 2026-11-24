@@ -72,7 +72,6 @@
 2 K2 crates/k2-approve/src/describe.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-core/src/hire/template/format.rs keeper: wire; a built-in template's author value K2 (template.toml), and the error lines that name that value
 2 K2 crates/k2-core/src/skills/writer.rs keeper: the <!-- K2:BEGIN --> and <!-- K2:END --> markers upsert_k2_section and onboarding's block removal read back
-2 K2 crates/k2-daemon/src/apps/relay_claims.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/compute_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/connect_device_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/desktop/virtual_routes.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
@@ -136,7 +135,6 @@
 1 K2 crates/k2-daemon/src/cell_identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/compute_preset.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/compute_secrets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/connect_users_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/db_home_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/desktop/deskd.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 1 K2 crates/k2-daemon/src/desktop/launch_agent.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)

@@ -21,7 +21,7 @@
 
 use crate::cli_response::CliResponse;
 use k2_core::{connect_users, product_name};
-use k2_core::brand::LOGIN_NAME;
+use k2_core::brand::{LOGIN_NAME, PRODUCT_NAME};
 
 /// `GET /cli/users` → `{"users":[{username,createdAt,disabled,role,wasViewer}, ...]}`.
 /// Redacted views only — never the password hash. `role` is the #629
@@ -947,7 +947,7 @@ pub fn account_page_html() -> String {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>K2 account</title>
+<title>{PRODUCT_NAME} account</title>
 <style>
   :root {{ color-scheme: dark; }}
   * {{ box-sizing: border-box; }}

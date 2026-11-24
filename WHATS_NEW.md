@@ -20,6 +20,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
 ### Compute
 - Your own server's compute jobs can no longer create user namespaces unless the node's owner allows it for that job with --userns. Jobs can no longer use io_uring, bpf, userfaultfd, perf_event_open, the kernel keyring (keyctl, add_key, request_key), kexec, kernel module calls, open_by_handle_at or personality changes.
+## 0.46.18 — New compute nodes join node lists by themselves
+
+### Compute
+- **New compute nodes join every workspace's node list automatically, unless the owner fixed that list.** A machine newly added to this server goes on every list that exists, so a job no longer waits for a person to add each new node to each list. To keep a list exactly as it is (one that pins a deliberate window, say), the owner or an Admin runs `k2 compute allow-nodes --fixed on --workspace <ws>` from a terminal outside K2; `--fixed off` lets new nodes join it again. Every list made before this update follows new nodes. `k2 compute allow-nodes` and `k2 compute nodes` say which a list is.
+- **A managing agent can ask to change another workspace's node list with a one-tap card.** An agent that hired a workspace, or one that may manage this server's compute nodes, runs `k2 compute allow-nodes --add <node> --workspace <ws>` (or `--remove <node>`, or `--clear`). K2 refuses it and prints the card to ask for: `k2 permission request compute.allow-nodes-for target=<ws> add=<node>`. The owner or an Admin sees the workspace and each node, and Allow makes exactly that change; Deny changes nothing. Only nodes granted to that workspace can be added, and an agent that doesn't manage the workspace can't ask.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

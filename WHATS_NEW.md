@@ -12,6 +12,15 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Home
 - **Attach files and images in Home DMs and channels.** The message box has the agent chat's own **+** (Attach a file or image), and you can also drop files on the chat or paste an image into the box. Each file uploads at once, its chip showing how far it is, and Send waits until all are up (up to 10 files per message, up to the size the server allows, 1 GB by default). Pictures show in the message, open in the image viewer, and every file has Download. Files go through your server's K2 as you, and only people who can read the message can open them. Files aren't scanned for viruses, so they always download as files and never open in K2. Your server's K2 needs this release.
 
+### Projects
+- **A project's chat is now kept as a Thread.** It reads and works as before everywhere (the Projects page, the phone, Apps and `k2 project`), and every line, read mark and unread count carries over: projects from earlier releases move over in the background after the update. The chat stays with the project, whoever its point of contact is, and goes only when the project is deleted.
+- **Project chats get the Thread's message tools.** Long lines fold with See more, you can search the chat, reply to a line, copy it or save it to the stash, and see who is typing. You can delete a line you sent (the server's owner can delete anyone's); the point of contact is told that a line was deleted, never what it said.
+- **Files on project lines.** Attach files to a project line from the desktop or with `k2 project msg <project> "text" --file <path>` (repeatable). They are kept in the point of contact's workspace, and the point of contact gets one `Attached:` line per file. A member agent's own file is copied there (`.k2/downloads/projects/<project id>/`).
+- **Project chat pushes are grouped like Thread pushes.** A busy project sends one push and then a "N new messages" push after a short wait instead of one per line, shows the latest line when your previews allow it, and stays quiet while you're looking at the chat. Who gets them is unchanged.
+- **Project lines are scrubbed of known secrets when stored**, as Thread messages are: a vault secret pasted into a project chat is stored as `[k2v:NAME]`.
+- **`k2 project read --all` shows deleted lines as `(deleted)`.** Without it, deleted lines are left out, as the chat shows them.
+- `k2 thread project:<name> "…"` posts to a project's chat under the same rules; `k2 project msg` stays the command to use.
+
 ### Threads
 - **Agents can reply to a specific Thread message or card; click the reply line or a #number to jump to it.** An agent posts `k2 thread <addr> --reply-to '#13664' "…"` to point you at a card or message: the reply shows its `↩ #N` line and the start of what it answers, and clicking that line scrolls to it (loading older messages if needed) and highlights it briefly. A `#N` in a message that names a message or card on that Thread is a link too; any other `#N` stays plain text. A number that isn't on the Thread is refused, and nothing is posted.
 - K2's informational notices in a Thread no longer count as unread; ones that need you still do.
@@ -98,17 +107,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 terminal spawn` in a workspace's folder no longer ends that workspace's chat.** With `--cwd` (or the project path) pointing at a workspace, the new terminal took the workspace's own session: its pinned chat was stopped and the command ran in its place. Every spawn now starts a terminal of its own beside the chat, also when you spawn with the same `--agent` again.
 - **Messages to agents on other servers retry briefly when the other server is busy, and say clearly if they still couldn't be delivered.** `k2 msg <agent>::<host>` (live text and `--inbox-wake` / `--inbox-silent` files) asks the other server up to three times, a few seconds apart, when it doesn't answer or answers that it is busy; a refusal (such as 401 or 403) is never asked again. A send that still fails exits non-zero with one line naming the server, the step (roster or send), the attempts and the last error, and says nothing was delivered and to send again; for a file package it names every file. A message that reached this server's outbox but not the other server still says QUEUED (not delivered yet), for file packages too, and K2 delivers it from the outbox later. A retry never delivers a message twice.
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it.
-## 0.46.19
-
-### Projects
-- **A project's chat is now kept as a Thread.** It reads and works as before everywhere (the Projects page, the phone, Apps and `k2 project`), and every line, read mark and unread count carries over: projects from earlier releases move over in the background after the update. The chat stays with the project, whoever its point of contact is, and goes only when the project is deleted.
-- **Project chats get the Thread's message tools.** Long lines fold with See more, you can search the chat, reply to a line, copy it or save it to the stash, and see who is typing. You can delete a line you sent (the server's owner can delete anyone's); the point of contact is told that a line was deleted, never what it said.
-- **Files on project lines.** Attach files to a project line from the desktop or with `k2 project msg <project> "text" --file <path>` (repeatable). They are kept in the point of contact's workspace, and the point of contact gets one `Attached:` line per file. A member agent's own file is copied there (`.k2/downloads/projects/<project id>/`).
-- **Project chat pushes are grouped like Thread pushes.** A busy project sends one push and then a "N new messages" push after a short wait instead of one per line, shows the latest line when your previews allow it, and stays quiet while you're looking at the chat. Who gets them is unchanged.
-- **Project lines are scrubbed of known secrets when stored**, as Thread messages are: a vault secret pasted into a project chat is stored as `[k2v:NAME]`.
-- **`k2 project read --all` shows deleted lines as `(deleted)`.** Without it, deleted lines are left out, as the chat shows them.
-- `k2 thread project:<name> "…"` posts to a project's chat under the same rules; `k2 project msg` stays the command to use.
-
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

@@ -3609,6 +3609,7 @@ mod tests {
     #[test]
     fn with_the_k5_switch_off_every_generator_gives_todays_bytes() {
         use crate::brand::CLI_NAME;
+        use crate::workspace::onboarding::strip_agents_md_compose_banner;
         assert!(matches!(
             agents_md_tooling_section_as(CLI_NAME),
             std::borrow::Cow::Borrowed(t) if t == AGENTS_MD_TOOLING_SECTION
@@ -3700,6 +3701,7 @@ mod tests {
     /// both ways, and back off they are today's bytes again.
     #[test]
     fn a_flip_regenerates_agents_md_and_the_skills() {
+        use crate::workspace::onboarding::strip_agents_md_compose_banner;
         use crate::brand::{BRAND_ID, CLI_NAME};
         let _home = crate::test_env::TempHome::new();
         let _runs = crate::agent_cli::K5RunsForTest::set(true);

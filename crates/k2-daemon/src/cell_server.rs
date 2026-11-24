@@ -2058,12 +2058,17 @@ mod unix_impl {
                 !out.contains("/evil"),
                 "foreign JSON project must not win over stamp; body={out}"
             );
-            // cwd flatten is visible: we passed a missing dir so the handler
-            // 400s on cwd after name/cmd/port/project, not on Missing name.
-            assert_eq!(status, "400 Bad Request", "body={out}");
+            // cwd flatten is visible: we passed a missing dir, so after
+            // name/cmd/port/project the handler refuses that cwd, not
+            // Missing name. Since Agent Isolation M2 (F5) an agent's publish
+            // folder must resolve first, so the refusal is
+            // path_out_of_reach naming our cwd (before 0.46.18 it was the
+            // 400 "cwd is not a directory").
+            assert_eq!(status, "403 Forbidden", "body={out}");
             assert!(
-                out.contains("cwd is not a directory"),
-                "expected cwd validation after JSON flatten; body={out}"
+                out.contains("\"code\":\"path_out_of_reach\"")
+                    && out.contains("/no/such/k2-publish-cwd"),
+                "expected the cwd refusal after JSON flatten; body={out}"
             );
 
             let (gstatus, _, _) = dispatch_cell_verb(

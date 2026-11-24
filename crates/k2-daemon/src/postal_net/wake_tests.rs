@@ -154,7 +154,10 @@ fn a_fixed_plane_connects_on_the_next_claim_without_waiting_out_the_backoff() {
     // The plane is fixed. A person claims an address: the answer says when
     // the last try ran and that it is retrying now.
     plane.fixed.store(true, Ordering::SeqCst);
-    let (s, v) = call(crate::postal_routes::CLAIM, Who::Owner, json!({ "workspace": ws_path, "address": "scout::initech.postal.bot" }), &[]);
+    // An address of its own: the test DB is shared by every test in the
+    // process, so a fixed one can already be held by another workspace.
+    let address = format!("w{}::initech.postal.bot", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let (s, v) = call(crate::postal_routes::CLAIM, Who::Owner, json!({ "workspace": ws_path, "address": address }), &[]);
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["plane"]["retrying"], json!(true), "{v}");
     assert_eq!(v["plane"]["lastTriedAt"], json!(p.at), "{v}");

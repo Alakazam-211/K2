@@ -226,12 +226,20 @@ fn on_and_on_again_mints_nothing() {
 #[test]
 fn a_persons_accept_with_no_token_asks_once() {
     let (b, _g) = setup(true);
-    let addr = format!("scout::{LABEL}.postal.bot");
+    // Its own workspace handle and address: under `cargo test` the test DB
+    // is shared by every test in the process, and a fixed `scout` here took
+    // the handle and the address other Postal tests claim.
+    let handle = format!("d{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let addr = format!("{handle}::{LABEL}.postal.bot");
     let ws_id = uuid::Uuid::new_v4().to_string();
     let friend_id = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, 'scout', '/tmp/k2-postal-dt', 'scout')", rusqlite::params![ws_id]).expect("ws");
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            rusqlite::params![ws_id, handle, format!("/tmp/k2-postal-{handle}")],
+        )
+        .expect("ws");
         let h = k2_core::postal::store::claim(&conn, &ws_id, &k2_core::postal::parse_address(&addr).expect("addr"), "owner").expect("claim");
         match k2_core::postal::store::record_incoming(&conn, &h, &k2_core::postal::parse_address("ops::globex.postal.bot").expect("peer"), None, None, None, None)
             .expect("request")

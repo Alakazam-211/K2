@@ -155,6 +155,25 @@ run app user import clash --file users.jsonl --apply
 grep -q 'refused, nothing written' <<<"$OUT" || fail "says refused: $OUT"
 grep -q 'clash line 2: email_taken' <<<"$OUT" || fail "lists the clash: $OUT"
 
+# A file that isn't UTF-8 is refused before anything is sent: exit 2, one
+# plain line, no traceback.
+printf '{"id":"0a1d0000-0000-4000-8000-00000000a0da","email":"caf\xe9@example.com"}\n' >"$FAKE_DIR/latin1.jsonl"
+: >"$FAKE_DIR/requests.log"
+run app user import feedback --file latin1.jsonl
+[ "$RC" -eq 2 ] || fail "a file that isn't UTF-8 is refused (2), got $RC: $ERR"
+[ "$ERR" = "Error: latin1.jsonl isn't UTF-8 text; save it as UTF-8 and try again" ] || fail "says it isn't UTF-8, in plain words: $ERR"
+[ -z "$OUT" ] || fail "nothing on stdout: $OUT"
+[ ! -s "$FAKE_DIR/requests.log" ] || fail "a file that isn't UTF-8 sent a request: $(cat "$FAKE_DIR/requests.log")"
+# A UTF-8 file goes as it did: CRLF becomes LF, a BOM stays, non-ASCII is a
+# \u escape in the body.
+printf '\xef\xbb\xbf{"id":"0a1d0000-0000-4000-8000-00000000a0da","email":"caf\xc3\xa9@example.com"}\r\n{"id":"0a1d0000-0000-4000-8000-00000000a0db","email":"bo@example.com"}\r\n' >"$FAKE_DIR/crlf.jsonl"
+run app user import feedback --file crlf.jsonl
+[ "$RC" -eq 0 ] || fail "a UTF-8 file with a BOM and CRLF imports (0), got $RC: $ERR"
+cat >"$FAKE_DIR/crlf.want" <<'EOF'
+"lines": "\ufeff{\"id\":\"0a1d0000-0000-4000-8000-00000000a0da\",\"email\":\"caf\u00e9@example.com\"}\n{\"id\":\"0a1d0000-0000-4000-8000-00000000a0db\",\"email\":\"bo@example.com\"}\n"
+EOF
+grep -qF -- "$(cat "$FAKE_DIR/crlf.want")" <<<"$(last_req)" || fail "the users file's bytes in the body: $(last_req)"
+
 # covers: app user import --json
 run app user import clash --file users.jsonl --json
 [ "$RC" -eq 1 ] || fail "--json with clashes exits 1, got $RC"

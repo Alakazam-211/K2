@@ -311,15 +311,24 @@ _app_user_import() {
         echo "{\"error\":\"usage\",\"hint\":\"can't read $file\"}" >&2
         return 1
     fi
-    local body
+    # A file that isn't UTF-8 is refused here (exit 2), before anything is
+    # sent. Otherwise the body is the file as read in text mode: line ends
+    # become \n, a BOM stays, and json.dumps writes non-ASCII as \u escapes.
+    local body rc=0
     body="$(K2_UI_FILE="$file" K2_UI_APP="$app" K2_UI_ROLE="$role" K2_UI_APPLY="$apply" python3 -c '
-import json, os
-with open(os.environ["K2_UI_FILE"], encoding="utf-8") as f:
-    lines = f.read()
+import json, os, sys
+try:
+    with open(os.environ["K2_UI_FILE"], encoding="utf-8") as f:
+        lines = f.read()
+except UnicodeDecodeError:
+    print("Error: %s isn'"'"'t UTF-8 text; save it as UTF-8 and try again" % os.environ["K2_UI_FILE"], file=sys.stderr)
+    sys.exit(2)
 b = {"app": os.environ["K2_UI_APP"], "lines": lines, "apply": os.environ["K2_UI_APPLY"] == "true"}
 if os.environ.get("K2_UI_ROLE"):
     b["role"] = os.environ["K2_UI_ROLE"]
-print(json.dumps(b))')" || return 1
+print(json.dumps(b))')" || rc=$?
+    if [ "$rc" = 2 ]; then return 2; fi
+    [ "$rc" = 0 ] || return 1
     K2_CP_MAX_TIME=600 _app_rt_post /cli/app/user/import "$body"
     unset body
     case "$_CP_STATUS" in

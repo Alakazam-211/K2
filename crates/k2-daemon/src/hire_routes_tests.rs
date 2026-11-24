@@ -1589,3 +1589,31 @@ fn passport_hire_stays_inside_the_hire_root() {
     let (st, v) = hire_as(&Who::Owner, &json!({ "path": outside, "name": "Owner Out" }));
     assert_eq!((st, v["created"].as_bool()), (200, Some(true)), "the owner hires anywhere: {v}");
 }
+
+/// A recipe hire of a template member sends the template's hello once: its
+/// launch carries no hello as the brief (the recipe's own brief, if any, is
+/// the brief), and the hello goes through the lock's record, the same step
+/// every first start takes, exactly once.
+#[test]
+fn a_recipe_hire_sends_the_template_hello_once() {
+    let _home = k2_core::test_env::TempHome::new();
+    ensure_test_root();
+    let ctx = k2_core::hire::plan::PlanContext { caller: k2_core::hire::HireCaller::Owner, limits: None, key_has_db: false };
+    for (tag, brief) in [("rh", None), ("rb", Some("Start with the backlog."))] {
+        let handle = uniq(tag);
+        let mut agent = json!({ "handle": handle, "template": "writer" });
+        if let Some(b) = brief {
+            agent["brief"] = json!(b);
+        }
+        let inst = k2_core::hire::apply::instantiate(&json!({ "agent": agent }), None, &ctx).expect("recipe hire");
+        let job = inst.launches.iter().find(|j| j.handle == handle).expect("the member launches");
+        assert_eq!(job.brief.as_deref(), brief, "{tag}: the brief is the recipe's own, never the hello");
+        let (_, path) = project_by_handle(&handle).expect("hired");
+        assert!(k2_core::hire::template::lock::has_pending_hello(&path), "{tag}: the lock holds the hello");
+        assert!(crate::template_hello::launch_hello(&handle), "{tag}: the first start sends it");
+        assert!(!crate::template_hello::launch_hello(&handle), "{tag}: then nothing");
+        let got = hellos_to(&handle);
+        assert_eq!(got.len(), 1, "{tag}: one hello: {got:?}");
+        assert!(!got[0].0.trim().is_empty(), "{tag}: {got:?}");
+    }
+}

@@ -20,7 +20,8 @@
 //! Fail closed: a live session with no recorded origin is an agent. The
 //! origin rides the k2-ptyd meta (`origin`), so an adopted session keeps
 //! it across a daemon restart; a session an older daemon left in k2-ptyd
-//! (no `origin` in its meta) is decided by [`legacy_adopted`].
+//! (no `origin` in its meta) is an agent's ([`from_meta`]) until the person
+//! opens a new tab.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -104,22 +105,15 @@ pub fn for_spawn(
     }
 }
 
-/// A session an older daemon (0.46.5–0.46.17) left in k2-ptyd, whose meta
-/// has no `origin`. Decided conservatively: a person's shell tab only when
-/// it is the shape only a person's client made, a plain login shell under a
-/// `tab-*` key spawned through `/cli/sessions/v2/spawn` (spawn site
-/// `v2_spawn`). Every other session there is an agent: the daemon-side
-/// spawn helper (site `spawn`: pinned chats, heartbeats, sidecars,
-/// `k2 terminal spawn`) and any key that isn't a tab's.
-pub fn legacy_adopted(spawn_site: Option<&str>, key: &str, program: Option<&str>, args: &[String]) -> SessionOrigin {
-    for_spawn(spawn_site == Some("v2_spawn"), key, program, args, &HashMap::new())
-}
-
-/// The origin for an adopted session, from its k2-ptyd meta.
-pub fn from_meta(meta: &serde_json::Value, key: &str, program: Option<&str>, args: &[String]) -> SessionOrigin {
+/// The origin for an adopted session, from its k2-ptyd meta. A session an
+/// older daemon (0.46.5–0.46.17) left in k2-ptyd has no `origin` there and
+/// is always an agent's, whatever its key or program (fail closed): its
+/// shape can't prove a person opened it. A person gets a shell tab again by
+/// opening a new tab, which records its origin.
+pub fn from_meta(meta: &serde_json::Value) -> SessionOrigin {
     match meta.get(META_KEY).and_then(serde_json::Value::as_str) {
         Some(raw) => SessionOrigin::parse(raw),
-        None => legacy_adopted(meta.get("spawn_site").and_then(serde_json::Value::as_str), key, program, args),
+        None => SessionOrigin::Agent,
     }
 }
 
@@ -169,22 +163,33 @@ mod tests {
     }
 
     #[test]
-    fn an_adopted_session_keeps_its_origin_and_an_old_one_is_decided_conservatively() {
-        // Recorded by this daemon's spawn.
+    fn an_adopted_session_keeps_its_recorded_origin() {
         let meta = json!({ "key": "tab-1", "spawn_site": "v2_spawn", "origin": "person_shell_tab" });
-        assert_eq!(from_meta(&meta, "tab-1", None, &[]), SessionOrigin::PersonShellTab);
+        assert_eq!(from_meta(&meta), SessionOrigin::PersonShellTab);
         let meta = json!({ "key": "tab-1", "spawn_site": "v2_spawn", "origin": "agent" });
-        assert_eq!(from_meta(&meta, "tab-1", None, &[]), SessionOrigin::Agent);
+        assert_eq!(from_meta(&meta), SessionOrigin::Agent);
         // An unknown value fails closed.
         let meta = json!({ "key": "tab-1", "spawn_site": "v2_spawn", "origin": "owner" });
-        assert_eq!(from_meta(&meta, "tab-1", None, &[]), SessionOrigin::Agent);
-        // An older daemon's meta (no origin): a plain shell tab from the
-        // client door is a person's; nothing else is.
-        let old = |site: &str, key: &str| json!({ "key": key, "spawn_site": site });
-        assert_eq!(from_meta(&old("v2_spawn", "tab-1"), "tab-1", None, &[]), SessionOrigin::PersonShellTab);
-        assert_eq!(from_meta(&old("spawn", "tab-1"), "tab-1", None, &[]), SessionOrigin::Agent, "the daemon's spawn helper");
-        assert_eq!(from_meta(&old("v2_spawn", "p"), "p", None, &[]), SessionOrigin::Agent, "not a tab's key");
-        assert_eq!(from_meta(&old("v2_spawn", "tab-1"), "tab-1", Some("/usr/bin/npx"), &[]), SessionOrigin::Agent, "not the plain shell");
-        assert_eq!(from_meta(&json!({ "key": "tab-1" }), "tab-1", None, &[]), SessionOrigin::Agent, "no spawn site");
+        assert_eq!(from_meta(&meta), SessionOrigin::Agent);
+    }
+
+    /// An older daemon's session (no `origin` in its meta) is an agent's,
+    /// whatever its key, spawn site or program: even the exact shape a
+    /// person's client made (a plain shell under `tab-*` from `v2_spawn`).
+    #[test]
+    fn a_session_with_no_origin_is_an_agent_whatever_its_key_or_program() {
+        for meta in [
+            json!({ "key": "tab-1", "spawn_site": "v2_spawn" }),
+            json!({ "key": "tab-1", "spawn_site": "v2_spawn", "program": null, "args": [] }),
+            json!({ "key": "tab-1", "spawn_site": "spawn", "program": "bash" }),
+            json!({ "key": "8f0c1d9e-0000-4000-8000-000000000000", "spawn_site": "v2_spawn", "program": "bash" }),
+            json!({ "key": "p:hb:daily", "spawn_site": "spawn", "program": "/usr/bin/npx" }),
+            json!({ "key": "terminal-0a1b2c3d", "spawn_site": "spawn", "program": "/opt/agent/run.sh" }),
+            json!({ "key": "tab-1" }),
+            json!({}),
+            json!(null),
+        ] {
+            assert_eq!(from_meta(&meta), SessionOrigin::Agent, "{meta}");
+        }
     }
 }

@@ -88,9 +88,35 @@ fn call(path: &str, who: Who, body: Value, q: &[(&str, &str)]) -> (u16, Value) {
     (code, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("json {e}: {}", r.body)))
 }
 
+/// The loop's bell and the network mark as a fresh process has them, now
+/// and when the test ends (pass or fail): under `cargo test` every test
+/// shares one process, and a ring left unheard or a "connected" left set
+/// leaks into the next Postal test. Taken after a `TempHome` (its env lock
+/// keeps other Postal tests, which ring on a claim, out meanwhile).
+struct Fresh;
+
+impl Fresh {
+    fn new() -> Fresh {
+        Fresh.reset();
+        Fresh
+    }
+    fn reset(&self) {
+        *WAKE.lock().unwrap_or_else(|p| p.into_inner()) = false;
+        *LAST_WAKE.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        k2_core::postal::gate::set_network_available(false);
+    }
+}
+
+impl Drop for Fresh {
+    fn drop(&mut self) {
+        self.reset();
+    }
+}
+
 #[test]
 fn a_fixed_plane_connects_on_the_next_claim_without_waiting_out_the_backoff() {
     let _home = crate::test_support::TempHome::new();
+    let _fresh = Fresh::new();
     k2_core::db::init_for_tests();
     k2_core::postal::keys::install(Arc::new(k2_core::postal::keys::MemorySecrets::default()));
     let _on = crate::postal_routes::switch_for_test(true);
@@ -164,6 +190,8 @@ fn people_wake_it_at_most_once_per_wake_every() {
 
 #[test]
 fn a_wake_ends_the_wait_and_an_unwoken_wait_runs_out() {
+    let _home = crate::test_support::TempHome::new();
+    let _fresh = Fresh::new();
     assert!(!pause(Duration::from_millis(50)), "nobody woke it");
     let waiter = std::thread::spawn(|| {
         let start = Instant::now();

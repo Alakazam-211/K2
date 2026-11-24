@@ -220,6 +220,7 @@ def text_hits(word, case):
     if key in _text_cache:
         return _text_cache[key]
     rx = word_rx(word, case)
+    needle = word if case else word.lower()
     count, first = 0, None
     for place in TEXT_PLACES:
         top = os.path.join(HERE, place)
@@ -230,7 +231,8 @@ def text_hits(word, case):
         for path in files:
             with open(path, encoding="utf-8", errors="replace") as f:
                 for n, line in enumerate(f, 1):
-                    if stands_in(rx, line):
+                    # The word's letters first (cheap), then the rule.
+                    if (needle in (line if case else line.lower())) and stands_in(rx, line):
                         count += 1
                         if first is None:
                             first = f"{os.path.relpath(path, HERE)}:{n}"

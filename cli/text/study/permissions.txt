@@ -151,7 +151,13 @@ With a node list (`k2 compute allow-nodes`), your jobs run only on the nodes on 
 
     k2 permission request compute.allow-nodes nodes=<node>[,<node>…] --why "<what you need it for>"
 
-Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list: another agent asks for its own. `--clear` opens every granted node at once, so ask for the nodes you need instead.
+Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list this way. `--clear` opens every granted node at once, so ask for the nodes you need instead. A node newly added to this server joins your list by itself unless a person fixed the list (`--fixed on`): there is nothing to ask for that.
+
+Another workspace's list is a person's too, and you may ask for it only if you manage that workspace (you hired it, or you may manage this server's compute nodes). `k2 compute allow-nodes --add <node>[,<node>…] --workspace <ws>` (or `--remove <node>[,<node>…]`, or `--clear`) is refused with `allow_nodes_for_needs_person` (exit 3) and ends with the card for that one change:
+
+    k2 permission request compute.allow-nodes-for add=<node>[,<node>…] target=<ws> --why "<what you need it for>"
+
+(`remove=<node>[,<node>…]` or `clear=true` in place of `add=`). The owner or an admin sees the workspace, the change and each node; Allow makes exactly that change to that workspace's list. Only nodes granted to that workspace can be added (`allow_nodes_not_granted` otherwise). A workspace you don't manage is refused (`forbidden`, and `allow_nodes_not_manager` on the ask): its own agent asks for its own list.
 
 ## Your compute job limits
 

@@ -33119,7 +33119,12 @@ Agents:
                  list: k2 permission request compute.allow-nodes nodes=N[,N…]
                  --why "…" (Allow adds exactly those). Only nodes granted to it
                  (else allow_nodes_not_granted); --clear opens every granted node,
-                 so ask for the nodes it needs. Nodes by name
+                 so ask for the nodes it needs. Nodes by name. Another workspace's
+                 list (--workspace WS): an agent that manages it (it hired it, or
+                 it may manage compute nodes) gets allow_nodes_for_needs_person
+                 (exit 3) and asks on a card for that one change: k2 permission
+                 request compute.allow-nodes-for target=WS add=N[,N…] (or
+                 remove=N[,N…], clear=true); any other agent gets forbidden
   k2 compute allow-nodes --fixed on|off [--workspace WS]
                  a node newly added to this server (a new machine, or one
                  removed and enrolled again) joins every list unless the list is
@@ -60717,7 +60722,7 @@ cmd_schema() {
     {
       "name": "compute allow-nodes",
       "usage": "k2 compute allow-nodes [<node>[,<node>…] | --add N | --remove N | --clear | --fixed on|off] [--workspace WS] [--json]",
-      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). A node newly added to this server joins every list that isn't fixed. An agent may only narrow its own; adding a node, --clear or --fixed is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3).",
+      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). A node newly added to this server joins every list that isn't fixed. An agent may only narrow its own; adding a node, --clear or --fixed is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3). An agent that manages another workspace asks for a change to its list on a card (allow_nodes_for_needs_person, exit 3).",
       "args": [{"name": "node", "required": false}],
       "flags": [
         {"name": "--add", "arg": "NODE[,NODE…]", "description": "Add nodes to the list (a person)."},
@@ -73541,6 +73546,11 @@ NODE LIST (0.46.8)
   card shows each node's size and owner; Allow adds exactly those nodes
   to your own list. Only nodes granted to you (allow_nodes_not_granted,
   exit 3: a person grants the node first) and only your own list.
+  Another workspace's list (--workspace WS): if you manage it (you hired
+  it, or you may manage compute nodes) a change is
+  allow_nodes_for_needs_person, exit 3; ask on the card it names:
+  k2 permission request compute.allow-nodes-for target=WS add=N[,N…]
+  (or remove=N[,N…], clear=true). Not yours to manage: forbidden.
   --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
   New nodes join (0.46.18): a node newly added to this server joins
@@ -74903,6 +74913,9 @@ COMMON ERRORS
                          person grants it first; exit 3, can't be requested
   allow_nodes_fixed_needs_person  --fixed on|off: a person's (the owner or an
                          Admin); exit 3, can't be requested
+  allow_nodes_for_needs_person  a change to another workspace's list you
+                         manage: a person's; exit 3, ask on a card
+                         (compute.allow-nodes-for target=WS add=N)
   job_network_invalid    --network other than none, or a --netns-dummy name or
                          address outside the rules (NETWORK); exit 2
   job_network_needs_update  --network none / --netns-dummy, but no node for you
@@ -106855,7 +106868,13 @@ With a node list (`k2 compute allow-nodes`), your jobs run only on the nodes on 
 
     k2 permission request compute.allow-nodes nodes=<node>[,<node>…] --why "<what you need it for>"
 
-Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list: another agent asks for its own. `--clear` opens every granted node at once, so ask for the nodes you need instead.
+Run it as printed. The owner or an admin sees each node, its size and who owns it. Allow adds exactly those nodes to your own list; then run your job again. Only nodes granted to your workspace: one that isn't is refused with `allow_nodes_not_granted` and can't be requested (a person grants the node first). Only your own list this way. `--clear` opens every granted node at once, so ask for the nodes you need instead. A node newly added to this server joins your list by itself unless a person fixed the list (`--fixed on`): there is nothing to ask for that.
+
+Another workspace's list is a person's too, and you may ask for it only if you manage that workspace (you hired it, or you may manage this server's compute nodes). `k2 compute allow-nodes --add <node>[,<node>…] --workspace <ws>` (or `--remove <node>[,<node>…]`, or `--clear`) is refused with `allow_nodes_for_needs_person` (exit 3) and ends with the card for that one change:
+
+    k2 permission request compute.allow-nodes-for add=<node>[,<node>…] target=<ws> --why "<what you need it for>"
+
+(`remove=<node>[,<node>…]` or `clear=true` in place of `add=`). The owner or an admin sees the workspace, the change and each node; Allow makes exactly that change to that workspace's list. Only nodes granted to that workspace can be added (`allow_nodes_not_granted` otherwise). A workspace you don't manage is refused (`forbidden`, and `allow_nodes_not_manager` on the ask): its own agent asks for its own list.
 
 ## Your compute job limits
 

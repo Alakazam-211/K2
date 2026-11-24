@@ -21,7 +21,12 @@
 //! cards teach as `compute.allow-nodes` / `compute.allow-nodes-clear`.
 //! An agent asks only for nodes that exist and are granted to its own
 //! workspace (`allow_nodes_not_granted` otherwise, before any card), and
-//! never for another workspace's list (`forbidden`, naming who can).
+//! never for another workspace's list (`forbidden`, naming who can)
+//! unless it manages that workspace ([`manages`], 0.46.18): then the
+//! change (`--add`, `--remove` or `--clear`) is refused
+//! `allow_nodes_for_needs_person`, which the cards teach as
+//! `compute.allow-nodes-for target=<ws> add=|remove=|clear=true`. Only
+//! nodes granted to that workspace can be added there.
 //! A Member login can read it, not change it.
 //!
 //! **New nodes join (0.46.18).** A list follows new nodes unless a person
@@ -72,6 +77,69 @@ pub const NEEDS_PERSON: &str = "allow_nodes_needs_person";
 pub const NOT_GRANTED: &str = "allow_nodes_not_granted";
 /// Skip code in a placement record: on the grant, off the list.
 pub const SKIP: &str = "not_allowed";
+/// A managing agent's change to ANOTHER workspace's list (exit 3): a
+/// person decides, on the `compute.allow-nodes-for` card (0.46.18).
+pub const FOR_NEEDS_PERSON: &str = "allow_nodes_for_needs_person";
+/// The card for another workspace's list, asked by an agent that doesn't
+/// manage it (409 at the ask).
+pub const NOT_MANAGER: &str = "allow_nodes_not_manager";
+
+/// Why an agent may ask for another workspace's node list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Manages {
+    /// It hired that workspace (the hire ledger, `k2 agent hire`).
+    Hired,
+    /// "Let this agent manage compute nodes" is on for it (compute_manage).
+    ComputeManager,
+}
+
+impl Manages {
+    /// "it hired k2-engine" / "it may manage this server's compute nodes".
+    pub(crate) fn words(self, target: &str) -> String {
+        match self {
+            Manages::Hired => format!("it hired {target}"),
+            Manages::ComputeManager => "it may manage this server's compute nodes".to_string(),
+        }
+    }
+}
+
+/// May the agent of `asker` ask for `target`'s node list? Never for its
+/// own (that is `compute.allow-nodes`).
+pub(crate) fn manages(asker: &str, target: &str) -> Option<Manages> {
+    if asker.is_empty() || asker == target {
+        return None;
+    }
+    let hired = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::hire::ledger::hired_by_agent(&conn, asker, target)
+    };
+    if hired {
+        return Some(Manages::Hired);
+    }
+    crate::compute_manage::workspace_allows(asker).then_some(Manages::ComputeManager)
+}
+
+/// `allow_nodes_not_granted` for `ws`: these nodes have no grant there.
+fn not_granted(ws: &Ws, ungranted: &[String]) -> crate::compute_routes::Refusal {
+    let one = ungranted.len() == 1;
+    named_no(
+        NOT_GRANTED,
+        403,
+        format!(
+            "{} {} not granted to workspace {}, so a node list entry would never let its jobs in. A person grants {} first \
+             (Settings → Cores → Compute, or {CLI_SLOT} compute grant <node> --workspace {} from a terminal outside {PRODUCT_SLOT}); then ask to add {}",
+            ungranted.join(", "),
+            if one { "is" } else { "are" },
+            ws.handle,
+            if one { "it" } else { "them" },
+            ws.handle,
+            if one { "it" } else { "them" },
+        ),
+    )
+    .with("workspace", ws.handle.clone())
+    .with("notGranted", ungranted.join(","))
+}
 /// Anyone but a person setting `--fixed` (exit 3, not requestable).
 pub const FIXED_NEEDS_PERSON: &str = "allow_nodes_fixed_needs_person";
 
@@ -339,7 +407,8 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     if let Some(on) = fixed {
         return set_fixed(who, s(&v, "workspace"), on);
     }
-    let ws = target_ws(who, s(&v, "workspace")).map_err(|r| other_workspace(who, s(&v, "workspace"), r))?;
+    let asked = Asked { add: &add, remove: &remove, clear };
+    let ws = target_ws(who, s(&v, "workspace")).map_err(|r| other_workspace(who, s(&v, "workspace"), r, &asked))?;
     let resolve = |names: &[String]| -> R<Vec<String>> {
         let mut ids = Vec::new();
         for name in names {
@@ -390,23 +459,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
                 // (a list entry never lets a job in), so say so first.
                 let ungranted: Vec<String> = ids.iter().filter(|id| store::grant(&conn, id, &ws.id).is_none()).map(|id| name_of(&conn, id)).collect();
                 if !ungranted.is_empty() {
-                    let list = ungranted.join(",");
-                    return Err(named_no(
-                        NOT_GRANTED,
-                        403,
-                        format!(
-                            "{} {} not granted to workspace {}, so a node list entry would never let its jobs in. A person grants {} first \
-                             (Settings → Cores → Compute, or {CLI_SLOT} compute grant <node> --workspace {} from a terminal outside {PRODUCT_SLOT}); then ask to add {}",
-                            ungranted.join(", "),
-                            if ungranted.len() == 1 { "is" } else { "are" },
-                            ws.handle,
-                            if ungranted.len() == 1 { "it" } else { "them" },
-                            ws.handle,
-                            if ungranted.len() == 1 { "it" } else { "them" },
-                        ),
-                    )
-                    .with("workspace", ws.handle.clone())
-                    .with("notGranted", list));
+                    return Err(not_granted(&ws, &ungranted));
                 }
                 let names: Vec<String> = ids.iter().map(|id| name_of(&conn, id)).collect();
                 (names.clone(), format!("adding {} to", names.join(", ")))
@@ -453,7 +506,14 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     };
     let (mut failed, mut withdrawn) = (Vec::new(), 0);
     if change != Change::Same {
-        audit(who, "allow_nodes", None, Some(&ws.id), None, serde_json::json!({"from": from, "to": to}));
+        let mut detail = serde_json::json!({"from": from, "to": to});
+        // 0.46.18: a person's Allow on a managing agent's card says whose
+        // card it was (the permission card's own audit line has the rest).
+        if let Some(asker) = s(&v, "askedBy").filter(|_| person) {
+            detail["askedBy"] = asker.into();
+            detail["via"] = "permission-card".into();
+        }
+        audit(who, "allow_nodes", None, Some(&ws.id), None, detail);
         // Jobs already queued on a node that just left the list never
         // start there.
         failed = sweep_off_list(None, Some(&ws.id));
@@ -527,24 +587,116 @@ fn set_fixed(who: &Who, requested: Option<&str>, on: bool) -> R<serde_json::Valu
     Ok(out)
 }
 
-/// An agent naming another workspace's list (`target_ws`'s `forbidden`):
-/// it can't ask for that list; that workspace's own agent asks, or a
-/// person changes it. Any other refusal passes through unchanged.
-fn other_workspace(who: &Who, requested: Option<&str>, r: crate::compute_routes::Refusal) -> crate::compute_routes::Refusal {
-    let (Some(_), Some(req), "forbidden") = (who.passport(), requested.map(str::trim).filter(|t| !t.is_empty()), r.code) else {
+/// What a set request asks for besides a whole list (`nodes`).
+struct Asked<'a> {
+    add: &'a [String],
+    remove: &'a [String],
+    clear: bool,
+}
+
+/// An agent naming another workspace's list (`target_ws`'s `forbidden`).
+/// An agent that manages it ([`manages`]) is refused
+/// `allow_nodes_for_needs_person` with the card's values (`workspace`, and
+/// `add`, `remove` or `clear`), after the checks the card makes too (each
+/// node exists; one to add is granted to that workspace). Any other agent
+/// can't ask for that list: that workspace's own agent asks, or a person
+/// changes it. Any other refusal passes through unchanged.
+fn other_workspace(who: &Who, requested: Option<&str>, r: crate::compute_routes::Refusal, asked: &Asked<'_>) -> crate::compute_routes::Refusal {
+    let (Some((own, _)), Some(req), "forbidden") = (who.passport(), requested.map(str::trim).filter(|t| !t.is_empty()), r.code) else {
         return r;
     };
-    let handle = crate::compute_routes::ws_by_token(req).map(|w| w.handle).unwrap_or_else(|| req.to_string());
+    let target = crate::compute_routes::ws_by_token(req);
+    if let Some(t) = target.as_ref() {
+        if let Some(how) = manages(own, &t.id) {
+            return for_needs_person(who, own, t, how, asked).unwrap_or_else(|r| r);
+        }
+    }
+    let handle = target.map(|w| w.handle).unwrap_or_else(|| req.to_string());
     named_no(
         "forbidden",
         403,
         format!(
             "an agent changes only its own workspace's compute node list, never {handle}'s. {handle}'s own agent asks for a node on a card \
-             ({CLI_SLOT} permission request compute.allow-nodes nodes=<node>, from its terminal), or a person runs \
+             ({CLI_SLOT} permission request compute.allow-nodes nodes=<node>, from its terminal), an agent that manages {handle} (it hired it) \
+             asks on {CLI_SLOT} permission request compute.allow-nodes-for target={handle} add=<node>, or a person runs \
              {CLI_SLOT} compute allow-nodes --add <node> --workspace {handle} from a terminal outside {PRODUCT_SLOT}"
         ),
     )
     .with("workspace", handle)
+}
+
+/// The managing agent's refusal: the card's values, or why there is no
+/// card to ask (an unknown or ungranted node). `Err` is the refusal too.
+fn for_needs_person(
+    who: &Who,
+    own: &str,
+    t: &Ws,
+    how: Manages,
+    asked: &Asked<'_>,
+) -> R<crate::compute_routes::Refusal> {
+    let me = crate::compute_routes::ws_handle(own);
+    let resolve = |names: &[String]| -> R<Vec<store::NodeRow>> {
+        let mut rows: Vec<store::NodeRow> = Vec::new();
+        for name in names {
+            let n = resolve_node_for(who, Some(name.as_str()), Some(&t.id))?;
+            if !rows.iter().any(|r| r.id == n.id) {
+                rows.push(n);
+            }
+        }
+        Ok(rows)
+    };
+    let why = format!(
+        "{me} manages {} ({}), but another workspace's compute node list decides which machines receive that workspace's code, so a person decides: \
+         the owner or an Admin, on the card {me} asks for, or from a terminal outside {PRODUCT_NAME}",
+        t.handle,
+        how.words(&t.handle)
+    );
+    let ask = |what: &str| format!("{CLI_NAME} permission request compute.allow-nodes-for target={} {what}", t.handle);
+    let base = |hint: String| no(FOR_NEEDS_PERSON, 403, hint).with("workspace", t.handle.clone());
+    if !asked.add.is_empty() {
+        let rows = resolve(asked.add)?;
+        let ungranted: Vec<String> = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            rows.iter().filter(|n| store::grant(&conn, &n.id, &t.id).is_none()).map(|n| n.name.clone()).collect()
+        };
+        if !ungranted.is_empty() {
+            return Err(not_granted(t, &ungranted));
+        }
+        let names = rows.iter().map(|n| n.name.clone()).collect::<Vec<_>>().join(",");
+        return Ok(base(format!(
+            "{why} (k2 compute allow-nodes --add {names} --workspace {}). The card: {}",
+            t.handle,
+            ask(&format!("add={names}"))
+        ))
+        .with("add", names));
+    }
+    if !asked.remove.is_empty() {
+        let names = resolve(asked.remove)?.iter().map(|n| n.name.clone()).collect::<Vec<_>>().join(",");
+        return Ok(base(format!(
+            "{why} (k2 compute allow-nodes --remove {names} --workspace {}). The card: {}",
+            t.handle,
+            ask(&format!("remove={names}"))
+        ))
+        .with("remove", names));
+    }
+    if asked.clear {
+        return Ok(base(format!(
+            "{why} (k2 compute allow-nodes --clear --workspace {}): clearing opens every node granted to {} at once. The card: {}",
+            t.handle,
+            t.handle,
+            ask("clear=true")
+        ))
+        .with("clear", "true"));
+    }
+    // A whole list at once (`nodes`): the card takes one change.
+    Ok(base(format!(
+        "{why}. The card takes one change at a time: ask for the nodes to add ({}) or to take off ({}); a whole new list is a person's \
+         (k2 compute allow-nodes <node>[,<node>…] --workspace {})",
+        ask("add=<node>[,<node>…]"),
+        ask("remove=<node>[,<node>…]"),
+        t.handle
+    )))
 }
 
 #[cfg(test)]

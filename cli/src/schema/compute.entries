@@ -35,7 +35,7 @@
     {
       "name": "compute allow-nodes",
       "usage": "k2 compute allow-nodes [<node>[,<node>…] | --add N | --remove N | --clear | --fixed on|off] [--workspace WS] [--json]",
-      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). A node newly added to this server joins every list that isn't fixed. An agent may only narrow its own; adding a node, --clear or --fixed is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3).",
+      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). A node newly added to this server joins every list that isn't fixed. An agent may only narrow its own; adding a node, --clear or --fixed is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3). An agent that manages another workspace asks for a change to its list on a card (allow_nodes_for_needs_person, exit 3).",
       "args": [{"name": "node", "required": false}],
       "flags": [
         {"name": "--add", "arg": "NODE[,NODE…]", "description": "Add nodes to the list (a person)."},

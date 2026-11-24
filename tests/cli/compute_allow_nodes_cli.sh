@@ -15,6 +15,10 @@
 # beside it (white-label C5): the CLI prints the template with its own
 # names (k2, K2), never the server's (zz, Globex Desk); a daemon that sends
 # no template (old-ws) has its hint printed as sent.
+# 0.46.18: a managing agent's change to another workspace's list
+# (`allow_nodes_for_needs_person`) exits 3 and ends with the daemon's "Ask
+# with: k2 permission request compute.allow-nodes-for …" line, the body
+# naming that workspace and the change; the help and study name the card.
 # 0.46.18: `--fixed on|off` sends `fixed` true or false and nothing else
 # (any other word is a usage error, exit 2); the list says whether it is
 # fixed or follows new nodes, and so does `k2 compute nodes`.
@@ -85,6 +89,14 @@ class H(BaseHTTPRequestHandler):
         if "fixed" in body:
             return self.reply(200, {"workspace": "builder", "list": True, "change": "fixed", "fixed": body["fixed"],
                                     "nodes": [{"name": "k2n13-vin", "state": "active", "granted": True}]})
+        if body.get("workspace") == "managed-ws":
+            key = "add" if body.get("add") else ("remove" if body.get("remove") else "clear")
+            value = body.get(key) if key != "clear" else "true"
+            cmd = 'k2 permission request compute.allow-nodes-for %s=%s target=managed-ws --why "<what you need it for>"' % (key, value)
+            return self.reply(403, {"error": {"code": "allow_nodes_for_needs_person", "workspace": "managed-ws", key: value,
+                                              "hint": "builder manages managed-ws (it hired managed-ws), but a person decides"},
+                                    "permission": {"action": "compute.allow-nodes-for", "params": {"target": "managed-ws", key: value},
+                                                   "approvers": "owner or admin", "command": cmd}})
         if body.get("workspace") in ("other-ws", "old-ws"):
             ws = body["workspace"]
             t = "an agent changes only its own workspace's compute node list, never %s's: a person runs {cli} compute allow-nodes --add <node> --workspace %s from a terminal outside {product}" % (ws, ws)
@@ -161,6 +173,21 @@ set -e
 expect_eq "no template (an older daemon) exits 3" "$rc" "3"
 expect_has "no template: the hint as sent" "$err" "a person runs zz compute allow-nodes --add <node> --workspace old-ws from a terminal outside Globex Desk"
 
+echo "== a managing agent: another workspace's list asks on its card =="
+for change in "--add k2n13-vin:add=k2n13-vin" "--remove k2n14-vin:remove=k2n14-vin" "--clear:clear=true"; do
+    flags="${change%%:*}"
+    want="${change#*:}"
+    set +e
+    # shellcheck disable=SC2086
+    err="$("$K2" compute allow-nodes $flags --workspace managed-ws 2>&1 </dev/null >/dev/null)"; rc=$?
+    set -e
+    expect_eq "$flags on another workspace exits 3" "$rc" "3"
+    expect_has "$flags: the code" "$err" "allow_nodes_for_needs_person"
+    expect_eq "$flags ends with the card for that change" "$(printf '%s\n' "$err" | tail -1)" \
+        "Ask with: k2 permission request compute.allow-nodes-for $want target=managed-ws --why \"<what you need it for>\""
+done
+expect_eq "the body names the workspace and the change" "$(tail -1 "$LOG" | python3 -c 'import json,sys; b=json.load(sys.stdin)["body"]; print(b.get("workspace"), b.get("clear"))')" "managed-ws True"
+
 echo "== --fixed on|off: a person's flag, shown on the list =="
 last_body() { tail -1 "$LOG" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["body"], sort_keys=True))'; }
 set +e
@@ -198,6 +225,9 @@ expect_has "study: the card" "$study" 'k2 permission request compute.allow-nodes
 expect_has "study: exactly those" "$study" "Allow adds exactly those nodes"
 expect_has "study: the code" "$study" "allow_nodes_not_granted"
 expect_has "help: --fixed" "$help" "k2 compute allow-nodes --fixed on|off [--workspace WS]"
+expect_has "help: the card for another workspace" "$help" "compute.allow-nodes-for target=WS add=N[,N…]"
+expect_has "study: the card for another workspace" "$study" "k2 permission request compute.allow-nodes-for target=WS add=N[,N…]"
+expect_has "study: its code" "$study" "allow_nodes_for_needs_person"
 expect_has "study: new nodes join" "$study" "a node newly added to this server joins"
 
 echo

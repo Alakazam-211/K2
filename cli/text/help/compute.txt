@@ -33,7 +33,12 @@ Agents:
                  list: k2 permission request compute.allow-nodes nodes=N[,N…]
                  --why "…" (Allow adds exactly those). Only nodes granted to it
                  (else allow_nodes_not_granted); --clear opens every granted node,
-                 so ask for the nodes it needs. Nodes by name
+                 so ask for the nodes it needs. Nodes by name. Another workspace's
+                 list (--workspace WS): an agent that manages it (it hired it, or
+                 it may manage compute nodes) gets allow_nodes_for_needs_person
+                 (exit 3) and asks on a card for that one change: k2 permission
+                 request compute.allow-nodes-for target=WS add=N[,N…] (or
+                 remove=N[,N…], clear=true); any other agent gets forbidden
   k2 compute allow-nodes --fixed on|off [--workspace WS]
                  a node newly added to this server (a new machine, or one
                  removed and enrolled again) joins every list unless the list is

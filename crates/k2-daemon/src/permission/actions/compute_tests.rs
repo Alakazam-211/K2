@@ -373,6 +373,130 @@ fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
     assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": b_name })).contains("compute nodes are off"));
 }
 
+// ── compute.allow-nodes-for (0.46.18) ────────────────────────────────
+
+/// The hire ledger says `boss`'s agent hired `ws` (`k2 agent hire`).
+fn hired(boss: &Ws, ws: &Ws) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let inst = format!("inst-{}", crypto::random_id().expect("id"));
+    let by = k2_core::hire::HireCaller::Agent { workspace_id: boss.id.clone() };
+    k2_core::hire::ledger::insert_applying(&conn, &inst, &by, None, "h", None, None, 1).expect("instance");
+    k2_core::hire::ledger::add_member(&conn, &inst, &ws.id, "lead", &ws.handle, "/w", true).expect("member");
+}
+
+/// 0.46.18 (Rosson 2026-11-23): an agent that manages another workspace
+/// (it hired it, or it may manage this server's compute nodes) asks for
+/// one change to that workspace's node list on a card a person answers.
+/// Refused at the ask: an agent that doesn't manage it (409
+/// `allow_nodes_not_manager`), a node not granted to that workspace, an
+/// unknown node, its own workspace, and no change or two. Already done:
+/// nothing is asked. The card names the workspace and the nodes; a Member
+/// is below its floor; Deny changes nothing.
+#[test]
+fn allow_nodes_for_is_a_managing_agents_card_a_person_answers() {
+    let _db = k2_core::db::scoped_for_test();
+    use k2_core::permission::catalog::{Direction, Floor, Grant, Proof};
+    let r = super::super::find("compute.allow-nodes-for").expect("registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.direction, r.spec.proof, r.spec.grant), (Floor::Admin, Direction::Loosen, Proof::Click, Grant::OneTime));
+
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let boss = seed("alfb");
+    let eng = seed("alfe");
+    let stranger = seed("alfs");
+    hired(&boss, &eng);
+    let (a, a_name) = list_node(&eng, "alf-a", true);
+    let (_b, b_name) = list_node(&eng, "alf-b", true);
+    let (_d, d_name) = list_node(&eng, "alf-d", true);
+    let (_c, c_name) = list_node(&boss, "alf-c", true); // the boss's, not eng's
+    let asks_of = |ws: &Ws| -> i64 {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT COUNT(*) FROM permission_requests WHERE workspace_id = ?1", [&ws.id], |r| r.get(0)).expect("count")
+    };
+
+    // No list on eng: every granted node is allowed already.
+    let (s, v) = ask(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": b_name }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{v}");
+    set_list(&eng, Some(std::slice::from_ref(&a)));
+
+    // An agent that doesn't manage eng can't ask; nothing is stored.
+    let (s, v) = ask(&stranger, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": b_name }));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("allow_nodes_not_manager")), "{v}");
+    let hint = v["error"]["hint"].as_str().unwrap_or("");
+    assert!(hint.contains(&format!("{} doesn't manage {}", stranger.handle, eng.handle)), "{hint}");
+    assert_eq!(asks_of(&stranger), 0);
+    // Nor the other way round: eng didn't hire its boss.
+    let (s, v) = ask(&eng, "compute.allow-nodes-for", json!({ "target": boss.handle, "clear": "true" }));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("allow_nodes_not_manager")), "{v}");
+
+    // Values that don't hold: refused before a card.
+    assert!(ask_refused(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": c_name })).contains("allow_nodes_not_granted"));
+    assert!(ask_refused(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": "no-such-node" })).contains("no compute node 'no-such-node'"));
+    assert!(ask_refused(&boss, "compute.allow-nodes-for", json!({ "target": boss.handle, "add": c_name })).contains("is your own workspace"));
+    assert!(ask_refused(&boss, "compute.allow-nodes-for", json!({ "target": "no-such-ws", "add": b_name })).contains("no workspace 'no-such-ws'"));
+    for params in [json!({ "target": eng.handle }), json!({ "target": eng.handle, "add": b_name, "clear": "true" })] {
+        assert!(ask_refused(&boss, "compute.allow-nodes-for", params.clone()).contains("say one change"), "{params}");
+    }
+    let (s, v) = ask(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "clear": "yes" }));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "clear is true only: {v}");
+    // Already so: nothing to ask.
+    for params in [json!({ "target": eng.handle, "add": a_name }), json!({ "target": eng.handle, "remove": b_name })] {
+        let (s, v) = ask(&boss, "compute.allow-nodes-for", params.clone());
+        assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "{params}: {v}");
+    }
+    assert!(ask_refused(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "remove": a_name })).contains("leave"));
+    assert_eq!(asks_of(&boss), 0, "a refused or done ask stores no request");
+
+    // The card: the workspace and the nodes in plain words.
+    let v = ask_ok(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": format!("{b_name},{d_name}") }));
+    let card = card_of(&v);
+    let vw = view(&boss, &card);
+    assert_eq!(vw["whatChanges"], format!("Add {b_name} and {d_name} to {}'s compute node list.", eng.handle), "{vw}");
+    assert_eq!(vw["setting"], format!("{}'s compute node list", eng.handle), "{vw}");
+    let cons = vw["consequences"].as_str().unwrap_or("");
+    assert!(cons.starts_with(&format!("{}'s jobs may then run on {b_name} and {d_name}", eng.handle)), "{cons}");
+    assert!(cons.contains("whole source tree") && cons.contains(&format!("{} asks because it hired {}", boss.handle, eng.handle)), "{cons}");
+    assert!(!vw.to_string().contains('\u{2014}'), "no em dashes on the card: {vw}");
+    let values = values_of(&vw);
+    assert_eq!(values[0], ("workspace".to_string(), boss.handle.clone()), "{vw}");
+    assert!(values.contains(&("target".to_string(), eng.handle.clone())), "{vw}");
+    assert!(values.iter().any(|(k, v)| k == &b_name && v.contains("owned by this server")), "{vw}");
+    assert_eq!(vw["approvers"]["floor"], "admin", "{vw}");
+
+    // A Member is below the floor; Deny changes nothing.
+    let member = login("alfm", Role::Member);
+    below_floor(answer_as(&member, &boss, &card, json!({ "answer": "Allow" })), "admin");
+    let admin = login("alfa", Role::Admin);
+    let (s, ans) = answer_as(&admin, &boss, &card, json!({ "answer": "Deny", "reason": "not those" }));
+    assert_eq!(s, "200 OK", "{ans}");
+    assert_eq!(row(&id_of(&v)).state, RequestState::Denied);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(k2_core::compute::allow::get(&conn, &eng.id).expect("read").expect("a list").nodes, vec![a.clone()], "deny changes nothing");
+    }
+
+    // Take a node off, and clear: the words say so.
+    let v = ask_ok(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "clear": "true" }));
+    let vw = view(&boss, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Remove {}'s compute node list.", eng.handle), "{vw}");
+    let (s, ans) = answer_as(&admin, &boss, &card_of(&v), json!({ "answer": "Deny" }));
+    assert_eq!(s, "200 OK", "{ans}");
+
+    // "Let this agent manage compute nodes" may ask too, for any workspace.
+    k2_core::workspace::settings::set_agents_can_manage_compute(&stranger.id, true).expect("manage compute");
+    let v = ask_ok(&stranger, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": b_name }));
+    let vw = view(&stranger, &card_of(&v));
+    assert!(vw["consequences"].as_str().unwrap_or("").contains("it may manage this server's compute nodes"), "{vw}");
+
+    // Compute off: nothing asks.
+    let _off = ComputeOn::set(false);
+    assert!(ask_refused(&boss, "compute.allow-nodes-for", json!({ "target": eng.handle, "add": d_name })).contains("compute nodes are off"));
+}
+
 /// A node's offer: its caps for this server (`cpus` cores, `gb` memory).
 fn sized_offer(cpus: u64, gb: u64) -> k2_core::compute::proto::frames::Offer {
     use k2_core::compute::proto::frames::{Availability, Caps, Control, Free, Offer};

@@ -270,6 +270,8 @@ pub(crate) const V1_ACTIONS: [&str; 87] = [
     // the list (narrowing it is the agent's own; widening is a person's).
     "compute.allow-nodes",
     "compute.allow-nodes-clear",
+    // 0.46.18: a managing agent's change to ANOTHER workspace's list.
+    "compute.allow-nodes-for",
     // prd-compute-blacksmith-class-v1 B2: add trusted branches to the
     // agent's own CI cache (removing one is the agent's own).
     "ci.cache-trust",
@@ -398,6 +400,21 @@ const COMPUTE_GRANT_PARAMS: &[(&str, &[ParamFrom])] = &[
     ("max-queued", &[ParamFrom::Body("/maxQueued")]),
     ("max-disk", &[ParamFrom::Body("/maxDiskGb")]),
 ];
+
+/// `compute.allow-nodes-for`'s values: the workspace and its one change.
+const ALLOW_FOR_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("target", &[ParamFrom::Response("/error/workspace")]),
+    ("add", &[ParamFrom::Response("/error/add")]),
+    ("remove", &[ParamFrom::Response("/error/remove")]),
+    ("clear", &[ParamFrom::Response("/error/clear")]),
+];
+
+/// The `compute.allow-nodes-for` wall (each row adds the change it needs).
+const ALLOW_FOR_ROW: Row = Row {
+    params: ALLOW_FOR_PARAMS,
+    optional: &["add", "remove", "clear"],
+    ..row(ask("compute.allow-nodes-for", Floor::Admin), code(403, "allow_nodes_for_needs_person"), "/cli/compute/allow-nodes/set", POST)
+};
 
 /// The `compute.grant` wall: an agent's own grant change, limits only.
 const COMPUTE_GRANT_ROW: Row = Row {
@@ -534,6 +551,13 @@ pub(crate) const ROWS: &[Row] = &[
         needs: Some("/error/clear"),
         ..row(ask("compute.allow-nodes-clear", Floor::Admin), code(403, "allow_nodes_needs_person"), "/cli/compute/allow-nodes/set", POST)
     },
+    // 0.46.18: a managing agent's change to another workspace's list. The
+    // refusal names the workspace and exactly one change (`error.add`,
+    // `error.remove` or `error.clear`); a whole list at once names none
+    // and can't be requested (the card takes one change).
+    Row { needs: Some("/error/add"), ..ALLOW_FOR_ROW },
+    Row { needs: Some("/error/remove"), ..ALLOW_FOR_ROW },
+    Row { needs: Some("/error/clear"), ..ALLOW_FOR_ROW },
     // B2: the agent's own trusted-branch change that adds a branch (the
     // refusal names them in `error.branches`).
     Row {
@@ -1723,6 +1747,7 @@ mod tests {
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
+            (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"workspace":"k2-engine","add":"k2n13"})), json!({"error":{"code":"allow_nodes_for_needs_person","hint":"x","workspace":"k2-engine","add":"k2n13"}}), "compute.allow-nodes-for"),
             (403, "POST", "/cli/ci/cache/trust/set", vec![], Some(json!({"add":["rel"]})), json!({"error":{"code":"cache_trust_needs_person","hint":"x","workspace":"k2","branches":"rel"}}), "ci.cache-trust"),
             // 0.46.9 (GH#78): an agent's git-access grant.
             (403, "POST", "/cli/compute/git-access/grant", vec![], Some(json!({"github":"acme/app"})), json!({"error":{"code":"git_access_needs_person","hint":"x","workspace":"k2","repos":"acme/app"}}), "compute.git-access"),
@@ -2038,6 +2063,32 @@ mod tests {
             let p = teach_of(403, "POST", path, &[], Some(json!({"app":"jobs"})), resp).unwrap();
             assert_eq!(p["requestable"], false, "{path}: {p}");
         }
+    }
+
+    /// 0.46.18: a managing agent's change to another workspace's list
+    /// teaches `compute.allow-nodes-for` with that workspace and exactly its
+    /// one change; a whole list at once (no change named) can't be asked.
+    #[test]
+    fn another_workspaces_list_teaches_the_for_card_with_its_one_change() {
+        let refusal = |extra: Value| {
+            let mut e = json!({"code":"allow_nodes_for_needs_person","hint":"x","workspace":"k2-engine"});
+            for (k, v) in extra.as_object().unwrap() {
+                e[k] = v.clone();
+            }
+            json!({ "error": e })
+        };
+        for (extra, want) in [
+            (json!({"add":"k2n13,k2n14"}), "k2 permission request compute.allow-nodes-for add=k2n13,k2n14 target=k2-engine --why \"<what you need it for>\""),
+            (json!({"remove":"k2n2"}), "k2 permission request compute.allow-nodes-for remove=k2n2 target=k2-engine --why \"<what you need it for>\""),
+            (json!({"clear":"true"}), "k2 permission request compute.allow-nodes-for clear=true target=k2-engine --why \"<what you need it for>\""),
+        ] {
+            let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"workspace":"k2-engine"})), refusal(extra.clone())).unwrap();
+            assert_eq!(action_of(&p), "compute.allow-nodes-for", "{extra}: {p}");
+            assert_eq!(p["command"], want, "{extra}: {p}");
+            assert_eq!(p["approvers"], "owner or admin", "{p}");
+        }
+        let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"workspace":"k2-engine","nodes":"a"})), refusal(json!({}))).unwrap();
+        assert_eq!(p["requestable"], false, "a whole list names no change: {p}");
     }
 
     /// The compute node list (0.46.8): a job off the list and an agent's

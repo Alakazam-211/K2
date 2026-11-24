@@ -432,7 +432,9 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 66;
 /// own terminal's vault confirm, answered on their phone).
 /// v26 = 0.46.17: "LLM tokens" (`llm.tokens-refresh`; `access_expired` needs
 /// nothing).
-/// v27 = 0.46.18: a site name another workspace holds (`publish.transfer`).
+/// v27 = 0.46.18: a site name another workspace holds (`publish.transfer`);
+/// "Your compute node list": new nodes join it by themselves, and another
+/// workspace's list for an agent that manages it (`compute.allow-nodes-for`).
 pub const SKILL_VERSION_PERMISSIONS: u32 = 27;
 
 // ── Content checksumming ─────────────────────────────────────────────

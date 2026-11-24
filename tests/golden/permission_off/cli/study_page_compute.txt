@@ -121,6 +121,11 @@ NODE LIST (0.46.8)
   card shows each node's size and owner; Allow adds exactly those nodes
   to your own list. Only nodes granted to you (allow_nodes_not_granted,
   exit 3: a person grants the node first) and only your own list.
+  Another workspace's list (--workspace WS): if you manage it (you hired
+  it, or you may manage compute nodes) a change is
+  allow_nodes_for_needs_person, exit 3; ask on the card it names:
+  k2 permission request compute.allow-nodes-for target=WS add=N[,N…]
+  (or remove=N[,N…], clear=true). Not yours to manage: forbidden.
   --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
   New nodes join (0.46.18): a node newly added to this server joins
@@ -1483,6 +1488,9 @@ COMMON ERRORS
                          person grants it first; exit 3, can't be requested
   allow_nodes_fixed_needs_person  --fixed on|off: a person's (the owner or an
                          Admin); exit 3, can't be requested
+  allow_nodes_for_needs_person  a change to another workspace's list you
+                         manage: a person's; exit 3, ask on a card
+                         (compute.allow-nodes-for target=WS add=N)
   job_network_invalid    --network other than none, or a --netns-dummy name or
                          address outside the rules (NETWORK); exit 2
   job_network_needs_update  --network none / --netns-dummy, but no node for you

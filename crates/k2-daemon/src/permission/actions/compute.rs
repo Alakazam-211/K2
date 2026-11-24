@@ -133,6 +133,9 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     if action == GRANT.id {
         return Some(grant_computed(ctx));
     }
+    if action == ALLOW_NODES_FOR.id {
+        return Some(allow_for_computed(ctx));
+    }
     if action != ADMIN_APPROVE.id {
         return None;
     }
@@ -1040,6 +1043,254 @@ fn apply_allow_nodes_clear(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) ->
     apply_allow_to(who, body, message)
 }
 
+// ── compute.allow-nodes-for (0.46.18, `crate::compute_allow`) ────────
+
+const ALLOW_FOR_PARAMS: &[ParamSpec] = &[
+    // The other workspace (its handle, name or id), never the asker's.
+    ParamSpec { key: "target", kind: ParamKind::Workspace, required: true, list: false, choices: &[] },
+    // Exactly one of the three.
+    ParamSpec { key: "add", kind: ParamKind::Node, required: false, list: true, choices: &[] },
+    ParamSpec { key: "remove", kind: ParamKind::Node, required: false, list: true, choices: &[] },
+    ParamSpec { key: "clear", kind: ParamKind::Choice, required: false, list: false, choices: &["true"] },
+];
+
+/// The managing agent's refusal names the workspace and its one change.
+const ALLOW_FOR_WALL_PARAMS: &[(&str, ParamFrom)] = &[
+    ("target", ParamFrom::Response("/error/workspace")),
+    ("add", ParamFrom::Response("/error/add")),
+    ("remove", ParamFrom::Response("/error/remove")),
+    ("clear", ParamFrom::Response("/error/clear")),
+];
+
+/// `compute.allow-nodes-for target= add=|remove=|clear=true` (Rosson
+/// 2026-11-23: "This should be a card you can present"): change ANOTHER
+/// workspace's compute node list, asked by an agent that manages it (it
+/// hired it, or it may manage this server's compute nodes:
+/// [`crate::compute_allow::manages`]). A new node joins lists by itself
+/// since 0.46.18; this is for the rest (a fixed list, a node to take off).
+/// A person at the floor `k2 compute allow-nodes --workspace` needs (the
+/// owner or an Admin) taps Allow, and `POST /cli/compute/allow-nodes/set`
+/// runs as them, so every check of the route runs again at the click and
+/// its `allow_nodes` event names them (and `askedBy` the agent). Only
+/// nodes granted to that workspace can be added. One-time, no undo.
+pub(crate) static ALLOW_NODES_FOR: ActionSpec = ActionSpec {
+    id: "compute.allow-nodes-for",
+    area: Area::Compute,
+    params: ALLOW_FOR_PARAMS,
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    // K2 writes the words from the stored values (`allow_for_computed`):
+    // `{target}` the workspace's handle, `{change}` the one change in plain
+    // words, `{effects}` what it does and why this agent may ask.
+    words: Words {
+        setting: "{target}'s compute node list",
+        what_changes: "{change}",
+        consequences: "{effects}",
+        scope: "{target}'s compute node list",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: concat!(cli_name!(), " compute allow-nodes --workspace {target} (a terminal outside K2)") },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::compute_allow::FOR_NEEDS_PERSON },
+        route_prefix: crate::compute_allow::SET,
+        method: WallMethod::Post,
+        params: ALLOW_FOR_WALL_PARAMS,
+    }],
+    coverage: WallCoverage::Code,
+    form: None,
+    machine_hints: &[],
+};
+
+/// What a `compute.allow-nodes-for` request asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ForChange {
+    Add(Vec<String>),
+    Remove(Vec<String>),
+    Clear,
+}
+
+/// A `compute.allow-nodes-for` request, checked: the workspace (another
+/// one, that the asker manages), its one change, and the node ids it names.
+pub(crate) struct ForAsk {
+    pub target: crate::compute_routes::Ws,
+    pub how: crate::compute_allow::Manages,
+    pub change: ForChange,
+    pub ids: Vec<String>,
+}
+
+/// A list param's names (a list, or one comma string).
+fn list_param(ctx: &Ctx, key: &str) -> Vec<String> {
+    match ctx.params.get(key) {
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Some(serde_json::Value::String(s)) => s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Why it can't be asked: `Err((None, why))` is `bad_params` (values that
+/// don't hold), `Err((Some(code), why))` an agent that may not ask.
+pub(crate) fn for_ask(ctx: &Ctx) -> Result<ForAsk, (Option<&'static str>, String)> {
+    let bad = |m: String| (None, m);
+    let token = text_param(ctx, "target").ok_or_else(|| bad("name the workspace: target=<workspace>".into()))?;
+    let target = crate::compute_routes::ws_by_token(token).ok_or_else(|| bad(format!("no workspace '{token}' on this server")))?;
+    if target.id == ctx.workspace_id {
+        return Err(bad(format!(
+            "{} is your own workspace: ask with {CLI_NAME} permission request compute.allow-nodes nodes=<node> (to add), or take a node off yourself \
+             ({CLI_NAME} compute allow-nodes --remove <node>)",
+            target.handle
+        )));
+    }
+    let (add, remove) = (list_param(ctx, "add"), list_param(ctx, "remove"));
+    let clear = text_param(ctx, "clear") == Some("true");
+    let change = match (add.is_empty(), remove.is_empty(), clear) {
+        (false, true, false) => ForChange::Add(add),
+        (true, false, false) => ForChange::Remove(remove),
+        (true, true, true) => ForChange::Clear,
+        _ => return Err(bad("say one change: add=<node>[,<node>…], remove=<node>[,<node>…] or clear=true".into())),
+    };
+    let Some(how) = crate::compute_allow::manages(&ctx.workspace_id, &target.id) else {
+        return Err((
+            Some(crate::compute_allow::NOT_MANAGER),
+            format!(
+                "{} doesn't manage {}: only an agent that hired it, or one that may manage this server's compute nodes, asks for its node list. \
+                 {}'s own agent asks for its own list, or a person runs {CLI_NAME} compute allow-nodes --workspace {} from a terminal outside K2",
+                ctx.workspace_handle, target.handle, target.handle, target.handle
+            ),
+        ));
+    };
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let mut ids = Vec::new();
+    if let ForChange::Add(names) | ForChange::Remove(names) = &change {
+        for name in names {
+            let n = k2_core::compute::store::find_node(&conn, name)
+                .filter(|n| n.state != "revoked")
+                .ok_or_else(|| bad(format!("no compute node '{name}' ({CLI_NAME} compute nodes)")))?;
+            if matches!(change, ForChange::Add(_)) && k2_core::compute::store::grant(&conn, &n.id, &target.id).is_none() {
+                return Err(bad(format!(
+                    "{} has no grant on '{}' (allow_nodes_not_granted): a person grants it first ({CLI_NAME} compute grant {} --workspace {})",
+                    target.handle, n.name, n.name, target.handle
+                )));
+            }
+            if !ids.contains(&n.id) {
+                ids.push(n.id);
+            }
+        }
+    }
+    Ok(ForAsk { target, how, change, ids })
+}
+
+/// "a, b and c" for the node names the request holds.
+fn names_words(names: &[String]) -> String {
+    and_list(names)
+}
+
+/// The card's words for `compute.allow-nodes-for`, from the stored values:
+/// `{target}` ("k2-engine"), `{change}` ("Add k2n13 and k2n14 to
+/// k2-engine's compute node list"), `{effects}`.
+fn allow_for_computed(ctx: &Ctx) -> Ctx {
+    let mut out = ctx.clone();
+    let ws = &ctx.workspace_handle;
+    let (target, change, effects) = match for_ask(ctx) {
+        Ok(a) => {
+            let t = a.target.handle.clone();
+            let why = format!("{ws} asks because {}; it gets no other access to {t}.", a.how.words(&t));
+            let (change, effects) = match &a.change {
+                ForChange::Add(n) => (
+                    format!("Add {} to {t}'s compute node list", names_words(n)),
+                    format!(
+                        "{t}'s jobs may then run on {}, and each job sends its whole source tree there (its --with repos too). Add only machines that may hold {t}'s code. {why}",
+                        names_words(n)
+                    ),
+                ),
+                ForChange::Remove(n) => (
+                    format!("Take {} off {t}'s compute node list", names_words(n)),
+                    format!(
+                        "{t}'s jobs no longer run on {}: a job of {t}'s still waiting there ends (failed/node_not_allowed), and its next jobs go to the nodes left on the list. {why}",
+                        names_words(n)
+                    ),
+                ),
+                ForChange::Clear => (
+                    format!("Remove {t}'s compute node list"),
+                    format!("{t}'s jobs may then run on any node granted to it again, and each job sends its whole source tree to the node it runs on. {why}"),
+                ),
+            };
+            (t, change, effects)
+        }
+        Err(_) => {
+            let t = text_param(ctx, "target").unwrap_or("another workspace").to_string();
+            (t.clone(), format!("Change {t}'s compute node list"), String::new())
+        }
+    };
+    out.params.insert("target".into(), json!(target));
+    out.params.insert("change".into(), json!(change));
+    out.params.insert("effects".into(), json!(effects));
+    out
+}
+
+fn check_allow_nodes_for(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let a = match for_ask(ctx) {
+        Ok(a) => a,
+        Err((Some(code), why)) => return Check::Unavailable { code, why },
+        Err((None, why)) => return Check::Moved(why),
+    };
+    let entry = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::compute::allow::get(&conn, &a.target.id)
+    };
+    let list = match entry {
+        Ok(e) => e.map(|e| e.nodes),
+        Err(e) => return Check::Moved(format!("{}'s node list can't be read ({e}); a person sets it again", a.target.handle)),
+    };
+    match (&a.change, list) {
+        // No list: every granted node is allowed already, and nothing to
+        // take off or clear.
+        (_, None) => Check::AlreadyDone,
+        (ForChange::Add(_), Some(l)) if a.ids.iter().all(|id| l.contains(id)) => Check::AlreadyDone,
+        (ForChange::Remove(_), Some(l)) if !a.ids.iter().any(|id| l.contains(id)) => Check::AlreadyDone,
+        (ForChange::Remove(_), Some(l)) if l.iter().all(|id| a.ids.contains(id)) => Check::Moved(format!(
+            "that would leave {}'s list empty; a list keeps at least one node (clear=true removes the list: every granted node again)",
+            a.target.handle
+        )),
+        _ => Check::Needed,
+    }
+}
+
+/// Through the route's own entry, as the person who clicked: the
+/// workspace by id, the one change, and who asked (for its event).
+fn apply_allow_nodes_for(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let a = match for_ask(ctx) {
+        Ok(a) => a,
+        Err((_, m)) => return Applied::Refused { code: "bad_params".into(), message: m },
+    };
+    let t = &a.target.handle;
+    let mut body = json!({ "workspace": a.target.id, "askedBy": format!("agent:{}", ctx.workspace_handle) });
+    let message = match &a.change {
+        ForChange::Add(n) => {
+            body["add"] = json!(n);
+            format!("{t}'s jobs may run on {} now.", names_words(n))
+        }
+        ForChange::Remove(n) => {
+            body["remove"] = json!(n);
+            format!("{} {} off {t}'s compute node list now.", names_words(n), if n.len() == 1 { "is" } else { "are" })
+        }
+        ForChange::Clear => {
+            body["clear"] = json!(true);
+            format!("{t} has no node list now: its jobs may go to any node granted to it.")
+        }
+    };
+    apply_allow_to(who, body, message)
+}
+
 /// The card's extra values for `compute.allow-nodes` (0.46.15): one row
 /// per named node with what the person is letting the agent's jobs reach,
 /// its platform, its size for this server and who owns it ("lc: linux
@@ -1047,12 +1298,15 @@ fn apply_allow_nodes_clear(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) ->
 /// the card's text hash, so a node coming online between the ask and the
 /// click never makes the card stale. Empty for every other action.
 pub(crate) fn card_values(action: &str, ctx: &Ctx) -> Vec<k2_core::permission::card::KeyValue> {
-    if action != ALLOW_NODES.id {
-        return Vec::new();
-    }
+    // 0.46.18: the nodes another workspace's list would gain, the same way.
+    let names = match action {
+        a if a == ALLOW_NODES.id => node_names(ctx),
+        a if a == ALLOW_NODES_FOR.id => list_param(ctx, "add"),
+        _ => return Vec::new(),
+    };
     let h = k2_core::db::shared();
     let conn = h.lock();
-    node_names(ctx)
+    names
         .into_iter()
         .map(|name| {
             let value = match k2_core::compute::store::find_node(&conn, &name).filter(|n| n.state != "revoked") {
@@ -1727,6 +1981,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &GRANT, check: check_grant, apply: apply_grant },
         Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
         Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
+        Registered { spec: &ALLOW_NODES_FOR, check: check_allow_nodes_for, apply: apply_allow_nodes_for },
         Registered { spec: &CI_CACHE_TRUST, check: check_cache_trust, apply: apply_cache_trust },
         Registered { spec: &PACKAGES, check: check_packages, apply: apply_packages },
         Registered { spec: &PACKAGES_POLICY, check: check_packages_policy, apply: apply_packages_policy },

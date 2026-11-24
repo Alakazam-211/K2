@@ -280,6 +280,30 @@ pub fn creator_key_of(conn: &Connection, workspace_id: &str) -> Option<String> {
     .flatten()
 }
 
+/// Did the agent of `hirer_workspace_id` hire `workspace_id` (`k2 agent
+/// hire` from its own terminal: the instance's actor is
+/// `agent:<hirer id>`), and is that workspace still a live member of the
+/// hire? The record a "managing agent" check reads (0.46.18: it may ask a
+/// person to change that workspace's compute node list). Never true for a
+/// workspace and itself.
+pub fn hired_by_agent(conn: &Connection, hirer_workspace_id: &str, workspace_id: &str) -> bool {
+    let (hirer, ws) = (hirer_workspace_id.trim(), workspace_id.trim());
+    if hirer.is_empty() || ws.is_empty() || hirer == ws {
+        return false;
+    }
+    let actor = HireCaller::Agent { workspace_id: hirer.to_string() }.actor();
+    conn.query_row(
+        "SELECT 1 FROM agent_instance_members m JOIN agent_instances i ON i.id = m.instance_id \
+         WHERE m.workspace_id = ?1 AND m.status = 'live' AND i.status <> 'failed' AND i.actor = ?2 LIMIT 1",
+        params![ws, actor],
+        |_| Ok(()),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .is_some()
+}
+
 /// The live instance a workspace belongs to.
 pub fn instance_of_workspace(conn: &Connection, workspace_id: &str) -> Option<String> {
     conn.query_row(
@@ -397,5 +421,26 @@ mod tests {
         let b = serde_json::json!({"b": {"x": [1, {"p": 2, "q": 1}], "y": 2}, "a": 1});
         assert_eq!(request_hash(&a), request_hash(&b));
         assert_ne!(request_hash(&a), request_hash(&serde_json::json!({"a": 2})));
+    }
+
+    /// 0.46.18: only the agent that hired a workspace, while that
+    /// workspace is still a live member of the hire; not the owner's or an
+    /// API key's hire, and never a workspace and itself.
+    #[test]
+    fn hired_by_agent_reads_the_hire_ledger() {
+        let c = crate::db::isolated_test_connection();
+        let boss = HireCaller::Agent { workspace_id: "boss".into() };
+        insert_applying(&c, "inst-1", &boss, None, "h1", None, None, 2).expect("instance");
+        add_member(&c, "inst-1", "engine", "lead", "engine", "/w/engine", true).expect("member");
+        add_member(&c, "inst-1", "helper", "member", "helper", "/w/helper", false).expect("member");
+        insert_applying(&c, "inst-2", &HireCaller::Owner, None, "h2", None, None, 1).expect("instance");
+        add_member(&c, "inst-2", "cores", "lead", "cores", "/w/cores", true).expect("member");
+        assert!(hired_by_agent(&c, "boss", "engine") && hired_by_agent(&c, "boss", "helper"));
+        assert!(!hired_by_agent(&c, "boss", "cores"), "the owner hired it");
+        assert!(!hired_by_agent(&c, "engine", "boss"), "not the other way round");
+        assert!(!hired_by_agent(&c, "other", "engine"));
+        assert!(!hired_by_agent(&c, "boss", "boss") && !hired_by_agent(&c, "", "engine"));
+        set_member_status(&c, "inst-1", "helper", "retired");
+        assert!(!hired_by_agent(&c, "boss", "helper"), "a retired member is no longer managed");
     }
 }

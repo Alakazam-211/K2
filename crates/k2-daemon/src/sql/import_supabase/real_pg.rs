@@ -314,7 +314,7 @@ fn real_pg_import_supabase_end_to_end() {
     let _g = crate::sql::sql_server_test_lock();
     let _db = k2_core::db::scoped_for_test();
     let ws_dir = std::env::temp_dir().join(format!("k2-rpi-ws-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(ws_dir.join(".k2/db/dumps")).unwrap();
+    std::fs::create_dir_all(k2_core::workspace_dot_dir(&ws_dir).join("db/dumps")).unwrap();
     let ws_path = ws_dir.to_string_lossy().into_owned();
     let ws = format!("ws-rpi-{}", &uuid::Uuid::new_v4().to_string()[..6]);
     {
@@ -336,7 +336,7 @@ fn real_pg_import_supabase_end_to_end() {
     c.check("db create --cluster 17/k2supa --name supa_app", made.is_ok(), format!("{made:?}"));
     let db = "supa_app";
     let migrator = format!("{db}_migrator");
-    let dump = ws_dir.join(".k2/db/dumps/supa.dump").to_string_lossy().into_owned();
+    let dump = k2_core::workspace_dot_dir(&ws_dir).join("db/dumps/supa.dump").to_string_lossy().into_owned();
     let sp = SRC_PORT.to_string();
     run(&format!("{}/pg_dump", bin()), &["-Fc", "-h", &b.sock(), "-p", &sp, "-U", "postgres", "-d", "supa_src", "-f", &dump], None).expect("pg_dump");
     let (ws_r, wp_r) = (ws.as_str(), ws_path.as_str());
@@ -445,11 +445,11 @@ fn real_pg_import_supabase_end_to_end() {
     // The migration map and a later k2 db migrate.
     let applied = b.su(DST_PORT, db, "SELECT string_agg(version, ',' ORDER BY version) FROM _k2_migrations;");
     c.check("migrations recorded as NNNN_name", applied == "0001_init,0002_add_notes", &applied);
-    let file = std::fs::read_to_string(ws_dir.join(".k2/db/migrations/0002_add_notes.sql")).unwrap_or_default();
+    let file = std::fs::read_to_string(k2_core::workspace_dot_dir(&ws_dir).join("db/migrations/0002_add_notes.sql")).unwrap_or_default();
     c.check("the renamed file holds its statements", file.contains("20240215093000_add notes") && file.contains("create table public.notes"), &file);
     let map = std::fs::read_to_string(ws_dir.join(super::MAP_FILE)).unwrap_or_default();
     c.check("the map is recorded", map.contains("\"supabase\": \"20240101120000\"") && map.contains("\"renamed\": \"0001_init\""), &map);
-    std::fs::write(ws_dir.join(".k2/db/migrations/0003_more.sql"), "CREATE TABLE public.more (x int);\n").unwrap();
+    std::fs::write(k2_core::workspace_dot_dir(&ws_dir).join("db/migrations/0003_more.sql"), "CREATE TABLE public.more (x int);\n").unwrap();
     let migrated = crate::sql::routes::with_test_ops(b, || ops::migrate_db(b, &secrets, &ws, Some(db), &ws_path, None));
     c.check("db migrate then applies only 0003", migrated.as_ref().is_ok_and(|m| m["applied"] == serde_json::json!(["0003_more"])), format!("{migrated:?}"));
 

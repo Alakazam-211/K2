@@ -280,7 +280,7 @@ mod windows_tests {
     #[test]
     fn a_bad_saved_port_is_refused_with_no_shell() {
         let user: PathBuf = std::env::temp_dir().join(format!("k5-port-win-{}", std::process::id()));
-        let k2 = user.join(".k2");
+        let k2 = k2_client::paths::k2_home_in(&user);
         std::fs::create_dir_all(&k2).unwrap();
         std::fs::write(k2.join("heartbeat.port"), "70000\0\n").unwrap();
         let profile = user.to_str().unwrap();

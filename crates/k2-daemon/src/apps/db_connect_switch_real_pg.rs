@@ -205,8 +205,8 @@ fn real_pg_switch_and_rollback() {
     super::super::alerts::set_sink(Some(Box::new(|_ws: &str, _text: &str| {})));
     let ws = "ws-switch-real".to_string();
     let ws_dir = std::env::temp_dir().join(format!("k2-sw-ws-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(ws_dir.join(".k2/db/migrations")).unwrap();
-    std::fs::write(ws_dir.join(".k2/db/migrations/0001_notes.sql"), "CREATE TABLE notes (id int PRIMARY KEY, body text NOT NULL);\n").unwrap();
+    std::fs::create_dir_all(k2_core::workspace_dot_dir(&ws_dir).join("db/migrations")).unwrap();
+    std::fs::write(k2_core::workspace_dot_dir(&ws_dir).join("db/migrations/0001_notes.sql"), "CREATE TABLE notes (id int PRIMARY KEY, body text NOT NULL);\n").unwrap();
     let ws_path = ws_dir.to_string_lossy().into_owned();
     {
         let h = k2_core::db::shared();

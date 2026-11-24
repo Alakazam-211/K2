@@ -849,7 +849,7 @@ mod windows_tests {
     #[test]
     fn the_prelude_reads_the_files_with_no_shell() {
         let user = scratch("prelude");
-        let k2 = user.join(".k2");
+        let k2 = k2_client::paths::k2_home_in(&user);
         std::fs::create_dir_all(&k2).unwrap();
         let env = env_of(&[
             ("USERPROFILE", user.as_os_str()),

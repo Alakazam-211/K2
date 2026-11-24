@@ -875,7 +875,7 @@ mod windows_tests {
     #[test]
     fn the_port_and_token_come_from_the_k2_home() {
         let user = scratch("files");
-        let home = user.join(".k2");
+        let home = k2_client::paths::k2_home_in(&user);
         std::fs::create_dir_all(&home).unwrap();
         std::fs::write(home.join("heartbeat.port"), "43210\n").unwrap();
         std::fs::write(home.join("heartbeat.token"), "owner-tok\n").unwrap();
@@ -902,9 +902,9 @@ mod windows_tests {
         // ends there whatever is above it; the user home's own `.k2` (the
         // K2 home) is passed over on the way.
         let base = scratch("project");
-        std::fs::create_dir_all(base.join(".k2")).unwrap();
+        std::fs::create_dir_all(k2_client::workspace_dir::workspace_dot_dir(&base)).unwrap();
         let user = base.join("user");
-        let home = user.join(".k2");
+        let home = k2_client::paths::k2_home_in(&user);
         std::fs::create_dir_all(&home).unwrap();
         let deep = user.join("Documents").join("notes");
         std::fs::create_dir_all(&deep).unwrap();
@@ -922,7 +922,7 @@ mod windows_tests {
         );
         // A workspace folder between them is the project.
         let ws = user.join("Documents");
-        std::fs::create_dir_all(ws.join(".k2")).unwrap();
+        std::fs::create_dir_all(k2_client::workspace_dir::workspace_dot_dir(&ws)).unwrap();
         let s = settings(profile(&user), &home, &deep);
         assert_eq!(PathBuf::from(&s.project), ws);
         std::fs::remove_dir_all(&base).unwrap();

@@ -74,7 +74,7 @@ fn real_pg_compat_identity_and_policy_drill() {
     let ws = format!("ws-rpc-{}", &uuid::Uuid::new_v4().to_string()[..8]);
     let other_ws = format!("{ws}-r");
     let dir = std::env::temp_dir().join(format!("k2-rpc-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(dir.join(".k2/db/migrations")).unwrap();
+    std::fs::create_dir_all(k2_core::workspace_dot_dir(&dir).join("db/migrations")).unwrap();
     let path = dir.to_string_lossy().into_owned();
     let service_id = {
         let h = k2_core::db::shared();
@@ -165,7 +165,7 @@ fn real_pg_compat_identity_and_policy_drill() {
 
     // ── the App's schema: reference-style policies ──
     std::fs::write(
-        dir.join(".k2/db/migrations/0001_app.sql"),
+        k2_core::workspace_dot_dir(&dir).join("db/migrations/0001_app.sql"),
         "CREATE TABLE notes (id serial PRIMARY KEY, user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE, body text NOT NULL, tier text);\n\
          ALTER TABLE notes ENABLE ROW LEVEL SECURITY;\n\
          CREATE POLICY notes_select ON notes FOR SELECT TO authenticated USING (auth.uid() = user_id);\n\
@@ -389,7 +389,7 @@ fn real_pg_compat_identity_and_policy_drill() {
     check("set_claims refuses while another role is a member of the key's owner", o.as_ref().err().is_some_and(|e| e.contains("readable by another role")), &o, &mut fails);
     srv.su("postgres", &format!("REVOKE \"{db}_migrator\" FROM outsider;"));
     let mig2 = crate::sql::routes::with_test_ops(srv, || {
-        std::fs::write(dir.join(".k2/db/migrations/0002_more.sql"), "CREATE TABLE more_t (id int);\n").unwrap();
+        std::fs::write(k2_core::workspace_dot_dir(&dir).join("db/migrations/0002_more.sql"), "CREATE TABLE more_t (id int);\n").unwrap();
         crate::sql::ops::migrate(srv, &secrets, &ws, &path, None)
     });
     let o = srv.script(&agent, &db, "SELECT count(*) FROM k2.claims_key;");

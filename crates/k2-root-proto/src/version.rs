@@ -161,10 +161,9 @@
 //!   refuses the argv, so the daemon asks for the update before it sends
 //!   it. Another 0.46.17 lane that needs a helper change joins 18 here with
 //!   its own namespace flag; never 19 before 18 ships.
-//! - 19 = every root-helper change of the first release after 0.46.17, in
-//!   one bump, shared by every lane (the ONE place to add to it; isolation
-//!   M1b's `agents` verbs and the Supabase-compat lane A role verbs join it
-//!   with their own flags): point-in-time restore of a named cluster
+//! - 19 = the first release after 0.46.17, one bump (this is the ONE place
+//!   to add to it; another lane joins 19 here with its own namespace flag):
+//!   point-in-time restore of a named cluster
 //!   (prd-app-supabase-compat-v1 §11.1, lane E), `pg basebackup
 //!   <M>-<name>`, `pg backups <M>-<name>` (open, read-only), `pg
 //!   restore-to <M>-<name> <new> <UTC stamp> [--drill]` (always a new
@@ -429,7 +428,7 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 19, "protocol 19 = the first bump after 0.46.17 (point-in-time restore, isolation, compat roles); 18 = 0.46.17's (archiving on an existing named cluster)");
+        assert_eq!(PROTOCOL, 19, "protocol 19 = the first bump after 0.46.17 (point-in-time restore of a named cluster); 18 = 0.46.17's (archiving on an existing named cluster)");
         assert_eq!(PGRESTORE_MIN_PROTOCOL, 19, "pg basebackup / restore-to join the bump after 0.46.17");
         for argv in [
             &["pg", "basebackup", "17-feedback"][..],

@@ -231,6 +231,21 @@ pub fn set_third_party_verifier(f: ThirdPartyVerifier) {
     let _ = verifier().set(f);
 }
 
+/// Check a third-party ID token for `cfg`'s App with the registered issuer
+/// check: `(claims, App user id)` or `(status, code, message)`. Every door
+/// that takes these tokens (`/rest/v1`, `/auth/v1`, `/storage/v1`) asks
+/// here, so they agree. Blocking (K2's stores, the key cache).
+pub fn third_party_check(cfg: &DoorConfig, token: &str) -> Result<(Value, Option<String>), (u16, String, String)> {
+    #[cfg(test)]
+    let test_f = TEST_VERIFIER.with(|t| t.get());
+    #[cfg(not(test))]
+    let test_f: Option<ThirdPartyVerifier> = None;
+    let Some(f) = test_f.or_else(|| verifier().get().copied()) else {
+        return Err((401, "issuer_unknown".into(), "this App trusts no third-party token issuer (k2 app identity issuer add <app> …)".into()));
+    };
+    f(cfg, token)
+}
+
 /// supabase-js decodes the access token as a JWT in `setSession` (and
 /// `getClaims`; S0's answer, PRD §18): so the auth door hands server code
 /// its pass in a JWT's shape, `<header>.<claims>.<pass>`, header
@@ -315,7 +330,17 @@ fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// The claims for a K2 session of this App (PRD §5.2).
+/// Lane A's claims for the pass's App user (PRD §5.2, with its
+/// `app_metadata` and `user_metadata`): the same object the brokered lane
+/// and `k2.set_claims` use. `None` when the user can't be read.
+pub fn user_claims(app_id: &str, pass: &SkinPass) -> Option<Value> {
+    let pid = pass.principal_id.as_deref()?;
+    let user = k2_core::skin::compat::app_user(&pass.app, pid).ok().flatten()?;
+    Some(super::claims::for_user(app_id, &user, Some(&pass.id)))
+}
+
+/// The claims for a K2 session of this App (PRD §5.2) when its App user
+/// can't be read ([`user_claims`] first).
 pub fn person_claims(app_id: &str, pass: &SkinPass, p: Option<&SkinPrincipal>) -> Value {
     let now = now_secs();
     json!({
@@ -373,8 +398,10 @@ fn service_key(service_id: &str, raw: &str) -> Option<String> {
 }
 
 fn person(app_id: &str, pass: SkinPass, device: bool) -> Resolved {
-    let p = pass.principal_id.as_deref().and_then(principal);
-    let claims = person_claims(app_id, &pass, p.as_ref());
+    let claims = user_claims(app_id, &pass).unwrap_or_else(|| {
+        let p = pass.principal_id.as_deref().and_then(principal);
+        person_claims(app_id, &pass, p.as_ref())
+    });
     Resolved { caller: Caller { role: DbRole::Authenticated, claims }, who: Who::Person { pass, device } }
 }
 
@@ -418,14 +445,7 @@ pub fn resolve(req: &DoorRequest, ctx: &Ctx) -> Result<Resolved, DoorAnswer> {
     }
     if let Some(b) = bearer {
         if looks_like_jwt(b) {
-            #[cfg(test)]
-            let test_f = TEST_VERIFIER.with(|t| t.get());
-            #[cfg(not(test))]
-            let test_f: Option<ThirdPartyVerifier> = None;
-            let Some(f) = test_f.or_else(|| verifier().get().copied()) else {
-                return Err(refuse(401, "issuer_unknown", "this App trusts no third-party token issuer", Some("k2 app identity issuer add <app> …")));
-            };
-            return match f(cfg, b) {
+            return match third_party_check(cfg, b) {
                 Ok((claims, principal_id)) => {
                     let role = match claims.get("role").and_then(Value::as_str) {
                         Some("authenticated") => DbRole::Authenticated,
@@ -588,7 +608,7 @@ async fn answer(req: DoorRequest, ctx: &Ctx) -> DoorAnswer {
         Door::Rest => super::rest_door::handle(&req, ctx, &who).await,
         Door::Auth => unreachable_auth(),
         // Never reached: serve_one hands storage to serve_storage first.
-        Door::Storage => refuse(404, "not_built", "the /storage/v1 door is not on this server yet", None),
+        Door::Storage => refuse(500, "failed", "the /storage/v1 door answers before this (a K2 bug)", None),
     }
 }
 
@@ -640,22 +660,16 @@ pub async fn serve_one<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, head: &str,
     http::write_answer(s, &a, head_only, !close).await
 }
 
-/// `/storage/v1`: LANE D's door. Lane D replaces this body with
-/// `crate::apps::compat::storage_door::serve(s, head, head_len, &ctx.cfg.app_id, via)`
-/// (`via` from `ctx.ingress`); its caller rules come from [`resolve`] (build
-/// a [`DoorRequest`] from the head with `http::parse_head`). The connection
-/// closes after it either way.
+/// `/storage/v1`: lane D's door (`storage_door`), which reads the head and
+/// streams its own bodies. Its caller rules are `storage_auth`'s; third-party
+/// tokens go through [`third_party_check`] like every door's. The
+/// connection closes after it.
 async fn serve_storage<S: AsyncRead + AsyncWrite + Unpin>(s: &mut S, head: &str, head_len: usize, ctx: &Ctx) {
-    let _ = ctx;
-    // Read the head only; a body is never read, and the close tells the
-    // client so.
-    let mut consumed = vec![0u8; head_len];
-    if tokio::io::AsyncReadExt::read_exact(s, &mut consumed).await.is_err() {
-        return;
-    }
-    let head_only = head.starts_with("HEAD ");
-    let a = refuse(404, "not_built", "the /storage/v1 door is not on this server yet", None).closing();
-    http::write_answer(s, &a, head_only, false).await;
+    let via = match ctx.ingress {
+        Ingress::Link => super::storage_auth::Via::Link,
+        Ingress::Public { .. } => super::storage_auth::Via::Public,
+    };
+    super::storage_door::serve(s, head, head_len, &ctx.cfg.app_id, via).await;
 }
 
 // ── the public host (apps::router) ───────────────────────────────────

@@ -13,12 +13,14 @@
 //! sit where page script can read it (R4). A pass for another App, a
 //! revoked one, or a platform pass is refused.
 //!
-//! **Seams for the other lanes.** Lane A owns the claims object
-//! ([`claims_for_pass`] builds §5.2's shape from what K2 has today) and
-//! third-party tokens ([`third_party`] refuses every one until its issuer
-//! list lands). Lane C owns the publishable key and the `service` scope's
-//! mint: this door reads `service` from the key's stored scopes, so a key
-//! minted with it works here the day the scope exists.
+//! **The other lanes.** The claims are lane A's (`door::user_claims`;
+//! [`claims_for_pass`] only when the App user can't be read), and
+//! third-party tokens go through the doors' one issuer check
+//! ([`third_party`], `door::third_party_check`). Lane C owns the
+//! publishable key (sent as the bearer when nobody is signed in: no
+//! credential), the pass in a JWT's shape (its claims must be K2's) and
+//! the `service` scope's mint; this door reads `service` from the key's
+//! stored scopes.
 
 use serde_json::{json, Value};
 
@@ -73,11 +75,6 @@ pub fn cookie_value<'a>(cookie: &'a str, name: &str) -> Option<&'a str> {
     })
 }
 
-/// A JWT's shape: three dot-separated base64url parts.
-fn looks_like_jwt(t: &str) -> bool {
-    let parts: Vec<&str> = t.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
-}
 
 fn is_write(method: &str) -> bool {
     !matches!(method, "GET" | "HEAD" | "OPTIONS")
@@ -103,7 +100,12 @@ pub struct Lookups<'a> {
 
 /// Resolve the caller of one request (blocking: the stores are SQLite).
 pub fn resolve(app: &AppFacts, b: &DoorConfig, via: Via, r: &ReqAuth, look: &Lookups<'_>) -> SResult<Caller> {
-    let auth_bearer = bearer(r.authorization.as_deref());
+    // supabase-js sends the publishable key as the bearer when nobody is
+    // signed in: that is no credential (the anon lane decides). The auth
+    // door hands server code its pass as `header.claims.<pass>`: the pass
+    // is the credential, and the claims must be the ones K2 wrote.
+    let raw_bearer = bearer(r.authorization.as_deref()).filter(|t| !super::door::is_publishable(t));
+    let auth_bearer = raw_bearer.map(super::door::unwrap_pass);
     // 1. The server key, as `apikey` or a bearer.
     let key = [r.apikey.as_deref().map(str::trim), auth_bearer]
         .into_iter()
@@ -140,10 +142,17 @@ pub fn resolve(app: &AppFacts, b: &DoorConfig, via: Via, r: &ReqAuth, look: &Loo
                 )
                 .with_http(403));
             }
+            if let Some(raw) = raw_bearer.filter(|raw| *raw != t) {
+                let pass = (look.pass)(t).map_err(|e| StorageError::unavailable(format!("can't read sessions: {e}")))?;
+                let ok = pass.as_ref().is_some_and(|p| super::door::claims_match(raw, &super::door::session_claims(&app.app_id, p)));
+                if !ok {
+                    return Err(StorageError::invalid_jwt("the token's claims are not the ones K2 wrote for this session: sign in again"));
+                }
+            }
             return person(app, t, look);
         }
-        if looks_like_jwt(t) {
-            return third_party(app, t);
+        if super::issuers::looks_like_jwt(t) {
+            return third_party(b, t);
         }
         return Err(StorageError::invalid_jwt("invalid credential"));
     }
@@ -174,12 +183,13 @@ fn person(app: &AppFacts, raw: &str, look: &Lookups<'_>) -> SResult<Caller> {
     if pass.app != app.service_id {
         return Err(StorageError::access_denied("a session of another App").with_http(403));
     }
-    Ok(Caller { role: DbRole::Authenticated, claims: claims_for_pass(app, &pass, &principal), label: format!("guest:{principal}") })
+    let claims = super::door::user_claims(&app.app_id, &pass).unwrap_or_else(|| claims_for_pass(app, &pass, &principal));
+    Ok(Caller { role: DbRole::Authenticated, claims, label: format!("guest:{principal}") })
 }
 
-/// The claims object for a K2 session (PRD §5.2). Lane A's `claims.rs`
-/// replaces this with the full builder (metadata, the App role); the
-/// fields and their meaning are the contract.
+/// The claims object for a K2 session (PRD §5.2) when its App user can't
+/// be read; otherwise lane A's builder (`door::user_claims`, with the
+/// metadata), as on `/rest/v1`.
 pub fn claims_for_pass(app: &AppFacts, pass: &k2_core::skin::SkinPass, principal: &str) -> Value {
     let now = k2_core::deploy::now();
     let email = pass.username.contains('@').then(|| pass.username.to_ascii_lowercase());
@@ -197,13 +207,21 @@ pub fn claims_for_pass(app: &AppFacts, pass: &k2_core::skin::SkinPass, principal
     })
 }
 
-/// A third-party ID token (PRD §6). Lane A's issuer list verifies it; until
-/// that lands, every one is refused, loudly.
-pub fn third_party(app: &AppFacts, _token: &str) -> SResult<Caller> {
-    Err(StorageError::invalid_jwt(format!(
-        "no trusted token issuer is set for {} (k2 app identity issuer add)",
-        app.app_id
-    )))
+/// A third-party ID token (PRD §6), checked by lane A's issuer list
+/// through the doors' one slot (`door::third_party_check`), so storage and
+/// `/rest/v1` agree on every token.
+pub fn third_party(b: &DoorConfig, token: &str) -> SResult<Caller> {
+    match super::door::third_party_check(b, token) {
+        Ok((claims, user)) => {
+            if claims.get("role").and_then(Value::as_str) != Some("authenticated") {
+                return Err(StorageError::internal("the issuer check gave claims without the authenticated role"));
+            }
+            let label = user.map_or_else(|| "third-party".to_string(), |u| format!("guest:{u}"));
+            Ok(Caller { role: DbRole::Authenticated, claims, label })
+        }
+        // Supabase Storage answers every bad token the same way (InvalidJWT).
+        Err((_, code, message)) => Err(StorageError::invalid_jwt(format!("{code}: {message}"))),
+    }
 }
 
 /// The live stores.
@@ -344,11 +362,72 @@ mod tests {
     }
 
     #[test]
-    fn third_party_tokens_wait_for_lane_a() {
+    fn a_third_party_token_with_no_issuer_check_is_refused() {
+        crate::apps::compat::door::TEST_VERIFIER.with(|t| t.set(None));
         let r = ReqAuth { method: "GET".into(), authorization: Some("Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln".into()), ..Default::default() };
         let e = run(&bind(), Via::Public, r, None, None).expect_err("no issuer");
         assert_eq!(e.code, "InvalidJWT");
-        assert!(e.message.contains("issuer"), "{}", e.message);
+        assert!(e.message.contains("issuer_unknown"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_third_party_token_takes_the_doors_issuer_check() {
+        fn ok(_: &DoorConfig, _: &str) -> Result<(Value, Option<String>), (u16, String, String)> {
+            Ok((json!({"role": "authenticated", "sub": "fb-uid-1", "email": "ana@example.com"}), Some(USER.into())))
+        }
+        fn refused(_: &DoorConfig, _: &str) -> Result<(Value, Option<String>), (u16, String, String)> {
+            Err((401, "token_expired".into(), "the token has expired".into()))
+        }
+        fn no_role(_: &DoorConfig, _: &str) -> Result<(Value, Option<String>), (u16, String, String)> {
+            Ok((json!({"sub": "fb-uid-1"}), None))
+        }
+        let r = ReqAuth { method: "GET".into(), authorization: Some("Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln".into()), ..Default::default() };
+        crate::apps::compat::door::TEST_VERIFIER.with(|t| t.set(Some(ok)));
+        for via in [Via::Public, Via::Link] {
+            let c = run(&bind(), via, r.clone(), None, None).expect("a checked token");
+            assert_eq!(c.role, DbRole::Authenticated);
+            assert_eq!(c.claims["email"], "ana@example.com", "the email claim reaches auth.jwt()");
+            assert_eq!(c.claims["sub"], "fb-uid-1");
+            assert_eq!(c.label, format!("guest:{USER}"));
+        }
+        crate::apps::compat::door::TEST_VERIFIER.with(|t| t.set(Some(refused)));
+        let e = run(&bind(), Via::Link, r.clone(), None, None).expect_err("refused by the check");
+        assert_eq!(e.code, "InvalidJWT");
+        assert!(e.message.contains("token_expired"), "{}", e.message);
+        crate::apps::compat::door::TEST_VERIFIER.with(|t| t.set(Some(no_role)));
+        let e = run(&bind(), Via::Link, r, None, None).expect_err("claims without the role");
+        assert!(e.status >= 500, "{e}");
+        crate::apps::compat::door::TEST_VERIFIER.with(|t| t.set(None));
+    }
+
+    #[test]
+    fn the_publishable_key_as_bearer_is_no_credential() {
+        let pk = crate::apps::compat::door::publishable_key("svc-jobs");
+        let r = ReqAuth { method: "GET".into(), authorization: Some(format!("Bearer {pk}")), apikey: Some(pk.clone()), ..Default::default() };
+        let e = run(&bind(), Via::Public, r.clone(), None, None).expect_err("anon off");
+        assert_eq!(e.status, 401, "{e}");
+        let mut b = bind();
+        b.anon = true;
+        let c = run(&b, Via::Public, r, None, None).expect("anon on");
+        assert_eq!(c.role, DbRole::Anon);
+    }
+
+    #[test]
+    fn the_auth_doors_pass_in_a_jwt_shape_is_the_pass_on_the_link() {
+        let raw = "k2skn_tok1.secret";
+        let p = pass("svc-jobs");
+        let wrapped = crate::apps::compat::door::wrap_pass(raw, &crate::apps::compat::door::session_claims("jobs", &p));
+        let r = ReqAuth { method: "GET".into(), authorization: Some(format!("Bearer {wrapped}")), ..Default::default() };
+        let c = run(&bind(), Via::Link, r.clone(), Some(p.clone()), None).expect("the wrapped pass");
+        assert_eq!(c.role, DbRole::Authenticated);
+        assert_eq!(c.claims["sub"], USER);
+        let e = run(&bind(), Via::Public, r, Some(p.clone()), None).expect_err("never a bearer on the public host");
+        assert_eq!(e.http_status(), 403, "{e}");
+        // The same pass under claims K2 didn't write: refused.
+        let forged = crate::apps::compat::door::wrap_pass(raw, &json!({"sub": "someone-else", "role": "service_role"}));
+        let r = ReqAuth { method: "GET".into(), authorization: Some(format!("Bearer {forged}")), ..Default::default() };
+        let e = run(&bind(), Via::Link, r, Some(p), None).expect_err("forged claims");
+        assert_eq!(e.code, "InvalidJWT");
     }
 
     #[test]

@@ -437,6 +437,8 @@ pub fn spawn_health_loop() {
                 // checked against the App users now (loud on a difference),
                 // then kept in step as skin.db changes.
                 crate::apps::compat::users_sync::spawn_watcher();
+                // ...and its third-party token check, for every door.
+                crate::apps::compat::door::set_third_party_verifier(crate::apps::compat::issuers::door_verifier);
                 // 0.46.17: rights an older K2 left on `public` for
                 // workspaces no longer granted, cleared once per database.
                 let _ = std::panic::catch_unwind(|| {

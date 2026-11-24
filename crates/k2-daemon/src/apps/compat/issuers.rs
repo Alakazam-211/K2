@@ -374,6 +374,20 @@ fn audit_identity_changed(app_id: &str, issuer: &str, sub: &str, user: &str, rec
     }
 }
 
+/// [`verify`] in the shape the doors' slot takes
+/// (`door::set_third_party_verifier`, registered at boot): the claims and
+/// the App user, or `(status, code, message)`.
+pub fn door_verifier(cfg: &super::door_config::DoorConfig, token: &str) -> Result<(Value, Option<String>), (u16, String, String)> {
+    let Some((_, service_id)) = super::door::config_for(&cfg.app_id) else {
+        return Err((404, "compat_off".into(), format!("the Supabase-compatible layer is off for {}", cfg.app_id)));
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    match verify(&cfg.app_id, &service_id, token, now) {
+        Ok(v) => Ok((v.claims, v.user_id)),
+        Err(r) => Err((r.status, r.code.to_string(), r.message)),
+    }
+}
+
 #[cfg(test)]
 #[path = "issuers_tests.rs"]
 mod tests;

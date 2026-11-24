@@ -416,19 +416,19 @@ pub fn resolved_refusal(r: &AgentReach, real: &Path, shown: &Path) -> Option<Str
     let tmp = r.tmp_dir.map(canon).filter(|t| t.starts_with(&k2));
     let in_tmp = tmp.as_ref().is_some_and(|t| under(real, t));
     if !in_tmp && (under(real, &k2) || under(real, r.k2_home)) {
-        return Some(format!("{} is in K2's own folder, which K2 never reads for an agent", shown.display()));
+        return Some(format!("{} is in {p}'s own folder, which {p} never reads for an agent", shown.display(), p = crate::brand::PRODUCT_NAME));
     }
     if k2.starts_with(real) || r.k2_home.starts_with(real) {
-        return Some(format!("{} holds K2's own folder, which K2 never reads for an agent", shown.display()));
+        return Some(format!("{} holds {p}'s own folder, which {p} never reads for an agent", shown.display(), p = crate::brand::PRODUCT_NAME));
     }
     let home = canon(r.home);
     for rel in HOME_NEVER {
         let spots = [home.join(rel), r.home.join(rel), canon(&r.home.join(rel))];
         if spots.iter().any(|c| under(real, c)) {
-            return Some(format!("{} is in ~/{rel}, a credential folder K2 never reads for an agent (secrets go through the vault)", shown.display()));
+            return Some(format!("{} is in ~/{rel}, a credential folder {} never reads for an agent (secrets go through the vault)", shown.display(), crate::brand::PRODUCT_NAME));
         }
         if spots.iter().any(|c| c.starts_with(real) && c.as_path() != real) {
-            return Some(format!("{} holds ~/{rel}, a credential folder K2 never reads for an agent", shown.display()));
+            return Some(format!("{} holds ~/{rel}, a credential folder {} never reads for an agent", shown.display(), crate::brand::PRODUCT_NAME));
         }
     }
     if r.fenced && !in_tmp && !under(real, &canon(r.workspace)) {
@@ -902,9 +902,10 @@ pub fn spec_json(spec: &ExecSpec) -> Result<String, String> {
     if json.len() > SPEC_MAX {
         let rules = spec.fence.as_ref().map_or(0, |v| v.ro.len() + v.rw.len());
         return Err(format!(
-            "the folder fence's view has {rules} rules ({} KiB), more than a session start can carry ({} KiB): a folder K2 carves (/tmp, /dev, /run) holds too many entries; the session doesn't start",
+            "the folder fence's view has {rules} rules ({} KiB), more than a session start can carry ({} KiB): a folder {} carves (/tmp, /dev, /run) holds too many entries; the session doesn't start",
             json.len() / 1024,
-            SPEC_MAX / 1024
+            SPEC_MAX / 1024,
+            crate::brand::PRODUCT_NAME
         ));
     }
     Ok(json)

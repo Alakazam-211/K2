@@ -3055,7 +3055,7 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
         // submitted ships no source either (neither the bundle nor the
         // --dirty blob). The owner's or a login's own job ships as before.
         if crate::compute_fenced::requested_by_passport(&job.requested_by) && crate::agent_isolation::workspace_and_fence(&job.workspace_id).1 {
-            return fail("fenced_no_source", "the workspace's folder fence is on, and K2 doesn't ship a fenced agent's code yet".into());
+            return fail("fenced_no_source", format!("the workspace's folder fence is on, and {} doesn't ship a fenced agent's code yet", k2_core::brand::PRODUCT_NAME));
         }
         let blob = match n.kind {
             TransferKind::Bundle => {

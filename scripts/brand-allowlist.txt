@@ -961,4 +961,5 @@
 2 repo crates/kessel-attest/src/main.rs keeper: kessel-attest does not link k2-client; its help names the format docs in this repo
 1 repo crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
 2 K2 crates/k2-root-proto/src/agent_scope_policy.rs keeper: stored; comments inside the D-Bus policy and the daemon unit drop-in the root helper writes for agent scopes (k2-root-proto links no brand)
-5 K2 crates/k2-root-proto/src/agent_scope.rs keeper: stored; the systemd Description= values and unit comments of the agent slices and scopes the root helper creates (k2-root-proto links no brand; read in systemctl status)
+6 K2 crates/k2-root-proto/src/agent_scope.rs keeper: stored; the systemd Description= values and unit comments of the agent slices and scopes the root helper creates (k2-root-proto links no brand; read in systemctl status)
+1 K2 crates/k2-core/src/agent_scope.rs keeper: stored; ADOPTED_DESCRIPTION, the adopted scope's systemd Description= the root helper writes (k2-root-proto's fixed text) and is_adopted reads back from systemctl show, so it matches the helper's in every brand

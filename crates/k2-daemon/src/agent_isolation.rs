@@ -107,7 +107,7 @@ fn out_of_reach_response(ws: &str, what: &str, path: Option<&Path>, why: String)
             "ok": false,
             "error": {
                 "code": "path_out_of_reach",
-                "hint": format!("{why}, so K2 won't {what} it for an agent. Copy what you mean to share into your workspace first. It can't be requested."),
+                "hint": format!("{why}, so {} won't {what} it for an agent. Copy what you mean to share into your workspace first. It can't be requested.", k2_core::brand::PRODUCT_NAME),
                 "path": shown,
             },
         })

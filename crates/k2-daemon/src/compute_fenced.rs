@@ -16,8 +16,9 @@ pub(crate) fn refusal(who: &Who, ws: &Ws) -> R<()> {
             FENCED_NO_SOURCE,
             403,
             format!(
-                "workspace {}'s folder fence is on, and K2 doesn't ship a fenced agent's code yet; run with --no-source (copy what the job needs into its command or an artifact), or ask the owner to run it",
-                ws.handle
+                "workspace {}'s folder fence is on, and {} doesn't ship a fenced agent's code yet; run with --no-source (copy what the job needs into its command or an artifact), or ask the owner to run it",
+                ws.handle,
+                k2_core::brand::PRODUCT_NAME
             ),
         ));
     }

@@ -48,9 +48,10 @@ pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, Strin
         let w = dunce::canonicalize(ws_dir).map_err(|e| format!("the workspace folder: {e}"))?;
         if r != w {
             return Err(format!(
-                "the workspace is inside a larger git repo ({}), and its folder fence is on, so K2 ships only the workspace: \
+                "the workspace is inside a larger git repo ({}), and its folder fence is on, so {} ships only the workspace: \
                  make the workspace a repo of its own, or pass --repo <folder> (a git repo inside the workspace)",
-                root.display()
+                root.display(),
+                crate::brand::PRODUCT_NAME
             ));
         }
         // M2 review F4: the workspace's `.git` is the agent's own file, so its
@@ -59,8 +60,9 @@ pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, Strin
             let d = dunce::canonicalize(&dir).map_err(|e| format!("the {what}: {e}"))?;
             if !d.starts_with(&w) {
                 return Err(format!(
-                    "the workspace's {what} is outside it ({}), and its folder fence is on, so K2 won't ship it",
-                    dir.display()
+                    "the workspace's {what} is outside it ({}), and its folder fence is on, so {} won't ship it",
+                    dir.display(),
+                    crate::brand::PRODUCT_NAME
                 ));
             }
             // M2 review G2 (stopgap until the repo-reading git steps run under
@@ -69,15 +71,17 @@ pub fn workspace_repo_root(ws_dir: &Path, fenced: bool) -> Result<PathBuf, Strin
             // hold none.
             if let Some(link) = first_link_in(&d) {
                 return Err(format!(
-                    "the workspace's {what} holds a link ({}), and its folder fence is on, so K2 won't ship it",
-                    link.display()
+                    "the workspace's {what} holds a link ({}), and its folder fence is on, so {} won't ship it",
+                    link.display(),
+                    crate::brand::PRODUCT_NAME
                 ));
             }
             for alt in ["objects/info/alternates", "objects/info/http-alternates"] {
                 if d.join(alt).exists() {
                     return Err(format!(
-                        "the workspace's repo borrows objects from another repo ({}), and its folder fence is on, so K2 won't ship it",
-                        d.join(alt).display()
+                        "the workspace's repo borrows objects from another repo ({}), and its folder fence is on, so {} won't ship it",
+                        d.join(alt).display(),
+                        crate::brand::PRODUCT_NAME
                     ));
                 }
             }

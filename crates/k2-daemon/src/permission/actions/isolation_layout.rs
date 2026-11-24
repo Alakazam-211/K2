@@ -21,7 +21,7 @@
 //! - **Undo:** none from the card; `k2 agent isolation layout off` is the
 //!   owner's own (it loosens).
 
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 use k2_core::permission::catalog::{
     ActionSpec, Area, Direction, Expiry, Floor, Grant, NotCardableSpec, Proof, SettingsRef, Undo, Wall, WallCoverage, WallMatch,
     WallMethod, Words,
@@ -58,7 +58,7 @@ pub(crate) static ISOLATION_LAYOUT: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "general", path: concat!(cli_name!(), " agent isolation layout on|off|status (a terminal outside K2)") },
+    settings: SettingsRef { page: "general", path: concat!(cli_name!(), " agent isolation layout on|off|status (a terminal outside ", product_name!(), ")") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: crate::agent_isolation_layout::ROUTE,

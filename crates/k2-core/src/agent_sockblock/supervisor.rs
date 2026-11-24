@@ -118,7 +118,7 @@ fn open_hook(h: &HookRule) -> Result<OwnedFd, String> {
         return Err("it isn't a socket".into());
     }
     if st.st_uid != h.uid {
-        return Err(format!("it belongs to uid {}, not K2's user", st.st_uid));
+        return Err(format!("it belongs to uid {}, not {}'s user", st.st_uid, crate::brand::PRODUCT_NAME));
     }
     Ok(fd)
 }

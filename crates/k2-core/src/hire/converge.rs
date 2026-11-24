@@ -694,6 +694,13 @@ pub fn converge(
         changed = true;
         created = true;
     } else if existing.is_none() {
+        // A new workspace inside the hire root: a root that isn't there yet
+        // is made the way the daemon makes one (the server user's, 0700).
+        if let Ok(root) = super::root::hire_root() {
+            if super::root::is_under(Path::new(&path), &root) {
+                super::root::ensure_root(&root)?;
+            }
+        }
         let dir_exists = Path::new(&path).exists();
         let result = if dir_exists {
             steps_out.push(skipped("create-dir", "exists"));

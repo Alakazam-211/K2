@@ -374,3 +374,20 @@ fn a_new_workspace_under_a_0700_root_is_0755() {
     }
     assert_eq!(mode_of(&st.root), 0o700, "the root keeps its mode");
 }
+
+/// A person's hire into the hire root when the root isn't there yet makes
+/// the root the way the daemon makes one (0700), whatever the umask.
+#[test]
+fn a_persons_hire_makes_a_missing_hire_root_0700() {
+    let st = setup();
+    let _keep = KeepRoot::new();
+    let root = st.root.join("not-made");
+    super::super::root::set_hire_root(&s(&root)).expect("set the root");
+    // SAFETY: umask has no preconditions.
+    let _umask = Umask(unsafe { libc::umask(0o002) });
+    let ws = root.join("first");
+    let req: ConvergeRequest = serde_json::from_value(serde_json::json!({ "path": s(&ws) })).expect("body");
+    converge(&req, &HireCaller::Owner, &ConvergeAuthority::unrestricted()).expect("the owner's hire");
+    assert_eq!(mode_of(&root), 0o700, "the root the hire made");
+    assert!(super::super::root::check_root_safe(&root).is_ok());
+}

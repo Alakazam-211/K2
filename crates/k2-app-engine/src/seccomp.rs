@@ -17,6 +17,7 @@
 //! equals the default).
 
 use serde_json::{json, Value};
+use k2_brand::product_name;
 
 pub const PROFILE_VERSION: u32 = 1;
 /// Where the distro ships Podman's default.
@@ -72,14 +73,14 @@ pub fn transform(default_profile: &str) -> Result<String, String> {
         "names": ["clone"],
         "action": "SCMP_ACT_ALLOW",
         "args": [{"index": 0, "value": CLONE_NEWUSER, "valueTwo": 0, "op": "SCMP_CMP_MASKED_EQ"}],
-        "comment": "K2: clone, never a new user namespace",
+        "comment": concat!(product_name!(), ": clone, never a new user namespace"),
     }));
     if derr != ENOSYS {
         kept.push(json!({
             "names": ["clone3"],
             "action": "SCMP_ACT_ERRNO",
             "errnoRet": ENOSYS,
-            "comment": "K2: clone3 hides its flags; ENOSYS makes libc use clone",
+            "comment": concat!(product_name!(), ": clone3 hides its flags; ENOSYS makes libc use clone"),
         }));
     }
     if derr != EPERM {
@@ -87,7 +88,7 @@ pub fn transform(default_profile: &str) -> Result<String, String> {
             "names": DENY,
             "action": "SCMP_ACT_ERRNO",
             "errnoRet": EPERM,
-            "comment": "K2: no user namespaces, keyrings, bpf, userfaultfd or perf for Apps",
+            "comment": concat!(product_name!(), ": no user namespaces, keyrings, bpf, userfaultfd or perf for Apps"),
         }));
     }
     *syscalls = kept;

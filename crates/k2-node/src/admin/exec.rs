@@ -26,6 +26,8 @@ use serde_json::{json, Value};
 
 use super::config::{self, AdminConfig, AdminFile};
 use super::store::{Audit, AuditEntry, NonceStore};
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
 /// Where the executor reads and writes. Fixed by the root-owned service
 /// unit's argv; nothing a socket peer sends can change them.
@@ -269,7 +271,7 @@ impl Platform for SystemPlatform {
     }
     fn restart_unit(&self, unit: &str) -> Result<(), String> {
         if !K2_UNITS.contains(&unit) {
-            return Err(format!("{unit} is not a K2 unit"));
+            return Err(format!("{unit} is not a {PRODUCT_NAME} unit"));
         }
         if cfg!(target_os = "macos") {
             match unit {
@@ -805,7 +807,7 @@ impl Executor {
                 let unit = str_arg(args, "unit")?;
                 only_keys(args, &["unit", "now"])?;
                 if !K2_UNITS.contains(&unit.as_str()) {
-                    return Err(AdminRefusal::new(code::BAD_ARGS, "unit must be a K2 unit (k2-node, k2-node-packages)"));
+                    return Err(AdminRefusal::new(code::BAD_ARGS, concat!("unit must be a ", product_name!(), " unit (k2-node, k2-node-packages)")));
                 }
                 if unit == "k2-node" {
                     // A shared node waits for running jobs first (V55).
@@ -870,7 +872,7 @@ impl Executor {
         let names = a.names();
         for n in &names {
             if let Some(d) = k2_node_proto::pkgpolicy::denied(n) {
-                return Err(AdminRefusal::new(k2_node_proto::pkgpolicy::codes::PACKAGE_DENIED, format!("{n} is on K2's deny list ({d}); the machine's owner installs it by hand if they want it")));
+                return Err(AdminRefusal::new(k2_node_proto::pkgpolicy::codes::PACKAGE_DENIED, format!("{n} is on {PRODUCT_NAME}'s deny list ({d}); the machine's owner installs it by hand if they want it")));
             }
         }
         let (file, _, root_checks) = self.pkg_files();
@@ -960,7 +962,7 @@ impl Executor {
         let to = Level::parse(&str_arg(args, "level")?).ok_or_else(|| AdminRefusal::new(code::BAD_ARGS, "level must be off|policy|full"))?;
         let cfg = self.config()?;
         if to >= cfg.level {
-            return Err(AdminRefusal::new(code::HUMAN_REQUIRED, "the level can only be lowered remotely; the machine's owner raises it there (sudo k2-node admin level …, or Settings → Compute in that machine's K2, also over K2 Connect)"));
+            return Err(AdminRefusal::new(code::HUMAN_REQUIRED, concat!("the level can only be lowered remotely; the machine's owner raises it there (sudo k2-node admin level …, or Settings → Compute in that machine's ", product_name!(), ", also over K2 Connect)")));
         }
         let mut f: AdminFile = cfg.file.clone();
         f.remote_admin = to.as_str().into();

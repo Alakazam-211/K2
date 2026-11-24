@@ -7,8 +7,10 @@ use k2_node::node::{Node, NodeOptions, NODE_VERSION};
 use k2_node::paths::{default_home, Layout, DEFAULT_CONFIG_DIR};
 use k2_node_proto::frames::Control;
 use k2_node_proto::pairing::EnrollString;
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
-const USAGE: &str = r#"k2-node — K2 compute node runtime
+const USAGE: &str = concat!(r#"k2-node — K2 compute node runtime
 
 Install (root, once; the installers are inside this binary):
   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
@@ -16,7 +18,7 @@ Install (root, once; the installers are inside this binary):
                      [--controller URL --enroll - --name NAME < code-file]
                      [--remote-admin off|policy|full] [--no-job-wall]
   Remote admin defaults to policy (asked, policy preselected; a first install
-  without a terminal takes policy): K2 keeps the node updated and healthy.
+  without a terminal takes policy): "#, product_name!(), r#" keeps the node updated and healthy.
   Linux turns the job wall on (installs the acl package if missing);
   --no-job-wall is the explicit way out. Nodes on 0.46.3 or older need this
   0.46.4 install once by hand before remote updates work.
@@ -45,10 +47,10 @@ Install (root, once; the installers are inside this binary):
   k2-node packages list | allow <pkg>... | disallow <pkg>... | install <pkg>...   (all but list: root)
   sudo k2-node packages policy <own|server> [level=list|profiles|official] [profiles=a,b] [max_install_mb=N]
                  which packages each server's jobs may install here without asking you:
-                 list = only the approved list; profiles = plus K2's profiles you name
+                 list = only the approved list; profiles = plus "#, product_name!(), r#"'s profiles you name
                  (tauri-linux, rust-gui-ci, build-base, k2-workspace, gpu-headless); official = anything
-                 from the distro's signed repos except K2's deny list. Anything else
-                 reaches you as a request in K2 (Settings → Compute → Approvals).
+                 from the distro's signed repos except "#, product_name!(), r#"'s deny list. Anything else
+                 reaches you as a request in "#, product_name!(), r#" (Settings → Compute → Approvals).
   k2-node status [--home DIR] [--json]
   k2-node pause [--now] [--by NAME] [--config-dir DIR]     (machine owner: root or k2nodectl)
   k2-node drain [--by NAME] [--config-dir DIR]
@@ -60,7 +62,7 @@ Install (root, once; the installers are inside this binary):
                  caches older than N days (default 0 = all); --toolchains also clears
                  download caches when no job runs. Running jobs are never touched.
 
-More than one K2 server (0.46.3; the machine owner, at this machine):
+More than one "#, product_name!(), r#" server (0.46.3; the machine owner, at this machine):
   k2-node servers [list] [--json]                        every server this node serves
   sudo k2-node servers add --url URL --code - [--trust own|team] [--for 7d|none]
                  [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h]
@@ -83,12 +85,12 @@ More than one K2 server (0.46.3; the machine owner, at this machine):
   (<server> is a label, e.g. baden.k2.dev, or slot:<n>; the new server mints CODE.FP
    with `k2 compute node add <this node>`; then read it the SAS that `servers` shows)
   k2-node install-files --os linux|macos --binary PATH --home DIR --config-dir DIR --user NAME --group NAME --out DIR
-  k2-node check-home <dir>        (installer: refuse a home that runs K2)
+  k2-node check-home <dir>        (installer: refuse a home that runs "#, product_name!(), r#")
   k2-node version
 
 Remote admin (prd-k2-node-admin-v1; root, at this machine):
   sudo k2-node admin level off|policy|full      raise or lower remote admin (raising: here, or the owner's
-                                                 own K2 on this machine, also over K2 Connect; never an agent)
+                                                 own "#, product_name!(), r#" on this machine, also over K2 Connect; never an agent)
   sudo k2-node admin pin                         pin the enrolled controller's key for the executor
   sudo k2-node admin init [--level L] [--auto-update follow|off]   (installer)
   sudo k2-node admin audit [--tail N] [--json]   check + print the root audit chain
@@ -129,11 +131,11 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
 The job wall (0.46.3): Linux jobs run as k2job in a sandboxed systemd unit; macOS
 jobs run under a Seatbelt profile. Neither can read the node's key or state or
 people's home folders, and network = "none" keeps them off the network. On by
-default (0.46.4); a node without it: sudo k2-node setup, or from K2
+default (0.46.4); a node without it: sudo k2-node setup, or from "#, product_name!(), r#"
 `k2 compute node wall <node>` (remote admin policy).
   k2-node wall-probe [--read P]... [--list D]... [--connect IP:PORT]... [--syscall NAME]...   (tests: what this process can reach)
 
-Agents never run this: they use `k2 compute` on their K2 server."#;
+Agents never run this: they use `k2 compute` on their "#, product_name!(), r#" server."#);
 
 struct Args {
     flags: BTreeMap<String, Vec<String>>,
@@ -291,10 +293,10 @@ async fn cmd_run(a: &Args) -> Result<(), String> {
     let found = k2_files_in_home();
     if !found.is_empty() {
         if a.has("--dev") {
-            eprintln!("WARNING: --dev: running as a user who runs K2 ({}). Jobs still get a scrubbed env and their own HOME, but they can read this user's files. Dev/smoke only.", found.join(", "));
+            eprintln!("WARNING: --dev: running as a user who runs {PRODUCT_NAME} ({}). Jobs still get a scrubbed env and their own HOME, but they can read this user's files. Dev/smoke only.", found.join(", "));
         } else {
             return Err(format!(
-                "this user runs K2 itself ({}). A compute node must run as its own user (k2node); see scripts/node/. (--dev overrides for local smoke tests.)",
+                "this user runs {PRODUCT_NAME} itself ({}). A compute node must run as its own user (k2node); see scripts/node/. (--dev overrides for local smoke tests.)",
                 found.join(", ")
             ));
         }
@@ -1009,7 +1011,7 @@ fn cmd_check_home(a: &Args) -> Result<(), String> {
     if found.is_empty() {
         Ok(())
     } else {
-        Err(format!("{dir} belongs to a user who runs K2 ({}); a compute node needs its own user", found.join(", ")))
+        Err(format!("{dir} belongs to a user who runs {PRODUCT_NAME} ({}); a compute node needs its own user", found.join(", ")))
     }
 }
 

@@ -75,6 +75,7 @@ use security_framework_sys::keychain::{
     SecKeychainFindGenericPassword, SecKeychainGetUserInteractionAllowed, SecKeychainOpen,
     SecKeychainSetUserInteractionAllowed,
 };
+use crate::brand::PRODUCT_NAME;
 
 #[doc(hidden)] // pub for k2-core's keychain tests (macos_keychain_tests.rs)
 pub const SECURITY: &str = "/usr/bin/security";
@@ -217,11 +218,11 @@ impl std::fmt::Display for KeychainError {
             }
             KeychainError::Spawn(e) => write!(f, "could not run {SECURITY}: {e}"),
             KeychainError::NoSuchKeychain(p) => write!(f, "the keychain {} does not exist", p.display()),
-            KeychainError::BadField(what) => write!(f, "the keychain {what} contains a character K2 can't pass to security"),
+            KeychainError::BadField(what) => write!(f, "the keychain {what} contains a character {PRODUCT_NAME} can't pass to security"),
             KeychainError::Verify(why) => write!(f, "the keychain item did not read back as written ({why})"),
             KeychainError::TooLarge(n) => write!(
                 f,
-                "the secret is {n} bytes, more than macOS's security tool takes on its input (about 3,900 bytes of printable text); K2 won't put it on a command line or write it from its own process"
+                "the secret is {n} bytes, more than macOS's security tool takes on its input (about 3,900 bytes of printable text); {PRODUCT_NAME} won't put it on a command line or write it from its own process"
             ),
             KeychainError::NeedsRepair(r) => write!(
                 f,

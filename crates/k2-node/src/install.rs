@@ -2,6 +2,7 @@
 //! Rendered here (not in shell) so they are golden-tested.
 
 use std::path::Path;
+use k2_brand::PRODUCT_NAME;
 
 pub struct InstallParams<'a> {
     pub binary: &'a str,
@@ -14,9 +15,9 @@ pub struct InstallParams<'a> {
 /// systemd system unit `k2-node.service`.
 pub fn render_unit(p: &InstallParams<'_>) -> String {
     format!(
-        "# K2 compute node. Installed by scripts/node/install-node-linux.sh.\n\
+        "# {PRODUCT_NAME} compute node. Installed by scripts/node/install-node-linux.sh.\n\
 [Unit]\n\
-Description=K2 compute node (runs jobs from your K2 server as {user})\n\
+Description=K2 compute node (runs jobs from your {PRODUCT_NAME} server as {user})\n\
 After=network-online.target\n\
 Wants=network-online.target\n\
 \n\
@@ -66,7 +67,7 @@ pub fn render_plist(p: &InstallParams<'_>) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- K2 compute node. Installed by scripts/node/install-node-macos.sh. -->
+<!-- {PRODUCT_NAME} compute node. Installed by scripts/node/install-node-macos.sh. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>

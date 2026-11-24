@@ -35,6 +35,7 @@ use crate::journal::JournalReader;
 use crate::node::tenant::ShareInfo;
 use crate::node::{Node, Tenant, NODE_VERSION};
 use crate::status::ServerLine;
+use k2_brand::PRODUCT_NAME;
 
 pub const ATTACH_PATH: &str = "/cli/compute/attach";
 pub const ENROLL_PATH: &str = "/cli/compute/enroll";
@@ -176,7 +177,7 @@ where
         if ch.protocol < min_protocol {
             let _ = send_hs(ws, &HandshakeFrame::Refused(Refused {
                 code: k2_node_proto::share::codes::SERVER_TOO_OLD.into(),
-                message: format!("this node is shared and needs a K2 server on protocol {min_protocol} (0.46.3) or newer; this server said {}: update it", ch.protocol),
+                message: format!("this node is shared and needs a {PRODUCT_NAME} server on protocol {min_protocol} (0.46.3) or newer; this server said {}: update it", ch.protocol),
             }))
             .await;
             return Ok(AttachOutcome::TooOld(ch.protocol));

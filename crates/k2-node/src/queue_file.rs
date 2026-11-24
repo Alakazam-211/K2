@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use k2_node_proto::share::{ServerEntry, OWNER_SLOT};
 use serde::{Deserialize, Serialize};
+use k2_brand::PRODUCT_NAME;
 
 pub const QUEUE_FILE: &str = "queue.toml";
 
@@ -102,7 +103,7 @@ pub fn render(f: &QueueFile) -> Result<String, String> {
     f.validate()?;
     let body = toml::to_string(f).map_err(|e| format!("encode queue.toml: {e}"))?;
     Ok(format!(
-        "# K2 node queue settings (prd-compute-job-tiers-v1): the node owner's decisions only.\n\
+        "# {PRODUCT_NAME} node queue settings (prd-compute-job-tiers-v1): the node owner's decisions only.\n\
          # Change them with `k2 compute node servers <node> limits <server> priority=true|false` from the owner server.\n{body}"
     ))
 }

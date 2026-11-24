@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 
 use crate::server::{self, Config, Exit};
 use crate::sys::{cvt, set_cloexec};
+use k2_brand::PRODUCT_NAME;
 
 /// Exit codes of the launcher / `--serve`.
 pub const EXIT_OK: i32 = 0;
@@ -84,7 +85,7 @@ pub fn launcher(cfg_without_ready: Config) -> i32 {
         return match (n, b[0]) {
             (1, b'R') => EXIT_OK,
             (1, b'B') => {
-                eprintln!("k2-ptyd: already running for this K2 home");
+                eprintln!("k2-ptyd: already running for this {PRODUCT_NAME} home");
                 EXIT_ALREADY_RUNNING
             }
             _ => {

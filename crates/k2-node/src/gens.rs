@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 use k2_node_proto::gens::codes::CACHE_GENS_NEEDS_WALL;
 use serde::{Deserialize, Serialize};
+use k2_brand::PRODUCT_NAME;
 
 /// The folder under a server's job-facing root that holds its generations.
 pub const GENS_DIR: &str = "gens";
@@ -65,7 +66,7 @@ pub fn read_switch(config_dir: &Path) -> SwitchFile {
 pub fn write_switch(config_dir: &Path, f: &SwitchFile) -> Result<(), String> {
     let body = toml::to_string(f).map_err(|e| format!("encode {SWITCH_FILE}: {e}"))?;
     let text = format!(
-        "# K2 compute cache generations (prd-compute-blacksmith-class-v1 §4.1). The machine owner's switch.\n\
+        "# {PRODUCT_NAME} compute cache generations (prd-compute-blacksmith-class-v1 §4.1). The machine owner's switch.\n\
          # Change it only at this machine: sudo k2-node admin cache-gens on|off\n{body}"
     );
     crate::util::atomic_write(&config_dir.join(SWITCH_FILE), text.as_bytes(), 0o644)

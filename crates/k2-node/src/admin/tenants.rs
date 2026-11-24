@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 
 use super::exec::Executor;
 use super::jobs::{self, TenantUser};
+use k2_brand::PRODUCT_NAME;
 
 /// First tenant uid/gid (the PRD's example `61001`).
 pub const TENANT_ID_FIRST: u32 = share::TENANT_UID_FIRST;
@@ -384,7 +385,7 @@ impl Executor {
                 let ids_s = id.to_string();
                 run(&tool("groupadd")?, &["--system", "--gid", &ids_s, &group])?;
                 let nologin = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"].into_iter().find(|p| Path::new(p).exists()).unwrap_or("/bin/false");
-                let comment = format!("K2 compute jobs (server slot {slot})");
+                let comment = format!("{PRODUCT_NAME} compute jobs (server slot {slot})");
                 run(
                     &tool("useradd")?,
                     &["--system", "--uid", &ids_s, "--gid", &group, "--home-dir", "/nonexistent", "--no-create-home", "--shell", nologin, "--comment", &comment, &name],

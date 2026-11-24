@@ -68,7 +68,6 @@
 2 cli crates/k5-cli/src/families/whoami.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 2 cli crates/k5-cli/src/families/workspace.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 2 cli crates/k5-cli/src/transport/client.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-1 cli crates/k2-app-engine/src/server.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-core/src/zen/widget_runs.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/apps/grace.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/apps/handover.rs debt: the command name typed out; use CLI_NAME or cli_name!()

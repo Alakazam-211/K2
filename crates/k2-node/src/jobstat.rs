@@ -28,6 +28,8 @@ use std::time::Duration;
 
 use k2_node_proto::gens::{JobStats, StatPoint, STATS_EVERY_SECS, STATS_MAX_POINTS};
 use k2_node_proto::results::{cpu_source, mem_source, HostSample, JobResources};
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
 /// Where a job's usage is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -681,9 +683,9 @@ pub fn quiet_env(h: &HostSample) -> Vec<(String, String)> {
 pub fn host_line(when: &str, h: &HostSample) -> String {
     let steal = h.steal_permille.map(|s| format!(", steal {}.{}%", s / 10, s % 10)).unwrap_or_default();
     let others = match h.other_jobs {
-        0 => "no other K2 job".to_string(),
-        1 => "1 other K2 job".to_string(),
-        n => format!("{n} other K2 jobs"),
+        0 => concat!("no other ", product_name!(), " job").to_string(),
+        1 => concat!("1 other ", product_name!(), " job").to_string(),
+        n => format!("{n} other {PRODUCT_NAME} jobs"),
     };
     let gpu = h.gpu_busy_pct.map(|b| format!(", GPU {b}% busy")).unwrap_or_default();
     let quiet = match quiet_verdict(h) {

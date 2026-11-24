@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use super::exec::Executor;
 use super::jobs::{self, JobIds};
+use k2_brand::PRODUCT_NAME;
 
 /// Users per slot ([`k2_node_proto::share::JOB_UID_POOL`]).
 pub const JOB_UID_POOL: u32 = share::JOB_UID_POOL;
@@ -474,7 +475,7 @@ impl Executor {
         f.users.insert(pool_key(slot, index), PoolUser { uid, held: Some("being made".into()), ..Default::default() });
         write_pool(&self.pool_path(), f).map_err(|e| refuse(JOB_UID_UNAVAILABLE, e))?;
         let nologin = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"].into_iter().find(|p| Path::new(p).exists()).unwrap_or("/bin/false");
-        let comment = format!("K2 compute secret jobs (server slot {slot}, pool {index})");
+        let comment = format!("{PRODUCT_NAME} compute secret jobs (server slot {slot}, pool {index})");
         let useradd = jobs::find_program_in_sbin("useradd").ok_or_else(|| refuse(code::NOT_CONFIGURED, "useradd not found"))?;
         super::exec::run_fixed(
             &useradd.display().to_string(),

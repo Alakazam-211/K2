@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::paths::Layout;
+use k2_brand::PRODUCT_NAME;
 
 /// The pending add's enrol credential (config dir, 0640 root:<node group>).
 pub const ENROLL_FILE: &str = "server-enroll.toml";
@@ -243,7 +244,7 @@ pub fn write_file(config_dir: &Path, f: &ServersFile) -> Result<(), String> {
     f.validate()?;
     let body = toml::to_string(f).map_err(|e| format!("encode servers.toml: {e}"))?;
     let text = format!(
-        "# K2 node servers (prd-compute-shared-queue-v1 §11.1): the node owner's decisions only.\n\
+        "# {PRODUCT_NAME} node servers (prd-compute-shared-queue-v1 §11.1): the node owner's decisions only.\n\
          # Change it with `sudo k2-node servers …` here, or `k2 compute node servers …` from the owner server.\n{body}"
     );
     crate::util::atomic_write_owned(&servers_path(config_dir), text.as_bytes(), 0o664, dir_group(config_dir))

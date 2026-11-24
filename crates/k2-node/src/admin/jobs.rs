@@ -44,12 +44,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::exec::Executor;
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
 /// Root-owned, 0644, in the config dir. Written by `k2-node setup`.
 pub const JOBS_FILE: &str = "jobs.toml";
 
 /// The refusal for a unit name that isn't one of this node's job units.
-const NOT_A_JOB_UNIT: &str = "not a K2 job unit";
+const NOT_A_JOB_UNIT: &str = concat!("not a ", product_name!(), " job unit");
 
 /// The default job user (Linux).
 pub const DEFAULT_JOB_USER: &str = "k2job";
@@ -221,7 +223,7 @@ pub fn write_jobs_file(config_dir: &Path, job_user: &str, node_user: &str) -> Re
 pub fn write_jobs(config_dir: &Path, f: &JobsFile) -> Result<(), String> {
     let body = toml::to_string(f).map_err(|e| e.to_string())?;
     let text = format!(
-        "# K2 compute node: jobs run as this user in a sandboxed systemd unit (0.46.3).\n\
+        "# {PRODUCT_NAME} compute node: jobs run as this user in a sandboxed systemd unit (0.46.3).\n\
          # Written by k2-node setup and tenant.prepare; remove the file to go back to jobs as the node user.\n{body}"
     );
     crate::util::atomic_write(&config_dir.join(JOBS_FILE), text.as_bytes(), 0o644)
@@ -2267,7 +2269,7 @@ pub fn system_enable_job_wall(paths: &super::exec::ExecPaths, node_user: &str, u
         let useradd = find_program("useradd").ok_or_else(|| fail("useradd not found".into()))?;
         super::exec::run_fixed(
             &useradd.display().to_string(),
-            &["--system", "--user-group", "--home-dir", "/nonexistent", "--no-create-home", "--shell", nologin, "--comment", "K2 compute jobs", user],
+            &["--system", "--user-group", "--home-dir", "/nonexistent", "--no-create-home", "--shell", nologin, "--comment", concat!(product_name!(), " compute jobs"), user],
         )
         .map_err(fail)?;
         created = true;

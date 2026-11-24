@@ -30,6 +30,7 @@ use std::time::Duration;
 use k2_node_proto::needs::{self, Need};
 
 use crate::util::{run_cmd, CmdOut};
+use k2_brand::PRODUCT_NAME;
 
 /// Pinned mise release (2026-09-20). Bump = new version + four sha256s.
 pub const MISE_VERSION: &str = "2026.9.12";
@@ -1079,7 +1080,7 @@ pub fn targets_from_list(text: &str) -> Vec<String> {
 pub fn system_rust_refusal(token: &str) -> String {
     format!(
         "{token}: this node's Rust is a system package with no rustup, so k2-node can't add compile targets here. \
-         Send the job without a node name (K2 places it on a node with rustup), or name another node"
+         Send the job without a node name ({PRODUCT_NAME} places it on a node with rustup), or name another node"
     )
 }
 

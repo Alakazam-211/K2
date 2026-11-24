@@ -6,14 +6,16 @@ use std::time::Duration;
 
 use super::local::{self, Hello};
 use super::{switch, SimRoot, NODE_USER, SIMHOST_LABEL, SIM_ROOT, SIM_USER};
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
-pub const USAGE: &str = "\
-iPhones on this Mac (the iOS Simulator for your own K2 servers):
+pub const USAGE: &str = concat!("\
+iPhones on this Mac (the iOS Simulator for your own ", product_name!(), " servers):
   sudo k2-node setup --sim [--server <slot|label>] [--private-home]
                                        create the Simulator user and service; turn iPhones on (default: the owner server)
   sudo k2-node sim enable --server <slot|label>    turn iPhones on for one of your own servers
   sudo k2-node sim disable --server <slot|label>   turn them off (a running iPhone ends when its lease does)
-  k2-node sim status [--json]                      what's set up, Xcode and its runtimes, what's missing";
+  k2-node sim status [--json]                      what's set up, Xcode and its runtimes, what's missing");
 
 fn xml(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
@@ -25,7 +27,7 @@ pub fn render_plist(binary: &str, root: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- K2 compute node: the iOS Simulator service. Installed by k2-node setup --sim. -->
+<!-- {PRODUCT_NAME} compute node: the iOS Simulator service. Installed by k2-node setup --sim. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>

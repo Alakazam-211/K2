@@ -10,13 +10,14 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use crate::product_name;
 
 /// Where Git for Windows is downloaded.
 pub const GIT_FOR_WINDOWS_URL: &str = "https://git-scm.com/download/win";
 
 /// What a person or agent sees when `k2` can't run.
 pub const GIT_BASH_NEEDED: &str =
-    "K2's command-line tools need Git for Windows (Git Bash). Download it from https://git-scm.com/download/win , then open a new terminal.";
+    concat!(product_name!(), "'s command-line tools need Git for Windows (Git Bash). Download it from https://git-scm.com/download/win , then open a new terminal.");
 
 /// Where Git for Windows puts Git Bash, in the order they are tried: the
 /// variable that holds a folder, and the path under it. Machine-wide,

@@ -30,6 +30,7 @@ use k2_node_proto::pkgpolicy::{codes as pcodes, coverage, Coverage, PolicyFile};
 use serde::{Deserialize, Serialize};
 
 use crate::toolchain::{codes, Fail, Toolchains};
+use k2_brand::PRODUCT_NAME;
 
 pub const APPROVED_FILE: &str = "/etc/k2-node-packages.toml";
 /// The owner's package policy per server (root's; protocol 7).
@@ -238,7 +239,7 @@ pub async fn ensure_with(tc: &Toolchains, h: &crate::pkgsys::HostCtx, b: &dyn cr
             Coverage::Denied(d) => {
                 return Err((
                     pcodes::PACKAGE_DENIED,
-                    format!("{p} is on K2's deny list ({d}): it changes how the machine boots, logs in or starts services. It can't be requested; the machine's owner installs it by hand if they want it"),
+                    format!("{p} is on {PRODUCT_NAME}'s deny list ({d}): it changes how the machine boots, logs in or starts services. It can't be requested; the machine's owner installs it by hand if they want it"),
                 ))
             }
             Coverage::Ask => refused.push(p.clone()),
@@ -249,7 +250,7 @@ pub async fn ensure_with(tc: &Toolchains, h: &crate::pkgsys::HostCtx, b: &dyn cr
         return Err((
             codes::PACKAGE_NOT_APPROVED,
             format!(
-                "{r} isn't on this node's approved package list ({f}) or in its package policy for this server ({l}). Ask the node's owner from K2: k2 compute node packages request <node> {c} --why \"…\"; or the machine's owner approves it once with: sudo k2-node packages allow {r}",
+                "{r} isn't on this node's approved package list ({f}) or in its package policy for this server ({l}). Ask the node's owner from {PRODUCT_NAME}: k2 compute node packages request <node> {c} --why \"…\"; or the machine's owner approves it once with: sudo k2-node packages allow {r}",
                 r = refused.join(" "),
                 c = refused.join(","),
                 f = tc.packages_file.display(),

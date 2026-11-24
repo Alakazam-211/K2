@@ -50,6 +50,8 @@
 
 use k2_root_proto::apps::AppId;
 use k2_root_proto::engine::{app_slice, unit_stem, Resources, Wall, IN_WALL_DB_PORT, IN_WALL_GATEWAY_PORT, PASS_MOUNT, SLOT_SIZE};
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
 /// One secret mount for the template (the Podman secret already exists).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,7 +143,7 @@ pub fn render_build(r: &BuildRender) -> String {
         o.push_str(&s);
         o.push('\n');
     };
-    line("# K2 App runtime (k2-app-engine): one in-wall build of an App (S16).".into());
+    line(concat!("# ", product_name!(), " App runtime (k2-app-engine): one in-wall build of an App (S16).").into());
     line("# Rendered from a canned template; edits are overwritten.".into());
     line("[Unit]".into());
     line(format!("Description=K2 App {} build {}", r.app.as_str(), r.build));
@@ -197,7 +199,7 @@ pub fn render_build(r: &BuildRender) -> String {
 pub fn slice_unit(app: &AppId, r: &Resources) -> Option<String> {
     let w = r.cpu_weight?;
     Some(format!(
-        "# K2 App runtime (k2-app-engine): App {}'s slice. Rendered; edits are overwritten.\n[Slice]\nCPUWeight={w}\n",
+        "# {PRODUCT_NAME} App runtime (k2-app-engine): App {}'s slice. Rendered; edits are overwritten.\n[Slice]\nCPUWeight={w}\n",
         app.as_str()
     ))
 }
@@ -234,7 +236,7 @@ pub fn render(r: &Render) -> String {
         o.push('\n');
     };
     let relaxed = r.wall == Wall::Relaxed;
-    line(format!("# K2 App runtime (k2-app-engine): one deployment of a {} App.", if relaxed { "relaxed (open path)" } else { "guarded" }));
+    line(format!("# {PRODUCT_NAME} App runtime (k2-app-engine): one deployment of a {} App.", if relaxed { "relaxed (open path)" } else { "guarded" }));
     line("# Rendered from a canned template; edits are overwritten.".into());
     line("[Unit]".into());
     line(format!("Description=K2 App {} ({})", r.app.as_str(), r.deployment));

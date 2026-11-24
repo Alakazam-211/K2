@@ -34,6 +34,7 @@ use serde_json::{json, Value};
 
 use super::exec::{only_keys, str_arg, Checked, Executor};
 use super::store::AuditEntry;
+use k2_brand::product_name;
 
 /// How long a new build has to say it's healthy.
 pub const HEALTH_GATE_SECS: i64 = 120;
@@ -182,7 +183,7 @@ fn verify_codesign(staged: &Path) -> Result<(), AdminRefusal> {
     let out = super::fdpass::spawn_output(std::process::Command::new("/usr/bin/codesign").args(["--verify", "--strict", "-R"]).arg(&req).arg(staged).env_clear())
         .map_err(|x| AdminRefusal::new(code::BAD_BUILD, format!("codesign: {x}")))?;
     if !out.status.success() {
-        return Err(AdminRefusal::new(code::BAD_BUILD, "the build is not signed by K2's Developer ID"));
+        return Err(AdminRefusal::new(code::BAD_BUILD, concat!("the build is not signed by ", product_name!(), "'s Developer ID")));
     }
     Ok(())
 }

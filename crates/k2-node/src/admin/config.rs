@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use k2_node_proto::admin::{ApprovalKey, Level};
 use k2_node_proto::crypto;
 use serde::{Deserialize, Serialize};
+use k2_brand::PRODUCT_NAME;
 
 pub const ADMIN_FILE: &str = "admin.toml";
 /// The controller's persisted narrowing (`policy.narrow`), root-owned.
@@ -205,7 +206,7 @@ pub fn write(path: &Path, f: &AdminFile) -> Result<(), String> {
     AdminConfig::from_file(f.clone())?;
     let body = toml::to_string(f).map_err(|e| format!("encode admin.toml: {e}"))?;
     let text = format!(
-        "# K2 node remote admin (prd-k2-node-admin-v1 §6). The machine owner's consent.\n\
+        "# {PRODUCT_NAME} node remote admin (prd-k2-node-admin-v1 §6). The machine owner's consent.\n\
          # Raise the level only at this machine: sudo k2-node admin level off|policy|full\n{body}"
     );
     crate::util::atomic_write(path, text.as_bytes(), 0o644)

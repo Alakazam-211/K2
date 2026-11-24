@@ -56,6 +56,7 @@ use serde::{Deserialize, Serialize};
 use super::exec::Executor;
 use super::jobs;
 use crate::gpu::SysGpu;
+use k2_brand::PRODUCT_NAME;
 
 /// Root-owned, 0644, in the config dir. Written only by `sudo k2-node
 /// admin gpu on|off` (never by the node, never remotely).
@@ -175,7 +176,7 @@ pub fn write_gpu_file(config_dir: &Path, f: &GpuFile) -> Result<(), String> {
     f.validate()?;
     let body = toml::to_string(f).map_err(|e| e.to_string())?;
     let text = format!(
-        "# K2 compute node: GPU jobs (0.46.11). Written by sudo k2-node admin gpu on|off (never by the node, never remotely).\n\
+        "# {PRODUCT_NAME} compute node: GPU jobs (0.46.11). Written by sudo k2-node admin gpu on|off (never by the node, never remotely).\n\
          # Each [[device]] is one GPU; servers = who may run GPU jobs on it (\"owner\", or a server's key prefix).\n{body}"
     );
     crate::util::atomic_write(&p, text.as_bytes(), 0o644)
@@ -272,7 +273,7 @@ pub fn device_access(mode: u32, gid: u32, node_gid: u32, tenant_gids: &[u32]) ->
         return Err(format!("the render node's mode {:o} gives its group no read-write; a job can't open it", mode & 0o777));
     }
     if gid == 0 || gid == node_gid || tenant_gids.contains(&gid) {
-        return Err(format!("the render node's group ({gid}) is root's, the node's or a tenant's; K2 never gives a job that group"));
+        return Err(format!("the render node's group ({gid}) is root's, the node's or a tenant's; {PRODUCT_NAME} never gives a job that group"));
     }
     Ok(Some(gid))
 }
@@ -764,7 +765,7 @@ pub fn cli_on(config_dir: &Path, state_dir: &Path, sys: &Path, device: Option<&s
     out.extend(notes);
     out.push(format!(
         "Each server named also needs its own owner's grant: k2 compute grant <this node> --workspace <ws> --gpu. \
-         Its K2 sees GPU jobs at its next probe (within a minute), or restart k2-node now.\n\
+         Its {PRODUCT_NAME} sees GPU jobs at its next probe (within a minute), or restart k2-node now.\n\
          Not given to jobs: display (card) nodes, ROCm compute (/dev/kfd). One job per GPU at a time.\n{DESKTOP_WARNING}"
     ));
     Ok(out.join("\n"))

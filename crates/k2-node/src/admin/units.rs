@@ -1,6 +1,7 @@
 //! Service files for the root executor (prd-k2-node-admin-v1 §5, §5.2):
 //! a systemd socket + service on Linux, a LaunchDaemon with a launchd
 //! socket on macOS. Rendered here so they're golden-tested.
+use k2_brand::PRODUCT_NAME;
 
 pub struct AdminUnitParams<'a> {
     pub binary: &'a str,
@@ -18,7 +19,7 @@ pub const MACOS_LABEL: &str = "dev.k2.node-admin";
 
 pub fn render_socket_unit(p: &AdminUnitParams<'_>) -> String {
     format!(
-        "# K2 node admin: the root executor's local socket (no network door).\n\
+        "# {PRODUCT_NAME} node admin: the root executor's local socket (no network door).\n\
 [Unit]\n\
 Description=K2 node admin executor socket\n\
 \n\
@@ -38,7 +39,7 @@ WantedBy=sockets.target\n",
 
 pub fn render_service_unit(p: &AdminUnitParams<'_>) -> String {
     format!(
-        "# K2 node admin: the root executor. It runs only commands signed by the\n\
+        "# {PRODUCT_NAME} node admin: the root executor. It runs only commands signed by the\n\
 # pinned controller (and, for privileged ones, the owner's approval key),\n\
 # checked here, as root. prd-k2-node-admin-v1.\n\
 [Unit]\n\
@@ -84,7 +85,7 @@ pub fn render_plist(p: &AdminUnitParams<'_>) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- K2 node admin executor (root). Runs only signed commands it checks itself. -->
+<!-- {PRODUCT_NAME} node admin executor (root). Runs only signed commands it checks itself. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>

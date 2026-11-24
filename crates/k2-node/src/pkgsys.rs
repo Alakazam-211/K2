@@ -30,6 +30,7 @@ use std::time::Duration;
 use k2_node_proto::host::OsRelease;
 use k2_node_proto::pkgmap::{self, Mgr, Resolved, SysName};
 use k2_node_proto::pkgpolicy::{codes, denied, DrySummary};
+use k2_brand::PRODUCT_NAME;
 
 /// A refusal: a stable code and words an agent or owner can act on.
 pub type Refusal = (&'static str, String);
@@ -202,7 +203,7 @@ fn plan(b: &dyn Backend, h: &HostCtx, names: &[String]) -> Result<(Vec<String>, 
     let mut unmapped = Vec::new();
     for name in names {
         if let Some(d) = denied(name) {
-            return Err((codes::PACKAGE_DENIED, format!("{name} is on K2's deny list ({d}): it changes how the machine boots, logs in or starts services. The machine's owner installs it by hand if they want it")));
+            return Err((codes::PACKAGE_DENIED, format!("{name} is on {PRODUCT_NAME}'s deny list ({d}): it changes how the machine boots, logs in or starts services. The machine's owner installs it by hand if they want it")));
         }
         let Some(ns) = h.natives(name) else {
             unmapped.push(name.clone());
@@ -215,7 +216,7 @@ fn plan(b: &dyn Backend, h: &HostCtx, names: &[String]) -> Result<(Vec<String>, 
                 return Err((codes::NO_PACKAGE_MAPPING, format!("{n:?} isn't a package name")));
             }
             if let Some(d) = denied(&n) {
-                return Err((codes::PACKAGE_DENIED, format!("{name} installs {n}, on K2's deny list ({d})")));
+                return Err((codes::PACKAGE_DENIED, format!("{name} installs {n}, on {PRODUCT_NAME}'s deny list ({d})")));
             }
             let target = match b.resolve(&n) {
                 Resolved::Provider(p) => {
@@ -245,7 +246,7 @@ fn plan(b: &dyn Backend, h: &HostCtx, names: &[String]) -> Result<(Vec<String>, 
         return Err((
             codes::NO_PACKAGE_MAPPING,
             format!(
-                "no {} name for {} on this {} node: use a native name (sys:{}:<name>), pick a node of another distro (--distro), or ask K2 to add a map row",
+                "no {} name for {} on this {} node: use a native name (sys:{}:<name>), pick a node of another distro (--distro), or ask {PRODUCT_NAME} to add a map row",
                 h.mgr.name(),
                 unmapped.join(", "),
                 h.distro,
@@ -263,7 +264,7 @@ pub fn check_dry(h: &HostCtx, d: &DryRun, g: &Guards) -> Result<(), Refusal> {
     if !d.removes.is_empty() || !d.downgrades.is_empty() {
         let mut v: Vec<String> = d.removes.iter().map(|r| format!("removes {r}")).collect();
         v.extend(d.downgrades.iter().map(|r| format!("downgrades {r}")));
-        return Err((codes::PACKAGE_REMOVES, format!("the install {}; K2 never removes or downgrades a package. The machine's owner installs it by hand if they want that", v.join(", "))));
+        return Err((codes::PACKAGE_REMOVES, format!("the install {}; {PRODUCT_NAME} never removes or downgrades a package. The machine's owner installs it by hand if they want that", v.join(", "))));
     }
     if h.mgr == Mgr::Pacman {
         let up: Vec<&str> = d.installs.iter().filter(|p| p.upgrade).map(|p| p.name.as_str()).collect();
@@ -276,10 +277,10 @@ pub fn check_dry(h: &HostCtx, d: &DryRun, g: &Guards) -> Result<(), Refusal> {
     }
     let foreign: Vec<String> = d.installs.iter().filter(|p| !origin_ok(h, &p.origin)).map(|p| format!("{} ({})", p.name, if p.origin.is_empty() { "unknown origin" } else { &p.origin })).collect();
     if !foreign.is_empty() {
-        return Err((codes::PACKAGE_THIRD_PARTY, format!("{} would come from outside {}'s own repos; K2 installs only from the distro's signed official repos", foreign.join(", "), h.distro)));
+        return Err((codes::PACKAGE_THIRD_PARTY, format!("{} would come from outside {}'s own repos; {PRODUCT_NAME} installs only from the distro's signed official repos", foreign.join(", "), h.distro)));
     }
     if let Some((n, d)) = d.installs.iter().find_map(|p| denied(&p.name).map(|d| (p.name.clone(), d))) {
-        return Err((codes::PACKAGE_DENIED, format!("the install pulls in {n}, on K2's deny list ({d})")));
+        return Err((codes::PACKAGE_DENIED, format!("the install pulls in {n}, on {PRODUCT_NAME}'s deny list ({d})")));
     }
     let kb: u64 = d.installs.iter().filter_map(|p| p.size_kb).sum();
     if kb.div_ceil(1024) > g.max_install_mb {
@@ -291,7 +292,7 @@ pub fn check_dry(h: &HostCtx, d: &DryRun, g: &Guards) -> Result<(), Refusal> {
 /// The guarded install (root). See the module docs for the steps.
 pub fn guarded_install(b: &dyn Backend, h: &HostCtx, names: &[String], g: &Guards, log: &mut dyn FnMut(&str)) -> Result<Report, Refusal> {
     if let Some(why) = b.signing_off() {
-        return Err((codes::PKG_SIGNING_OFF, format!("{}'s signature check is off on this machine ({why}); K2 installs nothing until its owner turns it back on", h.mgr.name())));
+        return Err((codes::PKG_SIGNING_OFF, format!("{}'s signature check is off on this machine ({why}); {PRODUCT_NAME} installs nothing until its owner turns it back on", h.mgr.name())));
     }
     let (natives, resolved, already) = plan(b, h, names)?;
     for r in &resolved {

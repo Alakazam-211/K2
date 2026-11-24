@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 
 use crate::quadlet::{self, SecretMount};
 use crate::sys::{self, Out};
+use k2_brand::CLI_NAME;
 
 /// `HOST` in an App's container: the App binds `$HOST:$PORT`.
 pub const IN_CONTAINER_HOST: &str = "0.0.0.0";
@@ -752,7 +753,7 @@ impl Engine {
         if !r.ok() {
             let _ = self.systemctl(&["stop", &unit], 120);
             undo(self);
-            return Err((codes::SYSTEMD, format!("start {unit}: {} (its output: k2 app logs)", r.why())));
+            return Err((codes::SYSTEMD, format!("start {unit}: {} (its output: {CLI_NAME} app logs)", r.why())));
         }
         let pid = self.show(&unit, "MainPID").and_then(|p| p.parse::<i32>().ok()).filter(|p| *p > 0);
         Ok(json!({

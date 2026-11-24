@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
 skill_version: 67
-skill_checksum: 16977519b6caec51
+skill_checksum: 3843db32c5e4304c
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat, remind. Use it for remind me, reminder, alarm, follow up later, at <time>, every morning, schedule, cron
 ---

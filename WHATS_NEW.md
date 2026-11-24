@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.18
+
+### Desktop app
+- **A slow or unreachable other server no longer makes the app look offline; while this server is busy, the app stays usable and shows a small reconnecting note.**
+
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

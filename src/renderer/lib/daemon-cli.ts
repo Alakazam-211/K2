@@ -28,6 +28,7 @@ import { assertServerScope } from '@/kessel/assert-scope'
 import type { ConnectHost } from '@/stores/connect-host'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { reportRemoteFailure } from '@/lib/connection-gate-probe'
+import { noteLocalTrouble } from '@/lib/local-health'
 import {
   classifyRemoteFetchError,
   logRemotePath,
@@ -495,6 +496,11 @@ async function cliFetch(
         err: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
       })
       reportRemoteFailure()
+    } else if (isConnectionLevelError(err) && !scope.isRemote && scope.isWindowHost()) {
+      // 0.46.18: the window's own local server. Only starts the one probe
+      // loop behind the light "busy" note (lib/local-health); never a
+      // reload, a remount or a blocking overlay.
+      noteLocalTrouble()
     }
     throw err
   } finally {

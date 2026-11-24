@@ -24,6 +24,9 @@ import {
   shouldConsultArbiter,
   nextSoftPollFails,
   probeBootStatusWithEviction,
+  localFirstConnectStep,
+  localProbeOutcome,
+  LOCAL_BUSY_REASON,
   WEDGE_PATTERN_MS,
   WEDGE_CLEAR_OK_STREAK,
   WEDGE_FLAP_THRESHOLD,
@@ -484,5 +487,57 @@ describe('probeBootStatusWithEviction (0.46.10)', () => {
       return { kind: 'http' as const }
     })
     expect(calls).toBe(1)
+  })
+})
+
+// 0.46.18: a slow but alive local daemon on first connect (a reload).
+describe('localFirstConnectStep', () => {
+  const ok = { kind: 'ok' as const, status: status({ version: '9.9.9' }), tokenSent: false }
+  const timedOut = { kind: 'network' as const, timedOut: true as const }
+  const refused = { kind: 'network' as const }
+
+  it('a timed-out /boot-status is busy, and the streak grows', () => {
+    const r = localFirstConnectStep({
+      slowStreak: 1,
+      boot: timedOut,
+      cli: null,
+      decision: { kind: 'wait', reason: 'unreachable-or-legacy-daemon' },
+    })
+    expect(r).toEqual({ slowStreak: 2, decision: { kind: 'wait', reason: LOCAL_BUSY_REASON } })
+  })
+
+  it('a ready /boot-status with a slow /cli probe is busy, never "Applying updates"', () => {
+    const r = localFirstConnectStep({ slowStreak: 0, boot: ok, cli: 'slow', decision: { kind: 'accept' } })
+    expect(r.decision).toEqual({ kind: 'wait', reason: LOCAL_BUSY_REASON })
+    expect(r.slowStreak).toBe(1)
+  })
+
+  it('a real 503 still reads as migrating, and resets the streak', () => {
+    const r = localFirstConnectStep({ slowStreak: 3, boot: ok, cli: 'migrating', decision: { kind: 'accept' } })
+    expect(r.decision.kind).toBe('migrating')
+    expect(r.slowStreak).toBe(0)
+  })
+
+  it('a refusal is the plain wait (unreachable), and resets the streak', () => {
+    const d = { kind: 'wait' as const, reason: 'unreachable-or-legacy-daemon' }
+    expect(localFirstConnectStep({ slowStreak: 2, boot: refused, cli: null, decision: d })).toEqual({
+      slowStreak: 0,
+      decision: d,
+    })
+  })
+
+  it('ready + ready accepts', () => {
+    const r = localFirstConnectStep({ slowStreak: 2, boot: ok, cli: 'ready', decision: { kind: 'accept' } })
+    expect(r).toEqual({ slowStreak: 0, decision: { kind: 'accept' } })
+  })
+})
+
+describe('localProbeOutcome', () => {
+  it('folds a /boot-status probe to ok / slow / refused', () => {
+    expect(localProbeOutcome({ kind: 'ok', status: status(), tokenSent: false })).toBe('ok')
+    expect(localProbeOutcome({ kind: 'ok', status: status({ phase: 'migrating' }), tokenSent: false })).toBe('slow')
+    expect(localProbeOutcome({ kind: 'http', httpStatus: 500 })).toBe('slow')
+    expect(localProbeOutcome({ kind: 'network', timedOut: true })).toBe('slow')
+    expect(localProbeOutcome({ kind: 'network' })).toBe('refused')
   })
 })

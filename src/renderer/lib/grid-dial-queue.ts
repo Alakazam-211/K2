@@ -233,6 +233,15 @@ function releaseDialSlot(key: string, remote: boolean): void {
   next!.wake()
 }
 
+/** A local grid handshake that timed out (no refusal, no error): the
+ *  daemon is alive but slow. Pure, for the tests. */
+export function localSlowHandshake(
+  scope: Pick<ServerScope, 'isRemote'>,
+  outcome: 'open' | 'failed' | 'timeout',
+): boolean {
+  return !scope.isRemote && outcome === 'timeout'
+}
+
 export type GridDialOpts = {
   /** Rechecked after the slot is granted, before `new WebSocket`. */
   isCancelled?: () => boolean
@@ -278,14 +287,16 @@ export async function openQueuedGridWebSocket(
     }
     ws.binaryType = 'arraybuffer'
     watchLocalSocket(scope, ws)
-    const opened = await new Promise<boolean>((resolve) => {
+    // 'timeout': no answer inside HANDSHAKE_TIMEOUT_MS; 'failed': refused,
+    // errored or closed before it opened.
+    const outcome = await new Promise<'open' | 'failed' | 'timeout'>((resolve) => {
       const timer = setTimeout(() => {
         cleanup()
-        resolve(false)
+        resolve('timeout')
       }, HANDSHAKE_TIMEOUT_MS)
       const onAbort = () => {
         cleanup()
-        resolve(false)
+        resolve('failed')
       }
       const cleanup = () => {
         clearTimeout(timer)
@@ -296,15 +307,15 @@ export async function openQueuedGridWebSocket(
       }
       ws.onopen = () => {
         cleanup()
-        resolve(true)
+        resolve('open')
       }
       ws.onerror = () => {
         cleanup()
-        resolve(false)
+        resolve('failed')
       }
       ws.onclose = () => {
         cleanup()
-        resolve(false)
+        resolve('failed')
       }
       if (isAborted(opts?.signal)) {
         onAbort()
@@ -322,11 +333,18 @@ export async function openQueuedGridWebSocket(
       }
       throw new Error('grid-dial-aborted')
     }
-    if (!opened) {
-      noteGridDialFailure(scope)
-      // Refused, errored or timed out before it opened: a stale token
-      // looks exactly like this to the browser.
-      if (!scope.isRemote) markLocalDaemonCredsStale()
+    if (outcome !== 'open') {
+      // 0.46.18: a LOCAL handshake that only timed out is a busy daemon,
+      // not a resource storm or a new token (a refusal on loopback fails
+      // fast). Counting it armed the 8 s burst backoff for every local
+      // socket (events and overlay too) right when the daemon came back,
+      // so a 12 s stall read as 20 s offline. A remote timeout still counts.
+      if (!localSlowHandshake(scope, outcome)) {
+        noteGridDialFailure(scope)
+        // Refused, errored or (remote) timed out before it opened: a stale
+        // token looks exactly like this to the browser.
+        if (!scope.isRemote) markLocalDaemonCredsStale()
+      }
       if (ws.readyState !== WebSocket.CLOSED) {
         try {
           ws.close()

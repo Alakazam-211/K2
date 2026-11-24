@@ -3,13 +3,15 @@ import {
   BACKOFF_MS,
   HANDSHAKE_TIMEOUT_MS,
   gridDialBackoffRemainingMs,
+  localSlowHandshake,
   noteGridDialFailure,
   openQueuedGridWebSocket,
+  openQueuedWebSocket,
   resetGridDialQueueForTests,
   setGridDialMaxForTests,
 } from './grid-dial-queue'
 
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 class FakeWebSocket {
   static pending: FakeWebSocket[] = []
   static throwOnConstruct = false
@@ -300,5 +302,66 @@ describe('grid-dial-queue', () => {
     } finally {
       globalThis.WebSocket = prev
     }
+  })
+
+  // 0.46.18: this computer's daemon under load answers a grid upgrade after
+  // 5-15 s. Those timeouts used to arm the 8 s burst backoff for every local
+  // socket (events and overlay too), so a 12 s stall read as ~20 s offline.
+  describe('slow local handshakes (0.46.18)', () => {
+    const remoteB = { hostKey: 'b.k2.dev', isRemote: true } as unknown as ServerScope
+
+    it('only a local timeout is a slow handshake', () => {
+      expect(localSlowHandshake(primaryScope(), 'timeout')).toBe(true)
+      expect(localSlowHandshake(primaryScope(), 'failed')).toBe(false)
+      expect(localSlowHandshake(remoteB, 'timeout')).toBe(false)
+    })
+
+    it('three local handshake timeouts in a row arm no backoff', async () => {
+      vi.useFakeTimers()
+      const prev = globalThis.WebSocket
+      globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+      try {
+        vi.setSystemTime(7_000_000)
+        // Three panes' handshakes hang at once and time out together (the
+        // burst the old rule counted).
+        const failed = [0, 1, 2].map((i) =>
+          expect(openQueuedGridWebSocket(primaryScope(), `ws://127.0.0.1/grid${i}`)).rejects.toThrow('grid-dial-failed'),
+        )
+        await vi.advanceTimersByTimeAsync(HANDSHAKE_TIMEOUT_MS)
+        await Promise.all(failed)
+        expect(FakeWebSocket.pending).toHaveLength(3)
+        expect(gridDialBackoffRemainingMs(primaryScope())).toBe(0)
+        // The next local socket (an events socket) dials at once.
+        const events = await openQueuedWebSocket(primaryScope(), 'ws://127.0.0.1/cli/sessions/events')
+        expect(events).toBe(FakeWebSocket.pending[3])
+      } finally {
+        globalThis.WebSocket = prev
+        vi.useRealTimers()
+      }
+    })
+
+    it('three remote handshake timeouts back off that server only, never the local one', async () => {
+      vi.useFakeTimers()
+      const prev = globalThis.WebSocket
+      globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+      try {
+        vi.setSystemTime(8_000_000)
+        setGridDialMaxForTests(3)
+        // Three of B's handshakes hang at once and time out together.
+        const failed = [0, 1, 2].map((i) =>
+          expect(openQueuedGridWebSocket(remoteB, `wss://b.k2.dev/grid${i}`)).rejects.toThrow('grid-dial-failed'),
+        )
+        await vi.advanceTimersByTimeAsync(HANDSHAKE_TIMEOUT_MS)
+        await Promise.all(failed)
+        expect(FakeWebSocket.pending).toHaveLength(3)
+        expect(gridDialBackoffRemainingMs(remoteB)).toBeGreaterThan(0)
+        expect(gridDialBackoffRemainingMs(primaryScope())).toBe(0)
+        const local = await openQueuedWebSocket(primaryScope(), 'ws://127.0.0.1/cli/sessions/events')
+        expect(local).toBe(FakeWebSocket.pending[3])
+      } finally {
+        globalThis.WebSocket = prev
+        vi.useRealTimers()
+      }
+    })
   })
 })

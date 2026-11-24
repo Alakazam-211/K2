@@ -71,6 +71,14 @@ import {
 } from '@/lib/remote-recovery'
 import { jittered } from '@/lib/backoff'
 import {
+  localHealthStore,
+  localHealthText,
+  localProbeTimeoutMs,
+  startLocalHealthWatch,
+  type LocalProbeOutcome,
+} from '@/lib/local-health'
+import { useStore } from 'zustand'
+import {
   clearR1FlapEpisode,
   registerRemoteHealthControls,
   takeRemoteFailureEvidence,
@@ -277,7 +285,7 @@ export function holdAcceptIfCliNotReady(
 }
 
 /** The gate's verdict for a single poll. */
-type GateDecision =
+export type GateDecision =
   | { kind: 'accept' }
   | { kind: 'migrating'; detail: string }
   | { kind: 'wait'; reason: string } // unreachable / wrong version / old daemon
@@ -558,9 +566,15 @@ function reloadOntoServerBundleOnce(status: DaemonBootStatus | null): void {
   window.location.replace(url)
 }
 
-/** Authenticated /cli/settings/get — 200 means real routes are open.
- *  503 migrating / network / 401 → not ready. */
-export async function probeCliReady(timeoutMs = 2000): Promise<boolean> {
+/** What the authenticated /cli/settings/get probe found (0.46.18):
+ *  - 'ready'     200, real routes are open;
+ *  - 'migrating' 503, the daemon is still applying migrations;
+ *  - 'slow'      no answer inside the timeout: the daemon is alive (its
+ *                /boot-status just answered) but busy;
+ *  - 'down'      refused, 401 or another error. */
+export type CliReadiness = 'ready' | 'migrating' | 'slow' | 'down'
+
+export async function probeCliReadiness(timeoutMs = 2000): Promise<CliReadiness> {
   try {
     const creds = await getDaemonWs(primaryScope())
     const url = withCliTokenQuery(
@@ -571,16 +585,68 @@ export async function probeCliReady(timeoutMs = 2000): Promise<boolean> {
       url,
       withDaemonFetch({ method: 'GET', signal: AbortSignal.timeout(timeoutMs) }),
     )
-    if (resp.status === 503) return false
+    if (resp.status === 503) return 'migrating'
     if (!resp.ok) {
       invalidateDaemonWs()
-      return false
+      return 'down'
     }
-    return true
-  } catch {
+    return 'ready'
+  } catch (err) {
+    // A timeout is a busy daemon, not new creds: keep the cached port and
+    // token (re-reading them every 2 s only adds work for a slow daemon).
+    if (classifyRemoteFetchError(err) === 'timeout') return 'slow'
     invalidateDaemonWs()
-    return false
+    return 'down'
   }
+}
+
+/** Authenticated /cli/settings/get — true when real routes are open. */
+export async function probeCliReady(timeoutMs = 2000): Promise<boolean> {
+  return (await probeCliReadiness(timeoutMs)) === 'ready'
+}
+
+/** The wait reason while this computer's daemon is alive but answering
+ *  slower than the probe's timeout (0.46.18). */
+export const LOCAL_BUSY_REASON = 'local-busy'
+
+/**
+ * 0.46.18 — the LOCAL first connect (launch, or a reload) against a slow
+ * daemon. Before, every probe had a fixed 2 s budget, so a daemon taking
+ * 12 s per answer was asked again every 2.5 s, never answered in time, and
+ * the window read "Connecting…" (or "Applying updates…" when only the
+ * /cli probe was slow) for as long as it stayed busy. Now:
+ *   - a timed-out probe counts as SLOW (the next one waits longer:
+ *     `localProbeTimeoutMs`, 2 s → 4 s → 8 s → 15 s); a refusal or an
+ *     answer resets the streak;
+ *   - a slow /cli probe after a ready /boot-status waits with the busy
+ *     copy instead of claiming migrations.
+ * Pure, for the tests: the next slow streak and the decision to show.
+ */
+export function localFirstConnectStep(opts: {
+  slowStreak: number
+  boot: BootProbeResult
+  cli: CliReadiness | null
+  decision: GateDecision
+}): { slowStreak: number; decision: GateDecision } {
+  const bootSlow = opts.boot.kind === 'network' && opts.boot.timedOut === true
+  const cliSlow = opts.cli === 'slow'
+  if (bootSlow || cliSlow) {
+    return {
+      slowStreak: opts.slowStreak + 1,
+      decision: { kind: 'wait', reason: LOCAL_BUSY_REASON },
+    }
+  }
+  const decision =
+    opts.cli === null ? opts.decision : holdAcceptIfCliNotReady(opts.decision, opts.cli === 'ready')
+  return { slowStreak: 0, decision }
+}
+
+/** One local-health probe (lib/local-health): `/boot-status` on the
+ *  window's own local server, folded to ok / slow / refused. */
+export function localProbeOutcome(probe: BootProbeResult): LocalProbeOutcome {
+  if (probe.kind === 'ok') return probe.status.phase === 'ready' ? 'ok' : 'slow'
+  if (probe.kind === 'http') return 'slow'
+  return probe.timedOut ? 'slow' : 'refused'
 }
 
 // ── Wedge detector (0.40.48 connection resilience; 0.40.68 flap coverage) ──
@@ -1012,6 +1078,9 @@ export function ConnectionGate(): React.ReactElement {
     // (a token-sent poll answered with a stranger's view). Re-armed by the
     // next full view.
     let staleViewReviveStarted = false
+    // 0.46.18: local first connect: probes in a row that timed out (the
+    // daemon is alive but busy). Each one gives the next a longer budget.
+    let localSlowStreak = 0
 
     // A host switch must re-poll from scratch: drop any prior accept so
     // the overlay shows while the new host is contacted. (The recovery
@@ -1108,7 +1177,7 @@ export function ConnectionGate(): React.ReactElement {
       // 0.46.10: once mounted, a network-class miss is retried once at once
       // (fresh socket) before it counts. First connect keeps one try.
       const probeOnce = (): Promise<BootProbeResult> =>
-        fetchBootStatus(isRemote ? REMOTE_BOOT_STATUS_TIMEOUT_MS : 2000)
+        fetchBootStatus(isRemote ? REMOTE_BOOT_STATUS_TIMEOUT_MS : localProbeTimeoutMs(localSlowStreak))
       const probe =
         isRemote && acceptedOnce
           ? await probeBootStatusWithEviction(probeOnce)
@@ -1212,10 +1281,17 @@ export function ConnectionGate(): React.ReactElement {
       let next = policy.decide(status)
       // Local: boot-status `ready` is not enough — /cli/* 503s until
       // migrations finish. Probe a real route before importing App.
-      if (next.kind === 'accept' && !isRemote) {
-        const cliReady = await probeCliReady()
-        if (cancelled) return
-        next = holdAcceptIfCliNotReady(next, cliReady)
+      // 0.46.18: a probe that only timed out is a busy daemon: wait with
+      // the busy copy and give the next probe longer (localFirstConnectStep).
+      if (!isRemote) {
+        let cli: CliReadiness | null = null
+        if (next.kind === 'accept') {
+          cli = await probeCliReadiness(localProbeTimeoutMs(localSlowStreak))
+          if (cancelled) return
+        }
+        const step = localFirstConnectStep({ slowStreak: localSlowStreak, boot: probe, cli, decision: next })
+        localSlowStreak = step.slowStreak
+        next = step.decision
       }
       // 0.39.36: a REMOTE host's /boot-status accepting only proves the
       // daemon is up + the right protocol — NOT that this client's
@@ -1545,6 +1621,18 @@ export function ConnectionGate(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostKey, remoteNeedsAuth])
 
+  // 0.46.18: a mounted window on this computer's server watches it
+  // (lib/local-health). Trouble on its own sockets or requests starts one
+  // backed-off probe loop; the result is only ever the light note below,
+  // never the blocking overlay. Remote hosts keep their own recovery.
+  const localMounted = !isRemote && decision.kind === 'accept'
+  useEffect(() => {
+    if (!localMounted) return
+    return startLocalHealthWatch({
+      probe: async (timeoutMs) => localProbeOutcome(await fetchBootStatus(timeoutMs)),
+    })
+  }, [localMounted])
+
   // Phase 2: once accepted, dynamically import App. Its import
   // side-effects (store creation, eager fetches) run NOW for the first
   // time, against a daemon confirmed to be the right version AND ready.
@@ -1709,8 +1797,68 @@ export function ConnectionGate(): React.ReactElement {
     <>
       {roomsHost}
       <AppErrorBoundary key="app"><App key={hostKey} /></AppErrorBoundary>
+      {!isRemote && <LocalHealthNote />}
       {signInOverlay}
     </>
+  )
+}
+
+/** 0.46.18: the light note for a mounted window whose LOCAL server is busy
+ *  or not answering (lib/local-health). Same pill as RecoveryBanner, and
+ *  like it passes every click and key through: the app stays usable on its
+ *  last view while the one probe loop retries. */
+export function LocalHealthNote(): React.ReactElement | null {
+  const health = useStore(localHealthStore, (s) => s.health)
+  const text = localHealthText(health)
+  if (text === null) return null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="local-health-note"
+      data-local-health={health.kind}
+      style={{
+        position: 'fixed',
+        left: 0,
+        right: 0,
+        bottom: '1.25rem',
+        zIndex: 9999,
+        display: 'flex',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          padding: '0.4rem 0.85rem',
+          borderRadius: 'var(--radius-box, 0px)',
+          background: 'rgba(20,20,20,0.92)',
+          border: '1px solid var(--color-border, rgba(255,255,255,0.12))',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.35)',
+          color: 'var(--color-text-primary, #e0e0e0)',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          fontSize: '0.8rem',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          pointerEvents: 'none',
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: 'var(--radius-badge, 9999px)',
+            background: '#f5a623',
+            flexShrink: 0,
+          }}
+        />
+        <span>{text}</span>
+      </div>
+    </div>
   )
 }
 
@@ -1868,6 +2016,10 @@ function ConnectingOverlay({
   // the user updates are being applied; otherwise it's a plain connect.
   // A failed App import trumps both — "Connecting…" would be a lie (the
   // daemon accepted; it's the UI bundle that couldn't load).
+  // 0.46.18: this computer's daemon answers, only slowly. Say so instead
+  // of a bare "Connecting…" (or a false "Applying updates…").
+  const localBusy =
+    isLocal && decision.kind === 'wait' && decision.reason === LOCAL_BUSY_REASON
   const heading = importFailed
     ? `${PRODUCT_NAME} failed to load`
     : updateCopy ? updateCopy.heading
@@ -1875,6 +2027,8 @@ function ConnectingOverlay({
   const subline = importFailed
     ? 'The app interface could not be loaded.'
     : updateCopy ? updateCopy.subline
+    : localBusy
+      ? 'This computer’s K2 server is busy. Waiting for it to answer…'
     : migrating
       ? (decision.detail && decision.detail.length > 0 ? decision.detail : 'Applying updates…')
       : null
@@ -1884,9 +2038,12 @@ function ConnectingOverlay({
   // a plain 'wait' (unreachable / wrong version) surface it after ~10s.
   // importFailed shows it UNCONDITIONALLY: on a local accept the poll
   // loop stopped, so the attempt thresholds can never fire on their own.
+  // A busy local daemon's probes wait 2 + 4 + 8 + 15 s: four of them is
+  // about 30 s with no answer, so offer Reload then, not after 20.
   const showReloadButton =
     updateCopy?.forceReload === true ||
-    shouldShowReloadButton({ migrating, attempts, importFailed })
+    shouldShowReloadButton({ migrating, attempts, importFailed }) ||
+    (localBusy && attempts >= 4)
 
   return (
     <div

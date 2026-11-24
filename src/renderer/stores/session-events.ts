@@ -26,6 +26,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useActiveStore } from '@/stores/active'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { jittered } from '@/lib/backoff'
+import { noteLocalOk, noteLocalTrouble } from '@/lib/local-health'
 import { logRemotePath } from '@/lib/remote-path-log'
 import {
   noteRemoteEventsClosed,
@@ -1195,11 +1196,18 @@ function remoteRecoveryBlocked(scope: ServerScope): boolean {
 /** The window-level WS-drop debounce (remote-ws-drop) is about the
  *  window's connection; only sockets on the window's host feed it. */
 function noteClosed(scope: ServerScope): void {
-  if (scope.isWindowHost()) noteRemoteEventsClosed()
+  if (!scope.isWindowHost()) return
+  noteRemoteEventsClosed()
+  // 0.46.18: the window's LOCAL server (lib/local-health): one probe loop
+  // and, if it stays slow, the light "busy" note. Another server's socket
+  // (a pinned scope) never reaches here.
+  if (!scope.isRemote) noteLocalTrouble()
 }
 
 function noteOpened(scope: ServerScope): void {
-  if (scope.isWindowHost()) noteRemoteEventsOpened()
+  if (!scope.isWindowHost()) return
+  noteRemoteEventsOpened()
+  if (!scope.isRemote) noteLocalOk()
 }
 
 /**

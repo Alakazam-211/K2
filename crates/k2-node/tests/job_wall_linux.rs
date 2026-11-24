@@ -866,7 +866,26 @@ async fn a_job_makes_no_user_namespace_unless_userns_and_its_limit_is_its_own() 
     assert!(out.contains(r#""keyctl":"EPERM""#), "keyctl stays refused: {out}");
     if restricted {
         let loaded = std::fs::read_to_string(k2_node::admin::apparmor::LOADED).unwrap();
-        assert!(k2_node::admin::apparmor::loaded_in(&loaded), "root loaded {}", k2_node::admin::apparmor::PROFILE);
+        assert!(k2_node::admin::apparmor::loaded_in(&loaded) || !Path::new(k2_node::admin::apparmor::PROFILE_PATH).exists(), "loaded while a --userns unit runs, or gone with it");
+        // A tampered file (an attachment path, then an extra rule) is never
+        // loaded as ours: the next --userns start writes this build's over
+        // it first (the job reads the file's hash while it runs).
+        use k2_node::admin::apparmor::{profile_sha256, PROFILE_PATH, PROFILE_TEXT};
+        for (job, tampered) in [
+            ("ns4", PROFILE_TEXT.replace("profile k2-job-userns flags", "profile k2-job-userns /usr/bin/** flags")),
+            ("ns5", PROFILE_TEXT.replace("  userns,\n", "  userns,\n  capability,\n")),
+        ] {
+            std::fs::write(PROFILE_PATH, &tampered).unwrap();
+            std::fs::set_permissions(PROFILE_PATH, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let probe = format!("sha256sum {PROFILE_PATH}; {} wall-probe --syscall userns_mount_tmpfs", r.bin.display());
+            let mut p = plan(job, &["/bin/sh", "-c", &probe]);
+            p.userns = true;
+            c.send(Frame::Assign(assign(p, 1)));
+            let fr = run_to_receipt(&mut c, job).await;
+            let out = text(&logs_of(&fr, job), LogStream::Out);
+            assert!(out.starts_with(&profile_sha256()), "{job}: the job ran under this build's profile file, not the tampered one: {out}");
+            assert!(out.contains(r#""userns_mount_tmpfs":"ok""#), "{job}: {out}");
+        }
     } else {
         assert!(!Path::new(k2_node::admin::apparmor::PROFILE_PATH).exists(), "no profile where the kernel doesn't restrict");
     }

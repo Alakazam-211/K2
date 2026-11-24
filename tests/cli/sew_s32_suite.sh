@@ -5,6 +5,10 @@
 # daemon) and the integration tests the S32 code touches. Fails loudly on
 # the first failure. Never touches the real ~/.k2 (each test uses a temp
 # HOME).
+#
+# On bash it ran 993 s on a busy node (cli-parity 37e11bda), past
+# cli-parity's 900 s default:
+# cli-parity-timeout: 1800
 
 set -euo pipefail
 cd "$(dirname "$0")/../.."

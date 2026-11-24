@@ -187,7 +187,8 @@ fn exposure_counts_are_pinned() {
     // Catalog v54 (0.46.11, app-recordings-v1, Sew 0.9.0): + recordings.list,
     // recordings.get, recordings.transcript and the recordings.events socket (app).
     // Catalog v55 (0.46.11): + auth.doorStatus (app).
-    assert_eq!((widget, app, garden_local), (54, 149, 57), "per-exposure verb counts (widget, app, garden-local)");
+    // The Supabase-compatible layer (0.46.18, lane A): + identity.token (app, link door only).
+    assert_eq!((widget, app, garden_local), (54, 150, 57), "per-exposure verb counts (widget, app, garden-local)");
     let both: Vec<&str> = c
         .verbs
         .iter()

@@ -206,6 +206,8 @@ pub const AREAS: &[(&str, &str)] = &[
     ("data", concat!(cli_name!(), " app data and exec")),
     ("egress", "where an App may connect out"),
     ("database", concat!("an App's own database: ", cli_name!(), " app db connect, check, disconnect")),
+    ("compat", concat!("the Supabase-compatible layer: ", cli_name!(), " app compat, identity, storage, user meta and import")),
+    ("cron", concat!("App cron: ", cli_name!(), " app cron, the daemon calling an App's routes on a schedule")),
     ("box", "box prep, box services, Podman"),
     ("domains", "labels and custom domains"),
     ("handover", "moving Apps between workspaces and boxes"),

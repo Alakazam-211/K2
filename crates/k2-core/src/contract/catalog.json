@@ -6750,7 +6750,8 @@
       "bindings": {
         "http": {
           "method": "GET",
-          "route": "/cli/skin/identity-token"
+          "route": "/cli/skin/identity-token",
+          "door": "link"
         }
       },
       "request": [],

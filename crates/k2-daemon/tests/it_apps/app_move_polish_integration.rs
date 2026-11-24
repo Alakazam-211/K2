@@ -1110,14 +1110,16 @@ async fn an_agent_makes_and_edits_only_its_own_workspaces_roles() {
     assert!(role("rw-theirs").is_none() && role("rw-mix").is_none() && role("rw-tpl").is_none(), "nothing made");
     let r = post(d.port, "/cli/skin/roles/update", &agent, json!({"name": "rw-mine", "roomAccess": line(&b)})).await;
     refused(&r, "update to another workspace's room");
+    // A room line elsewhere on a box-wide role: one held request for the
+    // owner (0.46.18), never applied by the agent.
     let r = post(d.port, "/cli/skin/roles/room", &agent, json!({"name": "rw-mine", "handle": b.handle, "caps": ["thread:read"]})).await;
-    refused(&r, "a room line elsewhere");
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "a room line elsewhere: {}", r.body);
     assert_eq!(role("rw-mine").expect("rw-mine").rooms, vec![a.id.clone()], "its role still reaches only its room");
     // A role that already reaches elsewhere: not the agent's to edit or remove.
     let r = post(d.port, "/cli/skin/roles/update", &agent, json!({"name": "rw-owner-b", "roomAccess": line(&a)})).await;
     refused(&r, "update another workspace's role");
     let r = post(d.port, "/cli/skin/roles/room", &agent, json!({"name": "rw-owner-b", "handle": a.handle, "caps": ["thread:read"]})).await;
-    refused(&r, "add its room to another workspace's role");
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "add its room to a box-wide role: {}", r.body);
     let r = post(d.port, "/cli/skin/roles/paths", &agent, json!({"name": "rw-owner-b", "handle": b.handle, "read": ["docs"]})).await;
     refused(&r, "folders on another workspace's role");
     let r = post(d.port, "/cli/skin/roles/remove", &agent, json!({"name": "rw-owner-b"})).await;
@@ -1283,9 +1285,14 @@ async fn a_role_named_like_another_roles_id_is_never_the_one_checked() {
     let r = post(d.port, "/cli/app/deny", OWNER, json!({"request": req["id"].as_str().expect("request id")})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(guest_role(), None, "denied: no role handed out");
+    // A room line on the (box-wide) victim by its id: held for the owner
+    // (0.46.18), and the request carries the real role, never the decoy.
+    let r = post(d.port, "/cli/skin/roles/room", &agent, json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})).await;
+    assert_eq!((r.status, r.json()["status"].clone()), (202, json!("held")), "{}", r.body);
+    assert_eq!(r.json()["request"]["body"]["body"]["role"], json!(victim.id), "the real role's id: {}", r.body);
+    assert!(r.body.contains("decoy-victim"), "it names the real role: {}", r.body);
     for (path, want, body) in [
         ("/cli/skin/roles/update", "owner_only", json!({"name": victim.id, "roomAccess": [{"handle": a.handle, "caps": ["thread:read"]}]})),
-        ("/cli/skin/roles/room", "owner_only", json!({"name": victim.id, "handle": a.handle, "caps": ["thread:read"]})),
         ("/cli/skin/roles/paths", "owner_only", json!({"name": victim.id, "handle": b.handle, "read": ["docs"]})),
         ("/cli/skin/roles/remove", "owner_only", json!({"name": victim.id})),
     ] {

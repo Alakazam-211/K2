@@ -2258,3 +2258,88 @@ fn ending_owner_chat_sessions_takes_a_confirm_bound_to_its_sid_or_all() {
     );
     assert_eq!(s, 403, "{v}");
 }
+
+/// 0.46.18 field report: on a Linux server with no owner login and no
+/// vault password, `k2 app uninstall --purge` and `k2 hostchat purge`
+/// failed with `no_confirm_method`, so the owner could never purge. The
+/// owner token from a terminal outside K2 (the vault socket's person
+/// check, the one a server's first owner login uses) now confirms them
+/// there; TCP, logins, agents and K2 terminals get what they got before,
+/// and a server with any other check uses that one.
+#[test]
+fn a_headless_servers_owner_purges_from_its_own_terminal_and_remote_callers_stay_strict() {
+    let _home = crate::test_support::TempHome::new();
+    let t = vault();
+    let finish = |c: &VaultCaller, action: &str| {
+        call(&t, CONFIRM_FINISH, c, json!({ "action": action, "secretId": "shop", "method": "terminal" }))
+    };
+    for &action in TERMINAL_ACTIONS {
+        let start = json!({ "action": action, "secretId": "shop" });
+        let (s, v) = call(&t, CONFIRM_START, &owner_tty(), start.clone());
+        if cfg!(target_os = "macos") {
+            // A Mac has its own check (Touch ID): never the terminal.
+            assert_eq!((s, v["methods"].clone()), (200, json!(["local-auth"])), "{action}: {v}");
+            let (s, v) = finish(&owner_tty(), action);
+            assert_eq!((s, code(&v)), (403, "confirm_failed"), "{action}: {v}");
+            continue;
+        }
+        assert_eq!((s, v["methods"].clone()), (200, json!(["terminal"])), "{action}: {v}");
+        let (s, v) = finish(&owner_tty(), action);
+        assert_eq!(s, 200, "{action}: {v}");
+        let tok = v["token"].as_str().expect("token").to_string();
+        // Bound to this step, this App or install, and the owner; once.
+        assert!(t.v.confirm.take(&tok, "reveal", Some("shop"), "owner").is_err(), "another step");
+        let (_, v) = finish(&owner_tty(), action);
+        let tok = v["token"].as_str().expect("token").to_string();
+        assert!(t.v.confirm.take(&tok, action, Some("other"), "owner").is_err(), "another App");
+        let (_, v) = finish(&owner_tty(), action);
+        let tok = v["token"].as_str().expect("token").to_string();
+        assert!(t.v.confirm.take(&tok, action, Some("shop"), "connect:lee").is_err(), "another caller");
+        let (_, v) = finish(&owner_tty(), action);
+        let tok = v["token"].as_str().expect("token").to_string();
+        let proof = t.v.confirm.take(&tok, action, Some("shop"), "owner").expect("the owner's purge of shop");
+        assert!(matches!(&proof, k2_vault::HumanProof::Confirmed { method } if method == "terminal"), "{proof:?}");
+        assert!(t.v.confirm.take(&tok, action, Some("shop"), "owner").is_err(), "single use");
+
+        // The owner token over TCP: as before, no confirm here.
+        let (s, v) = call(&t, CONFIRM_START, &owner(), start.clone());
+        assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{action}: {v}");
+        let (s, v) = finish(&owner(), action);
+        assert_eq!((s, code(&v)), (403, "confirm_failed"), "{action}: {v}");
+        // A Connect login confirms with its own password, never the terminal.
+        for c in [login(Role::Owner), login(Role::Admin)] {
+            let (s, v) = call(&t, CONFIRM_START, &c, start.clone());
+            assert_eq!((s, v["methods"].clone()), (200, json!(["connect-password"])), "{c:?}: {v}");
+            let (s, v) = finish(&c, action);
+            assert_eq!((s, code(&v)), (403, "confirm_failed"), "{c:?}: {v}");
+        }
+        // Agents and K2 terminals: refused outright.
+        for c in [agent("ws1", true), shell("ws1")] {
+            let (s, v) = finish(&c, action);
+            assert_eq!(s, 403, "{c:?}: {v}");
+            assert!(v.get("token").is_none(), "{v}");
+        }
+    }
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    // Only the purges take it: another step from the same terminal doesn't.
+    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "reveal", "secretId": "shop" }));
+    assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{v}");
+    let (s, v) = finish(&owner_tty(), "reveal");
+    assert!(s >= 400 && v.get("token").is_none(), "{s} {v}");
+    // A server with an owner login: that login's password is its check.
+    {
+        let _p = Presence::offers(Some(presence::OWNER_LOGIN_PASSWORD), false);
+        let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "app-purge", "secretId": "shop" }));
+        assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{v}");
+        let (s, v) = finish(&owner_tty(), "app-purge");
+        assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+    }
+    // A server with a vault password: the vault password, not the terminal.
+    set_vault_password(&t, "correct horse battery");
+    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "sew-purge", "secretId": "shop" }));
+    assert_eq!((s, v["methods"].clone()), (200, json!(["vault-password"])), "{v}");
+    let (s, v) = finish(&owner_tty(), "sew-purge");
+    assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+}

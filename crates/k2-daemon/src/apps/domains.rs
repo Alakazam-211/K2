@@ -943,7 +943,7 @@ mod custom_tests {
             fn claim(&self, h: &str, _: Option<bool>) -> Result<ClaimAnswer, CpError> {
                 *self.claims.borrow_mut() += 1;
                 if *self.down.borrow() {
-                    return Err(CpError::Retry("K2 Connect's database didn't answer: K2 tries again".into()));
+                    return Err(CpError::Retry(format!("{}'s database didn't answer: {}", k2_core::brand::LOGIN_NAME, crate::apps::relay_claims::TRIES_AGAIN)));
                 }
                 Ok(ClaimAnswer { hostname: h.into(), status: "pending".into(), verify_token: Some(PICKED.into()), last_error: None })
             }

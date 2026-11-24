@@ -152,7 +152,6 @@
 1 K2 crates/k2-daemon/src/domains/renew.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/egress.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/federation_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/front443/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/jobs/runner.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/cert_trigger.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/defaults.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)

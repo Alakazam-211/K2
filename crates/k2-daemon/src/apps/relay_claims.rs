@@ -55,6 +55,30 @@ use k2_core::domains::{AppDomain, RELAY_CLAIMED, RELAY_RELEASED, RELAY_VERIFIED}
 use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 use k2_core::{cli_name, login_name, product_name};
 
+/// The end of a control-plane answer the claim loop retries: the product
+/// says it tries again. Every such writer here ends with it, after `: ` or
+/// `; `, and a reader that retries nothing takes it off with
+/// [`without_tries_again`] (front443's owner switch).
+pub const TRIES_AGAIN: &str = concat!(product_name!(), " tries again");
+
+/// `e` without a closing ": <product> tries again" or "; <product> tries
+/// again" ([`TRIES_AGAIN`]).
+pub fn without_tries_again(e: &str) -> &str {
+    without_tries_again_for(e, TRIES_AGAIN)
+}
+
+/// [`without_tries_again`] with the words as a value, so a test can read
+/// another brand's.
+pub(crate) fn without_tries_again_for<'a>(e: &'a str, tries_again: &str) -> &'a str {
+    let mut s = e;
+    for sep in [": ", "; "] {
+        while let Some(rest) = s.strip_suffix(tries_again).and_then(|r| r.strip_suffix(sep)) {
+            s = rest;
+        }
+    }
+    s
+}
+
 /// The control plane's answer for one name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaimAnswer {
@@ -174,7 +198,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             "{LOGIN_NAME} has no claim on {hostname} from this server (it dropped an old one, or this server's name changed hands); {PRODUCT_NAME} claims it again at the next check, and the TXT value may change"
         ),
         "verification_failed" => format!(
-            "{LOGIN_NAME} can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; {PRODUCT_NAME} tries again"
+            "{LOGIN_NAME} can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; {TRIES_AGAIN}"
         ),
         "txt_missing" | "not_verified" | "pending" => format!(
             "{LOGIN_NAME} can't see the TXT record yet (_k2-domain.{hostname}). It checks through public DNS, which can take a few minutes"
@@ -183,11 +207,11 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             let limit = v.get("limit").and_then(J::as_u64).unwrap_or(5);
             format!("{LOGIN_NAME} takes {limit} new names an hour per account and this account is over that now: {PRODUCT_NAME} tries again later")
         }
-        "conflict" => format!("another change to {hostname} reached {LOGIN_NAME} at the same moment: {PRODUCT_NAME} tries again"),
-        "supabase_error" => concat!(login_name!(), "'s database didn't answer: ", product_name!(), " tries again").to_string(),
-        "dns_unavailable" => concat!(login_name!(), " couldn't look up the TXT record right now: ", product_name!(), " tries again").to_string(),
+        "conflict" => format!("another change to {hostname} reached {LOGIN_NAME} at the same moment: {TRIES_AGAIN}"),
+        "supabase_error" => format!("{LOGIN_NAME}'s database didn't answer: {TRIES_AGAIN}"),
+        "dns_unavailable" => format!("{LOGIN_NAME} couldn't look up the TXT record right now: {TRIES_AGAIN}"),
         "custom_hostnames_disabled" => {
-            concat!(login_name!(), " hasn't turned on custom names yet: Path B starts working once ", product_name!(), "'s relays do; ", product_name!(), " tries again").to_string()
+            format!("{LOGIN_NAME} hasn't turned on custom names yet: Path B starts working once {PRODUCT_NAME}'s relays do; {TRIES_AGAIN}")
         }
         other => format!("{LOGIN_NAME} won't route {hostname} ({other}){d}"),
     }
@@ -513,7 +537,7 @@ pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
     match api.claim(host, k2_core::front443::load().http) {
         Ok(a) => {
             let Some(token) = a.verify_token.as_deref() else {
-                let w = format!("{LOGIN_NAME}'s answer for {host} carries no TXT value; {PRODUCT_NAME} tries again");
+                let w = format!("{LOGIN_NAME}'s answer for {host} carries no TXT value; {TRIES_AGAIN}");
                 record(host, d.relay_state.as_deref(), Some(&w));
                 return Err(w);
             };
@@ -530,7 +554,7 @@ pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
             Err(w)
         }
         Err(CpError::Unreachable(w)) => {
-            let w = format!("{LOGIN_NAME} didn't answer ({w}); {PRODUCT_NAME} tries again");
+            let w = format!("{LOGIN_NAME} didn't answer ({w}); {TRIES_AGAIN}");
             record(host, d.relay_state.as_deref(), Some(&w));
             Err(w)
         }

@@ -827,3 +827,18 @@ fn passthrough_add_refuses_a_nested_name() {
     assert_eq!((status, code), (409, "host_is_k2s"));
     k2_core::tunnel::subdomains::store(Default::default());
 }
+
+/// The owner's switch shows a retried relay answer's cause alone, whatever
+/// the brand's product is called: the writers say this build's product
+/// (relay_claims::TRIES_AGAIN), and the reader takes off exactly that.
+#[test]
+fn a_retried_relay_answer_is_shown_without_its_tries_again() {
+    use crate::apps::relay_claims::{without_tries_again, without_tries_again_for, TRIES_AGAIN};
+    assert_eq!(TRIES_AGAIN, format!("{} tries again", k2_core::brand::PRODUCT_NAME));
+    for sep in [": ", "; "] {
+        assert_eq!(without_tries_again(&format!("dns down{sep}{TRIES_AGAIN}")), "dns down");
+        assert_eq!(without_tries_again_for(&format!("dns down{sep}Globex Desk tries again"), "Globex Desk tries again"), "dns down");
+        assert_eq!(without_tries_again_for(&format!("dns down{sep}K2 tries again"), "Globex Desk tries again"), format!("dns down{sep}K2 tries again"));
+    }
+    assert_eq!(without_tries_again("no suffix here"), "no suffix here");
+}

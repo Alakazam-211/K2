@@ -790,7 +790,7 @@ pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(
             super::relay_claims::Step::Verified => None,
             super::relay_claims::Step::Waiting(w) => Some(format!("through {LOGIN_NAME}: {w}")),
             super::relay_claims::Step::Refused { words, .. } => Some(words),
-            super::relay_claims::Step::Unreachable(w) => Some(format!("{LOGIN_NAME} didn't answer ({w}); {PRODUCT_NAME} tries again")),
+            super::relay_claims::Step::Unreachable(w) => Some(format!("{LOGIN_NAME} didn't answer ({w}); {}", super::relay_claims::TRIES_AGAIN)),
         };
         if let Some(w) = words {
             o.ok = false;

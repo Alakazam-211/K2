@@ -570,7 +570,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             // Nothing retries an owner's switch: said so, whatever the
             // control plane's words for a retried claim were.
             Err(e) => {
-                let why = e.trim_end_matches(": K2 tries again").trim_end_matches("; K2 tries again");
+                let why = crate::apps::relay_claims::without_tries_again(&e);
                 return Err((409, "relay_switch_failed", format!("{LOGIN_NAME} didn't take the change, so nothing changed ({why}). Run this again in a minute.")));
             }
         }

@@ -25,9 +25,10 @@ const PASSED_ON: &[(i32, &str)] = &[
 ];
 
 /// The front's own codes, which the shell script never uses: 69 no
-/// Python 3 for a hand-off (`k2 study errors` names it), 127 a call by an
-/// alias in mode tombstone, 9009 a command not built into k5 for Windows.
-const FRONT_ONLY: &[i32] = &[69, 127, 9009];
+/// Python 3 for a hand-off and 70 a hand-off in a build with no shell CLI
+/// (`k2 study errors` names both), 127 a call by an alias in mode
+/// tombstone, 9009 a command not built into k5 for Windows.
+const FRONT_ONLY: &[i32] = &[69, 70, 127, 9009];
 
 /// The literal `exit <number>` codes in one line of shell, where a command
 /// can stand. Comments are skipped.

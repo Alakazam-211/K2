@@ -59,9 +59,10 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console"] }
 
-# build.rs packs cli/k2 into the binary: gzip, and its BLAKE3. k2-brand
-# gives it the command's name of this build (K2_BRAND_DIR), so a brand's
-# build embeds its pages with its own name (src/brand_text.rs). k2-brand
+# build.rs packs cli/k2 into the binary: gzip, and its BLAKE3 (a brand
+# with no shell CLI, cli.no_bash, packs nothing). k2-brand gives it the
+# command's name of this build (K2_BRAND_DIR), so a brand's build embeds
+# its pages with its own name (src/brand_text.rs), and cli.no_bash. k2-brand
 # is in the workspace already, so Cargo.lock gains no crate.
 [build-dependencies]
 blake3 = "1"

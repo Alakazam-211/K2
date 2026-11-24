@@ -8,6 +8,16 @@
 //! `src/embedded.rs`). Fails the build when the script or its version line
 //! is missing.
 //!
+//! A build of a brand with no shell CLI (`k2_brand::CLI_NO_BASH`, the
+//! brand file's `cli.no_bash`) packs nothing: it never reads `cli/k2`, so
+//! the file need not be there, and writes the script's items in
+//! `embedded.rs` as `None`. The version then comes from the same line in
+//! `cli/src/prelude.sh`, the line `scripts/build-cli.sh` copies into
+//! `cli/k2`, read the same way (`src/version_line.rs`). The version marker
+//! is written in both builds. Such a build fails when prelude.sh or its
+//! version line is missing. The pages and the manifest below are text the
+//! binary prints, not the script, so every build embeds them.
+//!
 //! Also embeds the CLI's static text, the same files `scripts/build-cli.sh`
 //! inlines into `cli/k2`, keyed as bash looks them up: every
 //! `cli/text/study/<id>.txt` under `<id>` and every
@@ -53,6 +63,9 @@ mod schema_join;
 
 #[path = "src/brand_text.rs"]
 mod brand_text;
+
+#[path = "src/version_line.rs"]
+mod version_line;
 
 /// This build's brand, as its text needs it: the values the slots take
 /// (the brand file's `names.company`, `names.login`,
@@ -142,31 +155,63 @@ fn filled(text: String, at: &Path) -> String {
     text
 }
 
-/// How far into the script the version line may be (prelude.sh puts it
-/// on line 12; k2-client's script check reads 40 lines too).
-const VERSION_LINES: usize = 40;
-
 fn main() {
     let manifest = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"),
     );
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let script = manifest.join("../../cli/k2");
-    println!("cargo:rerun-if-changed={}", script.display());
     println!("cargo:rerun-if-changed=build.rs");
 
+    let rs = if k2_brand::CLI_NO_BASH {
+        no_script(&manifest)
+    } else {
+        script(&manifest, &out)
+    };
+    let rs_path = out.join("embedded.rs");
+    std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
+
+    let brand = Brand::of_this_build(&manifest);
+    text(&manifest, &out, &brand);
+    schema(&manifest, &out, &brand);
+}
+
+/// The version on the `K2_CLI_VERSION="x.y.z"` line of `bytes`, read from
+/// `path`; the build fails without one.
+fn version_of(bytes: &[u8], path: &Path) -> String {
+    version_line::cli_version(bytes).unwrap_or_else(|| {
+        panic!(
+            "{}: no K2_CLI_VERSION=\"x.y.z\" line in its first {} lines",
+            path.display(),
+            version_line::VERSION_LINES
+        )
+    })
+}
+
+/// The version items of `embedded.rs`, the same in every build. `from`
+/// is the file the version was read from.
+fn version_items(version: &str, from: &str) -> String {
+    format!(
+        "/// The version on {from}'s `K2_CLI_VERSION=` line.\n\
+         pub const SCRIPT_VERSION: &str = {version:?};\n\
+         /// The version as a marker other code finds in the binary's bytes\n\
+         /// without running it (k2-client's `cli_install::check_binary`).\n\
+         /// The NUL ends it, so `0.46.1` is never read inside `0.46.15`.\n\
+         pub static VERSION_MARKER: &str = \"K5_CLI_VERSION={version}\\0\";\n"
+    )
+}
+
+/// `embedded.rs` for a build that carries the shell CLI: `cli/k2`,
+/// gzipped to `$OUT_DIR/k2.gz`, its BLAKE3 and its version.
+fn script(manifest: &Path, out: &Path) -> String {
+    let script = manifest.join("../../cli/k2");
+    println!("cargo:rerun-if-changed={}", script.display());
     let bytes = std::fs::read(&script).unwrap_or_else(|e| {
         panic!(
             "the shell CLI is not at {}: {e} (build it with scripts/build-cli.sh)",
             script.display()
         )
     });
-    let version = cli_version(&bytes).unwrap_or_else(|| {
-        panic!(
-            "{}: no K2_CLI_VERSION=\"x.y.z\" line in its first {VERSION_LINES} lines",
-            script.display()
-        )
-    });
+    let version = version_of(&bytes, &script);
 
     let blake = blake3::hash(&bytes).to_hex().to_string();
 
@@ -179,25 +224,34 @@ fn main() {
     let gz_lit = gz_path
         .to_str()
         .unwrap_or_else(|| panic!("OUT_DIR is not UTF-8: {}", gz_path.display()));
-    let rs = format!(
+    format!(
         "/// `cli/k2`, gzipped.\n\
-         pub static SCRIPT_GZ: &[u8] = include_bytes!({gz_lit:?});\n\
+         pub static SCRIPT_GZ: Option<&[u8]> = Some(include_bytes!({gz_lit:?}));\n\
          /// The BLAKE3 of `cli/k2` (not of the gzip), in lowercase hex: what\n\
          /// the front checks a copy by before it runs it.\n\
-         pub const SCRIPT_BLAKE3: &str = {blake:?};\n\
-         /// The version on `cli/k2`'s `K2_CLI_VERSION=` line.\n\
-         pub const SCRIPT_VERSION: &str = {version:?};\n\
-         /// The version as a marker other code finds in the binary's bytes\n\
-         /// without running it (k2-client's `cli_install::check_binary`).\n\
-         /// The NUL ends it, so `0.46.1` is never read inside `0.46.15`.\n\
-         pub static VERSION_MARKER: &str = \"K5_CLI_VERSION={version}\\0\";\n"
-    );
-    let rs_path = out.join("embedded.rs");
-    std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
+         pub const SCRIPT_BLAKE3: Option<&str> = Some({blake:?});\n\
+         {}",
+        version_items(&version, "`cli/k2`")
+    )
+}
 
-    let brand = Brand::of_this_build(&manifest);
-    text(&manifest, &out, &brand);
-    schema(&manifest, &out, &brand);
+/// `embedded.rs` for a build with no shell CLI: no copy and no BLAKE3,
+/// and the version from `cli/src/prelude.sh`. `cli/k2` is never read.
+fn no_script(manifest: &Path) -> String {
+    let prelude = manifest.join("../../cli/src/prelude.sh");
+    println!("cargo:rerun-if-changed={}", prelude.display());
+    let bytes = std::fs::read(&prelude)
+        .unwrap_or_else(|e| panic!("read {}: {e}", prelude.display()));
+    let version = version_of(&bytes, &prelude);
+    format!(
+        "/// No copy of the shell CLI: this brand's build carries none\n\
+         /// (its brand file's `cli.no_bash`).\n\
+         pub static SCRIPT_GZ: Option<&[u8]> = None;\n\
+         /// No copy, so no BLAKE3.\n\
+         pub const SCRIPT_BLAKE3: Option<&str> = None;\n\
+         {}",
+        version_items(&version, "`cli/src/prelude.sh`")
+    )
 }
 
 /// `$OUT_DIR/schema.rs`: the body `k2 --schema` prints after its version
@@ -496,20 +550,4 @@ fn pages(dir: &Path) -> Vec<(String, PathBuf)> {
     assert!(!found.is_empty(), "no pages under {}", dir.display());
     found.sort();
     found
-}
-
-/// The value of the script's `K2_CLI_VERSION="x.y.z"` line: digits, letters,
-/// dots, `-` and `+` only, never empty.
-fn cli_version(bytes: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(16 * 1024)]);
-    let line = text
-        .lines()
-        .take(VERSION_LINES)
-        .find_map(|l| l.strip_prefix("K2_CLI_VERSION=\""))?;
-    let value = line.strip_suffix('"')?;
-    let ok = !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b".-+".contains(&b));
-    ok.then(|| value.to_string())
 }

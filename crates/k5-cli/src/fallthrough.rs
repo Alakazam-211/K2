@@ -1,5 +1,15 @@
 //! Handing a verb to the shell CLI.
 //!
+//! A build of a brand with no shell CLI ([`k2_client::brand::CLI_NO_BASH`])
+//! carries no copy ([`embedded`] is `None`) and hands nothing over: every
+//! hand-off is refused first, before Python 3, the bash, the bundled copy,
+//! the K2 home or the cache are looked at, and nothing is written. One
+//! line on stderr says the command line is not built into the program and
+//! that this build has no shell CLI to run it, and the front exits 70
+//! ([`FrontError::NoShellCli`]). By the native bar's ceiling that can only
+//! be a defect of the build. The rest of this page is a build that
+//! carries the shell CLI.
+//!
 //! A verb the front doesn't handle runs in the shell CLI, with the
 //! arguments exactly as they came (never re-encoded or rewritten) and two
 //! variables added ([`fallthrough_env`]); nothing else changes, and the
@@ -77,12 +87,12 @@ pub struct Packed<'a> {
     pub blake3: &'a str,
 }
 
-/// The copy this binary carries.
-pub fn embedded() -> Packed<'static> {
-    Packed {
-        gz: embedded::SCRIPT_GZ,
-        blake3: embedded::SCRIPT_BLAKE3,
-    }
+/// The copy this binary carries; `None` in a build with no shell CLI.
+pub fn embedded() -> Option<Packed<'static>> {
+    Some(Packed {
+        gz: embedded::SCRIPT_GZ?,
+        blake3: embedded::SCRIPT_BLAKE3?,
+    })
 }
 
 impl Packed<'_> {
@@ -162,8 +172,8 @@ fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File
 }
 
 /// The front's own failures. Each is one line on stderr and exit 1;
-/// no Python 3 is exit 69, and a command not built into k5 for Windows is
-/// exit 9009.
+/// no Python 3 is exit 69, a command not built into k5 for Windows is
+/// exit 9009, and a build with no shell CLI is exit 70.
 #[derive(Debug)]
 pub enum FrontError {
     /// The K2 home can't be found, so the cache has nowhere to go.
@@ -181,6 +191,10 @@ pub enum FrontError {
     /// Windows: a command the binary doesn't answer itself, which is
     /// never handed to a bash there. Carries the verb.
     NotOnWindows { noun: String },
+    /// This build carries no shell CLI ([`k2_client::brand::CLI_NO_BASH`]),
+    /// so a command line the binary doesn't answer has nothing to run it.
+    /// Carries the verb.
+    NoShellCli { noun: String },
     /// bash could not be started.
     Run { bash: PathBuf, err: io::Error },
 }
@@ -191,6 +205,7 @@ impl FrontError {
         match self {
             FrontError::NoPython { .. } => Exit::NoPython,
             FrontError::NotOnWindows { .. } => Exit::NotOnWindows,
+            FrontError::NoShellCli { .. } => Exit::NoShellCli,
             _ => Exit::Error,
         }
     }
@@ -202,10 +217,12 @@ impl FrontError {
 
     /// The line printed on stderr. It starts with the command's own name
     /// (the brand's, [`k2_client::brand::CLI_NAME`]), whichever name the
-    /// front was called by.
+    /// front was called by; the Python and Windows lines spell `k5`.
     pub fn line(&self) -> String {
         match self {
-            FrontError::NoPython { .. } | FrontError::NotOnWindows { .. } => self.to_string(),
+            FrontError::NoPython { .. }
+            | FrontError::NotOnWindows { .. }
+            | FrontError::NoShellCli { .. } => self.to_string(),
             _ => format!("{}: {self}", k2_client::brand::CLI_NAME),
         }
     }
@@ -230,6 +247,11 @@ impl fmt::Display for FrontError {
                 python_how(cfg!(target_os = "macos"))
             ),
             FrontError::NotOnWindows { noun } => f.write_str(&not_on_windows_line(noun)),
+            FrontError::NoShellCli { noun } => write!(
+                f,
+                "{} {noun}: this command line is not built into this program, and this build has no shell CLI to run it.",
+                k2_client::brand::CLI_NAME
+            ),
             FrontError::Run { bash, err } => write!(f, "can't run {}: {err}", bash.display()),
         }
     }
@@ -500,13 +522,16 @@ pub fn dev_fd(fd: &std::os::fd::OwnedFd) -> OsString {
 /// when the call would be refused, and a value the caller set never
 /// stands), then [`run`]; its error's line on stderr, and its exit. Nothing
 /// else has changed the process environment, so it is what the shell
-/// inherits.
+/// inherits. A build with no shell CLI skips the rule (there is no shell
+/// to tell) and [`run`] refuses at once.
 pub fn hand_off(args: &[OsString]) -> Exit {
-    match crate::passport::hand_off_env(crate::passport::current(args)) {
-        (name, Some(value)) => std::env::set_var(name, value),
-        (name, None) => std::env::remove_var(name),
+    if embedded().is_some() {
+        match crate::passport::hand_off_env(crate::passport::current(args)) {
+            (name, Some(value)) => std::env::set_var(name, value),
+            (name, None) => std::env::remove_var(name),
+        }
+        trace::mark("passport rule");
     }
-    trace::mark("passport rule");
     let err = run(args);
     // The shell never ran: nothing went to the daemon, so no plain-http
     // line before the front's own.
@@ -515,32 +540,71 @@ pub fn hand_off(args: &[OsString]) -> Exit {
     err.exit()
 }
 
+/// What a hand-off has ready before bash starts ([`prepare`]).
+#[derive(Debug)]
+pub struct Ready {
+    /// The bash to run.
+    pub bash: PathBuf,
+    /// The copy it runs, open.
+    pub script: Script,
+    /// The folder [`SCRIPT_DIR_VAR`] names ([`script_dir_for`]).
+    pub dir: Option<PathBuf>,
+}
+
+/// What [`run`] works out before bash starts, each step only when the one
+/// before let it go on: the copy this build carries (`packed`; none is
+/// [`FrontError::NoShellCli`] at once, and nothing else is asked), Python
+/// 3 (`python`), the bash (`bash`), this executable (`exe`, for the
+/// bundled copy and the script folder), then the copy to run, from the
+/// bundle or the cache under the K2 home (`k2_home`).
+pub fn prepare(
+    packed: Option<Packed<'_>>,
+    args: &[OsString],
+    python: impl FnOnce() -> crate::python::Python3,
+    bash: impl FnOnce() -> Result<PathBuf, FrontError>,
+    exe: impl FnOnce() -> Option<PathBuf>,
+    k2_home: impl FnOnce() -> Result<PathBuf, HomeError>,
+) -> Result<Ready, FrontError> {
+    let Some(packed) = packed else {
+        return Err(FrontError::NoShellCli { noun: noun(args) });
+    };
+    if python() == crate::python::Python3::Missing {
+        return Err(FrontError::NoPython { noun: noun(args) });
+    }
+    trace::mark("python3");
+    let bash = bash()?;
+    trace::mark("find bash");
+    let exe = exe();
+    let bundled = exe.as_deref().and_then(bundled_place);
+    trace::mark("exe and bundled place");
+    let script = script(&packed, bundled.as_deref(), k2_home)?;
+    let dir = exe.as_deref().and_then(script_dir_for);
+    trace::mark("script dir");
+    Ok(Ready { bash, script, dir })
+}
+
 /// Hands `args` to the shell CLI. On Unix this process becomes bash, so
 /// this returns only when that fails; what comes back is the front's own
 /// error. On Windows nothing is handed over: the answer is always
 /// [`FrontError::NotOnWindows`], before anything is looked for or written.
+/// In a build with no shell CLI it is [`FrontError::NoShellCli`], before
+/// anything is looked at ([`prepare`]).
 pub fn run(args: &[OsString]) -> FrontError {
     if !cfg!(unix) {
         return FrontError::NotOnWindows { noun: noun(args) };
     }
-    if crate::python::here() == crate::python::Python3::Missing {
-        return FrontError::NoPython { noun: noun(args) };
-    }
-    trace::mark("python3");
-    let bash = match interpreter() {
-        Ok(b) => b,
+    let ready = prepare(
+        embedded(),
+        args,
+        crate::python::here,
+        interpreter,
+        resolved_exe,
+        crate::home::k2_home,
+    );
+    let Ready { bash, script, dir } = match ready {
+        Ok(r) => r,
         Err(e) => return e,
     };
-    trace::mark("find bash");
-    let exe = resolved_exe();
-    let bundled = exe.as_deref().and_then(bundled_place);
-    trace::mark("exe and bundled place");
-    let script = match script(&embedded(), bundled.as_deref(), crate::home::k2_home) {
-        Ok(s) => s,
-        Err(e) => return e,
-    };
-    let dir = exe.as_deref().and_then(script_dir_for);
-    trace::mark("script dir");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -631,18 +695,32 @@ mod tests {
         assert_eq!(cache_dir(Path::new("/h/.k2")), Path::new("/h/.k2/run/cli"));
     }
 
-    /// The binary's own copy is this checkout's `cli/k2`, byte for byte.
+    /// The binary's own copy is this checkout's `cli/k2`, byte for byte;
+    /// a build with no shell CLI carries none.
     #[test]
     fn the_embedded_copy_is_cli_k2() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-        let want = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
-        let got = embedded().unpack().expect("the embedded copy unpacks");
-        assert!(
-            got == want,
-            "the embedded copy differs from {}",
-            repo.display()
-        );
-        assert_eq!(embedded().blake3, blake3_hex(&want));
+        match embedded() {
+            None => assert!(
+                k2_client::brand::CLI_NO_BASH,
+                "a build with the shell CLI carries no copy"
+            ),
+            Some(packed) => {
+                assert!(
+                    !k2_client::brand::CLI_NO_BASH,
+                    "a build with no shell CLI carries a copy"
+                );
+                let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+                let want =
+                    fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
+                let got = packed.unpack().expect("the embedded copy unpacks");
+                assert!(
+                    got == want,
+                    "the embedded copy differs from {}",
+                    repo.display()
+                );
+                assert_eq!(packed.blake3, blake3_hex(&want));
+            }
+        }
     }
 
     /// The hex is BLAKE3's own: the reference vectors for "" and "abc".
@@ -661,16 +739,27 @@ mod tests {
     /// The digest built into the binary is the BLAKE3 of this checkout's
     /// `cli/k2`, worked out here; and a copy one byte off, at the start, in
     /// the middle or at the end, is never what runs: not from the cache
-    /// (it is replaced with the real one) and not from a bundled copy.
+    /// (it is replaced with the real one) and not from a bundled copy. A
+    /// build with no shell CLI has no digest; there the one-byte checks
+    /// run on a copy packed here.
     #[test]
     fn the_built_in_blake3_is_cli_k2_s_and_a_one_byte_change_is_refused() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
-        let real = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
-        assert_eq!(
-            embedded::SCRIPT_BLAKE3,
-            blake3::hash(&real).to_hex().as_str()
-        );
-        let packed = embedded();
+        let (real, fixture) = if k2_client::brand::CLI_NO_BASH {
+            assert_eq!(embedded::SCRIPT_BLAKE3, None);
+            (SCRIPT.to_vec(), Some(Fixture::new(SCRIPT)))
+        } else {
+            let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+            let real = fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
+            assert_eq!(
+                embedded::SCRIPT_BLAKE3,
+                Some(blake3::hash(&real).to_hex().as_str())
+            );
+            (real, None)
+        };
+        let packed = match &fixture {
+            Some(f) => f.packed(),
+            None => embedded().expect("a build with the shell CLI carries a copy"),
+        };
         for at in [0, real.len() / 2, real.len() - 1] {
             let mut off = real.clone();
             off[at] ^= 0x01;
@@ -987,6 +1076,88 @@ mod tests {
             line(python_how(false)),
             "k5 msg: this command is not built into k5 yet and needs Python 3. Install it with your system's package manager (python3), then open a new terminal."
         );
+    }
+
+    #[test]
+    fn without_the_shell_cli_it_says_so_and_exits_70() {
+        let err = FrontError::NoShellCli {
+            noun: noun(&[OsString::from("msg"), OsString::from("x")]),
+        };
+        let name = k2_client::brand::CLI_NAME;
+        assert_eq!(
+            err.line(),
+            format!("{name} msg: this command line is not built into this program, and this build has no shell CLI to run it.")
+        );
+        assert_eq!(err.exit(), Exit::NoShellCli);
+        assert_eq!(err.exit_code(), 70);
+    }
+
+    /// With no copy, the hand-off is refused before anything is asked:
+    /// not Python 3, not the bash, not the executable, not the K2 home
+    /// (each panics here), so nothing is read or written.
+    #[test]
+    fn with_no_copy_the_hand_off_is_refused_before_anything_is_asked() {
+        let args = [OsString::from("msg"), OsString::from("x")];
+        let err = prepare(
+            None,
+            &args,
+            || panic!("Python 3 is asked"),
+            || panic!("the bash is looked for"),
+            || panic!("the executable is looked at"),
+            || panic!("the K2 home is looked up"),
+        )
+        .expect_err("refused");
+        assert!(
+            matches!(&err, FrontError::NoShellCli { noun } if noun == "msg"),
+            "{err:?}"
+        );
+        // An empty line is `help`, as the shell reads it.
+        let err = prepare(
+            None,
+            &[],
+            || panic!("Python 3 is asked"),
+            || panic!("the bash is looked for"),
+            || panic!("the executable is looked at"),
+            || panic!("the K2 home is looked up"),
+        )
+        .expect_err("refused");
+        assert!(
+            matches!(&err, FrontError::NoShellCli { noun } if noun == "help"),
+            "{err:?}"
+        );
+    }
+
+    /// This build's hand-off: with no shell CLI, [`run`] refuses at once
+    /// and asks nothing (the steps after it panic); with it, Python 3 is
+    /// the first thing asked, so its absence ends the hand-off with exit
+    /// 69 before the bash, the executable or the home are looked at.
+    #[test]
+    fn this_build_s_hand_off_refuses_first_only_without_the_shell_cli() {
+        let args = [OsString::from("msg")];
+        let asked = std::cell::Cell::new(false);
+        let err = prepare(
+            embedded(),
+            &args,
+            || {
+                asked.set(true);
+                crate::python::Python3::Missing
+            },
+            || panic!("the bash is looked for"),
+            || panic!("the executable is looked at"),
+            || panic!("the K2 home is looked up"),
+        )
+        .expect_err("not handed over");
+        if k2_client::brand::CLI_NO_BASH {
+            assert!(matches!(err, FrontError::NoShellCli { .. }), "{err:?}");
+            assert!(!asked.get(), "Python 3 was asked in a build with no shell CLI");
+            // `run` itself, which can only refuse here: it returns at once.
+            let err = run(&args);
+            assert!(matches!(err, FrontError::NoShellCli { .. }), "{err:?}");
+            assert_eq!(err.exit_code(), 70);
+        } else {
+            assert!(matches!(err, FrontError::NoPython { .. }), "{err:?}");
+            assert!(asked.get(), "Python 3 was not asked first");
+        }
     }
 
     #[test]

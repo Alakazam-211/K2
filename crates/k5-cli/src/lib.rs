@@ -51,7 +51,8 @@
 //! - [`prompt`]: questions to a person and secrets from stdin, no-echo
 //!   reads included, as the shell's `read -r`, `read -rs` and `$(cat)`.
 //! - [`fallthrough`]: handing a verb to the shell CLI, byte for byte, from
-//!   the copy of `cli/k2` packed into the binary ([`embedded`]).
+//!   the copy of `cli/k2` packed into the binary ([`embedded`]); a build
+//!   with no shell CLI carries none and refuses (exit 70).
 //! - [`passport`]: the passport rule the front applies before a verb
 //!   falls through. It only counts for now.
 //! - [`port`]: the shell's port check, before any command runs: a port

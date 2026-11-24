@@ -72,6 +72,15 @@ pub enum Exit {
     /// support program does not exist". The binary's own: the shell CLI
     /// never ends with it (`k2 study errors` lists it).
     NoPython,
+    /// 70: a command the binary hands to the shell CLI, in a build that
+    /// carries none (the brand file's `cli.no_bash`,
+    /// [`crate::fallthrough::FrontError::NoShellCli`]); its one line says
+    /// the command line is not built into the program and the build has
+    /// no shell CLI to run it. sysexits' `EX_SOFTWARE`, "an internal
+    /// software error": by the native bar's ceiling no command line falls
+    /// through, so it can only be a defect of the build. The binary's
+    /// own: the shell CLI never ends with it (`k2 study errors` lists it).
+    NoShellCli,
     /// 9009: Windows, and a command the binary doesn't answer itself
     /// there. The Windows binary never hands a command to bash: its one
     /// line says the command is not built into k5 for Windows yet
@@ -95,7 +104,7 @@ pub enum Exit {
 
 impl Exit {
     /// Every code, in order.
-    pub const ALL: [Exit; 15] = [
+    pub const ALL: [Exit; 16] = [
         Exit::Ok,
         Exit::Error,
         Exit::Usage,
@@ -107,6 +116,7 @@ impl Exit {
         Exit::TooOld,
         Exit::CurlReadError,
         Exit::NoPython,
+        Exit::NoShellCli,
         Exit::WaitTimedOut,
         Exit::Tombstone,
         Exit::Interrupted,
@@ -127,6 +137,7 @@ impl Exit {
             Exit::TooOld => 8,
             Exit::CurlReadError => 26,
             Exit::NoPython => 69,
+            Exit::NoShellCli => 70,
             Exit::WaitTimedOut => 124,
             Exit::Tombstone => 127,
             Exit::Interrupted => 130,
@@ -178,6 +189,7 @@ mod tests {
                 (Exit::TooOld, 8),
                 (Exit::CurlReadError, 26),
                 (Exit::NoPython, 69),
+                (Exit::NoShellCli, 70),
                 (Exit::WaitTimedOut, 124),
                 (Exit::Tombstone, 127),
                 (Exit::Interrupted, 130),
@@ -209,6 +221,7 @@ mod tests {
             (Exit::Refused, "teaching refusal"),
             (Exit::NotFound, "not found"),
             (Exit::NoPython, "a program the command needs is missing"),
+            (Exit::NoShellCli, "this command line is not built into the program"),
         ] {
             let line = format!("  {}  {words}", exit.code());
             assert!(

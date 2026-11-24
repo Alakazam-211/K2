@@ -790,6 +790,10 @@ const TPL_OLD: &str = r#"{"ok":true,"steps":[],"rows":[{"step":"role","status":"
 
 const TPL_DRY: &str = r#"{"ok":true,"rows":[{"step":"folder","status":"write","target":"/srv/hire-root/qa-bot"},{"step":"role","status":"write","target":"ROLE.md"}],"template":{"id":"qa-bot","version":3},"permissions":{"cards":true},"questions":[{"id":"stack","answered":true},{"id":"repo"}],"hireSwitch":{"code":"hire_off","command":"k2 permission request agents.hire"}}"#;
 
+/// A template hire's permission lines (T3): granted, a card waiting, refused
+/// with who can turn it on, declined; `refused` names the note.
+const TPL_PERMS: &str = r#"{"ok":true,"steps":[],"rows":[{"step":"role","status":"done","target":"ROLE.md"},{"step":"permission","status":"done","target":"mail_manage"},{"step":"permission","status":"card","target":"compute","hint":"an owner or admin answers the card"},{"step":"permission","status":"refused","target":"db_access","hint":"only an owner turns this on (Settings)"},{"step":"permission","status":"declined","target":"hire"}],"template":{"id":"qa-bot","version":3},"permissions":{"refused":true},"questions":[]}"#;
+
 fn probe(path: &str) -> Reply {
     ok(&format!(r#"{{"ok":true,"path":"{path}"}}"#))
 }
@@ -874,6 +878,63 @@ fn hire_a_template() {
             files,
             0,
             3,
+        ),
+        case(
+            "--decline and --allow go with the template: each permission's line, both notes",
+            &[
+                "hire",
+                "hire-me",
+                "--template",
+                "qa-bot",
+                "--decline",
+                "hire",
+                "--allow",
+                "mail_manage",
+                "--decline",
+                "x y",
+            ],
+            &[],
+            vec![not_found(), ok(TPL_PERMS), ok(SET_OK)],
+            files,
+            0,
+            3,
+        ),
+        // covers: agent hire --json
+        case(
+            "the permission lines as JSON",
+            &["hire", "hire-me", "--template", "qa-bot", "--allow", "db_access", "--json"],
+            &[],
+            vec![not_found(), ok(TPL_PERMS), ok(SET_OK)],
+            files,
+            0,
+            3,
+        ),
+        case(
+            "--decline goes with --template",
+            &["hire", "hire-me", "--decline", "hire"],
+            &[],
+            vec![],
+            files,
+            2,
+            0,
+        ),
+        case(
+            "--allow goes with --template",
+            &["hire", "hire-me", "--allow", "hire"],
+            &[],
+            vec![],
+            files,
+            2,
+            0,
+        ),
+        case(
+            "--decline with no value",
+            &["hire", "--template", "qa-bot", "--decline"],
+            &[],
+            vec![],
+            files,
+            2,
+            0,
         ),
         case(
             "the plan, and the switch the real hire needs",

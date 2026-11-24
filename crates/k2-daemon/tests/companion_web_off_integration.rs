@@ -20,6 +20,10 @@
 //! - the `/pair` page and the iOS app-site-association file;
 //! - web on → unchanged.
 
+// Each test holds TEST_LOCK for its whole run on purpose: the tests share
+// one process-wide `$HOME` and in-memory stores, so they must not overlap.
+#![allow(clippy::await_holding_lock)]
+
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
 use std::sync::Mutex as StdMutex;

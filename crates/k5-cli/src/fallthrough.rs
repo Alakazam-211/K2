@@ -699,16 +699,9 @@ mod tests {
     /// a build with no shell CLI carries none.
     #[test]
     fn the_embedded_copy_is_cli_k2() {
-        match embedded() {
-            None => assert!(
-                k2_client::brand::CLI_NO_BASH,
-                "a build with the shell CLI carries no copy"
-            ),
-            Some(packed) => {
-                assert!(
-                    !k2_client::brand::CLI_NO_BASH,
-                    "a build with no shell CLI carries a copy"
-                );
+        match (embedded(), k2_client::brand::CLI_NO_BASH) {
+            (None, true) => {}
+            (Some(packed), false) => {
                 let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
                 let want =
                     fs::read(&repo).unwrap_or_else(|e| panic!("read {}: {e}", repo.display()));
@@ -720,6 +713,10 @@ mod tests {
                 );
                 assert_eq!(packed.blake3, blake3_hex(&want));
             }
+            (got, no_bash) => panic!(
+                "no_bash = {no_bash}, and a copy is embedded: {}",
+                got.is_some()
+            ),
         }
     }
 
@@ -978,10 +975,12 @@ mod tests {
     }
 
     /// cli_install's layout: an executable in an app's `Contents/MacOS`
-    /// finds `Contents/Resources/_up_/cli/k2`; a build in `target/` none.
+    /// finds `Contents/Resources/_up_/cli/<the brand's command>`; a build
+    /// in `target/` none.
     #[cfg(unix)]
     #[test]
     fn the_bundled_place_is_cli_install_s_layout() {
+        let name = k2_client::cli_install::CLI_NAME;
         let dir = scratch("app");
         let contents = dir.join("K2.app/Contents");
         fs::create_dir_all(contents.join("MacOS")).unwrap();
@@ -990,11 +989,11 @@ mod tests {
         assert_eq!(bundled_place_for(&exe), None, "no script in the app yet");
         let cli = contents.join("Resources/_up_/cli");
         fs::create_dir_all(&cli).unwrap();
-        fs::write(cli.join("k2"), SCRIPT).unwrap();
-        assert_eq!(bundled_place_for(&exe), Some(cli.join("k2")));
+        fs::write(cli.join(name), SCRIPT).unwrap();
+        assert_eq!(bundled_place_for(&exe), Some(cli.join(name)));
         let target = dir.join("target/release");
         fs::create_dir_all(&target).unwrap();
-        fs::write(target.join("k2"), SCRIPT).unwrap();
+        fs::write(target.join(name), SCRIPT).unwrap();
         assert_eq!(bundled_place_for(&target.join("k5-cli")), None);
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -1149,7 +1148,10 @@ mod tests {
         .expect_err("not handed over");
         if k2_client::brand::CLI_NO_BASH {
             assert!(matches!(err, FrontError::NoShellCli { .. }), "{err:?}");
-            assert!(!asked.get(), "Python 3 was asked in a build with no shell CLI");
+            assert!(
+                !asked.get(),
+                "Python 3 was asked in a build with no shell CLI"
+            );
             // `run` itself, which can only refuse here: it returns at once.
             let err = run(&args);
             assert!(matches!(err, FrontError::NoShellCli { .. }), "{err:?}");
@@ -1231,7 +1233,7 @@ mod tests {
         assert_eq!(script_dir_for(&exe), Some(contents.join("MacOS")));
         let cli = contents.join("Resources/_up_/cli");
         fs::create_dir_all(&cli).unwrap();
-        fs::write(cli.join("k2"), SCRIPT).unwrap();
+        fs::write(cli.join(k2_client::cli_install::CLI_NAME), SCRIPT).unwrap();
         assert_eq!(script_dir_for(&exe), Some(cli));
         // A build or an install elsewhere: its own folder.
         assert_eq!(

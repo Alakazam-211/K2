@@ -221,7 +221,10 @@ mod tests {
             (Exit::Refused, "teaching refusal"),
             (Exit::NotFound, "not found"),
             (Exit::NoPython, "a program the command needs is missing"),
-            (Exit::NoShellCli, "this command line is not built into the program"),
+            (
+                Exit::NoShellCli,
+                "this command line is not built into the program",
+            ),
         ] {
             let line = format!("  {}  {words}", exit.code());
             assert!(

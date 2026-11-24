@@ -31,7 +31,9 @@ mod tests {
     use std::path::PathBuf;
 
     fn repo_file(rel: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(rel)
     }
 
     #[test]

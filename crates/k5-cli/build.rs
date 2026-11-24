@@ -240,8 +240,8 @@ fn script(manifest: &Path, out: &Path) -> String {
 fn no_script(manifest: &Path) -> String {
     let prelude = manifest.join("../../cli/src/prelude.sh");
     println!("cargo:rerun-if-changed={}", prelude.display());
-    let bytes = std::fs::read(&prelude)
-        .unwrap_or_else(|e| panic!("read {}: {e}", prelude.display()));
+    let bytes =
+        std::fs::read(&prelude).unwrap_or_else(|e| panic!("read {}: {e}", prelude.display()));
     let version = version_of(&bytes, &prelude);
     format!(
         "/// No copy of the shell CLI: this brand's build carries none\n\

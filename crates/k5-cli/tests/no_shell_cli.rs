@@ -36,7 +36,11 @@ fn tree(dir: &Path) -> Vec<PathBuf> {
             let path = entry
                 .unwrap_or_else(|e| panic!("read {}: {e}", d.display()))
                 .path();
-            found.push(path.strip_prefix(dir).expect("under the folder").to_path_buf());
+            found.push(
+                path.strip_prefix(dir)
+                    .expect("under the folder")
+                    .to_path_buf(),
+            );
             if path.is_dir() {
                 todo.push(path);
             }
@@ -58,7 +62,10 @@ fn a_hand_off_is_refused_only_in_a_build_with_no_shell_cli() {
         std::fs::create_dir_all(d).unwrap();
     }
     let path = common::path_without_python3(&dir.join("path"));
-    let args: Vec<OsString> = ["zz-no-such-verb", "x"].iter().map(OsString::from).collect();
+    let args: Vec<OsString> = ["zz-no-such-verb", "x"]
+        .iter()
+        .map(OsString::from)
+        .collect();
     let out = Command::new(FIXTURE)
         .env_clear()
         .env("PATH", &path)
@@ -94,6 +101,10 @@ fn a_hand_off_is_refused_only_in_a_build_with_no_shell_cli() {
         Vec::<PathBuf>::new(),
         "the hand-off wrote under the home"
     );
-    assert_eq!(tree(&proj), Vec::<PathBuf>::new(), "the hand-off wrote in the folder");
+    assert_eq!(
+        tree(&proj),
+        Vec::<PathBuf>::new(),
+        "the hand-off wrote in the folder"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # cargo-deny-policy.sh — the app-wide cargo-deny gate without cargo: the
 # root deny.toml holds the Kessel Steward's policy, and
-# `scripts/ci/cargo-deny.sh offline` refuses an unpinned git dependency and
-# a shipped crate missing from its list. The real cargo-deny run is
+# `scripts/ci/cargo-deny.sh offline` refuses an unpinned git dependency, a
+# shipped crate missing from its list, a Cargo.lock no check covers and a
+# SIDE tree whose lock is gone. The real cargo-deny run is
 # `scripts/ci/checks.sh audit` (it needs the RustSec database). No skips.
 set -euo pipefail
 
@@ -75,6 +76,18 @@ text="$(grep -v '^ *#' "$SCRIPT")"
 echo "offline checks:"
 rc=0; out="$(bash "$SCRIPT" offline 2>&1)" || rc=$?
 [ "$rc" = 0 ] && pass "the real tree passes" || fail "real tree" "rc=$rc $out"
+# Every Cargo.lock in the repo: the root's, a SIDE tree's, or named with why not.
+side=()
+while IFS= read -r p; do side+=("$p"); done < <(sed -n '/^SIDE=(/,/^)/s/^ *"\([^"|]*\)[^"]*"$/\1/p' "$SCRIPT")
+nlocks="$(git -C "$ROOT" ls-files -co --exclude-standard -- '*Cargo.lock' | grep -cE '(^|/)Cargo.lock$')"
+nvendor="$(git -C "$ROOT" ls-files -co --exclude-standard -- 'vendor/*Cargo.lock' | grep -c 'Cargo.lock$')"
+[[ "$out" == *"$nlocks Cargo.lock files: the root lock, ${#side[@]} SIDE trees checked here, $nvendor named with the reason they are not"* ]] \
+    && pass "all $nlocks locks accounted for (${#side[@]} SIDE, $nvendor vendor)" || fail "lock count" "want $nlocks locks, ${#side[@]} SIDE, $nvendor vendor: $out"
+[[ "$out" == *"not checked here: vendor/"*"another team's code"* ]] && pass "a vendor lock is printed with its reason" || fail "vendor reason" "$out"
+for d in "${side[@]}"; do
+    [ -f "$ROOT/$d/Cargo.lock" ] || fail "SIDE $d" "no $d/Cargo.lock in the repo"
+done
+[ "${#side[@]}" -ge 6 ] && pass "SIDE lists the app template and the third_party trees" || fail "SIDE list" "got ${#side[@]}: ${side[*]}"
 
 # A fixture tree: a manifest, a lock and the five release build scripts.
 SHA=85f5c87f93b301823629d920da5bc31015bd64b0
@@ -88,6 +101,9 @@ fixture() {
     printf 'cargo build --release -p k5-cli --bin k5-cli "${args[@]}"\n' > "$d/scripts/lib/build-binaries.sh"
     printf 'cargo build --release -p k2-export --bin k2-export\n' > "$d/scripts/linux-ptyd-embed.sh"
     printf "Run 'cargo build k2-daemon' { cargo build --release -p k2-daemon }\n" > "$d/scripts/windows/build-nsis-release.ps1"
+    local s
+    for s in "${side[@]}"; do mkdir -p "$d/$s"; printf 'version = 4\n' > "$d/$s/Cargo.lock"; done
+    mkdir -p "$d/vendor/other-team/fuzz"; printf 'version = 4\n' > "$d/vendor/other-team/fuzz/Cargo.lock"
     echo "$d"
 }
 refused() {
@@ -122,6 +138,26 @@ refused "a release crate missing from SHIPPED" "builds -p k2-new-worker for rele
 d="$(fixture newmac)"
 printf 'cargo build --release -p k5-cli --bin k5-cli "${args[@]}"\ncargo build --release -p k2-new-mac-tool\n' > "$d/scripts/lib/build-binaries.sh"
 refused "a Mac build crate missing from SHIPPED" "scripts/lib/build-binaries.sh builds -p k2-new-mac-tool for release, but it is not in SHIPPED" "$d"
+
+d="$(fixture newlock)"
+mkdir -p "$d/tools/new-thing"; printf 'version = 4\n' > "$d/tools/new-thing/Cargo.lock"
+refused "a Cargo.lock no check covers" "tools/new-thing/Cargo.lock: no check covers this lock" "$d"
+d="$(fixture sidegone)"
+rm "$d/${side[0]}/Cargo.lock"
+refused "a SIDE tree whose lock is gone" "SIDE lists ${side[0]}, but ${side[0]}/Cargo.lock is gone" "$d"
+d="$(fixture rootgone)"
+rm "$d/Cargo.lock"
+refused "a missing root lock" "the root lock is missing" "$d"
+# In a git checkout the list comes from git: an untracked lock counts (it
+# fails before it is committed), an ignored one does not.
+d="$(fixture gitrepo)"
+git -C "$d" init -q && git -C "$d" add -A
+printf 'scratch/\n' > "$d/.gitignore"
+mkdir -p "$d/scratch/x"; printf 'version = 4\n' > "$d/scratch/x/Cargo.lock"
+rc=0; out="$(bash "$SCRIPT" offline "$d" 2>&1)" || rc=$?
+[ "$rc" = 0 ] && pass "a git checkout skips an ignored lock" || fail "ignored lock" "rc=$rc $out"
+mkdir -p "$d/tools/untracked"; printf 'version = 4\n' > "$d/tools/untracked/Cargo.lock"
+refused "an untracked new lock in a git checkout" "tools/untracked/Cargo.lock: no check covers this lock" "$d"
 
 echo "stale exceptions and ignores (cargo-deny output per tree, stubbed):"
 # The shipped package names, from the script's SHIPPED list.

@@ -1,5 +1,6 @@
 # The app-wide cargo-deny policy: what K2 ships (the app, the daemon and
-# their workers), checked against the real Cargo.lock.
+# their workers), checked against the real Cargo.lock, and every other
+# Cargo.lock K2 owns (the app template, third_party: SIDE in the script).
 #
 #   bash scripts/ci/cargo-deny.sh            (scripts/ci/checks.sh audit runs it)
 #

@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # cargo-deny.sh — the app-wide cargo-deny gate: the root deny.toml against
-# every crate K2 ships, on the real Cargo.lock.
+# every crate K2 ships, on the real Cargo.lock, and against every other
+# Cargo.lock in the repo that K2 owns (SIDE below).
 #
 #   scripts/ci/cargo-deny.sh install <dir>   put the pinned cargo-deny at <dir>/bin/cargo-deny
-#   scripts/ci/cargo-deny.sh offline         no cargo: the git pins and the shipped list
+#   scripts/ci/cargo-deny.sh offline         no cargo: the git pins, the shipped list and
+#                                            the lock list
 #   scripts/ci/cargo-deny.sh check [<cargo-deny>]
 #                                            offline, then advisories bans licenses sources
-#                                            for each shipped crate (default: cargo-deny on PATH)
+#                                            for each shipped crate and each SIDE tree
+#                                            (default: cargo-deny on PATH)
 #   scripts/ci/cargo-deny.sh ci <dir>        install <dir>, then check with it (checks.sh audit)
 #   scripts/ci/cargo-deny.sh stale <logdir> [<deny.toml>]
 #                                            fail if a licence exception or an advisory ignore
@@ -21,16 +24,30 @@
 # Cargo.lock is read, never updated. Every run reads the root deny.toml
 # (--config), never a crate's own deny.toml.
 #
+# Every Cargo.lock in the repo is either checked or named with the reason it
+# isn't. The root Cargo.lock is the shipped runs above. A SIDE tree has its
+# own lock outside the shipped graph: the app template's check app, and the
+# patched third_party copies the root [patch] points at (the root lock
+# covers the code K2 ships from them; their own locks serve building them
+# alone). check copies each SIDE tree out of the repo, because third_party
+# sits inside the root workspace's folder and cargo there would read the
+# root lock, then runs the same four checks on it, --locked, with the root
+# deny.toml. LOCKS_EXPLAINED names, by path pattern, the locks not checked
+# here and why; offline prints each one with its reason.
+#
 # `offline` checks, with no cargo:
 #   - every git dependency in every Cargo.toml (vendored ones too) is pinned
 #     by `rev = "<40-hex sha>"`, with no branch or tag, and every git source
 #     in Cargo.lock carries that sha;
+#   - every Cargo.lock in the repo (git ls-files, untracked ones too) is
+#     the root lock, a SIDE tree's or matches LOCKS_EXPLAINED, and every
+#     SIDE tree still has its lock;
 #   - every crate the release builds name (`-p <crate>` in
 #     scripts/macos-daemon-helper-app.sh, scripts/lib/build-binaries.sh,
 #     scripts/ci/build-linux-bins.sh, scripts/linux-ptyd-embed.sh and
 #     scripts/windows/build-nsis-release.ps1)
 #     is in SHIPPED below, so a new shipped crate can't skip the gate.
-#     tests/packaging/cargo-deny-policy.sh tests both, and the policy itself.
+#     tests/packaging/cargo-deny-policy.sh tests these, and the policy itself.
 #
 # After the runs, check fails if a [[licenses.exceptions]] entry or an
 # [advisories] ignore was unused in all of the shipped trees (cargo-deny's
@@ -73,16 +90,37 @@ SHIPPED=(
     "crates/k2-signer:k2-signer"
 )
 
+# The K2-owned trees with their own Cargo.lock, as <lock dir>[|<copy dir>]:
+# check copies <copy dir> (default: the lock dir) out of the repo and runs
+# cargo-deny on <lock dir>/Cargo.toml there. The app template's build
+# script wants its page next to src-tauri, so the whole app is copied.
+SIDE=(
+    "tests/app-template/tauri-ci-check/src-tauri|tests/app-template/tauri-ci-check"
+    "third_party/objc2"
+    "third_party/sew-proto"
+    "third_party/tao"
+    "third_party/tauri-runtime-wry"
+    "third_party/wry"
+)
+
+# The locks not checked here, as <path pattern>|<why> (fnmatch, on the path
+# from the repo root).
+LOCKS_EXPLAINED=(
+    "vendor/*|another team's code, vendored as they publish it; its owners check it"
+)
+
 offline() {
     local root="${1:-$ROOT}"
     local names=()
     local s
     for s in "${SHIPPED[@]}"; do names+=("${s#*:}"); done
-    python3 - "$root" "${names[*]}" <<'PY'
-import pathlib, re, sys, tomllib
+    python3 - "$root" "${names[*]}" "$(printf '%s\n' "${SIDE[@]}")" "$(printf '%s\n' "${LOCKS_EXPLAINED[@]}")" <<'PY'
+import fnmatch, pathlib, re, subprocess, sys, tomllib
 
 root = pathlib.Path(sys.argv[1])
 shipped = set(sys.argv[2].split())
+side = [l.split("|")[0] for l in sys.argv[3].splitlines() if l]
+explained = [tuple(l.split("|", 1)) for l in sys.argv[4].splitlines() if l]
 SHA = re.compile(r"^[0-9a-f]{40}$")
 errs = []
 skip = {"target", "node_modules", ".git"}
@@ -143,6 +181,39 @@ if lock.exists():
         if not m or m.group(1) != m.group(2):
             errs.append(f"Cargo.lock {pkg.get('name')} {pkg.get('version')}: git source not locked to its full rev ({src})")
 
+# Every Cargo.lock: from git in a checkout (tracked, plus untracked ones
+# not ignored, so a new lock fails before it is committed), else every
+# Cargo.lock under root (a test fixture).
+top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+if top.returncode == 0 and pathlib.Path(top.stdout.strip()).resolve() == root.resolve():
+    ls = subprocess.run(["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "--", "*Cargo.lock"],
+                        capture_output=True, text=True, check=True)
+    locks = sorted({l for l in ls.stdout.splitlines() if pathlib.PurePosixPath(l).name == "Cargo.lock" and (root / l).exists()})
+else:
+    locks = sorted(str(p.relative_to(root)) for p in root.rglob("Cargo.lock")
+                   if not any(part in skip for part in p.relative_to(root).parts))
+if "Cargo.lock" not in locks:
+    errs.append("Cargo.lock: the root lock is missing (the shipped runs read it)")
+side_seen = 0
+skipped = []
+for l in locks:
+    if l == "Cargo.lock":
+        continue
+    d = str(pathlib.PurePosixPath(l).parent)
+    if d in side:
+        side_seen += 1
+        continue
+    why = next((w for pat, w in explained if fnmatch.fnmatch(l, pat)), None)
+    if why is None:
+        errs.append(f"{l}: no check covers this lock: add its tree to SIDE in scripts/ci/cargo-deny.sh, or name it in LOCKS_EXPLAINED with the reason")
+    else:
+        skipped.append((l, why))
+for d in side:
+    if f"{d}/Cargo.lock" not in locks:
+        errs.append(f"SIDE lists {d}, but {d}/Cargo.lock is gone: remove it from SIDE in scripts/ci/cargo-deny.sh")
+for l, why in skipped:
+    print(f"cargo-deny offline: not checked here: {l}: {why}")
+
 named = set()
 for script in ("scripts/macos-daemon-helper-app.sh", "scripts/lib/build-binaries.sh", "scripts/ci/build-linux-bins.sh",
                "scripts/linux-ptyd-embed.sh", "scripts/windows/build-nsis-release.ps1"):
@@ -161,6 +232,7 @@ for e in errs:
 if errs:
     sys.exit(1)
 print(f"cargo-deny offline: {manifests} manifests, {git_deps} git dependencies and {lock_git} locked git sources, all pinned by full sha; {len(shipped)} shipped crates cover every release -p")
+print(f"cargo-deny offline: {len(locks)} Cargo.lock files: the root lock, {side_seen} SIDE trees checked here, {len(skipped)} named with the reason they are not")
 PY
 }
 
@@ -193,6 +265,22 @@ check() {
             rc=1
         fi
     done
+    local side_dir lockdir copy
+    side_dir="$(mktemp -d "${TMPDIR:-/tmp}/k2-cargo-deny-side.XXXXXX")"
+    for s in "${SIDE[@]}"; do
+        lockdir="${s%%|*}" copy="${s#*|}"
+        [ "$copy" = "$s" ] && copy="$lockdir"
+        echo ""
+        echo "── cargo deny: $lockdir (its own Cargo.lock, on a copy outside the repo) ──"
+        mkdir -p "$side_dir/$copy"
+        cp -R "$ROOT/$copy/." "$side_dir/$copy/"
+        if ! "$deny" --locked --manifest-path "$side_dir/$lockdir/Cargo.toml" --config "$ROOT/deny.toml" \
+                check advisories bans licenses sources 2>&1 | tee "$logs/side-${lockdir//\//_}.log"; then
+            failed+=("$lockdir")
+            rc=1
+        fi
+    done
+    rm -rf "$side_dir"
     echo ""
     if ! stale "$logs" "$ROOT/deny.toml"; then
         failed+=("stale exceptions or ignores")
@@ -203,7 +291,7 @@ check() {
         echo "cargo-deny: FAILED for ${failed[*]}" >&2
         return 1
     fi
-    echo "cargo-deny: ${#SHIPPED[@]} shipped crates pass advisories, bans, licenses and sources"
+    echo "cargo-deny: ${#SHIPPED[@]} shipped crates and ${#SIDE[@]} SIDE trees pass advisories, bans, licenses and sources"
 }
 
 # stale <logdir> <deny.toml>: <logdir> holds one cargo-deny output per

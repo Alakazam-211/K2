@@ -159,8 +159,10 @@ part_rust_check() {
 #
 # cargo deny: the app-wide policy (the root deny.toml: the Kessel licence
 # allowlist, RustSec, git sources) against every crate K2 ships, each with
-# its default features, on Cargo.lock. scripts/ci/cargo-deny.sh holds the
-# shipped-crate list and says how it is scoped.
+# its default features, on Cargo.lock, and against every other K2-owned
+# Cargo.lock (the app template, third_party), each on a copy outside the
+# repo. scripts/ci/cargo-deny.sh holds both lists, names the locks it
+# doesn't check and why, and says how it is scoped.
 part_audit() {
     step "advisory allow-list rules";              python3 scripts/ci/audit-ignores.py check
     step "install cargo-audit (pinned)";           cargo install cargo-audit --locked --version =0.22.2 --root target/audit-tools
@@ -169,7 +171,7 @@ part_audit() {
     step "scanners catch a known advisory";        bash tests/packaging/audit-canary.sh target/audit-tools
     step "cargo audit";                            target/audit-tools/bin/cargo-audit audit --deny unmaintained --deny unsound --file Cargo.lock
     step "osv-scanner";                            target/audit-tools/osv-scanner scan source --lockfile bun.lock --lockfile Cargo.lock --config osv-scanner.toml
-    step "cargo deny (deny.toml, shipped crates)"; bash scripts/ci/cargo-deny.sh check target/audit-tools/bin/cargo-deny
+    step "cargo deny (deny.toml, shipped crates and side locks)"; bash scripts/ci/cargo-deny.sh check target/audit-tools/bin/cargo-deny
 }
 
 part_rust_test() {

@@ -450,6 +450,8 @@ jobs:
       # The app-wide policy (root deny.toml: Kessel licence allowlist,
       # RustSec, git sources) against every shipped crate, each with its
       # default features (the release builds' features, never
-      # --all-features). scripts/ci/cargo-deny.sh lists the crates.
-      - name: cargo deny (deny.toml, shipped crates)
+      # --all-features), and against every other K2-owned Cargo.lock (the
+      # app template, third_party). scripts/ci/cargo-deny.sh lists both and
+      # names the locks it doesn't check.
+      - name: cargo deny (deny.toml, shipped crates and side locks)
         run: bash scripts/ci/cargo-deny.sh check target/audit-tools/bin/cargo-deny

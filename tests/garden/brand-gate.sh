@@ -50,7 +50,7 @@ printf 'fn clean() {}\n' > "$T/src-tauri/src/main.rs"
 
 # Two K2 lines and one K5 line at their rows pass. Comments, the test module,
 # test files, look-alike names and the brand modules are not counted.
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company lines in 2 rows still spell a name out)."
 run 0 "K2 crates/a/src/old.rs:3: fn a()" --list
 run 0 "K2 crates/a/src/old.rs:4: fn b()" --list
 run 0 "K5 crates/a/src/old.rs:5: fn c()" --list K5
@@ -95,11 +95,36 @@ run 1 "crates/a/src/k5.rs:1 spells out K5 and has no K5 row"
 rm "$T/crates/a/src/k5.rs"
 run 0 "brand-gate: ok"
 
+# The company's name in shipped code fails, Rust and renderer, and names
+# the brand consts. A comment, a test file and a test module are not
+# counted, nor the brand modules. A keeper row lets one line pass, and no
+# more than its count.
+printf 'fn f() -> &str { "Sent to Alakazam Labs" }\n' > "$T/crates/a/src/feedback.rs"
+run 1 "crates/a/src/feedback.rs:1 spells out company and has no company row: use COMPANY_NAME or PRODUCT_LOCKUP"
+printf "export const t = 'Tell Alakazam Labs about it'\n" > "$T/src/renderer/lib/f.ts"
+run 1 "src/renderer/lib/f.ts:1 spells out company and has no company row"
+rm "$T/src/renderer/lib/f.ts"
+cp "$T/a.txt" "$T/a.before"
+printf '1 company crates/a/src/feedback.rs keeper: a licence line that names the real company\n' >> "$T/a.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 1 company lines in 3 rows still spell a name out)."
+printf 'fn g() -> &str { "K2 by Alakazam Labs" }\n' >> "$T/crates/a/src/feedback.rs"
+run 1 "crates/a/src/feedback.rs has 2 company lines, its row allows 1"
+cp "$T/a.before" "$T/a.txt"
+rm "$T/crates/a/src/feedback.rs"
+printf 'fn t() { assert_eq!(x, "Alakazam Labs"); }\n' > "$T/crates/a/src/feedback_tests.rs"
+printf "it('names us', () => expect(n).toBe('Alakazam Labs'))\n" > "$T/src/renderer/lib/f.test.ts"
+printf "// Alakazam Labs in a comment\nexport const COMPANY_NAME = 'Alakazam Labs'\n" >> "$T/src/renderer/lib/brand.ts"
+printf '// Alakazam Labs in a comment\n#[cfg(test)]\nmod tests {\n    fn t() { let c = "Alakazam Labs"; }\n}\n' > "$T/crates/a/src/quiet.rs"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company lines in 2 rows still spell a name out)."
+lacks "company " --list company
+rm "$T/crates/a/src/feedback_tests.rs" "$T/src/renderer/lib/f.test.ts" "$T/crates/a/src/quiet.rs"
+printf "export const PRODUCT_NAME = 'K2'\n" > "$T/src/renderer/lib/brand.ts"
+
 # A row needs a reason that says keeper or debt.
 printf '2 K2 crates/a/src/old.rs because\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n' > "$T/a.txt"
 run 1 "the reason must start 'keeper: ' or 'debt: '"
 printf '2 K9 crates/a/src/old.rs debt: x\n' > "$T/a.txt"
-run 1 "want '<lines> <K2|K5|repo> <path> <keeper|debt>: <reason>'"
+run 1 "want '<lines> <K2|K5|repo|company> <path> <keeper|debt>: <reason>'"
 
 # --tighten lowers a row to today's count, drops one at zero, keeps reasons.
 printf '# head\n\n5 K2 crates/a/src/old.rs debt: copy\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n3 repo crates/a/src/gone.rs debt: gone\n' > "$T/a.txt"

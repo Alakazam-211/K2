@@ -6,7 +6,8 @@
 # @/lib/brand (src/renderer/lib/brand.ts). Lower them with --tighten.
 #
 # Kinds: K2 (the product's name), K5 (the K5 Space today; nothing else may
-# use the word yet), repo (Alakazam-211/K2). k2.dev is in the zone gate's
+# use the word yet), repo (Alakazam-211/K2), company (Alakazam Labs: use
+# COMPANY_NAME or PRODUCT_LOCKUP; no rows today). k2.dev is in the zone gate's
 # ceilings (scripts/garden/zone-ceilings*.txt).
 # Reasons: `keeper:` stays on purpose (who reads it); `debt:` should move
 # to the brand module. Seeded 2026-11-16 from the tree as it was.

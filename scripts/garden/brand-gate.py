@@ -35,6 +35,12 @@ Kinds in scripts/brand-allowlist.txt, the product's names:
   K5    the word K5 on its own: today the K5 Space and old review labels;
         a new one is either the future name used too early or a collision
   repo  the release repo, Alakazam-211/K2 (not K2SO)
+  company  the company's name, Alakazam Labs (rebrand B7 follow-up): a
+        partner build names its own maker, so copy uses COMPANY_NAME or
+        PRODUCT_LOCKUP (k2_core::brand, @/lib/brand), both the brand
+        file's. Zero rows when the kind came in: a new one is either copy
+        that should use the module, or a `keeper:` row that says who must
+        read our real name (a licence or an attribution in code).
 
 Kinds in scripts/cli-name-allowlist.txt, the command's name (`k2` and `k5`,
 the word scripts/garden/cli-name-flip.py matches, either digit):
@@ -154,12 +160,14 @@ BRAND_KINDS = {
     "K2": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)(?<!::)K2(?![A-Za-z0-9_]|::)"),
     "K5": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)K5(?![A-Za-z0-9_])"),
     "repo": re.compile(r"Alakazam-211/K2(?![A-Za-z0-9_])"),
+    "company": re.compile(r"Alakazam\s+Labs\b"),
 }
 CLI_KINDS = ("cli", "value", "glued")
 HINT = {
     "K2": "use k2_core::brand or @/lib/brand",
     "K5": "use k2_core::brand or @/lib/brand",
     "repo": "use k2_core::brand or @/lib/brand",
+    "company": "use COMPANY_NAME or PRODUCT_LOCKUP (k2_core::brand, @/lib/brand)",
     "cli": "use CLI_NAME or cli_name!() (k2_core::brand, @/lib/brand)",
     "value": "use CLI_NAME, or add a keeper: row that says its class and who reads the value",
     "glued": "keep the name apart from the token, or add a keeper: row that says who reads this name",

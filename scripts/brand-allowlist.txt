@@ -17,6 +17,7 @@
 13 K2 src/renderer/lib/context-stack.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 crates/k2-root-helper/src/creds.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 10 K2 crates/k2-core/src/contract/gen.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+10 K2 crates/k2-node/src/main_unix.rs keeper: k2-node's USAGE, a raw string scripts/gen-cli-explorer-catalog.mjs reads as text
 10 K2 crates/k2-root-helper/src/pg_major.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 10 K2 crates/k2-vault/src/vault.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 9 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -177,7 +178,6 @@
 1 K2 crates/k2-node-proto/src/results.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-node/src/admin/jobs.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-node/src/install.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-node/src/main_unix.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-node/src/pkgsys.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-node/src/sim/host.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
 1 K2 crates/k2-rest/src/oracle.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first

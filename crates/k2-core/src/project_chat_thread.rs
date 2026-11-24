@@ -103,6 +103,7 @@ pub fn message_of(group_id: &str, item: &OverlayItem) -> ProjectGroupMessage {
         author_kind: kp::kind_of(item.doc.author.as_ref()).to_string(),
         client_msg_id: item.doc.client_msg_id.clone(),
         attachments: item.doc.attachments.clone(),
+        deleted: item.doc.deleted,
     }
 }
 
@@ -596,13 +597,18 @@ fn effective(limit: Option<i64>, default: i64) -> Result<usize, String> {
 
 /// Up to `want` live (not deleted) items with seq < `before` (none = the
 /// end), the newest of them, oldest first.
-fn newest_live(conv: &str, mut before: Option<i64>, want: usize) -> Result<Vec<OverlayItem>, String> {
+fn newest_live(conv: &str, before: Option<i64>, want: usize) -> Result<Vec<OverlayItem>, String> {
+    newest_items(conv, before, want, false)
+}
+
+/// [`newest_live`], deleted lines counted in when `with_deleted`.
+fn newest_items(conv: &str, mut before: Option<i64>, want: usize, with_deleted: bool) -> Result<Vec<OverlayItem>, String> {
     let mut out: Vec<OverlayItem> = Vec::new();
     loop {
         let page = crate::overlay::store::read_thread_page(conv, None, before, WALK_PAGE)?;
         let first = page.items.first().map(|i| i.seq);
         for item in page.items.into_iter().rev() {
-            if !item.doc.deleted {
+            if with_deleted || !item.doc.deleted {
                 out.push(item);
                 if out.len() >= want {
                     out.reverse();
@@ -624,6 +630,12 @@ fn newest_live(conv: &str, mut before: Option<i64>, want: usize) -> Result<Vec<O
 /// (default and max 500); without, the latest `limit` (default 20).
 /// `truncated` = more lines matched than the page holds.
 pub fn list_page(group_id: &str, after: Option<i64>, limit: Option<i64>) -> Result<MessagePage, String> {
+    list_page_with(group_id, after, limit, false)
+}
+
+/// [`list_page`]; with `with_deleted`, deleted lines are in the page too
+/// (`deleted: true`, empty body: `k2 project read --all`).
+pub fn list_page_with(group_id: &str, after: Option<i64>, limit: Option<i64>, with_deleted: bool) -> Result<MessagePage, String> {
     let conv = kp::conversation_id(group_id);
     let to_page = |items: Vec<OverlayItem>, eff: usize, from_newest: bool| {
         let truncated = items.len() > eff;
@@ -640,7 +652,7 @@ pub fn list_page(group_id: &str, after: Option<i64>, limit: Option<i64>) -> Resu
     match after {
         None => {
             let eff = effective(limit, MESSAGES_DEFAULT_LIMIT)?;
-            Ok(to_page(newest_live(&conv, None, eff + 1)?, eff, true))
+            Ok(to_page(newest_items(&conv, None, eff + 1, with_deleted)?, eff, true))
         }
         Some(ts) => {
             let eff = effective(limit, MESSAGES_AFTER_LIMIT)?;
@@ -664,7 +676,7 @@ pub fn list_page(group_id: &str, after: Option<i64>, limit: Option<i64>) -> Resu
             loop {
                 let d = crate::overlay::store::read_thread_delta(&conv, after_seq, WALK_PAGE)?;
                 let last = d.items.last().map(|i| i.seq);
-                out.extend(d.items.into_iter().filter(|i| !i.doc.deleted && i.doc.created_at > ts));
+                out.extend(d.items.into_iter().filter(|i| (with_deleted || !i.doc.deleted) && i.doc.created_at > ts));
                 if out.len() > eff {
                     break;
                 }

@@ -121,6 +121,12 @@ pub struct ProjectGroupMessage {
     /// so a text line reads exactly as before.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::overlay::ThreadAttachment>,
+    /// project-chat-thread-v1: a deleted line (its sender, or the owner,
+    /// removed it; `body` is empty). Only a read that asks for deleted
+    /// lines (`include_deleted`) returns one; the field is left off the wire
+    /// otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
 }
 
 /// `project_group_messages.author_kind` of a person's post.
@@ -258,6 +264,7 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroupMessage> 
         author_kind: row.get(6)?,
         client_msg_id: row.get(7)?,
         attachments: Vec::new(),
+        deleted: false,
     })
 }
 

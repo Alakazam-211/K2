@@ -394,3 +394,38 @@ fn walkers_count_a_project_line_once() {
     let conv = kp::conversation_id(&gid);
     assert!(!s.items.iter().any(|i| i.id == conv), "never as a Thread: {:?}", s.items);
 }
+
+/// Drill (P9): a 10k-line chat moves in one batch with every seq kept, and
+/// the views page it as before.
+#[test]
+fn a_ten_thousand_line_chat_moves_with_its_seqs() {
+    let gid = group("big");
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute_batch("SAVEPOINT big_rows").expect("savepoint");
+        for i in 1..=10_000i64 {
+            conn.execute(
+                "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind) \
+                 VALUES (?1, ?2, 'scout', ?3, ?4, ?4, 'agent')",
+                params![format!("big-{gid}-{i}"), gid, format!("line {i}"), i],
+            )
+            .expect("row");
+        }
+        conn.execute("UPDATE project_groups SET messages_in_thread = 0, last_msg_seq = 10000 WHERE id = ?1", params![gid]).expect("mark");
+        conn.execute_batch("RELEASE big_rows").expect("release");
+    }
+    let started = std::time::Instant::now();
+    assert_eq!(move_group(&gid).expect("move"), 10_000);
+    eprintln!("10k-line move took {:?}", started.elapsed());
+    let conv = kp::conversation_id(&gid);
+    assert_eq!(crate::overlay::store::thread_seq_of(&conv, &format!("big-{gid}-1")).expect("seq"), Some(1));
+    assert_eq!(crate::overlay::store::thread_seq_of(&conv, &format!("big-{gid}-10000")).expect("seq"), Some(10_000));
+    let page = project_groups::list_messages(&gid, None, None).expect("page");
+    assert_eq!(page.messages.first().map(|m| m.seq), Some(9_981));
+    assert!(page.truncated);
+    let page = project_groups::list_messages(&gid, Some(9_995), None).expect("after");
+    assert_eq!(page.messages.iter().map(|m| m.seq).collect::<Vec<_>>(), (9_996..=10_000).collect::<Vec<_>>());
+    let page = project_groups::list_messages_before_seq(&gid, 51, Some(50)).expect("before");
+    assert_eq!((page.messages.len(), page.truncated), (50, false));
+}

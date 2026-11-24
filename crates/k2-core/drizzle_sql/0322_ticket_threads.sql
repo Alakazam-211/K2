@@ -29,6 +29,10 @@ DROP TRIGGER IF EXISTS overlay_conversations_project_deleted;
 --> statement-breakpoint
 DROP TRIGGER IF EXISTS overlay_conversations_ticket_deleted;
 --> statement-breakpoint
+-- A run after 0331 (a test that runs every migration since 0163 again):
+-- 0331's project trigger names the catalog too. 0331 makes it again.
+DROP TRIGGER IF EXISTS overlay_conversations_group_deleted;
+--> statement-breakpoint
 DROP TABLE IF EXISTS overlay_conversations_0322;
 --> statement-breakpoint
 CREATE TABLE overlay_conversations_0322 (

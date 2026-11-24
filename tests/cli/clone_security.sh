@@ -348,11 +348,24 @@ k2() {
 # TTY (what the terminal showed, stderr included; ERR is the same) and ECHO.
 k2pty() {
     local mode="$1" steps="$2"; shift 2
+    # This run's files only: an echo file left from an earlier run must not
+    # pass for this one.
+    rm -f "$W/out" "$W/tty" "$W/echo"
     set +e
     "$PY" "$W/ptyrun.py" "$mode" "$steps" "$W" -- "$K2" "$@"; RC=$?
     set -e
-    OUT="$(cat "$W/out")"
-    TTY="$(tr -d '\r' <"$W/tty")"; ERR="$TTY"; ECHO="$(cat "$W/echo")"
+    OUT="$(cat "$W/out" 2>/dev/null || true)"
+    TTY="$(tr -d '\r' <"$W/tty" 2>/dev/null || true)"; ERR="$TTY"
+    if [ -f "$W/echo" ]; then
+        ECHO="$(cat "$W/echo")"
+    else
+        # The driver gave up (a prompt it waited for never came, or the
+        # command never finished) before it could read the terminal back:
+        # a loud failure with what the terminal showed, then on to the
+        # next check and the summary.
+        ECHO="(the terminal driver stopped before the command ended)"
+        bad "the terminal driver stopped (exit $RC) on: $* (steps $steps); the terminal showed: $(printf %q "$TTY")"
+    fi
 }
 # auth NAME PATH: the Authorization headers the stub NAME got on PATH.
 auth() { [ -f "$W/log-$1.jsonl" ] || return 0; "$PY" -c '

@@ -12,7 +12,11 @@
 #     non-zero, one line naming both files;
 #   - a file package left queued: exit 0 and a QUEUED line naming both
 #     files (it used to print only the raw answer, which read like a
-#     delivery).
+#     delivery);
+#   - a send that may have reached the other server (it timed out after
+#     the POST left): exit 0, a DELIVERY UNKNOWN line that says it may or
+#     may not have landed and to check before sending again, never "not
+#     delivered" or "send again"; the same for a file package.
 #
 # No real daemon: a python stub on loopback answers as the daemon does.
 # HOME is sandboxed. Never touches the real ~/.k2. Runs on the bash CLI and
@@ -48,6 +52,8 @@ ROSTER_LINE='the roster step failed after 3 attempts (last error: GET https://ro
 SEND_WHY='the send step got no delivery after 3 attempts (last error: peer rejected inbound: HTTP 503)'
 TRAY_LINE="not delivered to bob::rosson.k2.dev (2 files: a.md, b.md): $ROSTER_LINE"
 TRAY_HINT="2 files: a.md, b.md for bob::rosson.k2.dev is not delivered yet: $SEND_WHY. K2 retries it from this server's outbox (next try in about 30 s); don't send it again."
+UNKNOWN_WHY="the other server didn't answer in time on the send step after 1 attempt (last error: POST https://rosson.k2.dev/cli/federation/inbound: error sending request: operation timed out)"
+TRAY_UNKNOWN_HINT="2 files: a.md, b.md for bob::rosson.k2.dev may or may not have been delivered: $UNKNOWN_WHY. K2 retries it from this server's outbox (next try in about 30 s); check with them before sending it again."
 
 cat >"$WORK/stub.py" <<'PY'
 import json, os
@@ -81,10 +87,15 @@ class H(BaseHTTPRequestHandler):
             else:
                 self._send(200, {"peer": "fp1", "roster": {"agents": [{"agent": "bob", "workspace_id": "ws-b", "workspace_name": "Bob", "aliases": []}]}})
         elif p == "/cli/federation/send":
-            self._send(200, {"status": "queued", "delivered": False, "reason": os.environ["SEND_WHY"], "step": "send", "attempts": 3, "msg_uuid": "u1", "peer": "fp1", "hint": "delivery deferred to retry: " + os.environ["SEND_WHY"]})
+            if m == "send-unknown":
+                self._send(200, {"status": "queued", "delivery": "unknown", "reason": os.environ["UNKNOWN_WHY"], "step": "send", "attempts": 1, "msg_uuid": "u1", "peer": "fp1", "hint": "delivery unknown: " + os.environ["UNKNOWN_WHY"]})
+            else:
+                self._send(200, {"status": "queued", "delivered": False, "reason": os.environ["SEND_WHY"], "step": "send", "attempts": 3, "msg_uuid": "u1", "peer": "fp1", "hint": "delivery deferred to retry: " + os.environ["SEND_WHY"]})
         elif p == "/cli/inbox/deliver":
             if m == "tray-roster-fails":
                 self._send(502, {"error": os.environ["TRAY_LINE"], "step": "roster", "attempts": 3})
+            elif m == "tray-unknown":
+                self._send(200, {"status": "queued", "delivery": "unknown", "reason": os.environ["UNKNOWN_WHY"], "msg_uuid": "u2", "peer": "fp1", "hint": os.environ["TRAY_UNKNOWN_HINT"]})
             else:
                 self._send(200, {"status": "queued", "delivered": False, "reason": os.environ["SEND_WHY"], "msg_uuid": "u2", "peer": "fp1", "hint": os.environ["TRAY_HINT"]})
         else:
@@ -111,7 +122,8 @@ chmod 600 "$HOME/.k2/heartbeat.token"
 : >"$WORK/log"
 echo "roster-fails" >"$WORK/mode"
 PORT="$PORT" MODEF="$WORK/mode" LOG="$WORK/log" ROSTER_LINE="$ROSTER_LINE" SEND_WHY="$SEND_WHY" \
-    TRAY_LINE="$TRAY_LINE" TRAY_HINT="$TRAY_HINT" python3 "$WORK/stub.py" &
+    TRAY_LINE="$TRAY_LINE" TRAY_HINT="$TRAY_HINT" UNKNOWN_WHY="$UNKNOWN_WHY" \
+    TRAY_UNKNOWN_HINT="$TRAY_UNKNOWN_HINT" python3 "$WORK/stub.py" &
 STUB_PID=$!
 up=0
 for _i in $(seq 1 40); do
@@ -166,6 +178,24 @@ echo "== a two-file package left queued =="
 run tray-queued msg bob::rosson.k2.dev --inbox-wake a.md b.md
 assert_eq "exit 0 (the outbox has it)" "$rc" "0"
 assert_eq "the QUEUED line names both files" "$err" "QUEUED (not delivered yet): $TRAY_HINT"
+
+echo "== live text: the send may have landed (timed out after it left) =="
+run send-unknown msg bob::rosson.k2.dev "part 1 of 3"
+assert_eq "exit 0 (the outbox has it)" "$rc" "0"
+assert_eq "no delivered line" "$out" ""
+assert_eq "the UNKNOWN line says it may have landed" \
+    "$(printf '%s\n' "$err" | head -n 1)" \
+    "DELIVERY UNKNOWN for bob::rosson.k2.dev: $UNKNOWN_WHY; it may or may not have received the message. Check with them before sending again."
+assert_eq "then the outbox line" \
+    "$(printf '%s\n' "$err" | sed -n 2p)" \
+    "  K2 retries it from this server's outbox (next try in about 30 s). The owner can watch it with: k2 fed outbox"
+assert_eq "never 'not delivered' or 'send again'" \
+    "$(printf '%s\n' "$err" | grep -c -i -e 'not delivered' -e 'send again\.' || true)" "0"
+
+echo "== a two-file package that may have landed =="
+run tray-unknown msg bob::rosson.k2.dev --inbox-wake a.md b.md
+assert_eq "exit 0 (the outbox has it)" "$rc" "0"
+assert_eq "the UNKNOWN line names both files" "$err" "DELIVERY UNKNOWN: $TRAY_UNKNOWN_HINT"
 
 echo
 echo "msg_federated_not_delivered: $pass passed, $fail failed"

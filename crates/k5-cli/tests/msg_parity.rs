@@ -1267,6 +1267,26 @@ fn msg_to_another_server() {
             0,
             4,
         ),
+        // 0.46.18: the send may have landed: DELIVERY UNKNOWN, exit 0.
+        plain(
+            "delivery unknown",
+            to("ada::box.k2.dev"),
+            vec![
+                ok(ON),
+                ok(PEERS),
+                ok(ROSTER),
+                ok(r#"{"status":"queued","delivery":"unknown","reason":"the other server didn't answer in time on the send step after 1 attempt (last error: timed out)","hint":"delivery unknown: x"}"#),
+            ],
+            0,
+            4,
+        ),
+        plain(
+            "delivery unknown, no reason",
+            to("ada::box.k2.dev"),
+            vec![ok(ON), ok(PEERS), ok(ROSTER), ok(r#"{"status":"queued","delivery":"unknown"}"#)],
+            0,
+            4,
+        ),
         plain("an empty agent", to("@box"), vec![ok(ON)], 2, 1),
         // A value flag first: msg's own loop reads the Postal address. A
         // flag Postal mail can't honour is refused with the address-first

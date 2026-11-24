@@ -1206,6 +1206,24 @@ fn remote_addresses_and_readers() {
             .unwrap(),
         "QUEUED\tconn refused"
     );
+    // 0.46.18: a send that may have landed reads UNKNOWN, not QUEUED.
+    assert_eq!(
+        sent(r#"{"status":"queued","delivery":"unknown","reason":"the other server didn't  answer"}"#)
+            .unwrap(),
+        "UNKNOWN\tthe other server didn't answer"
+    );
+    assert_eq!(
+        sent(r#"{"status":"queued","delivery":"later","reason":"x"}"#).unwrap(),
+        "QUEUED\tx"
+    );
+    assert_eq!(
+        remote::unknown("bob", "h.k2.dev", ""),
+        format!(
+            "DELIVERY UNKNOWN for bob::h.k2.dev: the other server didn't answer in time; it may or may not have \
+             received the message. Check with them before sending again.\n  {PRODUCT_NAME} retries it from this \
+             server's outbox (next try in about 30 s). The owner can watch it with: {CLI_NAME} fed outbox\n"
+        )
+    );
     assert_eq!(
         sent(r#"{"error":{"code":"gated","hint":"on"}}"#).unwrap(),
         "GATE\tgated\ton"
@@ -1252,6 +1270,8 @@ fn remote_addresses_and_readers() {
         remote::no_agent("$agent", "$host", "$rdetail"),
         remote::no_agent("$agent", "$host", ""),
         remote::queued("${shown}", "${host}", "$sdetail"),
+        remote::unknown("${shown}", "${host}", "$sdetail"),
+        remote::unknown("${shown}", "${host}", ""),
     ] {
         parts.extend(text.lines().map(esc));
     }

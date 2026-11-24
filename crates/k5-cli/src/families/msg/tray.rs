@@ -941,8 +941,20 @@ pub fn reader(response: &[u8], wake: bool) -> (bool, Shown) {
             stderr.push_str(&format!("note: {}\n", py::str_of(&Value::Str(t.clone()))));
         }
     }
-    // 0.46.18: a package left in this server's outbox has not landed yet.
-    if matches!(get(pairs, "status"), Some(Value::Str(t)) if t.as_str() == Some("queued")) {
+    // 0.46.18: a package left in this server's outbox has not landed yet;
+    // one whose send may have reached the other server is UNKNOWN.
+    let queued = matches!(get(pairs, "status"), Some(Value::Str(t)) if t.as_str() == Some("queued"));
+    let unknown = matches!(get(pairs, "delivery"), Some(Value::Str(t)) if t.as_str() == Some("unknown"));
+    if queued && unknown {
+        let hint = get(pairs, "hint").filter(|v| py::truthy(v)).map_or_else(
+            || {
+                "the other server may or may not have received it; check with them before sending it again"
+                    .to_string()
+            },
+            py::str_of,
+        );
+        stderr.push_str(&format!("DELIVERY UNKNOWN: {hint}\n"));
+    } else if queued {
         let hint = get(pairs, "hint").filter(|v| py::truthy(v)).map_or_else(
             || concat!(product_name!(), " retries it from this server's outbox").to_string(),
             py::str_of,
@@ -1462,8 +1474,40 @@ mod tests {
         let src =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert!(src.contains(concat!(
-            "if d.get(\"status\") == \"queued\":\n",
+            "elif d.get(\"status\") == \"queued\":\n",
             "    sys.stderr.write(\"QUEUED (not delivered yet): %s\\n\" % (d.get(\"hint\") or \"K2 retries it from this server\\x27s outbox\"))\n"
+        )));
+    }
+
+    // 0.46.18: a package whose send may have reached the other server is
+    // UNKNOWN (never "not delivered yet"), with the daemon's hint or the
+    // plain line; still exit 0 (the outbox has it).
+    #[test]
+    fn an_unknown_package_says_it_may_have_landed() {
+        let (err, shown) = reader(
+            br#"{"status":"queued","delivery":"unknown","hint":"a.md for bob::h.k2.dev may or may not have been delivered"}"#,
+            true,
+        );
+        assert!(!err);
+        assert_eq!(
+            shown.stderr,
+            "DELIVERY UNKNOWN: a.md for bob::h.k2.dev may or may not have been delivered\n"
+        );
+        assert!(matches!(shown.exit, Exit::Ok));
+        let (_, shown) = reader(br#"{"status":"queued","delivery":"unknown"}"#, false);
+        assert_eq!(
+            shown.stderr,
+            "DELIVERY UNKNOWN: the other server may or may not have received it; check with them before sending it again\n"
+        );
+        // `delivery` alone (not queued) says nothing.
+        let (_, shown) = reader(br#"{"status":"sent","delivery":"unknown"}"#, false);
+        assert_eq!(shown.stderr, "");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/msg-inbox-staging.sh");
+        let src =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(src.contains(concat!(
+            "if d.get(\"status\") == \"queued\" and d.get(\"delivery\") == \"unknown\":\n",
+            "    sys.stderr.write(\"DELIVERY UNKNOWN: %s\\n\" % (d.get(\"hint\") or \"the other server may or may not have received it; check with them before sending it again\"))\n"
         )));
     }
 }

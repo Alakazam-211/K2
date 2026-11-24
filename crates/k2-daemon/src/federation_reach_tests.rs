@@ -202,28 +202,41 @@ fn a_repeat_while_the_first_is_still_delivering_is_503_not_a_second_delivery() {
     // 0.46.18: a sender whose POST timed out may send the same message
     // again (resealed, same msg_uuid) while this server is still
     // delivering the first. The repeat is answered 503 `in_flight`, never
-    // delivered; once the first is done, the seen record answers 409.
+    // delivered; once the first is done, the seen record answers "already
+    // received" (a success, nothing delivered again).
     with_temp_home(|| {
         k2_core::db::init_for_tests();
-        let (ws_id, _path) = receiving_workspace();
+        let (ws_id, path) = receiving_workspace();
         let key = pin_peer();
-        let sealed = seal_to(&ws_id, &key, "bob", "part 1 of 2");
+        let spec = federation::encode_tray_spec(Some("part 1 of 2"), None, false, &[("a.md".to_string(), b"one".to_vec())])
+            .unwrap();
+        let signal = AgentSignal::new(
+            AgentAddress::Agent { workspace: WorkspaceId("src-ws".into()), name: "ada".into() },
+            AgentAddress::Agent { workspace: WorkspaceId(ws_id.clone()), name: "bob".into() },
+            SignalKind::Custom {
+                kind: federation::TRAY_SIGNAL_KIND.to_string(),
+                payload: serde_json::to_value(&spec).unwrap(),
+            },
+        );
+        let sealed = federation::seal(&signal, &key, "peer", 8).unwrap();
         let env: federation::FederationEnvelope = serde_json::from_slice(&sealed).unwrap();
+        let inbox = || k2_core::inbox::list_root(std::path::Path::new(&path)).len();
 
         let first = crate::federation_retry::InFlight::claim(&env.payload.from_fingerprint, &env.payload.msg_uuid)
             .expect("the first delivery's claim");
         let repeat = handle_inbound(&sealed);
         assert_eq!(repeat.status, "503 Service Unavailable", "{}", repeat.body);
         assert_eq!(body(&repeat)["code"], "in_flight", "{}", repeat.body);
+        assert_eq!(inbox(), 0, "a repeat while in flight writes nothing");
         drop(first);
 
-        // Delivered now (the switch is off here: a terminal decline, recorded).
         let done = handle_inbound(&federation::reseal(&sealed, &key).unwrap());
         assert_eq!(done.status, "200 OK", "{}", done.body);
-        assert_eq!(body(&done)["mode"], "declined", "{}", done.body);
+        assert_eq!(body(&done)["mode"], "inbox", "{}", done.body);
         let again = handle_inbound(&federation::reseal(&sealed, &key).unwrap());
-        assert_eq!(again.status, "409 Conflict", "{}", again.body);
-        assert!(again.body.contains("duplicate message"), "{}", again.body);
+        assert_eq!(again.status, "200 OK", "{}", again.body);
+        assert_eq!(body(&again)["mode"], "already_received", "{}", again.body);
+        assert_eq!(inbox(), 1, "delivered once");
     });
 }
 

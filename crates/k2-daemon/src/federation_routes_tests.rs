@@ -618,39 +618,125 @@ fn send_tray_over_cap_fails_loud() {
 // ── P3 receive: durable msg_uuid dedupe. The outbox drain is
 //    at-least-once — a redelivery of an already-handled envelope (same
 //    SIGNED msg_uuid, possibly re-sealed with a fresh nonce so the
-//    in-memory replay LRU can't catch it) must 409 as a duplicate
-//    instead of driving the chat / decline path twice. The drain maps
-//    that 409 back to "already delivered".
+//    in-memory replay LRU can't catch it) must not land twice. 0.46.18:
+//    the repeat answers 200 "already received" (`delivered:true`, so every
+//    sender and the drain count it as delivered) and writes nothing.
 #[test]
-fn inbound_redelivery_of_handled_msg_uuid_is_409_duplicate() {
+fn the_same_sealed_message_twice_lands_once() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let ws_path = temp_ws_path();
+        std::fs::create_dir_all(&ws_path).unwrap();
+        let ws_id = register_project(&ws_path); // opt-in OFF: a tray still lands
+
+        let key = pin_trusted_peer("peer");
+        let bytes = seal_tray_to(&ws_id, &key, "peer", brief_tray());
+        let msg_uuid = serde_json::from_slice::<federation::FederationEnvelope>(&bytes).unwrap().payload.msg_uuid;
+        let first = handle_inbound(&bytes);
+        assert_eq!(first.status, "200 OK", "first delivery: {}", first.body);
+        let v: serde_json::Value = serde_json::from_str(&first.body).unwrap();
+        assert_eq!(v["mode"], "inbox", "{v}");
+        assert_eq!(k2_core::inbox::list_root(Path::new(&ws_path)).len(), 1, "landed once");
+
+        // The SAME message RE-SEALED (fresh nonce + at — what a sender's
+        // retry and the drain send), so only the durable store can catch it.
+        let second = handle_inbound(&federation::reseal(&bytes, &key).expect("reseal"));
+        assert_eq!(second.status, "200 OK", "a repeat is a success: {}", second.body);
+        let v: serde_json::Value = serde_json::from_str(&second.body).unwrap();
+        assert_eq!(v["delivered"], true, "{v}");
+        assert_eq!(v["mode"], "already_received", "{v}");
+        assert_eq!(v["already_received"], true, "{v}");
+        assert_eq!(v["msg_uuid"], msg_uuid, "{v}");
+        assert_eq!(
+            k2_core::inbox::list_root(Path::new(&ws_path)).len(),
+            1,
+            "the repeat is NOT delivered again"
+        );
+
+        // The claim is on disk (a restarted daemon reads the same file):
+        // the store holds this uuid under the peer's fingerprint.
+        let on_disk = std::fs::read_to_string(k2_core::paths::k2_home().join("federation-seen.json"))
+            .expect("the seen store is a file");
+        assert!(on_disk.contains(&msg_uuid), "{on_disk}");
+
+        // A different msg_uuid (another message with the same content) lands.
+        let other = handle_inbound(&seal_tray_to(&ws_id, &key, "peer", brief_tray()));
+        assert_eq!(other.status, "200 OK", "{}", other.body);
+        let v: serde_json::Value = serde_json::from_str(&other.body).unwrap();
+        assert_eq!(v["mode"], "inbox", "a new msg_uuid is delivered: {v}");
+        assert_eq!(k2_core::inbox::list_root(Path::new(&ws_path)).len(), 2);
+    });
+}
+
+// A decline writes nothing, so it is not recorded: its repeat is declined
+// again (never "already received", which would read as a delivery).
+#[test]
+fn a_declined_message_repeated_is_declined_again() {
     with_temp_home(|| {
         k2_core::db::init_for_tests();
         let ws_path = temp_ws_path();
         let ws_id = register_project(&ws_path); // opt-in OFF → decline (terminal)
-
         let key = pin_trusted_peer("peer");
         let bytes = seal_msg_to(&ws_id, &key, "peer", "deliver once");
-        let first = handle_inbound(&bytes);
-        assert_eq!(first.status, "200 OK", "first delivery: {}", first.body);
-        let v: serde_json::Value = serde_json::from_str(&first.body).unwrap();
-        assert_eq!(v["mode"], "declined", "opt-in OFF declines (terminal)");
-
-        // Redeliver the SAME message RE-SEALED (fresh nonce + at — the
-        // exact thing the drain does for stale envelopes), so only the
-        // durable msg_uuid store can catch it.
-        let resealed = federation::reseal(&bytes, &key).expect("reseal");
-        let second = handle_inbound(&resealed);
-        assert_eq!(
-            second.status, "409 Conflict",
-            "redelivered msg_uuid must dedupe: {}",
-            second.body
-        );
-        assert!(
-            second.body.contains("duplicate message"),
-            "the dedupe reject must carry the drain's marker: {}",
-            second.body
-        );
+        for sealed in [bytes.clone(), federation::reseal(&bytes, &key).expect("reseal")] {
+            let resp = handle_inbound(&sealed);
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "declined", "{v}");
+            assert_eq!(v["delivered"], false, "{v}");
+        }
     });
+}
+
+// A live delivery that provably typed nothing (here: no agent mode, so no
+// session) gives its claim back: the sender's drain may still deliver it.
+#[test]
+fn a_live_delivery_that_typed_nothing_can_be_delivered_later() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let ws_path = temp_ws_path();
+        let ws_id = register_project(&ws_path);
+        k2_core::workspace::settings::update_project_setting(&ws_path, "allow_remote_instruct", "1")
+            .expect("opt in");
+        let key = pin_trusted_peer("peer");
+        let bytes = seal_msg_to(&ws_id, &key, "peer", "hello");
+        let env: federation::FederationEnvelope = serde_json::from_slice(&bytes).unwrap();
+        let fp = env.payload.from_fingerprint.clone();
+        for sealed in [bytes.clone(), federation::reseal(&bytes, &key).expect("reseal")] {
+            let resp = handle_inbound(&sealed);
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "live", "tried again, not already received: {v}");
+            assert_eq!(v["delivered"], false, "{v}");
+            assert_eq!(v["result"]["reason"], "no_agent_mode", "{v}");
+            assert!(
+                !k2_core::federation::seen::already_seen(&fp, &env.payload.msg_uuid),
+                "nothing typed: the claim is given back"
+            );
+        }
+    });
+}
+
+#[test]
+fn which_live_failures_typed_nothing() {
+    for r in [
+        "workspace_not_found",
+        "no_agent_mode",
+        "spawn_failed",
+        "main_chat_missing",
+        "pty_stalled",
+        "dormant_no_wake",
+        "hitl_gate_open",
+        "folder_trust_denied",
+        "not_recorded",
+    ] {
+        assert!(typed_nothing(Some(r)), "{r}");
+    }
+    // pty_died may have typed part of it; folder_trust_pending delivers it
+    // once trusted; an unknown reason is not assumed safe.
+    for r in [Some("pty_died"), Some("folder_trust_pending"), Some("something_new"), None] {
+        assert!(!typed_nothing(r), "{r:?}");
+    }
 }
 
 // ── P3 receive: a message addressed to a workspace NOT on this server is

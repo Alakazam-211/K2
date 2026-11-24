@@ -618,12 +618,18 @@ pub fn sent(raw: &[u8]) -> Read {
             }
             other => return Err(no_attr(25, other, "startswith")),
         };
+        // 0.46.18: UNKNOWN when the send may have landed.
+        let kind = if super::py::eq(&get(&d, "delivery", 27)?, &s("unknown")) {
+            "UNKNOWN"
+        } else {
+            "QUEUED"
+        };
         let words: Vec<String> = str_of(&why)
             .split(py_space)
             .filter(|w| !w.is_empty())
             .map(str::to_string)
             .collect();
-        return Ok(format!("QUEUED\t{}", words.join(" ")));
+        return Ok(format!("{kind}\t{}", words.join(" ")));
     }
     if super::py::eq(&st, &s("declined")) {
         let v = or(
@@ -759,6 +765,27 @@ pub fn queued(shown: &str, host: &str, why: &str) -> String {
     format!(
         concat!(
             "QUEUED (not delivered yet) for {}::{}: {}\n",
+            "  ",
+            product_name!(),
+            " retries it from this server's outbox (next try in about 30 s). The owner can watch it with: ",
+            cli_name!(),
+            " fed outbox\n"
+        ),
+        shown, host, why
+    )
+}
+
+/// Delivery unknown (0.46.18): the send may have reached the other server.
+/// The two lines.
+pub fn unknown(shown: &str, host: &str, why: &str) -> String {
+    let why = if why.is_empty() {
+        "the other server didn't answer in time"
+    } else {
+        why
+    };
+    format!(
+        concat!(
+            "DELIVERY UNKNOWN for {}::{}: {}; it may or may not have received the message. Check with them before sending again.\n",
             "  ",
             product_name!(),
             " retries it from this server's outbox (next try in about 30 s). The owner can watch it with: ",
@@ -985,6 +1012,11 @@ fn send_with(
         "QUEUED" => {
             note();
             err(&queued(&shown, host, &sdetail));
+            Exit::Ok
+        }
+        "UNKNOWN" => {
+            note();
+            err(&unknown(&shown, host, &sdetail));
             Exit::Ok
         }
         "GATE" => {

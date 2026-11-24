@@ -465,23 +465,10 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     // fire-and-forget so it never extends this request.
     crate::federation_drain::note_peer_reachable(&ingested.peer_fingerprint);
 
-    // ── IDEMPOTENCY GATE — durable per-peer msg_uuid dedupe ──
-    // The outbox drain is at-least-once: a delivery whose RESPONSE was lost
-    // gets re-dialed (possibly re-sealed with a fresh nonce, so the
-    // in-memory replay LRU can't catch it — and that cache resets on
-    // restart anyway). The signed msg_uuid is stable across re-seals, so a
-    // uuid we already terminally handled is a duplicate: 409 WITHOUT
-    // touching the chat. The drain maps this reject to "already delivered".
-    if k2_core::federation::seen::already_seen(&ingested.peer_fingerprint, &ingested.msg_uuid) {
-        return json_err(
-            "409 Conflict",
-            format!("duplicate message (already delivered): {}", ingested.msg_uuid),
-        );
-    }
     // 0.46.18: while this msg_uuid is being delivered, a repeat of it (a
     // sender that gave up waiting and tried again) is not delivered a
     // second time: 503 `in_flight`, which every sender retries later and
-    // then meets the seen record above. Held to the end of this request.
+    // then meets the seen record below. Held to the end of this request.
     let _in_flight = match crate::federation_retry::InFlight::claim(
         &ingested.peer_fingerprint,
         &ingested.msg_uuid,
@@ -499,6 +486,19 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             };
         }
     };
+
+    // ── IDEMPOTENCY GATE — durable per-peer msg_uuid dedupe ──
+    // The outbox drain is at-least-once: a delivery whose RESPONSE was lost
+    // gets re-dialed (possibly re-sealed with a fresh nonce, so the
+    // in-memory replay LRU can't catch it — and that cache resets on
+    // restart anyway). The signed msg_uuid is stable across re-seals, and
+    // it is claimed in `federation::seen` before a delivery starts (0.46.18),
+    // so a uuid this server already received is answered "already received"
+    // (a success: every sender counts it as delivered) WITHOUT touching the
+    // inbox, the chat or Thread.
+    if k2_core::federation::seen::already_seen(&ingested.peer_fingerprint, &ingested.msg_uuid) {
+        return already_received_response(&ingested.msg_uuid);
+    }
 
     // ── STAGE 2: DELIVERY (the gate has passed) ──
     let signal = ingested.signal;
@@ -615,16 +615,20 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             Some(handle) => format!("{ws_id}/{handle}"),
             None => project_path.clone(),
         };
+        // 0.46.18: claimed BEFORE the delivery, so a repeat (a sender's
+        // retry, its outbox drain, a restart in between) never types it
+        // twice. Only a failure that provably typed nothing gives the claim
+        // back: that message is still owed, and the sender's drain keeps it
+        // queued for retry.
+        if !k2_core::federation::seen::claim(&ingested.peer_fingerprint, &ingested.msg_uuid) {
+            return already_received_response(&ingested.msg_uuid);
+        }
         // 0310 (P28): recorded with `via = federation` and the peer's
         // pinned key, so the `[from agent::host · m_…]` stamp is checkable.
         let (result, _) =
             crate::hire_routes::deliver_recorded_federated(&deliver_to, &text, &from_label, &ingested.peer_fingerprint);
-        // Terminal SUCCESS → remember the msg_uuid so a drain redelivery
-        // (lost-response race) dedupes instead of injecting twice. A FAILED
-        // live delivery is deliberately NOT recorded — it is still owed, and
-        // the sender's drain keeps it queued for retry.
-        if result.success {
-            k2_core::federation::seen::record(&ingested.peer_fingerprint, &ingested.msg_uuid);
+        if !result.success && typed_nothing(result.reason.as_deref()) {
+            k2_core::federation::seen::forget(&ingested.peer_fingerprint, &ingested.msg_uuid);
         }
         CliResponse::ok_json(
             serde_json::json!({
@@ -646,9 +650,9 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
         // from a transport/security failure — but `delivered:false`.
         //
         // A decline is TERMINAL (senders dead-letter it; re-dialing can
-        // never flip an opt-out) — record the msg_uuid so a redelivery
-        // dedupes here too.
-        k2_core::federation::seen::record(&ingested.peer_fingerprint, &ingested.msg_uuid);
+        // never flip an opt-out). It writes nothing, so it is not recorded
+        // (0.46.18): a repeat is declined again, never told "already
+        // received".
         CliResponse::ok_json(
             serde_json::json!({
                 "delivered": false,
@@ -659,6 +663,55 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             .to_string(),
         )
     }
+}
+
+/// The answer to a repeat of a message this server already received
+/// (0.46.18): a success, and nothing delivered again. `delivered:true`
+/// keeps every sender (an older one, the outbox drain) counting it as
+/// delivered; `already_received` says why. Older receivers answer the
+/// same repeat 409 "duplicate message", which senders count the same way.
+pub(crate) fn already_received_response(msg_uuid: &str) -> CliResponse {
+    CliResponse::ok_json(
+        serde_json::json!({
+            "delivered": true,
+            "mode": ALREADY_RECEIVED,
+            "already_received": true,
+            "msg_uuid": msg_uuid,
+            "hint": "this server already received this message; it was not delivered again",
+        })
+        .to_string(),
+    )
+}
+
+/// The `mode` of [`already_received_response`].
+pub(crate) const ALREADY_RECEIVED: &str = "already_received";
+
+/// The send answer's `delivery` when the message POST may have reached the
+/// peer and no answer said whether it landed (0.46.18).
+pub(crate) const DELIVERY_UNKNOWN: &str = "unknown";
+
+/// True when a failed live delivery's reason means nothing was typed into
+/// any terminal and nothing will be later: no session to reach, a refusal
+/// before any write, or a send held before it started. Its claim on the
+/// msg_uuid is given back so the sender's outbox can deliver it. Any other
+/// reason (`pty_died` may have typed part of it; `folder_trust_pending`
+/// delivers it once the folder is trusted; one this list doesn't know)
+/// keeps the claim, so a repeat is "already received".
+pub(crate) fn typed_nothing(reason: Option<&str>) -> bool {
+    matches!(
+        reason,
+        Some(
+            "workspace_not_found"
+                | "no_agent_mode"
+                | "spawn_failed"
+                | "main_chat_missing"
+                | "pty_stalled"
+                | "dormant_no_wake"
+                | "hitl_gate_open"
+                | "folder_trust_denied"
+                | "not_recorded"
+        )
+    )
 }
 
 /// The sender-facing hint for a peer's decline. `remote_instruction_disabled`
@@ -1053,6 +1106,11 @@ fn deliver_inbound_tray(
         .clone()
         .or_else(|| k2_core::inbox::md_title_for_named(&named))
         .map(|t| escape_capped(&t, PEER_TEXT_CAP));
+    // 0.46.18: claimed before the write (a repeat never lands a second
+    // package); given back only when nothing was written.
+    if !k2_core::federation::seen::claim(peer_fingerprint, msg_uuid) {
+        return already_received_response(msg_uuid);
+    }
     let package = match k2_core::inbox::deliver_named_bytes(
         std::path::Path::new(project_path),
         &named,
@@ -1063,10 +1121,11 @@ fn deliver_inbound_tray(
     ) {
         Ok(p) => p,
         Err(e) => {
+            k2_core::federation::seen::forget(peer_fingerprint, msg_uuid);
             return json_err(
                 "500 Internal Server Error",
                 format!("tray inbox deliver: {e}"),
-            )
+            );
         }
     };
 
@@ -1107,9 +1166,6 @@ fn deliver_inbound_tray(
     } else {
         serde_json::Value::Null
     };
-
-    // Package write is terminal — drain redelivery must not duplicate the tray.
-    k2_core::federation::seen::record(peer_fingerprint, msg_uuid);
 
     let mut out = serde_json::json!({
         "delivered": true,
@@ -1516,22 +1572,56 @@ pub(crate) fn handle_send_until(body: &[u8], deadline: std::time::Instant) -> Cl
                     "msg_uuid": msg_uuid,
                     "peer": peer.fingerprint,
                 });
-                if parsed.get("mode").and_then(|v| v.as_str()) == Some("inbox") {
+                let mode = parsed.get("mode").and_then(|v| v.as_str());
+                if mode == Some("inbox") {
                     out["ok"] = serde_json::json!(true);
                     out["mode"] = serde_json::json!("inbox");
                     // Only fields in shape reach the caller.
                     for (key, v) in checked_inbox_answer(&parsed, &peer.fingerprint) {
                         out[key.as_str()] = v;
                     }
+                } else if mode == Some(ALREADY_RECEIVED) {
+                    // 0.46.18: a repeat the peer already had (an earlier
+                    // try landed): delivered, once.
+                    out["already_received"] = serde_json::json!(true);
                 }
                 CliResponse::ok_json(out.to_string())
             }
         }
+        // 0.46.18: a POST that may have reached the peer (no answer after
+        // it was sent, a reset mid-answer, a 5xx, the peer still delivering
+        // it) has an UNKNOWN outcome: the peer may have it. Still queued
+        // (the outbox redelivers it with the same msg_uuid, which the peer
+        // drops if it has it), and the caller is told not to send it anew.
+        Err(crate::federation_retry::SendFailed { failed, may_have_arrived: true }) => {
+            let e = format!(
+                "the other server didn't answer in time on the send step after {} (last error: {})",
+                crate::federation_retry::attempts_text(failed.attempts),
+                one_line_text(&failed.last)
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "status": "queued",
+                    "delivery": DELIVERY_UNKNOWN,
+                    "reason": e,
+                    "step": "send",
+                    "attempts": failed.attempts,
+                    "msg_uuid": msg_uuid,
+                    "peer": peer.fingerprint,
+                    "hint": format!(
+                        "delivery unknown: {e}; it may or may not have received the message. Check with them before sending again."
+                    )
+                })
+                .to_string(),
+            )
+        }
         // Not delivered: the message waits in this server's outbox and the
         // drain re-dials it (the next sweep, about 30 s). `delivered:false`
         // + `reason` let a caller tell this apart from "sent" (0.46.11).
-        // 0.46.18: `reason` names the step and the attempts too.
-        Err(failed) => {
+        // 0.46.18: `reason` names the step and the attempts too. Only when
+        // no try can have reached the peer (it never connected, it said
+        // busy, or it refused).
+        Err(crate::federation_retry::SendFailed { failed, may_have_arrived: false }) => {
             let e = format!(
                 "the send step got no delivery after {} (last error: {})",
                 crate::federation_retry::attempts_text(failed.attempts),
@@ -1567,14 +1657,20 @@ pub(crate) fn handle_send_until(body: &[u8], deadline: std::time::Instant) -> Cl
 /// ([`crate::federation_retry::peer_dedupes`]); otherwise it is left to
 /// the outbox drain. A 4xx is never retried. Every retry is resealed (fresh
 /// nonce, the SAME msg_uuid), so the receiver's dedupe sees one message.
+///
+/// A failure says whether any try may have reached the peer
+/// ([`crate::federation_retry::SendFailed::may_have_arrived`]): a request
+/// that left without an answer (a timeout or a reset after connecting), a
+/// 5xx other than a plain 503 busy, or a 503 `in_flight` (the peer is
+/// delivering it). Only when none did is "not delivered" provably true.
 pub(crate) fn post_with_retries(
     base: &str,
     first_bytes: &[u8],
     key: &rcgen::KeyPair,
     peer_fp: &str,
     deadline: std::time::Instant,
-) -> Result<String, crate::federation_retry::Failed> {
-    use crate::federation_retry::{run, Step};
+) -> Result<String, crate::federation_retry::SendFailed> {
+    use crate::federation_retry::{run, SendFailed, Step};
     let url = format!("{base}/cli/federation/inbound");
     let mut builder = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
@@ -1587,14 +1683,18 @@ pub(crate) fn post_with_retries(
     let client = match builder.build() {
         Ok(c) => c,
         Err(e) => {
-            return Err(crate::federation_retry::Failed {
-                attempts: 0,
-                last: format!("build http client: {e}"),
-                refused: true,
+            return Err(SendFailed {
+                failed: crate::federation_retry::Failed {
+                    attempts: 0,
+                    last: format!("build http client: {e}"),
+                    refused: true,
+                },
+                may_have_arrived: false,
             })
         }
     };
     let left_may_retry = crate::federation_retry::peer_dedupes(peer_fp);
+    let reached = std::cell::Cell::new(false);
     run("message send", deadline, |attempt, cap| {
         // The first try sends the bytes as sealed (and queued); a retry
         // reseals them: the receiver burned the first nonce at its gate.
@@ -1617,7 +1717,12 @@ pub(crate) fn post_with_retries(
             Err(e) => {
                 let text = format!("POST {url}: {}", error_chain(&e));
                 // Never left: always safe to send again.
-                if e.is_connect() || left_may_retry {
+                if e.is_connect() {
+                    return Step::Retry(text);
+                }
+                // It left (or may have): the peer may have it.
+                reached.set(true);
+                if left_may_retry {
                     return Step::Retry(text);
                 }
                 return Step::Stop(text);
@@ -1631,7 +1736,14 @@ pub(crate) fn post_with_retries(
         }
         let body = resp.text().unwrap_or_default();
         if status == 409 && body.contains("duplicate message") {
-            return Step::Done("{}".to_string());
+            // An older peer's answer to a repeat it already has.
+            return Step::Done(
+                serde_json::json!({ "delivered": true, "mode": ALREADY_RECEIVED }).to_string(),
+            );
+        }
+        let in_flight = status == 503 && body.contains("\"in_flight\"");
+        if in_flight || ((500..600).contains(&status) && status != 503) {
+            reached.set(true);
         }
         let text = format!("peer rejected inbound: HTTP {status}");
         if status == 429 || status == 503 || (left_may_retry && (500..600).contains(&status)) {
@@ -1640,6 +1752,7 @@ pub(crate) fn post_with_retries(
             Step::Stop(text)
         }
     })
+    .map_err(|failed| SendFailed { failed, may_have_arrived: reached.get() })
 }
 
 /// The part of a tray send's budget the roster lookup may use; the send
@@ -1698,11 +1811,21 @@ fn tray_queued_hint(
         .and_then(|r| r.as_str())
         .map(|r| format!(": {r}"))
         .unwrap_or_default();
-    v["hint"] = serde_json::json!(format!(
-        "{} for {agent}::{host} is not delivered yet{why}. {product} retries it from this server's outbox (next try in about 30 s); don't send it again.",
-        tray_parts(spec),
-        product = k2_core::brand::PRODUCT_NAME,
-    ));
+    let hint = if v.get("delivery").and_then(|d| d.as_str()) == Some(DELIVERY_UNKNOWN) {
+        // 0.46.18: the POST may have reached the peer.
+        format!(
+            "{} for {agent}::{host} may or may not have been delivered{why}. {product} retries it from this server's outbox (next try in about 30 s); check with them before sending it again.",
+            tray_parts(spec),
+            product = k2_core::brand::PRODUCT_NAME,
+        )
+    } else {
+        format!(
+            "{} for {agent}::{host} is not delivered yet{why}. {product} retries it from this server's outbox (next try in about 30 s); don't send it again.",
+            tray_parts(spec),
+            product = k2_core::brand::PRODUCT_NAME,
+        )
+    };
+    v["hint"] = serde_json::json!(hint);
     CliResponse { body: v.to_string(), ..resp }
 }
 

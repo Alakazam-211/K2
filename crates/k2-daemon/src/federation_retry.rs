@@ -14,8 +14,11 @@
 //! A POST that may have reached the peer is retried only when the peer
 //! says it drops a repeat it is still delivering ([`IN_FLIGHT_DEDUPE`] in
 //! its roster). Every retry carries the same `msg_uuid` (resealed, fresh
-//! nonce), so the receiver's dedupe (`federation::seen` after a delivery,
-//! [`InFlight`] while one runs) keeps it to one delivery.
+//! nonce), so the receiver's dedupe ([`InFlight`] while one runs, then
+//! `federation::seen`, claimed before a delivery starts) keeps it to one
+//! delivery. A run that fails after a try may have reached the peer says
+//! so ([`SendFailed::may_have_arrived`]): its outcome is unknown, never
+//! "not delivered".
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -69,6 +72,17 @@ pub(crate) struct Failed {
     pub last: String,
     /// True when the last failure was one that is not retried ([`Step::Stop`]).
     pub refused: bool,
+}
+
+/// How a message POST's tries failed: the run, and whether any try may
+/// have reached the peer (it left without an answer, or the peer answered
+/// a 5xx that can hide a delivery, or said it is delivering it). When none
+/// did, "nothing was delivered" is provably true; otherwise the outcome is
+/// unknown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SendFailed {
+    pub failed: Failed,
+    pub may_have_arrived: bool,
 }
 
 /// The pause before try `n + 2` (`n` = 0 for the 2nd), with jitter `r` in

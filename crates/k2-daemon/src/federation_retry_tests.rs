@@ -22,6 +22,8 @@ use crate::test_support::with_temp_home;
 enum Answer {
     /// Read the request, close without an answer.
     Drop,
+    /// Read the request, say nothing for this long, then close.
+    Stall(std::time::Duration),
     /// This status and JSON body.
     Says(u16, String),
 }
@@ -115,6 +117,10 @@ fn scripted_peer(roster: Vec<Answer>, inbound: Vec<Answer>) -> Peer {
             };
             match answer {
                 Answer::Drop => drop(s),
+                Answer::Stall(d) => {
+                    std::thread::sleep(d);
+                    drop(s);
+                }
                 Answer::Says(status, body) => {
                     let _ = write!(
                         s,
@@ -411,4 +417,151 @@ fn a_tray_send_whose_roster_never_answers_fails_and_names_its_parts() {
         assert_eq!(peer.roster_hits(), 3);
         assert!(peer.posts().is_empty(), "no roster, no send");
     });
+}
+
+// ── What a failed send says, step by step (0.46.18 field report) ─────
+//
+// "Nothing was delivered" only where it is provably true: the roster step
+// (no message was sent), or a send no try of which reached the peer. A
+// POST that left and got no answer, a 5xx, or a 503 `in_flight` may have
+// landed: the outcome is UNKNOWN, and the answer says to check before
+// sending it again.
+
+fn send_until(fp: &str, budget: std::time::Duration) -> CliResponse {
+    let body = serde_json::json!({ "to": format!("{fp}::ws-b::bob"), "text": "part 2 of 3" });
+    handle_send_until(body.to_string().as_bytes(), std::time::Instant::now() + budget)
+}
+
+fn assert_unknown(v: &serde_json::Value, attempts: &str) {
+    assert_eq!(v["status"], "queued", "still queued for the outbox: {v}");
+    assert_eq!(v["delivery"], "unknown", "{v}");
+    assert!(v.get("delivered").is_none(), "never `delivered:false` when it may have landed: {v}");
+    let reason = v["reason"].as_str().unwrap_or_else(|| panic!("a reason: {v}"));
+    assert!(
+        reason.starts_with(&format!(
+            "the other server didn't answer in time on the send step after {attempts} (last error: "
+        )),
+        "{reason}"
+    );
+    let hint = v["hint"].as_str().unwrap_or_else(|| panic!("a hint: {v}"));
+    assert!(
+        hint.ends_with("; it may or may not have received the message. Check with them before sending again."),
+        "{hint}"
+    );
+    assert!(!hint.contains("Nothing was delivered") && !reason.contains("no delivery"), "{v}");
+}
+
+#[test]
+fn a_roster_timeout_says_nothing_was_delivered() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let peer = scripted_peer(vec![Answer::Stall(std::time::Duration::from_secs(4))], vec![]);
+        let fp = pin(&peer);
+        let resp = handle_peer_roster_until(&fp, std::time::Instant::now() + std::time::Duration::from_secs(2));
+        assert_eq!(resp.status, "502 Bad Gateway", "{}", resp.body);
+        let line = json(&resp)["error"].as_str().unwrap().to_string();
+        assert!(line.starts_with("the roster step failed after 1 attempt (last error: GET "), "{line}");
+        assert!(line.ends_with("Nothing was delivered; send again."), "{line}");
+        assert!(peer.posts().is_empty(), "no message was sent");
+    });
+}
+
+#[test]
+fn a_send_that_timed_out_after_it_left_is_unknown() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let peer = scripted_peer(vec![], vec![Answer::Stall(std::time::Duration::from_secs(4))]);
+        let fp = pin(&peer);
+        let v = json(&send_until(&fp, std::time::Duration::from_secs(2)));
+        assert_unknown(&v, "1 attempt");
+        assert!(v["reason"].as_str().unwrap().contains("POST http://127.0.0.1:"), "{v}");
+        assert_eq!(peer.posts().len(), 1, "it reached the peer once");
+        assert_eq!(outbox::list_for_peer(&fp).len(), 1, "kept for the outbox drain (same msg_uuid)");
+    });
+}
+
+#[test]
+fn a_send_dropped_mid_answer_or_still_in_flight_is_unknown() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        // The connection closed after the request arrived (an older peer:
+        // not resent).
+        let peer = scripted_peer(vec![], vec![Answer::Drop]);
+        let fp = pin(&peer);
+        crate::federation_retry::set_peer_dedupes(&fp, false);
+        assert_unknown(&json(&send_to(&fp)), "1 attempt");
+
+        // The peer kept saying it is delivering this very message.
+        let peer = scripted_peer(
+            vec![],
+            vec![says(503, r#"{"error":"message is being delivered: x","code":"in_flight"}"#)],
+        );
+        let fp = pin(&peer);
+        assert_unknown(&json(&send_to(&fp)), "3 attempts");
+
+        // An earlier try that may have landed decides it, whatever the
+        // later ones said.
+        let peer = scripted_peer(vec![], vec![says(502, "{}"), says(503, r#"{"error":"busy"}"#)]);
+        let fp = pin(&peer);
+        crate::federation_retry::set_peer_dedupes(&fp, true);
+        assert_unknown(&json(&send_to(&fp)), "3 attempts");
+    });
+}
+
+#[test]
+fn a_send_that_never_reached_the_peer_is_not_delivered() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        // Nothing listens: every try fails to connect.
+        let (_held, dead) = crate::test_support::dead_port();
+        let gone = Peer { base: format!("http://127.0.0.1:{dead}"), seen: Arc::default() };
+        let fp = pin(&gone);
+        let v = json(&send_to(&fp));
+        assert_eq!(v["status"], "queued", "{v}");
+        assert_eq!(v["delivered"], false, "{v}");
+        assert!(v.get("delivery").is_none(), "{v}");
+        let reason = v["reason"].as_str().unwrap();
+        assert!(
+            reason.starts_with("the send step got no delivery after 3 attempts (last error: POST "),
+            "{reason}"
+        );
+    });
+}
+
+#[test]
+fn an_already_received_answer_is_a_delivery() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let peer = scripted_peer(
+            vec![],
+            vec![
+                says(503, r#"{"error":"message is being delivered","code":"in_flight"}"#),
+                says(200, r#"{"delivered":true,"mode":"already_received","already_received":true}"#),
+            ],
+        );
+        let fp = pin(&peer);
+        let v = json(&send_to(&fp));
+        assert_eq!(v["status"], "sent", "{v}");
+        assert_eq!(v["already_received"], true, "{v}");
+        assert!(outbox::list_for_peer(&fp).is_empty());
+    });
+}
+
+#[test]
+fn a_tray_whose_send_is_unknown_says_so() {
+    let unknown = CliResponse::ok_json(
+        serde_json::json!({
+            "status": "queued",
+            "delivery": "unknown",
+            "reason": "the other server didn't answer in time on the send step after 1 attempt (last error: y)",
+        })
+        .to_string(),
+    );
+    let v = json(&tray_queued_hint("bob", "rosson.k2.dev", &two_file_spec(), unknown));
+    assert_eq!(
+        v["hint"],
+        "2 files: a.md, b.pdf for bob::rosson.k2.dev may or may not have been delivered: the other server didn't \
+         answer in time on the send step after 1 attempt (last error: y). K2 retries it from this server's outbox \
+         (next try in about 30 s); check with them before sending it again."
+    );
 }

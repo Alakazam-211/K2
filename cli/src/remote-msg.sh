@@ -327,11 +327,11 @@ st = d.get("status", "")
 if st == "sent":
     print("SENT"); sys.exit(0)
 if st == "queued":
-    # 0.46.11: the reason alone (transport error); the CLI words the line.
+    # 0.46.11: the reason alone (transport error); the CLI words the line. 0.46.18: UNKNOWN when the send may have landed.
     why = d.get("reason") or d.get("hint") or ""
     if why.startswith("delivery deferred to retry: "):
         why = why[len("delivery deferred to retry: "):]
-    print("QUEUED\t%s" % " ".join(str(why).split())); sys.exit(0)
+    print("%s\t%s" % ("UNKNOWN" if d.get("delivery") == "unknown" else "QUEUED", " ".join(str(why).split()))); sys.exit(0)
 if st == "declined":
     print("DECLINED\t%s" % (d.get("hint") or d.get("reason") or "declined by peer")); sys.exit(0)
 print("OTHER")
@@ -352,6 +352,18 @@ print("OTHER")
                 echo "QUEUED (not delivered yet) for ${shown}::${host}: $sdetail" >&2
             else
                 echo "QUEUED (not delivered yet) for ${shown}::${host}: the peer is briefly unreachable" >&2
+            fi
+            echo "  K2 retries it from this server's outbox (next try in about 30 s). The owner can watch it with: k2 fed outbox" >&2
+            return 0 ;;
+        UNKNOWN)
+            # 0.46.18: the send may have reached the other server, so it is
+            # neither "not delivered" nor one to send again. Exit 0 (the
+            # outbox has it, and redelivers it with the same msg_uuid).
+            [ -n "$note_handle" ] && _k2_addr_note "${agent}::${host}" "${note_handle}::${host}"
+            if [ -n "$sdetail" ]; then
+                echo "DELIVERY UNKNOWN for ${shown}::${host}: $sdetail; it may or may not have received the message. Check with them before sending again." >&2
+            else
+                echo "DELIVERY UNKNOWN for ${shown}::${host}: the other server didn't answer in time; it may or may not have received the message. Check with them before sending again." >&2
             fi
             echo "  K2 retries it from this server's outbox (next try in about 30 s). The owner can watch it with: k2 fed outbox" >&2
             return 0 ;;

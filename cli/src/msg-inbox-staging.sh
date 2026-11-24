@@ -455,8 +455,11 @@ if d.get("ok") is False and "id" not in d and "filename" not in d:
 if isinstance(d.get("addressNote"), str) and d["addressNote"]:
     sys.stderr.write("note: %s\n" % d["addressNote"])
 # 0.46.18: a package left in the outbox of this server has not landed yet;
-# the answer alone read like a delivery.
-if d.get("status") == "queued":
+# the answer alone read like a delivery. One whose send may have reached
+# the other server is UNKNOWN, never "not delivered".
+if d.get("status") == "queued" and d.get("delivery") == "unknown":
+    sys.stderr.write("DELIVERY UNKNOWN: %s\n" % (d.get("hint") or "the other server may or may not have received it; check with them before sending it again"))
+elif d.get("status") == "queued":
     sys.stderr.write("QUEUED (not delivered yet): %s\n" % (d.get("hint") or "K2 retries it from this server\x27s outbox"))
 # Package primary: if wake failed after package landed, note it but exit 0.
 if os.environ.get("WAKE_MODE") == "true":

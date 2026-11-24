@@ -264,7 +264,7 @@ pub fn doctor_notes(workspaces: bool) -> Vec<String> {
     };
     let mut out = Vec::new();
     if let Some(d) = unsafe_folder_on_the_way(&root) {
-        out.push(format!("hire root {}: {}", root.display(), unsafe_folder_error(&d).hint));
+        out.push(format!("hire root {}: {} can be changed by another user: chmod go-w {}", root.display(), d.display(), d.display()));
     } else if let Some(mode) = readable_by_others(&root) {
         out.push(format!("hire root {}: other users can read it (mode {mode:o}); 0700 is tighter (chmod 700)", root.display()));
     }
@@ -286,7 +286,7 @@ pub fn doctor_notes(workspaces: bool) -> Vec<String> {
                 continue;
             }
             if let Some(d) = unsafe_folder_on_the_way(Path::new(&path)) {
-                out.push(format!("workspace {name} ({path}) is under the hire root: {}", unsafe_folder_error(&d).hint));
+                out.push(format!("workspace {name} ({path}) is under the hire root: {} can be changed by another user: chmod go-w {}", d.display(), d.display()));
             }
         }
     }

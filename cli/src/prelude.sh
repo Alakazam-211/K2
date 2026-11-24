@@ -32,6 +32,12 @@ _K2_CLI_NAME=k2
 # The product's own name, for a line that names it from code (a daemon's
 # hint template's {product}, _k2_hint_fill). The brand flip rewrites it.
 _K2_PRODUCT_NAME=K2
+# The line after "It can't be requested." (0.46.18): with no card to raise,
+# feedback to the product's team. Built from the two names above (the
+# brand's), so a brand build says its own; the embedded Python blocks read
+# it from the environment. k5's copy is transport::permission::NO_CARD_FEEDBACK.
+_K2_NO_CARD_FEEDBACK="If you think this should be possible, tell the ${_K2_PRODUCT_NAME} team: ${_K2_CLI_NAME} send-feedback \"<what you were trying to do>\""
+export _K2_NO_CARD_FEEDBACK
 
 # What the Rust front sets when it hands a command to this script. Empty
 # counts as unset.

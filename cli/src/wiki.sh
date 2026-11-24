@@ -1167,7 +1167,7 @@ if err:
             # The card is the request: the line to run instead (closing).
             print("Ask with: k2 workspace trust request %s --why \"<what you need it for>\"" % shlex.quote(folder), file=sys.stderr)
         else:
-            print("It can'"'"'t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
+            print("It can'"'"'t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
         sys.exit(3)
     sys.exit(1)
 def show(v):

@@ -40,7 +40,7 @@ if code != "200" or d.get("ok") is False or (isinstance(d.get("error"), str) and
         if p.get("command"):
             print("Ask with: " + p["command"], file=sys.stderr)
         elif p.get("requestable") is False:
-            print("It can\x27t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
+            print("It can\x27t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
     sys.exit(3 if code == "403" else 1)
 if "serving" in d:
     print("front      :", "on" if d.get("enabled") else "off", "· serving" if d.get("serving") else "· not serving",

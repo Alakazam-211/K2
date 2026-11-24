@@ -91,7 +91,7 @@ def permission_lines(p):
         return ["Ask with: " + cmd]
     if p.get("requestable") is False:
         hint = p.get("hint")
-        return ([hint] if isinstance(hint, str) and hint else []) + ["It can't be requested.", 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"']
+        return ([hint] if isinstance(hint, str) and hint else []) + ["It can't be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"]]
     return []
 
 def die(err):

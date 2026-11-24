@@ -382,7 +382,7 @@ elif p.get("requestable") is False:
     hint = p.get("hint")
     if isinstance(hint, str) and hint:
         print(hint)
-    print("It can'"'"'t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n")
+    print("It can'"'"'t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n")
 ' 2>/dev/null
 }
 

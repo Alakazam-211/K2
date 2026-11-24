@@ -32,6 +32,12 @@ _K2_CLI_NAME=k2
 # The product's own name, for a line that names it from code (a daemon's
 # hint template's {product}, _k2_hint_fill). The brand flip rewrites it.
 _K2_PRODUCT_NAME=K2
+# The line after "It can't be requested." (0.46.18): with no card to raise,
+# feedback to the product's team. Built from the two names above (the
+# brand's), so a brand build says its own; the embedded Python blocks read
+# it from the environment. k5's copy is transport::permission::NO_CARD_FEEDBACK.
+_K2_NO_CARD_FEEDBACK="If you think this should be possible, tell the ${_K2_PRODUCT_NAME} team: ${_K2_CLI_NAME} send-feedback \"<what you were trying to do>\""
+export _K2_NO_CARD_FEEDBACK
 
 # What the Rust front sets when it hands a command to this script. Empty
 # counts as unset.
@@ -3467,7 +3473,7 @@ elif p.get("requestable") is False:
     hint = p.get("hint")
     if isinstance(hint, str) and hint:
         print(hint)
-    print("It can'"'"'t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n")
+    print("It can'"'"'t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n")
 ' 2>/dev/null
 }
 
@@ -9378,7 +9384,7 @@ def refused(route, code, data, raw):
             hint = p.get('hint')
             if isinstance(hint, str) and hint:
                 print(hint, file=sys.stderr)
-            print(\"It can't be requested.\", 'If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"', sep=\"\\n\", file=sys.stderr)
+            print(\"It can't be requested.\", __import__('os').environ['_K2_NO_CARD_FEEDBACK'], sep=\"\\n\", file=sys.stderr)
             sys.exit(3)
     sys.exit(1)
 
@@ -31689,7 +31695,7 @@ if code != "200" or d.get("ok") is False or (isinstance(d.get("error"), str) and
         if p.get("command"):
             print("Ask with: " + p["command"], file=sys.stderr)
         elif p.get("requestable") is False:
-            print("It can\x27t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
+            print("It can\x27t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
     sys.exit(3 if code == "403" else 1)
 if "serving" in d:
     print("front      :", "on" if d.get("enabled") else "off", "· serving" if d.get("serving") else "· not serving",
@@ -32114,7 +32120,7 @@ if isinstance(p, dict):
     if p.get("command"):
         print("Ask with: " + p["command"], file=sys.stderr)
     elif p.get("requestable") is False:
-        print("It can\x27t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
+        print("It can\x27t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
 '
         [ "$as_json" = "1" ] && printf '%s\n' "$body"
         exit "$(_sidecar_exit_for "$code")"
@@ -32414,7 +32420,7 @@ p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["ta
 if isinstance(p, dict) and p.get("command"):
     print("Ask with: " + p["command"], file=sys.stderr)
 elif c == "desktop_people_only" or (isinstance(p, dict) and p.get("requestable") is False):
-    print("It can\x27t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
+    print("It can\x27t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
 '
         [ "$as_json" = "1" ] && printf '%s\n' "$body"
         exit "$(_sidecar_exit_for "$code")"
@@ -55367,7 +55373,7 @@ if err:
             # The card is the request: the line to run instead (closing).
             print("Ask with: k2 workspace trust request %s --why \"<what you need it for>\"" % shlex.quote(folder), file=sys.stderr)
         else:
-            print("It can'"'"'t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
+            print("It can'"'"'t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
         sys.exit(3)
     sys.exit(1)
 def show(v):
@@ -77463,7 +77469,7 @@ for a in actions:
             elif p.get("requestable") is False:
                 if isinstance(p.get("hint"), str) and p["hint"]:
                     sys.stderr.write(p["hint"] + "\n")
-                sys.stderr.write("It can't be requested.\n" + 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"' + "\n")
+                sys.stderr.write("It can't be requested.\n" + __import__("os").environ["_K2_NO_CARD_FEEDBACK"] + "\n")
         sys.exit(3 if status in (401, 403) else 4 if status == 404 else 1)
     a["status"] = "done"
     changed = True
@@ -78455,7 +78461,7 @@ def note_permission(resp):
     elif p.get("requestable") is False:
         if isinstance(p.get("hint"), str) and p["hint"]:
             permission_lines.append(p["hint"])
-        permission_lines.extend(["It can't be requested.", 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'])
+        permission_lines.extend(["It can't be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"]])
 
 def fail(code, hint, exit_code=1):
     sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}}) + "\n")
@@ -85321,7 +85327,7 @@ def permission_lines(p):
         return ["Ask with: " + cmd]
     if p.get("requestable") is False:
         hint = p.get("hint")
-        return ([hint] if isinstance(hint, str) and hint else []) + ["It can't be requested.", 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"']
+        return ([hint] if isinstance(hint, str) and hint else []) + ["It can't be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"]]
     return []
 
 def die(err):
@@ -86767,7 +86773,7 @@ def die(err, exit_code=None, permission=None):
         elif permission.get("requestable") is False:
             if isinstance(permission.get("hint"), str) and permission["hint"]:
                 sys.stderr.write(permission["hint"] + "\n")
-            sys.stderr.write("It can't be requested.\n" + 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"' + "\n")
+            sys.stderr.write("It can't be requested.\n" + __import__("os").environ["_K2_NO_CARD_FEEDBACK"] + "\n")
     if exit_code is None:
         # PRD §11 exit contract: 3 = gated-off / owner-only · 2 = bad
         # usage (timeouts also exit 2, via explicit die(..., 2) at the
@@ -104586,7 +104592,7 @@ def note_permission(v):
     elif p.get("requestable") is False:
         if isinstance(p.get("hint"), str) and p["hint"]:
             lines.append(p["hint"])
-        lines.extend(["It can't be requested.", 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'])
+        lines.extend(["It can't be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"]])
     if lines:
         try:
             with open(path, "w") as f:

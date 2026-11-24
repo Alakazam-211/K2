@@ -85,7 +85,7 @@ OUTPUTS = [
     ("python", r"\bpython3\b"),
 ]
 OUTS = [
-    ("secret", r"_K2_SECRET|read -r?s|_k2_read_secret|--token\b"),
+    ("secret", r"_K2_SECRET|read -r?s|_k2_read_secret|_k2_read_hidden|--token\b"),
     ("prompt", r"\bread -r? ?-p\b|\bread -p\b|</dev/tty"),
     ("confirm", r"confirm"),
     ("poll", r"\bsleep \d"),

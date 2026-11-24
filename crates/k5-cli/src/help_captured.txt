@@ -678,6 +678,8 @@ C	app hydra off -h	26	27
 C	app hydra on --help	26	27
 C	app hydra on -h	26	27
 F	app identity help	46
+F	app identity issuer --help	46
+F	app identity issuer -h	46
 F	app identity issuers --help	46
 F	app identity issuers -h	46
 F	app identity unlink --help	46

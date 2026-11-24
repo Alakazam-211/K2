@@ -48,14 +48,17 @@ pub const VIA_TCP_HEADER: &str = "x-k2-via-tcp";
 pub fn workspace_and_fence(ws: &str) -> (Option<PathBuf>, bool) {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let row: Option<(String, String)> = conn
-        .query_row("SELECT path, isolation_mode FROM projects WHERE id = ?1", [ws], |r| Ok((r.get(0)?, r.get(1)?)))
-        .ok();
+    let row = conn.query_row("SELECT path, isolation_mode FROM projects WHERE id = ?1", [ws], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
     match row {
         // M2 review L2: anything but `off` is fenced (a later mode name is never
         // read as no fence).
-        Some((path, mode)) => (Some(PathBuf::from(path)), mode.trim() != "off"),
-        None => (None, false),
+        Ok((path, mode)) => (Some(PathBuf::from(path)), mode.trim() != "off"),
+        Err(rusqlite::Error::QueryReturnedNoRows) => (None, false),
+        // A database error never reads as "no fence".
+        Err(e) => {
+            log_debug!("[agents] WARN workspace {ws}: its fence can't be read ({e}); treated as fenced");
+            (None, true)
+        }
     }
 }
 
@@ -358,8 +361,46 @@ fn scope_placement_inner(state: &mut k2_core::agent_scope::BoxState) -> Result<(
     layout_ready(&v)?;
     install_scope_caller();
     log_debug!("[agents] identity on: the root helper places each agent session, job run and service in its own scope");
-    state.old_layout = adopt_survivors(&v);
+    // The box-run adopt rows (2026-11-24): this runs before the main
+    // database opens, and an agent's fence is read from it. So the
+    // survivors are recognised in the old layout until the database is up,
+    // and adopted then ([`adopt_after_db`]), each by the fence it really has.
+    state.old_layout = running_in_old_layout(&v);
+    *PENDING_ADOPT.lock().unwrap_or_else(|e| e.into_inner()) = Some(v);
     Ok(())
+}
+
+/// The layout whose survivors wait for [`adopt_after_db`].
+static PENDING_ADOPT: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/// Boot, right after the main database opens: adopt the survivors the
+/// layout listed at [`register_root_placement`]; the agents left in the old
+/// layout (and why) replace the boot list.
+pub fn adopt_after_db() {
+    let Some(v) = PENDING_ADOPT.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+    let left = adopt_survivors(&v);
+    if let Some(mut st) = k2_core::agent_scope::box_state() {
+        st.old_layout = left;
+        k2_core::agent_scope::set_box_state(st);
+    }
+}
+
+/// An agent's fence for adoption: read from the database, and fenced when
+/// it can't be read (a fenced slice only narrows the port rules; reading
+/// an agent as open by mistake would widen them).
+fn fence_for_adopt(ws: &str) -> bool {
+    let Some(db) = k2_core::db::try_shared() else {
+        log_debug!("[agents] WARN adopt {ws}: the database isn't open; adopted as fenced");
+        return true;
+    };
+    let conn = db.lock();
+    match conn.query_row("SELECT isolation_mode FROM projects WHERE id = ?1", [ws], |r| r.get::<_, String>(0)) {
+        Ok(mode) => mode.trim() != "off",
+        Err(e) => {
+            log_debug!("[agents] WARN adopt {ws}: its fence can't be read ({e}); adopted as fenced");
+            true
+        }
+    }
 }
 
 /// Why scopes are off when the owner turned them off.
@@ -459,7 +500,7 @@ fn adopt_survivors(layout: &serde_json::Value) -> Vec<(String, String)> {
             left.push((ws.to_string(), format!("its old cgroup is not root's (owner uid {})", s["owner"])));
             continue;
         }
-        let fenced = workspace_and_fence(ws).1;
+        let fenced = fence_for_adopt(ws);
         let plan = match k2_core::agent_scope::ScopePlan::new(fenced) {
             Ok(p) => p,
             Err(e) => {
@@ -1003,6 +1044,65 @@ pub fn describe(p: &PeerAgent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The box-run adopt rows (2026-11-24): boot adopted survivors before
+    /// the main database opened, reading each agent's fence from it. On a
+    /// test build `db::shared()` fell back to the in-memory test DB (a fenced
+    /// agent was adopted into the open slice); on a release build it panics
+    /// ("db::init_database must run before db::shared()"), at every start
+    /// while the survivors live. The boot order, as written: the scope
+    /// placement reads no agent's fence and opens no database; adoption runs
+    /// after `init_home_database`.
+    #[test]
+    fn boot_reads_no_agent_fence_before_the_database_opens() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let main = std::fs::read_to_string(src.join("daemon_main.rs")).unwrap();
+        let at = |needle: &str| main.find(needle).unwrap_or_else(|| panic!("daemon_main.rs has no {needle}"));
+        let placement = at("crate::agent_isolation::register_root_placement();");
+        let db = at("k2_core::db::init_home_database(");
+        assert!(placement < db, "the placement is registered before the database opens (as today)");
+        let adopt = main.find("crate::agent_isolation::adopt_after_db();").expect("boot adopts the survivors (adopt_after_db) once the database is open");
+        assert!(adopt > db, "adoption runs after init_home_database, not before");
+        let me = std::fs::read_to_string(src.join("agent_isolation.rs")).unwrap();
+        let body = |name: &str| -> String {
+            let i = me.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("no fn {name}"));
+            let end = me[i..].find("\n}\n").map(|e| i + e).expect("end of fn");
+            me[i..end].to_string()
+        };
+        for f in ["register_root_placement", "register_scope_placement", "scope_placement_inner"] {
+            let b = body(f);
+            for reads in ["adopt_survivors(", "workspace_and_fence(", "fence_for_adopt(", "db::shared(", "db::try_shared("] {
+                assert!(!b.contains(reads), "{f} runs before the database opens and must not call {reads}");
+            }
+        }
+    }
+
+    /// A fence that can't be read is never "no fence": a database error
+    /// reads as fenced.
+    #[test]
+    fn an_unreadable_fence_counts_as_fenced() {
+        let _db = k2_core::db::scoped_for_test();
+        let (off, on) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (id, mode) in [(&off, "off"), (&on, "fence")] {
+                conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)", rusqlite::params![id, format!("adopt-{mode}"), format!("/fixture/{id}")]).unwrap();
+                conn.execute("UPDATE projects SET isolation_mode = ?1 WHERE id = ?2", rusqlite::params![mode, id]).unwrap();
+            }
+        }
+        assert!(!workspace_and_fence(&off).1 && workspace_and_fence(&on).1);
+        assert_eq!(workspace_and_fence("no-such-workspace"), (None, false), "an unknown workspace has no fence to read");
+        assert!(!fence_for_adopt(&off) && fence_for_adopt(&on), "adopt reads the fence the agent has");
+        assert!(fence_for_adopt("no-such-workspace"), "adopt: a workspace it can't find is fenced (the narrower slice)");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute_batch("ALTER TABLE projects RENAME TO projects_away").unwrap();
+        }
+        assert_eq!(workspace_and_fence(&off), (None, true), "a database error reads as fenced");
+        assert!(fence_for_adopt(&on) && fence_for_adopt(&off), "adopt: a database error is fenced");
+    }
 
     /// B4 fix review N4 (test 3): an adopt that left processes behind is
     /// listed for `/boot-status`; a whole one isn't; layout_ready needs P1

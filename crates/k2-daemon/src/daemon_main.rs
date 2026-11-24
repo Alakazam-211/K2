@@ -722,6 +722,10 @@ async fn async_main() {
             std::process::exit(2);
         }
     }
+    // B4: agents whose sessions lived through the restart in root-owned
+    // old cgroups get their scopes now, each by its fence (read from the
+    // database just opened).
+    crate::agent_isolation::adopt_after_db();
     // 0.46.11: the Get started list and Kessel at first run start on for a
     // brand-new server only (no settings file and migration 0290's "not in
     // use" rule; see `app_settings::apply_new_server_defaults`). Right after

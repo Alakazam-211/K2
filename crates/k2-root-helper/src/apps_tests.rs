@@ -1433,6 +1433,90 @@ fn proc_entry(t: &T, pid: u32, name: &str, uid: u32) {
     );
 }
 
+fn proc_cgroup(t: &T, pid: u32, path: &str) {
+    write(t, &format!("/proc/{pid}/cgroup"), &format!("0::{path}\n"));
+}
+
+/// The k2app user manager's own cgroup root (APP_UID's).
+const MGR: &str = "/user.slice/user-996.slice/user@996.service";
+
+#[test]
+fn only_an_app_units_cgroup_counts_as_an_app() {
+    let app = format!("{MGR}/k2apps.slice/k2apps-shop.slice/libpod-0123.scope/container");
+    assert!(crate::apps::in_app_unit(&format!("0::{app}\n"), APP_UID));
+    assert!(crate::apps::in_app_unit(&format!("0::{MGR}/k2apps.slice/k2apps-shop.slice/libpod-conmon-0123.scope\n"), APP_UID));
+    // cgroup v1 hybrid: any hierarchy's line.
+    assert!(crate::apps::in_app_unit(&format!("12:pids:{app}\n1:name=systemd:/\n"), APP_UID));
+    for k2s_own in [
+        format!("{MGR}/user.slice/podman-pause-1a2b3c4d.scope"),
+        format!("{MGR}/app.slice/k2-app-engine.service"),
+        format!("{MGR}/app.slice/dbus.service"),
+        format!("{MGR}/session.slice/dbus-broker.service"),
+        format!("{MGR}/init.scope"),
+        // The bare Apps slice is no App's own unit.
+        format!("{MGR}/k2apps.slice"),
+        // Another user's manager, and a look-alike name.
+        "/user.slice/user-1001.slice/user@1001.service/k2apps.slice/k2apps-shop.slice".to_string(),
+        format!("{MGR}/app.slice/k2apps-shop.slice"),
+        "/system.slice/k2-daemon.service".to_string(),
+    ] {
+        assert!(!crate::apps::in_app_unit(&format!("0::{k2s_own}\n"), APP_UID), "{k2s_own}");
+    }
+    assert!(!crate::apps::in_app_unit("", APP_UID));
+}
+
+/// 0.46.18 field report (Ubuntu 24.04): with every App gone, unprep still
+/// refused (apps_running) on K2's own k2app processes. Now only a process
+/// in an App unit counts, whatever (sub)uid the container runs it as.
+#[test]
+fn unprep_ignores_k2s_own_processes_and_counts_app_units() {
+    let t = box_root();
+    with_app_user(&t);
+    write(&t, "/proc/meminfo", "MemTotal:        8000000 kB\n");
+    write(&t, RESERVED_PORTS_PROC, "\n");
+    write(&t, "/proc/self/mountinfo", "");
+    bin(&t, CRUN);
+    rule(&t, SYSTEMCTL, "is-active", 3, "");
+    for args in [
+        &["apps", "delegate", "on"][..],
+        &["apps", "reserve-ports", "on"],
+        &["apps", "process-unit", "on"],
+        &["apps", "runtime", "crun"],
+        &["apps", "cores-slice", "768"],
+        &["apps", "budget", "4096", "4096"],
+    ] {
+        ok(&t.call(args));
+    }
+    // An App: its node runs as a container user (a subordinate uid), its
+    // conmon as k2app; both in the App's unit.
+    proc_entry(&t, 5001, "node", 100_999);
+    proc_cgroup(&t, 5001, &format!("{MGR}/k2apps.slice/k2apps-shop.slice/libpod-ab.scope/container"));
+    proc_entry(&t, 5002, "conmon", APP_UID);
+    proc_cgroup(&t, 5002, &format!("{MGR}/k2apps.slice/k2apps-shop.slice/libpod-conmon-ab.scope"));
+    // K2's own: the user manager, the pause scope, the engine, D-Bus.
+    for (pid, name, cg) in [
+        (5100, "systemd", format!("{MGR}/init.scope")),
+        (5101, "catatonit", format!("{MGR}/user.slice/podman-pause-1a2b.scope")),
+        (5102, "k2-app-engine", format!("{MGR}/app.slice/k2-app-engine.service")),
+        (5103, "podman", format!("{MGR}/app.slice/k2-app-engine.service")),
+        (5104, "dbus-daemon", format!("{MGR}/app.slice/dbus.service")),
+        (5105, "dbus-broker-lau", format!("{MGR}/session.slice/dbus-broker.service")),
+    ] {
+        proc_entry(&t, pid, name, APP_UID);
+        proc_cgroup(&t, pid, &cg);
+    }
+    let o = t.call(&["apps", "unprep"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("refused: 2 k2app processes are running"), "{}", o.stderr);
+
+    // The App stops: only K2's own are left, and unprep goes ahead.
+    std::fs::remove_dir_all(t.p("/proc/5001")).unwrap();
+    std::fs::remove_dir_all(t.p("/proc/5002")).unwrap();
+    let o = t.call(&["apps", "unprep"]);
+    ok(&o);
+    assert!(!t.p("/etc/systemd/system/user@996.service.d/k2-delegate.conf").exists());
+}
+
 #[test]
 fn unprep_refuses_while_apps_run_then_undoes_config_but_keeps_the_user() {
     let t = box_root();

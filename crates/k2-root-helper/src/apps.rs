@@ -2056,8 +2056,42 @@ pub fn budget(ctx: &Ctx, b: Option<(u64, u64)>) -> HResult<J> {
 
 // ── unprep ──────────────────────────────────────────────────────────────
 
-/// Processes of `uid` other than its user manager and Podman's pause
-/// process (an App, a shell, anything else).
+/// Is a process with this `/proc/<pid>/cgroup` text inside a real App unit:
+/// an App's own slice in k2app's user manager
+/// (`…/user@<uid>.service/k2apps.slice/k2apps-<app>.slice/…`, where its
+/// container, conmon and pasta run, [`app_cgroups`])? K2's own k2app
+/// processes live elsewhere in that manager (the engine's unit, Podman's
+/// pause scope, k2app's D-Bus) and are not Apps.
+pub(crate) fn in_app_unit(cgroup: &str, uid: u32) -> bool {
+    let manager = format!("user@{uid}.service");
+    cgroup.lines().any(|l| {
+        let path = l.splitn(3, ':').nth(2).unwrap_or("");
+        let mut parts = path.split('/').skip_while(|c| *c != manager);
+        parts.next().is_some()
+            && parts.next() == Some(APPS_SLICE)
+            && parts.next().is_some_and(|c| c.starts_with("k2apps-") && c.ends_with(".slice"))
+    })
+}
+
+/// k2app's names that are K2's own, not an App (only for a process whose
+/// cgroup can't be read).
+const OWN_NAMES: &[&str] = &[
+    "systemd",
+    "(sd-pam)",
+    "catatonit",
+    "podman pause",
+    "podman",
+    "k2-app-engine",
+    "dbus-daemon",
+    "dbus-broker",
+    "dbus-broker-lau",
+];
+
+/// Running App processes: those in an App unit's cgroup ([`in_app_unit`]),
+/// whatever (sub)uid the container runs them as. 0.46.18 field report:
+/// counting every k2app process but a few names refused `unprep` with no
+/// App left (Podman's pause scope, k2-app-engine, k2app's D-Bus). A k2app
+/// process whose cgroup can't be read counts unless its name is K2's own.
 fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
     let Ok(rd) = std::fs::read_dir(ctx.p("/proc")) else {
         return 0;
@@ -2074,23 +2108,15 @@ fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
         let Some(status) = kread(ctx, &format!("/proc/{pid}/status")) else {
             continue;
         };
-        let ruid = status
-            .lines()
-            .find_map(|l| l.strip_prefix("Uid:"))
-            .and_then(|r| r.split_whitespace().next())
-            .and_then(|r| r.parse::<u32>().ok());
-        if ruid != Some(uid) {
-            continue;
-        }
-        let comm = status
-            .lines()
-            .find_map(|l| l.strip_prefix("Name:"))
-            .map(str::trim)
-            .unwrap_or("");
-        if !matches!(
-            comm,
-            "systemd" | "(sd-pam)" | "catatonit" | "podman pause" | "podman" | "k2-app-engine"
-        ) {
+        let app = match kread(ctx, &format!("/proc/{pid}/cgroup")) {
+            Some(cg) => in_app_unit(&cg, uid),
+            None => {
+                let field = |k: &str| status.lines().find_map(|l| l.strip_prefix(k)).map(str::trim).unwrap_or("").to_string();
+                field("Uid:").split_whitespace().next().and_then(|r| r.parse::<u32>().ok()) == Some(uid)
+                    && !OWN_NAMES.contains(&field("Name:").as_str())
+            }
+        };
+        if app {
             n += 1;
         }
     }

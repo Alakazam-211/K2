@@ -595,9 +595,11 @@ impl Answer {
     }
 }
 
-/// The head of an answer; never a header value with a line break.
+/// The head of an answer; never a header value with a line break. It
+/// carries the daemon's framing headers, as the other doors' answers do
+/// (`http::write_answer`).
 pub fn head_text(status: u16, headers: &[(String, String)], body_len: u64) -> String {
-    let mut out = format!("HTTP/1.1 {status} {}\r\n", reason(status));
+    let mut out = format!("HTTP/1.1 {status} {}\r\n{}", reason(status), k2_core::frame_policy::CONNECT_HEADER_LINES);
     for (k, v) in headers {
         if !k.contains(['\r', '\n']) && !v.contains(['\r', '\n']) {
             out.push_str(&format!("{k}: {v}\r\n"));

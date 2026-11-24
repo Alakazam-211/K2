@@ -1463,7 +1463,7 @@ mod tests {
         // The link now resolves elsewhere: refused until approved again.
         fs::remove_file(ws.join(".k2/wiki")).unwrap();
         symlink(&other, ws.join(".k2/wiki")).unwrap();
-        let err = write_note_as(&ws, "K2.md", "k", NoteWriter::ApiKey).expect_err("changed target");
+        let err = write_note_as(&ws, "Again.md", "k", NoteWriter::ApiKey).expect_err("changed target");
         assert!(err.contains("the approved location is"), "{err}");
         assert!(empty(&other), "nothing written in the changed location");
         assert_eq!(location::state(&ws).unwrap().status, "changed");

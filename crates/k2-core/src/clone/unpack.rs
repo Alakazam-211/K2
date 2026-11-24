@@ -254,8 +254,9 @@ fn fill_claimed(
                 }
                 None => {
                     crate::log_debug!(
-                        "[clone/unpack] skipped {}: not a provider session path this K2 places",
-                        archive_path.display()
+                        "[clone/unpack] skipped {}: not a provider session path this {} places",
+                        archive_path.display(),
+                        crate::brand::PRODUCT_NAME
                     );
                 }
             }

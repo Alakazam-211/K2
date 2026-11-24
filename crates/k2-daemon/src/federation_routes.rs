@@ -478,6 +478,27 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             format!("duplicate message (already delivered): {}", ingested.msg_uuid),
         );
     }
+    // 0.46.18: while this msg_uuid is being delivered, a repeat of it (a
+    // sender that gave up waiting and tried again) is not delivered a
+    // second time: 503 `in_flight`, which every sender retries later and
+    // then meets the seen record above. Held to the end of this request.
+    let _in_flight = match crate::federation_retry::InFlight::claim(
+        &ingested.peer_fingerprint,
+        &ingested.msg_uuid,
+    ) {
+        Some(claim) => claim,
+        None => {
+            return CliResponse {
+                status: "503 Service Unavailable",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "error": format!("message is being delivered: {}", ingested.msg_uuid),
+                    "code": "in_flight",
+                })
+                .to_string(),
+            };
+        }
+    };
 
     // ── STAGE 2: DELIVERY (the gate has passed) ──
     let signal = ingested.signal;
@@ -1177,7 +1198,16 @@ pub fn handle_send_route(body: &[u8]) -> CliResponse {
 /// via [`crate::caller_workspace::with_request_principal`], `from_workspace`
 /// is forced from `principal.workspace_uuid` (body claim ignored). Owner path
 /// (no principal) keeps optional body `from_workspace`.
+///
+/// 0.46.18: the POST is retried briefly (see [`post_with_retries`]); the
+/// whole request stays within [`crate::federation_retry::SEND_BUDGET`].
 pub fn handle_send(body: &[u8]) -> CliResponse {
+    handle_send_until(body, std::time::Instant::now() + crate::federation_retry::SEND_BUDGET)
+}
+
+/// [`handle_send`], its dial tries bounded by `deadline` (a caller that
+/// looked up the roster first passes what is left of its own budget).
+pub(crate) fn handle_send_until(body: &[u8], deadline: std::time::Instant) -> CliResponse {
     #[derive(serde::Deserialize)]
     struct Req {
         to: String,
@@ -1434,8 +1464,9 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         );
     }
 
-    // Dial the peer's E2E listener over the Connect tunnel + POST the envelope.
-    match post_inbound(&dial_base, &bytes) {
+    // Dial the peer's E2E listener over the Connect tunnel + POST the envelope
+    // (0.46.18: retried briefly; a retry is resealed with the same msg_uuid).
+    match post_with_retries(&dial_base, &bytes, &key, &peer.fingerprint, deadline) {
         Ok(resp_body) => {
             // The transport succeeded and the message left this daemon, so the
             // queued copy is consumed either way (a DECLINE is a terminal
@@ -1499,18 +1530,179 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         // Not delivered: the message waits in this server's outbox and the
         // drain re-dials it (the next sweep, about 30 s). `delivered:false`
         // + `reason` let a caller tell this apart from "sent" (0.46.11).
-        Err(e) => CliResponse::ok_json(
-            serde_json::json!({
-                "status": "queued",
-                "delivered": false,
-                "reason": e,
-                "msg_uuid": msg_uuid,
-                "peer": peer.fingerprint,
-                "hint": format!("delivery deferred to retry: {e}")
-            })
-            .to_string(),
-        ),
+        // 0.46.18: `reason` names the step and the attempts too.
+        Err(failed) => {
+            let e = format!(
+                "the send step got no delivery after {} (last error: {})",
+                crate::federation_retry::attempts_text(failed.attempts),
+                one_line_text(&failed.last)
+            );
+            CliResponse::ok_json(
+                serde_json::json!({
+                    "status": "queued",
+                    "delivered": false,
+                    "reason": e,
+                    "step": "send",
+                    "attempts": failed.attempts,
+                    "msg_uuid": msg_uuid,
+                    "peer": peer.fingerprint,
+                    "hint": format!("delivery deferred to retry: {e}")
+                })
+                .to_string(),
+            )
+        }
     }
+}
+
+/// POST a sealed envelope to the peer's `/cli/federation/inbound`, with the
+/// brief retries of [`crate::federation_retry::run`] until `deadline`
+/// (0.46.18). `Ok` is the 2xx body (or `{}` for the peer's 409 "duplicate
+/// message": it already has this msg_uuid, which is a delivery).
+///
+/// Retried every time: a request that never left (connect, DNS, TLS), 429,
+/// and 503 (busy, or the peer is still delivering this very message). A
+/// request that may have reached the peer (timed out or dropped after it
+/// was sent; another 5xx) is retried only when the peer's roster said it
+/// drops a repeat while one is in flight
+/// ([`crate::federation_retry::peer_dedupes`]); otherwise it is left to
+/// the outbox drain. A 4xx is never retried. Every retry is resealed (fresh
+/// nonce, the SAME msg_uuid), so the receiver's dedupe sees one message.
+pub(crate) fn post_with_retries(
+    base: &str,
+    first_bytes: &[u8],
+    key: &rcgen::KeyPair,
+    peer_fp: &str,
+    deadline: std::time::Instant,
+) -> Result<String, crate::federation_retry::Failed> {
+    use crate::federation_retry::{run, Step};
+    let url = format!("{base}/cli/federation/inbound");
+    let mut builder = reqwest::blocking::Client::builder()
+        // Never follow a redirect: a peer must not steer us to another host.
+        .redirect(reqwest::redirect::Policy::none());
+    // Loopback (127.0.0.1, ::1, localhost) and plain http never use a
+    // proxy; HTTPS to a remote K2 may use the box's proxy settings.
+    if k2_core::proxy_rule::direct(&url) {
+        builder = builder.no_proxy();
+    }
+    let client = match builder.build() {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(crate::federation_retry::Failed {
+                attempts: 0,
+                last: format!("build http client: {e}"),
+                refused: true,
+            })
+        }
+    };
+    let left_may_retry = crate::federation_retry::peer_dedupes(peer_fp);
+    run("message send", deadline, |attempt, cap| {
+        // The first try sends the bytes as sealed (and queued); a retry
+        // reseals them: the receiver burned the first nonce at its gate.
+        let bytes = if attempt == 1 {
+            first_bytes.to_vec()
+        } else {
+            match federation::reseal(first_bytes, key) {
+                Ok(b) => b,
+                Err(e) => return Step::Stop(format!("reseal: {e}")),
+            }
+        };
+        let sent = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .timeout(cap)
+            .body(bytes)
+            .send();
+        let resp = match sent {
+            Ok(r) => r,
+            Err(e) => {
+                let text = format!("POST {url}: {}", error_chain(&e));
+                // Never left: always safe to send again.
+                if e.is_connect() || left_may_retry {
+                    return Step::Retry(text);
+                }
+                return Step::Stop(text);
+            }
+        };
+        let status = resp.status().as_u16();
+        if resp.status().is_success() {
+            // An unreadable body is not a delivery failure: the transport
+            // succeeded, so fall back to empty (as post_inbound does).
+            return Step::Done(resp.text().unwrap_or_default());
+        }
+        let body = resp.text().unwrap_or_default();
+        if status == 409 && body.contains("duplicate message") {
+            return Step::Done("{}".to_string());
+        }
+        let text = format!("peer rejected inbound: HTTP {status}");
+        if status == 429 || status == 503 || (left_may_retry && (500..600).contains(&status)) {
+            Step::Retry(text)
+        } else {
+            Step::Stop(text)
+        }
+    })
+}
+
+/// The part of a tray send's budget the roster lookup may use; the send
+/// gets the rest of [`crate::federation_retry::SEND_BUDGET`].
+const TRAY_ROSTER_SHARE: std::time::Duration = std::time::Duration::from_secs(18);
+
+/// "a.md" / "2 files: a.md, b.pdf" for a tray package's parts.
+fn tray_parts(spec: &federation::TraySpec) -> String {
+    let names: Vec<String> = spec.files.iter().map(|f| one_line_text(&f.name)).collect();
+    match names.len() {
+        0 => "the note".to_string(),
+        1 => names[0].clone(),
+        n => format!("{n} files: {}", names.join(", ")),
+    }
+}
+
+/// A tray send whose roster lookup failed: the same status, its `error`
+/// one line naming the target and every part of the package (none of them
+/// was delivered).
+fn tray_not_delivered(
+    agent: &str,
+    host: &str,
+    spec: &federation::TraySpec,
+    roster_resp: CliResponse,
+) -> CliResponse {
+    let mut v: serde_json::Value =
+        serde_json::from_str(&roster_resp.body).unwrap_or(serde_json::Value::Null);
+    let why = match v.get("error") {
+        Some(serde_json::Value::String(e)) => e.clone(),
+        _ => return roster_resp,
+    };
+    v["error"] = serde_json::json!(format!(
+        "not delivered to {agent}::{host} ({}): {why}",
+        tray_parts(spec)
+    ));
+    CliResponse { body: v.to_string(), ..roster_resp }
+}
+
+/// A tray send left queued in the outbox: a `hint` that says plainly which
+/// parts have not landed yet and that the outbox retries them.
+fn tray_queued_hint(
+    agent: &str,
+    host: &str,
+    spec: &federation::TraySpec,
+    resp: CliResponse,
+) -> CliResponse {
+    let mut v: serde_json::Value = match serde_json::from_str(&resp.body) {
+        Ok(v) => v,
+        Err(_) => return resp,
+    };
+    if v.get("status").and_then(|s| s.as_str()) != Some("queued") {
+        return resp;
+    }
+    let why = v
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .map(|r| format!(": {r}"))
+        .unwrap_or_default();
+    v["hint"] = serde_json::json!(format!(
+        "{} for {agent}::{host} is not delivered yet{why}. K2 retries it from this server's outbox (next try in about 30 s); don't send it again.",
+        tray_parts(spec)
+    ));
+    CliResponse { body: v.to_string(), ..resp }
 }
 
 /// `k2 msg <agent>::<host> --inbox-wake` — resolve the user form against
@@ -1561,9 +1753,12 @@ pub fn handle_send_user_tray(
             ),
         );
     }
-    let roster_resp = handle_peer_roster(&peer.fingerprint);
+    // 0.46.18: the roster lookup and the send share one budget, under the
+    // CLI's request limit; the roster may take at most TRAY_ROSTER_SHARE.
+    let started = std::time::Instant::now();
+    let roster_resp = handle_peer_roster_until(&peer.fingerprint, started + TRAY_ROSTER_SHARE);
     if !roster_resp.status.starts_with("200") {
-        return roster_resp;
+        return tray_not_delivered(agent, host, &spec, roster_resp);
     }
     let wsid = match workspace_id_from_roster_body(&roster_resp.body, agent) {
         Ok(id) => id,
@@ -1572,7 +1767,7 @@ pub fn handle_send_user_tray(
     let to = format!("{}::{}::{}", peer.fingerprint, wsid, agent);
     let mut body = serde_json::json!({
         "to": to,
-        "tray": spec,
+        "tray": &spec,
     });
     if let Some(obj) = body.as_object_mut() {
         if let Some(ws) = from_workspace.filter(|s| !s.trim().is_empty()) {
@@ -1582,7 +1777,11 @@ pub fn handle_send_user_tray(
             obj.insert(crate::send_once::PARAM.into(), serde_json::json!(k));
         }
     }
-    let resp = handle_send(&body.to_string().into_bytes());
+    let resp = handle_send_until(
+        &body.to_string().into_bytes(),
+        started + crate::federation_retry::SEND_BUDGET,
+    );
+    let resp = tray_queued_hint(agent, host, &spec, resp);
     // A7 S5: typed by another name of that workspace → tell the caller
     // the reply address (the CLI prints it as a `note:` line).
     let handle = handle_for_workspace_in_roster_body(&roster_resp.body, &wsid);
@@ -1967,8 +2166,17 @@ pub fn handle_roster(fp: Option<&str>, ts: Option<&str>, sig: Option<&str>) -> C
     match roster::verify_roster_request(&store, fp, ts, sig, roster::DEFAULT_ROSTER_SKEW_SECS) {
         Ok(_peer) => {
             let projection = roster::build_local_roster();
-            match serde_json::to_string(&projection) {
-                Ok(body) => CliResponse::ok_json(body),
+            match serde_json::to_value(&projection) {
+                Ok(mut body) => {
+                    // 0.46.18: tell the peer this server drops a repeat of a
+                    // message it is still delivering (so a sender may resend
+                    // a POST that timed out; see federation_retry).
+                    if let Some(obj) = body.as_object_mut() {
+                        let (k, v) = crate::federation_retry::IN_FLIGHT_DEDUPE;
+                        obj.insert(k.into(), serde_json::json!(v));
+                    }
+                    CliResponse::ok_json(body.to_string())
+                }
                 Err(e) => json_err("500 Internal Server Error", format!("serialize roster: {e}")),
             }
         }
@@ -2075,7 +2283,21 @@ pub fn handle_outbox() -> CliResponse {
 /// peer's `/cli/federation/roster` (signing the challenge with our own key as
 /// that peer's pinned counterpart) and returns the peer's agent projection so
 /// the renderer can populate the dropdown. Blocking (network I/O).
+///
+/// 0.46.18: a peer that doesn't answer (or answers 429 / 5xx) is asked again
+/// (see [`crate::federation_retry`]), within
+/// [`crate::federation_retry::ROSTER_BUDGET`]. A final failure is a 502 whose
+/// `error` is one line: the step, the attempts, the last error and what to
+/// do (nothing was delivered; send again).
 pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
+    handle_peer_roster_until(
+        peer_selector,
+        std::time::Instant::now() + crate::federation_retry::ROSTER_BUDGET,
+    )
+}
+
+/// [`handle_peer_roster`], its tries bounded by `deadline`.
+pub(crate) fn handle_peer_roster_until(peer_selector: &str, deadline: std::time::Instant) -> CliResponse {
     if peer_selector.is_empty() {
         return CliResponse::bad_request("peer selector required");
     }
@@ -2105,20 +2327,15 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
         Ok(k) => k,
         Err(e) => return json_err("500 Internal Server Error", format!("load keypair: {e}")),
     };
-    let ts = chrono::Utc::now().timestamp();
-    let (fp, sig) = match roster::sign_roster_request(&key, ts) {
-        Ok(v) => v,
-        Err(e) => return json_err("500 Internal Server Error", format!("sign roster request: {e}")),
-    };
-
     let roster_base = match gated_peer_base_url(&peer) {
         Ok(b) => b,
         Err(e) => return json_err("403 Forbidden", e),
     };
-    match get_peer_roster(&roster_base, &fp, ts, &sig, std::time::Duration::from_secs(20)) {
+    match fetch_roster_with_retries(&key, &roster_base, deadline) {
         Ok(body) => {
             let mut parsed: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+            crate::federation_retry::note_roster(&peer.fingerprint, &parsed);
             // A7 S2: heal + bind this peer's rows (scoped to the peer, CA6).
             let _ = heal_rows_from_roster(&peer, &parsed);
             // 0.46.1: A to Z here, at the local seam, so a peer on an older
@@ -2128,8 +2345,68 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
                 serde_json::json!({ "peer": peer.fingerprint, "roster": parsed }).to_string(),
             )
         }
-        Err(e) => json_err("502 Bad Gateway", format!("fetch peer roster: {e}")),
+        Err(failed) => CliResponse {
+            status: "502 Bad Gateway",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": roster_failed_line(&failed),
+                "step": "roster",
+                "attempts": failed.attempts,
+                "lastError": failed.last,
+            })
+            .to_string(),
+        },
     }
+}
+
+/// The one line a failed roster lookup ends with (0.46.18): the step, the
+/// attempts, the last error, and what to do. No line breaks or tabs (the
+/// CLIs print it as one line).
+pub(crate) fn roster_failed_line(failed: &crate::federation_retry::Failed) -> String {
+    let last = one_line_text(&failed.last);
+    if failed.refused {
+        format!(
+            "the roster step failed ({}, not retried: {last}). Nothing was delivered.",
+            crate::federation_retry::attempts_text(failed.attempts)
+        )
+    } else {
+        format!(
+            "the roster step failed after {} (last error: {last}). Nothing was delivered; send again.",
+            crate::federation_retry::attempts_text(failed.attempts)
+        )
+    }
+}
+
+/// `text` with every run of whitespace (line breaks and tabs included) as
+/// one space.
+fn one_line_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// GET a peer's roster at `base` with fresh signed challenges, retrying
+/// what can pass (no answer, 429, 5xx) until `deadline`
+/// ([`crate::federation_retry::run`]). Never a 4xx again.
+pub(crate) fn fetch_roster_with_retries(
+    key: &rcgen::KeyPair,
+    base: &str,
+    deadline: std::time::Instant,
+) -> Result<String, crate::federation_retry::Failed> {
+    use crate::federation_retry::{run, status_can_pass, Step};
+    run("roster fetch", deadline, |_attempt, cap| {
+        let ts = chrono::Utc::now().timestamp();
+        let (fp, sig) = match roster::sign_roster_request(key, ts) {
+            Ok(v) => v,
+            Err(e) => return Step::Stop(format!("sign roster request: {e}")),
+        };
+        match get_peer_roster_once(base, &fp, ts, &sig, cap, None) {
+            Ok(body) => Step::Done(body),
+            Err(e @ RosterFetchError::Transport { .. }) => Step::Retry(e.to_string()),
+            Err(RosterFetchError::Status(code)) if status_can_pass(code) => {
+                Step::Retry(RosterFetchError::Status(code).to_string())
+            }
+            Err(e) => Step::Stop(e.to_string()),
+        }
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2191,7 +2468,10 @@ fn fetch_peer_roster(
     let (fp, sig) = roster::sign_roster_request(&key, ts)?;
     let base = gated_peer_base_url(peer)?;
     let body = get_peer_roster(&base, &fp, ts, &sig, timeout)?;
-    serde_json::from_str(&body).map_err(|e| format!("parse peer roster: {e}"))
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("parse peer roster: {e}"))?;
+    crate::federation_retry::note_roster(&peer.fingerprint, &parsed);
+    Ok(parsed)
 }
 
 /// A peer's roster entries with only handles in them: an entry whose
@@ -2768,6 +3048,19 @@ pub(crate) fn get_peer_roster_typed(
     sig: &str,
     timeout: std::time::Duration,
 ) -> Result<String, RosterFetchError> {
+    get_peer_roster_once(base, fp, ts, sig, timeout, Some(DialRetry::AnyTransport))
+}
+
+/// One roster GET; `quick_retry` adds [`send_with_retry`]'s quick redials
+/// (none when the caller runs its own tries).
+fn get_peer_roster_once(
+    base: &str,
+    fp: &str,
+    ts: i64,
+    sig: &str,
+    timeout: std::time::Duration,
+    quick_retry: Option<DialRetry>,
+) -> Result<String, RosterFetchError> {
     let url = format!("{base}/cli/federation/roster");
     let mut builder = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
@@ -2781,10 +3074,12 @@ pub(crate) fn get_peer_roster_typed(
     }
     let client = builder.build().map_err(|e| RosterFetchError::Body(format!("build http client: {e}")))?;
     let ts_s = ts.to_string();
-    let resp = send_with_retry(DialRetry::AnyTransport, timeout, || {
-        client.get(&url).query(&[("fp", fp), ("ts", ts_s.as_str()), ("sig", sig)])
-    })
-    .map_err(|e| RosterFetchError::Transport {
+    let build = || client.get(&url).query(&[("fp", fp), ("ts", ts_s.as_str()), ("sig", sig)]);
+    let sent = match quick_retry {
+        Some(policy) => send_with_retry(policy, timeout, build),
+        None => build().send(),
+    };
+    let resp = sent.map_err(|e| RosterFetchError::Transport {
         timed_out: e.is_timeout(),
         message: format!("GET {url}: {}", error_chain(&e)),
     })?;
@@ -2832,3 +3127,7 @@ mod tests;
 #[cfg(test)]
 #[path = "federation_reach_tests.rs"]
 mod reach_tests;
+
+#[cfg(test)]
+#[path = "federation_retry_tests.rs"]
+mod retry_tests;

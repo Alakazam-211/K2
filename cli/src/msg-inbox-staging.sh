@@ -454,6 +454,10 @@ if d.get("ok") is False and "id" not in d and "filename" not in d:
 # (the daemon says which), same wording as the live k2 msg note.
 if isinstance(d.get("addressNote"), str) and d["addressNote"]:
     sys.stderr.write("note: %s\n" % d["addressNote"])
+# 0.46.18: a package left in the outbox of this server has not landed yet;
+# the answer alone read like a delivery.
+if d.get("status") == "queued":
+    sys.stderr.write("QUEUED (not delivered yet): %s\n" % (d.get("hint") or "K2 retries it from this server\x27s outbox"))
 # Package primary: if wake failed after package landed, note it but exit 0.
 if os.environ.get("WAKE_MODE") == "true":
     wake = d.get("wake")

@@ -70,6 +70,8 @@ pub mod db_routes;
 pub mod events;
 pub mod federation_address;
 pub mod federation_drain;
+// 0.46.18: brief retries for a federated send's roster and POST dials.
+pub mod federation_retry;
 // Sew S27 grant hook: thin mgmt UDS client + the outbox delivery worker.
 pub mod sew_mgmt;
 pub mod tool_hook_worker;

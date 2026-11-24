@@ -198,6 +198,36 @@ fn a_message_post_is_never_sent_twice_after_it_left() {
 }
 
 #[test]
+fn a_repeat_while_the_first_is_still_delivering_is_503_not_a_second_delivery() {
+    // 0.46.18: a sender whose POST timed out may send the same message
+    // again (resealed, same msg_uuid) while this server is still
+    // delivering the first. The repeat is answered 503 `in_flight`, never
+    // delivered; once the first is done, the seen record answers 409.
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let (ws_id, _path) = receiving_workspace();
+        let key = pin_peer();
+        let sealed = seal_to(&ws_id, &key, "bob", "part 1 of 2");
+        let env: federation::FederationEnvelope = serde_json::from_slice(&sealed).unwrap();
+
+        let first = crate::federation_retry::InFlight::claim(&env.payload.from_fingerprint, &env.payload.msg_uuid)
+            .expect("the first delivery's claim");
+        let repeat = handle_inbound(&sealed);
+        assert_eq!(repeat.status, "503 Service Unavailable", "{}", repeat.body);
+        assert_eq!(body(&repeat)["code"], "in_flight", "{}", repeat.body);
+        drop(first);
+
+        // Delivered now (the switch is off here: a terminal decline, recorded).
+        let done = handle_inbound(&federation::reseal(&sealed, &key).unwrap());
+        assert_eq!(done.status, "200 OK", "{}", done.body);
+        assert_eq!(body(&done)["mode"], "declined", "{}", done.body);
+        let again = handle_inbound(&federation::reseal(&sealed, &key).unwrap());
+        assert_eq!(again.status, "409 Conflict", "{}", again.body);
+        assert!(again.body.contains("duplicate message"), "{}", again.body);
+    });
+}
+
+#[test]
 fn split_remote_sidecar_reads_workspace_slash_handle() {
     assert_eq!(split_remote_sidecar("ada/notes"), ("ada", Some("notes")));
     assert_eq!(split_remote_sidecar(" ada / 2 "), ("ada", Some("2")));

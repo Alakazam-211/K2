@@ -941,6 +941,14 @@ pub fn reader(response: &[u8], wake: bool) -> (bool, Shown) {
             stderr.push_str(&format!("note: {}\n", py::str_of(&Value::Str(t.clone()))));
         }
     }
+    // 0.46.18: a package left in this server's outbox has not landed yet.
+    if matches!(get(pairs, "status"), Some(Value::Str(t)) if t.as_str() == Some("queued")) {
+        let hint = get(pairs, "hint").filter(|v| py::truthy(v)).map_or_else(
+            || concat!(product_name!(), " retries it from this server's outbox").to_string(),
+            py::str_of,
+        );
+        stderr.push_str(&format!("QUEUED (not delivered yet): {hint}\n"));
+    }
     if wake {
         if let Some(Value::Object(w)) = get(pairs, "wake") {
             if matches!(get(w, "success"), Some(Value::Bool(false))) {
@@ -1426,5 +1434,36 @@ mod tests {
             shown.stderr,
             "note: package landed; wake notify failed (wake_failed)\n"
         );
+    }
+
+    // 0.46.18: a package left queued says so, with the daemon's hint (or
+    // the plain line when it sends none); still exit 0 (the outbox has it).
+    #[test]
+    fn a_queued_package_says_it_has_not_landed() {
+        let (err, shown) = reader(
+            br#"{"status":"queued","delivered":false,"hint":"2 files: a.md, b.md for bob::h.k2.dev is not delivered yet"}"#,
+            true,
+        );
+        assert!(!err);
+        assert_eq!(
+            shown.stderr,
+            "QUEUED (not delivered yet): 2 files: a.md, b.md for bob::h.k2.dev is not delivered yet\n"
+        );
+        assert!(matches!(shown.exit, Exit::Ok));
+        let (_, shown) = reader(br#"{"status":"queued"}"#, false);
+        assert_eq!(
+            shown.stderr,
+            concat!("QUEUED (not delivered yet): ", product_name!(), " retries it from this server's outbox\n")
+        );
+        let (_, shown) = reader(br#"{"status":"sent"}"#, false);
+        assert_eq!(shown.stderr, "");
+        // The shell's line, word for word.
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/msg-inbox-staging.sh");
+        let src =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(src.contains(concat!(
+            "if d.get(\"status\") == \"queued\":\n",
+            "    sys.stderr.write(\"QUEUED (not delivered yet): %s\\n\" % (d.get(\"hint\") or \"K2 retries it from this server\\x27s outbox\"))\n"
+        )));
     }
 }

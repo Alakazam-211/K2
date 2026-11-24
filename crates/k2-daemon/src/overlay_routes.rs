@@ -1739,7 +1739,7 @@ pub(crate) fn push_system_notice(addr: &str, doc_id: &str) -> Result<(), String>
         .ok_or_else(|| format!("notice {doc_id} is not on {addr}'s Thread"))?;
     let doc = overlay::store::get_doc(doc_id)?.ok_or_else(|| format!("notice {doc_id} is gone"))?;
     if doc.system_notice.is_none() {
-        return Err(format!("{doc_id} is not a K2 notice"));
+        return Err(format!("{doc_id} is not a {} notice", k2_core::brand::PRODUCT_NAME));
     }
     let text = push_preview_text(k2_core::push::ThreadMsgKind::Text, &doc);
     crate::thread_push::on_system_post(

@@ -205,6 +205,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/PeopleSection.tsx',
   'components/Settings/sections/user-access-load.ts',
   'components/Settings/sections/ProjectsSection.tsx',
+  // Moved out of ProjectsSection.tsx (0.46.18): the workspace's address cap
+  // from the window's own server, as ProjectsSection read it.
+  'components/Settings/sections/MailAddressCapLine.tsx',
   'components/Settings/sections/RoleSkillEditor.tsx',
   'components/Settings/sections/SkinAccessSection.tsx',
   'components/Settings/sections/TunnelUrlsPanel.tsx',

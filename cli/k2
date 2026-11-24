@@ -25424,7 +25424,7 @@ EOF
 
 _study_page_isolation() {
     cat <<'EOF'
-Agent isolation (Linux servers)
+k2 study isolation — agent isolation (Linux servers)
 
 LABELLED BY AGENT (on wherever the server can have it)
   Every terminal, `k2 job` run and published service of an agent runs in

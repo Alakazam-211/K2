@@ -26,8 +26,10 @@ fn the_shell_s_lines() {
                 "cmd_connections no longer has {shell:?}"
             );
         }
+        // 0.46.18: add carries `--note` as `$note_pair` (empty without one).
+        let pair = if matches!(verb, Verb::Add) { "$note_pair" } else { "" };
         let call = format!(
-            r#"            cli_request_post "/cli/connections" "action={w}&target=$(urlencode "$target")" | python3 -c ""#
+            r#"            cli_request_post "/cli/connections" "action={w}&target=$(urlencode "$target"){pair}" | python3 -c ""#
         );
         assert!(
             text.lines().any(|l| l == call),

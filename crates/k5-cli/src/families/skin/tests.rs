@@ -239,7 +239,9 @@ fn the_routes_are_the_shells() {
         &["user", "rooms", "b"],
         &["user", "role", "b", "r"],
         &["user", "unassign", "b"],
-        &["role", "create", "r"],
+        // 0.46.18: a role names its App (or --box-wide).
+        &["role", "create", "r", "--app", "a"],
+        &["role", "create", "r", "--box-wide"],
         &["role", "room", "r", "h"],
         &["role", "paths", "r", "h", "--clear"],
         &["role", "update", "r"],

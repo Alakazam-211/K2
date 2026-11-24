@@ -32,7 +32,7 @@ impl std::fmt::Display for Refused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} is a batch file or a cmd.exe command and an argument has a line break (or NUL): a batch file can't take that safely, so nothing was started",
+            "{} is a batch file or a cmd.exe command, and its path or an argument can't be passed to cmd.exe as written (a line break or NUL in an argument, or a quote in the path), so nothing was started",
             self.program
         )
     }
@@ -162,7 +162,7 @@ pub fn resolve_for(
             // A batch file not on this PATH may still be found by the spawn,
             // which would start cmd.exe with the arguments as they are.
             if is_batch(Path::new(program)) {
-                return through_cmd(format!("\"{program}\""));
+                return through_cmd(bat_head(program).ok_or_else(refused)?);
             }
         }
         return Ok((program.to_string(), args.to_vec()));
@@ -176,20 +176,38 @@ pub fn resolve_for(
     }
     match launcher {
         Launcher::Std => Ok((found.to_string_lossy().into_owned(), args.to_vec())),
-        Launcher::Pty => through_cmd(format!("\"{}\"", found.display())),
+        Launcher::Pty => through_cmd(bat_head(&found.to_string_lossy()).ok_or_else(refused)?),
     }
 }
 
+/// Whether Windows runs `path` as a batch file (through cmd.exe): its
+/// file name ends in `.bat` or `.cmd` once Windows has tidied it, as
+/// CreateProcess and std see it: trailing dots and spaces dropped
+/// (`run.bat.`, `run.cmd `), and a stream suffix too (`run.bat::$DATA`).
+/// Read from the text, so it gives the same answer on any OS.
 fn is_batch(path: &Path) -> bool {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("cmd") | Some("bat") => true,
-        _ => false,
+    let text = path.to_string_lossy();
+    let mut name = text.rsplit(['\\', '/']).next().unwrap_or("");
+    // A drive-relative `C:run.bat`: the drive is no stream separator.
+    let b = name.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && !text.contains(['\\', '/']) {
+        name = &name[2..];
     }
+    // `name:stream:$DATA`: the file is the part before the first colon.
+    let name = name.split(':').next().unwrap_or("");
+    let name = name.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+    name.ends_with(".bat") || name.ends_with(".cmd")
+}
+
+/// A batch file's path as the head of the cmd.exe payload: in quotes,
+/// each `%` kept from expanding as [`bat_arg`] does. `None` (the spawn is
+/// refused) for a path no Windows file can have and no quoting keeps: a
+/// `"`, a line break or NUL, or a trailing `\` (std refuses the same).
+fn bat_head(path: &str) -> Option<String> {
+    if path.is_empty() || path.contains(['"', '\r', '\n', '\0']) || path.ends_with('\\') {
+        return None;
+    }
+    Some(format!("\"{}\"", path.replace('%', "%%cd:~,%")))
 }
 
 /// The switches, then the payload in one more pair of quotes: the pair
@@ -211,7 +229,8 @@ fn cmd_payload(head: String, args: &[String]) -> Option<String> {
 
 /// One argument for cmd.exe (inside the [`CMD_WRAPPER`] payload), so it
 /// arrives as the same text: std's rule for batch files. Anything but
-/// letters, digits and `#$*+-./:?@\_` puts it in quotes, where cmd.exe's
+/// ASCII letters, digits and `#$*+-./:?@\_` (any other character, ASCII
+/// or not) puts it in quotes, where cmd.exe's
 /// operators (`& | < > ^ ( )`) are plain text; a `"` is doubled; a `%`
 /// becomes `%%cd:~,%` (an empty substring of `%cd%`, so no `%VAR%` is
 /// expanded); backslashes before a quote are doubled. `None` for a line
@@ -221,9 +240,7 @@ pub fn bat_arg(arg: &str) -> Option<String> {
         return None;
     }
     const UNQUOTED: &str = r"#$*+-./:?@\_";
-    let quote = arg.is_empty()
-        || arg.ends_with('\\')
-        || arg.chars().any(|c| (c.is_ascii() && !(c.is_ascii_alphanumeric() || UNQUOTED.contains(c))) || c.is_control());
+    let quote = arg.is_empty() || arg.ends_with('\\') || arg.chars().any(|c| !(c.is_ascii_alphanumeric() || UNQUOTED.contains(c)));
     let mut s = String::with_capacity(arg.len() + 2);
     if quote {
         s.push('"');
@@ -613,6 +630,10 @@ mod tests {
             (r"tail\", r#""tail\\""#),
             (r#"a\"b"#, r#""a\\""b""#),
             ("", "\"\""),
+            // Any non-ASCII character puts it in quotes too, as std does.
+            ("é", "\"é\""),
+            ("naïve", "\"naïve\""),
+            ("\u{3000}", "\"\u{3000}\""),
         ];
         for (arg, want) in cases {
             assert_eq!(bat_arg(arg).as_deref(), Some(*want), "{arg:?}");
@@ -850,5 +871,213 @@ mod tests {
         let exts = parse_pathext(".COM;.EXE;.PS1;.CMD");
         assert!(exts.iter().any(|e| e.eq_ignore_ascii_case(".cmd")));
         assert!(!exts.iter().any(|e| e.eq_ignore_ascii_case(".ps1")));
+    }
+
+    /// A model, on any OS, of what the wrapper's last argument goes through:
+    /// cmd.exe (`/s /c "…"` strips the outer pair; `/e:ON /v:OFF`; `%`
+    /// expansion as on a command line, then its operators), then the C
+    /// runtime's split that node.exe, or any .exe a batch file hands `%*`
+    /// to, applies. `Err` names what cmd.exe would expand or act on; `Ok` is
+    /// the head (the batch path or built-in) and every argument as received.
+    fn through_cmd_model(wrapped: &str) -> Result<Vec<String>, String> {
+        let payload = wrapped.strip_prefix('"').and_then(|p| p.strip_suffix('"')).ok_or("no outer quotes")?;
+        if payload.contains(['\r', '\n', '\0']) {
+            return Err("cmd.exe ends the command at a line break or NUL".into());
+        }
+        // `%` expansion. `%%`, or a name that isn't defined, keeps the `%`
+        // and the scan goes on from the next `%` (the reading that expands
+        // the most); `%cd:~,%` is an empty substring.
+        const DEFINED: [&str; 4] = ["PATH", "USERNAME", "CD", "COMSPEC"];
+        let c: Vec<char> = payload.chars().collect();
+        let mut line = String::new();
+        let mut i = 0;
+        while i < c.len() {
+            if c[i] != '%' {
+                line.push(c[i]);
+                i += 1;
+                continue;
+            }
+            let Some(j) = (i + 1..c.len()).find(|&k| c[k] == '%') else {
+                line.push('%');
+                i += 1;
+                continue;
+            };
+            let name: String = c[i + 1..j].iter().collect();
+            let base = name.split(':').next().unwrap_or("");
+            if name.is_empty() || !DEFINED.iter().any(|d| d.eq_ignore_ascii_case(base)) {
+                line.push('%');
+                i += 1;
+                continue;
+            }
+            if &name[base.len()..] != ":~," {
+                return Err(format!("cmd.exe expands %{name}%"));
+            }
+            i = j + 1;
+        }
+        // cmd.exe's operators count outside quotes only.
+        let mut quoted = false;
+        for ch in line.chars() {
+            match ch {
+                '"' => quoted = !quoted,
+                '&' | '|' | '<' | '>' | '^' | '(' | ')' if !quoted => return Err(format!("cmd.exe acts on {ch:?}")),
+                _ => {}
+            }
+        }
+        if quoted {
+            return Err("a quote is left open".into());
+        }
+        // The C runtime's split (msvcrt 2008 and later, as std reads it).
+        let mut argv = Vec::new();
+        let (mut cur, mut have, mut in_q) = (String::new(), false, false);
+        let mut i = 0;
+        let c: Vec<char> = line.chars().collect();
+        while i < c.len() {
+            match c[i] {
+                ' ' | '\t' if !in_q => {
+                    if have {
+                        argv.push(std::mem::take(&mut cur));
+                        have = false;
+                    }
+                    i += 1;
+                }
+                '\\' => {
+                    let start = i;
+                    while i < c.len() && c[i] == '\\' {
+                        i += 1;
+                    }
+                    let n = i - start;
+                    if i < c.len() && c[i] == '"' {
+                        cur.extend(std::iter::repeat_n('\\', n / 2));
+                        if n % 2 == 1 {
+                            cur.push('"');
+                            i += 1;
+                        }
+                    } else {
+                        cur.extend(std::iter::repeat_n('\\', n));
+                    }
+                    have = true;
+                }
+                '"' => {
+                    have = true;
+                    if in_q && c.get(i + 1) == Some(&'"') {
+                        cur.push('"');
+                        i += 2;
+                    } else {
+                        in_q = !in_q;
+                        i += 1;
+                    }
+                }
+                ch => {
+                    cur.push(ch);
+                    have = true;
+                    i += 1;
+                }
+            }
+        }
+        if have {
+            argv.push(cur);
+        }
+        Ok(argv)
+    }
+
+    /// The model catches what it is for: `"` escaped as `\"` and `%` left
+    /// alone (how a C-runtime quoter writes them) let cmd.exe act.
+    #[test]
+    fn the_cmd_model_catches_c_runtime_quoting() {
+        assert!(through_cmd_model(r#""x.cmd "a\" & echo SECOND & \"b"""#).is_err());
+        assert!(through_cmd_model(r#""x.cmd a|b""#).is_err());
+        assert!(through_cmd_model(r#""x.cmd "%PATH%"""#).is_err());
+        assert!(through_cmd_model(r#""x.cmd ^&""#).is_err());
+        assert!(through_cmd_model("\"x.cmd \"a\nb\"\"").is_err());
+        assert_eq!(through_cmd_model(r#"""x.cmd" "a b" c""#), Ok(vec!["x.cmd".into(), "a b".into(), "c".into()]));
+    }
+
+    /// Each argument reaches a batch file or a built-in as one argument with
+    /// its text unchanged (nothing expanded, no operator acted on), or the
+    /// spawn is refused; nothing is ever dropped from it.
+    #[test]
+    fn every_argument_reaches_a_batch_file_whole_or_is_refused() {
+        let dir = PathBuf::from(r"C:\tools");
+        let files: HashSet<_> = [dir.join("run.bat")].into_iter().collect();
+        let path = dir.to_string_lossy().into_owned();
+        let cases = [
+            "a&b", "a & b", "a&&echo SECOND", "a|b", "a||b", "%PATH%", "%USERNAME%x%PATH%", "%cd%", "%PATH:a=b%", "100%", "%%",
+            "%%cd:~,%", "^", "a^&b", "^^", "\"", "\"\"", "x\" & echo SECOND & \"", "<in", "out>", "a<b>c", "2>&1", "tail\\",
+            "tail\\\\", "\\\"", "a\\\"&b", "dir\\ & x\\", "(x)", ")", "!x!", "", " ", "é&ü", "naïve", "tab\there", "a=b;c,d",
+            "\u{3000}", "*?",
+        ];
+        for arg in cases {
+            let args = vec!["--flag".to_string(), arg.to_string(), "end".to_string()];
+            for program in ["run", "echo", r"C:\elsewhere\x.cmd"] {
+                let (prog, a) = pty_ok(program, &args, &path, ".EXE;.BAT", "cmd.exe", exists_in(&files));
+                assert_eq!(prog, "cmd.exe", "{program} {arg:?}");
+                assert_eq!(&a[..5], &CMD_WRAPPER, "{program} {arg:?}");
+                let got = through_cmd_model(&a[5]).unwrap_or_else(|e| panic!("{program} {arg:?}: {e}: {}", a[5]));
+                assert_eq!(&got[1..], &args[..], "{program} {arg:?}: {}", a[5]);
+            }
+        }
+        for arg in ["a\nb", "a\r\nb", "x\n& echo SECOND", "\n", "a\rb", "a\0b"] {
+            let args = vec![arg.to_string()];
+            for program in ["run", "echo", r"C:\elsewhere\x.cmd"] {
+                let r = resolve_for_pty(program, &args, &path, ".EXE;.BAT", "cmd.exe", exists_in(&files));
+                assert_eq!(r, Err(Refused { program: program.to_string() }), "{program} {arg:?}");
+            }
+        }
+    }
+
+    /// Windows runs `run.bat.`, `run.cmd ` and `run.bat::$DATA` as the batch
+    /// file itself, so they get cmd.exe's escaping too.
+    #[test]
+    fn a_batch_file_named_with_trailing_dots_spaces_or_a_stream_is_still_a_batch_file() {
+        for name in ["run.bat", "RUN.CMD", "run.bat.", "run.cmd ", "run.bat. .", "run.bat::$DATA", "run.cmd:x", "C:run.bat", r"C:\x\run.bat.", "C:/x/run.cmd  "] {
+            assert!(is_batch(Path::new(name)), "{name:?}");
+        }
+        for name in ["run.exe", "run.bat.exe", "batch", "run.cmdx", r"C:\x.bat\run.exe", "run", "C:bat"] {
+            assert!(!is_batch(Path::new(name)), "{name:?}");
+        }
+        let none: HashSet<PathBuf> = HashSet::new();
+        let args = vec!["a&echo SECOND".to_string(), "%USERNAME%".to_string()];
+        for program in [r"C:\elsewhere\run.bat.", r"C:\elsewhere\run.cmd ", r"C:\elsewhere\run.bat::$DATA"] {
+            let (prog, a) = pty_ok(program, &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
+            assert_eq!(prog, "cmd.exe", "{program:?}");
+            assert_eq!(&a[..5], &CMD_WRAPPER, "{program:?}");
+            assert_eq!(through_cmd_model(&a[5]), Ok(vec![program.to_string(), args[0].clone(), args[1].clone()]), "{program:?}");
+            let r = resolve_for_pty(program, &["a\nb".into()], r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
+            assert_eq!(r, Err(Refused { program: program.to_string() }), "{program:?}");
+        }
+        // Found on PATH by that name (Windows tidies it to `run.bat`).
+        let dir = PathBuf::from(r"C:\tools");
+        let real = dir.join("run.bat").to_string_lossy().into_owned();
+        let tidy = |p: &Path| p.to_string_lossy().trim_end_matches(['.', ' ']) == real;
+        let (prog, a) = pty_ok("run.bat.", &args, &dir.to_string_lossy(), ".EXE", "cmd.exe", tidy);
+        assert_eq!(prog, "cmd.exe");
+        assert_eq!(&through_cmd_model(&a[5]).expect("model")[1..], &args[..]);
+        // std's own spawn checks the tidied name itself; it gets the file.
+        let r = for_ok(Launcher::Std, "run.bat.", &args, &dir.to_string_lossy(), ".EXE", "cmd.exe", tidy, |_| None);
+        assert_eq!(r.1, args);
+    }
+
+    /// The batch path heads the payload in quotes, its `%` kept from
+    /// expanding; a path with a quote, a line break or NUL can't be quoted
+    /// for cmd.exe and the spawn is refused.
+    #[test]
+    fn a_batch_path_is_quoted_for_cmd_exe_or_refused() {
+        let none: HashSet<PathBuf> = HashSet::new();
+        let args = vec!["one".to_string()];
+        let program = r"C:\%USERNAME%\run.cmd";
+        let (prog, a) = pty_ok(program, &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
+        assert_eq!(prog, "cmd.exe");
+        assert_eq!(a[5], r#"""C:\%%cd:~,%USERNAME%%cd:~,%\run.cmd" one""#);
+        assert_eq!(through_cmd_model(&a[5]), Ok(vec![program.to_string(), "one".into()]));
+        // Found on PATH in a folder with a `%` in its name.
+        let dir = PathBuf::from(r"C:\100%PATH%");
+        let files: HashSet<_> = [dir.join("run.bat")].into_iter().collect();
+        let (_, a) = pty_ok("run", &args, &dir.to_string_lossy(), ".EXE;.BAT", "cmd.exe", exists_in(&files));
+        assert_eq!(through_cmd_model(&a[5]), Ok(vec![dir.join("run.bat").to_string_lossy().into_owned(), "one".into()]));
+        for program in [r#"C:\x" & echo SECOND & ".cmd"#, r#"C:\x"y.bat"#, "C:\\x\\run\n.cmd", "C:\\x\\run\0.bat"] {
+            let r = resolve_for_pty(program, &args, r"C:\empty", ".EXE", "cmd.exe", exists_in(&none));
+            assert_eq!(r, Err(Refused { program: program.to_string() }), "{program:?}");
+            assert!(r.unwrap_err().to_string().contains("nothing was started"));
+        }
     }
 }

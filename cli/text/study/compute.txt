@@ -1204,16 +1204,23 @@ NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
 
 USER NAMESPACES (--userns; k2-node 0.46.18 on the node)
   By default a job can't create user namespaces (unshare -U,
-  bubblewrap): its node's job wall denies them. --userns lets this job,
-  if the node's owner granted its workspace that on the node:
+  bubblewrap, rootless Podman): its node's job wall denies them.
+  --userns lets the owner's trusted jobs build containers in their own
+  namespace, if the node's owner granted the workspace that on the node:
     k2 compute grant <node> --workspace <w> --userns      (the owner or an Admin)
     k2 compute run --userns -- unshare -U -r id
   - Only this node's own server's workspaces; never another server's jobs
     on a shared node, even servers of the same owner: where your server
     is a tenant, userns_owner_only, exit 3. The grant can't be given
     there either.
-  - mount, umount2 and pivot_root stay denied with --userns (no rootless
-    Podman); every other denial of the job wall stays too.
+  - With --userns the job may mount, umount2, pivot_root, setns, clone3
+    and use the new mount API (fsopen, fsconfig, fsmount, fspick,
+    move_mount, open_tree, mount_setattr) in its own namespace. Still
+    denied even with --userns: bpf, perf_event_open, userfaultfd, keyctl,
+    add_key, request_key, io_uring_*, kexec_*, the module calls and
+    open_by_handle_at. keyctl stays denied, so rootless Podman may need
+    keyring = false in the job's containers.conf. Without --userns all of
+    these calls stay denied.
   - The grant row is required, for the owner and an Admin too; an agent
     can't set it and no card asks for it. --no-userns takes it away.
   - K2 places such a job only on a node that offers it and where the

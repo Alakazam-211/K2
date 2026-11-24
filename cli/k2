@@ -33287,17 +33287,19 @@ Agents:
                                 link-local or test ranges only (exit 2 else);
                                 implies --network none
                  [--userns]     by default a job can't create user namespaces
-                                (unshare -U, bubblewrap). --userns lets this
-                                job, if the node's owner granted its workspace
-                                that on the node (k2 compute grant <node>
-                                --workspace <w> --userns). Only this node's own
-                                server's workspaces; never another server's
-                                jobs on a shared node, even servers of the same
-                                owner (else userns_not_granted,
-                                userns_owner_only or userns_needs_update, exit
-                                3). mount, umount2 and pivot_root stay denied
-                                (no rootless Podman). k2 study compute: USER
-                                NAMESPACES
+                                (unshare -U, bubblewrap, rootless Podman).
+                                --userns lets the owner's trusted jobs build
+                                containers in their own namespace, if the
+                                node's owner granted the workspace that on the
+                                node (k2 compute grant <node> --workspace <w>
+                                --userns). keyctl stays denied, so rootless
+                                Podman may need keyring = false in the job's
+                                containers.conf. Only this node's own server's
+                                workspaces; never another server's jobs on a
+                                shared node, even servers of the same owner
+                                (else userns_not_granted, userns_owner_only or
+                                userns_needs_update, exit 3). k2 study
+                                compute: USER NAMESPACES
                  [--no-addr-filter]  with --userns and --network none only:
                                 no per-job address filter (the job's own
                                 network namespace, loopback only, stays the
@@ -33725,8 +33727,9 @@ terminal outside K2, Touch ID / vault password) decides every change:
                    GPU jobs on for this server at that machine
                    (sudo k2-node admin gpu on). It doesn't give --exclusive
                    --userns: this workspace's jobs may ask --userns on this node
-                   (they may create user namespaces: unshare -U, bubblewrap;
-                   mount stays denied). The owner or an Admin login only.
+                   (they may build containers in their own namespace:
+                   unshare -U, bubblewrap, rootless Podman). The owner or an
+                   Admin login only.
                    Only this node's own server's workspaces; never another
                    server's jobs on a shared node, even servers of the same
                    owner (userns_owner_only). No card asks for it
@@ -60790,7 +60793,7 @@ cmd_schema() {
         {"name": "--gpu-mem", "arg": "4G", "description": "Only with --gpu (alone: exit 2): the job's GPU memory budget."},
         {"name": "--network", "arg": "none", "description": "No network for this job (loopback only), whatever the node's setting; the one value is none (on, no-lan: exit 2, job_network_invalid)."},
         {"name": "--netns-dummy", "arg": "NAME=ADDR/PREFIX", "description": "Linux nodes: a dummy interface in the job's own network namespace, e.g. dummy0=10.254.254.1/32; from k2-node 0.46.17 the first is the IPv4 default route (a browser gets an ICE host candidate; nothing leaves). NAME 1-15 of A-Z a-z 0-9 . _ - (not lo); the address from a private, link-local or test range only. Repeatable, at most 4; implies --network none."},
-        {"name": "--userns", "arg": null, "description": "By default a job can't create user namespaces (unshare -U, bubblewrap; mount, umount2 and pivot_root stay denied). --userns lets this job, if the node's owner granted its workspace that on the node (k2 compute grant <node> --workspace <w> --userns). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner (else userns_not_granted, userns_owner_only or userns_needs_update, exit 3)."},
+        {"name": "--userns", "arg": null, "description": "By default a job can't create user namespaces (unshare -U, bubblewrap, rootless Podman). --userns lets the owner's trusted jobs build containers in their own namespace (keyctl stays denied, so rootless Podman may need keyring = false in the job's containers.conf), if the node's owner granted the workspace that on the node (k2 compute grant <node> --workspace <w> --userns). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner (else userns_not_granted, userns_owner_only or userns_needs_update, exit 3)."},
         {"name": "--no-addr-filter", "arg": null, "description": "With --userns and --network none only: no per-job address filter (the job's own network namespace, loopback only, stays the wall). For tests that watch packets between the job's own namespaces. Granted separately by the node's owner (k2 compute grant <node> --workspace <w> --no-addr-filter). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner; else no_addr_filter_invalid (exit 2)."},
         {"name": "--receipt-v2", "arg": null, "description": "The node signs receipt v2; only nodes on protocol 9 take it (preview: ciPreview)."},
         {"name": "--retry-interrupted", "arg": null, "description": "Retry a job that an infrastructure failure interrupted."},
@@ -61715,7 +61718,7 @@ cmd_schema() {
         {"name": "--no-ci", "arg": null, "description": "Take --tier ci away."},
         {"name": "--gpu", "arg": null, "description": "This workspace may send --gpu jobs; the node's own owner must also turn GPU jobs on for this server."},
         {"name": "--no-gpu", "arg": null, "description": "Take --gpu jobs away."},
-        {"name": "--userns", "arg": null, "description": "This workspace's jobs may ask --userns on this node (they may create user namespaces). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner."},
+        {"name": "--userns", "arg": null, "description": "This workspace's jobs may ask --userns on this node (they may build containers in their own namespace). Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner."},
         {"name": "--no-userns", "arg": null, "description": "Take --userns jobs away (and --no-addr-filter with it)."},
         {"name": "--no-addr-filter", "arg": null, "description": "Its --userns --network none jobs may also drop their per-job address filter; granted separately, only beside --userns. Only this node's own server's workspaces; never another server's jobs on a shared node, even servers of the same owner."},
         {"name": "--addr-filter", "arg": null, "description": "Take --no-addr-filter away."}
@@ -74605,16 +74608,23 @@ NETWORK (--network none, --netns-dummy; k2-node 0.46.15 on the node)
 
 USER NAMESPACES (--userns; k2-node 0.46.18 on the node)
   By default a job can't create user namespaces (unshare -U,
-  bubblewrap): its node's job wall denies them. --userns lets this job,
-  if the node's owner granted its workspace that on the node:
+  bubblewrap, rootless Podman): its node's job wall denies them.
+  --userns lets the owner's trusted jobs build containers in their own
+  namespace, if the node's owner granted the workspace that on the node:
     k2 compute grant <node> --workspace <w> --userns      (the owner or an Admin)
     k2 compute run --userns -- unshare -U -r id
   - Only this node's own server's workspaces; never another server's jobs
     on a shared node, even servers of the same owner: where your server
     is a tenant, userns_owner_only, exit 3. The grant can't be given
     there either.
-  - mount, umount2 and pivot_root stay denied with --userns (no rootless
-    Podman); every other denial of the job wall stays too.
+  - With --userns the job may mount, umount2, pivot_root, setns, clone3
+    and use the new mount API (fsopen, fsconfig, fsmount, fspick,
+    move_mount, open_tree, mount_setattr) in its own namespace. Still
+    denied even with --userns: bpf, perf_event_open, userfaultfd, keyctl,
+    add_key, request_key, io_uring_*, kexec_*, the module calls and
+    open_by_handle_at. keyctl stays denied, so rootless Podman may need
+    keyring = false in the job's containers.conf. Without --userns all of
+    these calls stay denied.
   - The grant row is required, for the owner and an Admin too; an agent
     can't set it and no card asks for it. --no-userns takes it away.
   - K2 places such a job only on a node that offers it and where the

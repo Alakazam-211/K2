@@ -4,8 +4,8 @@
 # this repo holds, a scratch brand's command, aliases, id and product, the
 # sign-off for a soft collision, the live host and package checks against
 # a stand-in PATH and local index files, the table of the other fields'
-# shapes (tests/garden/brand-lint-fields.tsv) and --hosted. Offline: no
-# network, no CLI, no cargo.
+# shapes (tests/garden/brand-lint-fields.tsv), the fields a brand that isn't
+# ours must set itself, and --hosted. Offline: no network, no CLI, no cargo.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 B="$HERE/scripts/brand.sh"
@@ -41,12 +41,72 @@ done
 case "$out" in *"brand lint: xy: command xy, product 'Globex Desk': ok"*) ok ;; *) die "brand/xy: $out" ;; esac
 
 # ── a scratch brand ───────────────────────────────────────────────────
-brand() { # brand <folder> <id> <command> <product> [<alias>...]
+bare() { # bare <folder> <id> <command> <product> [<alias>...]: its names only
     local d="$T/$1" id="$2" cli="$3" product="$4"; shift 4
     mkdir -p "$d"
     local aliases=""
     for a in "$@"; do aliases="$aliases{ name = \"$a\", mode = \"notice\" }, "; done
     printf 'id = "%s"\nschema = 1\n\n[names]\nproduct = "%s"\n\n[cli]\nname = "%s"\naliases = [%s]\n' "$id" "$product" "$cli" "$aliases" > "$d/brand.toml"
+}
+# The fields a scratch brand (never ours) must set itself, neutral values:
+# SETS_ITS_OWN and SETS_ON_PURPOSE in scripts/brand/lint.py.
+OWN_NAMES='company = "Initech"
+login = "Initech Account"'
+OWN_TABLES='
+[zones]
+label = "q8.example.invalid"
+
+[feeds]
+daemon = "https://updates.example.invalid/q8/daemon-latest.json"
+downloads = "https://updates.example.invalid/q8/download"
+
+[package]
+update_feed = "https://updates.example.invalid/q8/latest.json"
+
+[update]
+keys = [{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]
+
+[links]
+site = "https://q8.example.invalid"
+support_email = "help@q8.example.invalid"
+dashboard = ""
+feedback = ""
+
+[mail]
+postal = false
+
+[phone]
+bundle_id = "invalid.example.q8"
+team_id = "ABCDE12345"
+push_topic = "invalid.example.q8"
+'
+REQUIRED_OWN="names.company names.login zones.label links.site links.support_email links.dashboard links.feedback feeds.daemon feeds.downloads package.update_feed update.keys"
+REQUIRED_SET="mail.postal phone.bundle_id phone.team_id phone.push_topic"
+brand() { # brand <folder> <id> <command> <product> [<alias>...]: names and the fields above
+    bare "$@"
+    local f="$T/$1/brand.toml"
+    { sed -n '1,/^\[names\]$/p' "$f"; printf '%s\n' "$OWN_NAMES"; sed '1,/^\[names\]$/d' "$f"; printf '%s' "$OWN_TABLES"; } > "$f.new"
+    mv "$f.new" "$f"
+}
+# set_field <file> <table> <key> <TOML value, or - to take the line out>:
+# in the table when the file has it, else in a new table at the end.
+set_field() {
+    python3 -c '
+import sys
+path, table, key, value = sys.argv[1:]
+lines = open(path, encoding="utf-8").read().split("\n")
+head = f"[{table}]"
+if head in lines:
+    at = lines.index(head)
+    end = next((i for i in range(at + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+    body = [l for l in lines[at + 1:end] if not l.startswith(f"{key} = ")]
+    if value != "-":
+        body.insert(0, f"{key} = {value}")
+    lines = lines[:at + 1] + body + lines[end:]
+elif value != "-":
+    lines += ["", head, f"{key} = {value}", ""]
+open(path, "w", encoding="utf-8").write("\n".join(lines))
+' "$@"
 }
 brand good q8 q8 "Initech Hub"
 lint "$T/good"; [ "$rc" = 0 ] || die "a good scratch brand: $out"; ok
@@ -128,12 +188,10 @@ while IFS=$'\t' read -r field value want; do
                 esac
             done
         } >> "$T/f$rows/brand.toml"
-    elif [ "$table" = names ]; then
-        # The scratch brand has [names] already: the key goes in it.
-        awk -v kv="${field#*.} = $value" '{ print } /^\[names\]$/ { print kv }' "$T/f$rows/brand.toml" > "$T/f$rows/b" \
-            && mv "$T/f$rows/b" "$T/f$rows/brand.toml"
     else
-        printf '\n[%s]\n%s = %s\n' "$table" "${field#*.}" "$value" >> "$T/f$rows/brand.toml"
+        # Into the table when the scratch brand has it (it sets the
+        # fields a brand that isn't ours must), else a new table.
+        set_field "$T/f$rows/brand.toml" "$table" "${field#*.}" "$value"
     fi
     lint "$T/f$rows"
     if [ "$want" = ok ]; then
@@ -146,7 +204,7 @@ done < "$HERE/tests/garden/brand-lint-fields.tsv"
 [ "$rows" -ge 60 ] || die "the fields table has only $rows rows"; ok
 # A finding names the field and says what shape it wants.
 brand f-why q8 q8 "Initech Hub"
-printf '\n[links]\nsite = "http://example.invalid"\n' >> "$T/f-why/brand.toml"
+set_field "$T/f-why/brand.toml" links site '"http://example.invalid"'
 lint "$T/f-why"
 [[ "$out" == *"brand lint: q8: field links.site: shape: must be an https URL"* ]] || die "a shape finding's line: $out"; ok
 # A root-helper key is refused with the reason, and only once.
@@ -176,17 +234,28 @@ lint "$T/h-own" --hosted
 # Ours are never a partner's box: --hosted checks their shapes only.
 lint "$HERE/brand/k2" --hosted
 [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists)"* ]] || die "brand/k2 --hosted: $out"; ok
-# A brand with only its names lacks every field a hosted box needs.
-brand h-bare q8 q8 "Initech Hub"
-lint "$T/h-bare"; [ "$rc" = 0 ] || die "without --hosted the hosted fields are not asked for: $out"; ok
+# A brand with only its names lacks every field a brand that isn't ours
+# must set, each named once; --hosted adds the rest a hosted box needs.
+bare h-bare q8 q8 "Initech Hub"
+lint "$T/h-bare"
+[ "$rc" = 1 ] || die "a bare brand: $out"
+for f in $REQUIRED_OWN; do
+    [[ "$out" == *"field $f: required: is missing: a brand that isn't ours sets its own (the default brand's would show ours)"* ]] \
+        || die "a bare brand names $f: $out"
+done
+for f in $REQUIRED_SET; do
+    [[ "$out" == *"field $f: required: is missing: a brand that isn't ours sets it on purpose (the default brand's is ours)"* ]] \
+        || die "a bare brand names $f: $out"
+done
+[ "$(printf '%s\n' "$out" | grep -c ': required: ')" = 15 ] || die "a bare brand: 15 fields: $out"
+[[ "$out" != *": hosted: "* ]] || die "without --hosted the hosted fields are not asked for: $out"; ok
 lint "$T/h-bare" --hosted
 [ "$rc" = 1 ] || die "a bare brand --hosted: $out"
-for f in names.company names.login zones.label package.update_feed update.keys \
-    feeds.daemon feeds.downloads look.icons links.site links.support_email links.support_url \
-    links.terms links.privacy links.dashboard links.feedback mail.postal; do
+for f in look.icons links.support_url links.terms links.privacy; do
     [[ "$out" == *"field $f: hosted: a hosted box needs it set"* ]] || die "a bare brand --hosted names $f: $out"
 done
-[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 16 ] || die "a bare brand --hosted: 16 fields: $out"; ok
+[ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 4 ] || die "a bare brand --hosted: 4 more fields: $out"
+[ "$(printf '%s\n' "$out" | grep -c ': required: ')" = 15 ] || die "a bare brand --hosted: each required field once: $out"; ok
 # System mail has no fleet-wide sender: left out, it is noreply@{server}.
 [[ "$out" != *"mail.system_from"* ]] || die "mail.system_from is not asked of a hosted brand: $out"; ok
 # A link that may not be none, and a value that is the default brand's own.
@@ -202,7 +271,70 @@ sed -i.bak -e "s#^site = .*#site = $site#" -e "s#^support_email = .*#support_ema
 lint "$T/h-ours" --hosted
 [ "$rc" = 1 ] && [[ "$out" == *"field links.site: ours: is the default brand's own value"* ]] \
     && [[ "$out" == *"field links.support_email: ours:"* ]] || die "the default brand's own values: $out"; ok
-lint "$T/h-ours"; [ "$rc" = 0 ] || die "the default brand's values are only refused with --hosted: $out"; ok
+lint "$T/h-ours"
+[ "$rc" = 1 ] && [[ "$out" == *"field links.site: ours: is the default brand's own value $site: a brand that isn't ours sets its own"* ]] \
+    && [[ "$out" == *"field links.support_email: ours: is the default brand's own value $mail"* ]] \
+    || die "the default brand's site and support address are refused without --hosted too: $out"; ok
+
+# ── a brand that isn't ours sets the fields that name us ──────────────
+# Each one left out is refused, naming it; so is each one set to the
+# default brand's own value. The same lists and words as crates/k2-brand.
+i=0
+for f in $REQUIRED_OWN $REQUIRED_SET; do
+    i=$((i + 1))
+    brand "n-miss-$i" q8 q8 "Initech Hub"
+    set_field "$T/n-miss-$i/brand.toml" "${f%%.*}" "${f#*.}" -
+    lint "$T/n-miss-$i"
+    [ "$rc" = 1 ] && [[ "$out" == *"field $f: required: is missing: a brand that isn't ours"* ]] \
+        && [[ "$out" == *"REFUSED (1 finding(s))"* ]] || die "a brand that leaves out $f: $out"
+done
+ok
+k2val() { # k2val <table.key>: brand/k2's value, as TOML (a string or true/false)
+    python3 -c '
+import json, sys, tomllib
+t, k = sys.argv[2].split(".")
+v = tomllib.load(open(sys.argv[1], "rb"))[t][k]
+print(json.dumps(v) if isinstance(v, (str, bool)) else "")
+' "$HERE/brand/k2/brand.toml" "$1"
+}
+i=0
+for f in $REQUIRED_OWN; do
+    [ "$f" = update.keys ] && continue
+    i=$((i + 1))
+    v="$(k2val "$f")"
+    [ -n "$v" ] && [ "$v" != '""' ] || die "brand/k2 has no value of ours for $f"
+    brand "n-ours-$i" q8 q8 "Initech Hub"
+    set_field "$T/n-ours-$i/brand.toml" "${f%%.*}" "${f#*.}" "$v"
+    lint "$T/n-ours-$i"
+    [ "$rc" = 1 ] && [[ "$out" == *"field $f: ours: is the default brand's own value $v: a brand that isn't ours sets its own"* ]] \
+        && [[ "$out" == *"REFUSED (1 finding(s))"* ]] || die "a brand that keeps our $f: $out"
+done
+ok
+k2key="$(sed -n 's/.*role = "primary", key_id = "\([0-9A-F]*\)", pubkey = "\([^"]*\)".*/\1 \2/p' "$HERE/brand/k2/brand.toml")"
+[ -n "$k2key" ] || die "brand/k2 has no primary update key line"
+brand n-key q8 q8 "Initech Hub"
+set_field "$T/n-key/brand.toml" update keys "[{ role = \"primary\", key_id = \"${k2key%% *}\", pubkey = \"${k2key#* }\" }]"
+lint "$T/n-key"
+[ "$rc" = 1 ] && [[ "$out" == *"field update.keys: ours: holds the default brand's own update key ${k2key%% *}: a brand that isn't ours sets its own"* ]] \
+    || die "a brand that carries our update key: $out"; ok
+# The phone app and Postal may be ours, written on purpose.
+brand n-phone q8 q8 "Initech Hub"
+for k in bundle_id team_id push_topic; do set_field "$T/n-phone/brand.toml" phone "$k" "$(k2val "phone.$k")"; done
+set_field "$T/n-phone/brand.toml" mail postal true
+lint "$T/n-phone"; [ "$rc" = 0 ] || die "our phone app and Postal, written on purpose: $out"; ok
+# A copy of brand/k2 in a folder named k2 outside the repo's brand/ is
+# not ours: it keeps our company and our update keys, and with its login
+# line out, that is named too.
+mkdir -p "$T/copy/brand/k2"
+cp "$HERE/brand/k2/brand.toml" "$T/copy/brand/k2/brand.toml"
+lint "$T/copy/brand/k2"
+[ "$rc" = 1 ] && [[ "$out" == *"field names.company: ours: is the default brand's own value $(k2val names.company)"* ]] \
+    && [[ "$out" == *"field update.keys: ours: holds the default brand's own update key"* ]] \
+    || die "a copy of brand/k2 elsewhere: $out"; ok
+grep -v '^login = ' "$HERE/brand/k2/brand.toml" > "$T/copy/brand/k2/brand.toml"
+lint "$T/copy/brand/k2"
+[ "$rc" = 1 ] && [[ "$out" == *"field names.login: required: is missing: a brand that isn't ours sets its own"* ]] \
+    || die "a copy of brand/k2 elsewhere, its login left out: $out"; ok
 
 # ── [control] on our brands: the bash CLI's copy ──────────────────────
 # A stand-in repo: the lint, our brand folders, the template and the bash

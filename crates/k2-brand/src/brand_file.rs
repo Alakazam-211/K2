@@ -18,6 +18,16 @@
 //! spelled in this code. The machine names (`[machine]`) must be the
 //! default brand's for now: the code still uses those names everywhere.
 //!
+//! A brand that isn't ours ([`ours::is_ours`]: not k2 or k5 in this
+//! repo's own `brand/<id>`) may not leave out a field whose default names
+//! us or reaches us: it sets each one in [`SETS_ITS_OWN`] to a value that
+//! is not the default brand's (a link may be `""`, none), and each one in
+//! [`SETS_ON_PURPOSE`] to any value. Left out, a partner's build would say
+//! our company, our sign-in name, our site or our support address, look
+//! for our updates, or join our mail and phone app without anyone
+//! choosing it. `[control]` (our control endpoints, on purpose) and
+//! `[machine]` (the code's own names) stay ours when left out.
+//!
 //! The tokens an install writes (the PATH block's two marker lines, the
 //! fish file's name, the system-wide path) are made here, by
 //! [`path_markers`], [`install_tokens`] and [`system_cli_path`], and nowhere
@@ -32,6 +42,9 @@
 //! so an install or an undo still finds and replaces such a block.
 
 use std::path::Path;
+
+#[path = "ours.rs"]
+pub mod ours;
 
 /// The one schema this reader knows.
 const SCHEMA: i64 = 1;
@@ -93,6 +106,37 @@ const CONTROL_KEYS: &[&str] = &["relay", "relay_list", "connect", "cert", "push"
 /// The keys one signing key (`[update] keys`) may hold.
 const KEY_KEYS: &[&str] = &["role", "key_id", "pubkey"];
 
+/// The fields a brand that isn't ours must set to a value of its own: each
+/// one's default names us or reaches us (our company, our sign-in name,
+/// our zone, our site, our support address, our account page, our
+/// feedback form, our update feeds, our update keys). A link here may be
+/// `""` (none), which is not ours.
+pub const SETS_ITS_OWN: &[&str] = &[
+    "names.company",
+    "names.login",
+    "zones.label",
+    "links.site",
+    "links.support_email",
+    "links.dashboard",
+    "links.feedback",
+    "feeds.daemon",
+    "feeds.downloads",
+    "package.update_feed",
+    "update.keys",
+];
+
+/// The fields a brand that isn't ours must set, to any value (ours too,
+/// when it means it): whether its boxes join Postal, and the phone app
+/// they pair with (K2's ruling). `look.icons` is asked for only by the
+/// hosted lint (scripts/brand/lint.py --hosted) until something reads it;
+/// it joins this list then.
+pub const SETS_ON_PURPOSE: &[&str] = &[
+    "mail.postal",
+    "phone.bundle_id",
+    "phone.team_id",
+    "phone.push_topic",
+];
+
 /// A brand file, checked.
 #[derive(Debug)]
 pub struct Brand {
@@ -100,6 +144,14 @@ pub struct Brand {
     pub product: String,
     pub cli_name: String,
     pub aliases: Vec<Alias>,
+    /// `package.update_feed`, when set: the desktop app's update manifest
+    /// (scripts/brand-values.mjs reads `[package]`; this reader checks it
+    /// only for its shape and that a brand not ours has its own).
+    pub update_feed: Option<String>,
+    /// `update.keys`, when set, as (key id, key line) (crates/k2-release-keys
+    /// compiles them; this reader checks their shape and that a brand not
+    /// ours carries none of the default brand's).
+    pub update_keys: Vec<(String, String)>,
     /// Every other field, each the brand's own, the default brand's, or
     /// made from the brand's names.
     pub fields: Fields,
@@ -289,30 +341,45 @@ pub fn system_cli_path(name: &str) -> String {
 }
 
 /// Reads and checks the brand file at `path`. `default` is the default
-/// brand's file (`brand/k2/brand.toml`): a field `path` leaves out takes
-/// its value, so it must spell every field. When `path` is the default
-/// brand's file itself, it is read once and must be whole.
+/// brand's file (`<root>/brand/k2/brand.toml`, which also says where the
+/// repo's root is): a field `path` leaves out takes its value, so it must
+/// spell every field. When `path` is the default brand's file itself, it
+/// is read once and must be whole. A brand that isn't ours must set the
+/// fields in [`SETS_ITS_OWN`] and [`SETS_ON_PURPOSE`] itself.
 pub fn load(path: &Path, default: &Path) -> Result<Brand, String> {
     let same = match (path.canonicalize(), default.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     };
+    let root = default
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent);
     if same {
-        return read_one(path, None);
+        return read_one(path, None, root);
     }
-    let base = read_one(default, None).map_err(|e| format!("{e} (the default brand file)"))?;
-    read_one(path, Some(&base))
+    let base =
+        read_one(default, None, root).map_err(|e| format!("{e} (the default brand file)"))?;
+    read_one(path, Some(&base), root)
 }
 
-fn read_one(path: &Path, base: Option<&Brand>) -> Result<Brand, String> {
+fn read_one(path: &Path, base: Option<&Brand>, root: Option<&Path>) -> Result<Brand, String> {
     let shown = path.display();
     let text = std::fs::read_to_string(path).map_err(|e| {
         format!("brand file {shown}: can't read it ({e}); K2_BRAND_DIR names the folder that holds brand.toml")
     })?;
-    parse(&text, base.map(|b| &b.fields)).map_err(|e| format!("brand file {shown}: {e}"))
+    let ours_by_id = |id: &str| match (path.parent(), root) {
+        (Some(folder), Some(root)) => ours::is_ours(id, folder, root),
+        _ => false,
+    };
+    parse(&text, base, &ours_by_id).map_err(|e| format!("brand file {shown}: {e}"))
 }
 
-fn parse(text: &str, base: Option<&Fields>) -> Result<Brand, String> {
+fn parse(
+    text: &str,
+    base: Option<&Brand>,
+    ours_by_id: &dyn Fn(&str) -> bool,
+) -> Result<Brand, String> {
     let doc: toml::Table = toml::from_str(text).map_err(|e| format!("not valid TOML: {e}"))?;
     match doc.get("schema") {
         Some(toml::Value::Integer(SCHEMA)) => {}
@@ -399,14 +466,96 @@ fn parse(text: &str, base: Option<&Fields>) -> Result<Brand, String> {
             .ok_or_else(|| format!("{field}.mode {word:?} must be silent, notice or tombstone"))?;
         aliases.push(Alias { name, mode });
     }
-    let fields = parse_fields(&doc, &product, base)?;
-    Ok(Brand {
+    let fields = parse_fields(&doc, &product, base.map(|b| &b.fields))?;
+    // [package] and [update] are read by their own readers
+    // (scripts/brand-values.mjs, crates/k2-release-keys; the update keys
+    // are also the trust root of the Sew pins a build carries). Here they
+    // are only checked for their shape, and that a brand not ours has its
+    // own.
+    let update_feed = get_str(&doc, "package", "update_feed", check_https)?;
+    let update_keys = check_key_list(&doc, "update", "keys")?;
+    let ours = ours_by_id(&id);
+    let brand = Brand {
         id,
         product,
         cli_name,
         aliases,
+        update_feed,
+        update_keys,
         fields,
-    })
+    };
+    if let (Some(base), false) = (base, ours) {
+        check_not_ours(&doc, &brand, base)?;
+    }
+    Ok(brand)
+}
+
+/// `[table] key` is in the file.
+fn is_set(doc: &toml::Table, field: &str) -> bool {
+    let (table, key) = field.split_once('.').unwrap_or((field, ""));
+    matches!(doc.get(table), Some(toml::Value::Table(t)) if t.contains_key(key))
+}
+
+/// A brand that isn't ours sets every field in [`SETS_ITS_OWN`] to a value
+/// that is not the default brand's (`base`), and every field in
+/// [`SETS_ON_PURPOSE`]. The first one it doesn't is named.
+fn check_not_ours(doc: &toml::Table, b: &Brand, base: &Brand) -> Result<(), String> {
+    for field in SETS_ITS_OWN {
+        if !is_set(doc, field) {
+            return Err(format!(
+                "{field} is missing: a brand that isn't ours sets its own (the default brand's would show ours)"
+            ));
+        }
+    }
+    for field in SETS_ON_PURPOSE {
+        if !is_set(doc, field) {
+            return Err(format!(
+                "{field} is missing: a brand that isn't ours sets it on purpose (the default brand's is ours)"
+            ));
+        }
+    }
+    let (f, o) = (&b.fields, &base.fields);
+    let same = |mine: &str, theirs: &str| (mine == theirs).then(|| mine.to_string());
+    let same_link = |mine: &Option<String>, theirs: &Option<String>| match (mine, theirs) {
+        (Some(m), Some(t)) if m == t => Some(m.clone()),
+        _ => None,
+    };
+    for (field, theirs) in [
+        ("names.company", same(&f.company, &o.company)),
+        ("names.login", same(&f.login, &o.login)),
+        ("zones.label", same(&f.label_zone, &o.label_zone)),
+        ("links.site", same(&f.site, &o.site)),
+        (
+            "links.support_email",
+            same(&f.support_email, &o.support_email),
+        ),
+        ("links.dashboard", same_link(&f.dashboard, &o.dashboard)),
+        ("links.feedback", same_link(&f.feedback, &o.feedback)),
+        ("feeds.daemon", same(&f.daemon_feed, &o.daemon_feed)),
+        ("feeds.downloads", same(&f.downloads, &o.downloads)),
+        (
+            "package.update_feed",
+            same_link(&b.update_feed, &base.update_feed),
+        ),
+    ] {
+        if let Some(v) = theirs {
+            return Err(format!(
+                "{field} is the default brand's own value {v:?}: a brand that isn't ours sets its own"
+            ));
+        }
+    }
+    for (key_id, pubkey) in &b.update_keys {
+        if let Some((id, _)) = base
+            .update_keys
+            .iter()
+            .find(|(i, p)| i == key_id || p == pubkey)
+        {
+            return Err(format!(
+                "update.keys holds the default brand's own update key {id}: a brand that isn't ours sets its own"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// One field's value: the brand's own when it sets it, else the default
@@ -538,10 +687,6 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         b(|f| &f.downloads),
         "feeds.downloads",
     )?;
-    // [update] is read by its own reader (crates/k2-release-keys); its
-    // keys are also the trust root of the Sew pins a build carries. Here
-    // they are only checked for their shape.
-    check_key_list(doc, "update", "keys")?;
     let machine = |key: &str, f: fn(&Fields) -> &String| -> Result<String, String> {
         let field = format!("machine.{key}");
         let check: fn(&str, &str) -> Result<(), String> = if key == "home" {
@@ -652,14 +797,18 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
 
 /// `[<table>] <key>`, when set: a list of `{ role, key_id, pubkey }`,
 /// each a minisign public key line whose id is its `key_id`, a primary
-/// first, no key twice.
-fn check_key_list(doc: &toml::Table, table: &str, key: &str) -> Result<(), String> {
+/// first, no key twice. Its keys as (key id, key line); none when unset.
+fn check_key_list(
+    doc: &toml::Table,
+    table: &str,
+    key: &str,
+) -> Result<Vec<(String, String)>, String> {
     let list = format!("{table}.{key}");
     let Some(t) = opt_table(doc, table)? else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     let items = match t.get(key) {
-        None => return Ok(()),
+        None => return Ok(Vec::new()),
         Some(toml::Value::Array(a)) if !a.is_empty() => a,
         Some(_) => {
             return Err(format!(
@@ -667,7 +816,7 @@ fn check_key_list(doc: &toml::Table, table: &str, key: &str) -> Result<(), Strin
             ))
         }
     };
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: Vec<(String, String)> = Vec::new();
     for (i, item) in items.iter().enumerate() {
         let f = format!("{list}[{i}]");
         let toml::Value::Table(k) = item else {
@@ -695,12 +844,12 @@ fn check_key_list(doc: &toml::Table, table: &str, key: &str) -> Result<(), Strin
                 "{f}.key_id {key_id:?} is not the pubkey's key id ({id})"
             ));
         }
-        if seen.contains(&key_id) {
+        if seen.iter().any(|(id, _)| *id == key_id) {
             return Err(format!("{list} lists {key_id} twice"));
         }
-        seen.push(key_id);
+        seen.push((key_id, pubkey));
     }
-    Ok(())
+    Ok(seen)
 }
 
 /// minisign's key id of a public key line ("Ed", the 8 id bytes as a
@@ -1265,15 +1414,77 @@ mod tests {
         }
     }
 
-    const GOOD: &str = r#"
-id = "ab"
-schema = 1
-[names]
-product = "AB"
-[cli]
-name = "ab"
-aliases = [{ name = "abc", mode = "notice" }, { name = "ab1", mode = "silent" }, { name = "ab2", mode = "tombstone" }]
-"#;
+    /// The names a brand that isn't ours sets itself ([`SETS_ITS_OWN`]):
+    /// neutral values, for the test files.
+    macro_rules! own_names {
+        () => {
+            "company = \"Initech\"\nlogin = \"Initech Account\"\n"
+        };
+    }
+
+    /// The other fields a brand that isn't ours sets itself
+    /// ([`SETS_ITS_OWN`], [`SETS_ON_PURPOSE`]), as whole tables: neutral
+    /// values, for the test files.
+    macro_rules! own_tables {
+        () => {
+            r#"[zones]
+label = "ab.example.invalid"
+[feeds]
+daemon = "https://updates.example.invalid/ab/daemon-latest.json"
+downloads = "https://updates.example.invalid/ab/download"
+[package]
+update_feed = "https://updates.example.invalid/ab/latest.json"
+[update]
+keys = [{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUPnFf/6A99m" }]
+[links]
+site = "https://ab.example.invalid"
+support_email = "help@ab.example.invalid"
+dashboard = ""
+feedback = ""
+[mail]
+postal = false
+[phone]
+bundle_id = "invalid.example.ab"
+team_id = "ABCDE12345"
+push_topic = "invalid.example.ab"
+"#
+        };
+    }
+
+    /// GOOD's aliases line.
+    macro_rules! good_aliases {
+        () => {
+            "aliases = [{ name = \"abc\", mode = \"notice\" }, { name = \"ab1\", mode = \"silent\" }, { name = \"ab2\", mode = \"tombstone\" }]\n"
+        };
+    }
+
+    /// A brand file that isn't ours: its names, its command, and the
+    /// fields such a brand must set; the rest left out.
+    const GOOD: &str = concat!(
+        "\nid = \"ab\"\nschema = 1\n[names]\nproduct = \"AB\"\n",
+        own_names!(),
+        "[cli]\nname = \"ab\"\n",
+        good_aliases!(),
+        own_tables!(),
+    );
+
+    /// `text`, a brand file with `names.product` and `[cli]`, given the
+    /// fields a brand that isn't ours sets itself (`own_names!` after the
+    /// product, `own_tables!` at the end).
+    fn partner(text: &str) -> String {
+        let at = text
+            .find("\nproduct = ")
+            .expect("the file has names.product")
+            + 1;
+        let end = at + text[at..].find('\n').expect("the product's line ends") + 1;
+        format!(
+            "{}{}{}{}",
+            &text[..end],
+            own_names!(),
+            &text[end..],
+            own_tables!()
+        )
+    }
 
     /// `GOOD` with `from` replaced by `to` (once; it must be there).
     fn good_with(from: &str, to: &str) -> String {
@@ -1319,7 +1530,7 @@ macro_rules! cli_name {
 #[macro_export]
 macro_rules! login_name {
     () => {
-        "K2 Connect"
+        "Initech Account"
     };
 }
 
@@ -1378,7 +1589,7 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
     #[test]
     fn no_aliases_gives_empty_lists() {
         for (tag, aliases) in [("empty", "aliases = []\n"), ("absent", "")] {
-            let text = format!("id = \"ab\"\nschema = 1\n[names]\nproduct = \"AB\"\n[cli]\nname = \"ab\"\n{aliases}");
+            let text = good_with(good_aliases!(), aliases);
             let t = TempBrand::new(tag, Some(&text));
             let out = render(&load(&t.file(), &default_file()).expect("loads"));
             assert!(
@@ -1435,6 +1646,7 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
     fn a_retiring_alias_is_listed_and_a_silent_one_is_not() {
         let text = "id = \"xy\"\nschema = 1\n[names]\nproduct = \"XY\"\n[cli]\nname = \"xy\"\n\
             aliases = [{ name = \"xyold\", mode = \"notice\" }, { name = \"xy2\", mode = \"silent\" }]\n";
+        let text = &partner(text);
         let t = TempBrand::new("retired", Some(text));
         let out = render(&load(&t.file(), &default_file()).expect("loads"));
         let want = "pub const RETIRED: &[RetiredName] = &[RetiredName { name: \"xyold\", \
@@ -1482,7 +1694,7 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
         let text =
             "id = \"gd\"\nschema = 1\n[names]\nproduct = \"Globex Desk\"\n[cli]\nname = \"gd\"\n\
             aliases = [{ name = \"gdold\", mode = \"notice\" }]\n";
-        let t = TempBrand::new("apart", Some(text));
+        let t = TempBrand::new("apart", Some(&partner(text)));
         let out = render(&load(&t.file(), &default_file()).expect("loads"));
         for line in [
             "pub const PATH_BLOCK_BEGIN: &str = \"# >>> Globex Desk CLI >>>\";\n",
@@ -1560,7 +1772,7 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
     fn the_product_and_the_command_stay_apart() {
         let text =
             "id = \"gd\"\nschema = 1\n[names]\nproduct = \"Globex Desk\"\n[cli]\nname = \"gd\"\n";
-        let t = TempBrand::new("apart", Some(text));
+        let t = TempBrand::new("apart", Some(&partner(text)));
         let out = render(&load(&t.file(), &default_file()).expect("loads"));
         for line in [
             "        \"Globex Desk\"\n",
@@ -1739,7 +1951,7 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
         );
         refused(
             "no-names",
-            &good_with("[names]\nproduct = \"AB\"\n", ""),
+            &good_with(concat!("[names]\nproduct = \"AB\"\n", own_names!()), ""),
             "[names] is missing",
         );
         refused(
@@ -1808,6 +2020,8 @@ server = "Hub Box"
 login = "Initech Account"
 [cli]
 name = "ab"
+[package]
+update_feed = "https://updates.example.invalid/latest.json"
 [zones]
 label = "boxes.example.invalid"
 [control]
@@ -1933,27 +2147,49 @@ call_name = "Hub Calls"
     }
 
     /// A field a brand leaves out is the default brand's, except the ones
-    /// made from the brand's own names.
+    /// made from the brand's own names. GOOD isn't ours, so it sets the
+    /// fields of SETS_ITS_OWN and SETS_ON_PURPOSE; the rest are left out.
     #[test]
     fn a_left_out_field_is_the_default_brands_or_made_from_the_names() {
         let base = default_fields();
         let t = TempBrand::new("left-out", Some(GOOD));
         let got = load(&t.file(), &default_file()).expect("loads").fields;
+        let s = |v: &str| v.to_string();
         let want = Fields {
-            short: "AB".into(),
-            lockup: format!("AB by {}", base.company),
-            server: "AB Server".into(),
-            system_from_name: "AB".into(),
-            sew_call_name: "AB".into(),
+            short: s("AB"),
+            company: s("Initech"),
+            lockup: s("AB by Initech"),
+            server: s("AB Server"),
+            login: s("Initech Account"),
+            label_zone: s("ab.example.invalid"),
+            daemon_feed: s("https://updates.example.invalid/ab/daemon-latest.json"),
+            downloads: s("https://updates.example.invalid/ab/download"),
+            site: s("https://ab.example.invalid"),
+            support_email: s("help@ab.example.invalid"),
+            dashboard: None,
+            feedback: None,
+            system_from_name: s("AB"),
+            postal: false,
+            phone_bundle_id: s("invalid.example.ab"),
+            phone_team_id: s("ABCDE12345"),
+            push_topic: s("invalid.example.ab"),
+            sew_call_name: s("AB"),
             ..base.clone()
         };
         assert_eq!(got, want);
+        // Left out, so the default brand's: our control endpoints (on
+        // purpose), the machine names, the other links, the sender.
+        assert_eq!(
+            (&got.connect, &got.home, &got.terms, &got.system_from),
+            (&base.connect, &base.home, &base.terms, &base.system_from)
+        );
         // System mail comes from each box's own server name by default.
         assert_eq!(base.system_from, format!("noreply@{SERVER_SLOT}"));
         let t = TempBrand::new(
             "own-from",
-            Some(&format!(
-                "{GOOD}[mail]\nsystem_from = \"hello@{{server}}\"\n"
+            Some(&good_with(
+                "[mail]\n",
+                "[mail]\nsystem_from = \"hello@{server}\"\n",
             )),
         );
         assert_eq!(
@@ -1964,13 +2200,8 @@ call_name = "Hub Calls"
             "hello@{server}"
         );
         // An empty link is none, and stays none: it is not the default's.
-        let t = TempBrand::new(
-            "no-site-link",
-            Some(&format!("{GOOD}[links]\ndashboard = \"\"\n")),
-        );
-        let got = load(&t.file(), &default_file()).expect("loads").fields;
-        assert_eq!(got.dashboard, None);
-        assert_eq!(got.site, base.site, "the rest of [links] is the default's");
+        assert!(base.dashboard.is_some() && base.feedback.is_some());
+        assert_eq!((got.dashboard, got.feedback), (None, None));
     }
 
     /// The default brand's file is where every left-out field comes from,
@@ -2061,7 +2292,7 @@ call_name = "Hub Calls"
             ),
             (
                 "rh-key",
-                format!("{GOOD}[update]\nroot_helper = []\n"),
+                good_with("[update]\n", "[update]\nroot_helper = []\n"),
                 "update.root_helper: ",
             ),
             (
@@ -2260,6 +2491,225 @@ call_name = "Hub Calls"
             ("feeds.daemon", &b.fields.daemon_feed, &base.daemon_feed),
         ] {
             assert_ne!(mine, ours, "the template sets its own {what}");
+        }
+    }
+
+    /// `GOOD` with the line that sets `field` (`table.key`) taken out, or
+    /// set to `value` (as TOML) when given.
+    fn good_setting(field: &str, value: Option<&str>) -> String {
+        let key = field.split_once('.').expect("table.key").1;
+        let head = format!("{key} = ");
+        let line = GOOD
+            .lines()
+            .find(|l| l.starts_with(&head))
+            .unwrap_or_else(|| panic!("GOOD sets {field}"));
+        assert_eq!(
+            GOOD.lines().filter(|l| l.starts_with(&head)).count(),
+            1,
+            "GOOD has one {key} line"
+        );
+        let to = value.map(|v| format!("{key} = {v}\n")).unwrap_or_default();
+        good_with(&format!("{line}\n"), &to)
+    }
+
+    /// A brand that isn't ours leaves out none of the fields that name us
+    /// or reach us: each one left out is refused, naming it. Left out, a
+    /// partner's build would show our company, our sign-in name, our site
+    /// or our support address, or take our updates.
+    #[test]
+    fn a_brand_not_ours_sets_each_field_that_names_us() {
+        let t = TempBrand::new("not-ours-whole", Some(GOOD));
+        let b = load(&t.file(), &default_file()).expect("GOOD sets every field it must");
+        assert!(
+            !ours::is_ours(&b.id, &t.dir, &repo("")),
+            "a brand in the temp dir is not ours"
+        );
+        for (i, field) in SETS_ITS_OWN.iter().enumerate() {
+            refused(
+                &format!("not-ours-missing-{i}"),
+                &good_setting(field, None),
+                &format!("{field} is missing: a brand that isn't ours sets its own (the default brand's would show ours)"),
+            );
+        }
+        for (i, field) in SETS_ON_PURPOSE.iter().enumerate() {
+            refused(
+                &format!("not-ours-unset-{i}"),
+                &good_setting(field, None),
+                &format!("{field} is missing: a brand that isn't ours sets it on purpose (the default brand's is ours)"),
+            );
+        }
+        // A whole table left out is named by its first field.
+        let at = GOOD.find("[phone]\n").expect("GOOD has [phone]");
+        refused(
+            "not-ours-no-phone",
+            &GOOD[..at],
+            "phone.bundle_id is missing: a brand that isn't ours sets it on purpose",
+        );
+    }
+
+    /// A brand that isn't ours may not set a field of SETS_ITS_OWN to the
+    /// default brand's own value, nor carry one of its update keys. The
+    /// fields of SETS_ON_PURPOSE may be ours when the brand writes them.
+    #[test]
+    fn a_brand_not_ours_may_not_take_our_values() {
+        let text = std::fs::read_to_string(default_file()).expect("read brand/k2");
+        let doc: toml::Table = toml::from_str(&text).expect("brand/k2 is TOML");
+        let ours = |field: &str| -> String {
+            let (table, key) = field.split_once('.').expect("table.key");
+            doc[table][key]
+                .as_str()
+                .unwrap_or_else(|| panic!("brand/k2 spells {field}"))
+                .to_string()
+        };
+        for (i, field) in SETS_ITS_OWN.iter().enumerate() {
+            if *field == "update.keys" {
+                continue;
+            }
+            let v = ours(field);
+            assert!(!v.is_empty(), "brand/k2's {field} is a value of ours");
+            refused(
+                &format!("not-ours-ours-{i}"),
+                &good_setting(field, Some(&format!("{v:?}"))),
+                &format!("{field} is the default brand's own value {v:?}: a brand that isn't ours sets its own"),
+            );
+        }
+        let keys = doc["update"]["keys"]
+            .as_array()
+            .expect("brand/k2's update.keys");
+        assert!(!keys.is_empty());
+        for (i, k) in keys.iter().enumerate() {
+            let (id, line) = (
+                k["key_id"].as_str().expect("key_id"),
+                k["pubkey"].as_str().expect("pubkey"),
+            );
+            refused(
+                &format!("not-ours-key-{i}"),
+                &good_setting(
+                    "update.keys",
+                    Some(&format!(
+                        "[{{ role = \"primary\", key_id = \"{id}\", pubkey = \"{line}\" }}]"
+                    )),
+                ),
+                &format!("update.keys holds the default brand's own update key {id}: a brand that isn't ours sets its own"),
+            );
+        }
+        // "" is no link: not ours. GOOD's dashboard and feedback are "".
+        assert!(GOOD.contains("dashboard = \"\"\n") && GOOD.contains("feedback = \"\"\n"));
+        // The phone app and Postal may be ours, written on purpose.
+        let mut text = good_setting("mail.postal", Some("true"));
+        for key in ["bundle_id", "team_id", "push_topic"] {
+            let line = GOOD
+                .lines()
+                .find(|l| l.starts_with(&format!("{key} = ")))
+                .expect("GOOD sets the phone");
+            text = text.replacen(
+                line,
+                &format!("{key} = {:?}", ours(&format!("phone.{key}"))),
+                1,
+            );
+        }
+        let t = TempBrand::new("not-ours-our-phone", Some(&text));
+        let f = load(&t.file(), &default_file())
+            .expect("our phone app and Postal, written on purpose, load")
+            .fields;
+        let base = default_fields();
+        assert_eq!(
+            (
+                &f.phone_bundle_id,
+                &f.phone_team_id,
+                &f.push_topic,
+                f.postal
+            ),
+            (
+                &base.phone_bundle_id,
+                &base.phone_team_id,
+                &base.push_topic,
+                true
+            )
+        );
+    }
+
+    /// Ours is brand k2 or k5 in this repo's own brand/<id>. A copy of
+    /// brand/k2 in a folder named k2 elsewhere is not ours: it is held to
+    /// the rule of a brand that isn't ours, so it may not leave a field
+    /// out, nor keep our values.
+    #[test]
+    fn a_copy_of_our_brand_elsewhere_is_not_ours() {
+        let root = repo("");
+        assert!(ours::is_ours("k2", &repo("brand/k2"), &root));
+        assert!(ours::is_ours("k5", &repo("brand/k5"), &root));
+        assert!(!ours::is_ours("xy", &repo("brand/xy"), &root));
+        assert!(
+            !ours::is_ours("k5", &repo("brand/k2"), &root),
+            "the id and the folder agree"
+        );
+        let t = TempBrand::new("copy-k2", None);
+        let dir = t.dir.join("brand").join("k2");
+        std::fs::create_dir_all(&dir).expect("make the copy's folder");
+        assert!(
+            !ours::is_ours("k2", &dir, &root),
+            "a folder named k2 outside the repo's brand/"
+        );
+        let text = std::fs::read_to_string(default_file()).expect("read brand/k2");
+        let file = dir.join("brand.toml");
+        let err_of = |text: &str| -> String {
+            std::fs::write(&file, text).expect("write the copy");
+            load(&file, &default_file()).expect_err("a copy of brand/k2 elsewhere is refused")
+        };
+        let err = err_of(&text);
+        let company = default_fields().company;
+        assert!(
+            err.contains(&format!("names.company is the default brand's own value {company:?}: a brand that isn't ours sets its own")),
+            "{err}"
+        );
+        let gap: String = text
+            .lines()
+            .filter(|l| !l.starts_with("login = "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        assert_eq!(
+            gap.lines().count() + 1,
+            text.lines().count(),
+            "brand/k2 has one login line"
+        );
+        let err = err_of(&gap);
+        assert!(
+            err.contains("names.login is missing: a brand that isn't ours sets its own (the default brand's would show ours)"),
+            "{err}"
+        );
+    }
+
+    /// Ours load unchanged and are ours; brand/xy is not ours and loads,
+    /// with its own values for every field that names us.
+    #[test]
+    fn ours_load_as_ours_and_brand_xy_as_its_own() {
+        let file = default_file();
+        let k2 = load(&file, &file).expect("brand/k2 loads");
+        assert!(ours::is_ours(&k2.id, &repo("brand/k2"), &repo("")));
+        let k5 = load(&repo("brand/k5/brand.toml"), &file).expect("brand/k5 loads");
+        assert!(ours::is_ours(&k5.id, &repo("brand/k5"), &repo("")));
+        assert_eq!(
+            k5.fields.company,
+            default_fields().company,
+            "brand/k5 keeps our names"
+        );
+        let xy = load(&repo("brand/xy/brand.toml"), &file).expect("brand/xy loads");
+        assert!(!ours::is_ours(&xy.id, &repo("brand/xy"), &repo("")));
+        let base = default_fields();
+        for (what, mine, ours) in [
+            ("names.company", &xy.fields.company, &base.company),
+            ("names.login", &xy.fields.login, &base.login),
+            ("zones.label", &xy.fields.label_zone, &base.label_zone),
+            ("links.site", &xy.fields.site, &base.site),
+            (
+                "links.support_email",
+                &xy.fields.support_email,
+                &base.support_email,
+            ),
+            ("feeds.daemon", &xy.fields.daemon_feed, &base.daemon_feed),
+            ("feeds.downloads", &xy.fields.downloads, &base.downloads),
+        ] {
+            assert_ne!(mine, ours, "brand/xy sets its own {what}");
         }
     }
 

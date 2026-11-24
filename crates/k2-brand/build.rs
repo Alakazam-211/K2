@@ -4,9 +4,12 @@
 //! The brand folder is `K2_BRAND_DIR` when it is set (a relative path is
 //! read from the workspace root), else `brand/k2` at the workspace root.
 //! A field the brand file leaves out takes the default brand's value
-//! (`brand/k2`), so this reads that file too. A brand file this build
-//! can't use stops the build with a line that names the file and the
-//! field.
+//! (`brand/k2`), so this reads that file too, except that a brand that
+//! isn't ours (not k2 or k5 in this repo's own `brand/<id>`) may not leave
+//! out, or take our value for, a field that names us or reaches us
+//! (`brand_file.rs`, `SETS_ITS_OWN` and `SETS_ON_PURPOSE`). A brand file
+//! this build can't use stops the build with a line that names the file
+//! and the field.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};

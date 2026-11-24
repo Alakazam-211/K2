@@ -83,10 +83,19 @@ the bash CLI's own copy of the Connect address (cli/src/connect.sh): only
 brand/k2 may set it, and its connect must be the bash copy's (bash), until
 the bash CLI reads the brand file.
 
+A brand that isn't ours (anything but brand/k2 and brand/k5 in this repo:
+is_ours, the rule crates/k2-brand/src/ours.rs keeps) sets every field whose
+default names us or reaches us, to a value of its own: SETS_ITS_OWN, the
+same list crates/k2-brand refuses at build time. Left out (required) or set
+to the default brand's own value (ours), a partner's build would show our
+company, our sign-in name, our site or our support address, or take our
+updates. A link there may be "" (none). The fields in SETS_ON_PURPOSE
+(mail.postal, the phone app) are required too, but may be ours.
+
 --hosted also checks a brand (not ours) as the brand of a hosted box: every
-field such a box needs is set (hosted), the links that may not be none are
-not "", none of them is the default brand's own value (ours), and its
-update keys are not the distributor template's test-only key (testkey).
+other field such a box needs is set (hosted), the links that may not be
+none are not "", none of them is the default brand's own value (ours), and
+its update keys are not the distributor template's test-only key (testkey).
 
 --name checks one command name (and --product one product) against the
 brands this repo holds and prints `<name><TAB><answer>`: the first rule it
@@ -330,6 +339,16 @@ FIELD_SHAPES = {
     "phone.bundle_id": "rdns", "phone.team_id": "team", "phone.push_topic": "rdns",
     "sew.call_name": "name",
 }
+# What a brand that isn't ours sets to a value of its own, and what it sets
+# to any value: the lists crates/k2-brand/src/brand_file.rs keeps (K2's
+# ruling, B7). look.icons joins SETS_ON_PURPOSE once something reads it;
+# until then only --hosted asks for it.
+SETS_ITS_OWN = (
+    "names.company", "names.login", "zones.label", "links.site", "links.support_email",
+    "links.dashboard", "links.feedback", "feeds.daemon", "feeds.downloads",
+    "package.update_feed", "update.keys",
+)
+SETS_ON_PURPOSE = ("mail.postal", "phone.bundle_id", "phone.team_id", "phone.push_topic")
 # What a hosted box of a brand (not ours) needs set. The links in
 # HOSTED_SOME may not be "" either; the fields in HOSTED_NOT_OURS may not
 # be the default brand's own value.
@@ -523,6 +542,37 @@ def control_findings(doc, brand_id, ours, default_id):
     return out
 
 
+def not_ours_findings(doc, default):
+    """(field, rule, why) for a brand that isn't ours: each field of
+    SETS_ITS_OWN or SETS_ON_PURPOSE it leaves out (required), and each field
+    of SETS_ITS_OWN it sets to the default brand's own value (ours)."""
+    out = []
+    for field in SETS_ITS_OWN + SETS_ON_PURPOSE:
+        if not field_value(doc, field)[0]:
+            why = ("a brand that isn't ours sets its own (the default brand's would show ours)"
+                   if field in SETS_ITS_OWN else
+                   "a brand that isn't ours sets it on purpose (the default brand's is ours)")
+            out.append((field, "required", f"is missing: {why}"))
+    for field in SETS_ITS_OWN:
+        present, v = field_value(doc, field)
+        _, theirs = field_value(default, field)
+        if not present:
+            continue
+        if field == "update.keys":
+            ours_keys = theirs if isinstance(theirs, list) else []
+            for k in v if isinstance(v, list) else []:
+                for o in ours_keys:
+                    if isinstance(k, dict) and isinstance(o, dict) and (
+                            k.get("key_id") == o.get("key_id") or k.get("pubkey") == o.get("pubkey")):
+                        out.append((field, "ours", f"holds the default brand's own update key {o.get('key_id')}: "
+                                                   "a brand that isn't ours sets its own"))
+            continue
+        if v != "" and v == theirs:
+            out.append((field, "ours", f"is the default brand's own value {json.dumps(v)}: "
+                                       "a brand that isn't ours sets its own"))
+    return out
+
+
 def field_findings(doc, ours, hosted, default):
     """(field, rule, why) for every other field: unknown tables and keys,
     shapes, the machine names, and with `hosted` what a hosted box needs."""
@@ -562,6 +612,8 @@ def field_findings(doc, ours, hosted, default):
             if v != want:
                 out.append((field, "machine", f"must be {want!r} for now: the code still uses that name everywhere"))
     out += control_findings(doc, doc.get("id"), ours, default.get("id"))
+    if not ours:
+        out += not_ours_findings(doc, default)
     if hosted and not ours:
         ids, lines = test_only_keys()
         for k in (doc.get("update") or {}).get("keys") or []:
@@ -570,6 +622,8 @@ def field_findings(doc, ours, hosted, default):
                             f"holds the distributor template's test-only key {k.get('key_id')}: "
                             "its private half never existed; put your own update key here"))
         for field in HOSTED:
+            if field in SETS_ITS_OWN or field in SETS_ON_PURPOSE:
+                continue  # asked of every brand that isn't ours, above
             present, v = field_value(doc, field)
             if not present:
                 out.append((field, "hosted", "a hosted box needs it set"))

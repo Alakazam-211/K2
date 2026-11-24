@@ -6,7 +6,12 @@
 # tables and keys below and nothing else: a table or key it does not know
 # stops the build, so add only what K5's release notes say a brand file
 # may hold. A field you leave out is K5's own value (brand/k2 in K5's
-# repo); the README's field guide says which ones you must set.
+# repo); the README's field guide says which ones you must set. Every
+# field whose own value names K5 or reaches K5 (your company, your
+# sign-in name, your zone, your site, your support address, your account
+# page and feedback form, your update feeds and keys) is one you must set,
+# and not to K5's own value; so are [mail] postal and [phone]. The build
+# and `brand.sh lint` refuse a brand that leaves one out, naming it.
 #
 # Before you ship, `bash scripts/brand.sh lint <this folder> --live
 # --hosted` must pass on the K5 tag you build (the pipeline runs the lint
@@ -117,11 +122,21 @@ feedback = ""
 # Each box sends from its own server name ({server}: noreply@{server} is
 # noreply@box.partner.example for the box box.partner.example), so SPF,
 # DKIM and DMARC go on each box's name, never on your apex domain.
-# postal: whether your boxes may join Postal (true or false).
+# postal: whether your boxes may join Postal (true or false); you must
+# set it.
 [mail]
 system_from = "noreply@{server}"
 system_from_name = "Globex Studio"
 postal = false
+
+# The phone app your boxes pair with: its bundle id, its Apple team id
+# and its push topic. You must set all three. To pair with K5's own phone
+# app, write its values here (brand/k2's [phone] in K5's repo); with an
+# app of your own, write yours. These are placeholders.
+[phone]
+bundle_id = "invalid.example.globex.studio"
+team_id = "GLOBEX0001"
+push_topic = "invalid.example.globex.studio"
 
 # What calls and chat name the service.
 [sew]
@@ -129,7 +144,5 @@ call_name = "Globex Studio"
 
 # Left out, so they are K5's own: [control] (Connect, the certificate
 # broker, push and the relays are ours; a brand that sets [control] sets
-# all six), [machine] (the home folder, program and unit names: a brand
-# may not rename them yet) and [phone] (your boxes pair with our
-# phone app unless you have your own: then set bundle_id, team_id and
-# push_topic).
+# all six) and [machine] (the home folder, program and unit names: a
+# brand may not rename them yet).

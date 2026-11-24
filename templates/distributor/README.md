@@ -66,8 +66,16 @@ the reservation is what keeps it from happening.
 `brand/brand.toml` holds everything your build and a hosted box of yours
 need to be yours. A field you leave out is K5's own value (the default
 brand, `brand/k2` in K5's repo), or is made from your names where the
-table says so. `bash scripts/brand.sh lint brand --hosted` refuses a brand
-that leaves out a field marked **must**, or sets one to K5's own value.
+table says so.
+
+A field marked **must, your own** names K5 or reaches K5 when left out
+(K5's company, sign-in name, site, support address, update feeds or
+keys), so the build and `bash scripts/brand.sh lint brand` refuse a
+brand that leaves it out or sets it to K5's own value, naming the field.
+A field marked **must, any value** is refused when left out, but may be
+K5's own value when you write it. `--hosted` also refuses a brand that
+leaves out a field marked **must (--hosted)**, or sets one to K5's own
+value.
 
 Shapes: every URL is `https://<domain>[/<path>]`; domains are lower case;
 an email is `<name>@<domain>`; a key is a minisign public key line (the
@@ -82,30 +90,30 @@ the build, naming it.
 | `schema` | the brand file's format: `1` | **must** |
 | `names.product` | the product's name, for prose and screens | **must** |
 | `names.short` | the name where space is short | may (left out: the product's) |
-| `names.company` | your company | **must** |
+| `names.company` | your company | **must**, your own |
 | `names.lockup` | the product with its maker | may (left out: `<product> by <company>`) |
 | `names.server` | what a box is called | may (left out: `<product> Server`) |
-| `names.login` | the account your users sign in with | **must** |
+| `names.login` | the account your users sign in with | **must**, your own |
 | `cli.name`, `cli.aliases` | the command and its other names ("Your brand's names" above) | **must** (aliases may be `[]`) |
 | `package.bundle_id`, `desktop_id`, `gui_binary` | the app's ids on macOS and Linux | **must** for app builds |
-| `package.update_feed` | the desktop app's update manifest | **must** |
+| `package.update_feed` | the desktop app's update manifest | **must**, your own |
 | `update.keys` | the update keys your build trusts, primary first; never K5's. They sign your daemon, so they are also the trust root of the Sew pins it carries (there is no separate Sew signer). The template's key is a test-only placeholder that `--hosted` refuses | **must**, your own |
-| `zones.label` | the zone your boxes are named under, `<subdomain>.<label>`: their only name (no second name under K5's own zone) | **must** |
+| `zones.label` | the zone your boxes are named under, `<subdomain>.<label>`: their only name (no second name under K5's own zone) | **must**, your own |
 | `control.connect`, `cert`, `push`, `relay`, `relay_list`, `web_api` | Connect, the certificate broker, the push gateway, the relays, the website's API | leave out: they are ours. A brand that sets `[control]` sets all six |
-| `feeds.daemon` | the headless daemon's update manifest | **must** |
-| `feeds.downloads` | the folder a release's files are downloaded from | **must** |
+| `feeds.daemon` | the headless daemon's update manifest | **must**, your own |
+| `feeds.downloads` | the folder a release's files are downloaded from | **must**, your own |
 | `machine.home`, `binary_prefix`, `unit_prefix` | the home folder (`.k2`), what programs and systemd units are named after (`k2-daemon`, `k2-daemon.service`); ops scripts find your boxes by these | leave out: a brand may not rename them yet |
-| `look.icons` | your icons folder, inside your brand folder | **must** |
+| `look.icons` | your icons folder, inside your brand folder | **must (--hosted)**; the build asks for it once something reads it |
 | `look.accent` | your accent colour | may (left out: the style's own) |
-| `links.site` | your public website | **must** |
-| `links.support_email` | where your users write for help | **must** |
-| `links.support_url`, `terms`, `privacy` | your support page, terms of service and privacy policy | **must**, not `""` |
-| `links.dashboard` | where a user manages their account | **must**, may be `""` (none) |
-| `links.feedback` | where Send feedback goes | **must**, may be `""` (the button is off) |
+| `links.site` | your public website | **must**, your own |
+| `links.support_email` | where your users write for help | **must**, your own |
+| `links.support_url`, `terms`, `privacy` | your support page, terms of service and privacy policy | **must (--hosted)**, not `""` |
+| `links.dashboard` | where a user manages their account | **must**, your own, or `""` (none) |
+| `links.feedback` | where Send feedback goes | **must**, your own, or `""` (the button is off) |
 | `mail.system_from` | the address system mail comes from. There is no fleet-wide sender: each box sends from its own server name through its own hostmail, so `{server}` stands for the box's name (`noreply@{server}` is `noreply@box.partner.example` for the box `box.partner.example`). SPF, DKIM and DMARC go on each box's server name, never on your apex domain | may (left out: `noreply@{server}`) |
 | `mail.system_from_name` | the name on it | may (left out: the product's) |
-| `mail.postal` | `true` or `false`: your boxes may join Postal | **must** |
-| `phone.bundle_id`, `team_id`, `push_topic` | the phone app your boxes pair with | leave out unless you have your own app |
+| `mail.postal` | `true` or `false`: your boxes may join Postal | **must**, any value |
+| `phone.bundle_id`, `team_id`, `push_topic` | the phone app your boxes pair with: K5's own app's values (`brand/k2` in K5's repo), or your own app's | **must**, any value |
 | `sew.call_name` | what calls and chat name the service | may (left out: the product's) |
 
 Most of these fields are read by nothing in K5 yet: K5's release notes

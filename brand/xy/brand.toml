@@ -40,10 +40,11 @@ keys = [
 ]
 
 # The fields a hosted box needs (brand/k2 says what each is). Neutral
-# placeholders: names under example.invalid, which nobody owns. Left out
-# on purpose, so they are brand/k2's (ours): [control] (the control
-# endpoints stay ours), [machine] (a brand may not rename those yet) and
-# [phone] (xy has no phone app).
+# placeholders: names under example.invalid, which nobody owns. A brand
+# that isn't ours sets every field that names us or reaches us, and
+# [mail] postal and [phone] (the build refuses one left out). Left out on
+# purpose, so they are brand/k2's (ours): [control] (the control
+# endpoints stay ours) and [machine] (a brand may not rename those yet).
 [zones]
 label = "desk.example.invalid"
 
@@ -69,6 +70,12 @@ feedback = ""
 system_from = "noreply@{server}"
 system_from_name = "Globex Desk"
 postal = false
+
+# A placeholder phone app: xy has none, so nothing pairs with it.
+[phone]
+bundle_id = "invalid.example.globex.desk"
+team_id = "GLOBEX0000"
+push_topic = "invalid.example.globex.desk"
 
 [sew]
 call_name = "Globex Desk"

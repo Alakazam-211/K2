@@ -5,6 +5,10 @@
 //! ready-made Garden is a data file with no Rust edit. See
 //! `src/zen/garden_catalog.rs`. The functions below `main` embed the SDK
 //! server files, the agent templates and the migrations list the same way.
+//!
+//! It also sets `cfg(k2_no_bash)` for a brand with `[cli] no_bash` true
+//! (`k2_brand::CLI_NO_BASH`): such a build carries no shell CLI, so
+//! `cli_stage` never compiles `cli/k2` in.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -45,6 +49,17 @@ fn main() {
     sdk_server_dist(&manifest);
     agent_templates(&manifest);
     migrations_list(&manifest);
+    no_bash();
+}
+
+/// `cfg(k2_no_bash)` when the brand carries no shell CLI. A `cfg`, not an
+/// `if` on the const: the script's bytes must not reach the binary at all.
+fn no_bash() {
+    println!("cargo:rerun-if-env-changed=K2_BRAND_DIR");
+    println!("cargo::rustc-check-cfg=cfg(k2_no_bash)");
+    if k2_brand::CLI_NO_BASH {
+        println!("cargo::rustc-cfg=k2_no_bash");
+    }
 }
 
 /// The migrations as `MIGRATIONS: &[(name, SQL)]`, in the order of

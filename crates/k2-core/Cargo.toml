@@ -53,6 +53,11 @@ airgap = []
 # with it a missing Xcode fails loudly (vs-live M-A18). Not a runtime feature.
 sim-live-ios = []
 
+# build.rs reads the brand's `cli.no_bash` (`cfg(k2_no_bash)`: no shell CLI
+# compiled in).
+[build-dependencies]
+k2-brand = { path = "../k2-brand" }
+
 # k2-core's OWN integration tests (under `crates/k2-core/tests/`) are
 # separate compilation units that don't see `cfg(test)` of the lib —
 # they only see features. Pull the lib back in as a dev-dependency with

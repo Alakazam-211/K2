@@ -5734,6 +5734,7 @@ dependencies = [
  "idna",
  "ignore",
  "image",
+ "k2-brand",
  "k2-client",
  "k2-core",
  "k2-node-proto",

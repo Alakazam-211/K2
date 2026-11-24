@@ -1600,8 +1600,10 @@ pub(crate) fn teach_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
 
 /// A refusal (4xx) to an agent names the command agents type now
 /// (`k2_core::agent_cli`): its hints say `k5 …` while the owner's k5
-/// switch is on and its links run k5. The same bytes otherwise, and for
-/// everyone but a valid agent passport. TCP side: after [`teach_tcp`].
+/// switch is on and its links run k5. Only a `hint` is taught
+/// ([`teach_hints`]); the rest of the answer, `hintTemplate` included,
+/// keeps its bytes. The same bytes otherwise, and for everyone but a valid
+/// agent passport. TCP side: after [`teach_tcp`].
 pub(crate) fn name_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
     if !(400..500).contains(&status_code(status)) {
         return Cow::Borrowed(body);
@@ -1618,7 +1620,7 @@ pub(crate) fn name_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
     })
     .unwrap_or(false);
     if agent {
-        k2_core::agent_cli::teach_as(body, cli)
+        teach_hints(body, cli)
     } else {
         Cow::Borrowed(body)
     }
@@ -1630,10 +1632,66 @@ pub(crate) fn name_cell(status: &str, body: String) -> String {
     if !(400..500).contains(&status_code(status)) {
         return body;
     }
-    match k2_core::agent_cli::teach(&body) {
+    match teach_hints(&body, k2_core::agent_cli::name()) {
         Cow::Borrowed(_) => body,
         Cow::Owned(named) => named,
     }
+}
+
+/// `body` with the value of every `"hint"` key (a JSON string, at any
+/// depth) taught as `cli`, and every other byte as it was: the codes,
+/// messages, names, notes and file names in an answer, the `hintTemplate`
+/// beside a hint, and the Ask line's `command` and `params` are data and
+/// are never passed to `teach_as`. A body that isn't JSON is left alone.
+pub(crate) fn teach_hints<'a>(body: &'a str, cli: &str) -> Cow<'a, str> {
+    if cli == CLI_NAME || !body.contains("\"hint\"") || serde_json::from_str::<serde::de::IgnoredAny>(body).is_err() {
+        return Cow::Borrowed(body);
+    }
+    let bytes = body.as_bytes();
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut changed = false;
+    // The last token was the key `"hint"` and its colon: the next string
+    // is a hint.
+    let mut after_hint_key = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                let start = i;
+                i += 1;
+                while bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+                let token = &body[start..i];
+                let rest = body[i..].trim_start();
+                if rest.starts_with(':') {
+                    after_hint_key = token == "\"hint\"";
+                    continue;
+                }
+                if std::mem::take(&mut after_hint_key) {
+                    let hint: String = serde_json::from_str(token).expect("a JSON string token");
+                    if let Cow::Owned(taught) = k2_core::agent_cli::teach_as(&hint, cli) {
+                        out.push_str(&body[copied..start]);
+                        out.push_str(&serde_json::to_string(&taught).expect("a string serializes"));
+                        copied = i;
+                        changed = true;
+                    }
+                }
+            }
+            b' ' | b'\t' | b'\n' | b'\r' | b':' => i += 1,
+            _ => {
+                after_hint_key = false;
+                i += 1;
+            }
+        }
+    }
+    if !changed {
+        return Cow::Borrowed(body);
+    }
+    out.push_str(&body[copied..]);
+    Cow::Owned(out)
 }
 
 /// Cell socket: the refusal wrapper on an agent verb's result (the cell's

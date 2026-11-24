@@ -17,6 +17,11 @@
 //! `k2::host`, `k2.dev`, `cli/k2`, `K2`). With the switch off it returns
 //! the same bytes, borrowed.
 //!
+//! Only text K2 writes is taught. A person's text (a workspace or agent
+//! name, a role, a note, a ticket, a file they wrote) goes into a
+//! generator through [`Held`] and comes out byte for byte, and the daemon
+//! teaches only the `hint` of a refusal, never the rest of an answer.
+//!
 //! Who asks: the generated AGENTS.md (`workspace::skill_regen`), the live
 //! context layers (`workspace::context_layers`), the `k2-cli`,
 //! `k2-permissions`, `k2-chat` and `k2-zen` skills, the per-agent skills
@@ -147,6 +152,92 @@ pub fn teach_doc_as<'a>(text: &'a str, cli: &str) -> Cow<'a, str> {
     let sep = if out[..at].ends_with('\n') { "" } else { "\n\n" };
     out.insert_str(at, &format!("{sep}{line}\n\n"));
     Cow::Owned(out)
+}
+
+/// Opens and closes a [`Held`] stand-in. Private-use characters: never in
+/// the text K2 writes, and neither one is a word character, so a stand-in
+/// next to a command changes nothing about where [`rename_command`] looks.
+const HOLD_OPEN: char = '\u{E000}';
+const HOLD_CLOSE: char = '\u{E001}';
+
+/// A person's text on its way into text agents are taught: a workspace,
+/// agent or skill name, a note, a role, a file a person wrote. A generator
+/// puts each such value in through [`Held::hold`], so [`Held::teach_as`]
+/// renames only the text K2 wrote and puts every held value back as it
+/// was, byte for byte. [`Held::pass_through`] holds nothing: the same
+/// generator then gives its text as written.
+pub struct Held {
+    values: Option<std::cell::RefCell<Vec<String>>>,
+}
+
+impl Held {
+    /// Holds each value until [`Held::teach_as`] (or [`Held::put_back`]).
+    pub fn new() -> Self {
+        Self { values: Some(std::cell::RefCell::new(Vec::new())) }
+    }
+
+    /// Holds nothing: [`Held::hold`] gives the value itself.
+    pub fn pass_through() -> Self {
+        Self { values: None }
+    }
+
+    /// `value` as it goes into the text: a stand-in teaching never reads,
+    /// or the value itself for [`Held::pass_through`].
+    pub fn hold<'a>(&self, value: &'a str) -> Cow<'a, str> {
+        let Some(values) = &self.values else {
+            return Cow::Borrowed(value);
+        };
+        let mut values = values.borrow_mut();
+        values.push(value.to_string());
+        Cow::Owned(format!("{HOLD_OPEN}{}{HOLD_CLOSE}", values.len() - 1))
+    }
+
+    /// `text` taught as `cli` ([`teach_as`]), then every held value put
+    /// back as it was.
+    pub fn teach_as(&self, text: &str, cli: &str) -> String {
+        self.put_back(&teach_as(text, cli))
+    }
+
+    /// [`Held::teach_as`] with [`name`].
+    pub fn teach(&self, text: &str) -> String {
+        self.teach_as(text, name())
+    }
+
+    /// `text` with every held value put back as it was, nothing taught.
+    pub fn put_back(&self, text: &str) -> String {
+        let Some(values) = &self.values else {
+            return text.to_string();
+        };
+        let values = values.borrow();
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find(HOLD_OPEN) {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + HOLD_OPEN.len_utf8()..];
+            let held = after
+                .find(HOLD_CLOSE)
+                .and_then(|end| after[..end].parse::<usize>().ok().map(|i| (i, end)))
+                .and_then(|(i, end)| values.get(i).map(|v| (v, end)));
+            match held {
+                Some((v, end)) => {
+                    out.push_str(v);
+                    rest = &after[end + HOLD_CLOSE.len_utf8()..];
+                }
+                None => {
+                    out.push(HOLD_OPEN);
+                    rest = after;
+                }
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+}
+
+impl Default for Held {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// `text` with `from`, where it is typed as a command, renamed `to`. A

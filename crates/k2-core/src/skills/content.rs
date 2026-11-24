@@ -244,6 +244,13 @@ Linux sidecar (your human turns it on in Settings → Cores → Database). Fail-
 }
 
 pub fn generate_manager_skill_content(project_path: &str, project_name: &str) -> String {
+    manager_skill_content(project_path, project_name, &crate::agent_cli::Held::pass_through())
+}
+
+/// [`generate_manager_skill_content`] with the workspace's and its peers'
+/// names and the person's custom layers put in through `held`.
+pub(crate) fn manager_skill_content(project_path: &str, project_name: &str, held: &crate::agent_cli::Held) -> String {
+    let project_name = held.hold(project_name);
     let mut skill = String::new();
 
     // ── 1. Identity + Workspace Context ──
@@ -280,7 +287,7 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
         Ok(peers) if !peers.is_empty() => {
             skill.push_str("### Currently connected\n\n");
             for peer in &peers {
-                skill.push_str(&format!("  - {}\n", peer.project_name));
+                skill.push_str(&format!("  - {}\n", held.hold(&peer.project_name)));
             }
             skill.push('\n');
             skill.push_str(concat!("To add a connection:    ", cli_name!(), " connections add <other-workspace-path>\n"));
@@ -298,7 +305,7 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
     // ── User Custom Layers (from ~/.k2so/templates/manager/) ──
     let custom_layers = load_custom_layers("manager");
     if !custom_layers.is_empty() {
-        skill.push_str(&custom_layers);
+        skill.push_str(&held.hold(&custom_layers));
     }
 
     // ── 3. Standing Orders ──
@@ -477,6 +484,13 @@ Run `"#, cli_name!(), r#" glossary <term>` for definitions of terms specific to 
 /// workspaces).
 /// No delegation — custom agents send work to workspace inboxes.
 pub fn generate_custom_agent_skill_content(project_name: &str, agent_name: &str) -> String {
+    custom_agent_skill_content(project_name, agent_name, &crate::agent_cli::Held::pass_through())
+}
+
+/// [`generate_custom_agent_skill_content`] with the workspace's and agent's names and the person's
+/// custom layers put in through `held`.
+pub(crate) fn custom_agent_skill_content(project_name: &str, agent_name: &str, held: &crate::agent_cli::Held) -> String {
+    let (project_name, agent_name) = (held.hold(project_name), held.hold(agent_name));
     let mut skill = format!(
 r#"# {PRODUCT_NAME} Agent Skill
 
@@ -490,7 +504,7 @@ You are {agent_name}, a custom agent for {project_name}.
     // User custom layers
     let custom_layers = load_custom_layers("custom-agent");
     if !custom_layers.is_empty() {
-        skill.push_str(&custom_layers);
+        skill.push_str(&held.hold(&custom_layers));
     }
 
     skill.push_str(concat!(r#"## Start of every wake
@@ -632,6 +646,13 @@ Run `"#, cli_name!(), r#" glossary <term>` for definitions of terms specific to 
 /// first-line signature "# K2 Agent Skill (Comprehensive)" which the
 /// older shared `generate_custom_agent_skill_content` doesn't emit.
 pub fn generate_k2_agent_skill_content(project_name: &str, agent_name: &str) -> String {
+    k2_agent_skill_content(project_name, agent_name, &crate::agent_cli::Held::pass_through())
+}
+
+/// [`generate_k2_agent_skill_content`] with the workspace's and agent's names and the person's
+/// custom layers put in through `held`.
+pub(crate) fn k2_agent_skill_content(project_name: &str, agent_name: &str, held: &crate::agent_cli::Held) -> String {
+    let (project_name, agent_name) = (held.hold(project_name), held.hold(agent_name));
     let mut skill = format!(
 r#"# {PRODUCT_NAME} Agent Skill (Comprehensive)
 
@@ -650,7 +671,7 @@ This skill lists the full daily + power-user CLI surface so you can triage, mess
     // Let user layers inject project-specific policy on top
     let custom_layers = load_custom_layers("k2so-agent");
     if !custom_layers.is_empty() {
-        skill.push_str(&custom_layers);
+        skill.push_str(&held.hold(&custom_layers));
     }
 
     skill.push_str(concat!(r#"## Every wake (do this first)
@@ -1064,6 +1085,13 @@ pub fn write_opt_in_skill(project_path: &str, skill: OptInSkill) -> PathBuf {
 /// and seeds a sub-agent session with the persona. Keep it short — the harness adds
 /// its own session-level instructions; this is just K2-CLI context.
 pub fn generate_template_skill_content(project_name: &str, agent_name: &str) -> String {
+    template_skill_content(project_name, agent_name, &crate::agent_cli::Held::pass_through())
+}
+
+/// [`generate_template_skill_content`] with the workspace's and agent's names and the person's
+/// custom layers put in through `held`.
+pub(crate) fn template_skill_content(project_name: &str, agent_name: &str, held: &crate::agent_cli::Held) -> String {
+    let (project_name, agent_name) = (held.hold(project_name), held.hold(agent_name));
     let mut skill = format!(
 r#"# {PRODUCT_NAME} Skill Profile — {agent_name}
 
@@ -1079,7 +1107,7 @@ A skill is a documentation profile — a persona / capability set the harness ca
     // User custom layers
     let custom_layers = load_custom_layers("agent-template");
     if !custom_layers.is_empty() {
-        skill.push_str(&custom_layers);
+        skill.push_str(&held.hold(&custom_layers));
     }
 
     skill.push_str(concat!(r#"## Start of every wake
@@ -1119,21 +1147,24 @@ Run `"#, cli_name!(), r#" glossary <term>` for terminology specific to "#, produ
 /// Generate the CLAUDE.md content for an agent, optionally focused on a
 /// specific task, naming the command agents type now
 /// ([`crate::agent_cli`]: today's bytes unless the owner's k5 switch is on
-/// and its links run k5).
+/// and its links run k5). What a person wrote (the agent's profile and
+/// role, PROJECT.md, the task, the names) stays as written.
 pub fn compose_agent_wake_context(
     project_path: &str,
     agent_name: &str,
     current_task: Option<&WorkItem>,
 ) -> Result<String, String> {
-    compose_agent_wake_context_as_written(project_path, agent_name, current_task)
-        .map(|md| crate::agent_cli::teach(&md).into_owned())
+    let held = crate::agent_cli::Held::new();
+    compose_agent_wake_context_held(project_path, agent_name, current_task, &held).map(|md| held.teach(&md))
 }
 
-/// [`compose_agent_wake_context`] with the brand's command as written.
-fn compose_agent_wake_context_as_written(
+/// [`compose_agent_wake_context`] with the brand's command as written and
+/// each person's text put in through `held`.
+fn compose_agent_wake_context_held(
     project_path: &str,
     agent_name: &str,
     current_task: Option<&WorkItem>,
+    held: &crate::agent_cli::Held,
 ) -> Result<String, String> {
     let dir = agent_dir(project_path, agent_name);
     if !dir.exists() {
@@ -1180,11 +1211,11 @@ fn compose_agent_wake_context_as_written(
 
     if is_custom {
         // ── Custom Agent: agent.md body + heartbeat control + tools ──
-        md.push_str(&format!("# {}\n\n", agent_name));
-        md.push_str(&format!("**Role:** {}\n\n", role));
+        md.push_str(&format!("# {}\n\n", held.hold(agent_name)));
+        md.push_str(&format!("**Role:** {}\n\n", held.hold(&role)));
 
         if !agent_body.is_empty() {
-            md.push_str(&format!("{}\n\n", agent_body));
+            md.push_str(&format!("{}\n\n", held.hold(&agent_body)));
         }
 
         // Add heartbeat control docs if not already in agent body
@@ -1221,28 +1252,28 @@ fn compose_agent_wake_context_as_written(
         }
     }
 
-    md.push_str(&format!("# {PRODUCT_NAME} Agent: {}\n\n", agent_name));
-    md.push_str(&format!("## Identity\n**Role:** {}\n\n", role));
+    md.push_str(&format!("# {PRODUCT_NAME} Agent: {}\n\n", held.hold(agent_name)));
+    md.push_str(&format!("## Identity\n**Role:** {}\n\n", held.hold(&role)));
     // Reference the agent's full profile (absolute path so it resolves from worktrees)
     md.push_str(&format!(
         "**Full profile:** `{}`\n\n",
-        agent_md_path.to_string_lossy()
+        held.hold(&agent_md_path.to_string_lossy())
     ));
     if !agent_body.is_empty() {
-        md.push_str(&format!("{}\n\n", agent_body));
+        md.push_str(&format!("{}\n\n", held.hold(&agent_body)));
     }
 
     // Inject shared project context
     if let Some(ref ctx) = project_context {
         md.push_str("## Project Context (shared)\n\n");
-        md.push_str(ctx);
+        md.push_str(&held.hold(ctx));
         md.push_str("\n\n");
     }
 
     // Inject standing orders (persistent directives from agent.md)
     if let Some(ref orders) = standing_orders {
         md.push_str("## Standing Orders\n\n");
-        md.push_str(orders);
+        md.push_str(&held.hold(orders));
         md.push_str("\n\n");
     }
 
@@ -1251,21 +1282,24 @@ fn compose_agent_wake_context_as_written(
         // Use absolute path so it resolves from worktrees (where relative .k2so/ doesn't exist)
         let task_file_abs = agent_work_dir(project_path, agent_name, "active").join(&task.filename);
         md.push_str("## Current Task\n\n");
-        md.push_str(&format!("**{}** (priority: {}, type: {})\n\n", task.title, task.priority, task.item_type));
-        md.push_str(&format!("Task file: `{}`\n\n", task_file_abs.to_string_lossy()));
+        md.push_str(&format!(
+            "**{}** (priority: {}, type: {})\n\n",
+            held.hold(&task.title),
+            held.hold(&task.priority),
+            held.hold(&task.item_type)
+        ));
+        md.push_str(&format!("Task file: `{}`\n\n", held.hold(&task_file_abs.to_string_lossy())));
         md.push_str("Read the full task file for complete details, acceptance criteria, and context.\n\n");
     }
 
     // Work queue info (absolute paths for worktree compatibility)
     let work_dir_abs = crate::workspace_dot_dir(project_path).join("agents").join(agent_name).join("work");
+    let work_dir = held.hold(&work_dir_abs.to_string_lossy()).into_owned();
     md.push_str("## Work Queue\n\n");
-    md.push_str(&format!(
-        "Your work items are at: `{}/`\n",
-        work_dir_abs.to_string_lossy()
-    ));
-    md.push_str(&format!("- `{}/inbox/` — assigned to you, pick the highest priority\n", work_dir_abs.to_string_lossy()));
-    md.push_str(&format!("- `{}/active/` — items you're currently working on\n", work_dir_abs.to_string_lossy()));
-    md.push_str(&format!("- `{}/done/` — move items here when complete\n\n", work_dir_abs.to_string_lossy()));
+    md.push_str(&format!("Your work items are at: `{work_dir}/`\n"));
+    md.push_str(&format!("- `{work_dir}/inbox/` — assigned to you, pick the highest priority\n"));
+    md.push_str(&format!("- `{work_dir}/active/` — items you're currently working on\n"));
+    md.push_str(&format!("- `{work_dir}/done/` — move items here when complete\n\n"));
 
     // Other agents — for managers, include profile paths so they can read agent.md files
     // Stage A dual-read: builtin `k2` is a synonym of legacy `k2so`.
@@ -1279,7 +1313,9 @@ fn compose_agent_wake_context_as_written(
                 let their_profile = persona_md_in(agents_root.join(name));
                 md.push_str(&format!(
                     "- **{}** — {} (profile: `{}`)\n",
-                    name, their_role, their_profile.to_string_lossy()
+                    held.hold(name),
+                    held.hold(their_role),
+                    held.hold(&their_profile.to_string_lossy())
                 ));
             }
             md.push_str(concat!("\nYou can create new agents (`", cli_name!(), " skills create <name> --role \"...\"`); a person updates an existing one's profile (`", cli_name!(), " agent update --name <name> --field role --value \"...\"`, from their own terminal).\n\n"));
@@ -1287,7 +1323,7 @@ fn compose_agent_wake_context_as_written(
             md.push_str("## Other Agents\n");
             md.push_str("You can delegate work to these agents:\n\n");
             for (name, their_role) in &other_agents {
-                md.push_str(&format!("- **{}** — {}\n", name, their_role));
+                md.push_str(&format!("- **{}** — {}\n", held.hold(name), held.hold(their_role)));
             }
             md.push_str("\n");
         }
@@ -1302,11 +1338,11 @@ fn compose_agent_wake_context_as_written(
         .unwrap_or_else(|| "workspace".to_string());
 
     let skill_content = if is_manager_lead {
-        generate_manager_skill_content(project_path, &project_name)
+        manager_skill_content(project_path, &project_name, held)
     } else if agent_type == "custom" {
-        generate_custom_agent_skill_content(&project_name, agent_name)
+        custom_agent_skill_content(&project_name, agent_name, held)
     } else {
-        generate_template_skill_content(&project_name, agent_name)
+        template_skill_content(&project_name, agent_name, held)
     };
 
     // Workspace primary is ROLE.md + composed AGENTS.md; do not plant
@@ -1318,7 +1354,8 @@ fn compose_agent_wake_context_as_written(
         log_if_err(
             "agent skill write",
             &skill_path,
-            atomic_write_str(&skill_path, &skill_content),
+            // As written: the held names put back, nothing taught.
+            atomic_write_str(&skill_path, &held.put_back(&skill_content)),
         );
     }
 

@@ -1008,17 +1008,24 @@ pub fn is_live_generated_layer(layer: &ContextLayer) -> bool {
 }
 
 /// Markdown body for a live layer (no leading H1 — compose adds `## label`),
-/// naming the command agents type now (`crate::agent_cli`).
+/// naming the command agents type now (`crate::agent_cli`). The names and
+/// notes in it are held: they stay as written.
 pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Option<String> {
-    let body = match live_kind_for_layer(layer)? {
-        LiveKind::Connections => render_connections_roster_body(project_path),
-        LiveKind::Heartbeats => render_heartbeats_roster_body(project_path),
-        LiveKind::Skills => render_skills_roster_body(project_path),
-        LiveKind::Users => render_users_roster_body(project_path),
-        LiveKind::Skin => render_skin_roster_body(project_path),
-        LiveKind::AppsMaintained => render_apps_maintained_body(project_path),
-    };
-    Some(crate::agent_cli::teach(&body).into_owned())
+    let kind = live_kind_for_layer(layer)?;
+    let held = crate::agent_cli::Held::new();
+    Some(held.teach(&live_body(project_path, kind, &held)))
+}
+
+/// One live roster's body, each person's value put in through `held`.
+fn live_body(project_path: &str, kind: LiveKind, held: &crate::agent_cli::Held) -> String {
+    match kind {
+        LiveKind::Connections => connections_roster_body(project_path, held),
+        LiveKind::Heartbeats => heartbeats_roster_body(project_path, held),
+        LiveKind::Skills => skills_roster_body(project_path, held),
+        LiveKind::Users => users_roster_body(held),
+        LiveKind::Skin => skin_roster_body(held),
+        LiveKind::AppsMaintained => apps_maintained_body(project_path, held),
+    }
 }
 
 /// "This workspace" (prd-workspace-sessions-cli-v1 WS-D2): a pointer to
@@ -1026,6 +1033,10 @@ pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Optio
 /// durable. Live state never goes in AGENTS.md (it is read once, at
 /// start): `k2 sessions` and `k2 whoami` carry it.
 pub fn render_this_workspace_paragraph(project_path: &str) -> String {
+    this_workspace_paragraph(project_path, &crate::agent_cli::Held::pass_through())
+}
+
+fn this_workspace_paragraph(project_path: &str, held: &crate::agent_cli::Held) -> String {
     let mut out = String::from("### This workspace\n\n");
     out.push_str(
         concat!("Other sessions may be working in this workspace (the main agent, sidecars, \
@@ -1055,7 +1066,7 @@ pub fn render_this_workspace_paragraph(project_path: &str) -> String {
         }
     };
     if !named.is_empty() {
-        let list: Vec<String> = named.iter().map(|a| format!("`{a}`")).collect();
+        let list: Vec<String> = named.iter().map(|a| format!("`{}`", held.hold(a))).collect();
         out.push_str(&format!(" Named sidecars: {}.", list.join(", ")));
     }
     out.push_str("\n\n");
@@ -1064,6 +1075,10 @@ pub fn render_this_workspace_paragraph(project_path: &str) -> String {
 
 /// Markdown body for the connections roster (no leading H1 — compose adds `## label`).
 pub fn render_connections_roster_body(project_path: &str) -> String {
+    connections_roster_body(project_path, &crate::agent_cli::Held::pass_through())
+}
+
+fn connections_roster_body(project_path: &str, held: &crate::agent_cli::Held) -> String {
     let mut out = String::new();
     out.push_str(
         concat!("Live roster of **connected workspace-agents** (peers, not sub-agents). \
@@ -1079,7 +1094,7 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
     out.push_str(concat!("    ", cli_name!(), " msg <workspace-name> --inbox-wake <path> [path…]\n"));
     out.push_str(concat!("    ", cli_name!(), " read <workspace-name>\n"));
     out.push_str(concat!("    ", cli_name!(), " connections list\n\n"));
-    out.push_str(&render_this_workspace_paragraph(project_path));
+    out.push_str(&this_workspace_paragraph(project_path, held));
 
     let local = crate::connections::list_peers(project_path).unwrap_or_default();
     let remotes = list_remote_connection_summaries(project_path);
@@ -1103,11 +1118,11 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
             let rel = if peer.relation_types.is_empty() {
                 String::new()
             } else {
-                format!(" · {}", peer.relation_types.join(", "))
+                format!(" · {}", held.hold(&peer.relation_types.join(", ")))
             };
-            out.push_str(&format!("- **{}** — `{status}`{rel}\n", peer.project_name));
+            out.push_str(&format!("- **{}** — `{status}`{rel}\n", held.hold(&peer.project_name)));
             if !peer.path.is_empty() {
-                out.push_str(&format!("  - path: `{}`\n", peer.path));
+                out.push_str(&format!("  - path: `{}`\n", held.hold(&peer.path)));
             }
         }
         out.push('\n');
@@ -1119,9 +1134,10 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
             let pair = if r.paired { "paired" } else { "unbound" };
             out.push_str(&format!(
                 "- **{}** @ `{}` — remote · {pair}\n",
-                r.agent, r.host
+                held.hold(&r.agent),
+                held.hold(&r.host)
             ));
-            out.push_str(&format!("  - address: `{}`\n", r.remote_addr));
+            out.push_str(&format!("  - address: `{}`\n", held.hold(&r.remote_addr)));
         }
         out.push('\n');
     }
@@ -1135,6 +1151,10 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
 
 /// Live heartbeats catalog (names, schedules, WAKEUP paths) — not WAKEUP bodies.
 pub fn render_heartbeats_roster_body(project_path: &str) -> String {
+    heartbeats_roster_body(project_path, &crate::agent_cli::Held::pass_through())
+}
+
+fn heartbeats_roster_body(project_path: &str, held: &crate::agent_cli::Held) -> String {
     let mut out = String::new();
     out.push_str(
         concat!("Live catalog of this workspace’s **heartbeats** (scheduled wakes). \
@@ -1167,20 +1187,21 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
             .unwrap_or("never");
         out.push_str(&format!(
             "- **{}** — `{state}` · `{}`\n",
-            hb.name, hb.frequency
+            held.hold(&hb.name),
+            held.hold(&hb.frequency)
         ));
-        out.push_str(&format!("  - wakeup: `{}`\n", hb.wakeup_path));
-        out.push_str(&format!("  - last fired: {last}\n"));
+        out.push_str(&format!("  - wakeup: `{}`\n", held.hold(&hb.wakeup_path)));
+        out.push_str(&format!("  - last fired: {}\n", held.hold(last)));
         if let Some(ref err) = hb.schedule_error {
             if !err.is_empty() {
-                out.push_str(&format!("  - schedule error: {err}\n"));
+                out.push_str(&format!("  - schedule error: {}\n", held.hold(err)));
             }
         }
         // An enabled row's reason is a usage-limit pause, which ends by
         // itself: AGENTS.md (regenerated rarely) would keep a stale line.
         if let Some(ref reason) = hb.disabled_reason {
             if !reason.is_empty() && !hb.enabled {
-                out.push_str(&format!("  - disabled reason: {reason}\n"));
+                out.push_str(&format!("  - disabled reason: {}\n", held.hold(reason)));
             }
         }
     }
@@ -1194,6 +1215,10 @@ pub fn render_heartbeats_roster_body(project_path: &str) -> String {
 
 /// Live skills catalog under `.k2/skills/` — load on demand, don’t dump bodies.
 pub fn render_skills_roster_body(project_path: &str) -> String {
+    skills_roster_body(project_path, &crate::agent_cli::Held::pass_through())
+}
+
+fn skills_roster_body(project_path: &str, held: &crate::agent_cli::Held) -> String {
     let mut out = String::new();
     out.push_str(
         concat!("Live catalog of **loadable skills** (documentation profiles under `.k2/skills/`). \
@@ -1219,12 +1244,12 @@ pub fn render_skills_roster_body(project_path: &str) -> String {
             .as_deref()
             .filter(|t| !t.is_empty())
             .unwrap_or(s.name.as_str());
-        out.push_str(&format!("- **{}**", s.name));
+        out.push_str(&format!("- **{}**", held.hold(&s.name)));
         if title != s.name {
-            out.push_str(&format!(" — {title}"));
+            out.push_str(&format!(" — {}", held.hold(title)));
         }
         out.push('\n');
-        out.push_str(&format!("  - path: `.k2/skills/{}/SKILL.md`\n", s.name));
+        out.push_str(&format!("  - path: `.k2/skills/{}/SKILL.md`\n", held.hold(&s.name)));
     }
     out.push('\n');
     out.push_str("This list updates on the next AGENTS.md regen after skills are added/removed.\n");
@@ -1238,6 +1263,10 @@ pub fn render_skills_roster_body(project_path: &str) -> String {
 /// The owner is the linked account's username (none linked → `"owner"`);
 /// real names follow usernames after ` — `.
 pub fn render_users_roster_body(_project_path: &str) -> String {
+    users_roster_body(&crate::agent_cli::Held::pass_through())
+}
+
+fn users_roster_body(held: &crate::agent_cli::Held) -> String {
     // 0.46.0: the owner row is the linked account's username (identity =
     // username), else "owner" — the old ownerDisplayName is not read.
     let owner = crate::person_name::owner_login_now().unwrap_or_default();
@@ -1269,7 +1298,7 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
         let disabled = if r.disabled { "yes" } else { "no" };
         out.push_str(&format!(
             "| {} | {} | {disabled} |\n",
-            label(&r.username),
+            held.hold(&label(&r.username)),
             r.role.as_wire()
         ));
     }
@@ -1281,6 +1310,10 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
 /// Username + role + has_password + default rooms. Never platform-token
 /// counts, never the raw `k2skn_` secret. Same people as `k2 app user list`.
 pub fn render_skin_roster_body(_project_path: &str) -> String {
+    skin_roster_body(&crate::agent_cli::Held::pass_through())
+}
+
+fn skin_roster_body(held: &crate::agent_cli::Held) -> String {
     let users = crate::skin::list_principals().unwrap_or_default();
 
     let mut out = String::new();
@@ -1319,7 +1352,7 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
         } else {
             u.default_room_handles.join(", ")
         };
-        out.push_str(&format!("| {} | {role} | {pw} | {rooms} |\n", u.username));
+        out.push_str(&format!("| {} | {} | {pw} | {} |\n", held.hold(&u.username), held.hold(role), held.hold(&rooms)));
     }
     out
 }
@@ -1329,6 +1362,10 @@ pub fn render_skin_roster_body(_project_path: &str) -> String {
 /// where its brief is. Names and states only: never a guest, a secret or a
 /// path.
 pub fn render_apps_maintained_body(project_path: &str) -> String {
+    apps_maintained_body(project_path, &crate::agent_cli::Held::pass_through())
+}
+
+fn apps_maintained_body(project_path: &str, held: &crate::agent_cli::Held) -> String {
     let mut out = String::new();
     out.push_str(
         concat!("The ", product_name!(), " Apps **this agent maintains** (`", cli_name!(), " app inspect <app>`). Another agent's Apps aren't listed. \
@@ -1354,18 +1391,24 @@ pub fn render_apps_maintained_body(project_path: &str) -> String {
         labels.extend(cfg.labels.iter().map(|l| l.label.clone()));
         labels.extend(cfg.subdomains.iter().map(|l| l.label.clone()));
         let seed = a.live_seed.as_deref().map(|s| s.chars().take(12).collect::<String>()).unwrap_or_else(|| "—".into());
-        out.push_str(&format!("| {} | {} | {} | {seed} |\n", a.app_id, a.state, labels.join(", ")));
+        out.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            held.hold(&a.app_id),
+            held.hold(&a.state),
+            held.hold(&labels.join(", ")),
+            held.hold(&seed)
+        ));
         if let Ok(Some(h)) = crate::deploy::handover::latest_for_app(&conn, &a.app_id) {
             let recent = h.to_workspace == ws && h.approved_at.is_some_and(|t| now - t < crate::deploy::handover::WINDOW_SECS);
             if recent && matches!(h.state.as_str(), "applied" | "final") {
                 let from = crate::workspace_session_handles::workspace_address_name(&conn, &h.from_workspace).unwrap_or_else(|_| h.from_workspace.clone());
                 notes.push(format!(
                     "- **{}** was handed over to you from {} ({} ago){}: `{CLI_NAME} app handover brief {}`. Their Thread history with guests stays with them.",
-                    a.app_id,
-                    if h.from_workspace.is_empty() { "the owner (parked)".to_string() } else { from },
+                    held.hold(&a.app_id),
+                    if h.from_workspace.is_empty() { "the owner (parked)".to_string() } else { held.hold(&from).into_owned() },
                     human_age(now - h.approved_at.unwrap_or(now)),
                     if h.brief.is_some() { ", with a brief" } else { "" },
-                    a.app_id
+                    held.hold(&a.app_id)
                 ));
             }
         }
@@ -1448,17 +1491,12 @@ fn live_kind_meta(kind: LiveKind) -> (&'static str, &'static str, &'static str) 
 
 fn render_live_file(project_path: &str, kind: LiveKind) -> String {
     let (_, title, _) = live_kind_meta(kind);
-    let body = match kind {
-        LiveKind::Connections => render_connections_roster_body(project_path),
-        LiveKind::Heartbeats => render_heartbeats_roster_body(project_path),
-        LiveKind::Skills => render_skills_roster_body(project_path),
-        LiveKind::Users => render_users_roster_body(project_path),
-        LiveKind::Skin => render_skin_roster_body(project_path),
-        LiveKind::AppsMaintained => render_apps_maintained_body(project_path),
-    };
     // The command agents type now (`crate::agent_cli`): today's bytes
-    // unless the owner's k5 switch is on and its links run k5.
-    crate::agent_cli::teach(&format!("# {title}\n\n{body}")).into_owned()
+    // unless the owner's k5 switch is on and its links run k5. The names
+    // and notes in it are held: they stay as written.
+    let held = crate::agent_cli::Held::new();
+    let body = live_body(project_path, kind, &held);
+    held.teach(&format!("# {title}\n\n{body}"))
 }
 
 /// Write/overwrite one live roster file from current workspace state.

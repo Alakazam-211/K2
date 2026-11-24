@@ -27,8 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::skills::content::{
-    generate_custom_agent_skill_content, generate_k2_agent_skill_content,
-    generate_manager_skill_content, generate_template_skill_content,
+    custom_agent_skill_content, k2_agent_skill_content, manager_skill_content, template_skill_content,
 };
 use crate::skills::version::{
     ensure_skill_up_to_date, SKILL_VERSION_CUSTOM_AGENT, SKILL_VERSION_K2_AGENT,
@@ -241,25 +240,28 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "workspace".to_string());
 
+    // The workspace's and agent's names and a person's custom layers are
+    // held: teaching below leaves them as written.
+    let held = crate::agent_cli::Held::new();
     let (skill_content, skill_type_tag, skill_version) = match agent_type {
         "manager" | "coordinator" | "pod-leader" => (
-            generate_manager_skill_content(project_path, &project_name),
+            manager_skill_content(project_path, &project_name, &held),
             "manager",
             SKILL_VERSION_MANAGER,
         ),
         // Stage A dual-read: `k2` and legacy `k2so` share the builtin skill.
         "k2so" | "k2" => (
-            generate_k2_agent_skill_content(&project_name, agent_name),
+            k2_agent_skill_content(&project_name, agent_name, &held),
             "k2so-agent",
             SKILL_VERSION_K2_AGENT,
         ),
         "custom" => (
-            generate_custom_agent_skill_content(&project_name, agent_name),
+            custom_agent_skill_content(&project_name, agent_name, &held),
             "custom-agent",
             SKILL_VERSION_CUSTOM_AGENT,
         ),
         _ => (
-            generate_template_skill_content(&project_name, agent_name),
+            template_skill_content(&project_name, agent_name, &held),
             "agent-template",
             SKILL_VERSION_TEMPLATE,
         ),
@@ -267,7 +269,7 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
 
     // The command agents type now (`crate::agent_cli`): today's bytes
     // unless the owner's k5 switch is on and its links run k5.
-    let mut skill_content = crate::agent_cli::teach(&skill_content).into_owned();
+    let mut skill_content = held.teach(&skill_content);
 
     // Append the "how to update" footer with absolute paths to PROJECT.md
     // and this agent's AGENT.md so the AI knows where the sources live

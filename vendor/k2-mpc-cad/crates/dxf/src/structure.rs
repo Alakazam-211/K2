@@ -42,6 +42,7 @@ pub struct HeaderVar {
 
 /// A table: its head unit (`0`/`TABLE`), its entries, and whether `ENDTAB` closed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Table {
     pub name: String,
     pub head: Unit,
@@ -60,6 +61,7 @@ pub enum Place {
 
 /// An entity and its followers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EntityUnit {
     pub head: Unit,
     /// ATTRIBs or VERTEXes, then the SEQEND.
@@ -70,6 +72,7 @@ pub struct EntityUnit {
 /// A block definition: its `BLOCK` unit, its entities (indices into
 /// [`Structure::entities`]) and its `ENDBLK` unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BlockDef {
     pub head: Unit,
     pub ents: Vec<usize>,
@@ -78,6 +81,7 @@ pub struct BlockDef {
 
 /// A file's structure.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Structure<'a> {
     pub tok: Tokens<'a>,
     pub sections: Vec<Section>,

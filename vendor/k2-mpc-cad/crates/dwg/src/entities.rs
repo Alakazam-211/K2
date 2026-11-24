@@ -119,7 +119,8 @@ pub fn kind_of(t: u16, classes: &[Class]) -> Option<(String, bool)> {
 }
 
 /// The text fields TEXT, ATTRIB and ATTDEF share.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TextData {
     pub elevation: f64,
     pub ins: [f64; 2],
@@ -141,7 +142,8 @@ pub struct TextData {
 }
 
 /// An attribute's own fields beside its text.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct AttData {
     pub text: TextData,
     pub tag: String,
@@ -153,7 +155,8 @@ pub struct AttData {
 }
 
 /// A multiline text's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct MTextData {
     pub ins: [f64; 3],
     pub n: [f64; 3],
@@ -177,7 +180,8 @@ pub struct MTextData {
 }
 
 /// A multiline text's 2018 column data.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct MTextColumns {
     pub kind: u16,
     pub count: u32,
@@ -189,7 +193,8 @@ pub struct MTextColumns {
 }
 
 /// A block reference's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct InsertData {
     pub ins: [f64; 3],
     pub scale: [f64; 3],
@@ -208,7 +213,8 @@ pub struct InsertData {
 }
 
 /// A light-weight polyline's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct LwData {
     pub flags: u16,
     pub const_width: f64,
@@ -228,7 +234,8 @@ impl LwData {
 }
 
 /// A spline's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct SplineData {
     pub degree: u32,
     /// As DXF codes them: 1 closed, 2 periodic, 4 rational.
@@ -240,7 +247,8 @@ pub struct SplineData {
 }
 
 /// A viewport's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ViewportData {
     pub centre: [f64; 3],
     pub size: [f64; 2],
@@ -279,7 +287,8 @@ pub enum HatchEdge {
 pub type PolyPath = (Vec<([f64; 2], f64)>, bool);
 
 /// One hatch boundary path.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct HatchPath {
     pub flags: u32,
     pub edges: Vec<HatchEdge>,
@@ -299,7 +308,8 @@ pub struct HatchLine {
 }
 
 /// A hatch's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct HatchData {
     /// A gradient: its name, angle (radians), shift, one-colour flag, and its colours.
     pub gradient: Option<(String, f64, f64, bool, Vec<u32>)>,
@@ -319,7 +329,8 @@ pub struct HatchData {
 
 /// An image's or a wipeout's fields: where it sits, its pixel axes and size, its clip
 /// boundary (pixel coordinates), and its image definition (an image's).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ImageData {
     pub ins: [f64; 3],
     pub u: [f64; 3],
@@ -375,7 +386,8 @@ fn image(o: &mut Obj<'_>) -> Result<ImageData, CadError> {
 }
 
 /// A dimension's fields: the ones every kind has, and its defining points by their DXF codes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct DimData {
     /// The DXF dimension type (0 rotated, 1 aligned, 2 angular 2-line, 3 diameter, 4 radius,
     /// 5 angular 3-point, 6 ordinate) with its flags (32, 64, 128).
@@ -393,6 +405,7 @@ pub struct DimData {
 
 /// A kind's own fields.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Body {
     Line {
         p1: [f64; 3],
@@ -477,6 +490,7 @@ pub enum Body {
 
 /// One entity: its handle, kind, extension data, common data and its kind's fields.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Entity {
     pub handle: u64,
     pub kind: String,
@@ -488,6 +502,29 @@ pub struct Entity {
     /// beyond the last byte's padding: data another writer added, tolerated (0 for a kind read
     /// for its common data only).
     pub extra_handle_bits: usize,
+}
+
+impl Entity {
+    /// An entity with no extension data and nothing tolerated past its handles: how a caller
+    /// outside this crate builds one (the struct is `#[non_exhaustive]`), then sets any other
+    /// field it needs.
+    pub fn new(
+        handle: u64,
+        kind: impl Into<String>,
+        type_number: u16,
+        common: EntCommon,
+        body: Body,
+    ) -> Self {
+        Entity {
+            handle,
+            kind: kind.into(),
+            type_number,
+            eed: Vec::new(),
+            common,
+            body,
+            extra_handle_bits: 0,
+        }
+    }
 }
 
 pub(crate) fn bad(why: impl Into<String>, at: usize) -> CadError {

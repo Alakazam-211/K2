@@ -355,7 +355,8 @@ pub(crate) fn mleader_handles(o: &mut Obj<'_>, m: &mut MleaderData) -> Result<()
 }
 
 /// A leader's fields (`LEADER`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct LeaderData {
     /// Its points, its arrow first, in world coordinates.
     pub points: Vec<[f64; 3]>,

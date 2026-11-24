@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use k2_mpc_cad_model::draw::{DrawSource, Geom};
-use k2_mpc_dwg::bits::Colour;
 use k2_mpc_dwg::drawing::{
     annotative_eed, attdef_info, count_left_out, dim_overrides, dynamic_target, geom_of, poly_geom,
     unique_block_names, DwgDrawing, Names, Tolerated,
@@ -17,37 +16,9 @@ use k2_mpc_dwg::frame::{Eed, XItem};
 use k2_mpc_dwg::{CadError, Limits};
 
 fn ent(body: Body) -> Entity {
-    Entity {
-        handle: 0x30,
-        kind: String::new(),
-        type_number: 0,
-        eed: Vec::new(),
-        common: EntCommon {
-            entmode: 2,
-            colour: Colour {
-                index: 256,
-                rgb: None,
-                book: false,
-                transparency: None,
-            },
-            lt_scale: 1.0,
-            lt_flags: 0,
-            ps_flags: 0,
-            mat_flags: 0,
-            invisible: false,
-            lineweight: 29,
-            owner: None,
-            reactors: Vec::new(),
-            xdic: None,
-            book: None,
-            layer: Some(0x10),
-            ltype: None,
-            plotstyle: None,
-            material: None,
-        },
-        body,
-        extra_handle_bits: 0,
-    }
+    let mut common = EntCommon::default();
+    common.layer = Some(0x10);
+    Entity::new(0x30, "", 0, common, body)
 }
 
 fn near(a: f64, b: f64) -> bool {
@@ -79,18 +50,12 @@ pub fn geometry_for_the_model() {
         }
         g => panic!("not an arc: {g:?}"),
     }
-    let ins = InsertData {
-        ins: [1.0, 2.0, 0.0],
-        scale: [1.0; 3],
-        rotation: PI,
-        n: up,
-        array: None,
-        block: Some(0x50),
-        has_attribs: false,
-        owned: 0,
-        attribs: Vec::new(),
-        seqend: None,
-    };
+    let mut ins = InsertData::default();
+    ins.ins = [1.0, 2.0, 0.0];
+    ins.scale = [1.0; 3];
+    ins.rotation = PI;
+    ins.n = up;
+    ins.block = Some(0x50);
     match geom_of(&ent(Body::Insert(ins)), &names, Vec::new()) {
         Geom::Insert {
             block, rotation, ..
@@ -100,16 +65,13 @@ pub fn geometry_for_the_model() {
         }
         g => panic!("not a reference: {g:?}"),
     }
-    let lw = LwData {
-        flags: 0x200 | 16 | 32,
-        const_width: 0.0,
-        elevation: 3.0,
-        thickness: 0.0,
-        n: up,
-        points: vec![[0.0, 0.0], [1.0, 0.0]],
-        bulges: vec![0.5, 0.0],
-        widths: vec![[0.1, 0.2], [0.0, 0.0]],
-    };
+    let mut lw = LwData::default();
+    lw.flags = 0x200 | 16 | 32;
+    lw.elevation = 3.0;
+    lw.n = up;
+    lw.points = vec![[0.0, 0.0], [1.0, 0.0]];
+    lw.bulges = vec![0.5, 0.0];
+    lw.widths = vec![[0.1, 0.2], [0.0, 0.0]];
     match geom_of(&ent(Body::LwPolyline(lw)), &names, Vec::new()) {
         Geom::Poly { verts, closed, .. } => {
             assert!(closed, "closed");
@@ -220,26 +182,21 @@ pub fn leader_style_overrides() {
 #[test]
 pub fn polyline_geometry() {
     use k2_mpc_dwg::polylines::{PolyKind, PolylineData, VertexData};
-    let p = PolylineData {
-        kind: PolyKind::TwoD,
-        flags: 1 | 4,
-        curve: 6,
-        w0: 0.0,
-        w1: 0.0,
-        thickness: 0.0,
-        elevation: 2.0,
-        n: [0.0, 0.0, 1.0],
-        owned: 3,
-        vertices: vec![0x41, 0x42, 0x43],
-        seqend: Some(0x44),
-    };
-    let vx = |flags: u8, x: f64| VertexData {
-        flags,
-        p: [x, 1.0, 0.0],
-        w0: 0.5,
-        w1: 0.5,
-        bulge: 0.25,
-        face: None,
+    let mut p = PolylineData::new(PolyKind::TwoD);
+    p.flags = 1 | 4;
+    p.curve = 6;
+    p.elevation = 2.0;
+    p.owned = 3;
+    p.vertices = vec![0x41, 0x42, 0x43];
+    p.seqend = Some(0x44);
+    let vx = |flags: u8, x: f64| {
+        let mut v = VertexData::default();
+        v.flags = flags;
+        v.p = [x, 1.0, 0.0];
+        v.w0 = 0.5;
+        v.w1 = 0.5;
+        v.bulge = 0.25;
+        v
     };
     // a spline-fit vertex (8) kept, a spline frame's control point (16) left out
     match poly_geom(&p, &[vx(8, 0.0), vx(16, 5.0), vx(8, 9.0)]) {
@@ -256,11 +213,9 @@ pub fn polyline_geometry() {
         }
         g => panic!("not a polyline: {g:?}"),
     }
-    let mesh = PolylineData {
-        kind: PolyKind::Mesh,
-        flags: 16,
-        ..p
-    };
+    let mut mesh = p;
+    mesh.kind = PolyKind::Mesh;
+    mesh.flags = 16;
     assert_eq!(
         poly_geom(&mesh, &[]),
         Geom::NotModelled,
@@ -306,30 +261,19 @@ pub fn block_annotative_mark() {
 /// value, constant or not, its prompt; no other kind is one.
 #[test]
 pub fn attdef_infos() {
-    let text = TextData {
-        elevation: 0.0,
-        ins: [0.0, 1.0],
-        align: None,
-        n: [0.0, 0.0, 1.0],
-        thickness: 0.0,
-        oblique: 0.0,
-        rotation: 0.0,
-        height: 0.25,
-        width: 1.0,
-        text: "D-00".into(),
-        generation: 0,
-        halign: 0,
-        valign: 0,
-        style: None,
-    };
+    let mut text = TextData::default();
+    text.ins = [0.0, 1.0];
+    text.n = [0.0, 0.0, 1.0];
+    text.height = 0.25;
+    text.width = 1.0;
+    text.text = "D-00".into();
     let def = |flags: u8| {
-        ent(Body::AttDef(AttData {
-            text: text.clone(),
-            tag: " NO ".into(),
-            flags,
-            prompt: Some("Door number".into()),
-            multiline: None,
-        }))
+        let mut a = AttData::default();
+        a.text = text.clone();
+        a.tag = " NO ".into();
+        a.flags = flags;
+        a.prompt = Some("Door number".into());
+        ent(Body::AttDef(a))
     };
     let got = attdef_info(&def(0)).expect("attdef_infos: an attribute definition");
     assert_eq!(

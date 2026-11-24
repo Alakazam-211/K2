@@ -34,6 +34,7 @@ const NEXT: &str = "the file is damaged: open a copy the app that made it saves 
 
 /// A file's container, as read.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Container {
     /// The version stamp (`AC1032`).
     pub version: String,
@@ -64,6 +65,7 @@ pub struct Gap {
 
 /// A section in the section map.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Section {
     pub name: String,
     pub id: u32,

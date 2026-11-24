@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-dwg"
-version = "0.4.1"
+version = "0.5.0"
 description = "Reads DWG files (the 2004 to 2018 family), read-only, with typed refusals, for the drawing-model read: a type pack for the multiplayer kit."
 edition.workspace = true
 rust-version.workspace = true

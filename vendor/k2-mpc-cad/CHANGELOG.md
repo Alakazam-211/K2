@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.5.0: pairs with kit v0.24.0
+
+**Requires `k2-mpc-base` v0.24.0**. A minor release: 37 of the read results' types are
+`#[non_exhaustive]` (below). Drawings read, index and edit as in v0.4.1.
+
+### Breaking: 37 read-result types are `#[non_exhaustive]`
+- **These 37 public structs and enums are `#[non_exhaustive]`** (listed below), so a field or a
+  variant the reads add later to one of them is not a breaking change. Outside these crates, a
+  struct literal of them does not compile, nor a pattern that names every field, nor a `match`
+  over the enums without a wildcard arm. **Migration:** end struct patterns with `..` and give
+  matches over `Body` and `Ver` a `_` arm; build a value with `T::default()` (or the
+  constructor named below) and set the fields you need, in place of a struct literal or
+  `..base` (fields stay public, to read and to set).
+- `k2-mpc-dwg`:
+  - `drawing::Tolerated` and `drawing::Names` (both `Default`, as before);
+  - `entities::Entity` (new: `Entity::new(handle, kind, type_number, common, body)`) and the
+    enum `entities::Body`;
+  - `entities::TextData`, `AttData`, `MTextData`, `MTextColumns`, `InsertData`, `LwData`,
+    `SplineData`, `ViewportData`, `HatchPath`, `HatchData`, `ImageData`, `DimData` (each now
+    `Default`);
+  - `leaders::LeaderData` and `polylines::VertexData` (each now `Default`);
+    `polylines::PolylineData` (new: `PolylineData::new(kind)`);
+  - `frame::EntCommon` (now `Default`: model space, by layer, linetype scale 1) and the enum
+    `frame::Ver`;
+  - `tables::Entry`, `LayerRec`, `LtypeRec`, `StyleRec`, `DimStyleRec`, `BlockHeader`,
+    `LayoutRec`; `header::HeaderVars`;
+  - `Container` and `Section` (`container::`, also at the crate root).
+- `k2-mpc-dxf`: `structure::Structure`, `structure::Table`, `structure::EntityUnit`,
+  `structure::BlockDef`, `token::Tokens`, and the edit verbs' result `edit::Planned`.
+- **Exhaustive as before** (a struct literal and a full pattern still compile outside the
+  crates): `k2-mpc-dwg` `bits::{Colour, Handle}`, `classes::Class`, `container::{Gap, Page,
+  SectionPage}`, `entities::{HatchEdge, HatchLine}`, `frame::{Eed, ObjCommon, XItem}`,
+  `objects::{MapEntry, ObjectHead}`, `polylines::PolyKind`, `tables::{Dash, DbColor}`;
+  `k2-mpc-dxf` `codes::Ty`, `structure::{HeaderVar, Place, Section, Unit}`, `token::{Eol,
+  Pair}`, `edit::check::{Intent, Want}` and `edit::Splice`. Types with private fields
+  (`drawing::DwgDrawing`, `frame::Obj`, `leaders::MleaderData`, `bits::Bits`; `draw::DxfDrawing`,
+  `mleader::Reader`) can't be built or matched whole outside the crates either way.
+- **Unchanged:** the format-neutral model (`k2-mpc-cad-model`), the limits (`Limits` in both
+  crates, still built with a struct literal), the test generator (`k2-mpc-dxf::testgen`), the
+  structure index's format, the schema tags and the verbs' output.
+
+### Pairs with kit v0.24.0
+- The kit's one pack API addition is opt-in (a container's own record, index row format 3);
+  these crates don't use it. Its other changes are the host's and the native engine's (off).
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.24.0 and the four crates at 0.5.0.
+
 ## v0.4.1: pairs with kit v0.23.0
 
 **Requires `k2-mpc-base` v0.23.0**. The pack's code is unchanged from v0.4.0; a DXF

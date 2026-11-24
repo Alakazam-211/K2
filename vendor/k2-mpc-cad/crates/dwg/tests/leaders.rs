@@ -415,18 +415,15 @@ pub fn leaders_read() {
         let Body::Leader(l) = e.body else {
             panic!("{v:?}: not a leader: {:?}", e.body)
         };
+        let mut want = LeaderData::default();
+        want.points = pts.to_vec();
+        want.path_type = 1;
+        want.n = [0.0, 0.0, 1.0];
+        want.hook_x = true;
+        want.annotation = Some(0x71);
+        want.dimstyle = Some(0x72);
         assert_eq!(
-            l,
-            LeaderData {
-                points: pts.to_vec(),
-                annot_type: 0,
-                path_type: 1,
-                n: [0.0, 0.0, 1.0],
-                hook_x: true,
-                arrow: false,
-                annotation: Some(0x71),
-                dimstyle: Some(0x72),
-            },
+            l, want,
             "{v:?}: its points, a spline, no arrowhead, what it annotates, its style"
         );
     }

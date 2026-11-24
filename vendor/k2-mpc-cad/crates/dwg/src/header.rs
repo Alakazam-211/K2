@@ -26,6 +26,7 @@ const NEXT: &str = "the file is damaged: open a copy the app that made it saves 
 
 /// What the drawing-model read takes from the header.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct HeaderVars {
     pub ltscale: f64,
     pub celtscale: f64,

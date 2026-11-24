@@ -64,6 +64,7 @@ pub fn control(o: &mut Obj<'_>, extra: usize) -> Result<Vec<u64>, CadError> {
 
 /// What every table entry has: its common object data, name and flags.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Entry {
     pub common: ObjCommon,
     pub name: String,
@@ -108,6 +109,7 @@ fn entry(o: &mut Obj<'_>) -> Result<Entry, CadError> {
 
 /// A layer.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LayerRec {
     pub entry: Entry,
     /// Frozen 1, off 2, frozen in new viewports 4, locked 8, plotted 16; the lineweight's
@@ -177,6 +179,7 @@ pub struct Dash {
 
 /// A linetype.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LtypeRec {
     pub entry: Entry,
     pub description: String,
@@ -264,6 +267,7 @@ pub fn ltype(o: &mut Obj<'_>) -> Result<LtypeRec, CadError> {
 
 /// A text style.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct StyleRec {
     pub entry: Entry,
     pub vertical: bool,
@@ -326,6 +330,7 @@ pub fn dimstyle_name(o: &mut Obj<'_>) -> Result<String, CadError> {
 
 /// A dimension style: the settings a leader's arrowhead is drawn by (the rest are read past).
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct DimStyleRec {
     pub entry: Entry,
     /// `DIMSCALE`, the overall scale.
@@ -442,6 +447,7 @@ pub fn dimstyle(o: &mut Obj<'_>) -> Result<DimStyleRec, CadError> {
 
 /// A block record.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BlockHeader {
     pub entry: Entry,
     pub anonymous: bool,
@@ -524,6 +530,7 @@ pub fn block_header(o: &mut Obj<'_>) -> Result<BlockHeader, CadError> {
 
 /// A layout: its plot settings' paper, its name and tab, its block record and viewports.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LayoutRec {
     pub name: String,
     pub tab: u32,

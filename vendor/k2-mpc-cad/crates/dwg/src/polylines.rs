@@ -26,6 +26,7 @@ pub enum PolyKind {
 
 /// A polyline's fields and its vertices' handles.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct PolylineData {
     pub kind: PolyKind,
     /// Its flags as DXF has them (`70`).
@@ -46,8 +47,30 @@ pub struct PolylineData {
     pub seqend: Option<u64>,
 }
 
+impl PolylineData {
+    /// A polyline of `kind` with nothing else set (flags 0, no widths, thickness or elevation,
+    /// normal +z, no vertices): how a caller outside this crate builds one (the struct is
+    /// `#[non_exhaustive]`), then sets the fields it needs.
+    pub fn new(kind: PolyKind) -> Self {
+        PolylineData {
+            kind,
+            flags: 0,
+            curve: 0,
+            w0: 0.0,
+            w1: 0.0,
+            thickness: 0.0,
+            elevation: 0.0,
+            n: [0.0, 0.0, 1.0],
+            owned: 0,
+            vertices: Vec::new(),
+            seqend: None,
+        }
+    }
+}
+
 /// A vertex's fields.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct VertexData {
     /// Its flags as DXF has them (`70`).
     pub flags: u8,

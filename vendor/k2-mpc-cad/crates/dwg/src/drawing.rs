@@ -62,6 +62,7 @@ pub struct DwgDrawing {
 /// may add past what the format names, and the table entries and entities whose own read
 /// refused, which the drawing leaves out or keeps in part (a host can say so).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Tolerated {
     /// The header's string stream: bits past the texts the format names.
     pub header_extra_string_bits: usize,
@@ -108,6 +109,7 @@ struct Cut {
 /// Names by handle: layers, linetypes, text styles, block records, dimension styles,
 /// registered applications.
 #[derive(Debug, Default, Clone)]
+#[non_exhaustive]
 pub struct Names {
     pub layer: HashMap<u64, String>,
     pub ltype: HashMap<u64, String>,

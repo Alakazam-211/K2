@@ -71,6 +71,7 @@ pub const OWNED_MAX: usize = 10_000;
 
 /// A plan, and what it is about.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Planned {
     /// The ranges, in byte order (none: no change).
     pub spans: Vec<Splice>,

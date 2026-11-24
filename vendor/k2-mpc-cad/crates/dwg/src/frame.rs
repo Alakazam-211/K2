@@ -32,6 +32,7 @@ const NEXT: &str = "the file is damaged: open a copy the app that made it saves 
 
 /// The versions this reader reads, oldest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum Ver {
     R2004,
     R2010,
@@ -433,6 +434,7 @@ fn reactors(o: &mut Obj<'_>, n: usize) -> Result<Vec<u64>, CadError> {
 
 /// What every entity has before its kind's fields, and its common handles.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct EntCommon {
     /// 0: the owner is in the handles; 1: paper space; 2: model space.
     pub entmode: u8,
@@ -453,6 +455,37 @@ pub struct EntCommon {
     pub ltype: Option<u64>,
     pub plotstyle: Option<u64>,
     pub material: Option<u64>,
+}
+
+impl Default for EntCommon {
+    /// An entity's common data with nothing set: in model space, by layer (colour 256, its
+    /// linetype and lineweight), linetype scale 1, visible, no handles. A caller outside this
+    /// crate starts from it (the struct is `#[non_exhaustive]`) and sets the fields it needs.
+    fn default() -> Self {
+        EntCommon {
+            entmode: 2,
+            colour: Colour {
+                index: 256,
+                rgb: None,
+                book: false,
+                transparency: None,
+            },
+            lt_scale: 1.0,
+            lt_flags: 0,
+            ps_flags: 0,
+            mat_flags: 0,
+            invisible: false,
+            lineweight: 29,
+            owner: None,
+            reactors: Vec::new(),
+            xdic: None,
+            book: None,
+            layer: None,
+            ltype: None,
+            plotstyle: None,
+            material: None,
+        }
+    }
 }
 
 /// A lineweight's index as hundredths of a millimetre, `-1` by layer, `-2` by block, `-3` the

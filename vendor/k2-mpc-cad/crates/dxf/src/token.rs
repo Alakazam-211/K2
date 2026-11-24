@@ -75,6 +75,7 @@ impl Pair {
 
 /// A file's tokens.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Tokens<'a> {
     pub bytes: &'a [u8],
     /// A UTF-8 byte-order mark comes first.

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSyn
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { BRAND_ID, CLI_ALIASES, CLI_NAME, PRODUCT_NAME, RELEASE_REPO } from './brand'
+import { BRAND_ID, CLI_ALIASES, CLI_NAME, COMPANY_NAME, PRODUCT_LOCKUP, PRODUCT_NAME, PUBLIC_SITE, RELEASE_REPO, SUPPORT_EMAIL } from './brand'
 
 const ROOT = resolve(__dirname, '../../..')
 const SCRIPT = join(ROOT, 'scripts/brand-values.mjs')
@@ -104,6 +104,52 @@ describe('the renderer module', () => {
     expect(PRODUCT_NAME).toBe(field(file, 'names', 'product'))
     expect(CLI_NAME).toBe(field(file, 'cli', 'name'))
     expect(CLI_ALIASES).toEqual(['k2so'])
+    expect(COMPANY_NAME).toBe(field(file, 'names', 'company'))
+    expect(PRODUCT_LOCKUP).toBe(field(file, 'names', 'lockup'))
+    expect(PUBLIC_SITE).toBe(field(file, 'links', 'site'))
+    expect(SUPPORT_EMAIL).toBe(field(file, 'links', 'support_email'))
+  })
+
+  it('brand/xy names its own company, lockup, site and support address (written to a scratch file, not the committed one)', () => {
+    const committed = readFileSync(join(ROOT, 'src/renderer/lib/brand.generated.ts'), 'utf8')
+    const file = join(ROOT, 'brand/xy/brand.toml')
+    const out = join(scratch, 'xy', 'brand.generated.ts')
+    expect(run(['renderer', '--brand', 'brand/xy', '--out', out])).toContain('for xy')
+    const made = readFileSync(out, 'utf8')
+    expect(field(file, 'names', 'company')).toBe('Globex Corporation')
+    expect(field(file, 'names', 'lockup')).toBe('Globex Desk by Globex Corporation')
+    expect(field(file, 'links', 'site')).toBe('https://desk.example.invalid')
+    expect(made).toContain("export const PRODUCT_NAME: string = 'Globex Desk'")
+    expect(made).toContain("export const COMPANY_NAME: string = 'Globex Corporation'")
+    expect(made).toContain("export const PRODUCT_LOCKUP: string = 'Globex Desk by Globex Corporation'")
+    expect(made).toContain("export const PUBLIC_SITE: string = 'https://desk.example.invalid'")
+    expect(made).toContain(`export const SUPPORT_EMAIL: string = '${field(file, 'links', 'support_email')}'`)
+    expect(made).not.toContain('Alakazam')
+    expect(made).not.toContain('k2.dev')
+    expect(readFileSync(join(ROOT, 'src/renderer/lib/brand.generated.ts'), 'utf8')).toBe(committed)
+  })
+
+  it('K2_BRAND_DIR with --out writes the brand it names', () => {
+    const out = join(scratch, 'xy-env', 'brand.generated.ts')
+    run(['renderer', '--out', out], { K2_BRAND_DIR: 'brand/xy' })
+    expect(readFileSync(out, 'utf8')).toContain("export const PRODUCT_LOCKUP: string = 'Globex Desk by Globex Corporation'")
+  })
+
+  it('a brand file with no company and no lockup: the default brand\'s company, and "<product> by <company>"', () => {
+    const k2 = join(ROOT, 'brand/k2/brand.toml')
+    const company = field(k2, 'names', 'company')
+    const out = run(['renderer', '--print', '--brand', brandFolder('no-company', GOOD)])
+    expect(out).toContain(`export const COMPANY_NAME: string = '${company}'`)
+    expect(out).toContain(`export const PRODUCT_LOCKUP: string = 'Acme Desk by ${company}'`)
+    expect(out).toContain(`export const PUBLIC_SITE: string = '${field(k2, 'links', 'site')}'`)
+    expect(out).toContain(`export const SUPPORT_EMAIL: string = '${field(k2, 'links', 'support_email')}'`)
+  })
+
+  it('a brand file with its own company and no lockup: "<product> by <its company>"', () => {
+    const dir = brandFolder('own-company', GOOD.replace('product = "Acme Desk"', 'product = "Acme Desk"\ncompany = "Acme Inc"'))
+    const out = run(['renderer', '--print', '--brand', dir])
+    expect(out).toContain("export const COMPANY_NAME: string = 'Acme Inc'")
+    expect(out).toContain("export const PRODUCT_LOCKUP: string = 'Acme Desk by Acme Inc'")
   })
 
   it('every brand in the repo makes a module with its own two names', () => {
@@ -113,6 +159,8 @@ describe('the renderer module', () => {
       expect(out, id).toContain(`export const BRAND_ID: string = '${id}'`)
       expect(out, id).toContain(`export const PRODUCT_NAME: string = '${field(file, 'names', 'product')}'`)
       expect(out, id).toContain(`export const CLI_NAME: string = '${field(file, 'cli', 'name')}'`)
+      expect(out, id).toContain(`export const COMPANY_NAME: string = '${field(file, 'names', 'company')}'`)
+      expect(out, id).toContain(`export const PRODUCT_LOCKUP: string = '${field(file, 'names', 'lockup')}'`)
     }
   })
 
@@ -199,6 +247,10 @@ describe('a brand file the build can\'t use stops it, naming the field', () => {
     ['schema', GOOD.replace('schema = 1', 'schema = 2'), 'schema must be 1'],
     ['pkg-key', GOOD.replace('gui_binary', 'gui_bin'), '[package] holds a key it does not know: gui_bin'],
     ['pkg-feed', GOOD.replace('https://updates', 'http://updates'), 'package.update_feed must be an https URL'],
+    ['empty-company', GOOD.replace('product = "Acme Desk"', 'product = "Acme Desk"\ncompany = ""'), 'names.company is empty'],
+    ['spaced-lockup', GOOD.replace('product = "Acme Desk"', 'product = "Acme Desk"\nlockup = " Acme"'), 'names.lockup " Acme" must be one line'],
+    ['http-site', `${GOOD}[links]\nsite = "http://acme.example"\n`, 'links.site "http://acme.example" must be an https URL'],
+    ['bad-email', `${GOOD}[links]\nsupport_email = "help"\n`, 'links.support_email "help" must be an email address'],
   ])('%s', (name, text, msg) => {
     const dir = brandFolder(name, text)
     expect(refused(['renderer', '--print', '--brand', dir])).toContain(msg)

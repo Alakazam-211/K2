@@ -1,8 +1,8 @@
 /**
  * The product's names, one definition each, for the renderer.
  *
- * The product's name, the command's name and its aliases come from the
- * brand file (`brand/<id>/brand.toml`, `brand/k2` unless `K2_BRAND_DIR`
+ * The product's name, the command's name and its aliases, the company, the
+ * lockup, the public site and the support address come from the brand file (`brand/<id>/brand.toml`, `brand/k2` unless `K2_BRAND_DIR`
  * names another) through `brand.generated.ts`, which
  * `scripts/brand-values.mjs` writes when building; Rust reads the same file
  * through crates/k2-brand. Two names, never made from each other: the
@@ -10,8 +10,9 @@
  * copied. Nothing here asks a server for either: a build shows the names
  * it was built with.
  *
- * The rest are the same values as `crates/k2-client/src/brand.rs`
- * (`k2_core::brand`); `brand.test.ts` reads both and fails when they drift.
+ * `brand.test.ts` checks them against the brand file; the rest are the same
+ * values as `crates/k2-client/src/brand.rs` (`k2_core::brand`), and it reads
+ * both and fails when they drift.
  * Copy that names the product, the command, the site or the release repo
  * uses these instead of spelling the name out; `scripts/brand-gate.sh`
  * keeps new literals out of the rest of the renderer.
@@ -24,20 +25,20 @@
 import { ZONE } from './hosts'
 import { PRODUCT_NAME } from './brand.generated'
 
-export { BRAND_ID, CLI_ALIASES, CLI_NAME, PRODUCT_NAME } from './brand.generated'
-
-/** The company that makes it. */
-export const COMPANY_NAME = 'Alakazam Labs'
+export {
+  BRAND_ID,
+  CLI_ALIASES,
+  CLI_NAME,
+  COMPANY_NAME,
+  PRODUCT_LOCKUP,
+  PRODUCT_NAME,
+  PUBLIC_SITE,
+  SUPPORT_EMAIL,
+} from './brand.generated'
 
 /** The product's name as a RegExp source (special characters escaped), for
  *  reading a server's text that names the product. */
 export const PRODUCT_NAME_PATTERN = PRODUCT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-/** The product with its maker. */
-export const PRODUCT_LOCKUP = `${PRODUCT_NAME} by ${COMPANY_NAME}`
-
-/** The public website. */
-export const PUBLIC_SITE = 'https://k2.dev'
 
 /** The zone boxes are named under (the hosts module's zone). */
 export const INFRA_ZONE = ZONE
@@ -45,9 +46,6 @@ export const INFRA_ZONE = ZONE
 /** The zones boxes are served under, primary first, when the daemon has
  *  not said (`/boot-status` `hostedZones`). */
 export const HOSTED_ZONES: readonly string[] = [ZONE]
-
-/** Where people write for help. */
-export const SUPPORT_EMAIL = 'support@k2.dev'
 
 /** The repo releases come from, `owner/name`: every release URL is built
  *  from this. The repo is moving from Alakazam-211/K2 to AlakazamLabs/K5 (a

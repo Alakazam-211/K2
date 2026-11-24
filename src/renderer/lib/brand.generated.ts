@@ -16,3 +16,15 @@ export const CLI_NAME: string = 'k2'
 
 /** Other names the command answers to. */
 export const CLI_ALIASES: readonly string[] = ['k2so']
+
+/** The company that makes it. */
+export const COMPANY_NAME: string = 'Alakazam Labs'
+
+/** The product with its maker. */
+export const PRODUCT_LOCKUP: string = 'K2 by Alakazam Labs'
+
+/** The public website. */
+export const PUBLIC_SITE: string = 'https://k2.dev'
+
+/** Where people write for help. */
+export const SUPPORT_EMAIL: string = 'support@k2.dev'

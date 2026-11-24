@@ -9,10 +9,14 @@
 //
 //   node scripts/brand-values.mjs renderer [--check]
 //       write src/renderer/lib/brand.generated.ts (the product's name, the
-//       command's name, its aliases, the brand id); --check exits 1 when the
-//       file is not what this brand makes. The committed file is brand/k2's.
+//       command's name, its aliases, the brand id, the company, the lockup,
+//       the site and the support address); --check exits 1 when the file is
+//       not what this brand makes. The committed file is brand/k2's.
 //   node scripts/brand-values.mjs renderer --print
 //       print that file instead of writing it.
+//   node scripts/brand-values.mjs renderer --out FILE
+//       write it to FILE instead (a test or a look at another brand's,
+//       leaving the committed file alone).
 //   node scripts/brand-values.mjs tauri [--out FILE]
 //       print (or write) the Tauri config overlay: the app's name, the
 //       bundle id, the update feed and the primary update key. A brand build passes the file to
@@ -35,6 +39,12 @@
 // Two names, never made from each other (Rosson's rule): the product's
 // ([names] product, for prose and screens) and the command's ([cli] name,
 // for anything typed or copied). The app's shown name is the product's.
+//
+// The company, the lockup, the site and the support address resolve the way
+// k2-brand resolves them (crates/k2-brand/src/brand_file.rs parse_fields):
+// names.company, links.site and links.support_email are the file's own, else
+// the default brand file's (brand/k2); names.lockup is the file's own, else
+// "<product> by <company>".
 //
 // The reader takes the brand file's own small shape (top-level keys,
 // [tables], strings, integers, true and false, a list of inline tables)
@@ -150,10 +160,44 @@ function text(file, obj, key, field) {
   return v
 }
 
+/** `[table] key` when the file sets it, checked by `check`; else null. */
+function own(file, doc, table, key, check) {
+  const t = doc.tables[table]
+  if (!t || !(key in t)) return null
+  const v = text(file, t, key, `${table}.${key}`)
+  check(file, `${table}.${key}`, v)
+  return v
+}
+
+/** The file's own value, else the default brand's; reading the default
+ *  brand itself (no base), a missing one is refused. */
+function inherit(file, ownValue, base, key, field) {
+  if (ownValue !== null) return ownValue
+  if (base) return base[key]
+  fail(file, `${field} is missing; the default brand file spells every field`)
+}
+
+function checkName(file, field, v) {
+  if ([...v].length > 40 || v.trim() !== v || /[\u0000-\u001f\u007f]/.test(v)) {
+    fail(file, `${field} "${v}" must be one line of 1 to 40 characters with no space at either end`)
+  }
+}
+
+function checkHttps(file, field, v) {
+  if (!/^https:\/\/[a-z0-9.-]+\.[a-z]+(\/\S*)?$/.test(v)) fail(file, `${field} "${v}" must be an https URL: https://<domain>[/<path>]`)
+}
+
+function checkEmail(file, field, v) {
+  if (!/^[A-Za-z0-9._+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]+$/.test(v)) fail(file, `${field} "${v}" must be an email address: <name>@<domain>`)
+}
+
 /** Read and check one brand folder's brand.toml. `pkg` is null when the
- *  file has no [package] table; `packageValues` refuses that. */
+ *  file has no [package] table; `packageValues` refuses that. A field the
+ *  file leaves out is the default brand's (brand/k2), read the same way. */
 export function readBrand(dir) {
   const file = join(dir, 'brand.toml')
+  const defaultFile = join(ROOT, DEFAULT_BRAND, 'brand.toml')
+  const base = resolve(file) === resolve(defaultFile) ? null : readBrand(join(ROOT, DEFAULT_BRAND))
   let raw
   try {
     raw = readFileSync(file, 'utf8')
@@ -216,7 +260,11 @@ export function readBrand(dir) {
     }
     update = { keys }
   }
-  return { file, id, product, cli, aliases, pkg, update }
+  const company = inherit(file, own(file, doc, 'names', 'company', checkName), base, 'company', 'names.company')
+  const lockup = own(file, doc, 'names', 'lockup', checkName) ?? `${product} by ${company}`
+  const site = inherit(file, own(file, doc, 'links', 'site', checkHttps), base, 'site', 'links.site')
+  const supportEmail = inherit(file, own(file, doc, 'links', 'support_email', checkEmail), base, 'supportEmail', 'links.support_email')
+  return { file, id, product, cli, aliases, company, lockup, site, supportEmail, pkg, update }
 }
 
 /** minisign's key id of a public key line ("Ed", 8 id bytes, 32 key bytes):
@@ -313,6 +361,18 @@ export function rendererModule(brand) {
     '/** Other names the command answers to. */',
     `export const CLI_ALIASES: readonly string[] = [${brand.aliases.map((a) => q(a.name)).join(', ')}]`,
     '',
+    '/** The company that makes it. */',
+    `export const COMPANY_NAME: string = ${q(brand.company)}`,
+    '',
+    '/** The product with its maker. */',
+    `export const PRODUCT_LOCKUP: string = ${q(brand.lockup)}`,
+    '',
+    '/** The public website. */',
+    `export const PUBLIC_SITE: string = ${q(brand.site)}`,
+    '',
+    '/** Where people write for help. */',
+    `export const SUPPORT_EMAIL: string = ${q(brand.supportEmail)}`,
+    '',
   ].join('\n')
 }
 
@@ -395,6 +455,14 @@ function main(argv) {
   if (cmd === 'renderer') {
     const rel = relative(ROOT, RENDERER_OUT)
     if (print) return void process.stdout.write(rendererModule(brand))
+    if (out) {
+      if (check) throw new Error('brand-values: --check reads the committed file; leave --out out')
+      const file = isAbsolute(out) ? out : join(ROOT, out)
+      mkdirSync(dirname(file), { recursive: true })
+      writeRendererModule(brand, file)
+      console.log(`brand-values: wrote ${shown(file)} for ${brand.id}`)
+      return
+    }
     if (check) {
       let have = ''
       try {
@@ -436,7 +504,7 @@ function main(argv) {
     console.log(`brand-values: ${brand.id}'s update keys are its own`)
     return
   }
-  console.error('usage: brand-values.mjs renderer [--check|--print] | tauri [--out FILE] | shell | update-keys   [--brand DIR]')
+  console.error('usage: brand-values.mjs renderer [--check|--print|--out FILE] | tauri [--out FILE] | shell | update-keys   [--brand DIR]')
   process.exit(2)
 }
 

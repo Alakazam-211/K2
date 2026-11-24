@@ -23,10 +23,11 @@ import {
   releaseTagUrl,
   resetReportedBrandForTests,
 } from './brand'
+import * as generated from './brand.generated'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const RUST = readFileSync(join(HERE, '../../../crates/k2-client/src/brand.rs'), 'utf8')
-/** The default brand file: the command's name, its aliases and the product's name (k2-brand reads it). */
+/** The default brand file: the names, the site and the support address (k2-brand reads it). */
 const BRAND_FILE = readFileSync(join(HERE, '../../../brand/k2/brand.toml'), 'utf8')
 /** The bash homes of the release repo's name: the CLI's, the release tooling's and the signer's policy. */
 const CLI_PRELUDE = readFileSync(join(HERE, '../../../cli/src/prelude.sh'), 'utf8')
@@ -85,9 +86,9 @@ function rustMacro(name: string): string {
   return m[1]
 }
 
-/** The value of `pub const NAME: &str = "...";` in brand.rs. */
-function rustConst(name: string): string {
-  const m = RUST.match(new RegExp(`^pub const ${name}: &str = "([^"]*)";$`, 'm'))
+/** The right side of `pub const NAME: &str = ...;` in brand.rs. */
+function rustConstValue(name: string): string {
+  const m = RUST.match(new RegExp(`^pub const ${name}: &str = (.*);$`, 'm'))
   if (!m) throw new Error(`no pub const ${name} in brand.rs`)
   return m[1]
 }
@@ -101,9 +102,23 @@ describe('the renderer brand module', () => {
     expect(CLI_ALIASES).toEqual(brandAliases())
     expect(RELEASE_REPO).toBe(rustMacro('release_repo'))
     expect(RELEASE_REPO_NAMES).toEqual(rustRepoNames())
-    expect(COMPANY_NAME).toBe(rustConst('COMPANY_NAME'))
-    expect(PUBLIC_SITE).toBe(rustConst('PUBLIC_SITE'))
-    expect(SUPPORT_EMAIL).toBe(rustConst('SUPPORT_EMAIL'))
+  })
+
+  it('the company, lockup, site and support address are the brand file\'s, on both sides', () => {
+    expect(COMPANY_NAME).toBe(brandString('names', 'company'))
+    expect(PRODUCT_LOCKUP).toBe(brandString('names', 'lockup'))
+    expect(PUBLIC_SITE).toBe(brandString('links', 'site'))
+    expect(SUPPORT_EMAIL).toBe(brandString('links', 'support_email'))
+    // The renderer re-exports the generated module and builds none of them.
+    expect(COMPANY_NAME).toBe(generated.COMPANY_NAME)
+    expect(PRODUCT_LOCKUP).toBe(generated.PRODUCT_LOCKUP)
+    expect(PUBLIC_SITE).toBe(generated.PUBLIC_SITE)
+    expect(SUPPORT_EMAIL).toBe(generated.SUPPORT_EMAIL)
+    // brand.rs reads the same fields through k2-brand, so they cannot drift.
+    expect(rustConstValue('COMPANY_NAME')).toBe('k2_brand::names::COMPANY')
+    expect(rustConstValue('PRODUCT_LOCKUP')).toBe('k2_brand::names::LOCKUP')
+    expect(rustConstValue('PUBLIC_SITE')).toBe('k2_brand::links::SITE')
+    expect(rustConstValue('SUPPORT_EMAIL')).toBe('k2_brand::links::SUPPORT_EMAIL')
   })
 
   it('one repo name everywhere: the CLI, the release tooling and the signer agree with brand.rs', () => {
@@ -178,6 +193,8 @@ describe('the renderer brand module', () => {
     const exported = Object.keys(await import('./brand'))
     expect(exported).not.toContain('productName')
     expect(exported).not.toContain('cliName')
-    expect(exported).toEqual(expect.arrayContaining(['BRAND_ID', 'PRODUCT_NAME', 'CLI_NAME', 'CLI_ALIASES']))
+    expect(exported).toEqual(
+      expect.arrayContaining(['BRAND_ID', 'PRODUCT_NAME', 'CLI_NAME', 'CLI_ALIASES', 'COMPANY_NAME', 'PRODUCT_LOCKUP', 'PUBLIC_SITE', 'SUPPORT_EMAIL']),
+    )
   })
 })

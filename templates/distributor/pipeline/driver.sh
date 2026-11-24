@@ -29,6 +29,7 @@
 #               crate a private white-label build can't ship (today:
 #               libgit2-sys, until gitoxide replaces libgit2)
 #   4 ceiling   scripts/brand/ceiling-zero-gate.sh: every command is native
+#               (with no shell CLI, under every run-time variant too)
 #   5 lint      scripts/brand.sh lint on your brand, and --live (lint_live)
 #   6 build     K5's Linux release build with K2_BRAND_DIR = your brand
 #               folder (SECRETS for a real build: your mail sign-in clients)
@@ -203,7 +204,7 @@ gates() { # gates <tag> <sha or empty> <dry: yes|no>
         || refuse "the tag links code a private white-label build can't ship (above)"
 
     step 4 "ceiling-zero: every command is native"
-    bash "$K5/scripts/brand/ceiling-zero-gate.sh" --tree "$K5" \
+    bash "$K5/scripts/brand/ceiling-zero-gate.sh" --brand "$BRAND" --tree "$K5" \
         || refuse "the tag still hands commands to the shell CLI"
 
     step 5 "the name policy on $BRAND"

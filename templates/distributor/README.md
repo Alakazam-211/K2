@@ -167,7 +167,7 @@ yours.
 | 1 | fetch | K5's public repo at the tag, nothing else; with `--sha`, the tag must still be the commit `pick` saw |
 | 2 | tools | the tag carries the brand tools the driver calls; an older tag is refused |
 | 3 | licence | `scripts/brand/licence-gate.sh`: the tag's `Cargo.lock` holds no crate on `scripts/brand/copyleft-crates.txt`. Today every tag is refused here, for `libgit2-sys` (see "The licence gate") |
-| 4 | ceiling-zero | `scripts/brand/ceiling-zero-gate.sh`: every command line is answered by K5's own program. A tag where any command still falls through to the old shell CLI (which prints K5's names) is refused |
+| 4 | ceiling-zero | `scripts/brand/ceiling-zero-gate.sh`: every command line is answered by K5's own program. A tag where any command still falls through to the old shell CLI (which prints K5's names) is refused, and so is one with a run-time row (class R: a command under an unusual environment or input) when your brand has no shell CLI |
 | 5 | lint | `scripts/brand.sh lint` on your brand, then `--live` when `lint_live = on` |
 | 6 | build | K5's own Linux release build with `K2_BRAND_DIR` set to your brand folder. **SECRETS** for a real build: your mail sign-in clients |
 | 7 | judge | the output judges read everything the CLI prints for every help and study page: no other brand's name, and each of your names in its place. K5's own list of lines it still owes a fix ("debt") is not carried into your build: any such line fails it. Then every binary must carry your brand mark, and only yours |

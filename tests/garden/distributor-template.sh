@@ -143,7 +143,7 @@ lockfile() { # lockfile <name version>...: the stand-in's Cargo.lock
 }
 lockfile "libc 0.2.170" "pg_query 6.2.1"
 ceiling() { # ceiling <fell> <H count> [<row>]
-    { printf '# %s of 5117 probes fall through: V 0, H %s, F 0, E 0, P 0\n' "$1" "$2"
+    { printf '# %s of 5117 probes fall through: V 0, H %s, F 0, E 0, P 0, R 0\n' "$1" "$2"
       printf 'class\tfamily\tform\n'
       if [ $# -gt 2 ]; then printf '%s\n' "$3"; fi; } > "$U/$CEIL"
 }

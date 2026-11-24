@@ -104,7 +104,7 @@ fn is_sock(st: &libc::stat) -> bool {
 
 fn open_hook(h: &HookRule) -> Result<OwnedFd, String> {
     let c = cstr(&h.path)?;
-    let fd = sys::openat2(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_CLOEXEC, sys::RESOLVE_NO_SYMLINKS | sys::RESOLVE_NO_MAGICLINKS)
+    let fd = sys::open_resolved(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_CLOEXEC, sys::RESOLVE_NO_SYMLINKS | sys::RESOLVE_NO_MAGICLINKS)
         .map_err(|e| match e.raw_os_error() {
             Some(libc::ELOOP) => "a link on the way".to_string(),
             _ => format!("it can't be opened ({e})"),
@@ -121,7 +121,7 @@ fn open_hook(h: &HookRule) -> Result<OwnedFd, String> {
 
 fn open_beneath(t: &TmpRule, rel: &[u8]) -> Result<OwnedFd, String> {
     let c = cstr(rel)?;
-    let fd = sys::openat2(t.dir.as_raw_fd(), &c, libc::O_PATH | libc::O_CLOEXEC, sys::RESOLVE_BENEATH | sys::RESOLVE_NO_MAGICLINKS)
+    let fd = sys::open_resolved(t.dir.as_raw_fd(), &c, libc::O_PATH | libc::O_CLOEXEC, sys::RESOLVE_BENEATH | sys::RESOLVE_NO_MAGICLINKS)
         .map_err(|e| match e.raw_os_error() {
             Some(libc::EXDEV) => "it leads out of the folder".to_string(),
             _ => format!("it can't be opened beneath the folder ({e})"),
@@ -234,7 +234,7 @@ pub fn prepare(spec: &BlockSpec) -> Result<Option<Prepared>, String> {
         return Err(format!("the temp folder {:?} isn't a plain absolute path", spec.tmp_dir));
     }
     let c = cstr(spec.tmp_dir.as_bytes())?;
-    let dir = sys::openat2(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC, sys::RESOLVE_NO_SYMLINKS)
+    let dir = sys::open_resolved(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC, sys::RESOLVE_NO_SYMLINKS)
         .map_err(|e| format!("the temp folder {}: {e}", spec.tmp_dir))?;
     let st = sys::fstat(dir.as_raw_fd()).map_err(|e| format!("the temp folder: {e}"))?;
     // SAFETY: geteuid has no failure mode.

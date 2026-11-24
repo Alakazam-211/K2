@@ -29,7 +29,7 @@
 //!
 //! Linux (x86-64, aarch64) only; elsewhere the daemon never sets it.
 
-use std::path::{Component, Path};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -209,11 +209,8 @@ pub fn parse_unix(addr: &[u8]) -> UnixName {
 
 /// A path the rule may name: absolute, no `.` or `..`, no empty part.
 pub fn plain_absolute(p: &str) -> bool {
-    let path = Path::new(p);
-    path.is_absolute()
-        && !p.contains('\0')
-        && !p.contains("//")
-        && path.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+    // By its text: `Path::components` drops `.` parts and doubled slashes.
+    p.strip_prefix('/').is_some_and(|rest| !p.contains('\0') && rest.split('/').all(|s| !s.is_empty() && s != "." && s != ".."))
 }
 
 /// One decision, as the log writes it.

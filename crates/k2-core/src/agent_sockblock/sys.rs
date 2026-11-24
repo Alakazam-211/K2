@@ -129,6 +129,108 @@ pub fn openat2(dirfd: RawFd, path: &CStr, flags: i32, resolve: u64) -> io::Resul
     owned(unsafe { libc::syscall(SYS_OPENAT2, dirfd, path.as_ptr(), &how as *const OpenHow, std::mem::size_of::<OpenHow>()) })
 }
 
+/// [`openat2`], or where the kernel (or a container's filter) has none
+/// (`ENOSYS`), the same rules for `O_PATH` opens by [`walk`]. Only
+/// `RESOLVE_BENEATH`, `RESOLVE_NO_SYMLINKS` and `RESOLVE_NO_MAGICLINKS`
+/// are understood (the walk follows no magic link: a `/proc` link's text is
+/// treated as text).
+pub fn open_resolved(dirfd: RawFd, path: &CStr, flags: i32, resolve: u64) -> io::Result<OwnedFd> {
+    match openat2(dirfd, path, flags, resolve) {
+        Err(e) if e.raw_os_error() == Some(libc::ENOSYS) => walk(dirfd, path.to_bytes(), flags, resolve),
+        r => r,
+    }
+}
+
+fn err(n: i32) -> io::Error {
+    io::Error::from_raw_os_error(n)
+}
+
+/// One component, never following a link (`O_PATH | O_NOFOLLOW`).
+fn open_one(dir: RawFd, name: &[u8]) -> io::Result<OwnedFd> {
+    let c = std::ffi::CString::new(name).map_err(|_| err(libc::EINVAL))?;
+    // SAFETY: c is NUL-terminated.
+    owned(unsafe { libc::openat(dir, c.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) } as libc::c_long)
+}
+
+fn link_text(fd: &OwnedFd) -> io::Result<Vec<u8>> {
+    let mut buf = vec![0u8; 4096];
+    // SAFETY: an empty path reads the link the O_PATH handle is on; buf is sized.
+    let n = unsafe { libc::readlinkat(fd.as_raw_fd(), c"".as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    buf.truncate(n as usize);
+    Ok(buf)
+}
+
+/// Resolve `path` from `dirfd` one component at a time, each opened from
+/// the handle of the folder before it (so a folder renamed meanwhile
+/// changes nothing): `..` goes back to the handle it came from, and with
+/// `RESOLVE_BENEATH` never above `dirfd` (`EXDEV`), nor through an absolute
+/// link or path; with `RESOLVE_NO_SYMLINKS` any link refuses (`ELOOP`).
+pub fn walk(dirfd: RawFd, path: &[u8], flags: i32, resolve: u64) -> io::Result<OwnedFd> {
+    use std::collections::VecDeque;
+    let beneath = resolve & RESOLVE_BENEATH != 0;
+    let no_links = resolve & RESOLVE_NO_SYMLINKS != 0;
+    let parts = |p: &[u8]| -> Vec<Vec<u8>> { p.split(|b| *b == b'/').filter(|s| !s.is_empty()).map(<[u8]>::to_vec).collect() };
+    let mut cur = if path.first() == Some(&b'/') {
+        if beneath {
+            return Err(err(libc::EXDEV));
+        }
+        open_one(libc::AT_FDCWD, b"/")?
+    } else {
+        open_one(dirfd, b".")?
+    };
+    let mut up: Vec<OwnedFd> = Vec::new();
+    let mut queue: VecDeque<Vec<u8>> = parts(path).into();
+    let mut links = 0;
+    let mut last: Option<OwnedFd> = None;
+    while let Some(name) = queue.pop_front() {
+        if last.is_some() {
+            return Err(err(libc::ENOTDIR));
+        }
+        if name == b"." {
+            continue;
+        }
+        if name == b".." {
+            match up.pop() {
+                Some(parent) => cur = parent,
+                None if beneath => return Err(err(libc::EXDEV)),
+                None => cur = open_one(cur.as_raw_fd(), b"..")?,
+            }
+            continue;
+        }
+        let fd = open_one(cur.as_raw_fd(), &name)?;
+        let st = fstat(fd.as_raw_fd())?;
+        match st.st_mode & libc::S_IFMT {
+            libc::S_IFLNK => {
+                links += 1;
+                if no_links || links > 40 {
+                    return Err(err(libc::ELOOP));
+                }
+                let t = link_text(&fd)?;
+                if t.first() == Some(&b'/') {
+                    if beneath {
+                        return Err(err(libc::EXDEV));
+                    }
+                    up.clear();
+                    cur = open_one(libc::AT_FDCWD, b"/")?;
+                }
+                for p in parts(&t).into_iter().rev() {
+                    queue.push_front(p);
+                }
+            }
+            libc::S_IFDIR => up.push(std::mem::replace(&mut cur, fd)),
+            _ => last = Some(fd),
+        }
+    }
+    let out = last.unwrap_or(cur);
+    if flags & libc::O_DIRECTORY != 0 && fstat(out.as_raw_fd())?.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(err(libc::ENOTDIR));
+    }
+    Ok(out)
+}
+
 /// Close every descriptor from `first` up.
 pub fn close_from(first: u32) {
     // SAFETY: closes descriptors this process owns; nothing refers to them after.

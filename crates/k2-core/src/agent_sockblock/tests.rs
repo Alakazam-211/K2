@@ -212,7 +212,7 @@ mod paths {
 
     fn rules(tmp: &Path, hook: Option<&Path>, uid: u32) -> Rules {
         let c = std::ffi::CString::new(tmp.to_str().unwrap()).unwrap();
-        let dir = sys::openat2(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC, 0).unwrap();
+        let dir = sys::open_resolved(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC, 0).unwrap();
         let dev = sys::fstat(dir.as_raw_fd()).unwrap().st_dev;
         Rules {
             hook: hook.map(|h| HookRule { path: h.to_str().unwrap().as_bytes().to_vec(), uid }),
@@ -307,6 +307,52 @@ mod paths {
         std::fs::write(&hook, "x").unwrap();
         assert!(allowed(&r, &hook).unwrap_err().contains("socket"));
         assert!(allowed(&r, &root.join("cells/s.sock2")).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The walk used where `openat2` is missing gives the same answers as
+    /// `openat2` for the forms the rule meets.
+    #[test]
+    fn the_walk_resolves_as_openat2_does() {
+        let root: PathBuf = crate::test_env::short_tmp(format!("k2sbw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("t/sub")).unwrap();
+        std::fs::create_dir_all(root.join("o")).unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        std::fs::write(root.join("t/sub/f"), "x").unwrap();
+        std::fs::write(root.join("o/g"), "y").unwrap();
+        std::os::unix::fs::symlink("sub/f", root.join("t/rel")).unwrap();
+        std::os::unix::fs::symlink(root.join("o/g"), root.join("t/abs")).unwrap();
+        std::os::unix::fs::symlink("../o/g", root.join("t/up")).unwrap();
+        std::os::unix::fs::symlink("loop", root.join("t/loop")).unwrap();
+        let c = std::ffi::CString::new(root.join("t").to_str().unwrap()).unwrap();
+        let t = sys::walk(libc::AT_FDCWD, c.as_bytes(), libc::O_PATH | libc::O_DIRECTORY, 0).unwrap();
+        let beneath = sys::RESOLVE_BENEATH | sys::RESOLVE_NO_MAGICLINKS;
+        let ino = |p: &Path| std::fs::metadata(p).map(|m| std::os::unix::fs::MetadataExt::ino(&m)).unwrap();
+        let got = |rel: &str, resolve: u64| -> Result<u64, i32> {
+            let via_walk = sys::walk(t.as_raw_fd(), rel.as_bytes(), libc::O_PATH, resolve).map(|fd| sys::fstat(fd.as_raw_fd()).unwrap().st_ino);
+            let rc = std::ffi::CString::new(rel).unwrap();
+            let via_kernel = sys::openat2(t.as_raw_fd(), &rc, libc::O_PATH | libc::O_CLOEXEC, resolve).map(|fd| sys::fstat(fd.as_raw_fd()).unwrap().st_ino);
+            if let Err(e) = &via_kernel {
+                if e.raw_os_error() != Some(libc::ENOSYS) {
+                    assert_eq!(via_walk.as_ref().map_err(|e| e.raw_os_error()), via_kernel.as_ref().map_err(|e| e.raw_os_error()), "{rel} {resolve:#x}: the walk and openat2 differ");
+                }
+            } else {
+                assert_eq!(via_walk.as_ref().ok(), via_kernel.as_ref().ok(), "{rel}: the walk and openat2 differ");
+            }
+            via_walk.map_err(|e| e.raw_os_error().unwrap())
+        };
+        let f = ino(&root.join("t/sub/f"));
+        assert_eq!(got("sub/f", beneath), Ok(f));
+        assert_eq!(got("rel", beneath), Ok(f), "a link that stays inside");
+        assert_eq!(got("sub/../sub/f", beneath), Ok(f));
+        assert_eq!(got("abs", beneath), Err(libc::EXDEV), "an absolute link");
+        assert_eq!(got("up", beneath), Err(libc::EXDEV), "a link out by ..");
+        assert_eq!(got("../o/g", beneath), Err(libc::EXDEV), ".. out");
+        assert_eq!(got("loop", beneath), Err(libc::ELOOP), "a link loop");
+        assert_eq!(got("rel", sys::RESOLVE_NO_SYMLINKS), Err(libc::ELOOP), "no links at all");
+        assert_eq!(got("sub/f/x", beneath), Err(libc::ENOTDIR));
+        assert_eq!(got("missing", beneath), Err(libc::ENOENT));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

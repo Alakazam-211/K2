@@ -212,7 +212,7 @@ fn role_helper() {
     let mode = if env("K2_SB_MODE") == "enforce" { Mode::Enforce } else { Mode::Record };
     let t = root.join("t");
     let c = std::ffi::CString::new(t.to_str().unwrap()).unwrap();
-    let dir = sys::openat2(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC, sys::RESOLVE_NO_SYMLINKS).unwrap();
+    let dir = sys::open_resolved(libc::AT_FDCWD, &c, libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC, sys::RESOLVE_NO_SYMLINKS).unwrap();
     let dev = sys::fstat(dir.as_raw_fd()).unwrap().st_dev;
     // SAFETY: no preconditions.
     let uid = unsafe { libc::geteuid() };

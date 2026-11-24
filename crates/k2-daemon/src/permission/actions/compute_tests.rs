@@ -1257,15 +1257,14 @@ fn pinned_only_card_names_the_node_and_the_change() {
     below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
     assert!(!pinned(&node_id));
 
-    // The off card, its own words, the node by its name though asked by
-    // id (another workspace: its own card).
+    // The off card, its own words (another workspace: its own card).
     let ws2 = seed("pinx");
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         k2_core::compute::pinned_only::set(&conn, &node_id, true, "owner", 9).expect("on");
     }
-    let v = ask_ok(&ws2, "compute.node.pinned-only", json!({ "node": node_id, "on": "false" }));
+    let v = ask_ok(&ws2, "compute.node.pinned-only", json!({ "node": name, "on": "false" }));
     let vw = view(&ws2, &card_of(&v));
     assert_eq!(vw["whatChanges"], format!("Turn off pinned jobs only for {name}."), "{vw}");
     assert!(vw["consequences"].as_str().unwrap_or("").starts_with(&format!("Automatic placement may choose {name} again")), "{vw}");

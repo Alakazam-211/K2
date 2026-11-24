@@ -86,7 +86,7 @@ use crate::passport;
 use crate::prelude::{self, Gate};
 use crate::python;
 use crate::transport::skew;
-use k2_client::brand::{RELEASES_LATEST_API, RELEASES_URL_PREFIX};
+use k2_client::brand::{CLI_NAME, RELEASES_LATEST_API, RELEASES_URL_PREFIX};
 use k2_client::{product_name, release_repo};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
@@ -274,8 +274,8 @@ pub fn cli_lines(ours: &str, theirs: Option<&str>, check: bool) -> String {
     };
     let mut s = format!(
         "k2 CLI {ours}\n{daemon}\n\n\
-         The CLI updates together with {product}; k2 never downloads itself.\n  \
-         Desktop: k2 update --app, or the app's own updater.\n  \
+         The CLI updates together with {product}; {CLI_NAME} never downloads itself.\n  \
+         Desktop: {CLI_NAME} update --app, or the app's own updater.\n  \
          Linux:   your {product} package, or the install script.\n  \
          The {product} daemon and root helper keep this CLI matched to {product}.\n"
     );
@@ -309,7 +309,7 @@ pub fn app_lines(ours: &str, tag: &str) -> String {
     format!(
         "  Current: v{ours}\n  Latest:  {tag}\n\n\
          To update the app, download from:\n  {RELEASES_URL_PREFIX}tag/{tag}\n\n\
-         Or use: k2 update --app --list  to see all versions\n"
+         Or use: {CLI_NAME} update --app --list  to see all versions\n"
     )
 }
 

@@ -32,6 +32,7 @@ use crate::exit::Exit;
 use crate::out;
 use crate::transport::permission::Note;
 use crate::transport::{Auth, Client, Response};
+use k2_client::cli_name;
 use std::path::Path;
 
 pub mod plain_http;
@@ -360,7 +361,9 @@ fn bulletin_line(day: &str, key: &str, tmpdir: Option<std::ffi::OsString>, now: 
         out::stderr_line(&format!(
             concat!(
                 k2_client::product_name!(),
-                " bulletin for {} is unread: k2 organization bulletin"
+                " bulletin for {} is unread: ",
+                cli_name!(),
+                " organization bulletin"
             ),
             day
         ));

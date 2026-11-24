@@ -42,6 +42,7 @@ use crate::out::py;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Client};
 use k2_client::brand::PRODUCT_NAME;
+use k2_client::cli_name;
 
 /// `launch`'s lookup.
 pub const RESOLVE: &str = "/cli/workspace/resolve";
@@ -52,12 +53,20 @@ pub const DISPLAY_NAME: &str = "/cli/workspace/agent-display-name";
 /// `update`'s call.
 pub const AGENT_UPDATE: &str = "/cli/agent/update";
 /// `update`'s usage line.
-pub const UPDATE_USAGE: &str = "Usage: k2 workspace update --field <f> --value <v>";
+pub const UPDATE_USAGE: &str = concat!(
+    "Usage: ",
+    cli_name!(),
+    " workspace update --field <f> --value <v>"
+);
 /// `launch`'s usage line.
-pub const LAUNCH_USAGE: &str = "Usage: k2 workspace launch [<path|name>] [--json]";
+pub const LAUNCH_USAGE: &str = concat!(
+    "Usage: ",
+    cli_name!(),
+    " workspace launch [<path|name>] [--json]"
+);
 /// `launch --no-attach`: exit 2.
 pub const NO_ATTACH: &str = concat!(
-    "Error: --no-attach: k2 workspace launch never attaches a terminal (it starts or finds the workspace's agent session and prints ",
+    "Error: --no-attach: ", cli_name!(), " workspace launch never attaches a terminal (it starts or finds the workspace's agent session and prints ",
     k2_client::product_name!(),
     "'s answer), so there is nothing to turn off. Run it without --no-attach."
 );
@@ -95,8 +104,8 @@ pub const DB_COLUMNS: [&str; 25] = [
 pub fn db_column_lines(field: &str) -> Vec<String> {
     vec![
         format!("Error: '{field}' is a workspace SETTING (a projects DB column), not an AGENT.md profile field."),
-        "'k2 workspace update' only edits the agent's AGENT.md; it would not change the real setting.".to_string(),
-        "Use: k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>]  (see 'k2 agent set --help')".to_string(),
+        concat!("'", cli_name!(), " workspace update' only edits the agent's AGENT.md; it would not change the real setting.").to_string(),
+        concat!("Use: ", cli_name!(), " agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>]  (see '", cli_name!(), " agent set --help')").to_string(),
     ]
 }
 

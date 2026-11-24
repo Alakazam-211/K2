@@ -98,7 +98,7 @@ pub const VERBS: &[crate::route::Verb] = &[];
 pub const ENDPOINT: &str = "/cli/terminal/read";
 /// No workspace and no session: two lines.
 pub const USAGE: [&str; 2] = [
-    "Usage: k2 read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token-stdin | --token <tok>]",
+    concat!("Usage: ", cli_name!(), " read <workspace>[@<host>] [--lines N] [--agent <name>] [--session <id>] [--token-stdin | --token <tok>]"),
     "  --token-stdin reads the remote token from stdin; a token on the command line (--token <tok>) is visible to other users on this machine",
 ];
 /// The line of the shell's Python that loops over `lines`, for its

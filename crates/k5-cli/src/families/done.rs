@@ -72,7 +72,8 @@ use crate::transport::client::{tmpdir_unusable, TMPDIR_UNWRITABLE};
 use crate::transport::encode::quote;
 use crate::transport::wire::curl;
 use crate::transport::{Call, Channel, Error};
-use k2_client::env_names;
+use k2_client::brand::CLI_NAME;
+use k2_client::{cli_name, env_names};
 use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -86,15 +87,15 @@ pub const VERBS: &[crate::route::Verb] = &[];
 pub const ENDPOINT: &str = "/cli/done";
 
 /// `--agent` with no name after it.
-pub const AGENT_NEEDS_A_NAME: &str = "k2 done: '--agent' needs a name.";
+pub const AGENT_NEEDS_A_NAME: &str = concat!(cli_name!(), " done: '--agent' needs a name.");
 /// `--blocked` with nothing after it.
-pub const BLOCKED_NEEDS_A_REASON: &str = "k2 done: '--blocked' needs a reason.";
+pub const BLOCKED_NEEDS_A_REASON: &str = concat!(cli_name!(), " done: '--blocked' needs a reason.");
 /// No agent from the flags or the environment.
 pub const AGENT_REQUIRED: &str = "Error: --agent required (or set K2_AGENT_NAME)";
 
 /// The shell's line for a flag it doesn't take.
 pub fn unknown_flag(word: &str) -> String {
-    format!("k2 done: unknown flag '{word}'. k2 done takes --blocked \"reason\" and --agent <name> (k2 done --help).")
+    format!("{CLI_NAME} done: unknown flag '{word}'. {CLI_NAME} done takes --blocked \"reason\" and --agent <name> ({CLI_NAME} done --help).")
 }
 
 /// What the words ask for.

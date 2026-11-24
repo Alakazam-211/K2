@@ -56,6 +56,7 @@ use crate::out::json::{self, Value};
 use crate::python::{self, Python3};
 use crate::text::{self, HelpForm, Variant};
 use crate::{cards, feedback_optin, prelude, tools};
+use k2_client::cli_name;
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -89,12 +90,21 @@ pub enum Study {
 pub const HEARTBEAT_ALIASES: &[&str] = &["routines", "routine", "reminders", "reminder", "cron"];
 
 /// `k2 study skins` is the apps page after this line and a blank one.
-pub const SKINS_LINE: &str = "k2 study skins is now k2 study apps \u{2014} this page still works.";
+pub const SKINS_LINE: &str = concat!(
+    cli_name!(),
+    " study skins is now ",
+    cli_name!(),
+    " study apps \u{2014} this page still works."
+);
 
 /// `k2 study llm-accounts` is the llm-tokens page after this line and a
 /// blank one.
-pub const LLM_ACCOUNTS_LINE: &str =
-    "k2 study llm-accounts is now k2 study llm-tokens \u{2014} this page still works.";
+pub const LLM_ACCOUNTS_LINE: &str = concat!(
+    cli_name!(),
+    " study llm-accounts is now ",
+    cli_name!(),
+    " study llm-tokens \u{2014} this page still works."
+);
 
 /// The page `cards` filters (`_study_page_skins ... | _perm_lines`).
 pub const CARDS_PAGE: &str = "apps";
@@ -339,7 +349,11 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
     ),
     (
         "app-rest",
-        concat!("supabase-js against your App's ", k2_client::product_name!(), " doors: /rest/v1, /auth/v1, the shim"),
+        concat!(
+            "supabase-js against your App's ",
+            k2_client::product_name!(),
+            " doors: /rest/v1, /auth/v1, the shim"
+        ),
     ),
     (
         "app-storage",
@@ -425,8 +439,14 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
         "app-databases",
         "An App's database: what reaches what, and connecting one",
     ),
-    ("supabase-compat", "Supabase-style RLS and auth.* on an App's database"),
-    ("app-cron", "App cron: scheduled calls to an App's own routes"),
+    (
+        "supabase-compat",
+        "Supabase-style RLS and auth.* on an App's database",
+    ),
+    (
+        "app-cron",
+        "App cron: scheduled calls to an App's own routes",
+    ),
     ("jobs", "Scheduled jobs the daemon runs"),
     (
         "heartbeats",
@@ -902,7 +922,9 @@ pub const DAILY_NATIVE: bool = true;
 pub const CARDS_HELP_LINE: &str = concat!(
     "  permission request <action> --why \"\u{2026}\"   Ask a person to allow what ",
     k2_client::product_name!(),
-    " refused you (k2 study permissions)"
+    " refused you (",
+    cli_name!(),
+    " study permissions)"
 );
 
 /// Whether `args` (the words after the program's name) is one of
@@ -1429,7 +1451,11 @@ mod tests {
     #[cfg(not(unix))]
     #[test]
     fn off_unix_every_page_is_the_binary_s() {
-        for pairs in [&[][..], &[("LANG", "en_US.ISO8859-1")], &[("PYTHONPATH", "/x")]] {
+        for pairs in [
+            &[][..],
+            &[("LANG", "en_US.ISO8859-1")],
+            &[("PYTHONPATH", "/x")],
+        ] {
             assert!(native_json(&Env::of(pairs), "\u{2014}"), "{pairs:?}");
         }
     }

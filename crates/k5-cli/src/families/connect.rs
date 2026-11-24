@@ -57,6 +57,7 @@ use crate::passport;
 use crate::prelude::{self, Closing, Gate};
 use crate::python;
 use crate::transport::{Auth, Call, Error};
+use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -75,7 +76,7 @@ pub const STATUS: &str = "/cli/tunnel/status";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "connect-account";
 /// A word after `status`: exit 2.
-pub const USAGE: &str = "Usage: k2 connect status";
+pub const USAGE: &str = concat!("Usage: ", cli_name!(), " connect status");
 /// The account session's file in the K2 home.
 pub const ACCOUNT_FILE: &str = "connect-account.json";
 /// The pairing's file in the K2 home.
@@ -89,8 +90,11 @@ pub const UNREADABLE: &str = concat!(
     " vault could not be read)"
 );
 /// The last line with no daemon.
-pub const NO_DAEMON: &str =
-    "  Tunnel status:   (daemon not running \u{2014} start with: k2 daemon start)";
+pub const NO_DAEMON: &str = concat!(
+    "  Tunnel status:   (daemon not running \u{2014} start with: ",
+    cli_name!(),
+    " daemon start)"
+);
 /// The last line when the shell's Python fails.
 pub const UNREACHABLE: &str = "  Tunnel status:   (daemon unreachable)";
 
@@ -403,9 +407,17 @@ pub fn status_lines(raw: &[u8]) -> String {
             .unwrap_or_else(|| s("(assigned by server)"));
         out.push_str(&format!("  Public URL:      {}\n", py::str_of(&url)));
     } else if truthy("released") {
-        out.push_str("  State:           RELEASED \u{2014} re-pair with: k2 connect login\n");
+        out.push_str(concat!(
+            "  State:           RELEASED \u{2014} re-pair with: ",
+            cli_name!(),
+            " connect login\n"
+        ));
     } else if at("enabled") == Some(&Value::Bool(false)) {
-        out.push_str("  State:           DISABLED \u{2014} re-enable with: k2 tunnel enable\n");
+        out.push_str(concat!(
+            "  State:           DISABLED \u{2014} re-enable with: ",
+            cli_name!(),
+            " tunnel enable\n"
+        ));
     } else {
         out.push_str("  State:           stopped\n");
     }

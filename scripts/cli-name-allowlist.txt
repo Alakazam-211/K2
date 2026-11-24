@@ -27,31 +27,20 @@
 # These rows are kept apart from scripts/brand-allowlist.txt (the product's
 # names) so the commits that lower them stay apart too.
 
-28 cli crates/k5-cli/src/retired.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-16 cli crates/k5-cli/src/families/sessions.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-16 cli crates/k5-cli/src/families/setup.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 9 cli crates/k2-node/src/main_unix.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 7 cli crates/k2-signer/src/verbs.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 7 cli crates/k2-vault/src/handoff.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 6 cli crates/k2-approve/src/main.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 5 cli crates/k2-vault/src/vault.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-5 cli crates/k5-cli/src/families/workspace/agent.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 5 cli src/renderer/components/Settings/sections/K5CliBetaRow.tsx keeper: the k5 beta switch's words name the k5 program (k2-client's cli_install runs it), not this build's command
 4 cli crates/k2-core/src/contract/gen.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-daemon/src/mail/sieve_lockdown_live.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 4 cli crates/k2-vault/src/boxmove.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-4 cli crates/k5-cli/src/families/activity.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-4 cli crates/k5-cli/src/families/connect.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-4 cli crates/k5-cli/src/families/connections.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-4 cli crates/k5-cli/src/families/feedback.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-4 cli crates/k5-cli/src/families/inbox.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 3 cli crates/k2-core/src/contract/live.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-core/src/jscheck/lint.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-daemon/src/permission/actions/postal.rs keeper: outside; p5's own subcommand (p5 k2 link) in its error lines, a word of p5's, not this build's command
 3 cli crates/k2-root-helper/src/sew.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 3 cli crates/k2-signer/src/check.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-3 cli crates/k5-cli/src/families/done.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-3 cli crates/k5-cli/src/pages.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 3 cli src-tauri/src/commands/settings.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-client/src/cli_install.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-core/src/contract/libs.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -63,11 +52,6 @@
 2 cli crates/k2-signer/src/provenance.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k2-vault/src/vault/agent_store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 2 cli crates/k5-cli/src/cli_status.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-2 cli crates/k5-cli/src/families/respond.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-2 cli crates/k5-cli/src/families/update.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-2 cli crates/k5-cli/src/families/whoami.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-2 cli crates/k5-cli/src/families/workspace.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-2 cli crates/k5-cli/src/transport/client.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 1 cli crates/k2-core/src/zen/widget_runs.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/apps/grace.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-daemon/src/apps/handover.rs debt: the command name typed out; use CLI_NAME or cli_name!()
@@ -95,10 +79,6 @@
 1 cli crates/k2-root-helper/src/pg_dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/policy.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/vault/handoff_store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli crates/k5-cli/src/families/connections/write.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-1 cli crates/k5-cli/src/families/read.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-1 cli crates/k5-cli/src/families/workspace/register.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
-1 cli crates/k5-cli/src/prelude.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4
 1 cli src/renderer/components/Settings/sections/GeneralSection.tsx keeper: the k5 beta switch's search entry names the k5 program (k2-client's cli_install runs it), not this build's command
 1 cli src/renderer/lib/thread-reply.ts keeper: stored; the first build's Thread reply header, parsed in messages that build wrote (they always say k2)
 17 value src/renderer/components/Wiki/WikiPage.tsx keeper: wire+inert; the wiki index's scope (daemon); the page's own view mode

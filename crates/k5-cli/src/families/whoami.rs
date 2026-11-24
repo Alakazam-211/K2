@@ -55,6 +55,7 @@ use crate::transport::client::{tmpdir_unusable, TMPDIR_UNWRITABLE};
 use crate::transport::encode::quote_bytes;
 use crate::transport::wire::curl;
 use crate::transport::{Call, Error};
+use k2_client::brand::CLI_NAME;
 use k2_client::env_names;
 use std::ffi::OsString;
 
@@ -70,7 +71,7 @@ pub const ENDPOINT: &str = "/cli/whoami";
 
 /// The shell's line for a flag it doesn't take.
 pub fn unknown_flag(word: &str) -> String {
-    format!("Error: unknown flag '{word}' (try 'k2 whoami --help')")
+    format!("Error: unknown flag '{word}' (try '{CLI_NAME} whoami --help')")
 }
 
 /// The line when the answer isn't JSON.
@@ -292,9 +293,10 @@ pub fn human(resp: &[u8]) -> Shown {
     if let Some(Value::Object(sib)) = get(pairs, "siblings") {
         if let Some(live) = get(sib, "live") {
             match py::percent_d(live) {
-                Ok(n) => {
-                    stdout.push_str(&format!("{:<10} {n} live here (k2 sessions)\n", "others:"))
-                }
+                Ok(n) => stdout.push_str(&format!(
+                    "{:<10} {n} live here ({CLI_NAME} sessions)\n",
+                    "others:"
+                )),
                 Err(exception) => {
                     return Shown {
                         stdout,

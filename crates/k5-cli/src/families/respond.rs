@@ -50,7 +50,7 @@ use crate::transport::client::is_socket;
 use crate::transport::encode::quote;
 use crate::transport::wire::curl;
 use crate::transport::{Auth, Call, Channel, Error};
-use k2_client::env_names;
+use k2_client::{cli_name, env_names};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -66,10 +66,13 @@ pub const ENDPOINT: &str = "/cli/respond";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "respond";
 /// No message.
-pub const USAGE: &str = "Usage: k2 respond [--final] <message>";
+pub const USAGE: &str = concat!("Usage: ", cli_name!(), " respond [--final] <message>");
 /// No cell socket and no passport to send it with.
-pub const NO_SESSION: &str =
-    "Error: 'k2 respond' needs an API-launched session (per-cell socket or scoped session token).";
+pub const NO_SESSION: &str = concat!(
+    "Error: '",
+    cli_name!(),
+    " respond' needs an API-launched session (per-cell socket or scoped session token)."
+);
 
 /// What the words say.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -63,7 +63,7 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::client::LOCAL_TRANSPORT_DENIED;
 use crate::transport::{permission, Auth, Call, Client, Error};
-use k2_client::brand::PRODUCT_NAME;
+use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::ffi::OsString;
 
 pub mod agent;
@@ -298,9 +298,9 @@ pub fn failed_line(e: &Error, endpoint: &str, base_url: &str) -> String {
             e.to_string()
         }
         _ => match e.curl_code() {
-            7 => format!("Error: {PRODUCT_NAME}'s server didn't answer {endpoint}: nothing took the connection at {base_url}; run k2 daemon status"),
+            7 => format!("Error: {PRODUCT_NAME}'s server didn't answer {endpoint}: nothing took the connection at {base_url}; run {CLI_NAME} daemon status"),
             LOCAL_TRANSPORT_DENIED => format!("Error: this machine refused the connection to {PRODUCT_NAME}'s server at {base_url}, so {endpoint} was not sent"),
-            rc => format!("Error: the request to {PRODUCT_NAME}'s server failed ({endpoint}, curl exit {rc}); run k2 daemon status"),
+            rc => format!("Error: the request to {PRODUCT_NAME}'s server failed ({endpoint}, curl exit {rc}); run {CLI_NAME} daemon status"),
         },
     }
 }

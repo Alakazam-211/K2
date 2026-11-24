@@ -13,26 +13,54 @@
 //! [`TABLE`] is a copy of the shell's array, row for row; the tests below
 //! read `cli/src/deprecation.sh` and fail when the two drift, or when the
 //! two functions no longer print what [`line`] and [`map`] print.
+use k2_client::brand::CLI_NAME;
+use k2_client::cli_name;
 
 /// `_K2_RETIRED_VERBS`: each row is the old verb (one word, or two) and
 /// its pointer, in the shell's order.
 pub const TABLE: &[(&str, &str)] = &[
-    ("agents create", "k2 skills create <name> --role \"...\""),
+    (
+        "agents create",
+        concat!(cli_name!(), " skills create <name> --role \"...\""),
+    ),
     (
         "agents running",
-        "k2 connections list  (a person: k2 workspace list --running)",
+        concat!(
+            cli_name!(),
+            " connections list  (a person: ",
+            cli_name!(),
+            " workspace list --running)"
+        ),
     ),
     (
         "agents list",
-        "k2 connections list  (or k2 skills list; a person: k2 workspace list)",
+        concat!(
+            cli_name!(),
+            " connections list  (or ",
+            cli_name!(),
+            " skills list; a person: ",
+            cli_name!(),
+            " workspace list)"
+        ),
     ),
-    ("agents work", "k2 inbox"),
+    ("agents work", concat!(cli_name!(), " inbox")),
     (
         "agents status",
-        "k2 connections list  (a person: k2 workspace list)",
+        concat!(
+            cli_name!(),
+            " connections list  (a person: ",
+            cli_name!(),
+            " workspace list)"
+        ),
     ),
-    ("agents delete", "k2 skills remove <name>"),
-    ("agents remove", "k2 skills remove <name>"),
+    (
+        "agents delete",
+        concat!(cli_name!(), " skills remove <name>"),
+    ),
+    (
+        "agents remove",
+        concat!(cli_name!(), " skills remove <name>"),
+    ),
     (
         "agents launch",
         concat!(
@@ -41,44 +69,66 @@ pub const TABLE: &[(&str, &str)] = &[
             " no longer launches agents)"
         ),
     ),
-    ("agents generate-md", "k2 skills regenerate [<name>]"),
-    ("agents profile", "k2 skills profile <name>"),
+    (
+        "agents generate-md",
+        concat!(cli_name!(), " skills regenerate [<name>]"),
+    ),
+    (
+        "agents profile",
+        concat!(cli_name!(), " skills profile <name>"),
+    ),
     ("agents lock", "(nothing replaces it)"),
     ("agents unlock", "(nothing replaces it)"),
-    ("agents triage", "k2 workspace triage"),
+    ("agents triage", concat!(cli_name!(), " workspace triage")),
     ("agents reap", "(nothing replaces it)"),
-    ("agent create", "k2 skills create <name> --role \"...\""),
-    ("agent delete", "k2 agent retire <name>"),
-    ("agent remove", "k2 agent retire <name>"),
+    (
+        "agent create",
+        concat!(cli_name!(), " skills create <name> --role \"...\""),
+    ),
+    ("agent delete", concat!(cli_name!(), " agent retire <name>")),
+    ("agent remove", concat!(cli_name!(), " agent retire <name>")),
     (
         "work create",
-        "k2 inbox compose --title \"...\" --body \"...\"",
+        concat!(cli_name!(), " inbox compose --title \"...\" --body \"...\""),
     ),
     (
         "work send",
-        "k2 msg <workspace> --inbox-silent <file>  (or --inbox-wake)",
+        concat!(
+            cli_name!(),
+            " msg <workspace> --inbox-silent <file>  (or --inbox-wake)"
+        ),
     ),
     (
         "work move",
-        "k2 agent complete --agent <name> --file <file>",
+        concat!(cli_name!(), " agent complete --agent <name> --file <file>"),
     ),
-    ("work inbox", "k2 inbox"),
-    ("work done", "k2 inbox archive <id>"),
+    ("work inbox", concat!(cli_name!(), " inbox")),
+    ("work done", concat!(cli_name!(), " inbox archive <id>")),
     (
         "delegate",
-        "your harness's sub-agent feature, with k2 skills profile <agent>",
+        concat!(
+            "your harness's sub-agent feature, with ",
+            cli_name!(),
+            " skills profile <agent>"
+        ),
     ),
-    ("mode", "k2 settings --mode custom  (or off|manager|k2)"),
-    ("who", "k2 connections list"),
-    ("roster", "k2 connections list"),
-    ("whatsnew", "k2 whats-new"),
-    ("commit-merge", "k2 commit --merge"),
-    ("feed", "k2 activity"),
+    (
+        "mode",
+        concat!(cli_name!(), " settings --mode custom  (or off|manager|k2)"),
+    ),
+    ("who", concat!(cli_name!(), " connections list")),
+    ("roster", concat!(cli_name!(), " connections list")),
+    ("whatsnew", concat!(cli_name!(), " whats-new")),
+    ("commit-merge", concat!(cli_name!(), " commit --merge")),
+    ("feed", concat!(cli_name!(), " activity")),
     (
         "signal",
-        "k2 msg <workspace> --signal <kind> [--payload <json>]",
+        concat!(
+            cli_name!(),
+            " msg <workspace> --signal <kind> [--payload <json>]"
+        ),
     ),
-    ("companion", "k2 users pair-phone"),
+    ("companion", concat!(cli_name!(), " users pair-phone")),
     ("agentic", "(agentic mode is always on)"),
 ];
 
@@ -103,7 +153,9 @@ pub fn lookup(verb: &str, sub: &str) -> Option<(String, &'static str)> {
 /// its own, any other is what to use instead.
 pub fn line(key: &str, new: &str) -> String {
     if new.starts_with('(') {
-        format!("Error: '{key}' is retired {new}. Run 'k2 help-deprecated' for the full map.\n")
+        format!(
+            "Error: '{key}' is retired {new}. Run '{CLI_NAME} help-deprecated' for the full map.\n"
+        )
     } else {
         format!("Error: '{key}' is retired. Use instead: {new}\n")
     }

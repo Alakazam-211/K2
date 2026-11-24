@@ -70,6 +70,7 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Client, Error};
+use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -93,9 +94,9 @@ pub const DELETE: &str = "/cli/inbox/delete";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "inbox";
 /// `read` with no id: exit 2.
-pub const READ_USAGE: &str = "Usage: k2 inbox read <id>";
+pub const READ_USAGE: &str = concat!("Usage: ", cli_name!(), " inbox read <id>");
 /// `search` with no query: exit 1.
-pub const SEARCH_USAGE: &str = "Usage: k2 inbox search \"query\"";
+pub const SEARCH_USAGE: &str = concat!("Usage: ", cli_name!(), " inbox search \"query\"");
 /// The writes' usage lines, each exit 1.
 pub const COMPOSE_USAGE: &str = concat!(
     "Usage: ",
@@ -119,7 +120,7 @@ pub const NO_ITEMS: &str = "No items.";
 /// `folders` with none.
 pub const NO_FOLDERS: [&str; 2] = [
     "No folders yet. Create one by moving an item:",
-    "  k2 inbox move <id> projects",
+    concat!("  ", cli_name!(), " inbox move <id> projects"),
 ];
 /// `read`'s Python on an answer that is empty or only spaces.
 pub const READ_NO_ANSWER: &str = concat!(
@@ -127,7 +128,9 @@ pub const READ_NO_ANSWER: &str = concat!(
     k2_client::product_name!(),
     " daemon (neither this session's cell socket nor the loopback port answered). Is ",
     k2_client::product_name!(),
-    " running? Try again: k2 inbox read <id>"
+    " running? Try again: ",
+    cli_name!(),
+    " inbox read <id>"
 );
 /// `read`'s Python on an answer that is not JSON, before its `%r`.
 pub const READ_UNUSABLE: &str = concat!(

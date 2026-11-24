@@ -70,6 +70,8 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::{permission, Channel, Error, Response};
+use k2_client::brand::CLI_NAME;
+use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -88,33 +90,51 @@ pub const MAIN: &str = "/cli/sessions/main";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "sessions-spawn";
 /// `main` with a word it doesn't take.
-pub const MAIN_USAGE: &str =
-    "usage: k2 sessions main [--json]  |  k2 sessions main set <id> [--json]";
+pub const MAIN_USAGE: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " sessions main [--json]  |  ",
+    cli_name!(),
+    " sessions main set <id> [--json]"
+);
 /// `main --thread` with a value it doesn't take.
 pub const THREAD_USAGE: &str =
     "usage: --thread keep-main|adopt-sidecar (which Thread the main chat shows afterwards)";
 /// `show` with a second id.
-pub const SHOW_USAGE: &str = "usage: k2 sessions show <id|address> [--tail N] [--json]";
+pub const SHOW_USAGE: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " sessions show <id|address> [--tail N] [--json]"
+);
 /// `show` with no id.
-pub const SHOW_NO_ID: &str =
-    "usage: k2 sessions show <id|address> [--tail N] [--json]  (ids: k2 sessions --past)";
+pub const SHOW_NO_ID: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " sessions show <id|address> [--tail N] [--json]  (ids: ",
+    cli_name!(),
+    " sessions --past)"
+);
 /// A 404 that names no route.
 pub const TOO_OLD: &str = concat!(
     "daemon_too_old: this ",
     k2_client::product_name!(),
-    " daemon has no k2 sessions routes yet (update ",
+    " daemon has no ",
+    cli_name!(),
+    " sessions routes yet (update ",
     k2_client::product_name!(),
-    ": k2 update --app)"
+    ": ",
+    cli_name!(),
+    " update --app)"
 );
 
 /// A flag the form doesn't take.
 pub fn unknown_flag(word: &str) -> String {
-    format!("usage: unknown flag '{word}' (k2 sessions --help)")
+    format!("usage: unknown flag '{word}' ({CLI_NAME} sessions --help)")
 }
 
 /// A verb `sessions` doesn't have.
 pub fn unknown_verb(word: &str) -> String {
-    format!("usage: unknown sessions verb '{word}' (k2 sessions --help)")
+    format!("usage: unknown sessions verb '{word}' ({CLI_NAME} sessions --help)")
 }
 
 /// `_sidecar_fail`'s line when the body gave none.
@@ -927,8 +947,11 @@ fn roster_lines(v: &Value, now: f64, o: &mut Out) -> Result<Exit, Raise> {
                 .cloned()
         });
         let hint = match example {
-            Some(e) => format!("Message one: k2 msg {} \"\u{2026}\"", py::str_of(&e)),
-            None => "Message one: k2 msg <address> \"\u{2026}\"".into(),
+            Some(e) => format!(
+                "Message one: {CLI_NAME} msg {} \"\u{2026}\"",
+                py::str_of(&e)
+            ),
+            None => concat!("Message one: ", cli_name!(), " msg <address> \"\u{2026}\"").into(),
         };
         let you = items.iter().any(|r| at(r, "you").is_some_and(py::truthy));
         o.line(&format!("{}{hint}", if you { "* = you.  " } else { "" }));
@@ -939,11 +962,11 @@ fn roster_lines(v: &Value, now: f64, o: &mut Out) -> Result<Exit, Raise> {
     let mut tail = Vec::new();
     if py::truthy(&asleep) && !items.iter().any(|r| at(r, "state") == Some(&s("asleep"))) {
         tail.push(format!(
-            "{} asleep (k2 sessions --all)",
+            "{} asleep ({CLI_NAME} sessions --all)",
             py_d(&asleep, line::R_ASLEEP)?
         ));
     }
-    tail.push("past conversations: k2 sessions --past".into());
+    tail.push(concat!("past conversations: ", cli_name!(), " sessions --past").into());
     o.line(&tail.join(" \u{b7} "));
     Ok(Exit::Ok)
 }
@@ -1023,9 +1046,13 @@ fn past_lines(v: &Value, now: f64, o: &mut Out) -> Result<Exit, Raise> {
                     return Err(Raise::at(line::P_FIRST, "KeyError: 'id'"));
                 };
                 let id = py::str_of(id);
-                o.line(&format!("Open one: k2 sessions open {id} --name <name>   \u{b7}   Read first: k2 sessions show {id}"));
+                o.line(&format!("Open one: {CLI_NAME} sessions open {id} --name <name>   \u{b7}   Read first: {CLI_NAME} sessions show {id}"));
             }
-            _ => o.line("Every one listed is held already: k2 msg its address (NOW column)."),
+            _ => o.line(concat!(
+                "Every one listed is held already: ",
+                cli_name!(),
+                " msg its address (NOW column)."
+            )),
         }
     }
     if at(v, "truncated").is_some_and(py::truthy) {
@@ -1125,14 +1152,14 @@ fn show_lines(v: &Value, now: f64, o: &mut Out) -> Result<Exit, Raise> {
         Some(a) => {
             let a = py::str_of(a);
             o.line(&format!(
-                "It is {} as {a}. Message it: k2 msg {a} \"\u{2026}\"",
+                "It is {} as {a}. Message it: {CLI_NAME} msg {a} \"\u{2026}\"",
                 str_at(&run, "state")
             ));
         }
         None => {
             let id = str_at(&c, "id");
             o.line(&format!(
-                "Reopen: k2 sessions open {id}   (or k2 msg --session {id} \"\u{2026}\")"
+                "Reopen: {CLI_NAME} sessions open {id}   (or {CLI_NAME} msg --session {id} \"\u{2026}\")"
             ));
         }
     }
@@ -1156,8 +1183,13 @@ fn main_lines(v: &Value, o: &mut Out) -> Result<Exit, Raise> {
             k2_client::product_name!(),
             " kept it pinned and did not start or switch to another chat.\n"
         ));
-        o.stderr
-            .push_str("Choose one: k2 sessions --past, then k2 sessions main set <id>\n");
+        o.stderr.push_str(concat!(
+            "Choose one: ",
+            cli_name!(),
+            " sessions --past, then ",
+            cli_name!(),
+            " sessions main set <id>\n"
+        ));
         return Ok(Exit::Error);
     } else if is("unstarted") {
         o.line(&format!(

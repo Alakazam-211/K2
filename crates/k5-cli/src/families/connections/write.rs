@@ -42,6 +42,7 @@ use crate::out::{self, py};
 use crate::prelude::Closing;
 use crate::transport::encode::quote;
 use crate::transport::Client;
+use k2_client::brand::CLI_NAME;
 
 /// What the verb does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +71,10 @@ impl Verb {
 
     /// No target: exit 1.
     pub fn usage(self) -> String {
-        format!("Usage: k2 connections {} <workspace-name>", self.word())
+        format!(
+            "Usage: {CLI_NAME} connections {} <workspace-name>",
+            self.word()
+        )
     }
 }
 

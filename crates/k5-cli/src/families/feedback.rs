@@ -63,6 +63,8 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
 use crate::transport::{Auth, Call, Channel, Client, Error};
+use k2_client::brand::CLI_NAME;
+use k2_client::cli_name;
 use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -144,7 +146,11 @@ pub enum Ask {
     Show { id: String, json: bool, html: bool },
 }
 
-const LIST_USAGE: &str = "usage: k2 tickets list [--all] [--status <s>] [--json]";
+const LIST_USAGE: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " tickets list [--all] [--status <s>] [--json]"
+);
 
 /// `_feedback_err <code> <hint>`: the line on stderr, without its newline.
 pub fn err_line(code: &str, hint: &str) -> String {
@@ -215,14 +221,14 @@ fn parse_show(rest: &[&str]) -> Result<Ask, String> {
             "--html" => html = true,
             w if w.starts_with('-') => {
                 return Err(usage(format!(
-                    "unknown flag '{w}' \u{2014} usage: k2 tickets show <id> [--html] [--json]"
-                )))
+                "unknown flag '{w}' \u{2014} usage: {CLI_NAME} tickets show <id> [--html] [--json]"
+            )))
             }
             // `if [ -z "$id" ]; then id="$1"`: an empty id is taken again.
             w if id.is_empty() => id = w.to_string(),
             w => {
                 return Err(usage(format!(
-                    "unexpected extra argument '{w}' \u{2014} usage: k2 tickets show <id>"
+                    "unexpected extra argument '{w}' \u{2014} usage: {CLI_NAME} tickets show <id>"
                 )))
             }
         }
@@ -950,7 +956,7 @@ fn show_lines(
             _ => "?".into(),
         };
         o.line(&format!(
-            "brief    : HTML, {shown}  (k2 tickets show {} --html > brief.html)",
+            "brief    : HTML, {shown}  ({CLI_NAME} tickets show {} --html > brief.html)",
             short_id(d)
         ));
         let text = match brief.as_ref().and_then(|b| at(b, "text")) {

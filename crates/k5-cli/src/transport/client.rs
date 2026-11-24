@@ -6,7 +6,7 @@ use super::encode::quote;
 use super::permission::{self, Note};
 use super::skew;
 use super::wire::{self, Answer, Body, Failure, Method, Request, Target};
-use k2_client::brand::PRODUCT_NAME;
+use k2_client::brand::{CLI_NAME, PRODUCT_NAME};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -602,11 +602,11 @@ pub struct NoAnswer {
 impl fmt::Display for NoAnswer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.empty {
-            write!(f, "Error: {PRODUCT_NAME}'s server gave an empty answer to {} after {} s; run k2 daemon status", self.endpoint, self.waited)
+            write!(f, "Error: {PRODUCT_NAME}'s server gave an empty answer to {} after {} s; run {CLI_NAME} daemon status", self.endpoint, self.waited)
         } else {
             write!(
                 f,
-                "Error: {PRODUCT_NAME}'s server didn't answer {} within {} s; run k2 daemon status",
+                "Error: {PRODUCT_NAME}'s server didn't answer {} within {} s; run {CLI_NAME} daemon status",
                 self.endpoint, self.waited
             )
         }
@@ -1885,7 +1885,10 @@ fn os_denied(e: &io::Error, _host: &str) -> bool {
 pub fn tmpdir_unusable() -> bool {
     let td = std::env::var_os("TMPDIR")
         .filter(|t| !t.is_empty())
-        .map_or_else(|| PathBuf::from(crate::offline::default_tmpdir()), PathBuf::from);
+        .map_or_else(
+            || PathBuf::from(crate::offline::default_tmpdir()),
+            PathBuf::from,
+        );
     !td.is_dir() || !writable(&td)
 }
 

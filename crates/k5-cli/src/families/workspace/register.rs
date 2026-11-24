@@ -33,6 +33,7 @@ use super::{print_or_fail, ws_request, Stop, Ws};
 use crate::exit::Exit;
 use crate::transport::encode::quote;
 use crate::transport::{Call, Client};
+use k2_client::brand::CLI_NAME;
 
 /// Which verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +61,7 @@ impl Verb {
     /// The usage line.
     pub fn usage(self) -> String {
         format!(
-            "Usage: k2 workspace {} <path> [--no-wiki] [--no-agents-md] [--fanout]",
+            "Usage: {CLI_NAME} workspace {} <path> [--no-wiki] [--no-agents-md] [--fanout]",
             self.word()
         )
     }

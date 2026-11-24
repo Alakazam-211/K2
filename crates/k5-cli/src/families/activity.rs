@@ -56,6 +56,8 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::encode::quote;
+use k2_client::brand::CLI_NAME;
+use k2_client::cli_name;
 use std::ffi::OsString;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
@@ -68,9 +70,17 @@ pub const VERBS: &[crate::route::Verb] = &[];
 /// The route.
 pub const ENDPOINT: &str = "/cli/feed";
 /// `--agent` with nothing after it: exit 2.
-pub const AGENT_NEEDS_A_NAME: &str = "Error: --agent needs a name (k2 activity --help)";
+pub const AGENT_NEEDS_A_NAME: &str = concat!(
+    "Error: --agent needs a name (",
+    cli_name!(),
+    " activity --help)"
+);
 /// `--limit` with nothing after it: exit 2.
-pub const LIMIT_NEEDS_A_NUMBER: &str = "Error: --limit needs a number (k2 activity --help)";
+pub const LIMIT_NEEDS_A_NUMBER: &str = concat!(
+    "Error: --limit needs a number (",
+    cli_name!(),
+    " activity --help)"
+);
 /// No events.
 pub const NO_ACTIVITY: &str = "No activity.";
 /// The Python on an answer that is not JSON, before its `%r`.
@@ -85,12 +95,12 @@ pub const PY_TS: u32 = 21;
 
 /// A flag the shell doesn't take: exit 2.
 pub fn unknown_flag(word: &str) -> String {
-    format!("Error: unknown flag '{word}' (k2 activity --help)")
+    format!("Error: unknown flag '{word}' ({CLI_NAME} activity --help)")
 }
 
 /// A limit that is not a number: exit 2.
 pub fn bad_limit(limit: &str) -> String {
-    format!("Error: the limit is a number, got '{limit}' (k2 activity --help)")
+    format!("Error: the limit is a number, got '{limit}' ({CLI_NAME} activity --help)")
 }
 
 /// What the words ask for.

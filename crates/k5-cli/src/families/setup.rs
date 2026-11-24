@@ -92,6 +92,7 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::text;
 use crate::transport::{permission, Channel, Error, Response};
+use k2_client::brand::CLI_NAME;
 use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 use std::path::Path;
@@ -119,35 +120,55 @@ pub const TOOL: &str = "agent-harness";
 pub const UNREACHABLE: &str = concat!(
     "Error: could not reach the ",
     product_name!(),
-    " daemon (k2 setup)"
+    " daemon (",
+    cli_name!(),
+    " setup)"
 );
 /// An answer that is not JSON, before its first 200 characters (bash) or
 /// code points (the Python).
-pub const NOT_UNDERSTOOD: &str = "Error: the daemon sent something k2 setup does not understand: ";
+pub const NOT_UNDERSTOOD: &str = concat!(
+    "Error: the daemon sent something ",
+    cli_name!(),
+    " setup does not understand: "
+);
 /// `skip` with no step.
-pub const SKIP_USAGE: &str = "usage: k2 setup skip <step> (k2 setup lists them)";
+pub const SKIP_USAGE: &str = concat!(
+    "usage: ",
+    cli_name!(),
+    " setup skip <step> (",
+    cli_name!(),
+    " setup lists them)"
+);
 /// `chief-of-staff` without its three flags.
-pub const CHIEF_USAGE: &str = "usage: k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G] (ask your person all three first)";
+pub const CHIEF_USAGE: &str = concat!("usage: ", cli_name!(), " setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G] (ask your person all three first)");
 /// `--handle` after `chief-of-staff`.
-pub const NO_HANDLE: &str = "k2 setup chief-of-staff: no --handle (its folder comes from --name)";
+pub const NO_HANDLE: &str = concat!(
+    cli_name!(),
+    " setup chief-of-staff: no --handle (its folder comes from --name)"
+);
 /// `--about` after `kessel`.
-pub const NO_ABOUT: &str = "k2 setup kessel: no --about";
+pub const NO_ABOUT: &str = concat!(cli_name!(), " setup kessel: no --about");
 /// `--kessel` anywhere but after `restart`.
-pub const KESSEL_GOES_WITH: &str = concat!(cli_name!(), " setup: --kessel goes with ", cli_name!(), " setup restart");
+pub const KESSEL_GOES_WITH: &str = concat!(
+    cli_name!(),
+    " setup: --kessel goes with ",
+    cli_name!(),
+    " setup restart"
+);
 
 /// A Kessel flag after another verb.
 pub fn goes_with(flag: &str) -> String {
-    format!("k2 setup: {flag} goes with k2 setup kessel or k2 setup chief-of-staff")
+    format!("{CLI_NAME} setup: {flag} goes with {CLI_NAME} setup kessel or {CLI_NAME} setup chief-of-staff")
 }
 
 /// A flag with nothing after it.
 pub fn needs_a_value(flag: &str) -> String {
-    format!("k2 setup: {flag} needs a value")
+    format!("{CLI_NAME} setup: {flag} needs a value")
 }
 
 /// A word the loop doesn't take.
 pub fn unknown_argument(word: &str) -> String {
-    format!("k2 setup: unknown argument: {word}")
+    format!("{CLI_NAME} setup: unknown argument: {word}")
 }
 
 /// `_setup_usage`: `cli/text/help/setup.txt`.
@@ -261,7 +282,8 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
                 json = true;
                 i += 1;
             }
-            "hide" | "show" | "kessel" | "chief-of-staff" | "dismiss-offer" | "restart" | "kessel-welcome" => {
+            "hide" | "show" | "kessel" | "chief-of-staff" | "dismiss-offer" | "restart"
+            | "kessel-welcome" => {
                 if sub.is_some() {
                     return Err(usage_err());
                 }
@@ -362,7 +384,9 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
         }
         Sub::Skip => format!("{{\"row\": {}}}", jstr(&row)),
         Sub::Restart if restart_kessel => "{\"kessel\": true}".to_string(),
-        Sub::Hide | Sub::Show | Sub::DismissOffer | Sub::Restart | Sub::KesselWelcome => "{}".to_string(),
+        Sub::Hide | Sub::Show | Sub::DismissOffer | Sub::Restart | Sub::KesselWelcome => {
+            "{}".to_string()
+        }
         Sub::List => String::new(),
     };
     Ok(Line { sub, json, body })
@@ -1146,16 +1170,28 @@ const NOTES: [(&str, &str); 3] = [
 const MARKS: [(&str, &str); 3] = [("done", "[x]"), ("todo", "[ ]"), ("skipped", "[-]")];
 
 /// The Apple tools' line.
-pub const APPLE_TOOLS: &str =
-    "The Apple tools include git, which workspaces need: k2 git-tools install";
-pub const FINISHED: &str =
-    "Finished: the app no longer shows this list (k2 setup show brings it back).";
-pub const HIDDEN: &str = "Hidden in the app (k2 setup show brings it back).";
+pub const APPLE_TOOLS: &str = concat!(
+    "The Apple tools include git, which workspaces need: ",
+    cli_name!(),
+    " git-tools install"
+);
+pub const FINISHED: &str = concat!(
+    "Finished: the app no longer shows this list (",
+    cli_name!(),
+    " setup show brings it back)."
+);
+pub const HIDDEN: &str = concat!(
+    "Hidden in the app (",
+    cli_name!(),
+    " setup show brings it back)."
+);
 pub const NOT_ENABLED: &str = "The app does not show setup lists on this server yet.";
 pub const MEET_KESSEL: &str = concat!(
     "Next: meet Kessel, the agent that runs ",
     product_name!(),
-    ": k2 setup kessel"
+    ": ",
+    cli_name!(),
+    " setup kessel"
 );
 
 /// `TABLE.get(v)` for a value the Python hashes first.
@@ -1266,12 +1302,12 @@ impl Py {
         }
         if sub == Sub::Kessel {
             self.print(&format!(
-                "Kessel is starting and will say hello on its Thread: k2 thread {}",
+                "Kessel is starting and will say hello on its Thread: {CLI_NAME} thread {}",
                 field("handle")
             ));
         } else {
             self.print(&format!(
-                "Tell your person on your Thread, and point them to {} (k2 msg {}).",
+                "Tell your person on your Thread, and point them to {} ({CLI_NAME} msg {}).",
                 field("name"),
                 field("handle")
             ));
@@ -1337,7 +1373,7 @@ impl Py {
             let name = py_get(kessel, "name", PY_KESSEL)?.unwrap_or(&nothing);
             let path = py_get(kessel, "path", PY_KESSEL)?.unwrap_or(&nothing);
             self.print(&format!(
-                "Kessel: {} at {} (k2 thread <its handle> to talk to it)",
+                "Kessel: {} at {} ({CLI_NAME} thread <its handle> to talk to it)",
                 py::str_of(name),
                 py::str_of(path)
             ));

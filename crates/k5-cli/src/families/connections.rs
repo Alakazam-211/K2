@@ -53,6 +53,7 @@ use crate::passport;
 use crate::prelude::{self, Closing};
 use crate::python;
 use crate::transport::{Call, Error};
+use k2_client::brand::CLI_NAME;
 use k2_client::cli_name;
 use std::ffi::OsString;
 use std::path::Path;
@@ -70,7 +71,11 @@ pub const ENDPOINT: &str = "/cli/connections";
 /// The tool's name in the shell's policy (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "connections";
 /// After a word `list` doesn't take: exit 2.
-pub const USAGE: &str = "Usage: k2 connections list [--json] [--users]";
+pub const USAGE: &str = concat!(
+    "Usage: ",
+    cli_name!(),
+    " connections list [--json] [--users]"
+);
 /// The Python on an answer that is not JSON, before its `%r`.
 pub const UNPARSEABLE: &str = "Error: daemon returned an unparseable response: ";
 /// `--users` and an answer with no list of them.
@@ -557,7 +562,7 @@ fn text_lines(d: &Value, ask: Ask, o: &mut Out) -> Result<Exit, Raise> {
                 } else {
                     "  "
                 };
-                o.line(&format!("{tail}Same workspace: always allowed to k2 msg. More: k2 sessions (--past for older chats)"));
+                o.line(&format!("{tail}Same workspace: always allowed to {CLI_NAME} msg. More: {CLI_NAME} sessions (--past for older chats)"));
             }
             o.line("");
         }
@@ -616,7 +621,11 @@ fn text_lines(d: &Value, ask: Ask, o: &mut Out) -> Result<Exit, Raise> {
             return Ok(Exit::Error);
         };
         o.line("");
-        o.line("People on this host (humans \u{2014} not workspace-agents; do not k2 msg):");
+        o.line(concat!(
+            "People on this host (humans \u{2014} not workspace-agents; do not ",
+            cli_name!(),
+            " msg):"
+        ));
         let rows: Vec<[String; 4]> = users
             .iter()
             .filter(|u| matches!(u, Value::Object(_)))
@@ -669,7 +678,15 @@ fn text_lines(d: &Value, ask: Ask, o: &mut Out) -> Result<Exit, Raise> {
             }
         }
     } else {
-        o.line("These are workspace-agents you can k2 msg. Humans on this box are not listed \u{2014} k2 connections list --users (do not k2 msg those names).");
+        o.line(concat!(
+            "These are workspace-agents you can ",
+            cli_name!(),
+            " msg. Humans on this box are not listed \u{2014} ",
+            cli_name!(),
+            " connections list --users (do not ",
+            cli_name!(),
+            " msg those names)."
+        ));
     }
     Ok(Exit::Ok)
 }

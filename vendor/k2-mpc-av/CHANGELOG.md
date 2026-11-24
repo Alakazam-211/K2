@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.0: pairs with kit v0.24.0 and k2-mpc-cad v0.5.0
+
+It builds with **`k2-mpc-cad` v0.5.0** (the drawing model and the DXF reader) and **`k2-mpc-base`
+v0.24.0**, the kit `k2-mpc-cad` v0.5.0 pairs with, both checked out beside this repo; `Cargo.lock`
+names them. The library's code is unchanged from v0.2.0. A minor release because the CAD crates it
+builds on, whose drawing (`Sheet::doc`) its API takes, move from v0.4.1 to v0.5.0.
+
+### Breaking
+- **The CAD types in this API are `k2-mpc-cad-model` 0.5.0's:** `Sheet::doc` is its `Doc` (so
+  `read_set` takes them), `read_set` and `read_files` return its `reads::ReadOut`, and
+  `read_files` and `Config::parse` refuse with its `error::CadError`. A host moves CAD to v0.5.0
+  with av.
+
+### Other
+- `Cargo.lock`: k2-mpc-base 0.24.0, k2-mpc-cad-model and k2-mpc-dxf 0.5.0; the crate version 0.3.0.
+
 ## v0.2.0: pairs with kit v0.23.0 and k2-mpc-cad v0.4.1
 
 It builds with **`k2-mpc-cad` v0.4.1** (the drawing model and the DXF reader) and **`k2-mpc-base`

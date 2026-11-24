@@ -337,6 +337,14 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
         "app-transfers-http",
         "Resumable uploads over plain HTTP: every field, refusal and curl",
     ),
+    (
+        "app-rest",
+        concat!("supabase-js against your App's ", k2_client::product_name!(), " doors: /rest/v1, /auth/v1, the shim"),
+    ),
+    (
+        "app-storage",
+        "Supabase-compatible file storage: buckets, policies, signed URLs, import",
+    ),
     ("app-chat", "Chat, voice and calls in your App"),
     (
         "app-recording",
@@ -417,6 +425,8 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
         "app-databases",
         "An App's database: what reaches what, and connecting one",
     ),
+    ("supabase-compat", "Supabase-style RLS and auth.* on an App's database"),
+    ("app-cron", "App cron: scheduled calls to an App's own routes"),
     ("jobs", "Scheduled jobs the daemon runs"),
     (
         "heartbeats",

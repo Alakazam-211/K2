@@ -163,7 +163,7 @@ def die(err, exit_code=None, permission=None):
         elif permission.get("requestable") is False:
             if isinstance(permission.get("hint"), str) and permission["hint"]:
                 sys.stderr.write(permission["hint"] + "\n")
-            sys.stderr.write("It can't be requested.\n")
+            sys.stderr.write("It can't be requested.\n" + 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"' + "\n")
     if exit_code is None:
         # PRD §11 exit contract: 3 = gated-off / owner-only · 2 = bad
         # usage (timeouts also exit 2, via explicit die(..., 2) at the

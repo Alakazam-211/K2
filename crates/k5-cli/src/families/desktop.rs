@@ -834,6 +834,7 @@ fn refusal_python(status: &str, d: &Value, e: &mut String) -> Result<(), Raise> 
         push(e, &format!("Ask with: {}", plus_str(command, E_ASK)?));
     } else if c == s("desktop_people_only") || unrequestable {
         push(e, "It can't be requested.");
+        push(e, crate::transport::permission::NO_CARD_FEEDBACK);
     }
     Ok(())
 }

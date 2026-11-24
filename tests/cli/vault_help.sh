@@ -500,11 +500,13 @@ ok "grant --ttl is sent, the end is printed, and a server that drops it fails lo
 # permission closing line when the daemon sends one (cards on), and with
 # nothing extra when it doesn't (cards off: today's text).
 set +e
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 err_on="$(k2s publish secret add svc REFUSED_ON --as env 2>&1)"; rc_on=$?
 err_off="$(k2s publish secret add svc REFUSED_OFF --as env 2>&1)"; rc_off=$?
 set -e
 [ "$rc_on" = 3 ] && [ "$rc_off" = 3 ] || fail "refused grant exits 3 (on $rc_on, off $rc_off): $err_on / $err_off"
-[ "$(printf '%s\n' "$err_on" | tail -1)" = "It can't be requested." ] || fail "cards on: no closing line: $err_on"
+[ "$(printf '%s\n' "$err_on" | tail -2)" = "It can't be requested."$'\n'"$NO_CARD_FEEDBACK" ] || fail "cards on: no closing lines: $err_on"
 [ "$(printf '%s\n' "$err_on" | grep -c "It can't be requested.")" = 1 ] || fail "cards on: closing line printed more than once: $err_on"
 <<<"$err_on" head -1 | grep -Fq "vault_owner_confirm_required: a person gave this secret" || fail "cards on: hint first: $err_on"
 [ "$(printf '%s\n' "$err_off" | wc -l | tr -d ' ')" = 1 ] || fail "cards off: one line, as before: $err_off"

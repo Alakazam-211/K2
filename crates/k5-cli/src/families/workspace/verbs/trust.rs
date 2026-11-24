@@ -582,6 +582,7 @@ fn body(d: &Value, mode: &str, folder: &str, p: &mut Py) -> R<Exit> {
                 ));
             } else {
                 p.eprint("It can't be requested.");
+                p.eprint(crate::transport::permission::NO_CARD_FEEDBACK);
             }
             return Ok(Exit::Refused);
         }

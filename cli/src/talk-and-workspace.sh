@@ -652,7 +652,7 @@ def refused(route, code, data, raw):
             hint = p.get('hint')
             if isinstance(hint, str) and hint:
                 print(hint, file=sys.stderr)
-            print(\"It can't be requested.\", file=sys.stderr)
+            print(\"It can't be requested.\", 'If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"', sep=\"\\n\", file=sys.stderr)
             sys.exit(3)
     sys.exit(1)
 

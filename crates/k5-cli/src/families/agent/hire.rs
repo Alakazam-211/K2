@@ -704,6 +704,7 @@ impl Hire<'_> {
                 self.perm.push(hint);
             }
             self.perm.push("It can't be requested.".to_string());
+            self.perm.push(crate::transport::permission::NO_CARD_FEEDBACK.to_string());
         }
     }
 

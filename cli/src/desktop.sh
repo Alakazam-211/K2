@@ -41,7 +41,7 @@ p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["ta
 if isinstance(p, dict) and p.get("command"):
     print("Ask with: " + p["command"], file=sys.stderr)
 elif c == "desktop_people_only" or (isinstance(p, dict) and p.get("requestable") is False):
-    print("It can\x27t be requested.", file=sys.stderr)
+    print("It can\x27t be requested.", "If you think this should be possible, tell the K2 team: k2 send-feedback \"<what you were trying to do>\"", sep="\n", file=sys.stderr)
 '
         [ "$as_json" = "1" ] && printf '%s\n' "$body"
         exit "$(_sidecar_exit_for "$code")"

@@ -310,13 +310,15 @@ run agent send-feedback "x" --scope cli --command "   "
 want_rc 2 "--command blank"
 no_requests "--command blank"
 
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 echo "== send: the daemon's refusals =="
 for code in agents_off scope_off; do
     echo "$code" > "$REFUSE"
     run agent send-feedback "x" --scope platform
     want_rc 3 "$code"
     want_has "$code: the code on stderr" "$ERR" "\"error\": \"$code\""
-    want_eq "$code: the closing line last" "$(last_err_line)" "It can't be requested."
+    want_eq "$code: the closing lines last" "$(printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
 done
 for code in command_required bad_command bad_scope; do
     echo "$code" > "$REFUSE"

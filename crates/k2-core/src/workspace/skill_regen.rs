@@ -368,7 +368,8 @@ pub const AGENTS_MD_PERMISSIONS_POINTER: &str = concat!("\
 \n\
 When ", product_name!(), " refuses you (exit 3) or holds a change (exit 2), the error ends with one \
 line: `Ask with: ", cli_name!(), " permission request …` (run it as printed, filling in only \
-`--why`) or `It can't be requested.` Load the **k2-permissions** skill \
+`--why`) or `It can't be requested.` (no card for it: send feedback with `", cli_name!(), " send-feedback`, \
+and ", product_name!(), "'s team sees it). Load the **k2-permissions** skill \
 (`.k2/skills/k2-permissions/SKILL.md`, or `", cli_name!(), " study permissions`) for the rules.\n");
 
 /// Both permission-card switches are on for the workspace at `project_path`

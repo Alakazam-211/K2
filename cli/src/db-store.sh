@@ -257,7 +257,7 @@ def note_permission(v):
     elif p.get("requestable") is False:
         if isinstance(p.get("hint"), str) and p["hint"]:
             lines.append(p["hint"])
-        lines.append("It can't be requested.")
+        lines.extend(["It can't be requested.", 'If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'])
     if lines:
         try:
             with open(path, "w") as f:

@@ -286,10 +286,12 @@ assert_eq "the error ends with the Ask with line" "$(printf '%s\n' "$err" | tail
 assert_eq "the JSON error comes first" "$(printf '%s\n' "$err" | head -n 1 | cut -c1-10)" '{"error":{'
 assert_eq "the Ask with line prints once" "$(printf '%s\n' "$err" | grep -c '^Ask with:')" "1"
 
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 set_mode agent-cannot
 run project view sales terminal
 assert_eq "not requestable exits 1" "$rc" "1"
-assert_eq "the error ends with It can't be requested." "$(printf '%s\n' "$err" | tail -n 1)" "It can't be requested."
+assert_eq "the error ends with It can't be requested. and the feedback line" "$(printf '%s\n' "$err" | tail -n 2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
 
 set_mode agent-off
 run project view sales

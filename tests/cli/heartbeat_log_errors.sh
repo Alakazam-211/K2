@@ -155,10 +155,12 @@ answer 403 '{"error":"not allowed: read heartbeats","permission":{"command":"k2 
 log
 is_error "a refusal with a permission card" 3 \
     "Error: k2 heartbeat log: K2's server refused /cli/heartbeat-log: not allowed: read heartbeats"$'\n'"Ask with: $ASK"
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 answer 403 '{"error":{"code":"people_only","hint":"only a person can do this"},"permission":{"requestable":false,"hint":"Ask your person to run it."}}'
 log
 is_error "a refusal that can't be requested" 3 \
-    "Error: k2 heartbeat log: K2's server refused /cli/heartbeat-log: only a person can do this"$'\n'"Ask your person to run it."$'\n'"It can't be requested."
+    "Error: k2 heartbeat log: K2's server refused /cli/heartbeat-log: only a person can do this"$'\n'"Ask your person to run it."$'\n'"It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
 answer 403 '{"error":"forbidden"}'
 log
 is_error "a refusal with no permission card" 1 \

@@ -257,6 +257,16 @@ impl PermissionRefusal {
 /// gate is on.
 pub const CLOSING_ASK_WITH: &str = "Ask with: ";
 pub const CLOSING_CANNOT: &str = "It can't be requested.";
+/// The line after [`CLOSING_CANNOT`] (0.46.18): with no card to raise,
+/// the way left is feedback to the product's team. Never after
+/// [`CLOSING_ASK_WITH`]: there the card is the path.
+pub const CLOSING_FEEDBACK: &str = concat!(
+    "If you think this should be possible, tell the ",
+    crate::product_name!(),
+    " team: ",
+    crate::cli_name!(),
+    " send-feedback \"<what you were trying to do>\""
+);
 /// `where` for a machine-only refusal (§5.5).
 pub const WHERE_AT_MACHINE: &str = "at the machine";
 

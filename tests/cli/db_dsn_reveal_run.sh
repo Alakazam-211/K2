@@ -169,8 +169,10 @@ run db create --workspace "$WS"
 [ "$RC" -eq 3 ] || fail "refused create exits 3, got $RC: $ERR"
 echo "$ERR" | grep -q '"code":"forbidden"' || fail "the error line: $ERR"
 echo "$ERR" | tail -n 1 | grep -q '^Ask with: k2 permission request db.agent-access level=write' || fail "the refusal ends with its Ask with: line: $ERR"
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 run db grant other --db ws_a --level read --workspace "$WS"
-echo "$ERR" | tail -n 1 | grep -q "^It can't be requested\.$" || fail "an unrequestable refusal says so: $ERR"
+[ "$(printf '%s\n' "$ERR" | tail -n 2)" = "It can't be requested."$'\n'"$NO_CARD_FEEDBACK" ] || fail "an unrequestable refusal says so, then how to send feedback: $ERR"
 
 
 echo "PASS: k2 db dsn --reveal / --ref --db / run / Ask lines"

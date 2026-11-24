@@ -527,12 +527,6 @@ fn the_front_lines() {
         ),
         (
             "403",
-            r#"{"error":{"code":"c"},"message":"m","permission":{"requestable":false}}"#,
-            "k2 front: error: c: m\nIt can't be requested.\n",
-            Exit::Refused,
-        ),
-        (
-            "403",
             r#"{"error":null}"#,
             "k2 front: error: None\n",
             Exit::Refused,
@@ -558,6 +552,20 @@ fn the_front_lines() {
             "{status} {body}"
         );
     }
+    // No card: the feedback line closes it (0.46.18).
+    assert_eq!(
+        shown(
+            "403",
+            r#"{"error":{"code":"c"},"message":"m","permission":{"requestable":false}}"#
+        ),
+        Shown::err(
+            format!(
+                "k2 front: error: c: m\nIt can't be requested.\n{}\n",
+                crate::transport::permission::NO_CARD_FEEDBACK
+            ),
+            Exit::Refused
+        )
+    );
     let long = "é".repeat(201);
     assert_eq!(
         shown("500", &long).stderr,

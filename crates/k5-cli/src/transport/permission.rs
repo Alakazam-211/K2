@@ -17,7 +17,7 @@
 //!    string `tail` (a newer daemon) first makes `command` this CLI's own
 //!    name, a space and the tail ([`named`]).
 //! 5. Else `requestable` exactly `false`: its non-empty string `hint`, if
-//!    any, then `It can't be requested.`
+//!    any, then `It can't be requested.` and [`NO_CARD_FEEDBACK`].
 //!
 //! What bash then does to Python's output: `$(…)` drops every trailing
 //! newline (and any NUL), and the note file adds one newline back.
@@ -142,6 +142,18 @@ pub fn ask_of(x: &Value) -> Value {
     }
 }
 
+/// The line after `It can't be requested.` (0.46.18): with no card to
+/// raise, the way left is feedback to the product's team. Never after an
+/// `Ask with:` line: there the card is the path. The shell CLI prints the
+/// same words.
+pub const NO_CARD_FEEDBACK: &str = concat!(
+    "If you think this should be possible, tell the ",
+    k2_client::product_name!(),
+    " team: ",
+    k2_client::cli_name!(),
+    " send-feedback \"<what you were trying to do>\""
+);
+
 /// The note: one or two lines, the last being the closing line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note {
@@ -204,6 +216,7 @@ pub fn note(text: &[u8]) -> Option<Note> {
         }
     }
     lines.push("It can't be requested.".to_string());
+    lines.push(NO_CARD_FEEDBACK.to_string());
     Some(Note { lines })
 }
 
@@ -368,6 +381,25 @@ mod tests {
             )))
         );
         assert_eq!(get(n.as_ref(), "requestable"), Some(&Value::Bool(true)));
+    fn a_card_never_carries_the_feedback_line() {
+        // A refusal with a card: the card is the path, so no send-feedback.
+        let n = note(
+            br#"{"error":"x","permission":{"action":"a.b","command":"k2 permission request a.b --why ...","requestable":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(n.lines(), ["Ask with: k2 permission request a.b --why ...".to_string()]);
+        assert!(!n.text().contains("send-feedback"), "{}", n.text());
+        // Without one, the feedback line closes the note.
+        let n = note(br#"{"permission":{"requestable":false,"where":"Settings"}}"#).unwrap();
+        assert_eq!(n.lines().last().map(String::as_str), Some(NO_CARD_FEEDBACK));
+        assert_eq!(
+            NO_CARD_FEEDBACK,
+            format!(
+                "If you think this should be possible, tell the {} team: {} send-feedback \"<what you were trying to do>\"",
+                k2_client::brand::PRODUCT_NAME,
+                k2_client::brand::CLI_NAME
+            )
+        );
     }
 
     #[test]
@@ -376,26 +408,27 @@ mod tests {
             lines(r#"{"permission":{"requestable":false,"hint":"Only a person can."}}"#),
             Some(vec![
                 "Only a person can.".to_string(),
-                "It can't be requested.".to_string()
+                "It can't be requested.".to_string(),
+                NO_CARD_FEEDBACK.to_string()
             ])
         );
         assert_eq!(
             lines(r#"{"permission":{"requestable":false}}"#),
-            Some(vec!["It can't be requested.".to_string()])
+            Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
         assert_eq!(
             lines(r#"{"permission":{"requestable":false,"hint":""}}"#),
-            Some(vec!["It can't be requested.".to_string()])
+            Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
         // A hint that isn't a string is left out.
         assert_eq!(
             lines(r#"{"permission":{"requestable":false,"hint":3}}"#),
-            Some(vec!["It can't be requested.".to_string()])
+            Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
         // An empty command falls to the requestable test.
         assert_eq!(
             lines(r#"{"permission":{"command":"","requestable":false}}"#),
-            Some(vec!["It can't be requested.".to_string()])
+            Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
     }
 
@@ -443,7 +476,7 @@ mod tests {
         let n = note(br#"{"permission":{"command":"k2 x\n\n"}}"#).unwrap();
         assert_eq!(n.text(), "Ask with: k2 x\n");
         let n = note(br#"{"permission":{"requestable":false,"hint":"a\nb"}}"#).unwrap();
-        assert_eq!(n.text(), "a\nb\nIt can't be requested.\n");
+        assert_eq!(n.text(), format!("a\nb\nIt can't be requested.\n{NO_CARD_FEEDBACK}\n"));
         let n = note(br#"{"permission":{"command":"a\u0000b"}}"#).unwrap();
         assert_eq!(n.text(), "Ask with: ab\n");
         let mut out = Vec::new();

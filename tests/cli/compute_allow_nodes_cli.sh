@@ -155,16 +155,18 @@ run --add k2n13-vin --add k2n14-vin
 expect_eq "repeated --add body" "$(last_add)" "k2n13-vin,k2n14-vin"
 expect_eq "repeated --add ends with the ask for both" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_TWO"
 
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 echo "== not requestable: an ungranted node, another workspace =="
 run --add k2n9-ungranted
 expect_eq "ungranted exits 3" "$rc" "3"
 expect_has "ungranted code" "$err" "allow_nodes_not_granted"
-expect_eq "ungranted can't be requested" "$(printf '%s\n' "$err" | tail -1)" "It can't be requested."
+expect_eq "ungranted can't be requested" "$(printf '%s\n' "$err" | tail -2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
 set +e
 err="$("$K2" compute allow-nodes --add k2n13-vin --workspace other-ws 2>&1 </dev/null >/dev/null)"; rc=$?
 set -e
 expect_eq "another workspace exits 3" "$rc" "3"
-expect_eq "another workspace can't be requested" "$(printf '%s\n' "$err" | tail -1)" "It can't be requested."
+expect_eq "another workspace can't be requested" "$(printf '%s\n' "$err" | tail -2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
 expect_has "another workspace: the hint with this CLI's names" "$err" "a person runs k2 compute allow-nodes --add <node> --workspace other-ws from a terminal outside K2"
 case "$err" in *"zz compute"*|*"Globex Desk"*) bad "another workspace: the server's names leaked: $err" ;; *) ok "another workspace: no server names" ;; esac
 set +e

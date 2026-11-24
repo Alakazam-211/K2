@@ -1075,6 +1075,8 @@ impl Run<'_> {
                                 }
                             }
                             lines.push_str("It can't be requested.\n");
+                            lines.push_str(crate::transport::permission::NO_CARD_FEEDBACK);
+                            lines.push('\n');
                         }
                         _ => {}
                     }

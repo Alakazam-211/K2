@@ -611,7 +611,10 @@ fn a_refusal_s_lines() {
     );
     assert_eq!(
         lines(r#"{"error":[1,"a"],"permission":{"requestable":false}}"#),
-        "k2 firewall: error: [1, 'a']\nIt can't be requested.\n"
+        format!(
+            "k2 firewall: error: [1, 'a']\nIt can't be requested.\n{}\n",
+            crate::transport::permission::NO_CARD_FEEDBACK
+        )
     );
     assert_eq!(lines("{}"), "k2 firewall: error: None\n");
     assert_eq!(

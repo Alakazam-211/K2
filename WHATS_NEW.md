@@ -56,6 +56,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Changes, commits, merges and discards now use the git installed on your computer.** If git isn't installed, K2 says so and shows how to install it. Reading changes and diffs doesn't need it.
 - **On Windows, K2 follows your git's line-ending settings when it restores or merges files.**
 - **In a workspace you haven't trusted, K2 won't stage, commit, merge or discard with git if the repository's own git settings run programs (such as filters or merge drivers). Trust the workspace first.**
+### Command line
+- When something can't be asked for with a card, K2 now tells you how to send feedback about it.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

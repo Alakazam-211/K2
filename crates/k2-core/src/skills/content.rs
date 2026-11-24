@@ -1348,7 +1348,11 @@ Permission cards are on for you: "Let agents ask with permission cards" is on fo
 Every refusal (exit 3) or hold (exit 2) ends with exactly one line:
 
 - `Ask with: "#, cli_name!(), r#" permission request <action> ... --why "<what you need it for>"`: run it as printed, filling in only `--why`.
-- `It can't be requested.`: a person does it themselves (the line before it says where). Tell your human.
+- `It can't be requested.`: a person does it themselves (the line before it says where). Tell your human. No card for it? Send feedback with `"#,
+    cli_name!(),
+    r#" send-feedback`, and "#,
+    product_name!(),
+    r#"'s team sees it: the line after it says how.
 
 For example:
 

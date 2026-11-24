@@ -213,6 +213,7 @@ mod imp {
                 eprintln!("{h}");
             }
             eprintln!("It can't be requested.");
+            eprintln!("{}", k2_core::permission::request::CLOSING_FEEDBACK);
         }
     }
 

@@ -250,8 +250,11 @@ LOG_FILE="$LOG_FILE" OWNER="$OWNER" PASSPORT="$PASSPORT" WS="$WS" VIA=uds SOCK_P
 UDS_PID=$!
 for _i in $(seq 1 50); do [ -S "$LIVE_SOCK" ] && break; sleep 0.1; done
 [ -S "$LIVE_SOCK" ] || { echo "FAIL: the cell socket stub did not start" >&2; exit 1; }
+# 0.46.18: with no card, the refusal's last line is how to send feedback.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 CARD_LINES="Error: a person does this (the owner, or an admin where Settings allows), not an agent: this route isn't open to agents. Use Settings or a terminal outside K2.
-It can't be requested."
+It can't be requested.
+$NO_CARD_FEEDBACK"
 # "label|args" for every verb the socket refuses.
 REFUSED_VERBS=(
     "workspace list|workspace list"
@@ -272,7 +275,7 @@ for v in "${REFUSED_VERBS[@]}"; do
     if [ "$name" = "workspace list --json" ]; then
         # --json keeps its JSON error object, then the closing line.
         assert_eq "socket: $name: the card's code, as JSON" "$(printf '%s\n' "$err" | head -n 1 | "$PY" -c 'import json, sys; print(json.load(sys.stdin)["error"]["code"])')" "owner_only"
-        assert_eq "socket: $name: the closing line" "$(printf '%s\n' "$err" | tail -n 1)" "It can't be requested."
+        assert_eq "socket: $name: the closing lines" "$(printf '%s\n' "$err" | tail -n 2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
     else
         assert_eq "socket: $name: the card's words and closing line" "$err" "$CARD_LINES"
     fi

@@ -599,6 +599,7 @@ fn front_python(status: &str, d: &Value, o: &mut String, e: &mut String) -> Resu
                 );
             } else if get(&p, "requestable") == Some(&Value::Bool(false)) {
                 push(e, "It can't be requested.");
+                push(e, crate::transport::permission::NO_CARD_FEEDBACK);
             }
         }
         return Ok(refusal_exit(status));

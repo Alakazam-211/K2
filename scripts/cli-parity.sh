@@ -204,6 +204,7 @@ done
 EXPECTED_DIFFS=(
     "version-offline|13.9 #3|--version (also -v and version, with any words after it but exactly --version --check, which the router's arm never reads) with no port or token: bash refuses (exit 1, \"Error: Cannot connect to K2.\"); the binary prints \"k2 <version>\" (exit 0), as help, --schema and --version never need the daemon"
     "native-without-python3|out-of-box S1|a native k5 command runs when python3 is missing; that is a named, beneficial difference, and parity stays exact everywhere python3 exists. Hand-offs to bash for anything not native stay, with a plain line naming what is missing (python3 on a fresh Mac, Git Bash on Windows): with no python3 on PATH, study errors --json prints its JSON as with python3 where bash prints none, and a family still handed to the shell (the first of a list the check walks) prints one line naming Python 3 and exits 69 without starting bash"
+    "codex-gate-native-walk|K2 m_cCfrB3dqxd|on macOS with ps unable to run and no python3, bash can only refuse the Codex gate; k5 decides by its native libproc walk. Intended (K2 m_cCfrB3dqxd); do not fix back. The check: a Codex call (CODEX_THREAD_ID) in a pane session whose tab marker names its passport's session, \`whoami\` at a stub daemon, a ps that exits 126 (\"Operation not permitted\", as a sandbox's) and no python3 on PATH: bash ends with its refusal (\"couldn't read the processes above this call\", exit 3) and sends nothing; the binary walks the chain itself, finds no shared Codex server and sends the call with the passport. With python3 both walk and agree (codex_gate_parity.rs; mac_walk's the_walk_is_the_python_s_walk). Elsewhere the binary walks with python3 as bash does: not proven there"
     "owner-token-with-passport|13.9 #4|an open verb (whoami, done, activity, api off) in a session with a cell socket set and the owner token on disk: bash sends the owner token over TCP (COMPAT-58, _cli_apply_auth_for_verb); the binary sends the passport, never the owner token. Also workspace_swap_canonical.sh's swap lookup: bash looks the workspace up with the owner token; the binary's passport is refused there, so it sends the typed name and the swap gets 400 not registered (until the daemon's handle_swap_canonical resolves names itself, after r3)"
     "feedback-optin-without-python3|the 0.46.17 feedback opt-in|an agent (a passport over TCP) whose server says agents may not report (\"agents\": false, \"senderKind\": \"agent\"), cards off: with python3 both CLIs leave send-feedback's block out of \`help\` and print the one line for \`study send-feedback\`; with no python3 on PATH bash's probe can't read the answer, so bash prints the full help and the full page, while the binary reads the answer itself and still leaves the block out and prints the one line, as it does with python3. Both send the same requests either way (help: the settings read, then the cards; study: the settings read)"
     "env-answer-large|the K5 lanes' large answers|bash hands a daemon answer to Python in an environment variable, so above the kernel's argument limit bash stops with 'Argument list too long' (exit 126) and k5 prints the answer. The cases, each with its own large-answer row: \`wiki status\` with an index above 1 MiB (wiki_parity.rs, wiki_status_with_a_large_answer; on macOS its /bin/bash 3.2 exits 1, and both send the same two requests), \`mail send --body-file\` with a body above 128 KiB (mail_writes_parity.rs, a_large_body; the body rides M_BODY: on Linux bash sends nothing, the binary sends it once; macOS has one limit for the whole environment, where both send it), \`zen history\` with an answer above 1 MiB (zen_parity.rs, zen_history_with_a_large_answer; macOS's bash fails there too, its wording not checked), \`agent list\` above 1 MiB (agent_parity.rs, a_list_above_the_environment_s_limit; 1 on macOS) and \`publish ps\` (publish_parity.rs, ps_large)"
@@ -365,6 +366,70 @@ check_native_without_python3() {
             || problems+=("the binary's $fam with no python3 wrote: $(head -c 300 "$d/err")")
         [ ! -e "$d/home/.k2/run/cli" ] || problems+=("the binary's $fam with no python3 wrote the shell CLI out")
     fi
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_codex_gate_native_walk (macOS only): a stub daemon that logs each
+# request line and its Bearer credential and answers {}; a ps stand-in that
+# exits 126 as a sandbox's does; a PATH with no python3. Both CLIs run
+# `whoami` as a Codex call in a pane session whose marker matches.
+check_codex_gate_native_walk() {
+    if [ "$(uname -s)" != Darwin ]; then
+        echo "macOS only (the binary's native walk); on $(uname -s) the binary walks with python3 as bash does"
+        return 3
+    fi
+    local d="$WORK/codex-native-walk" nopath port="" pid rc side problems=()
+    local passport="sessCx.parity9" err
+    mkdir -p "$d/home/.k2" "$d/ws/.k2" "$d/psdeny"
+    printf '#!/bin/sh\necho "ps: Operation not permitted" >&2\nexit 126\n' >"$d/psdeny/ps"
+    chmod +x "$d/psdeny/ps"
+    nopath="$(path_without_python3 "$d")" || { echo "$nopath"; return 1; }
+    python3 -I -c '
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+d = sys.argv[1]
+class H(BaseHTTPRequestHandler):
+    def _any(self):
+        with open(d + "/log", "a") as f:
+            f.write("%s %s %s\n" % (self.command, self.path.split("?")[0], self.headers.get("Authorization") or "-"))
+        body = b"{}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    do_GET = do_POST = _any
+    def log_message(self, *a):
+        pass
+s = HTTPServer(("127.0.0.1", 0), H)
+open(d + "/port", "w").write(str(s.server_address[1]))
+s.serve_forever()
+' "$d" &
+    pid=$!
+    for _ in $(seq 1 50); do [ -s "$d/port" ] && break; sleep 0.1; done
+    port="$(cat "$d/port" 2>/dev/null)"
+    if [ -z "$port" ]; then kill "$pid" 2>/dev/null; echo "the stub daemon never wrote its port"; return 1; fi
+    for side in bash binary; do
+        : >"$d/log"
+        if [ "$side" = binary ]; then set -- "$WORK/bin/k5"; else set -- bash "$ROOT/cli/k2"; fi
+        rc=0
+        (cd "$d/ws" && exec env -i PATH="$d/psdeny:$nopath" HOME="$d/home" K2_PORT="$port" \
+            K2_HOOK_TOKEN="$passport" K2_PANE_ID=p1 CODEX_THREAD_ID=t1 K2_CODEX_TAB_ISOLATED=sessCx \
+            "$@" whoami) >"$d/out.$side" 2>"$d/err.$side" </dev/null || rc=$?
+        cp "$d/log" "$d/log.$side"
+        printf '%s\n' "$rc" >"$d/rc.$side"
+    done
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+    err="$(cat "$d/err.bash")"
+    [ "$(cat "$d/rc.bash")" = 3 ] || problems+=("bash exited $(cat "$d/rc.bash"), not 3: $(printf '%s' "$err" | head -c 300)")
+    case "$err" in *"couldn't read the processes above this call"*) ;; *) problems+=("bash did not refuse for an unreadable chain: $(printf '%s' "$err" | head -c 300)") ;; esac
+    [ ! -s "$d/log.bash" ] || problems+=("bash sent a request: $(head -c 300 "$d/log.bash")")
+    case "$(cat "$d/err.binary")" in *"couldn't read the processes above"*|*"this Codex tab was started"*) problems+=("the binary refused: $(head -c 300 "$d/err.binary")") ;; esac
+    [ "$(cat "$d/rc.binary")" != 69 ] || problems+=("the binary handed the line to the shell (exit 69, no python3): $(head -c 300 "$d/err.binary")")
+    grep -q "^GET /cli/whoami Bearer $passport\$" "$d/log.binary" \
+        || problems+=("the binary did not send whoami with its passport: $(head -c 300 "$d/log.binary") (exit $(cat "$d/rc.binary"): $(head -c 300 "$d/err.binary"))")
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

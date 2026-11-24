@@ -272,6 +272,13 @@ fn a_file_streams_with_range_etag_and_safe_headers() {
 
     let f = files::fetch(&alex(), &q(&[("id", "7002")]), &[("if-none-match".into(), "\"e1\"".into())]).expect("unchanged");
     assert_eq!(f.status, 304);
+    // A browser's ranged read: `range=` in the query.
+    let mut f = files::fetch(&alex(), &q(&[("id", "7002"), ("range", "7-9")]), &[]).expect("a query range");
+    let mut got = Vec::new();
+    f.body.read_to_end(&mut got).unwrap();
+    assert_eq!((f.status, got.as_slice()), (206, b"789".as_slice()));
+    let r = files::fetch(&alex(), &q(&[("id", "7002"), ("range", "x-1")]), &[]).map(|_| ()).unwrap_err();
+    assert_eq!(r.code, "usage");
 
     sew_has_file(&api, "7003", "cat.png", "image/png", true, b"png!");
     let f = files::fetch(&alex(), &q(&[("id", "7003")]), &[]).expect("a png");

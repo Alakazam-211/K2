@@ -54,6 +54,9 @@ export type HomeChatFrame =
   | { type: 'summary_changed'; conv: string | null }
   | { type: 'status'; chat: string | null }
   | { type: 'notify'; conv: string; level: HomeChatNotifyLevel | null }
+  /** A message's files changed (a thumbnail landed, a file was removed):
+   *  `attachments` replaces its whole list (contract-home-chat-attachments-v1). */
+  | { type: 'attachments_updated'; conv: string; msg: string; attachments: unknown }
 
 function idOf(v: unknown): string | null {
   if (typeof v === 'string' && v) return v
@@ -108,6 +111,10 @@ export function parseHomeChatFrame(data: unknown): HomeChatFrame | null {
     }
     case 'read':
       return conv ? { type: 'read', conv } : null
+    case 'attachments_updated': {
+      const msg = idOf(v.msg)
+      return conv && msg ? { type: 'attachments_updated', conv, msg, attachments: v.attachments } : null
+    }
     case 'member_removed':
       return conv ? { type: 'member_removed', conv } : null
     case 'summary_changed':

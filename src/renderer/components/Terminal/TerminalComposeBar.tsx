@@ -24,7 +24,6 @@
 
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useDialogCancel } from '@/components/ui/dialog-cancel'
 import { leaveComposeHandoff, takeComposeHandoff } from './composeHandoff'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -93,14 +92,13 @@ import {
 } from '@/lib/thread-compose-attachments'
 import { isThreadImageFile } from '@/lib/thread-image-thumbs'
 import type { ComposeInsertDetail } from '@/lib/external-drop-router'
-import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 import { scopedKey } from '@/kessel/server-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { COMPOSE_TOOL, ComposeAttachButton, ComposeAttachmentChip, ComposeImageThumb } from '@/components/Thread/ComposeAttach'
 import { useThreadComposeDrawer } from '@/components/SessionView/threadComposeDrawer'
 import { useThreadComposeDropSource } from '@/components/Thread/threadDropZone'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import {
-  ThreadAttachmentChip,
   ThreadAttachmentChips,
   ThreadComposeBox,
   ThreadRoundButton,
@@ -1453,13 +1451,16 @@ export function TerminalComposeBar({
     }) ||
     (pendingFiles.length > 0 && !sending)
   // S4: the files waiting to ride the Thread post (a picture for images).
-  const fileChips = pendingFiles.map((f) =>
-    isThreadImageFile({ path: f.path }) ? (
-      <ComposeImageThumb key={f.path} path={f.path} variant="chip" onRemove={() => removeThreadFile(f.path)} />
-    ) : (
-      <ThreadAttachmentChip key={f.path} name={f.name} title={f.path} onRemove={() => removeThreadFile(f.path)} />
-    ),
-  )
+  const fileChips = pendingFiles.map((f) => (
+    <ComposeAttachmentChip
+      key={f.path}
+      name={f.name}
+      title={f.path}
+      image={isThreadImageFile({ path: f.path })}
+      path={f.path}
+      onRemove={() => removeThreadFile(f.path)}
+    />
+  ))
   const hasChips = imagePaths.length > 0 || fileChips.length > 0
   const replyChip = !sendOnThread || !reply.target ? null : zenLook ? (
     <ThreadReplyBar target={reply.target} onCancel={reply.clear} />
@@ -1828,18 +1829,7 @@ export function TerminalComposeBar({
             className="flex flex-shrink-0 items-end"
             style={{ gap: toolLayout.boxGap, marginLeft: toolLayout.marginLeft }}
           >
-          <ThreadRoundButton
-            label="Attach or save"
-            title="Attach a file, or save to stash"
-            lightable
-            menuOpen={plusMenuOpen}
-            buttonRef={plusBtnRef}
-            onClick={openPlusMenu}
-            data={{ 'aria-haspopup': 'menu', 'aria-expanded': plusMenuOpen, 'data-testid': 'compose-plus' }}
-            style={tool}
-          >
-            <ComposePlusGlyph />
-          </ThreadRoundButton>
+          <ComposeAttachButton menuOpen={plusMenuOpen} buttonRef={plusBtnRef} onClick={openPlusMenu} testId="compose-plus" style={tool} />
           {slashOn ? (
           <ThreadRoundButton
             label="Slash command"
@@ -2050,18 +2040,7 @@ export function composeRowChromeWidth(): number {
 /** The Thread bar's bottom gap (px) under the typing sliver. */
 export const COMPOSE_SLIVER_FOOT_PX = 6
 
-export const COMPOSE_TOOL = {
-  gap: 10,
-  /** "+", "/" and Send are this tall (Send is this square): the one-line
-   *  textarea's height, so the field is 26 + 2×6 padding + 2×1 border =
-   *  40px tall (Rosson 2026-10-16: 6px less than the 46px it was). */
-  height: 26,
-  /** Each button's side padding around its ink (the hit area). */
-  pad: 5,
-  /** Ink widths of the two drawn glyphs. */
-  plusInk: 12,
-  slashInk: 8,
-} as const
+export { COMPOSE_TOOL }
 
 /** The group's left margin and the space between the two buttons that
  *  make both visible gaps `COMPOSE_TOOL.gap`, given the field's border +
@@ -2071,16 +2050,6 @@ export function composeToolLayout(): { marginLeft: number; boxGap: number } {
   return { marginLeft: gap - THREAD_COMPOSE_BOX_EDGE - pad, boxGap: gap - 2 * pad }
 }
 
-/** "+" as two bars: ink exactly COMPOSE_TOOL.plusInk wide. */
-function ComposePlusGlyph(): React.JSX.Element {
-  const w = COMPOSE_TOOL.plusInk
-  return (
-    <svg data-compose-glyph="plus" width={w} height={w} viewBox={`0 0 ${w} ${w}`} fill="currentColor" aria-hidden="true" style={{ display: 'block' }}>
-      <rect x={w / 2 - 1} y={0} width={2} height={w} />
-      <rect x={0} y={w / 2 - 1} width={w} height={2} />
-    </svg>
-  )
-}
 
 /** "/" as a slanted bar: ink exactly COMPOSE_TOOL.slashInk wide. */
 function ComposeSlashGlyph(): React.JSX.Element {
@@ -2093,137 +2062,3 @@ function ComposeSlashGlyph(): React.JSX.Element {
   )
 }
 
-function ComposeImageThumb({
-  path,
-  onRemove,
-  variant = 'thumb',
-}: {
-  path: string
-  onRemove: () => void
-  /** `chip`: the Thread's Zen chip (a small round picture, the name, ×). */
-  variant?: 'thumb' | 'chip'
-}): React.JSX.Element {
-  const scope = useRoom().scope
-  const [url, setUrl] = useState<string | null>(null)
-  const [open, setOpen] = useState(false)
-  const urlRef = useRef<string | null>(null)
-  const lightboxRef = useRef<HTMLDivElement>(null)
-  useBrowserOverlay({ active: open && url !== null, ref: lightboxRef, fullscreen: true, kind: 'modal' })
-
-  useEffect(() => {
-    let cancelled = false
-    const ac = new AbortController()
-    if (urlRef.current) {
-      revokeObjectUrl(urlRef.current)
-      urlRef.current = null
-    }
-    setUrl(null)
-    void loadHostImageObjectUrl(scope, path, { signal: ac.signal })
-      .then((r) => {
-        if (cancelled || ac.signal.aborted) {
-          revokeObjectUrl(r.url)
-          return
-        }
-        urlRef.current = r.url
-        setUrl(r.url)
-      })
-      .catch(() => {
-        if (!cancelled) setUrl(null)
-      })
-    return () => {
-      cancelled = true
-      ac.abort()
-      if (urlRef.current) {
-        revokeObjectUrl(urlRef.current)
-        urlRef.current = null
-      }
-    }
-  }, [path])
-
-  // The preview: Esc, the × and a press beside the image close it.
-  const closePreview = useCallback(() => setOpen(false), [])
-  const previewCancel = useDialogCancel(open && url ? closePreview : undefined)
-
-  const name = path.split('/').pop()?.split('\\').pop() || path
-  const preview = open && url ? createPortal(
-      <div
-        ref={lightboxRef}
-        className="fixed inset-0 z-[99999] flex items-center justify-center bg-[var(--color-scrim)] p-6"
-        role="dialog"
-        aria-modal="true"
-        aria-label={name}
-      >
-        <img
-          src={url}
-          alt={name}
-          className="max-h-full max-w-full object-contain"
-          style={{ borderRadius: 0 }}
-          {...previewCancel}
-        />
-        <button
-          type="button"
-          aria-label="Close (Esc)"
-          title="Close (Esc)"
-          onClick={closePreview}
-          className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center bg-black/70 text-white text-lg leading-none hover:bg-black/90"
-          style={{ borderRadius: 0 }}
-        >
-          ×
-        </button>
-      </div>,
-      document.body,
-    ) : null
-  if (variant === 'chip') {
-    return (
-      <>
-        <ThreadAttachmentChip
-          name={name}
-          title={path}
-          onRemove={onRemove}
-          onOpen={url ? () => setOpen(true) : undefined}
-          leading={
-            <span
-              aria-hidden
-              data-compose-chip-thumb={url ? 'image' : 'loading'}
-              className="flex-shrink-0 overflow-hidden"
-              style={{ width: 20, height: 20, borderRadius: 999, background: 'var(--zen-surface)' }}
-            >
-              {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : null}
-            </span>
-          }
-        />
-        {preview}
-      </>
-    )
-  }
-  return (
-    <>
-    <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)]" style={{ borderRadius: 0 }}>
-      {url ? (
-        <button
-          type="button"
-          className="h-full w-full cursor-zoom-in p-0 border-0 bg-transparent"
-          aria-label={`View ${name}`}
-          onClick={() => setOpen(true)}
-        >
-          <img src={url} alt={name} className="h-full w-full object-cover" />
-        </button>
-      ) : (
-        <div className="h-full w-full bg-[var(--color-bg-hover)]" title={path} />
-      )}
-      <button
-        type="button"
-        aria-label={`Remove ${name}`}
-        onClick={(e) => {
-          e.stopPropagation()
-          onRemove()
-        }}
-        className="absolute top-0 right-0 h-4 w-4 flex items-center justify-center bg-black/60 text-white text-[10px] leading-none hover:bg-black/80"
-      >
-        ×
-      </button>
-    </div>
-    {preview}
-    </>
-  )
-}

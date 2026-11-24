@@ -519,6 +519,19 @@ pub fn fetch(c: &Caller, p: &HashMap<String, String>, fwd: &[(String, String)]) 
         .map(|(f, _)| *f)
         .ok_or_else(|| usage("v is original, thumb, preview or poster"))?;
     let dl = param(p, "dl") == Some("1");
+    // `range=a-b` in the query is a `Range: bytes=a-b` (a browser's ranged
+    // read without a header of its own); a real header wins.
+    let mut fwd: Vec<(String, String)> = fwd.to_vec();
+    if let Some(r) = param(p, "range") {
+        let ok = r.split_once('-').is_some_and(|(a, b)| !a.is_empty() && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit()));
+        if !ok {
+            return Err(usage("range is <first>-<last> (bytes)"));
+        }
+        if !fwd.iter().any(|(k, _)| k == "range") {
+            fwd.push(("range".to_string(), format!("bytes={r}")));
+        }
+    }
+    let fwd = fwd.as_slice();
     for fresh in [false, true] {
         let att = meta(c, &id, fresh)?;
         let Some(url) = att[field].as_str().filter(|s| !s.is_empty()) else {

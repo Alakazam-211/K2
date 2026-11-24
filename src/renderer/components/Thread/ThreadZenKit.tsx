@@ -1452,20 +1452,24 @@ export function ThreadAttachmentChips({ children, testId }: { children: ReactNod
 }
 
 /** One attached file: its name and ×. `leading` (a thumbnail) and `onOpen`
- *  (a click on the name) are the desktop's image preview. */
+ *  (a click on the name) are the desktop's image preview. `progress`
+ *  (0..1): an upload still on its way, its percent after the name. */
 export function ThreadAttachmentChip({
   name,
   onRemove,
   leading,
   onOpen,
   title,
+  progress,
 }: {
   name: string
   onRemove: () => void
   leading?: ReactNode
   onOpen?: () => void
   title?: string
+  progress?: number | null
 }): JSX.Element {
+  const uploading = typeof progress === 'number' && progress < 1
   return (
     <span
       data-zen-attachment={name}
@@ -1497,6 +1501,20 @@ export function ThreadAttachmentChip({
       ) : (
         <span className="truncate">{name}</span>
       )}
+      {uploading ? (
+        <span
+          role="progressbar"
+          aria-label={`Uploading ${name}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(Math.max(0, progress) * 100)}
+          data-zen-attachment-progress=""
+          className="flex-shrink-0 tabular-nums"
+          style={{ color: 'var(--zen-text-muted)' }}
+        >
+          {Math.round(Math.max(0, progress) * 100)}%
+        </span>
+      ) : null}
       <button
         type="button"
         aria-label={`Remove ${name}`}

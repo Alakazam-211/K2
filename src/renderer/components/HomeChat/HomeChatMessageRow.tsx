@@ -49,6 +49,7 @@ import type { ReplyPreview } from '@/lib/home-chat/chat'
 import { HomeChatReactionChips, HomeChatReactionPicker } from './HomeChatReactions'
 import { useHoverReveal } from './useHoverReveal'
 import { useReducedMotion } from '@/hooks/useReducedMotion'
+import { homeChatFileObjects } from '@/lib/home-chat/file-objects'
 
 export interface HomeChatRowActions {
   react: (msgId: string, emoji: string) => void
@@ -288,6 +289,8 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
     [m, readOnly, actions],
   )
   const gestures = useThreadMessageGestures(ref, m.deleted ? null : openMenu)
+  // Its files, as the Thread draws them (contract-home-chat-attachments-v1).
+  const files = useMemo(() => (m.attachments && m.attachments.length > 0 ? homeChatFileObjects(m.attachments) : null), [m.attachments])
   const toggle = useCallback((emoji: string) => actions.react(m.id, emoji), [actions, m.id])
   const who = useCallback((emoji: string) => actions.who(m.id, emoji), [actions, m.id])
 
@@ -446,6 +449,7 @@ export const HomeChatMessageRow = memo(function HomeChatMessageRow({
           runStart={runStart}
           tail={tail}
           quote={quote}
+          attachments={files}
         />
       )}
       <HomeChatReactionChips reactions={m.reactions} mine={mine} onToggle={toggle} whoFor={who} disabled={readOnly} />

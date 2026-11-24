@@ -7,7 +7,7 @@
 // memory (paint at once on reopening, then read the delta), never the
 // Thread's store and never on disk.
 
-import { compareSewIds, type HomeChatMessage, type HomeChatPeople, type HomeChatReaction } from './api'
+import { attachmentsOf, compareSewIds, type HomeChatMessage, type HomeChatPeople, type HomeChatReaction } from './api'
 
 /** The picker's quick row (§10). */
 export const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '😮', '🙏'] as const
@@ -80,6 +80,16 @@ export function undoReaction(messages: readonly HomeChatMessage[], msgId: string
 }
 
 /** A deleted message keeps its place with no words (Sew's tombstone). */
+/** An `attachments_updated` frame: the message's whole file list, replaced. */
+export function applyAttachmentsFrame(
+  messages: readonly HomeChatMessage[],
+  f: { msg: string; attachments: unknown },
+): HomeChatMessage[] {
+  if (!messages.some((m) => m.id === f.msg)) return messages as HomeChatMessage[]
+  const next = attachmentsOf(f.attachments)
+  return messages.map((m) => (m.id === f.msg ? { ...m, attachments: next } : m))
+}
+
 export function markDeleted(messages: readonly HomeChatMessage[], id: string): HomeChatMessage[] {
   if (!messages.some((m) => m.id === id)) return messages as HomeChatMessage[]
   return messages.map((m) => (m.id === id ? { ...m, deleted: true, body: '', reactions: [] } : m))

@@ -23,7 +23,11 @@
 //     is open and the window visible and focused (HC-15);
 //   - a DM has a Call button, the caller's "Calling…" bar, the in-call strip,
 //     and each call's record as a line ("Missed call", "Call · 12:04") with
-//     Call back, never a bubble (§11a.4).
+//     Call back, never a bubble (§11a.4);
+//   - files (contract-home-chat-attachments-v1, `home-chat-attachments-v1`):
+//     the agent chat's own "+", chips and drops (`HomeChatComposeFiles`),
+//     uploaded to this server as the person; a message's files drawn by the
+//     Thread's own file objects through a Home chat door (`file-objects`).
 //
 // Opening tells the daemon the chat is on screen (`view`, which subscribes
 // typing and joins an open channel not joined yet); it acks the newest
@@ -58,6 +62,8 @@ import {
   fetchHomeChatMembers,
   fetchHomeChatMessages,
   fetchHomeChatReactors,
+  HOME_CHAT_ATTACHMENTS_FEATURE,
+  HOME_CHAT_FILE_LIMITS_DEFAULT,
   mentionsMe,
   openHomeChatDm,
   parseHomeChatMessage,
@@ -71,6 +77,7 @@ import {
 import {
   JUMP_MAX_PAGES,
   TYPING_INTERVAL_MS,
+  applyAttachmentsFrame,
   applyReactionFrame,
   authorName,
   cachedHomeChat,
@@ -98,6 +105,12 @@ import {
   useHomeChatViewingLease,
 } from '@/stores/home-chat'
 import { HomeChatNotifyMenu } from './HomeChatNotifyMenu'
+import { HomeChatComposeFileChips, useHomeChatComposeFiles } from './HomeChatComposeFiles'
+import { ComposeAttachButton } from '@/components/Thread/ComposeAttach'
+import { ThreadAttachmentSourceProvider } from '@/components/Thread/ThreadImageObjects'
+import { useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
+import { homeChatAttachmentSource } from '@/lib/home-chat/file-objects'
+import { registerLocalFileDropTarget } from '@/lib/local-file-drop-targets'
 import { HomeChatMessageRow, JUMP_WASH_MS, type HomeChatRowActions } from './HomeChatMessageRow'
 import { HomeChatMembersSheet } from './HomeChatMembersSheet'
 import { HomeChatTyping } from './HomeChatTyping'
@@ -307,6 +320,9 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         setMessages((prev) => (prev ? markDeleted(prev, f.id) : prev))
       } else if (f.type === 'reaction') {
         setMessages((prev) => (prev ? applyReactionFrame(prev, f) : prev))
+      } else if (f.type === 'attachments_updated') {
+        // A thumbnail landed, or a file was removed: its whole list.
+        setMessages((prev) => (prev ? applyAttachmentsFrame(prev, f) : prev))
       } else if (f.type === 'member_removed') {
         reloadChannel()
       }
@@ -504,19 +520,29 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
   const [busy, setBusy] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const retryRef = useRef<{ conv: string; text: string; nonce: string } | null>(null)
+  // Files (contract-home-chat-attachments-v1): the agent chat's attach.
+  const [fileError, setFileError] = useState<string | null>(null)
+  const filesFeature = scope.serverSupports(HOME_CHAT_ATTACHMENTS_FEATURE)
+  const fileLimits = host?.status?.files ?? HOME_CHAT_FILE_LIMITS_DEFAULT
+  const [filesBlocked, setFilesBlocked] = useState(true)
+  const composeFiles = useHomeChatComposeFiles({ scope, conv, on: filesFeature && !filesBlocked, limits: fileLimits, onError: setFileError })
   const send = useCallback(
     (draft: string) => {
       const text = draft.trim()
-      if (!text || busy || !conv) return
+      const ids = composeFiles.ids()
+      if ((!text && ids.length === 0) || busy || !conv || composeFiles.uploading) return
       const kept = retryRef.current
-      const nonce = kept && kept.conv === conv && kept.text === text ? kept.nonce : newNonce()
-      retryRef.current = { conv, text, nonce }
+      const key = `${text}\u0000${ids.join(',')}`
+      const nonce = kept && kept.conv === conv && kept.text === key ? kept.nonce : newNonce()
+      retryRef.current = { conv, text: key, nonce }
       setBusy(true)
       setSendError(null)
-      sendHomeChatMessage(scope, { conv, text, nonce, replyTo: reply?.id ?? null })
+      setFileError(null)
+      sendHomeChatMessage(scope, { conv, text, nonce, replyTo: reply?.id ?? null, attachments: ids })
         .then((m) => {
           retryRef.current = null
           draftApi.current?.set('')
+          composeFiles.clear()
           setReply(null)
           sentRef.current = true
           if (m) setMessages((prev) => mergeHomeChatMessages(prev ?? [], [m]))
@@ -525,8 +551,24 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         .catch((e: unknown) => setSendError(daemonErrorText(e) || String(e)))
         .finally(() => setBusy(false))
     },
-    [busy, conv, scope, reply, target],
+    [busy, conv, scope, reply, target, composeFiles],
   )
+  // The "+" menu: the agent chat's (Attach a file or image, Save to stash).
+  const plusMenu = useComposePlusMenu()
+  const plusRef = useRef<HTMLButtonElement | null>(null)
+  const stash = useComposeStash({ scope, agent: null })
+  // A message's files, read through this server's Home chat door.
+  const fileSource = useMemo(
+    () => homeChatAttachmentSource(scope, (id) => messagesRef.current.find((m) => m.id === id)?.attachments),
+    [scope],
+  )
+  // Finder drops anywhere on the chat (Tauri owns them): this box's files.
+  const [paneEl, setPaneEl] = useState<HTMLDivElement | null>(null)
+  const addDroppedPaths = composeFiles.addPaths
+  useEffect(() => {
+    if (!paneEl || !filesFeature || filesBlocked) return
+    return registerLocalFileDropTarget(paneEl, (paths) => void addDroppedPaths(paths))
+  }, [paneEl, filesFeature, filesBlocked, addDroppedPaths])
 
   // ── Header and state ─────────────────────────────────────────────────
   const connectedKey = useConnectHostStore((s) => activeHomeHostKey(s.activeHost))
@@ -598,6 +640,10 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
       : messages === null
         ? 'loading'
         : null
+  // No files into a read-only conversation, or one not there yet.
+  const blockFiles = readOnly || chatState !== null
+  useEffect(() => setFilesBlocked(blockFiles), [blockFiles])
+  const filesOn = filesFeature && !blockFiles
 
   return (
     <div className="relative flex h-full w-full flex-1 flex-col overflow-hidden" data-testid="home-chat-view" data-kind={target.kind}>
@@ -640,8 +686,15 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
         <HomeChatMembersSheet target={target} onClose={() => setMembersOpen(false)} onChanged={reloadChannel} />
       )}
 
-      <div className="flex min-h-0 flex-1">
-      <ThreadChatScope className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ background: 'var(--zen-canvas)' }} testId="home-chat-thread">
+      <div ref={setPaneEl} className="flex min-h-0 flex-1">
+      <ThreadAttachmentSourceProvider value={filesFeature ? fileSource : null}>
+      <ThreadChatScope
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        style={{ background: 'var(--zen-canvas)' }}
+        testId="home-chat-thread"
+        // A file dropped anywhere on the chat attaches, as on the box.
+        onDropFiles={filesOn ? composeFiles.onDropFiles : undefined}
+      >
         <SelectableRegion className="flex min-h-0 flex-1 flex-col">
           <div
             ref={scrollRef}
@@ -752,8 +805,39 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             inputTestId="home-chat-input"
             sendTestId="home-chat-send"
             onSend={send}
-            busy={busy}
+            busy={busy || composeFiles.uploading}
             disabled={chatState !== null}
+            canSendEmpty={composeFiles.files.length > 0}
+            tools={
+              <>
+                <ComposeAttachButton
+                  menuOpen={plusMenu.menuOpen}
+                  buttonRef={plusRef}
+                  disabled={chatState !== null}
+                  testId="home-chat-plus"
+                  onClick={() =>
+                    plusMenu.open(plusRef.current, {
+                      attach: {
+                        onPick: composeFiles.pick,
+                        enabled: filesOn && !busy,
+                        why: filesOn ? null : 'This server’s K2 doesn’t take files in Home chat yet (it needs 0.46.18).',
+                      },
+                      canStash: !stash.saving && (draftApi.current?.get() ?? '').trim().length > 0,
+                      chord: stash.chord,
+                      onStash: () => {
+                        const text = draftApi.current?.get() ?? ''
+                        void stash.save({ text }).then((ok) => {
+                          if (ok) draftApi.current?.set('')
+                        })
+                      },
+                    })
+                  }
+                />
+                {filesOn ? composeFiles.fileInput : null}
+              </>
+            }
+            onPaste={filesOn ? composeFiles.onPaste : undefined}
+            onDropFiles={filesOn ? composeFiles.onDropFiles : undefined}
             inputRef={inputRef}
             placeholder={dm ? `Message ${title}` : `Message #${title}`}
             onKeyDown={(e) => {
@@ -768,11 +852,16 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
             drawer={<HomeChatTyping names={typingNames} under={reply !== null} />}
             // The agent Thread's reply bar, on the box's edge (× or Esc).
             chips={
-              reply ? (
-                <ThreadReplyBar
-                  target={{ id: reply.id, seq: 0, from: reply.from, addr: '', text: firstLine(reply.text) || reply.text, part: false }}
-                  onCancel={() => setReply(null)}
-                />
+              reply || composeFiles.files.length > 0 ? (
+                <>
+                  {reply ? (
+                    <ThreadReplyBar
+                      target={{ id: reply.id, seq: 0, from: reply.from, addr: '', text: firstLine(reply.text) || reply.text, part: false }}
+                      onCancel={() => setReply(null)}
+                    />
+                  ) : null}
+                  <HomeChatComposeFileChips files={composeFiles.files} onRemove={composeFiles.remove} />
+                </>
               ) : undefined
             }
             above={
@@ -796,12 +885,18 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                     {homeChatSendFailedLine(sendError)}
                   </ThreadChatNote>
                 )}
+                {fileError && (
+                  <ThreadChatNote error testId="home-chat-file-error">
+                    {fileError}
+                  </ThreadChatNote>
+                )}
               </>
             }
           />
         )}
         </div>
       </ThreadChatScope>
+      </ThreadAttachmentSourceProvider>
       {transcript && (
         <HomeChatTranscriptPanel
           heading={transcriptHeading(messages?.find((m) => m.id === transcript.cardId) ?? null)}

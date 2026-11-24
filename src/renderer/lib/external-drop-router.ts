@@ -59,6 +59,7 @@ import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { roomForElement } from '@/stores/window-room'
 import type { DesktopOs } from './desktop-chrome'
 import { markZenDropOver, zenDropTargetAt, zenFramePoint, type ZenDropHandler } from './zen/zen-drop-targets'
+import { localFileDropTargetAt, type LocalFileDropHandler } from './local-file-drop-targets'
 
 // ── Public event names ────────────────────────────────────────────────
 
@@ -87,6 +88,9 @@ export type ExternalDropTarget =
   /** A Garden widget frame whose widget listens for drops (`k2.onDrop`,
    *  prd-garden-board-needs-v1 GP4): its files go into the widget's data. */
   | { kind: 'zen-widget'; frame: HTMLIFrameElement; handler: ZenDropHandler }
+  /** A box that takes this computer's paths itself (a Home DM or channel):
+   *  `local-file-drop-targets`. */
+  | { kind: 'local-files'; handler: LocalFileDropHandler }
   | { kind: 'miss' }
 
 /** Parent directory of a POSIX-style path. */
@@ -225,6 +229,11 @@ export function hitTestExternalDrop(
   // itself; K2's own DOM over it wins, as it is the element there).
   const zen = zenDropTargetAt(el)
   if (zen) return { kind: 'zen-widget', frame: zen.frame, handler: zen.handler }
+
+  // A box that uploads this computer's files itself (Home chat): the paths
+  // as they are, before any upload to the window's server.
+  const local = localFileDropTargetAt(el)
+  if (local) return { kind: 'local-files', handler: local }
 
   // 0. Agent compose bar — insert host path into the draft (remote: upload
   //    first, same `.k2/downloads` as terminal drops). Any file type.
@@ -520,6 +529,9 @@ export async function routeExternalDrop(
       target.handler(paths, zenFramePoint(target.frame, position))
       return
     }
+    case 'local-files':
+      target.handler(paths)
+      return
     case 'terminal': {
       if (isRemote) {
         const payload = await executeRemoteDrop(
@@ -674,6 +686,9 @@ export async function routeBrowserFileDrop(
     case 'zen-widget':
       // The web client's frame takes its own HTML5 drops (the SDK uploads
       // them); one that reaches the page isn't the widget's.
+      return
+    case 'local-files':
+      // The box takes its own HTML5 drops (`onDropFiles`).
       return
     case 'terminal': {
       const payload = await executeBrowserFileDrop(

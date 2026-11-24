@@ -54,6 +54,8 @@ import { noteUserPost } from '@/lib/user-send-bus'
 interface CliHttpResult {
   res: Response
   text: string
+  /** A binary call's body on a 2xx (`CliCallMeta.binary`). */
+  blob?: Blob
 }
 
 /**
@@ -265,6 +267,9 @@ interface CliCallMeta {
   method: string
   /** Give up on one try after this long (`CliTimeoutError`). */
   timeoutMs?: number
+  /** The body is bytes: a 2xx is read as a Blob (`text` stays empty); any
+   *  other answer is read as text, as always. */
+  binary?: boolean
 }
 
 /**
@@ -425,6 +430,7 @@ async function cliFetch(
           res = await fetch(url, withDaemonFetch(init ?? {}))
         }
         throwIfHostSwitched(scope, startedKey)
+        if (meta.binary && res.ok) return { res, text: '', blob: await res.blob() }
         return { res, text: await res.text() }
       }
       let result = await attempt()
@@ -639,6 +645,46 @@ export async function daemonCliPost<T = unknown>(
   // person sending to that agent (`lib/user-send-bus.ts`).
   noteUserPost(route, scope.hostKey, body)
   return parsed
+}
+
+/**
+ * POST /cli/<route>?<params>[&token=] with raw `bytes` as the body
+ * (`application/octet-stream`), for a route that takes a file's bytes
+ * (Home chat's `uploads/data`). The answer is JSON, as for
+ * {@link daemonCliPost}; the view-only room check runs the same.
+ */
+export async function daemonCliPostBytes<T = unknown>(
+  scope: ServerScope,
+  route: string,
+  params: Record<string, string | number | boolean | undefined | null>,
+  bytes: Uint8Array,
+): Promise<T> {
+  assertServerScope(scope, 'daemonCliPostBytes')
+  assertScopeMayPost(scope, route)
+  const { res, text } = await cliFetch(scope, { route, method: 'POST' }, (creds) => ({
+    url: getUrl(creds, route, params),
+    init: { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes as unknown as BodyInit },
+  }))
+  return parseDaemonResponse<T>(res, text)
+}
+
+/**
+ * GET /cli/<route>?<params>[&token=] whose body is bytes (a Home chat
+ * file): the Blob on a 2xx; anything else throws as {@link daemonCliGet}.
+ */
+export async function daemonCliGetBlob(
+  scope: ServerScope,
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+  opts?: { signal?: AbortSignal },
+): Promise<Blob> {
+  const signal = opts?.signal
+  const { res, text, blob } = await cliFetch(scope, { route, method: 'GET', binary: true }, (creds) => ({
+    url: getUrl(creds, route, params),
+    init: signal ? { method: 'GET', signal } : { method: 'GET' },
+  }))
+  if (!res.ok || !blob) throw httpError(res, text)
+  return blob
 }
 
 /**

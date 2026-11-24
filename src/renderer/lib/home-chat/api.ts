@@ -8,7 +8,7 @@
 // client types here, so the views never parse Sew JSON.
 
 import type { ServerScope } from '@/kessel/server-scope'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliGetBlob, daemonCliPost, daemonCliPostBytes } from '@/lib/daemon-cli'
 import { parseCallSummary, type HomeChatCallSummary } from './calls'
 import { parseRecordingSummary, transcriptRootOf, type HomeChatRecordingSummary } from './recordings'
 
@@ -17,6 +17,9 @@ export const HOME_CHAT_FEATURE = 'home-chat-v1'
  *  menu, the push-prefs toggles and the viewing lease show and run only on
  *  a server that lists it. */
 export const HOME_CHAT_PUSH_FEATURE = 'home-chat-push-v1'
+/** Files in Home DMs and channels (contract-home-chat-attachments-v1): the
+ *  "+" and drops/pastes attach only on a server that lists it. */
+export const HOME_CHAT_ATTACHMENTS_FEATURE = 'home-chat-attachments-v1'
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -28,6 +31,8 @@ export interface HomeChatStatus {
   reason: HomeChatOffReason | string | null
   /** Sew's Home flags (`read_state_unread_count`, `http_typing`, …). */
   flags: Record<string, boolean>
+  /** File limits (servers with `home-chat-attachments-v1`). */
+  files?: HomeChatFileLimits
 }
 
 /** One person the caller may DM on a server (§6.1). */
@@ -104,6 +109,42 @@ export interface HomeChatMessage {
   transcriptOf?: string | null
   /** Who the message mentions (Sew's `mentions`); null when it says none. */
   mentions?: HomeChatMentions | null
+  /** Its files, in display order (contract-home-chat-attachments-v1). */
+  attachments?: HomeChatAttachment[]
+}
+
+/** One file on a message. The URLs are this server's daemon paths
+ *  (`/cli/home-chat/file?id=…`), never Sew's. */
+export interface HomeChatAttachment {
+  id: string
+  filename: string
+  contentType: string
+  size: number
+  kind: 'image' | 'video' | 'audio' | 'document' | 'archive' | 'other'
+  width: number | null
+  height: number | null
+  /** A thumbnail (images, video posters) exists. */
+  thumb: boolean
+  preview: boolean
+  poster: boolean
+  /** A thumbnail is still being made (`attachments_updated` follows). */
+  pending: boolean
+}
+
+/** The limits `/cli/home-chat/status` shows (`files`). */
+export interface HomeChatFileLimits {
+  /** Sew's largest file; null before the person's chat said READY. */
+  maxBytes: number | null
+  perMessage: number
+  chunkBytes: number
+  maxRequestBytes: number
+}
+
+export const HOME_CHAT_FILE_LIMITS_DEFAULT: HomeChatFileLimits = {
+  maxBytes: null,
+  perMessage: 10,
+  chunkBytes: 1 << 20,
+  maxRequestBytes: 8 << 20,
 }
 
 /** Sew's `message.mentions`: member ids, and `@channel` / `@here`. */
@@ -242,6 +283,49 @@ export function parseHomeChatMessage(v: unknown): HomeChatMessage | null {
     recording: m.recording ? parseRecordingSummary(m.recording, m.transcript_failure) : null,
     transcriptOf: transcriptRootOf(m),
     mentions: mentionsOf(m.mentions),
+    attachments: attachmentsOf(m.attachments),
+  }
+}
+
+const KINDS = new Set(['image', 'video', 'audio', 'document', 'archive', 'other'])
+
+/** Sew's `attachments[]` (as the daemon serves it) as the view's type. */
+export function attachmentsOf(v: unknown): HomeChatAttachment[] {
+  if (!Array.isArray(v)) return []
+  const out: HomeChatAttachment[] = []
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue
+    const a = x as Record<string, unknown>
+    const id = idOf(a.id)
+    if (!id) continue
+    const kind = typeof a.kind === 'string' && KINDS.has(a.kind) ? (a.kind as HomeChatAttachment['kind']) : 'other'
+    out.push({
+      id,
+      filename: str(a.filename) || 'file',
+      contentType: str(a.content_type),
+      size: typeof a.size === 'number' ? a.size : 0,
+      kind,
+      width: typeof a.width === 'number' ? a.width : null,
+      height: typeof a.height === 'number' ? a.height : null,
+      thumb: typeof a.thumbnail_url === 'string' && a.thumbnail_url !== '',
+      preview: typeof a.preview_url === 'string' && a.preview_url !== '',
+      poster: typeof a.poster_url === 'string' && a.poster_url !== '',
+      pending: a.media_pending === true,
+    })
+  }
+  return out
+}
+
+/** `/cli/home-chat/status`'s `files`, or the defaults. */
+export function parseHomeChatFileLimits(v: unknown): HomeChatFileLimits {
+  const o = (v ?? {}) as Record<string, unknown>
+  const n = (x: unknown, d: number): number => (typeof x === 'number' && x > 0 ? x : d)
+  const d = HOME_CHAT_FILE_LIMITS_DEFAULT
+  return {
+    maxBytes: typeof o.maxBytes === 'number' && o.maxBytes > 0 ? o.maxBytes : null,
+    perMessage: n(o.perMessage, d.perMessage),
+    chunkBytes: n(o.chunkBytes, d.chunkBytes),
+    maxRequestBytes: n(o.maxRequestBytes, d.maxRequestBytes),
   }
 }
 
@@ -363,12 +447,14 @@ export function parseHomeChatPushPrefs(v: unknown): HomeChatPushPrefs {
 // check reads the literal each daemonCliGet names, and `'home-chat/status'` read
 // as the POST-only /cli/status.
 export async function fetchHomeChatStatus(scope: ServerScope): Promise<HomeChatStatus> {
-  const v = await daemonCliGet<{ on?: unknown; reason?: unknown; flags?: unknown }>(scope, 'home-chat/status')
+  const v = await daemonCliGet<{ on?: unknown; reason?: unknown; flags?: unknown; files?: unknown }>(scope, 'home-chat/status')
   const flags: Record<string, boolean> = {}
   if (v.flags && typeof v.flags === 'object') {
     for (const [k, x] of Object.entries(v.flags as Record<string, unknown>)) flags[k] = x === true
   }
-  return { on: v.on === true, reason: typeof v.reason === 'string' ? v.reason : null, flags }
+  const out: HomeChatStatus = { on: v.on === true, reason: typeof v.reason === 'string' ? v.reason : null, flags }
+  if (v.files && typeof v.files === 'object') out.files = parseHomeChatFileLimits(v.files)
+  return out
 }
 
 export async function fetchHomeChatPeople(scope: ServerScope): Promise<HomeChatPeople> {
@@ -424,10 +510,11 @@ export async function fetchHomeChatMessages(
 
 export async function sendHomeChatMessage(
   scope: ServerScope,
-  body: { conv: string; text: string; nonce: string; replyTo?: string | null },
+  body: { conv: string; text: string; nonce: string; replyTo?: string | null; attachments?: readonly string[] },
 ): Promise<HomeChatMessage | null> {
-  const payload: Record<string, string> = { conv: body.conv, text: body.text, nonce: body.nonce }
+  const payload: Record<string, string | string[]> = { conv: body.conv, text: body.text, nonce: body.nonce }
   if (body.replyTo) payload.replyTo = body.replyTo
+  if (body.attachments && body.attachments.length > 0) payload.attachments = [...body.attachments]
   const v = await daemonCliPost<{ message?: unknown }>(scope, 'home-chat/send', payload)
   return parseHomeChatMessage(v.message)
 }
@@ -533,4 +620,69 @@ export async function setHomeChatPushPrefs(
   if (patch.previews !== undefined) body.previews = patch.previews
   if (patch.agents !== undefined) body.agents = patch.agents
   return parseHomeChatPushPrefs(await daemonCliPost(scope, 'home-chat/push-prefs/set', body))
+}
+
+// ── Files (contract-home-chat-attachments-v1) ───────────────────────────
+
+/** Where an upload stands (`uploads/create`, `uploads/data`, `uploads/status`). */
+export interface HomeChatUpload {
+  id: string
+  committed: number
+  size: number
+  complete: boolean
+  chunkBytes: number
+  maxRequestBytes: number
+}
+
+function uploadOf(v: unknown): HomeChatUpload {
+  const u = ((v as { upload?: unknown } | null)?.upload ?? {}) as Record<string, unknown>
+  const id = idOf(u.id)
+  if (!id) throw new Error('the server answered no upload')
+  const d = HOME_CHAT_FILE_LIMITS_DEFAULT
+  return {
+    id,
+    committed: typeof u.committed === 'number' ? u.committed : 0,
+    size: typeof u.size === 'number' ? u.size : 0,
+    complete: u.complete === true,
+    chunkBytes: typeof u.chunkBytes === 'number' && u.chunkBytes > 0 ? u.chunkBytes : d.chunkBytes,
+    maxRequestBytes: typeof u.maxRequestBytes === 'number' && u.maxRequestBytes > 0 ? u.maxRequestBytes : d.maxRequestBytes,
+  }
+}
+
+export async function createHomeChatUpload(
+  scope: ServerScope,
+  body: { conv: string; filename: string; size: number; contentType?: string },
+): Promise<HomeChatUpload> {
+  const payload: Record<string, string | number> = { conv: body.conv, filename: body.filename, size: body.size }
+  if (body.contentType) payload.contentType = body.contentType
+  return uploadOf(await daemonCliPost(scope, 'home-chat/uploads/create', payload))
+}
+
+/** One range of an upload's bytes, from `offset` (a browser can't send a
+ *  Content-Range header without a CORS preflight). */
+export async function sendHomeChatUploadBytes(scope: ServerScope, id: string, offset: number, bytes: Uint8Array): Promise<HomeChatUpload> {
+  return uploadOf(await daemonCliPostBytes(scope, 'home-chat/uploads/data', { id, offset }, bytes))
+}
+
+export async function fetchHomeChatUploadStatus(scope: ServerScope, id: string): Promise<HomeChatUpload> {
+  return uploadOf(await daemonCliGet(scope, 'home-chat/uploads/status', { id }))
+}
+
+export async function abortHomeChatUpload(scope: ServerScope, id: string): Promise<void> {
+  await daemonCliPost(scope, 'home-chat/uploads/abort', { id })
+}
+
+export type HomeChatFileVariant = 'original' | 'thumb' | 'preview' | 'poster'
+
+/** A file's bytes through this server's daemon, as this person. */
+export async function fetchHomeChatFile(
+  scope: ServerScope,
+  id: string,
+  opts: { variant?: HomeChatFileVariant; download?: boolean; range?: { offset: number; len: number }; signal?: AbortSignal } = {},
+): Promise<Blob> {
+  const params: Record<string, string> = { id }
+  if (opts.variant && opts.variant !== 'original') params.v = opts.variant
+  if (opts.download) params.dl = '1'
+  if (opts.range) params.range = `${opts.range.offset}-${opts.range.offset + Math.max(1, opts.range.len) - 1}`
+  return daemonCliGetBlob(scope, 'home-chat/file', params, { signal: opts.signal })
 }

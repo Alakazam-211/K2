@@ -243,6 +243,12 @@ export const REPORTED_FEATURES = {
    *  while the owner's `homeChatPush` switch is on and Home chat runs. The
    *  chat header's Notify menu and the viewing lease show and run only then. */
   'home-chat-push-v1': 'home-chat-push-v1',
+  /** contract-home-chat-attachments-v1 (0.46.18): files in Home DMs and
+   *  channels: `/cli/home-chat/uploads/*`, `send` `attachments`, `GET
+   *  /cli/home-chat/file`, `attachments_updated` frames. Listed beside
+   *  `home-chat-v1`. The box's "+" attaches, and messages draw their files,
+   *  only then. */
+  'home-chat-attachments-v1': 'home-chat-attachments-v1',
   /** Typing in agent Threads: the overlay socket carries `{"t":"typing",
    *  "thread"}` from a person's composer and `collection: "typing"` frames
    *  to the Thread's other readers. Without it the composer sends nothing

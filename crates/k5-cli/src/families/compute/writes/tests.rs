@@ -666,6 +666,9 @@ mod wait_verb {
         assert!(at(&end, e::EXIT).starts_with(r#"code, what = int(j["exitCode"])"#));
         assert!(at(&end, e::SIGNAL).starts_with("code, what = 128 + int("));
         assert!(at(&end, e::ST).starts_with("code, what = 3, st + "));
+        // --expect: a done job's took line, then the line it prints.
+        assert_eq!(at(&end, e::TOOK_LINE), r#"if st == "done" and j.get("took"):"#);
+        assert_eq!(at(&end, e::TOOK_LINE + 1), r#"sys.stderr.write("  %s\n" % j["took"])"#);
         assert!(at(&end, e::STILL).contains("still_running"));
         assert!(at(&end, e::RC).starts_with(r#"print("RC %d %s""#));
         let any = python_after(
@@ -679,6 +682,8 @@ mod wait_verb {
         assert!(at(&any, a::EXIT).starts_with(r#"code, what = int(j["exitCode"])"#));
         assert!(at(&any, a::SIGNAL).starts_with("code, what = 128 + int("));
         assert!(at(&any, a::ST_PLUS).starts_with("code, what = 3, st + "));
+        assert_eq!(at(&any, a::TOOK_LINE), r#"if st == "done" and j.get("took"):"#);
+        assert_eq!(at(&any, a::TOOK_LINE + 1), r#"sys.stderr.write("  %s\n" % j["took"])"#);
     }
 
     fn ask(f: impl FnOnce(&mut Ask)) -> Option<Words<Ask>> {

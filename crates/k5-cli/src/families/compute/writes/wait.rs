@@ -88,8 +88,10 @@ pub mod line {
         pub const EXIT: u32 = 23;
         pub const SIGNAL: u32 = 25;
         pub const ST: u32 = 27;
-        pub const STILL: u32 = 41;
-        pub const RC: u32 = 45;
+        /// `--expect`: a done job's took line.
+        pub const TOOK_LINE: u32 = 30;
+        pub const STILL: u32 = 43;
+        pub const RC: u32 = 47;
     }
     /// `--any`'s reader of one answer.
     pub mod any {
@@ -99,6 +101,8 @@ pub mod line {
         pub const EXIT: u32 = 10;
         pub const SIGNAL: u32 = 12;
         pub const ST_PLUS: u32 = 14;
+        /// `--expect`: a done job's took line.
+        pub const TOOK_LINE: u32 = 16;
     }
 }
 

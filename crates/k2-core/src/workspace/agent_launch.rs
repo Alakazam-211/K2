@@ -919,4 +919,58 @@ mod tests {
         assert!(fs::symlink_metadata(outside.join("feat/CLAUDE.md")).is_err(), "nothing is written through the link");
         fs::remove_dir_all(&outside).ok();
     }
+
+    /// The umask, put back on drop (nextest runs each test in its own
+    /// process).
+    #[cfg(unix)]
+    struct Umask(libc::mode_t);
+
+    #[cfg(unix)]
+    impl Drop for Umask {
+        fn drop(&mut self) {
+            // SAFETY: umask has no preconditions.
+            unsafe { libc::umask(self.0) };
+        }
+    }
+
+    #[cfg(unix)]
+    fn mode_of(p: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777
+    }
+
+    /// With a umask that leaves group write on, a worktree K2 makes
+    /// (`.worktrees` 0755, the worktree chmod go-w) launches end to end; a
+    /// group-writable worktree K2 didn't make is still refused.
+    #[cfg(unix)]
+    #[test]
+    fn case1_a_worktree_k2_made_launches_whatever_the_umask_and_one_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let ws = ws_under_temp_home("scout");
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git").args(args).current_dir(&ws.root).status().expect("git");
+            assert!(st.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        // SAFETY: umask has no preconditions.
+        let _umask = Umask(unsafe { libc::umask(0o002) });
+        let made = crate::git::create_worktree(&ws.root.to_string_lossy(), "feat-x").expect("a worktree");
+        let wt = PathBuf::from(&made.path);
+        assert_eq!(mode_of(&ws.root.join(".worktrees")), 0o755, ".worktrees as K2 makes it");
+        assert_eq!(mode_of(&wt) & 0o022, 0, "the worktree has no group or other write");
+
+        put_active_item(&ws.root, "scout", &wt);
+        let out = launch_in(&ws.root, "scout").expect("a worktree K2 made launches");
+        assert_eq!(out["worktreePath"], made.path.as_str(), "{out}");
+        assert!(wt.join("CLAUDE.md").is_file(), "CLAUDE.md written in the worktree");
+
+        let manual = ws.root.join(".worktrees").join("by-hand");
+        fs::create_dir(&manual).unwrap();
+        fs::set_permissions(&manual, fs::Permissions::from_mode(0o775)).unwrap();
+        put_active_item(&ws.root, "scout", &manual);
+        let e = launch_in(&ws.root, "scout").expect_err("a worktree others can write is refused");
+        assert!(e.starts_with("worktree_folder_unsafe"), "named code, got {e:?}");
+        assert!(fs::symlink_metadata(manual.join("CLAUDE.md")).is_err(), "nothing written there");
+    }
 }

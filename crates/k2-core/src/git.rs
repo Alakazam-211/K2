@@ -233,6 +233,38 @@ pub fn list_worktrees(path: &str) -> Vec<WorktreeInfo> {
 
 // ── Create Worktree ───────────────────────────────────────────────────────
 
+/// Set a folder K2 just made to `mode(current)`, on the folder itself (a
+/// link put in its place is not followed). Not Unix: nothing to set.
+#[cfg(unix)]
+fn set_folder_mode(dir: &Path, mode: impl Fn(u32) -> u32) -> std::io::Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    // SAFETY: a valid C string; the fd is owned below.
+    let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: open returned a new fd that nothing else owns.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: a valid fd; stat is plain data.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut st) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let next = mode(st.st_mode as u32 & 0o7777);
+    // SAFETY: a valid fd.
+    if unsafe { libc::fchmod(fd.as_raw_fd(), next as libc::mode_t) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_folder_mode(_dir: &Path, _mode: impl Fn(u32) -> u32) -> std::io::Result<()> {
+    Ok(())
+}
+
 pub fn create_worktree(
     project_path: &str,
     branch_name: &str,
@@ -257,6 +289,7 @@ pub fn create_worktree_from(
     if !worktrees_dir.exists() {
         std::fs::create_dir_all(&worktrees_dir)
             .map_err(|e| format!("Failed to create worktrees directory: {}", e))?;
+        set_folder_mode(&worktrees_dir, |_| 0o755).map_err(|e| format!("Failed to set the worktrees directory's mode: {}", e))?;
     }
 
     // Auto-add .worktrees/ to .gitignore
@@ -304,6 +337,10 @@ pub fn create_worktree_from(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("git worktree add failed: {}", stderr));
     }
+    // No group or other write on the folder git made (chmod go-w): a
+    // launch reaches a worktree only through folders no other user can
+    // change, whatever the umask.
+    set_folder_mode(&worktree_path, |m| m & !0o022).map_err(|e| format!("Failed to set the worktree's mode: {}", e))?;
 
     Ok(WorktreeCreateResult {
         path: wt_path_str,
@@ -329,6 +366,7 @@ pub fn checkout_worktree(
     if !worktrees_dir.exists() {
         std::fs::create_dir_all(&worktrees_dir)
             .map_err(|e| format!("Failed to create worktrees directory: {}", e))?;
+        set_folder_mode(&worktrees_dir, |_| 0o755).map_err(|e| format!("Failed to set the worktrees directory's mode: {}", e))?;
     }
 
     // Auto-add .worktrees/ to .gitignore
@@ -375,6 +413,10 @@ pub fn checkout_worktree(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("git worktree add failed: {}", stderr));
     }
+    // No group or other write on the folder git made (chmod go-w): a
+    // launch reaches a worktree only through folders no other user can
+    // change, whatever the umask.
+    set_folder_mode(&worktree_path, |m| m & !0o022).map_err(|e| format!("Failed to set the worktree's mode: {}", e))?;
 
     Ok(WorktreeCreateResult {
         path: wt_path_str,

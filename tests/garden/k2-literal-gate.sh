@@ -149,9 +149,10 @@ run 1 "want '<count> <family>' or 'skip <path> <reason>'"
 ceilings "1 apps" "2 apps"
 run 1 "apps is listed twice"
 
-# A copy of the real crates (no git): plant one literal 'k2 msg' and it
-# fails; turn one counted line into a template and --tighten lowers its
-# family by one.
+# A copy of the real crates (no git). B7 step 1 left no family a row, so
+# the real ceilings hold every family at zero: plant one literal 'k2 msg'
+# and it fails at a ceiling of 0; take it out and it passes, and --tighten
+# then changes nothing.
 C="$T/real"
 mkdir -p "$C/crates/k2-daemon" "$C/crates/k2-core" "$C/crates/k2-client" "$C/scripts/garden"
 for k in k2-daemon k2-core k2-client; do cp -R "$HERE/crates/$k/src" "$C/crates/$k/src"; done
@@ -163,35 +164,19 @@ crun() {
     case "$out" in *"$text"*) ;; *) echo "FAIL: real copy: output lacks '$text': $out" >&2; exit 1 ;; esac
     pass=$((pass + 1))
 }
-crun 0 "k2-literal-gate: ok"
-apps="$(awk '$2 == "apps" && NF == 2 { print $1 }' "$C/c.txt")"
-[ -n "$apps" ] || { echo "FAIL: the real ceilings have no apps row" >&2; exit 1; }
+crun 0 "k2-literal-gate: ok (0 lines in 0 families"
+[ -z "$(awk 'NF == 2 && $1 ~ /^[0-9]+$/' "$C/c.txt")" ] || { echo "FAIL: the real ceilings still have a family row" >&2; exit 1; }
+pass=$((pass + 1))
 f="$C/crates/k2-daemon/src/app_push/mod.rs"
 { printf 'pub const PLANTED: &str = "ask with k2 msg k2";\n'; cat "$HERE/crates/k2-daemon/src/app_push/mod.rs"; } > "$f"
-crun 1 "FAIL apps has $((apps + 1)) lines with a literal 'k2 <word>', its ceiling is $apps"
+crun 1 "FAIL apps has 1 lines with a literal 'k2 <word>', its ceiling is 0"
 crun 1 "git can't tell which lines are new; --list 'apps' prints them all"
+# A planted stamp and a kept line's text are not counted.
+{ printf 'pub const STAMP: &str = "[k2 apps] crashed";\n'; cat "$HERE/crates/k2-daemon/src/app_push/mod.rs"; } > "$f"
+crun 0 "k2-literal-gate: ok (0 lines in 0 families"
 cp "$HERE/crates/k2-daemon/src/app_push/mod.rs" "$f"
-# The first counted apps line becomes a {cli} template.
-python3 "$GATE" --root "$C" --ceilings "$C/c.txt" --list apps > "$T/apps.txt"
-first="$(sed -n 1p "$T/apps.txt")"
-loc="${first#apps: }"; loc="${loc%%: *}"; file="${loc%:*}"; line="${loc##*:}"
-python3 - "$C/$file" "$line" <<'PY'
-import re, sys
-path, n = sys.argv[1], int(sys.argv[2]) - 1
-lines = open(path, encoding="utf-8").read().split("\n")
-new = re.sub(r"(^|[^A-Za-z0-9_./$-])k2 ([a-z])", r"\1{cli} \2", lines[n])
-if new == lines[n]:
-    sys.exit(f"no literal to turn into a template on {path}:{n + 1}")
-lines[n] = new
-open(path, "w", encoding="utf-8").write("\n".join(lines))
-PY
-crun 0 "family is below the ceiling (apps)"
-crun 0 "k2-literal-gate: apps $apps -> $((apps - 1))" --tighten
-[ "$(awk '$2 == "apps" && NF == 2 { print $1 }' "$C/c.txt")" = "$((apps - 1))" ] || { echo "FAIL: real copy: apps ceiling not lowered" >&2; exit 1; }
-pass=$((pass + 1))
-# Only that row moved.
-moved="$(diff "$HERE/scripts/garden/k2-literal-ceilings.txt" "$C/c.txt" | grep '^[<>]' || true)"
-[ "$moved" = "$(printf '< %s apps\n> %s apps' "$apps" "$((apps - 1))")" ] || { echo "FAIL: real copy: --tighten moved more than the apps row: $moved" >&2; exit 1; }
+crun 0 "ceilings tightened: 0 lines in 0 families" --tighten
+cmp -s "$HERE/scripts/garden/k2-literal-ceilings.txt" "$C/c.txt" || { echo "FAIL: real copy: --tighten changed the ceilings: $(diff "$HERE/scripts/garden/k2-literal-ceilings.txt" "$C/c.txt")" >&2; exit 1; }
 pass=$((pass + 1))
 
 # The real tree is within its ceilings, through the script CI runs.

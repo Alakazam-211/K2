@@ -172,6 +172,10 @@ fn the_words() {
         &["read", "--limit"],
         &["read", "a", "b"],
         &["read", "-x"],
+        // project-chat-thread-v1: --file needs a path.
+        &["msg", "hi", "--file"],
+        &["msg", "Acme", "hi", "--file", ""],
+        &["msg", "a", "b", "--file", "x", "c"],
         &["access"],
         &["access", "on", "off"],
         &["access", "on", "--workspace"],
@@ -601,6 +605,12 @@ fn msg_and_read() {
     let msgs = ok(
         r#"{"ok":true,"truncated":true,"messages":[{"id":"m1","author":"ada","body":"hi","createdAt":1700000000}]}"#,
     );
+    let with_files = ok(
+        r#"{"ok":true,"id":"m9","groupName":"Acme","author":"acme-agent","delivered":false,"deliveryReason":"queued","attachments":[{"kind":"file","path":".k2/downloads/projects/pg_1/gone.md","line":3,"lineEnd":9,"size":5},{"kind":"file","path":"hosts","size":12}]}"#,
+    );
+    let deleted = ok(
+        r#"{"ok":true,"messages":[{"id":"m1","author":"ada","body":"hi","createdAt":1700000000},{"id":"m2","author":"bo","body":"","deleted":true,"createdAt":1700000001}]}"#,
+    );
     check(
         &rig,
         vec![
@@ -741,10 +751,70 @@ fn msg_and_read() {
                 "read: the project found",
                 &["read"],
                 &[],
-                vec![list, mine, other, msgs],
+                vec![list, mine.clone(), other, msgs],
                 owner_and_port,
                 0,
                 4,
+            ),
+            // project-chat-thread-v1: files ride the line; a spec that is no
+            // file here is sent as typed with its lines, one that is goes
+            // absolute; the answer's files are listed.
+            // covers: project msg
+            case(
+                "msg --file: files sent and listed",
+                &[
+                    "msg",
+                    "Acme",
+                    "Notes",
+                    "--file",
+                    "gone.md:3-9",
+                    "--file",
+                    "/etc/hosts",
+                ],
+                &[],
+                vec![mine.clone(), with_files.clone()],
+                owner_and_port,
+                0,
+                2,
+            ),
+            // covers: project msg --json
+            case(
+                "msg --file --json: files alone",
+                &["msg", "Acme", "", "--file", "gone.md", "--json"],
+                &[],
+                vec![mine.clone(), with_files.clone()],
+                owner_and_port,
+                0,
+                2,
+            ),
+            case(
+                "msg --file: a server that drops files",
+                &["msg", "Acme", "hi", "--file", "gone.md"],
+                &[],
+                vec![mine.clone(), posted("null", true)],
+                owner_and_port,
+                1,
+                2,
+            ),
+            // covers: project read
+            case(
+                "read --all: a deleted line",
+                &["read", "Acme", "--all"],
+                &[],
+                vec![mine.clone(), deleted.clone()],
+                owner_and_port,
+                0,
+                2,
+            ),
+            // covers: project read --json
+            case(
+                "read --all --json: a deleted line",
+                &["read", "Acme", "--all", "--json"],
+                &[],
+                vec![mine, deleted],
+                owner_and_port,
+                0,
+                2,
             ),
         ],
     );

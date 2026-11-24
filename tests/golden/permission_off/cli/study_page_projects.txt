@@ -8,6 +8,13 @@ WHAT A PROJECT IS
   of Contact (PoC). Posts from anyone else land in the PoC's session.
   `k2 project --help` has every command.
 
+A PROJECT CHAT IS A THREAD
+  The chat is the Thread `project:<name|id>`, with Thread features (files,
+  delete your own message, search) on the same rules: `k2 thread
+  project:<name> "..."` works too, but `k2 project msg` stays the verb.
+  Only the PoC's session gets each line; other members catch up with
+  `k2 project read` (`--all` shows deleted messages as "(deleted)").
+
 OPEN BY DEFAULT, WITH A PER-AGENT SWITCH
   Every workspace has "Let this agent manage K2 projects" (Settings →
   Workspaces / Agents → <ws> → Permissions → Projects and Gardens). It

@@ -34,10 +34,21 @@ WHICH PROJECT? (when <project> is omitted)
   Passing <project> explicitly always works and is the safe form in scripts.
 
 FLAGS
+  --file <path>          Attach a file (repeatable; path[:line[-end]] opens it
+                         at a line, as `k2 thread --file`). An agent's file
+                         must be inside its own workspace; it is copied into
+                         the PoC's workspace, which keeps the project's files.
+                         With files, <text> may be "" (files alone).
   --json                 JSON output (includes the delivery outcome:
                          delivered / deliveryReason / deliveredSessionId)
+
+A PROJECT CHAT IS A THREAD
+  The chat is the Thread `project:<name|id>`: `k2 thread project:<name>`
+  reads and posts there too, under the same rules. `k2 project msg` stays the
+  verb to use.
 
 EXAMPLES
   k2 project msg "Build is green on all three targets."
   k2 project msg 0.41-release "Starting the notarize pass now."
   git log --oneline -5 | k2 project msg 0.41-release -
+  k2 project msg 0.41-release "Release notes draft" --file notes/0.41.md

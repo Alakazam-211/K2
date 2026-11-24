@@ -134,10 +134,10 @@
     },
     {
       "name": "project msg",
-      "usage": "k2 project msg [<project>] <text> [--json]",
+      "usage": "k2 project msg [<project>] <text> [--file <path>]... [--json]",
       "description": "Post to a project's chat AS your workspace (auto-detected from K2_PROJECT_PATH, falling back to the current directory). One arg = <text> with the project auto-detected from your memberships (exactly one; none = exit 4 no_project, several = exit 4 ambiguous_project); two args = <project> <text>; three-plus = exit 2 (quote your message). <text> of \"-\" reads the body from stdin. delivered:false + deliveryReason:author-is-poc is a NORMAL success (the PoC never self-injects).",
       "args": [{"name": "project", "required": false}, {"name": "text", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "JSON output (includes delivered / deliveryReason / deliveredSessionId)."}]
+      "flags": [{"name": "--file", "arg": "path", "description": "Attach a file (repeatable; path[:line[-end]]). An agent's file must be in its own workspace; it is copied into the PoC's workspace. With files, <text> may be empty."}, {"name": "--json", "arg": null, "description": "JSON output (includes delivered / deliveryReason / deliveredSessionId)."}]
     },
     {
       "name": "organization bulletin",
@@ -173,12 +173,13 @@
     },
     {
       "name": "project read",
-      "usage": "k2 project read [<project>] [--after <ts>] [--limit <n>] [--json]",
+      "usage": "k2 project read [<project>] [--after <ts>] [--limit <n>] [--all] [--json]",
       "description": "Read a project's chat, oldest first (default: the 20 most recent). Catch-up pattern: keep the last message's at timestamp and pass --after <ts> (strictly greater; the default limit becomes the max 500 with --after; truncated:true + a continue hint when more remain). Project may be omitted under the same auto-detect rule as msg.",
       "args": [{"name": "project", "required": false}],
       "flags": [
         {"name": "--after", "arg": "ts", "description": "Only messages with at greater than <ts> (unix seconds)."},
         {"name": "--limit", "arg": "n", "description": "How many of the most recent messages to show (default 20, or 500 when --after is given; max 500)."},
+        {"name": "--all", "arg": null, "description": "Show deleted messages too, as (deleted)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },

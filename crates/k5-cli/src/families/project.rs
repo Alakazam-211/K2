@@ -81,12 +81,12 @@ pub mod line {
     pub const REMOVE: u32 = 274;
     pub const POC: u32 = 287;
     pub const MSG: u32 = 316;
-    pub const READ: u32 = 376;
-    pub const RENAME: u32 = 407;
-    pub const DELETE: u32 = 415;
-    pub const PIN: u32 = 425;
-    pub const VIEW: u32 = 439;
-    pub const ACCESS: u32 = 514;
+    pub const READ: u32 = 382;
+    pub const RENAME: u32 = 415;
+    pub const DELETE: u32 = 423;
+    pub const PIN: u32 = 433;
+    pub const VIEW: u32 = 447;
+    pub const ACCESS: u32 = 522;
 }
 
 /// One verb and its words.
@@ -111,17 +111,21 @@ pub enum Verb {
         project: String,
         workspace: String,
     },
-    /// `project` empty: auto-detected. `stdin`: the text is `-`.
+    /// `project` empty: auto-detected. `stdin`: the text is `-`. `files`:
+    /// each `--file` spec, as typed (project-chat-thread-v1).
     Msg {
         project: String,
         text: String,
         two: bool,
         stdin: bool,
+        files: Vec<String>,
     },
+    /// `all`: `--all`, deleted lines too (project-chat-thread-v1).
     Read {
         project: String,
         after: String,
         limit: String,
+        all: bool,
     },
     Rename {
         project: String,
@@ -452,15 +456,23 @@ fn parse_view(rest: &[&str]) -> Result<(Verb, bool), String> {
 fn parse_msg(rest: &[&str]) -> Result<(Verb, bool), String> {
     let mut j = false;
     let mut words: Vec<&str> = Vec::new();
+    let mut files: Vec<String> = Vec::new();
     // After a bare `--` every word is a positional, as typed.
     let mut dashes = false;
-    for w in rest {
+    let mut it = rest.iter();
+    while let Some(w) = it.next() {
         if dashes {
             words.push(w);
         } else if *w == "--" {
             dashes = true;
         } else if *w == "--json" {
             j = true;
+        } else if *w == "--file" {
+            // project-chat-thread-v1: files ride the line.
+            match it.next() {
+                Some(f) if !f.is_empty() => files.push((*f).to_string()),
+                _ => return Err(usage("--file needs a path (path[:line[-end]])")),
+            }
         } else if *w != "-" && w.starts_with('-') {
             return Err(usage(&format!(
                 "unknown flag '{w}' \u{2014} {}",
@@ -471,8 +483,18 @@ fn parse_msg(rest: &[&str]) -> Result<(Verb, bool), String> {
         }
     }
     match words.as_slice() {
-        [] => Err(usage(
+        [] if files.is_empty() => Err(usage(
             "msg requires <text> (or \"-\" to read it from stdin)",
+        )),
+        [] => Ok((
+            Verb::Msg {
+                project: String::new(),
+                text: String::new(),
+                two: false,
+                stdin: false,
+                files,
+            },
+            j,
         )),
         [text] => Ok((
             Verb::Msg {
@@ -480,6 +502,7 @@ fn parse_msg(rest: &[&str]) -> Result<(Verb, bool), String> {
                 text: (*text).to_string(),
                 two: false,
                 stdin: *text == "-",
+                files,
             },
             j,
         )),
@@ -489,6 +512,7 @@ fn parse_msg(rest: &[&str]) -> Result<(Verb, bool), String> {
                 text: (*text).to_string(),
                 two: true,
                 stdin: *text == "-",
+                files,
             },
             j,
         )),
@@ -505,9 +529,11 @@ const READ_USAGE: &str = cli!("read [<project>] [--after <ts>] [--limit <n>] [--
 fn parse_read(rest: &[&str]) -> Result<(Verb, bool), String> {
     let (mut project, mut after, mut limit, mut j) =
         (String::new(), String::new(), String::new(), false);
+    let mut all = false;
     let mut i = 0;
     while let Some(&w) = rest.get(i) {
         match w {
+            "--all" => all = true,
             "--after" => {
                 after = rest
                     .get(i + 1)
@@ -540,6 +566,7 @@ fn parse_read(rest: &[&str]) -> Result<(Verb, bool), String> {
             project,
             after,
             limit,
+            all,
         },
         j,
     ))
@@ -611,6 +638,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if !python::family_native(python::here()) {
         return None;
     }
+    // `_thread_attachments_json` reads `$PWD` (project-chat-thread-v1).
+    let cwd = match &form {
+        Form::Verb(Ok((Verb::Msg { files, .. }, _))) if !files.is_empty() => {
+            let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
+            pwd.to_str()?.to_string()
+        }
+        _ => String::new(),
+    };
     for name in k2_client::env_names::AGENT_NAME.iter().chain(&["HOME"]) {
         if let Some(v) = std::env::var_os(name) {
             v.to_str()?;
@@ -631,14 +666,14 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if let Some(stop) = prelude::id_tool(&settings, hook_sock.as_deref(), would_refuse, TOOL) {
         return Some(stop);
     }
-    Some(run_form(form, settings, would_refuse))
+    Some(run_form(form, settings, would_refuse, cwd))
 }
 
 fn help() -> &'static str {
     crate::text::help("project").expect("cli/text/help/project.txt is embedded")
 }
 
-fn run_form(form: Form, mut settings: Settings, would_refuse: bool) -> Exit {
+fn run_form(form: Form, mut settings: Settings, would_refuse: bool, cwd: String) -> Exit {
     let (verb, json) = match form {
         Form::Help => return Shown::out(help()).print(),
         Form::Unknown(v) => {
@@ -659,6 +694,7 @@ fn run_form(form: Form, mut settings: Settings, would_refuse: bool) -> Exit {
             project,
             two,
             stdin: true,
+            files,
             ..
         } => {
             let mut raw = Vec::new();
@@ -669,6 +705,7 @@ fn run_form(form: Form, mut settings: Settings, would_refuse: bool) -> Exit {
                 text: String::from_utf8_lossy(&held).into_owned(),
                 two,
                 stdin: true,
+                files,
             }
         }
         v => v,
@@ -695,6 +732,7 @@ fn run_form(form: Form, mut settings: Settings, would_refuse: bool) -> Exit {
         ws_path: settings.project.clone(),
         agent,
         home: std::env::var("HOME").ok(),
+        cwd,
         json,
         permission: None,
         out: PyOut::default(),
@@ -920,6 +958,8 @@ struct Py {
     ws_path: String,
     agent: String,
     home: Option<String>,
+    /// The shell's `$PWD`, for `--file` specs (empty without files).
+    cwd: String,
     json: bool,
     /// `LAST_PERMISSION[0]`.
     permission: Option<Value>,
@@ -1259,8 +1299,12 @@ impl Py {
     /// `print_message_rows(msgs)`.
     fn message_rows(&mut self, msgs: &Value, line: u32) -> R<()> {
         for m in py_iter(msgs, line)? {
-            let body = at_or(&m, "body", s(""), line)?;
-            let mut lines = PyStr::of(&body).splitlines();
+            // project-chat-thread-v1: a deleted line (`read --all`).
+            let mut lines = if truthy(&at_v(&m, "deleted", line)?) {
+                vec![PyStr::from("(deleted)")]
+            } else {
+                PyStr::of(&at_or(&m, "body", s(""), line)?).splitlines()
+            };
             if lines.is_empty() {
                 lines.push(PyStr::default());
             }
@@ -1296,12 +1340,14 @@ impl Py {
                 text,
                 two,
                 stdin,
-            } => self.msg(project, text, *two, *stdin),
+                files,
+            } => self.msg(project, text, *two, *stdin, files),
             Verb::Read {
                 project,
                 after,
                 limit,
-            } => self.read(project, after, limit),
+                all,
+            } => self.read(project, after, limit, *all),
             Verb::Rename { project, name } => self.rename(project, name),
             Verb::Delete { project } => self.delete(project),
             Verb::Pin { project, state } => self.pin(project, state),
@@ -1619,7 +1665,14 @@ impl Py {
         Ok(())
     }
 
-    fn msg(&mut self, proj: &str, text: &str, two: bool, from_stdin: bool) -> R<()> {
+    fn msg(
+        &mut self,
+        proj: &str,
+        text: &str,
+        two: bool,
+        from_stdin: bool,
+        files: &[String],
+    ) -> R<()> {
         let l = line::MSG;
         let show = if !proj.is_empty() {
             let Some(d) = self.request(Method::Get, SHOW, &[("group", proj.to_string())], None)?
@@ -1666,14 +1719,25 @@ impl Py {
             let b = basename(self.ws_path.trim_end_matches('/'));
             s(if b.is_empty() { "?" } else { b })
         };
-        let d = self.post(
-            "/cli/project-group/msg",
-            obj(vec![
-                ("group", at_v(&show, "id", l)?),
-                ("body", s(text)),
-                ("author", author),
-            ]),
-        )?;
+        let mut body = vec![
+            ("group", at_v(&show, "id", l)?),
+            ("body", s(text)),
+            ("author", author),
+        ];
+        if !files.is_empty() {
+            body.push((
+                "attachments",
+                super::feedback::write::attachments(files, &self.cwd, self.home.as_deref()),
+            ));
+        }
+        let d = self.post("/cli/project-group/msg", obj(body))?;
+        let has_files = matches!(&d, Value::Object(pairs) if get(pairs, "attachments").is_some());
+        if !files.is_empty() && !has_files {
+            return Err(self.die_with(
+                "server_too_old",
+                "this server's K2 doesn't take files on project lines (it needs project chats on the Thread)",
+            ));
+        }
         let name = or(
             or(at_v(&d, "groupName", l)?, at_v(&show, "name", l)?),
             s("?"),
@@ -1703,6 +1767,10 @@ impl Py {
             let sid = at_v(&d, "deliveredSessionId", l)?;
             if truthy(&sid) {
                 out.push(("deliveredSessionId", sid));
+            }
+            let files = at_v(&d, "attachments", l)?;
+            if truthy(&files) {
+                out.push(("attachments", files));
             }
             return self.print_json(&obj(out), l);
         }
@@ -1735,10 +1803,26 @@ impl Py {
         } else {
             self.line(&format!("Posted to {n}."));
         }
+        let files = or(at_v(&d, "attachments", l)?, Value::Array(Vec::new()));
+        for a in py_iter(&files, l)? {
+            let path = at_or(&a, "path", s(""), l)?;
+            let spec = if truthy(&at_v(&a, "line", l)?) {
+                let end = at_v(&a, "lineEnd", l)?;
+                let end = if truthy(&end) {
+                    format!("-{}", st(&end))
+                } else {
+                    String::new()
+                };
+                format!(":{}{end}", st(&at_v(&a, "line", l)?))
+            } else {
+                String::new()
+            };
+            self.line(&format!("  [file] {}{spec}", st(&path)));
+        }
         Ok(())
     }
 
-    fn read(&mut self, proj: &str, after: &str, limit: &str) -> R<()> {
+    fn read(&mut self, proj: &str, after: &str, limit: &str, all: bool) -> R<()> {
         let l = line::READ;
         let show = if proj.is_empty() {
             self.detect_project(l)?
@@ -1752,6 +1836,9 @@ impl Py {
         if !limit.is_empty() {
             params.push(("limit", limit.to_string()));
         }
+        if all {
+            params.push(("include_deleted", "1".to_string()));
+        }
         let d = self.get_(MESSAGES, &params)?;
         let msgs = at_or(&d, "messages", Value::Array(Vec::new()), l)?;
         let name = or(at_v(&show, "name", l)?, s("?"));
@@ -1764,12 +1851,16 @@ impl Py {
         if self.json {
             let mut ms = Vec::new();
             for m in &list {
-                ms.push(obj(vec![
+                let mut row = vec![
                     ("id", at_v(m, "id", l)?),
                     ("author", at_v(m, "author", l)?),
                     ("body", at_v(m, "body", l)?),
                     ("at", at_v(m, "createdAt", l)?),
-                ]));
+                ];
+                if truthy(&at_v(m, "deleted", l)?) {
+                    row.push(("deleted", Value::Bool(true)));
+                }
+                ms.push(obj(row));
             }
             let mut out = vec![
                 ("ok", Value::Bool(true)),
@@ -2179,9 +2270,59 @@ mod tests {
                 project: String::new(),
                 text: "-".into(),
                 two: false,
-                stdin: true
+                stdin: true,
+                files: Vec::new()
             }
         );
+        // project-chat-thread-v1: `--file` (repeatable; files alone too)
+        // and `read --all`.
+        match verb(&["msg", "Acme", "--file", "a.md", "hi", "--file", "b.rs:3-9"])
+            .unwrap()
+            .0
+        {
+            Verb::Msg {
+                project,
+                text,
+                files,
+                ..
+            } => {
+                assert_eq!((project.as_str(), text.as_str()), ("Acme", "hi"));
+                assert_eq!(files, vec!["a.md".to_string(), "b.rs:3-9".to_string()]);
+            }
+            other => panic!("{other:?}"),
+        }
+        match verb(&["msg", "--file", "a.md"]).unwrap().0 {
+            Verb::Msg {
+                text, files, two, ..
+            } => assert_eq!((text.as_str(), files.len(), two), ("", 1, false)),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            verb(&["msg", "hi", "--file"]).unwrap_err(),
+            usage("--file needs a path (path[:line[-end]])")
+        );
+        assert_eq!(
+            verb(&["msg", "hi", "--file", ""]).unwrap_err(),
+            usage("--file needs a path (path[:line[-end]])")
+        );
+        match verb(&["msg", "--", "--file", "x"]).unwrap().0 {
+            Verb::Msg {
+                project,
+                text,
+                files,
+                ..
+            } => {
+                assert_eq!(
+                    (project.as_str(), text.as_str(), files.len()),
+                    ("--file", "x", 0)
+                )
+            }
+            other => panic!("{other:?}"),
+        }
+        match verb(&["read", "Acme", "--all"]).unwrap().0 {
+            Verb::Read { all, .. } => assert!(all),
+            other => panic!("{other:?}"),
+        }
         assert!(verb(&["access", "on", "off"]).is_err());
         assert!(verb(&["list", "x"]).is_err());
     }

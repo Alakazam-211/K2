@@ -32,6 +32,8 @@ COMMANDS
                                  ONE project (rule spelled out in `msg --help`)
   read [<project>]               Read the chat, oldest first (--after to catch up
                                  on messages since your last read)
+                                 msg takes --file; the chat is also the Thread
+                                 project:<name> (k2 thread project:<name>)
   access on|off [--workspace <ws>]
                                  Owner/admin: turn a workspace agent's "Manage
                                  K2 projects" switch on or off

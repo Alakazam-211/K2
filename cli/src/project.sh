@@ -44,7 +44,7 @@ _project_py() {
     P_NAME="${P_NAME:-}" P_ARG_PROJECT="${P_ARG_PROJECT:-}" \
     P_ARG_WORKSPACE="${P_ARG_WORKSPACE:-}" P_TEXT="${P_TEXT:-}" \
     P_MSG_FORM="${P_MSG_FORM:-}" P_TEXT_STDIN="${P_TEXT_STDIN:-false}" \
-    P_AFTER="${P_AFTER:-}" P_LIMIT="${P_LIMIT:-}" P_VIEW="${P_VIEW:-}" \
+    P_AFTER="${P_AFTER:-}" P_LIMIT="${P_LIMIT:-}" P_VIEW="${P_VIEW:-}" P_FILES="${P_FILES:-}" P_ALL="${P_ALL:-}" \
     P_PERMISSION_NOTE="${_K2_PERMISSION_NOTE:-}" \
     _K5_PY_HTTP="$_K5_PY_HTTP" _K5_PY_HEADERS="$(_k5_py_headers)" python3 - <<'PYEOF'
 import json, os, sys, time
@@ -219,7 +219,7 @@ def home_path(p):
 
 def print_message_rows(msgs):
     for m in msgs:
-        lines = str(m.get("body", "")).splitlines() or [""]
+        lines = ["(deleted)"] if m.get("deleted") else (str(m.get("body", "")).splitlines() or [""])
         print("  %-9s%-11s%s" % (m.get("author", "?"),
                                  "(%s)" % ago(m.get("createdAt", 0)), lines[0]))
         for extra in lines[1:]:
@@ -391,7 +391,9 @@ elif verb == "msg":
         author = (os.environ.get("P_AGENT_NAME")
                   or os.path.basename(ws_path.rstrip("/")) or "?")
     d = call("POST", "/cli/project-group/msg",
-             body={"group": show.get("id"), "body": text, "author": author})
+             body=dict({"group": show.get("id"), "body": text, "author": author}, **({"attachments": json.loads(os.environ["P_FILES"])} if os.environ.get("P_FILES") else {})))
+    if os.environ.get("P_FILES") and "attachments" not in d:
+        die({"code": "server_too_old", "hint": "this server's K2 doesn't take files on project lines (it needs project chats on the Thread)"})
     name = d.get("groupName") or show.get("name") or "?"
     delivered = bool(d.get("delivered"))
     reason = d.get("deliveryReason")
@@ -406,6 +408,8 @@ elif verb == "msg":
             out["deliveryReason"] = reason
         if d.get("deliveredSessionId"):
             out["deliveredSessionId"] = d.get("deliveredSessionId")
+        if d.get("attachments"):
+            out["attachments"] = d.get("attachments")
         print(dumps(out))
     elif delivered:
         print("Posted to %s — delivered to PoC %s." % (name, poc_name(show) or "?"))
@@ -419,6 +423,8 @@ elif verb == "msg":
         print("Posted to %s — on its way to PoC %s (still being delivered)." % (name, poc_name(show) or "?"))
     else:
         print("Posted to %s." % name)
+    for a in ([] if as_json else d.get("attachments") or []):
+        print("  [file] %s%s" % (a.get("path", ""), (":%s" % a["line"] + ("-%s" % a["lineEnd"] if a.get("lineEnd") else "")) if a.get("line") else ""))
 
 elif verb == "read":
     proj = os.environ.get("P_ARG_PROJECT", "")
@@ -428,14 +434,16 @@ elif verb == "read":
         params["after"] = os.environ["P_AFTER"]
     if os.environ.get("P_LIMIT"):
         params["limit"] = os.environ["P_LIMIT"]
+    if os.environ.get("P_ALL") == "true":
+        params["include_deleted"] = "1"
     d = call("GET", "/cli/project-group/messages", params=params)
     msgs = d.get("messages", [])
     name = show.get("name") or "?"
     truncated = bool(d.get("truncated"))
     if as_json:
         out = {"ok": True, "project": name,
-               "messages": [{"id": m.get("id"), "author": m.get("author"),
-                             "body": m.get("body"), "at": m.get("createdAt")}
+               "messages": [dict({"id": m.get("id"), "author": m.get("author"),
+                             "body": m.get("body"), "at": m.get("createdAt")}, **({"deleted": True} if m.get("deleted") else {}))
                             for m in msgs]}
         if truncated:
             out["truncated"] = True
@@ -892,11 +900,17 @@ cmd_project_msg() {
     # is a positional, never a flag.
     # After a bare `--` every word is a positional, as typed.
     local as_json=false count=0 first="" second="" joined="" dashes=false
+    local -a files=()
     while [ $# -gt 0 ]; do
         if [ "$dashes" = false ] && [ "$1" = "--" ]; then
             dashes=true
         elif [ "$dashes" = false ] && [ "$1" = "--json" ]; then
             as_json=true
+        elif [ "$dashes" = false ] && [ "$1" = "--file" ]; then
+            # project-chat-thread-v1: files ride the line (path[:line[-end]],
+            # as `k2 thread --file`), kept in the PoC's workspace.
+            [ $# -ge 2 ] && [ -n "$2" ] || { _project_err "usage" "--file needs a path (path[:line[-end]])"; exit 2; }
+            files+=("$2"); shift
         elif [ "$dashes" = false ] && [ "$1" != "-" ] && [ "${1#-}" != "$1" ]; then
             _project_err "usage" "unknown flag '$1' — usage: k2 project msg [<project>] <text> [--json]"
             exit 2
@@ -908,7 +922,7 @@ cmd_project_msg() {
         fi
         shift
     done
-    if [ "$count" -eq 0 ]; then
+    if [ "$count" -eq 0 ] && [ "${#files[@]}" -eq 0 ]; then
         _project_err "usage" "msg requires <text> (or \"-\" to read it from stdin)"
         exit 2
     fi
@@ -917,7 +931,7 @@ cmd_project_msg() {
         exit 2
     fi
     local project="" text="" form="one" from_stdin=false
-    if [ "$count" -eq 1 ]; then
+    if [ "$count" -le 1 ]; then
         text="$first"
     else
         form="two"; project="$first"; text="$second"
@@ -925,16 +939,21 @@ cmd_project_msg() {
     if [ "$text" = "-" ]; then
         text="$(cat)"; from_stdin=true
     fi
+    local files_json=""
+    if [ "${#files[@]}" -gt 0 ]; then
+        files_json="$(_thread_attachments_json "${files[@]}")" || exit 1
+    fi
     local P_VERB="msg" P_JSON="$as_json" P_ARG_PROJECT="$project" P_TEXT="$text" \
-          P_MSG_FORM="$form" P_TEXT_STDIN="$from_stdin"
+          P_MSG_FORM="$form" P_TEXT_STDIN="$from_stdin" P_FILES="$files_json"
     _project_py
 }
 
 cmd_project_read() {
     if _wants_help "$@"; then cmd_help_project_read; exit 0; fi
-    local project="" after="" limit="" as_json=false
+    local project="" after="" limit="" as_json=false all=false
     while [ $# -gt 0 ]; do
         case "$1" in
+            --all) all=true; shift ;;
             --after)
                 [ $# -ge 2 ] || { _project_err "usage" "--after requires a unix-seconds timestamp"; exit 2; }
                 after="$2"; shift 2 ;;
@@ -953,7 +972,7 @@ cmd_project_read() {
                 shift ;;
         esac
     done
-    local P_VERB="read" P_JSON="$as_json" P_ARG_PROJECT="$project" P_AFTER="$after" P_LIMIT="$limit"
+    local P_VERB="read" P_JSON="$as_json" P_ARG_PROJECT="$project" P_AFTER="$after" P_LIMIT="$limit" P_ALL="$all"
     _project_py
 }
 

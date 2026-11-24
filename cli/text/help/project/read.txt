@@ -20,6 +20,8 @@ FLAGS
   --after <ts>           Only messages with `at` greater than <ts> (unix seconds)
   --limit <n>            How many of the most recent messages to show
                          (default 20 — or 500 when --after is given; max 500)
+  --all                  Show deleted messages too, as "(deleted)" (their
+                         text is gone); without it they are left out
   --json                 JSON output
 
 EXAMPLES

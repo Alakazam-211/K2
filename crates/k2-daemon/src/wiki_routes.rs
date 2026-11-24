@@ -553,6 +553,18 @@ pub fn handle_location_get(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// Whether a `/cli/wiki/*` POST may go on, the dispatcher arm's token
+/// check. The owner approves a wiki location: the owner token or an
+/// Owner-role login, never another login or a passport. Every other wiki
+/// POST takes a token the daemon accepts.
+pub(crate) fn post_caller_ok(path: &str, query: &str, owner_token: &str) -> bool {
+    if path == "/cli/wiki/location/approve" {
+        crate::routes::http::owner_role_identity(query, owner_token).is_some()
+    } else {
+        crate::routes::http::token_ok(query, owner_token)
+    }
+}
+
 /// POST /cli/wiki/location/approve?project=<path> (owner only: the route
 /// row's floor is Owner and the dispatcher arm checks it again): record the
 /// wiki's current resolved target as the approved location.

@@ -13,7 +13,8 @@
 //!
 //! ```json
 //! {"names":[{"zone":"globex.example","fqdn":"alice.globex.example",
-//!            "features":["e2e","voice"],"turn":"turn.alice.globex.example"}],
+//!            "features":{"e2e":true,"voice":true,"mail":false},
+//!            "turn":"turn.alice.globex.example"}],
 //!  "primaryZone":"globex.example","namesVersion":7,"namesStatus":"ok"}
 //! ```
 //!
@@ -22,9 +23,10 @@
 //!   `namesVersion`: the box has no names any more ([`BoxNames::Revoked`]).
 //!   A1 only records that state; what the daemon does about it is a later
 //!   step.
-//! - `namesVersion`: a counter (a JSON integer, 0 or more) that never goes
-//!   down for a box. A higher one REPLACES what is stored, never merges with
-//!   it; the same one is a no-op; a lower one is ignored. It goes back to
+//! - `namesVersion`: a hash of the names (a JSON integer, 0 or more; K2 Web
+//!   keeps it below 2^53), not a counter: there is no order. A different
+//!   one REPLACES what is stored, never merges with it; the same one is a
+//!   no-op. It goes back to
 //!   the control plane on every fetch as [`HEADER_NAMES_VERSION`], so the
 //!   answer can leave the names out when nothing changed.
 //! - Anything else keeps what the box has: no `namesStatus`, an empty list
@@ -33,8 +35,10 @@
 //! **Validation**, per entry: `zone` a lowercase hostname with at least two
 //! labels; `fqdn` a lowercase hostname strictly under `zone` (never the
 //! zone itself, never a wildcard: no field allows one); `turn`, when
-//! present, the same rule; `features` a list of short lowercase words
-//! (unknown words are kept for later steps); one entry per zone. A bad
+//! present, the same rule; `features` an object of short lowercase words
+//! to `true` or `false` (the ones that are true are the box's; unknown words
+//! are kept for later steps; any other value drops the entry); one entry
+//! per zone. A bad
 //! entry is dropped with a log line and the rest kept. The whole block is
 //! refused (and the stored names kept) only when it is malformed: no usable
 //! version, `names` not a list, more than [`MAX_NAMES`] entries, no valid
@@ -78,11 +82,24 @@ pub struct NameEntry {
     pub fqdn: String,
     /// The gates the control plane says the daemon may offer in this zone
     /// (`e2e`, `voice`, `nested`, `apps_edge`, `mail`, and any later word).
-    /// A word that is absent means "don't offer it".
+    /// A word that is absent means "don't offer it". On the wire (and in
+    /// the store) an object of word to `true`/`false`; only the true ones
+    /// are kept here, sorted.
+    #[serde(serialize_with = "features_as_object")]
     pub features: Vec<String>,
     /// The voice (TURN) name in this zone, when the zone has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<String>,
+}
+
+/// Write the enabled features as the wire's object (`{"e2e": true, ...}`).
+fn features_as_object<S: serde::Serializer>(f: &[String], ser: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+    let mut m = ser.serialize_map(Some(f.len()))?;
+    for w in f {
+        m.serialize_entry(w, &true)?;
+    }
+    m.end()
 }
 
 /// A validated list of this box's names.
@@ -218,25 +235,23 @@ fn parse_entry(v: &Value) -> Result<NameEntry, String> {
     let mut features: Vec<String> = Vec::new();
     match obj.get("features") {
         None | Some(Value::Null) => {}
-        Some(Value::Array(list)) => {
-            for f in list {
-                match f.as_str() {
-                    Some(w) if feature_word(w) => {
-                        if !features.iter().any(|x| x == w) {
-                            features.push(w.to_string());
-                        }
-                    }
-                    _ => return Err(format!("feature {f} is not a short lowercase word")),
+        Some(Value::Object(map)) => {
+            if map.len() > MAX_FEATURES {
+                return Err(format!("{} features (at most {MAX_FEATURES})", map.len()));
+            }
+            for (w, on) in map {
+                if !feature_word(w) {
+                    return Err(format!("feature {w:?} is not a short lowercase word"));
+                }
+                match on {
+                    Value::Bool(true) => features.push(w.clone()),
+                    Value::Bool(false) => {}
+                    other => return Err(format!("feature {w} is {other}, not true or false")),
                 }
             }
-            if features.len() > MAX_FEATURES {
-                return Err(format!(
-                    "{} features (at most {MAX_FEATURES})",
-                    features.len()
-                ));
-            }
+            features.sort();
         }
-        Some(_) => return Err("features is not a list".to_string()),
+        Some(_) => return Err("features is not an object of true or false".to_string()),
     }
     Ok(NameEntry {
         zone: zone.to_string(),
@@ -480,8 +495,6 @@ pub enum ApplyOutcome {
     Kept,
     /// The same `namesVersion` as stored: nothing changed.
     Unchanged,
-    /// An older `namesVersion` than stored: ignored.
-    Older,
     /// Stored names replaced (the store write may have failed; logged).
     Replaced,
 }
@@ -504,18 +517,10 @@ pub(crate) fn apply(answer: &NamesAnswer, cfg: &TunnelConfig) -> ApplyOutcome {
         }
         NamesAnswer::Usable { names, dropped } => (names, dropped),
     };
-    if let Some(held) = st.held.as_ref().map(BoxNames::version) {
-        if names.version() == held {
-            return ApplyOutcome::Unchanged;
-        }
-        if names.version() < held {
-            let msg = format!(
-                "names version {} is older than the stored {held}, ignored",
-                names.version()
-            );
-            log_once(&mut st, msg);
-            return ApplyOutcome::Older;
-        }
+    // namesVersion is a hash, not a counter: only "the same" means
+    // anything. A different one replaces what is held, whatever its value.
+    if st.held.as_ref().map(BoxNames::version) == Some(names.version()) {
+        return ApplyOutcome::Unchanged;
     }
     for d in dropped {
         crate::log_debug!("[tunnel/names] dropped {d}");
@@ -584,7 +589,7 @@ mod tests {
     }
 
     fn entry(zone: &str, fqdn: &str) -> String {
-        format!(r#"{{"zone":"{zone}","fqdn":"{fqdn}","features":["e2e"]}}"#)
+        format!(r#"{{"zone":"{zone}","fqdn":"{fqdn}","features":{{"e2e":true,"voice":false}}}}"#)
     }
 
     fn ok_body(version: u64, primary: &str, entries: &[String]) -> String {
@@ -597,8 +602,8 @@ mod tests {
     fn full() -> String {
         format!(
             r#"{{"names":[
-                {{"zone":"{ZONE}","fqdn":"alice.{ZONE}","features":["e2e","voice","nested","apps_edge","mail"],"turn":"turn.alice.{ZONE}"}},
-                {{"zone":"partner.example","fqdn":"alice.partner.example","features":[]}}
+                {{"zone":"{ZONE}","fqdn":"alice.{ZONE}","features":{{"e2e":true,"voice":true,"nested":true,"apps_edge":true,"mail":true}},"turn":"turn.alice.{ZONE}"}},
+                {{"zone":"partner.example","fqdn":"alice.partner.example","features":{{"e2e":false,"voice":false}}}}
               ],"primaryZone":"partner.example","namesVersion":7,"namesStatus":"ok"}}"#
         )
     }
@@ -641,7 +646,7 @@ mod tests {
                 NameEntry {
                     zone: ZONE.to_string(),
                     fqdn: format!("alice.{ZONE}"),
-                    features: ["e2e", "voice", "nested", "apps_edge", "mail"]
+                    features: ["apps_edge", "e2e", "mail", "nested", "voice"]
                         .map(String::from)
                         .to_vec(),
                     turn: Some(format!("turn.alice.{ZONE}")),
@@ -685,7 +690,15 @@ mod tests {
             r#"{"zone":"globex.example","fqdn":"bob.globex.example","turn":"turn.other.example"}"#
                 .to_string(),
             r#"{"zone":"globex.example","fqdn":"bob.globex.example","features":"e2e"}"#.to_string(),
-            r#"{"zone":"globex.example","fqdn":"bob.globex.example","features":["E2E"]}"#
+            // The old list form is not the wire any more.
+            r#"{"zone":"globex.example","fqdn":"bob.globex.example","features":["e2e"]}"#
+                .to_string(),
+            r#"{"zone":"globex.example","fqdn":"bob.globex.example","features":{"E2E":true}}"#
+                .to_string(),
+            // A value that is not true or false drops the entry.
+            r#"{"zone":"globex.example","fqdn":"bob.globex.example","features":{"e2e":1}}"#
+                .to_string(),
+            r#"{"zone":"globex.example","fqdn":"bob.globex.example","features":{"e2e":"true"}}"#
                 .to_string(),
             r#"{"fqdn":"bob.globex.example"}"#.to_string(),
             r#""bob.globex.example""#.to_string(),
@@ -863,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn the_same_version_is_a_no_op_and_an_older_one_is_ignored() {
+    fn the_same_version_is_a_no_op_and_any_other_one_replaces() {
         with_temp_home(|| {
             reset_for_test();
             let c = cfg("k2c_good");
@@ -875,9 +888,12 @@ mod tests {
                 &[entry(ZONE, &format!("carol.{ZONE}"))],
             )));
             assert_eq!(apply(&same_version_other_list, &c), ApplyOutcome::Unchanged);
-            assert_eq!(apply(&v(4), &c), ApplyOutcome::Older);
             assert_eq!(fqdns(), vec![format!("alice5.{ZONE}")]);
             assert_eq!(fs::read(store_path()).expect("store"), before);
+            // namesVersion is a hash: a lower value is just another list.
+            assert_eq!(apply(&v(4), &c), ApplyOutcome::Replaced);
+            assert_eq!(fqdns(), vec![format!("alice4.{ZONE}")]);
+            assert_eq!(version(), Some(4));
         });
     }
 
@@ -984,6 +1000,69 @@ mod tests {
             reset_for_test();
             sync(&c);
             assert_eq!(state(), None);
+        });
+    }
+
+    /// Features are an object of word to true or false: the true ones are
+    /// kept (sorted), false ones are not, unknown words are kept for later
+    /// steps, and the store writes the same object form back.
+    #[test]
+    fn features_are_an_object_of_true_or_false_and_the_store_keeps_that_form() {
+        with_temp_home(|| {
+            reset_for_test();
+            let body = r#"{"names":[{"zone":"globex.example","fqdn":"alice.globex.example","features":{"voice":true,"e2e":true,"mail":false,"later_word":true}}],"primaryZone":"globex.example","namesVersion":9007199254740991,"namesStatus":"ok"}"#;
+            let (n, dropped) = active(parse(&wire(body)));
+            assert!(dropped.is_empty(), "{dropped:?}");
+            assert_eq!(n.version, 9_007_199_254_740_991, "a 53-bit version");
+            assert_eq!(n.entries[0].features, vec!["e2e", "later_word", "voice"]);
+            let c = cfg("k2c_feat");
+            assert_eq!(apply(&parse(&wire(body)), &c), ApplyOutcome::Replaced);
+            let stored: Value = serde_json::from_str(&fs::read_to_string(store_path()).expect("store")).expect("json");
+            assert_eq!(
+                stored["names"][0]["features"],
+                serde_json::json!({"e2e": true, "later_word": true, "voice": true}),
+                "the store holds the wire's object form: {stored}"
+            );
+            reset_for_test();
+            sync(&c);
+            assert_eq!(current().expect("read back").entries[0].features, vec!["e2e", "later_word", "voice"]);
+            // No features key, or null: the entry is kept with none.
+            let none = r#"{"names":[{"zone":"globex.example","fqdn":"alice.globex.example"}],"primaryZone":"globex.example","namesVersion":1,"namesStatus":"ok"}"#;
+            assert!(active(parse(&wire(none))).0.entries[0].features.is_empty());
+            reset_for_test();
+        });
+    }
+
+    /// A store written by the pre-fix code (features as a list) is set aside
+    /// once, never retried in a loop: it is ignored with one log line, the
+    /// box holds nothing until the relay list answers, and that answer
+    /// replaces it (whatever its version) and is written in today's form.
+    #[test]
+    fn a_store_in_the_old_list_form_is_set_aside_once_and_replaced() {
+        with_temp_home(|| {
+            reset_for_test();
+            let c = cfg("k2c_old");
+            let owner = super::super::unpair::token_fingerprint("k2c_old");
+            let old = format!(
+                r#"{{"v":1,"owner":"{owner}","names":[{{"zone":"globex.example","fqdn":"alice.globex.example","features":["e2e"]}}],"primaryZone":"globex.example","namesVersion":5,"namesStatus":"ok"}}"#
+            );
+            fs::create_dir_all(store_path().parent().expect("dir")).expect("mkdir");
+            fs::write(store_path(), &old).expect("write the old store");
+            sync(&c);
+            assert_eq!(state(), None, "an old-form store is not used");
+            assert_eq!(version(), None, "so no X-K2-Names-Version goes out: the answer is a full list");
+            sync(&c);
+            assert_eq!(state(), None, "read once per token, not again");
+            // The same version as the old file still replaces it: nothing is held.
+            let body = r#"{"names":[{"zone":"globex.example","fqdn":"alice.globex.example","features":{"e2e":true}}],"primaryZone":"globex.example","namesVersion":5,"namesStatus":"ok"}"#;
+            assert_eq!(apply(&parse(&wire(body)), &c), ApplyOutcome::Replaced);
+            let raw = fs::read_to_string(store_path()).expect("store");
+            assert!(raw.contains(r#""features": {"#) && !raw.contains(r#""features": ["#), "rewritten in today's form: {raw}");
+            reset_for_test();
+            sync(&c);
+            assert_eq!(version(), Some(5), "today's form reads back");
+            assert_eq!(current().expect("held").entries[0].features, vec!["e2e"]);
+            reset_for_test();
         });
     }
 }

@@ -2565,7 +2565,7 @@ mod tests {
 
     // ── multi-zone A1: this box's names ride along ──
 
-    const NAMES_V7: &str = r#""names":[{"zone":"globex.example","fqdn":"alice.globex.example","features":["e2e"]}],"primaryZone":"globex.example","namesVersion":7,"namesStatus":"ok""#;
+    const NAMES_V7: &str = r#""names":[{"zone":"globex.example","fqdn":"alice.globex.example","features":{"e2e":true}}],"primaryZone":"globex.example","namesVersion":7,"namesStatus":"ok""#;
 
     fn good_with(names: &str) -> String {
         GOOD.replacen(r#"{"v":1,"#, &format!(r#"{{"v":1,{names},"#), 1)

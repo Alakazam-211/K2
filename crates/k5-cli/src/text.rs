@@ -707,9 +707,18 @@ mod tests {
             std::fs::read_to_string(text_dir(which).join(format!("{key}.txt"))).unwrap()
         };
         let slotted = source("study", "send-feedback");
-        assert!(slotted.contains(brand_text::COMPANY_SLOT), "study send-feedback");
-        assert!(slotted.contains(brand_text::LOGIN_SLOT), "study send-feedback");
-        assert!(source("help", "setup").contains(brand_text::COMPANY_SLOT), "help setup");
+        assert!(
+            slotted.contains(brand_text::COMPANY_SLOT),
+            "study send-feedback"
+        );
+        assert!(
+            slotted.contains(brand_text::LOGIN_SLOT),
+            "study send-feedback"
+        );
+        assert!(
+            source("help", "setup").contains(brand_text::COMPANY_SLOT),
+            "help setup"
+        );
 
         let feedback = study("send-feedback").expect("cli/text/study/send-feedback.txt");
         let setup = page("setup").expect("help setup prints cli/text/help/setup.txt");
@@ -723,9 +732,15 @@ mod tests {
             ("--schema", schema, &json_company, Some(&json_login)),
         ];
         for (what, text, company, login) in pages {
-            assert!(text.contains(company.as_str()), "{what} does not name {company}");
+            assert!(
+                text.contains(company.as_str()),
+                "{what} does not name {company}"
+            );
             if let Some(login) = login {
-                assert!(text.contains(login.as_str()), "{what} does not name {login}");
+                assert!(
+                    text.contains(login.as_str()),
+                    "{what} does not name {login}"
+                );
             }
             if COMPANY_NAME != our_company {
                 assert!(!text.contains(&our_company), "{what} names {our_company}");

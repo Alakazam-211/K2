@@ -6,7 +6,7 @@
 # out:confirm                    36 entries    56 forms
 # out:file                       99 entries   175 forms
 # out:many-requests              50 entries    79 forms
-# out:no-request                123 entries   188 forms
+# out:no-request                124 entries   190 forms
 # out:open-tool                 101 entries   157 forms
 # out:poll                        7 entries    12 forms
 # out:python-client             144 entries   282 forms
@@ -683,6 +683,7 @@ wiki status	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
 wiki index	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
 wiki note	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
 wiki seed	1	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
+wiki location	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
 wiki serve	1	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
 wiki chat	1	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-
 wiki publish	2	cli/src/wiki.sh:cmd_help_wiki:~	none	none	out:no-request	-

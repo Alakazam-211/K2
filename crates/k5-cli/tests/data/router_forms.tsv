@@ -2190,6 +2190,7 @@ wiki status	-	-	cli/src/wiki.sh:cmd_wiki	wiki status	y	parsed
 wiki index	-	-	cli/src/wiki.sh:cmd_wiki	wiki index	y	parsed
 wiki note	-	-	cli/src/wiki.sh:cmd_wiki	wiki note	y	parsed
 wiki seed	-	-	cli/src/wiki.sh:cmd_wiki	wiki seed	-	parsed
+wiki location	-	-	cli/src/wiki.sh:cmd_wiki	wiki location	y	parsed
 wiki serve	-	-	cli/src/wiki.sh:cmd_wiki	wiki serve	-	parsed
 wiki serve on	-	-	cli/src/wiki.sh:cmd_wiki_serve	-	-	parsed
 wiki serve off	-	wiki serve on	cli/src/wiki.sh:cmd_wiki_serve	-	-	parsed

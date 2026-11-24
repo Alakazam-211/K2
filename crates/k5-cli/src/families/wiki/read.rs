@@ -473,6 +473,30 @@ fn note_lines(d: &Value, o: &mut String) -> Result<(), Raise> {
     }
 }
 
+/// `location`'s reader (text): the daemon's `lines` on stdout, its `doctor`
+/// lines on stderr after `doctor: `. A string prints as itself, anything
+/// else as `json.dumps` writes it.
+pub fn location(raw: &[u8]) -> Shown {
+    let d = match head(raw) {
+        Ok(d) => d,
+        Err(shown) => return shown,
+    };
+    let Value::Object(pairs) = &d else {
+        return Shown::err("Error: unexpected answer from daemon\n", Exit::Error);
+    };
+    let as_line = |v: &Value| match v {
+        Value::Str(_) => py::str_of(v),
+        other => dumps(other, false),
+    };
+    let list = |key: &str| match get(pairs, key) {
+        Some(Value::Array(items)) => items.iter().map(as_line).collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let stdout: String = list("lines").into_iter().map(|l| format!("{l}\n")).collect();
+    let stderr: String = list("doctor").into_iter().map(|l| format!("doctor: {l}\n")).collect();
+    Shown { stdout, stderr, exit: Exit::Ok }
+}
+
 /// `seed`'s reader.
 pub fn seed(raw: &[u8]) -> Shown {
     let d = match head(raw) {

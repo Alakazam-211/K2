@@ -1,6 +1,6 @@
     {
       "name": "wiki",
-      "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
+      "usage": "k2 wiki <status|index|note|seed|location|serve|chat|publish|unpublish> ...",
       "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain. Hosting is being rebuilt on the K2 runtime; public chat is unavailable.",
       "args": [],
       "flags": [
@@ -37,6 +37,16 @@
       "description": "Create seed Home.md + _Index.md under .k2/wiki/ when missing.",
       "args": [{"name": "project", "required": false}],
       "flags": []
+    },
+    {
+      "name": "wiki location",
+      "usage": "k2 wiki location [--approve] [--json] [project]",
+      "description": "Whether .k2/wiki is a link to a folder elsewhere and whether the owner approved that location; API keys and templates add notes to a linked wiki only at an approved location. --approve (the owner, outside an agent's session) approves the link's current target. Doctor lines on stderr list linked wikis not approved yet.",
+      "args": [{"name": "project", "required": false}],
+      "flags": [
+        {"name": "--approve", "arg": null, "description": "Approve the link's current target (owner only; exit 3 in an agent's session)."},
+        {"name": "--json", "arg": null, "description": "The daemon's answer: linked, target, approved, status, lines, doctor."}
+      ]
     },
     {
       "name": "wiki serve",

@@ -180,6 +180,27 @@ export async function setWikiPublicChat(
   })
 }
 
+/** `GET /cli/wiki/location`: is the wiki a link, and is its target the
+ *  location the owner approved for API-key and template writes. */
+export type WikiLocation = {
+  workspace: string
+  linked: boolean
+  target: string | null
+  approved: { target: string; approvedAt: string } | null
+  status: 'not_linked' | 'approved' | 'not_approved' | 'changed' | 'missing_target'
+  lines: string[]
+  doctor: string[]
+}
+
+export async function fetchWikiLocation(project: string): Promise<WikiLocation> {
+  return daemonCliGet<WikiLocation>(primaryScope(), 'wiki/location', { project })
+}
+
+/** The owner approves the link's current target (the daemon refuses anyone else). */
+export async function approveWikiLocation(project: string): Promise<WikiLocation> {
+  return daemonCliPost<WikiLocation>(primaryScope(), 'wiki/location/approve', { project })
+}
+
 export async function fetchWikiServeStatus(project: string): Promise<WikiServeStatus> {
   return daemonCliGet<WikiServeStatus>(primaryScope(), 'wiki/serve/status', { project })
 }

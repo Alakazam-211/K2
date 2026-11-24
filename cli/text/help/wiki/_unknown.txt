@@ -7,6 +7,7 @@ USAGE
   k2 wiki index [--json] [project]
   k2 wiki note <id> [--json] [project]
   k2 wiki seed [project]
+  k2 wiki location [--approve] [--json] [project]
   k2 wiki serve on|off [--port N] [project]
   k2 wiki chat off [project]
   k2 wiki publish [--label LABEL] [project]
@@ -17,6 +18,7 @@ COMMANDS
   index      Graph index (nodes + links)
   note       One note body by id (e.g. Home.md)
   seed       Create Home.md + _Index.md if missing
+  location   Is the wiki a link to a folder elsewhere; --approve it for API keys and templates (owner)
   serve      Start/stop read-only localhost site (127.0.0.1 only)
   chat       Public chat is unavailable (coming back with the K2 runtime); `on` exits 3
   publish    Serve on + nest a subdomain (or print create instructions)

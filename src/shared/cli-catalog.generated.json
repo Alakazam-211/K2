@@ -3335,7 +3335,7 @@
    },
    {
     "name": "wiki",
-    "usage": "k2 wiki <status|index|note|seed|serve|chat|publish|unpublish> ...",
+    "usage": "k2 wiki <status|index|note|seed|location|serve|chat|publish|unpublish> ...",
     "description": "Per-workspace knowledge base (brain map) under .k2/wiki/: index graph, read notes, seed Home/_Index, localhost serve, publish via nested subdomain. Hosting is being rebuilt on the K2 runtime; public chat is unavailable."
    },
    {
@@ -3357,6 +3357,11 @@
     "name": "wiki seed",
     "usage": "k2 wiki seed [project]",
     "description": "Create seed Home.md + _Index.md under .k2/wiki/ when missing."
+   },
+   {
+    "name": "wiki location",
+    "usage": "k2 wiki location [--approve] [--json] [project]",
+    "description": "Whether .k2/wiki is a link to a folder elsewhere and whether the owner approved that location; API keys and templates add notes to a linked wiki only at an approved location. --approve (the owner, outside an agent's session) approves the link's current target. Doctor lines on stderr list linked wikis not approved yet."
    },
    {
     "name": "wiki serve",

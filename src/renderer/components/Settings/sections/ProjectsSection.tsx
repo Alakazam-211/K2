@@ -55,6 +55,7 @@ import { SaveTemplateRow } from '@/components/AgentTemplates/SaveTemplateSheet'
 import { useRemoveWorkspaceDialogStore } from '@/stores/remove-workspace-dialog'
 import { HeartbeatsPanel, HistoryPanel, WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
 import { ContextStackEditor, type ContextEditTarget } from './ContextStackEditor'
+import { WikiLocationPanel } from './WikiLocationPanel'
 import { RoleSkillEditor } from './RoleSkillEditor'
 import { CanonicalAgentModal } from './CanonicalAgentModal'
 import { type HarnessProbe } from './canonicalState'
@@ -120,6 +121,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeats', description: 'When this agent wakes up on its own, and what it did', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Agent personas and wake-up notes for this workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
   { id: 'projects.worktrees', section: 'projects', label: 'Worktrees', description: 'The git worktrees this workspace has open, and ones on disk you can reopen', keywords: ['worktree', 'git', 'branch'] },
+  { id: 'projects.wiki-location', section: 'projects', label: 'Wiki location', description: 'Approve a wiki that is a link to a folder elsewhere, so API keys and templates can add notes to it', keywords: ['wiki', 'obsidian', 'vault', 'link', 'symlink', 'approve', 'location'] },
   { id: 'projects.relations', section: 'projects', label: 'Connections', description: 'The workspaces and servers this agent can reach', keywords: ['relations', 'connected', 'connections', 'cross-workspace', 'links', 'federation'] },
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Chat migrations', description: `Bring Cursor chats into ${PRODUCT_NAME}`, keywords: ['cursor', 'migrate', 'session', 'import'] },
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'The model new chats in this workspace start with', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
@@ -1949,6 +1951,8 @@ function ProjectDetail({
                   )}
                 </SettingsGroup>
                 <WorktreeFoldersOnDisk project={project} fetchProjects={fetchProjects} />
+
+                <WikiLocationPanel projectPath={project.path} />
 
                 <div data-settings-id="projects.cursor-migrate">
                   <SettingsGroup title="Chat migrations" card>

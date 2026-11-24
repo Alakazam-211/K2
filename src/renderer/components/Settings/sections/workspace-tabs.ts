@@ -92,6 +92,7 @@ const OTHER_TABS: Record<string, WorkspaceSettingsTab> = {
   'projects.heartbeat': 'schedule',
   'projects.worktrees': 'advanced',
   'projects.cursor-migrate': 'advanced',
+  'projects.wiki-location': 'advanced',
   'projects.host-session-cell-cap': 'advanced',
 }
 

@@ -92,6 +92,9 @@ pub const NOTE: &str = "/cli/wiki/note";
 pub const SEED: &str = "/cli/wiki/seed";
 pub const SERVE: &str = "/cli/wiki/serve";
 pub const CHAT: &str = "/cli/wiki/chat";
+/// `wiki location`'s routes: the state, and the owner's approval.
+pub const LOCATION: &str = "/cli/wiki/location";
+pub const LOCATION_APPROVE: &str = "/cli/wiki/location/approve";
 pub const RESOLVE: &str = "/cli/workspace/resolve";
 /// `_subdomain_attrib_post claim`'s route (the ownership check and the
 /// attribution stamp).
@@ -123,6 +126,8 @@ pub enum Verb {
     Index,
     Note(String),
     Seed,
+    /// `wiki location`; `true`: `--approve`.
+    Location(bool),
     Serve(bool),
     ChatOff,
     Unpublish,
@@ -274,6 +279,66 @@ fn note_words(words: &[&str]) -> Form {
     Form::Ask(Verb::Note(id), o)
 }
 
+/// `cmd_wiki_location`'s own loop.
+fn location_words(words: &[&str]) -> Form {
+    let mut o = Opts::default();
+    let mut approve = false;
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        match w {
+            "--json" => o.json = true,
+            "--approve" => approve = true,
+            "--workspace" | "--project" => {
+                let v = words.get(i + 1).copied().unwrap_or("");
+                if v.is_empty() {
+                    return usage(o.json, format!("{w} requires a value"));
+                }
+                o.workspace = v.into();
+                i += 2;
+                continue;
+            }
+            _ => {
+                if let Some(v) = w
+                    .strip_prefix("--workspace=")
+                    .or_else(|| w.strip_prefix("--project="))
+                {
+                    o.workspace = v.into();
+                } else if w.starts_with('-') {
+                    return usage(
+                        o.json,
+                        format!(
+                            "unknown flag '{w}' \u{2014} usage: {} wiki location [--approve] [--json] [project]",
+                            cli_name!()
+                        ),
+                    );
+                } else if o.workspace.is_empty() {
+                    o.workspace = w.into();
+                } else {
+                    return usage(o.json, format!("unexpected argument '{w}'"));
+                }
+            }
+        }
+        i += 1;
+    }
+    Form::Ask(Verb::Location(approve), o)
+}
+
+/// `cmd_wiki_location`'s guard: `--approve` in a session (a passport) or
+/// with any `HOOK_TOKEN` is refused before anything is sent.
+fn approve_guard(settings: &Settings, json: bool) -> Option<Exit> {
+    let hook = k2_client::env_names::first_nonempty_os(k2_client::env_names::HOOK_TOKEN).is_some();
+    if !hook && !super::compute::writes::in_session(&settings.auth) {
+        return None;
+    }
+    wiki_err(
+        json,
+        "owner_only",
+        "the owner approves a wiki location from their own terminal or in Settings, not from an agent's session",
+    );
+    Some(Exit::Refused)
+}
+
 /// The command line's form (the words after `wiki`; no `-h` or `--help`
 /// before a bare `--`, the front's).
 pub fn parse(words: &[&str]) -> Form {
@@ -288,6 +353,7 @@ pub fn parse(words: &[&str]) -> Form {
         "index" => ask(Verb::Index, rest),
         "note" => note_words(rest),
         "seed" => ask(Verb::Seed, rest),
+        "location" => location_words(rest),
         "publish" => ask(Verb::Publish, rest),
         "unpublish" => ask(Verb::Unpublish, rest),
         "serve" => {
@@ -489,6 +555,11 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings, connect: Conn
         }
         Form::Ask(verb, o) => (verb, o),
     };
+    if verb == Verb::Location(true) {
+        if let Some(exit) = approve_guard(&settings, o.json) {
+            return exit;
+        }
+    }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let client = match settings.client(passport::current(args).would_refuse()) {
         Ok(c) => c,
@@ -626,6 +697,18 @@ impl Run {
                 }
             }
             Verb::Seed => read::seed(&self.post(SEED, &[])?).print(),
+            Verb::Location(approve) => {
+                let raw = if *approve {
+                    self.post(LOCATION_APPROVE, &[])?
+                } else {
+                    self.get(LOCATION, &[], false)?
+                };
+                if o.json {
+                    read::as_json(&raw).print()
+                } else {
+                    read::location(&raw).print()
+                }
+            }
             Verb::Serve(on) => {
                 let enabled = format!("enabled={on}");
                 let port = format!("port={}", quote(&o.port));

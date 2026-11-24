@@ -16,6 +16,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Agents
 - Cloning refuses archive entries that would land outside the new workspace.
 
+### Wiki
+- If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
+
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

@@ -136,6 +136,7 @@ cmd_wiki() {
         index)      cmd_wiki_index "$@" ;;
         note)       cmd_wiki_note "$@" ;;
         seed)       cmd_wiki_seed "$@" ;;
+        location)   cmd_wiki_location "$@" ;;
         serve)      cmd_wiki_serve "$@" ;;
         chat)       cmd_wiki_chat "$@" ;;
         publish)    cmd_wiki_publish "$@" ;;
@@ -425,6 +426,86 @@ else:
 wiki = d.get("wikiRel") or d.get("path") or ".k2/wiki"
 print("  Vault: %s" % wiki)
 print("  View:  k2 wiki index   or open View Wiki in the app")
+'
+}
+
+# k2 wiki location [--approve] [--json] [project]: is the workspace's wiki a
+# link to a folder elsewhere, and has the owner approved that location for
+# API-key and template writes. --approve records the link's current target
+# (the owner, from their own terminal: refused in a session, and the daemon
+# takes only the owner token or an Owner login). The daemon's doctor lines
+# (linked wikis not approved yet) go to stderr.
+cmd_wiki_location() {
+    local as_json=false approve=0 project_sel=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --approve) approve=1; shift ;;
+            --workspace|--project)
+                project_sel="${2:-}"; [ -z "$project_sel" ] && { _wiki_err "usage" "$1 requires a value"; exit 2; }
+                shift 2 ;;
+            --workspace=*|--project=*) project_sel="${1#*=}"; shift ;;
+            --help|-h) cmd_help_wiki; exit 0 ;;
+            -*)
+                _wiki_err "usage" "unknown flag '$1' — usage: k2 wiki location [--approve] [--json] [project]"
+                exit 2 ;;
+            *)
+                if [ -z "$project_sel" ]; then project_sel="$1"
+                else
+                    _wiki_err "usage" "unexpected argument '$1'"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ "$approve" = 1 ] && { _compute_in_session || _envn_any HOOK_TOKEN; }; then
+        _wiki_err "owner_only" "the owner approves a wiki location from their own terminal or in Settings, not from an agent's session"
+        exit 3
+    fi
+    _wiki_apply_project "$project_sel"
+
+    local raw
+    if [ "$approve" = 1 ]; then
+        raw=$(cli_post_form "/cli/wiki/location/approve")
+    else
+        raw=$(cli_request "/cli/wiki/location")
+    fi
+    if [ "$as_json" = "true" ]; then
+        printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print(json.dumps({"error":{"code":"no_response","hint":"no response from daemon"}}), file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception:
+    print(json.dumps({"error":{"code":"bad_json","hint":raw[:200]}}), file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print(json.dumps({"error": err if isinstance(err, dict) else {"code":"daemon","hint":str(err)}})); sys.exit(1)
+print(json.dumps(d, separators=(",", ":")))
+'
+        return 0
+    fi
+    printf '%s' "$raw" | python3 -c '
+import json,sys
+raw=sys.stdin.read()
+if not raw.strip():
+    print("Error: no response from daemon", file=sys.stderr); sys.exit(1)
+try: d=json.loads(raw)
+except Exception as e:
+    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
+if isinstance(d, dict) and d.get("error") is not None:
+    err=d["error"]
+    print("Error: %s" % (err if not isinstance(err, dict) else (err.get("hint") or err.get("message") or err)), file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    print("Error: unexpected answer from daemon", file=sys.stderr); sys.exit(1)
+lines = d.get("lines")
+for line in (lines if isinstance(lines, list) else []):
+    print(line if isinstance(line, str) else json.dumps(line))
+doctor = d.get("doctor")
+for line in (doctor if isinstance(doctor, list) else []):
+    sys.stderr.write("doctor: %s\n" % (line if isinstance(line, str) else json.dumps(line)))
 '
 }
 

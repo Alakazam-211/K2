@@ -619,3 +619,35 @@ fn publish_reads_the_tunnel_token() {
     assert!(super::publish::tunnel_token(&f).is_none());
     std::fs::remove_dir_all(&d).unwrap();
 }
+
+/// `wiki location`: its words, and the shell's two Python readers.
+#[test]
+fn location_forms_and_reader() {
+    let ask = |words: &[&str]| parse(words);
+    let o = |ws: &str, json: bool| Opts { json, workspace: ws.into(), ..Opts::default() };
+    assert_eq!(ask(&["location"]), Form::Ask(Verb::Location(false), o("", false)));
+    assert_eq!(ask(&["location", "--approve", "--json", "ws"]), Form::Ask(Verb::Location(true), o("ws", true)));
+    assert_eq!(ask(&["location", "--project=p", "--approve"]), Form::Ask(Verb::Location(true), o("p", false)));
+    assert!(matches!(ask(&["location", "a", "b"]), Form::Usage { .. }));
+    assert!(matches!(ask(&["location", "--nope"]), Form::Usage { .. }));
+    assert!(matches!(ask(&["location", "--workspace"]), Form::Usage { .. }));
+
+    // The shell's readers: the JSON one is note --json's, the text one
+    // prints `lines` and `doctor`.
+    let blocks = python("cmd_wiki_location");
+    assert_eq!(blocks.len(), 2, "a JSON reader and a text reader");
+    assert_eq!(blocks[0], python("cmd_wiki_note")[0], "location --json reads as note --json");
+    assert!(blocks[1].iter().any(|l| l.trim() == r#"sys.stderr.write("doctor: %s\n" % (line if isinstance(line, str) else json.dumps(line)))"#));
+
+    let shown = location(br#"{"ok":true,"lines":["one",2],"doctor":["d1",{"a":1}]}"#);
+    assert_eq!((shown.stdout.as_str(), shown.stderr.as_str()), ("one\n2\n", "doctor: d1\ndoctor: {\"a\": 1}\n"));
+    assert_eq!(shown.exit, Exit::Ok);
+    let err = location(b"[1]");
+    assert_eq!((err.stderr.as_str(), err.exit), ("Error: unexpected answer from daemon\n", Exit::Error));
+    let err = location(br#"{"error":"nope"}"#);
+    assert_eq!((err.stderr.as_str(), err.exit), ("Error: nope\n", Exit::Error));
+    let err = location(b"  ");
+    assert_eq!((err.stderr.as_str(), err.exit), ("Error: no response from daemon\n", Exit::Error));
+    let none = location(br#"{"lines":"x"}"#);
+    assert_eq!((none.stdout.as_str(), none.stderr.as_str(), none.exit), ("", "", Exit::Ok));
+}

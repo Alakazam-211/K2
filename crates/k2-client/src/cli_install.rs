@@ -306,7 +306,11 @@ pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
 /// (K2's ruling: a partner build's notes don't say k5).
 pub fn check_binary_in(no_bash: bool, path: &Path, want: Option<&str>) -> Result<(), String> {
     // What `want` is the version of, and the program, in the words below.
-    let of = if no_bash { "this release" } else { "the script" };
+    let of = if no_bash {
+        "this release"
+    } else {
+        "the script"
+    };
     let program = if no_bash {
         format!("{CLI_NAME}'s binary")
     } else {
@@ -325,7 +329,10 @@ pub fn check_binary_in(no_bash: bool, path: &Path, want: Option<&str>) -> Result
             return Err(if no_bash {
                 format!("{program} is missing ({})", path.display())
             } else {
-                format!("this release has no k5 program ({} is missing)", path.display())
+                format!(
+                    "this release has no k5 program ({} is missing)",
+                    path.display()
+                )
             })
         }
         Err(e) => return Err(format!("{PRODUCT_NAME} can't read {}: {e}", path.display())),
@@ -343,7 +350,10 @@ pub fn check_binary_in(no_bash: bool, path: &Path, want: Option<&str>) -> Result
     }
     match found.first() {
         Some(v) => Err(format!("{program} is version {v}, {of} {want}")),
-        None if no_bash => Err(format!("{} carries no {CLI_NAME} version mark", path.display())),
+        None if no_bash => Err(format!(
+            "{} carries no {CLI_NAME} version mark",
+            path.display()
+        )),
         None => Err(format!("{} carries no k5 version mark", path.display())),
     }
 }
@@ -1679,7 +1689,8 @@ mod tests {
             let rest = text.replace(CLI_NAME, "");
             rest.contains("k5") || rest.contains("K5")
         };
-        let dir = std::env::temp_dir().join(format!("k2-check-binary-notes-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("k2-check-binary-notes-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         let missing = dir.join("k5-cli");
@@ -1687,15 +1698,25 @@ mod tests {
         fs::write(&unmarked, b"\x7fELF no mark here").expect("write");
         let other = dir.join("other");
         fs::write(&other, b"..K5_CLI_VERSION=0.0.9\0..").expect("write");
-        let cases = [(&missing, "missing"), (&unmarked, "no mark"), (&other, "another version")];
+        let cases = [
+            (&missing, "missing"),
+            (&unmarked, "no mark"),
+            (&other, "another version"),
+        ];
         for (path, what) in cases {
             let note = check_binary_in(true, path, Some("1.2.3")).expect_err(what);
             let shown = note.replace(&path.display().to_string(), "");
-            assert!(note.contains(CLI_NAME) && !says_k5(&shown), "{what}: {note}");
+            assert!(
+                note.contains(CLI_NAME) && !says_k5(&shown),
+                "{what}: {note}"
+            );
         }
         assert_eq!(
             check_binary_in(false, &missing, Some("1.2.3")).expect_err("missing"),
-            format!("this release has no k5 program ({} is missing)", missing.display())
+            format!(
+                "this release has no k5 program ({} is missing)",
+                missing.display()
+            )
         );
         assert_eq!(
             check_binary_in(false, &other, Some("1.2.3")).expect_err("another version"),

@@ -22,8 +22,10 @@
 # plain-http K2_HOST they still prompt, the value reaches the vault socket
 # and the daemon stub gets nothing at all.
 #
-# stdin is a pty (so the CLI asks a person) with the typed line already
-# waiting in it, echo off; stdout and stderr are files. After the run the
+# stdin is a pty (so the CLI asks a person), echo off; stdout and stderr
+# are files. For a row that must be refused the typed line is already
+# waiting in it; for a row that reads, it is typed when the prompt shows
+# (a hidden prompt drops what was typed before it). After the run the
 # driver reads what is left in the pty: the whole typed line means the
 # CLI read nothing.
 #
@@ -266,6 +268,14 @@ WANT="$(want_line "http://x.localhost:$DPORT")"
 
 # run [ENV=V…] -- ARGS…: the CLI with the pty as stdin and $W/typed
 # waiting in it. Sets RC, OUT, ERR, UNREAD (what it left unread).
+# at_prompt TEXT…: STEPS that type the secret line at each TEXT as it
+# shows. A row where the CLI reads types at the prompt, as a person does:
+# a hidden prompt drops what was typed before it shows (as getpass does).
+# A row that must be refused keeps the line typed ahead, so "nothing was
+# read" means the CLI never got as far as the prompt.
+at_prompt() {
+    "$PY" -c 'import json, sys; print(json.dumps([[t, sys.argv[1] + "\n"] for t in sys.argv[2:]]))' "$SECRET" "$@"
+}
 TYPED_LINES=1
 STEPS=-
 run() {
@@ -394,35 +404,35 @@ exempt() {
 
 echo "== exempt: the vault plan confirm (job.sh; vault rollback of a secret a root unit loads) =="
 scn '{"placements": [{"target": "systemd_cred", "version": 1}], "methods": ["vault-password"]}'
-run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
+STEPS="$(at_prompt 'Vault password: ')"; run "${PLAIN[@]}" -- vault rollback API_KEY --to 1; STEPS=-
 exempt "plan confirm, vault password, remote plain http" 'Vault password: ' /cli/vault/confirm/finish
 scn '{"placements": [{"target": "systemd_cred", "version": 1}], "methods": ["connect-password"]}'
-run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
+STEPS="$(at_prompt 'Your K2 Connect password: ')"; run "${PLAIN[@]}" -- vault rollback API_KEY --to 1; STEPS=-
 exempt "plan confirm, Connect password, remote plain http" 'Your K2 Connect password: ' /cli/vault/confirm/finish
 
 echo "== exempt: the vault confirm (vault.sh; vault rollback) =="
 scn '{"placements": [], "methods": ["vault-password"]}'
-run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
+STEPS="$(at_prompt 'Vault password: ')"; run "${PLAIN[@]}" -- vault rollback API_KEY --to 1; STEPS=-
 exempt "confirm, vault password, remote plain http" 'Vault password: ' /cli/vault/confirm/finish
 scn '{"placements": [], "methods": ["owner-login-password"], "login": "admin"}'
-run "${PLAIN[@]}" -- vault rollback API_KEY --to 1
+STEPS="$(at_prompt 'Sign-in password for owner login admin: ')"; run "${PLAIN[@]}" -- vault rollback API_KEY --to 1; STEPS=-
 exempt "confirm, owner login password, remote plain http" 'Sign-in password for owner login admin: ' /cli/vault/confirm/finish
 
 echo "== exempt: a value for vault send --stdin (vault.sh) =="
 scn '{}'
-run "${PLAIN[@]}" -- vault send API_KEY --to agent-a --stdin
+STEPS="$(at_prompt 'Value (not shown): ')"; run "${PLAIN[@]}" -- vault send API_KEY --to agent-a --stdin; STEPS=-
 exempt "vault send --stdin value, remote plain http" 'Value (not shown): ' /cli/vault/send
 
 echo "== exempt: a new vault password (migrate.sh; vault confirm-password set) =="
 scn '{"methods": ["terminal"]}'
 TYPED_LINES=2
-run "${PLAIN[@]}" -- vault confirm-password set
+STEPS="$(at_prompt 'New vault password' 'Again: ')"; run "${PLAIN[@]}" -- vault confirm-password set; STEPS=-
 exempt "new vault password, remote plain http" 'New vault password' /cli/vault/confirm-password/set
 TYPED_LINES=1
 
 echo "== exempt: recovery words (migrate.sh; vault restore) =="
 scn '{}'
-run "${PLAIN[@]}" -- vault restore --from "$W/backup"
+STEPS="$(at_prompt 'Recovery words')"; run "${PLAIN[@]}" -- vault restore --from "$W/backup"; STEPS=-
 exempt "recovery words, remote plain http" 'Recovery words' /cli/vault/restore
 
 echo "== migrate.sh: a secret value for the daemon (vault set, vault rotate) =="
@@ -431,11 +441,11 @@ run "${PLAIN[@]}" -- vault set API_KEY
 refused "vault set value" 2 "$P" ""
 STEPS=pipe; run "${PLAIN[@]}" -- vault set API_KEY; STEPS=-
 refused "vault set value, piped" 2 "$P" ""
-run -- vault set API_KEY
+STEPS="$(at_prompt "$P")"; run -- vault set API_KEY; STEPS=-
 prompted "vault set value, loopback" "$P" "daemon /cli/vault/set"
 STEPS=pipe; run -- vault set API_KEY; STEPS=-
 piped "vault set value, piped, loopback" "daemon /cli/vault/set"
-run "${HTTPS[@]}" -- vault set API_KEY
+STEPS="$(at_prompt "$P")"; run "${HTTPS[@]}" -- vault set API_KEY; STEPS=-
 prompted "vault set value, https" "$P"
 # K2_PLAIN_HTTP_OK=1 and a tailnet host don't lift it.
 run "${PLAIN[@]}" K2_PLAIN_HTTP_OK=1 -- vault set API_KEY
@@ -459,9 +469,9 @@ STEPS=pipe; run "${PLAIN[@]}" -- "${RELAY[@]}"; STEPS=-
 refused "relay password, piped" 2 "$P" ""
 STEPS=pipe; run -- "${RELAY[@]}"; STEPS=-
 piped "relay password, piped, loopback" "daemon /cli/notifications/email/relay/add"
-run -- "${RELAY[@]}"
+STEPS="$(at_prompt "$P")"; run -- "${RELAY[@]}"; STEPS=-
 prompted "relay password, loopback" "$P" "daemon /cli/notifications/email/relay/add"
-run "${HTTPS[@]}" -- "${RELAY[@]}"
+STEPS="$(at_prompt "$P")"; run "${HTTPS[@]}" -- "${RELAY[@]}"; STEPS=-
 prompted "relay password, https" "$P"
 
 echo "== connect.sh: a site PIN (publish visibility ... pin) =="
@@ -475,7 +485,7 @@ refused "site PIN, piped" 2 "$P" "daemon POST /cli/publish/visibility"
 STEPS=pipe; run -- publish visibility acme pin; STEPS=-
 piped "site PIN, piped, loopback" "daemon /cli/publish/visibility"
 TYPED_LINES=2
-run -- publish visibility acme pin
+STEPS="$(at_prompt "PIN for acme" 'The same PIN again: ')"; run -- publish visibility acme pin; STEPS=-
 prompted "site PIN, loopback" "$P" "daemon /cli/publish/visibility"
 TYPED_LINES=1
 
@@ -487,9 +497,9 @@ STEPS=pipe; run "${PLAIN[@]}" -- llm tokens add-key claude work; STEPS=-
 refused "llm API token, piped" 2 "$P" ""
 STEPS=pipe; run -- llm tokens add-key claude work; STEPS=-
 piped "llm API token, piped, loopback" "daemon /cli/llm/accounts/add-key"
-run -- llm tokens add-key claude work
+STEPS="$(at_prompt "$P")"; run -- llm tokens add-key claude work; STEPS=-
 prompted "llm API token, loopback" "$P" "daemon /cli/llm/accounts/add-key"
-run "${HTTPS[@]}" -- llm tokens add-key claude work
+STEPS="$(at_prompt "$P")"; run "${HTTPS[@]}" -- llm tokens add-key claude work; STEPS=-
 prompted "llm API token, https" "$P"
 
 echo "== users-phones.sh: a login password (users pair-phone) =="
@@ -500,7 +510,7 @@ STEPS=pipe; run "${PLAIN[@]}" -- users pair-phone; STEPS=-
 refused "login password, piped" 2 "$P" "daemon POST /cli/auth/device/pair-code"
 STEPS=pipe; run -- users pair-phone; STEPS=-
 piped "login password, piped, loopback" "daemon /cli/auth/device/pair-code"
-run -- users pair-phone
+STEPS="$(at_prompt "$P")"; run -- users pair-phone; STEPS=-
 prompted "login password, loopback" "$P" "daemon /cli/auth/device/pair-code"
 
 echo "== clone.sh: a login's password (users add, users set-password) =="
@@ -529,9 +539,9 @@ STEPS=pipe; run "${PLAIN[@]}" -- workspace api-key ws1 --key-stdin; STEPS=-
 refused "workspace API key, piped" 2 "$P" ""
 STEPS=pipe; run -- workspace api-key ws1 --key-stdin; STEPS=-
 piped "workspace API key, piped, loopback" "daemon /cli/workspace/api-key"
-run -- workspace api-key ws1 --key-stdin
+STEPS="$(at_prompt "$P")"; run -- workspace api-key ws1 --key-stdin; STEPS=-
 prompted "workspace API key, loopback" "$P" "daemon /cli/workspace/api-key"
-run "${HTTPS[@]}" -- workspace api-key ws1 --key-stdin
+STEPS="$(at_prompt "$P")"; run "${HTTPS[@]}" -- workspace api-key ws1 --key-stdin; STEPS=-
 prompted "workspace API key, https" "$P"
 P='Paste the LLM API key: '
 run "${PLAIN[@]}" -- api-key create --label mon --key-stdin
@@ -540,9 +550,9 @@ STEPS=pipe; run "${PLAIN[@]}" -- api-key create --label mon --key-stdin; STEPS=-
 refused "api-key LLM key, piped" 2 "$P" ""
 STEPS=pipe; run -- api-key create --label mon --key-stdin; STEPS=-
 piped "api-key LLM key, piped, loopback" "daemon /cli/api-keys/create"
-run -- api-key create --label mon --key-stdin
+STEPS="$(at_prompt "$P")"; run -- api-key create --label mon --key-stdin; STEPS=-
 prompted "api-key LLM key, loopback" "$P" "daemon /cli/api-keys/create"
-run "${HTTPS[@]}" -- api-key create --label mon --key-stdin
+STEPS="$(at_prompt "$P")"; run "${HTTPS[@]}" -- api-key create --label mon --key-stdin; STEPS=-
 prompted "api-key LLM key, https" "$P"
 
 echo

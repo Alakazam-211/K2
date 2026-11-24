@@ -32,15 +32,32 @@
 //! never touched. Each change is one rename over the old file or link, so
 //! the path never goes missing; `k2` changes before `k5`, so a stage stopped
 //! between them leaves both working, one on each.
+//!
+//! A build with no shell CLI (the brand's `cli.no_bash`, `cfg(k2_no_bash)`
+//! from build.rs) has no script compiled in ([`CLI_CONTENT`] is `None`).
+//! Its links are on by build: the k5 binary when it passes, else nothing
+//! ([`k2_client::cli_install::Choice::None`], one log line). It never writes
+//! or puts back a script.
 
 use std::path::{Path, PathBuf};
 use crate::brand::PRODUCT_NAME;
 
+use k2_client::cli_install::Choice;
+
 /// The CLI script, embedded verbatim from `cli/k2` at the repo root so
 /// the daemon binary is self-contained (same reasoning as the SQL
-/// migrations' and the k2-open shim's `include_str!`).
+/// migrations' and the k2-open shim's `include_str!`). `None` in a build
+/// with no shell CLI: a `cfg`, so the bytes never reach that binary.
 // The repo's script file, not the command's name: a brand build of the bash CLI is a later step (C7).
-pub const CLI_CONTENT: &str = include_str!("../../../cli/k2");
+#[cfg(not(k2_no_bash))]
+pub const CLI_CONTENT: Option<&str> = Some(include_str!("../../../cli/k2"));
+/// The CLI script: none in a build with no shell CLI.
+#[cfg(k2_no_bash)]
+pub const CLI_CONTENT: Option<&str> = None;
+
+/// True in a build with no shell CLI (the brand's `cli.no_bash`), the same
+/// as [`k2_client::brand::CLI_NO_BASH`].
+pub const NO_BASH: bool = cfg!(k2_no_bash);
 
 /// Current version marker inside `cli/k2` (bumped by `release.sh`).
 const VERSION_PREFIX: &str = "K2_CLI_VERSION=";
@@ -68,9 +85,20 @@ fn cli_version(content: &str) -> Option<String> {
     None
 }
 
-/// The embedded CLI's version (= the daemon's in a release build).
+/// The version the commands are at, which the k5 binary's mark must
+/// equal: the embedded CLI's (= the daemon's in a release build). In a
+/// build with no shell CLI, the daemon's own version (release.sh bumps it
+/// with the script's).
 pub fn embedded_version() -> Option<String> {
-    cli_version(CLI_CONTENT)
+    match CLI_CONTENT {
+        Some(cli) => cli_version(cli),
+        None => Some(env!("CARGO_PKG_VERSION").to_string()),
+    }
+}
+
+/// The embedded script, or why there is none to write.
+fn script() -> Result<&'static str, String> {
+    CLI_CONTENT.ok_or_else(|| "this build has no shell CLI to write".to_string())
 }
 
 /// The version of a file that IS the K2 CLI: a `#!/bin/bash` first line
@@ -105,13 +133,6 @@ pub enum StageAs<'a> {
     Binary(&'a Path),
 }
 
-impl<'a> StageAs<'a> {
-    /// From the links' [`k2_client::cli_install::Choice`].
-    pub fn of(choice: &'a k2_client::cli_install::Choice) -> Self {
-        choice.binary().map_or(StageAs::Script, StageAs::Binary)
-    }
-}
-
 /// True when `path` is a symlink to the k5 binary (by its name).
 fn is_binary_link(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
@@ -121,9 +142,10 @@ fn is_binary_link(path: &Path) -> bool {
 /// Put the script copy at `target` in one step (a temp file beside it,
 /// renamed over it), for a path that holds a link to the binary.
 fn swap_in_script(target: &Path) -> Result<(), String> {
+    let cli = script()?;
     let tmp = k2_client::cli_install::swap_temp_path(target);
     let _ = std::fs::remove_file(&tmp);
-    write_exec(&tmp, CLI_CONTENT)?;
+    write_exec(&tmp, cli)?;
     k2_client::cli_install::finish_swap(&tmp, target).map_err(|e| format!("replace {}: {e}", target.display()))
 }
 
@@ -149,7 +171,8 @@ fn swap_in_binary(_binary: &Path, target: &Path) -> Result<(), String> {
 /// already current), `Ok(None)` when deliberately skipped because the
 /// target is a SYMLINK (owned by the app / a dev) or a file that isn't
 /// the K2 CLI (another program named `k2`), and `Err` only on a real
-/// write/permission failure.
+/// write/permission failure (or, in a build with no shell CLI, every time
+/// it would write the script).
 pub fn stage_cli_at(target: &Path) -> Result<Option<PathBuf>, String> {
     stage_at(target, StageAs::Script, true)
 }
@@ -223,7 +246,8 @@ pub fn stage_at(target: &Path, as_: StageAs<'_>, create: bool) -> Result<Option<
         return Ok(Some(target.to_path_buf()));
     }
 
-    let embedded = cli_version(CLI_CONTENT);
+    let cli = script()?;
+    let embedded = cli_version(cli);
     debug_assert!(embedded.is_some(), "cli/k2 lost its K2_CLI_VERSION line");
 
     let current = on_disk.as_ref().and_then(|b| cli_version(&String::from_utf8_lossy(b)));
@@ -236,7 +260,7 @@ pub fn stage_at(target: &Path, as_: StageAs<'_>, create: bool) -> Result<Option<
             format!("create {} (for {}): {e}", parent.display(), target.display())
         })?;
     }
-    write_exec(target, CLI_CONTENT)?;
+    write_exec(target, cli)?;
     Ok(Some(target.to_path_buf()))
 }
 
@@ -324,23 +348,50 @@ pub fn stage_cli() -> Result<Option<PathBuf>, String> {
 /// [`stage_cli`] for what `choice` says the commands run, so a caller that
 /// also adds the PATH line ([`crate::cli_install::boot_path_for_staged_as`])
 /// judges it by the same choice.
-pub fn stage_cli_for(choice: &k2_client::cli_install::Choice) -> Result<Option<PathBuf>, String> {
+pub fn stage_cli_for(choice: &Choice) -> Result<Option<PathBuf>, String> {
     if !cfg!(target_os = "linux") {
         return Ok(None);
     }
     let fallback = std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(|h| crate::cli_install::user_bin_dir(Path::new(&h)).join(crate::cli_install::CLI_NAME));
-    stage_cli_with_fallback_as(Path::new(INSTALL_PATH), fallback.as_deref(), StageAs::of(choice))
+    stage_choice_with_fallback(Path::new(INSTALL_PATH), fallback.as_deref(), choice)
 }
 
-/// What this daemon's commands run, by the owner's switch: on Linux the
-/// k5 binary beside this daemon checked against the embedded script; on
-/// macOS the one beside the bundled script ([`k2_client::cli_install::choice_for_script`]);
-/// the script anywhere else, or for a build with no bundle.
-pub fn current_choice() -> k2_client::cli_install::Choice {
-    use k2_client::cli_install::{self as ci, Choice};
-    let on = ci::switch_on();
+/// [`stage_cli_with_fallback_as`] for what `choice` says. For
+/// [`Choice::None`] (a build with no shell CLI whose k5 binary is missing
+/// or fails) nothing is written, put back or removed: one log line, and
+/// `Ok(None)`.
+pub fn stage_choice_with_fallback(
+    primary: &Path,
+    fallback: Option<&Path>,
+    choice: &Choice,
+) -> Result<Option<PathBuf>, String> {
+    match choice {
+        Choice::Script { .. } => stage_cli_with_fallback_as(primary, fallback, StageAs::Script),
+        Choice::Binary { binary } => {
+            stage_cli_with_fallback_as(primary, fallback, StageAs::Binary(binary))
+        }
+        Choice::None { note } => {
+            crate::log_debug!(
+                "[cli-stage] nothing staged at {}: {note}",
+                primary.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// What this daemon's commands run, by the owner's switch (always on in a
+/// build with no shell CLI, [`k2_client::cli_install::links_on`]): on Linux
+/// the k5 binary beside this daemon checked against [`embedded_version`];
+/// on macOS the one beside the bundled script
+/// ([`k2_client::cli_install::choice_for_script`]); the script anywhere
+/// else, or for a build with no bundle. A build with no shell CLI gets
+/// nothing where ours gets the script ([`Choice::None`]).
+pub fn current_choice() -> Choice {
+    use k2_client::cli_install as ci;
+    let on = ci::links_on();
     let exe = std::env::current_exe().ok();
     if cfg!(target_os = "linux") {
         let dir = exe.as_deref().and_then(Path::parent);
@@ -350,13 +401,28 @@ pub fn current_choice() -> k2_client::cli_install::Choice {
         };
         return Choice::from_found(on, found);
     }
+    // Not Linux: the daemon's stage doesn't link here.
+    let not_here = |why: &str| {
+        if NO_BASH {
+            Choice::None {
+                note: "this daemon links the k5 program on Linux only".to_string(),
+            }
+        } else {
+            Choice::Script {
+                note: on.then(|| why.to_string()),
+            }
+        }
+    };
     if cfg!(target_os = "macos") {
-        if let Some(script) = exe.as_deref().and_then(|e| ci::packaged_cli_for_exe(e, ci::CLI_NAME)) {
+        if let Some(script) = exe
+            .as_deref()
+            .and_then(|e| ci::packaged_cli_for_exe(e, ci::CLI_NAME))
+        {
             return ci::choice_for_script(on, &script);
         }
-        return Choice::Script { note: on.then(|| "this build isn't an installed app".to_string()) };
+        return not_here("this build isn't an installed app");
     }
-    Choice::Script { note: on.then(|| "this system runs the script only".to_string()) }
+    not_here("this system runs the script only")
 }
 
 /// The k5 binary's tests (they name its file, which this file doesn't:
@@ -365,9 +431,12 @@ pub fn current_choice() -> k2_client::cli_install::Choice {
 #[path = "cli_stage_binary_tests.rs"]
 mod binary_tests;
 
-#[cfg(test)]
+/// The script's own tests: a build that carries it.
+#[cfg(all(test, not(k2_no_bash)))]
 mod tests {
     use super::*;
+
+    const CLI: &str = CLI_CONTENT.expect("this build carries the shell CLI");
 
     fn tmp_dir(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("k2-cli-stage-{tag}-{}", uuid::Uuid::new_v4()));
@@ -384,16 +453,9 @@ mod tests {
     #[test]
     fn embedded_cli_has_version_and_bash_shebang() {
         // The staging cycle keys off K2_CLI_VERSION; the CLI is bash.
-        assert_eq!(CLI_CONTENT.lines().next(), Some("#!/bin/bash"));
-        let v = cli_version(CLI_CONTENT).expect("K2_CLI_VERSION present");
+        assert_eq!(CLI.lines().next(), Some("#!/bin/bash"));
+        let v = cli_version(CLI).expect("K2_CLI_VERSION present");
         assert!(!v.is_empty(), "version value must be non-empty");
-    }
-
-    #[test]
-    fn version_parse_trims_quotes_and_accepts_legacy() {
-        assert_eq!(cli_version("K2_CLI_VERSION=\"1.2.3\"\n").as_deref(), Some("1.2.3"));
-        assert_eq!(cli_version("K2SO_CLI_VERSION=\"0.9\"\n").as_deref(), Some("0.9"));
-        assert_eq!(cli_version("# no version here\n"), None);
     }
 
     #[test]
@@ -402,7 +464,7 @@ mod tests {
         let target = dir.join("k2");
         let out = stage_cli_at(&target).expect("stage ok");
         assert_eq!(out, Some(target.clone()));
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI_CONTENT);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI);
         #[cfg(unix)]
         assert_eq!(mode_of(&target), 0o755, "CLI must be executable");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -416,7 +478,7 @@ mod tests {
         // Same-version file is left untouched on the second pass.
         let again = stage_cli_at(&target).expect("second stage");
         assert_eq!(again, Some(target.clone()));
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI_CONTENT);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -428,7 +490,7 @@ mod tests {
         stage_cli_at(&target).expect("stage ok");
         assert_eq!(
             std::fs::read_to_string(&target).unwrap(),
-            CLI_CONTENT,
+            CLI,
             "an older on-disk version must be refreshed"
         );
         std::fs::remove_dir_all(&dir).unwrap();
@@ -474,7 +536,7 @@ mod tests {
         // An empty file (a write that died) is K2's to fill.
         std::fs::write(&target, b"").unwrap();
         assert_eq!(stage_cli_at(&target).expect("stage ok"), Some(target.clone()));
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI_CONTENT);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), CLI);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -500,7 +562,7 @@ mod tests {
         assert_eq!(out, Some(fallback.clone()));
         assert_eq!(
             std::fs::read_to_string(&fallback).unwrap(),
-            CLI_CONTENT,
+            CLI,
             "current CLI must land at the fallback"
         );
         assert_eq!(mode_of(&fallback), 0o755, "fallback CLI must be executable");
@@ -528,7 +590,7 @@ mod tests {
         let out = stage_cli_with_fallback(&primary, Some(&fallback))
             .expect("fallback stage must succeed");
         assert_eq!(out, Some(fallback.clone()));
-        assert_eq!(std::fs::read_to_string(&fallback).unwrap(), CLI_CONTENT);
+        assert_eq!(std::fs::read_to_string(&fallback).unwrap(), CLI);
         assert!(primary.is_dir(), "the blocking directory is left in place");
         assert_eq!(std::fs::read(primary.join("keep")).unwrap(), b"untouched");
 
@@ -544,7 +606,7 @@ mod tests {
         let out = stage_cli_with_fallback(&primary, Some(&fallback))
             .expect("primary stage must succeed");
         assert_eq!(out, Some(primary.clone()));
-        assert_eq!(std::fs::read_to_string(&primary).unwrap(), CLI_CONTENT);
+        assert_eq!(std::fs::read_to_string(&primary).unwrap(), CLI);
         assert!(!fallback.exists(), "fallback must be untouched when primary works");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -565,6 +627,87 @@ mod tests {
         );
         assert_eq!(std::fs::read(&blocker).unwrap(), b"not a directory");
 
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// Tests that hold in either kind of build: a no-bash one is checked
+/// through the same functions with the build kind passed in.
+#[cfg(test)]
+mod either_build_tests {
+    use super::*;
+
+    #[test]
+    fn version_parse_trims_quotes_and_accepts_legacy() {
+        assert_eq!(
+            cli_version("K2_CLI_VERSION=\"1.2.3\"\n").as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            cli_version("K2SO_CLI_VERSION=\"0.9\"\n").as_deref(),
+            Some("0.9")
+        );
+        assert_eq!(cli_version("# no version here\n"), None);
+    }
+
+    #[test]
+    fn no_bash_build_kind_agrees_with_the_brand_and_carries_no_script() {
+        assert_eq!(
+            NO_BASH,
+            k2_client::brand::CLI_NO_BASH,
+            "build.rs and k2-brand read one brand file"
+        );
+        assert_eq!(CLI_CONTENT.is_none(), NO_BASH);
+        let v = embedded_version().expect("a version");
+        if NO_BASH {
+            // The install check's version is the daemon's own.
+            assert_eq!(v, env!("CARGO_PKG_VERSION"));
+            assert!(script().is_err());
+        } else {
+            assert_eq!(Some(v), CLI_CONTENT.and_then(cli_version));
+        }
+    }
+
+    /// Nothing to stage: no file, no link, no folder at either place, and a
+    /// script copy or a link already there stays as it is.
+    #[test]
+    #[cfg(unix)]
+    fn no_bash_nothing_to_stage_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("k2-cli-stage-none-{}", uuid::Uuid::new_v4()));
+        let primary = dir.join("usr-local-bin").join("k2");
+        let fallback = dir.join("home-local-bin").join("k2");
+        let none = Choice::None {
+            note: "this release has no k5 program".to_string(),
+        };
+        assert_eq!(
+            stage_choice_with_fallback(&primary, Some(&fallback), &none),
+            Ok(None)
+        );
+        assert!(!dir.exists(), "nothing is made");
+
+        std::fs::create_dir_all(primary.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(fallback.parent().unwrap()).unwrap();
+        let old = "#!/bin/bash\nK2_CLI_VERSION=\"0.0.1\"\n";
+        std::fs::write(&primary, old).unwrap();
+        std::os::unix::fs::symlink(&primary, &fallback).unwrap();
+        assert_eq!(
+            stage_choice_with_fallback(&primary, Some(&fallback), &none),
+            Ok(None)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&primary).unwrap(),
+            old,
+            "an old copy is not refreshed"
+        );
+        assert_eq!(
+            std::fs::read_link(&fallback).unwrap(),
+            primary,
+            "a link is not touched"
+        );
+        assert!(
+            std::fs::symlink_metadata(primary.with_file_name("k5")).is_err(),
+            "no k5 made"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

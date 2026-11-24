@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::*;
+#[cfg(not(k2_no_bash))]
 use k2_client::cli_install::{begin_link_swap, is_k2_cli_script};
 
 struct Dir(PathBuf);
@@ -41,9 +42,10 @@ fn target_of(p: &Path) -> PathBuf {
     fs::read_link(p).unwrap_or_else(|e| panic!("{} must be a link: {e}", p.display()))
 }
 
+#[cfg(not(k2_no_bash))]
 fn is_copy(p: &Path) -> bool {
     let m = fs::symlink_metadata(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    m.file_type().is_file() && fs::read_to_string(p).unwrap() == CLI_CONTENT
+    m.file_type().is_file() && Some(fs::read_to_string(p).unwrap().as_str()) == CLI_CONTENT
 }
 
 #[test]
@@ -61,6 +63,7 @@ fn the_binary_beside_the_daemon_passes_only_when_on_and_of_this_release() {
 }
 
 #[test]
+#[cfg(not(k2_no_bash))]
 fn script_to_binary_and_back_for_k2_and_k5() {
     let dir = Dir::new("flip");
     let bin = put_binary(&dir.0);
@@ -96,6 +99,7 @@ fn script_to_binary_and_back_for_k2_and_k5() {
 }
 
 #[test]
+#[cfg(not(k2_no_bash))]
 fn turning_off_reaches_a_link_left_at_the_other_place() {
     let dir = Dir::new("other");
     let bin = put_binary(&dir.0);
@@ -146,6 +150,7 @@ fn other_links_and_files_are_never_touched_in_either_mode() {
 }
 
 #[test]
+#[cfg(not(k2_no_bash))]
 fn an_interrupted_swap_leaves_a_working_command() {
     let dir = Dir::new("interrupt");
     let bin = put_binary(&dir.0);
@@ -179,5 +184,48 @@ fn an_interrupted_swap_leaves_a_working_command() {
 fn the_switch_is_off_by_default() {
     let _home = crate::test_env::TempHome::new();
     assert!(!k2_client::cli_install::switch_on());
-    assert_eq!(current_choice(), k2_client::cli_install::Choice::Script { note: None });
+    let got = current_choice();
+    if NO_BASH {
+        // On by build, and never the script: the test binary's folder has
+        // no k5 program, so nothing, and why.
+        match &got {
+            Choice::None { note } => assert!(note.contains("is missing"), "{note}"),
+            other => panic!("a build with no shell CLI and no binary: {other:?}"),
+        }
+    } else {
+        assert_eq!(got, Choice::Script { note: None });
+    }
+}
+
+/// A build with no shell CLI over what an earlier build left: the script
+/// copy at `k2` becomes a link to the binary and `k5` joins it, through
+/// the same stage entry the boot uses; no script is written.
+#[test]
+fn no_bash_the_binary_replaces_a_script_copy_left_before() {
+    let dir = Dir::new("over-copy");
+    let bin = put_binary(&dir.0);
+    let local = dir.0.join("bin");
+    fs::create_dir_all(&local).unwrap();
+    let k2 = local.join("k2");
+    fs::write(&k2, "#!/bin/bash\nK2_CLI_VERSION=\"0.0.1\"\n").unwrap();
+    let runs = Choice::Binary {
+        binary: bin.clone(),
+    };
+    assert_eq!(
+        stage_choice_with_fallback(&k2, None, &runs).unwrap(),
+        Some(k2.clone())
+    );
+    assert_eq!(target_of(&k2), bin);
+    assert_eq!(target_of(&local.join("k5")), bin);
+    // Again: nothing changes.
+    assert_eq!(
+        stage_choice_with_fallback(&k2, None, &runs).unwrap(),
+        Some(k2.clone())
+    );
+    assert_eq!(target_of(&k2), bin);
+    let names: Vec<_> = fs::read_dir(&local)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "k2 and k5 only, no temp left: {names:?}");
 }

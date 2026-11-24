@@ -253,7 +253,7 @@ pub fn daemon_cli() -> DaemonCli {
     static CLI: OnceLock<DaemonCli> = OnceLock::new();
     CLI.get_or_init(|| {
         use sha2::Digest;
-        let sha = sha2::Sha256::digest(k2_core::cli_stage::CLI_CONTENT.as_bytes());
+        let sha = sha2::Sha256::digest(k2_core::cli_stage::CLI_CONTENT.unwrap_or_default().as_bytes());
         DaemonCli {
             version: k2_core::cli_stage::embedded_version().unwrap_or_default(),
             sha256: sha.iter().map(|b| format!("{b:02x}")).collect(),
@@ -586,7 +586,7 @@ mod tests {
         let mut cases: Vec<String> = VERSION_CASES.iter().map(|(t, _)| t.to_string()).collect();
         cases.push(marker_after_line(29));
         cases.push(marker_after_line(30));
-        cases.push(k2_core::cli_stage::CLI_CONTENT[..CLI_HEAD_BYTES].to_string());
+        cases.push(include_str!("../../../../cli/k2")[..CLI_HEAD_BYTES].to_string());
         for text in &cases {
             assert_eq!(
                 cli_version_of(text.as_bytes()),

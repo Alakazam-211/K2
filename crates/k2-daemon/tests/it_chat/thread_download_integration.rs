@@ -252,7 +252,14 @@ async fn files_download_is_person_only_to_grant() {
     let r = post(port, "/cli/skin/roles", &hook, json!({ "name": format!("x{tag}"), "roomAccess": [{ "handle": ws.handle, "caps": flagged }] })).await;
     owner_only(&r, "agent creates a role with files:download");
     let r = post(port, "/cli/skin/roles/room", &hook, json!({ "name": role, "handle": ws.handle, "caps": flagged })).await;
-    owner_only(&r, "agent adds files:download to a room");
+    // 0.46.18 (0eddc3af9b): a room line on a box-wide role is no bare
+    // refusal but one held request whose card is the owner's alone; it still
+    // changes nothing until a person approves (the role check below).
+    assert_eq!(r.status, 202, "agent adds files:download to a room: {}", r.body);
+    let held = r.json();
+    assert_eq!(held["request"]["status"], "pending", "{}", r.body);
+    assert!(held["reasons"].to_string().contains("only the owner approves it"), "{}", r.body);
+    assert!(r.body.contains("files:download"), "agent adds files:download to a room: {}", r.body);
     let r = post(port, "/cli/skin/roles/update", &hook, json!({ "name": role, "roomAccess": [{ "handle": ws.handle, "caps": flagged }] })).await;
     owner_only(&r, "agent updates a role to carry files:download");
     let r = post(port, "/cli/skin-tokens", &hook, json!({ "name": format!("tok{tag}"), "caps": flagged, "rooms": [ws.handle] })).await;

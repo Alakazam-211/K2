@@ -63,6 +63,9 @@ pub const MAX_REQUEST_BYTES: usize = 8 << 20;
 pub const RANGE_PARAM: &str = "content_range";
 /// How long a file's metadata (its signed URLs) is kept for one person.
 pub const META_TTL: Duration = Duration::from_secs(60);
+/// A thumbnail, preview or poster is the same bytes for as long as its id
+/// lives (Sew renders it once): the phone keeps it this long.
+pub const RENDER_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
 const META_MAX: usize = 2048;
 const UPLOADS_MAX: usize = 4096;
 /// An upload URL this close to its expiry is renewed before use.
@@ -171,6 +174,9 @@ fn uploads() -> &'static Mutex<HashMap<UpKey, Up>> {
 pub fn forget_for_tests() {
     uploads().lock().unwrap_or_else(|p| p.into_inner()).clear();
     metas().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    let mut m = memo().lock().unwrap_or_else(|p| p.into_inner());
+    m.map.clear();
+    m.order.clear();
 }
 
 /// The path and query of a Sew URL (path-absolute, or absolute on any
@@ -596,7 +602,10 @@ pub fn served_headers(sew: &[(String, String)], att: &Value, variant: &str, dl: 
     out.push(("content-disposition".into(), disposition(if inline { "inline" } else { "attachment" }, name)));
     out.push(("x-content-type-options".into(), "nosniff".into()));
     out.push(("content-security-policy".into(), FILE_CSP.into()));
-    out.push(("cache-control".into(), "private, max-age=300".into()));
+    // Sew's renders never change for an id; an original's bytes don't
+    // either, but its access can, so it is kept briefly.
+    let cache = if variant == "original" { "private, max-age=300".to_string() } else { format!("private, max-age={RENDER_MAX_AGE_SECS}, immutable") };
+    out.push(("cache-control".into(), cache));
     out
 }
 
@@ -658,4 +667,104 @@ pub async fn stream_out(stream: &mut tokio::net::TcpStream, f: Fetched) {
     drop(rx);
     let _ = reader.await;
     let _ = stream.flush().await;
+}
+
+// ── files in a push (contract-home-chat-attachments-v1, the push note) ──
+
+/// What a message's files say in a phone push: a short line ("Photo",
+/// "2 photos", "Video", "File: report.pdf") and `attachmentCount` with the
+/// first file's `kind`, so a sealed push says it too. Never a URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesSummary {
+    pub count: u32,
+    /// The first file's kind (`image|video|audio|document|archive|other`).
+    pub kind: String,
+    /// The first file's name.
+    pub name: String,
+    pub all_images: bool,
+    pub all_videos: bool,
+}
+
+/// The longest file name a push line carries.
+const PUSH_NAME_MAX: usize = 60;
+
+impl FilesSummary {
+    /// From Sew's `attachments[]` (`None`: no files).
+    pub fn of(atts: &Value) -> Option<FilesSummary> {
+        let list = atts.as_array().filter(|l| !l.is_empty())?;
+        let kind_of = |a: &Value| a["kind"].as_str().unwrap_or("other").to_string();
+        let first = &list[0];
+        let name: String = first["filename"].as_str().unwrap_or("file").chars().filter(|c| !c.is_control()).take(PUSH_NAME_MAX).collect();
+        Some(FilesSummary {
+            count: u32::try_from(list.len()).unwrap_or(u32::MAX),
+            kind: kind_of(first),
+            name: if name.trim().is_empty() { "file".to_string() } else { name },
+            all_images: list.iter().all(|a| kind_of(a) == "image"),
+            all_videos: list.iter().all(|a| kind_of(a) == "video"),
+        })
+    }
+
+    /// The push line for a message with no text of its own.
+    pub fn line(&self) -> String {
+        match (self.count, self.all_images, self.all_videos) {
+            (1, true, _) => "Photo".to_string(),
+            (n, true, _) => format!("{n} photos"),
+            (1, _, true) => "Video".to_string(),
+            (n, _, true) => format!("{n} videos"),
+            (1, _, _) => format!("File: {}", self.name),
+            (n, _, _) => format!("{n} files"),
+        }
+    }
+}
+
+type MemoKey = (String, String);
+
+struct Memo {
+    map: HashMap<MemoKey, FilesSummary>,
+    order: std::collections::VecDeque<MemoKey>,
+}
+
+const MEMO_MAX: usize = 2048;
+
+fn memo() -> &'static Mutex<Memo> {
+    static M: OnceLock<Mutex<Memo>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(Memo { map: HashMap::new(), order: std::collections::VecDeque::new() }))
+}
+
+/// The person's gateway saw message `m` (`message_created` / `_updated`):
+/// keep what its files would say in a push, so the push path needn't ask.
+pub fn note_message(ext: &str, m: &Value) {
+    let Some(id) = id_str(&m["id"]) else { return };
+    let Some(s) = FilesSummary::of(&m["attachments"]) else { return };
+    let key = (ext.to_string(), id);
+    let mut g = memo().lock().unwrap_or_else(|p| p.into_inner());
+    if g.map.insert(key.clone(), s).is_none() {
+        g.order.push_back(key);
+    }
+    while g.order.len() > MEMO_MAX {
+        if let Some(k) = g.order.pop_front() {
+            g.map.remove(&k);
+        }
+    }
+}
+
+/// What message `msg`'s files say, for person `ext`: what their gateway
+/// saw, else (when `ask`) one read of that message as them.
+pub fn message_files(ext: &str, conv: &str, msg: &str, ask: bool) -> Option<FilesSummary> {
+    if let Some(s) = memo().lock().unwrap_or_else(|p| p.into_inner()).map.get(&(ext.to_string(), msg.to_string())) {
+        return Some(s.clone());
+    }
+    if !ask || !k2_core::tool_hook::sew_wire::is_sew_id(conv) {
+        return None;
+    }
+    let after: u64 = msg.parse().ok()?;
+    let path = format!("/api/v1/channels/{conv}/messages?before={}&limit=1", after.checked_add(1)?);
+    let a = sew_as(ext, "GET", &path, None).ok()?;
+    if !a.ok() {
+        return None;
+    }
+    let items = a.body.get("items").unwrap_or(&a.body);
+    let m = items.as_array()?.iter().find(|m| id_str(&m["id"]).as_deref() == Some(msg))?;
+    note_message(ext, m);
+    FilesSummary::of(&m["attachments"])
 }

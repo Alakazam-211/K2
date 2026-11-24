@@ -2536,6 +2536,8 @@ fn home_chat_event(text: &str) -> PushEvent {
             truncated: false,
         }),
         passive: false,
+        attachment_count: 0,
+        attachment_kind: String::new(),
     })
 }
 

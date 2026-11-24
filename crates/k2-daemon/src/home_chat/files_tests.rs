@@ -287,6 +287,14 @@ fn a_file_streams_with_range_etag_and_safe_headers() {
     assert!(header(&f, "content-disposition").unwrap().starts_with("attachment;"));
     let f = files::fetch(&alex(), &q(&[("id", "7003"), ("v", "thumb")]), &[]).expect("its thumbnail");
     assert_eq!((header(&f, "content-type"), header(&f, "content-disposition").map(|d| d.starts_with("inline;"))), (Some("image/webp"), Some(true)));
+    // Every variant: an ETag on 200, a 304 for it; a render is kept long.
+    assert_eq!(header(&f, "etag"), Some("\"t1\""));
+    let long = format!("private, max-age={}, immutable", files::RENDER_MAX_AGE_SECS);
+    assert_eq!(header(&f, "cache-control"), Some(long.as_str()));
+    let f = files::fetch(&alex(), &q(&[("id", "7003"), ("v", "thumb")]), &[("if-none-match".into(), "\"t1\"".into())]).expect("thumb unchanged");
+    assert_eq!(f.status, 304);
+    let f = files::fetch(&alex(), &q(&[("id", "7003")]), &[]).expect("the original");
+    assert_eq!(header(&f, "cache-control"), Some("private, max-age=300"));
     let r = files::fetch(&alex(), &q(&[("id", "7003"), ("v", "poster")]), &[]).map(|_| ()).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (404, "no_variant"));
     let r = files::fetch(&alex(), &q(&[("id", "7003"), ("v", "big")]), &[]).map(|_| ()).unwrap_err();
@@ -349,4 +357,37 @@ fn file_routes_guard_their_methods_and_the_key_follows_home_chat() {
     let _home = k2_core::test_env::TempHome::new();
     assert_eq!(super::boot_status_key(), None);
     assert_eq!(super::attachments_boot_status_key(), None, "listed only beside home-chat-v1");
+}
+
+/// An upload is the LOGIN's, never a session's or a device's: one made by
+/// the iOS share extension (the same login, another process and session)
+/// is sent by the app, and the other way round. K2 keys its kept data URL
+/// by the person and asks Sew as that person, whichever session holds them.
+#[test]
+fn an_upload_belongs_to_the_login_not_a_session_or_device() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    sew_takes_upload(&api, "5004", 20);
+    // The share extension makes the upload and sends the first half.
+    let ext_side = people::Caller { ext: ALEX.into(), login: "alex".into(), role: Role::Member };
+    call(files::CREATE, json!({"conv": "900", "filename": "shot.jpg", "size": 20})).expect("create from the extension");
+    as_person(&ext_side, files::DATA, &q(&[("id", "5004"), ("offset", "0")]), &[1u8; 10]).expect("first half");
+    // Its session ends (the extension's process goes away).
+    follower::release_all();
+    // The app, the same login: the rest, on the kept URL, no new create.
+    let app_side = people::Caller { ext: ALEX.into(), login: "alex".into(), role: Role::Member };
+    let r = as_person(&app_side, files::DATA, &q(&[("id", "5004"), ("offset", "10")]), &[2u8; 10]).expect("second half from the app");
+    assert_eq!(r["upload"]["complete"], json!(true));
+    assert_eq!(api.calls_to("/api/v1/channels/900/uploads").len(), 1, "one upload");
+    // Even with nothing kept (a daemon restart), the login's status and send work: Sew is asked as the person.
+    files::forget_for_tests();
+    sew_reports_upload(&api, "5004", "after");
+    let st = as_person(&app_side, files::STATUS, &q(&[("id", "5004")]), b"").expect("status after a restart");
+    assert_eq!(st["upload"]["complete"], json!(true));
+    api.answer("/api/v1/channels/900/messages", 200, json!({"id": "81", "channel_id": "900", "attachments": [{"id": "5004", "url": "/api/v1/files/5004?exp=1&sig=s"}]}));
+    let m = as_person(&app_side, "/cli/home-chat/send", &q(&[]), json!({"conv": "900", "text": "", "nonce": "own-1", "attachments": ["5004"]}).to_string().as_bytes())
+        .expect("the app sends the extension's upload");
+    assert_eq!(m["message"]["attachments"][0]["id"], json!("5004"));
+    assert!(api.calls_to("/api/v1/uploads/5004").iter().all(|c| c.0.as_deref() == Some("sews_first.x")), "always as the person");
+    done();
 }

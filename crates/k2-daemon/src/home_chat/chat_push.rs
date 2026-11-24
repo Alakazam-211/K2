@@ -125,6 +125,13 @@ pub trait Env: Send + Sync {
     fn send(&self, event: PushEvent);
     /// A badge correction for `principal` (an alert that didn't go).
     fn badge(&self, principal: &str);
+    /// What message `msg`'s files say in a push (contract-home-chat-
+    /// attachments-v1); `ask`: read the message when nothing is kept (it
+    /// has no text of its own). Asked only while text may go.
+    fn files_of(&self, ext: &str, conv: &str, msg: &str, ask: bool) -> Option<super::files::FilesSummary> {
+        let _ = (ext, conv, msg, ask);
+        None
+    }
 }
 
 /// One held message. `preview` is message text: `Debug` hides it.
@@ -137,6 +144,8 @@ pub struct Pending {
     pub reason: HomeChatReason,
     pub dm: bool,
     preview: Option<String>,
+    /// Its files (only while text may go).
+    files: Option<super::files::FilesSummary>,
 }
 
 impl std::fmt::Debug for Pending {
@@ -148,6 +157,7 @@ impl std::fmt::Debug for Pending {
             .field("reason", &self.reason)
             .field("dm", &self.dm)
             .field("preview", &self.preview.as_ref().map(|_| "<hidden>"))
+            .field("files", &self.files.as_ref().map(|f| f.count))
             .finish()
     }
 }
@@ -238,6 +248,9 @@ impl Coalescer {
                 continue; // HC-6
             }
             let preview = if text_ok { it.preview().map(str::to_string) } else { None };
+            // Its files: the push says "Photo" when the message has no text.
+            let no_text = it.preview().is_none_or(|t| t.trim().is_empty());
+            let files = if text_ok { env.files_of(ext, &conv, &msg, no_text) } else { None };
             let p = Pending {
                 message_id: msg,
                 at: it.at.unwrap_or(0),
@@ -246,6 +259,7 @@ impl Coalescer {
                 reason: if dm && it.kind == "dm" { HomeChatReason::Dm } else { reason_of(&it.kind) },
                 dm,
                 preview,
+                files,
             };
             if it.older_than(ITEM_MAX_AGE_SECS, now_unix) {
                 old.entry(conv).or_default().push(p);
@@ -349,8 +363,12 @@ impl Coalescer {
         let mention = items.iter().any(|p| p.reason == HomeChatReason::Mention);
         let reason = if mention { HomeChatReason::Mention } else { newest.reason };
         let (unread_total, waiting_total) = env.totals(&r.principal);
-        let (text, truncated) = newest.preview.as_deref().map(held_text).unwrap_or_default();
-        let msg = newest.preview.as_ref().map(|_| HomeChatMsg {
+        // A message with files and no text: its files' line ("Photo").
+        let own = newest.preview.as_deref().filter(|t| !t.trim().is_empty());
+        let line = newest.files.as_ref().map(super::files::FilesSummary::line);
+        let shown = own.map(str::to_string).or(line);
+        let (text, truncated) = shown.as_deref().map(held_text).unwrap_or_default();
+        let msg = (newest.preview.is_some() || newest.files.is_some()).then(|| HomeChatMsg {
             id: newest.message_id.clone(),
             conversation_id: conv.to_string(),
             from: newest.sender.ext.clone(),
@@ -378,6 +396,8 @@ impl Coalescer {
             preview: text,
             msg,
             passive,
+            attachment_count: newest.files.as_ref().map_or(0, |f| f.count),
+            attachment_kind: newest.files.as_ref().map(|f| f.kind.clone()).unwrap_or_default(),
         });
         env.send(event);
         if !passive {
@@ -725,6 +745,10 @@ impl Env for LiveEnv {
     fn badge(&self, principal: &str) {
         crate::badge_push::trigger(principal);
     }
+
+    fn files_of(&self, ext: &str, conv: &str, msg: &str, ask: bool) -> Option<super::files::FilesSummary> {
+        super::files::message_files(ext, conv, msg, ask)
+    }
 }
 
 #[cfg(test)]
@@ -748,6 +772,9 @@ pub(crate) mod tests {
         pub budget: Mutex<usize>,
         pub sent: Mutex<Vec<HomeChatPush>>,
         pub badges: Mutex<Vec<String>>,
+        /// Message id → its files; `asked` records each ask's `ask`.
+        pub files: Mutex<HashMap<String, super::super::files::FilesSummary>>,
+        pub asked: Mutex<Vec<(String, bool)>>,
     }
 
     impl Default for Fake {
@@ -763,6 +790,8 @@ pub(crate) mod tests {
                 budget: Mutex::new(1000),
                 sent: Mutex::new(Vec::new()),
                 badges: Mutex::new(Vec::new()),
+                files: Mutex::new(HashMap::new()),
+                asked: Mutex::new(Vec::new()),
             }
         }
     }
@@ -774,6 +803,10 @@ pub(crate) mod tests {
     }
 
     impl Env for Fake {
+        fn files_of(&self, _: &str, _: &str, msg: &str, ask: bool) -> Option<super::super::files::FilesSummary> {
+            self.asked.lock().unwrap().push((msg.to_string(), ask));
+            self.files.lock().unwrap().get(msg).cloned()
+        }
         fn push_on(&self) -> bool {
             self.push_on
         }
@@ -897,6 +930,61 @@ pub(crate) mod tests {
         assert_eq!(s.len(), 2, "leading + trailing");
         assert_eq!((s[1].count, s[1].message_id.as_str()), (1, "1002"));
         assert_eq!(PushEvent::HomeChat(s[1].clone()).body(), SECRET);
+    }
+
+    /// contract-home-chat-attachments-v1: a message with files and no text
+    /// says them ("Photo", "2 photos", "File: report.pdf") and carries
+    /// `attachmentCount` and the first `attachmentKind`, sealed `msg` too;
+    /// with text the text stays. With previews off: the sender only, no
+    /// keys, and the files are never even asked for.
+    #[test]
+    fn files_say_themselves_in_a_push_only_while_text_may_go() {
+        use super::super::files::FilesSummary;
+        let photo = FilesSummary::of(&serde_json::json!([{"kind": "image", "filename": "a.png"}])).unwrap();
+        let photos = FilesSummary::of(&serde_json::json!([{"kind": "image", "filename": "a.png"}, {"kind": "image", "filename": "b.jpg"}])).unwrap();
+        let mixed = FilesSummary::of(&serde_json::json!([{"kind": "document", "filename": "report.pdf"}, {"kind": "image"}])).unwrap();
+        let pdf = FilesSummary::of(&serde_json::json!([{"kind": "document", "filename": "report.pdf"}])).unwrap();
+        let video = FilesSummary::of(&serde_json::json!([{"kind": "video", "filename": "c.mov"}])).unwrap();
+        assert_eq!(
+            [photo.line(), photos.line(), video.line(), pdf.line(), mixed.line()],
+            ["Photo", "2 photos", "Video", "File: report.pdf", "2 files"].map(String::from)
+        );
+        assert!(FilesSummary::of(&serde_json::json!([])).is_none());
+
+        let env = Fake::default();
+        env.files.lock().unwrap().insert("2001".into(), photos.clone());
+        let mut c = Coalescer::new();
+        let bare = item("dm", "900", "2001", "42", None, 1).with_preview("");
+        assert_eq!(c.on_items(&env, ME, &[bare], NOW, Instant::now()), 1);
+        let h = env.sent()[0].clone();
+        assert_eq!((h.preview.as_str(), h.attachment_count, h.attachment_kind.as_str()), ("2 photos", 2, "image"));
+        assert_eq!(h.msg.as_ref().map(|m| m.text.as_str()), Some("2 photos"), "the sealed msg says it too");
+        let e = PushEvent::HomeChat(h.clone());
+        assert_eq!(e.body(), "2 photos");
+        assert_eq!((e.data().get("attachmentCount"), e.data().get("attachmentKind")), (Some("2"), Some("image")));
+        assert_eq!(env.asked.lock().unwrap().as_slice(), &[("2001".to_string(), true)], "no text: it may read the message");
+        // The phone's own previews off: no text and no file keys.
+        let quiet = e.without_preview();
+        assert_eq!((quiet.data().get("attachmentCount"), quiet.body().as_str()), (None, "New message"));
+
+        // Text and a file: the text stays, the keys ride along.
+        let env = Fake::default();
+        env.files.lock().unwrap().insert("2002".into(), pdf);
+        let mut c = Coalescer::new();
+        c.on_items(&env, ME, &[dm("2002")], NOW, Instant::now());
+        let h = env.sent()[0].clone();
+        assert_eq!((h.preview.as_str(), h.attachment_count, h.attachment_kind.as_str()), (SECRET, 1, "document"));
+        assert_eq!(env.asked.lock().unwrap().as_slice(), &[("2002".to_string(), false)], "text: the kept files only");
+
+        // Previews off on the server: the sender only, nothing asked.
+        let env = Fake { previews: false, ..Fake::default() };
+        env.files.lock().unwrap().insert("2003".into(), photo);
+        let mut c = Coalescer::new();
+        c.on_items(&env, ME, &[item("dm", "900", "2003", "42", None, 1).with_preview("")], NOW, Instant::now());
+        let h = env.sent()[0].clone();
+        assert_eq!((h.preview.as_str(), h.attachment_count, h.msg.is_none()), ("", 0, true));
+        assert!(env.asked.lock().unwrap().is_empty());
+        assert_eq!(PushEvent::HomeChat(h).data().get("attachmentCount"), None);
     }
 
     /// Three in a window: the trailing push counts the two held; a mention

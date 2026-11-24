@@ -241,6 +241,12 @@ pub struct HomeChatPush {
     /// An old item's quiet summary (an item over 10 minutes old, HC-4): no
     /// sound, and `data.passive: "1"` tells the phone to show it silently.
     pub passive: bool,
+    /// `data.attachmentCount` (contract-home-chat-attachments-v1): the
+    /// newest message's files, so a sealed push can say "Photo" itself.
+    /// 0 = none, or text isn't allowed (previews off: the sender only).
+    pub attachment_count: u32,
+    /// `data.attachmentKind`: the first file's kind (`image`, `video`, …).
+    pub attachment_kind: String,
 }
 
 /// The newest message a Home chat push covers (sealed alerts only).
@@ -921,7 +927,7 @@ impl PushEvent {
             Self::ThreadPost(t) => Self::ThreadPost(ThreadPush { preview: String::new(), ..t.clone() }),
             // The sealed `msg` stays (it is the person's own device's); only
             // the lock-screen text goes (D6, the phone's own previews).
-            Self::HomeChat(h) => Self::HomeChat(HomeChatPush { preview: String::new(), ..h.clone() }),
+            Self::HomeChat(h) => Self::HomeChat(HomeChatPush { preview: String::new(), attachment_count: 0, attachment_kind: String::new(), ..h.clone() }),
             other => other.clone(),
         }
     }
@@ -1168,6 +1174,10 @@ impl PushEvent {
                 }
                 if h.passive {
                     d.insert("passive", "1");
+                }
+                if h.attachment_count > 0 {
+                    d.insert("attachmentCount", h.attachment_count.to_string());
+                    d.insert("attachmentKind", h.attachment_kind.clone());
                 }
                 d
             }

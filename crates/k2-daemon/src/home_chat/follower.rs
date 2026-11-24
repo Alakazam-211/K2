@@ -123,6 +123,9 @@ impl Held {
     /// K2's own file paths, never Sew's signed URLs ([`super::files::scrub`]).
     pub fn publish(&self, frames: &[Value]) {
         for f in frames {
+            if matches!(f["type"].as_str(), Some("message" | "message_updated")) {
+                super::files::note_message(&self.ext, &f["message"]);
+            }
             let mut f = f.clone();
             super::files::scrub(&mut f);
             let _ = self.events.send(f.to_string());

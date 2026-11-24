@@ -282,6 +282,8 @@ fn chat_push_event(msg: &str) -> PushEvent {
         preview: String::new(),
         msg: None,
         passive: false,
+        attachment_count: 0,
+        attachment_kind: String::new(),
     })
 }
 

@@ -1365,7 +1365,7 @@ async fn the_calls_route_is_dark_while_home_chat_is_off() {
     let server = tokio::spawn(async move {
         let (mut s, _) = l.accept().await.unwrap();
         let mut buf = vec![0u8; 1024];
-        super::serve(&mut s, &mut buf, routes::CALLS, routes::CALLS, "", false, None, "owner-token").await;
+        super::serve(&mut s, &mut buf, routes::CALLS, routes::CALLS, "", false, None, "owner-token", "").await;
     });
     let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
     c.write_all(b"\r\n").await.unwrap();

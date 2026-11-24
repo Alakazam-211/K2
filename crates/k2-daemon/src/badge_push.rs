@@ -728,6 +728,8 @@ mod tests {
                 preview: String::new(),
                 msg: None,
                 passive: false,
+                attachment_count: 0,
+                attachment_kind: String::new(),
             })
         };
         let n = alert_note(&push("880011")).expect("noted");

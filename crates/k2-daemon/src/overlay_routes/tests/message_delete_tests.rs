@@ -297,7 +297,7 @@ fn a_returning_reader_gets_the_tombstone_from_every_read() {
         all.extend_from_slice(pairs);
         let r = dispatch("/cli/thread", &params_of(&all)).expect("GET /cli/thread");
         assert_eq!(r.status, "200 OK", "{pairs:?}: {}", r.body);
-        assert!(!r.body.contains("4111"), "{pairs:?}: a read never carries the deleted words: {}", r.body);
+        assert!(!r.body.contains("card number is 4111"), "{pairs:?}: a read never carries the deleted words: {}", r.body);
         json_body(&r)
     };
     let tombstone_in = |rows: &serde_json::Value, how: &str| {

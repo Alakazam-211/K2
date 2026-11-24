@@ -91,7 +91,14 @@ pub(crate) async fn serve_tcp(stream: &mut tokio::net::TcpStream, buf: &mut [u8]
 }
 
 pub fn handle(by: Option<&str>, is_post: bool, body: &[u8]) -> CliResponse {
-    handle_with(by, is_post, body, k2_core::cli_stage::NO_BASH, relink, reteach)
+    handle_with(
+        by,
+        is_post,
+        body,
+        k2_core::cli_stage::NO_BASH,
+        relink,
+        reteach,
+    )
 }
 
 /// [`handle`] with the build kind (`fixed`: no shell CLI, so the switch is

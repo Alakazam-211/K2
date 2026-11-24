@@ -339,7 +339,8 @@ pub fn legacy_retire(ctx: &Ctx, which: Legacy) -> HResult<serde_json::Value> {
 /// brand's `cli.no_bash`, `cfg(k2_no_bash)`): the bytes never reach that
 /// helper.
 #[cfg(not(k2_no_bash))]
-const CLI_DEFLATED: Option<&[u8]> = Some(include_bytes!(concat!(env!("OUT_DIR"), "/k2-cli.deflate")));
+const CLI_DEFLATED: Option<&[u8]> =
+    Some(include_bytes!(concat!(env!("OUT_DIR"), "/k2-cli.deflate")));
 /// The K2 CLI: none in a build with no shell CLI.
 #[cfg(k2_no_bash)]
 const CLI_DEFLATED: Option<&[u8]> = None;
@@ -364,8 +365,13 @@ pub fn cli_content() -> Option<&'static str> {
         use sha2::Digest;
         use std::io::Read;
         let mut s = String::new();
-        flate2::read::DeflateDecoder::new(deflated).read_to_string(&mut s).ok()?;
-        let hex: String = sha2::Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+        flate2::read::DeflateDecoder::new(deflated)
+            .read_to_string(&mut s)
+            .ok()?;
+        let hex: String = sha2::Sha256::digest(s.as_bytes())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         (hex == want).then_some(s)
     })
     .as_deref()
@@ -389,13 +395,17 @@ pub fn embedded_cli_version() -> Option<String> {
 /// build that carries one (ours); a build with no shell CLI has its own.
 #[cfg(test)]
 pub(crate) fn cli_text() -> &'static str {
-    cli_content().expect("this helper build carries the shell CLI, and it inflates to the script build.rs hashed")
+    cli_content().expect(
+        "this helper build carries the shell CLI, and it inflates to the script build.rs hashed",
+    )
 }
 
 /// Tests: the compressed bytes, for the size check.
 #[cfg(test)]
 pub(crate) fn cli_deflated_len() -> usize {
-    CLI_DEFLATED.expect("this helper build carries the shell CLI").len()
+    CLI_DEFLATED
+        .expect("this helper build carries the shell CLI")
+        .len()
 }
 
 pub use k2_root_proto::cli::cli_version_of;
@@ -470,7 +480,9 @@ pub fn cli_refresh_with(
     // A build with no shell CLI has nothing to inflate: skipped, below.
     let cli = match CLI_DEFLATED {
         None => None,
-        Some(_) => Some(cli_content().ok_or_else(|| Fail::state("this helper's embedded CLI doesn't inflate to its cliSha256"))?),
+        Some(_) => Some(cli_content().ok_or_else(|| {
+            Fail::state("this helper's embedded CLI doesn't inflate to its cliSha256")
+        })?),
     };
     cli_refresh_carrying(ctx, who, names, cli)
 }

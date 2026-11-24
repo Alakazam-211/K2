@@ -19,14 +19,17 @@
 //       leaving the committed file alone).
 //   node scripts/brand-values.mjs tauri [--out FILE]
 //       print (or write) the Tauri config overlay: the app's name, the
-//       bundle id, the update feed and the primary update key. A brand build passes the file to
+//       bundle id, the update feed, the primary update key, and the
+//       bundle's short description (it names the company) and homepage
+//       (the site). A brand build passes the file to
 //       `tauri build --config <file>`, which merges it over
 //       src-tauri/tauri.conf.json. For brand/k2 it changes nothing: that
 //       file already holds the same values, and
 //       src/renderer/lib/brand-values.test.ts fails when they drift.
 //   node scripts/brand-values.mjs shell
 //       print the values as shell assignments (BRAND_ID, BRAND_PRODUCT,
-//       BRAND_CLI, BRAND_CLI_ALIASES, BRAND_BUNDLE_ID, BRAND_UPDATE_FEED,
+//       BRAND_CLI, BRAND_CLI_ALIASES, BRAND_COMPANY, BRAND_LOCKUP,
+//       BRAND_SITE, BRAND_SUPPORT_EMAIL, BRAND_BUNDLE_ID, BRAND_UPDATE_FEED,
 //       BRAND_DESKTOP_ID, BRAND_GUI_BINARY, BRAND_UPDATE_PUBKEYS), for a
 //       packaging script to eval.
 //   node scripts/brand-values.mjs update-keys
@@ -376,6 +379,12 @@ export function rendererModule(brand) {
   ].join('\n')
 }
 
+/** The one line that says what the app is and who makes it: the bundle's
+ *  short description, the Linux package's and the .desktop file's. */
+export function shortDescription(brand) {
+  return `AI workspace orchestration by ${brand.company}`
+}
+
 /** The Tauri config overlay (a JSON merge patch onto tauri.conf.json). */
 export function tauriOverlay(brand) {
   const keys = updateKeys(brand)
@@ -383,6 +392,7 @@ export function tauriOverlay(brand) {
   return {
     productName: brand.product,
     identifier: p.bundle_id,
+    bundle: { shortDescription: shortDescription(brand), homepage: brand.site },
     plugins: { updater: { endpoints: [p.update_feed], pubkey: tauriPubkey(keys[0].pubkey) } },
   }
 }
@@ -398,6 +408,10 @@ export function shellValues(brand) {
     `BRAND_PRODUCT=${sh(brand.product)}`,
     `BRAND_CLI=${sh(brand.cli)}`,
     `BRAND_CLI_ALIASES=${sh(brand.aliases.map((a) => a.name).join(' '))}`,
+    `BRAND_COMPANY=${sh(brand.company)}`,
+    `BRAND_LOCKUP=${sh(brand.lockup)}`,
+    `BRAND_SITE=${sh(brand.site)}`,
+    `BRAND_SUPPORT_EMAIL=${sh(brand.supportEmail)}`,
     `BRAND_BUNDLE_ID=${sh(p.bundle_id)}`,
     `BRAND_UPDATE_FEED=${sh(p.update_feed)}`,
     `BRAND_DESKTOP_ID=${sh(p.desktop_id)}`,

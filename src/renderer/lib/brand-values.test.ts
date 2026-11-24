@@ -110,6 +110,16 @@ describe('the renderer module', () => {
     expect(SUPPORT_EMAIL).toBe(field(file, 'links', 'support_email'))
   })
 
+  it('brand/xy\'s overlay and shell values name its own company and site', () => {
+    const overlay = JSON.parse(run(['tauri', '--brand', 'brand/xy']))
+    expect(overlay.bundle).toEqual({ shortDescription: 'AI workspace orchestration by Globex Corporation', homepage: 'https://desk.example.invalid' })
+    const shell = run(['shell', '--brand', 'brand/xy'])
+    expect(shell).toContain("BRAND_COMPANY='Globex Corporation'\n")
+    expect(shell).toContain("BRAND_LOCKUP='Globex Desk by Globex Corporation'\n")
+    expect(shell).toContain("BRAND_SITE='https://desk.example.invalid'\n")
+    expect(shell).not.toContain('Alakazam')
+  })
+
   it('brand/xy names its own company, lockup, site and support address (written to a scratch file, not the committed one)', () => {
     const committed = readFileSync(join(ROOT, 'src/renderer/lib/brand.generated.ts'), 'utf8')
     const file = join(ROOT, 'brand/xy/brand.toml')
@@ -185,6 +195,7 @@ describe('the packaging values', () => {
     expect(overlay).toEqual({
       productName: conf.productName,
       identifier: conf.identifier,
+      bundle: { shortDescription: conf.bundle.shortDescription, homepage: conf.bundle.homepage },
       plugins: { updater: { endpoints: conf.plugins.updater.endpoints, pubkey: conf.plugins.updater.pubkey } },
     })
   })
@@ -209,6 +220,15 @@ describe('the packaging values', () => {
     expect(desktop).toContain(`Exec=${values.BRAND_GUI_BINARY}\n`)
     expect(desktop).toContain(`Icon=${values.BRAND_DESKTOP_ID}\n`)
     expect(values.BRAND_CLI_ALIASES).toBe('k2so')
+    // The package's maker and description name the brand's company, the
+    // same line the app bundle has (tauri shortDescription).
+    for (const file of ['packaging/arch/PKGBUILD', 'packaging/omarchy/k2-bin/PKGBUILD']) {
+      const text = readFileSync(join(ROOT, file), 'utf8')
+      expect(text, file).toContain(`# Maintainer: ${values.BRAND_COMPANY} <${values.BRAND_SUPPORT_EMAIL}>\n`)
+      expect(text, file).toContain(`pkgdesc="AI workspace orchestration by ${values.BRAND_COMPANY} (GUI + daemon + CLI)"\n`)
+      expect(text, file).toContain(`url="${values.BRAND_SITE}"\n`)
+    }
+    expect(desktop).toContain(`Comment=${JSON.parse(run(['tauri'])).bundle.shortDescription}\n`)
   })
 
   it('the app ships the CLI under the brand\'s command name and its aliases', () => {
@@ -228,6 +248,7 @@ describe('the packaging values', () => {
     expect(JSON.parse(run(['tauri', '--brand', dir]))).toEqual({
       productName: 'Acme Desk',
       identifier: 'com.example.acme',
+      bundle: { shortDescription: 'AI workspace orchestration by Alakazam Labs', homepage: 'https://k2.dev' },
       plugins: {
         updater: {
           endpoints: ['https://updates.example/acme/latest.json'],

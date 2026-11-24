@@ -104,6 +104,15 @@ pub const DENIED: &[&str] = &[
     "umount",
     "umount2",
     "pivot_root",
+    // The new mount API (Linux 5.2+; mount_setattr 5.12): without these a
+    // mount deny can be gone around.
+    "fsopen",
+    "fsconfig",
+    "fsmount",
+    "fspick",
+    "move_mount",
+    "open_tree",
+    "mount_setattr",
 ];
 
 /// Refused unless the job has `--userns` (`EPERM`). `clone3` (its flags sit
@@ -187,6 +196,11 @@ mod filter {
         /// i386's are from the kernel's `syscall_32.tbl` (a 64-bit build has
         /// no `libc::SYS_*` for them).
         pub fn nr(self, name: &str) -> Option<u32> {
+            // Syscalls added since Linux 5.1 have one number on every ABI
+            // (asm-generic's table, also x86's and i386's).
+            if let Some(n) = unified_nr(name) {
+                return Some(n);
+            }
             match self {
                 Arch::I386 => Some(match name {
                     "mount" => 21,
@@ -217,6 +231,20 @@ mod filter {
                 Arch::X86_64 | Arch::Aarch64 => native_nr(self, name),
             }
         }
+    }
+
+    /// The new mount API's numbers: the same on x86_64, i386 and aarch64.
+    fn unified_nr(name: &str) -> Option<u32> {
+        Some(match name {
+            "open_tree" => 428,
+            "move_mount" => 429,
+            "fsopen" => 430,
+            "fsconfig" => 431,
+            "fsmount" => 432,
+            "fspick" => 433,
+            "mount_setattr" => 442,
+            _ => return None,
+        })
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -572,6 +600,84 @@ mod probes {
         }
     }
 
+    /// The errnos a namespace probe tells apart (code = index + 1; 0 = none
+    /// of them).
+    const ERRNO_CODES: [(i32, &str); 6] = [
+        (libc::EPERM, "EPERM"),
+        (libc::EACCES, "EACCES"),
+        (libc::EINVAL, "EINVAL"),
+        (libc::ENOSPC, "ENOSPC"),
+        (libc::ENOSYS, "ENOSYS"),
+        (libc::ENODEV, "ENODEV"),
+    ];
+
+    /// Fork; the child makes a user + mount namespace, maps itself to root
+    /// there, and mounts tmpfs (mount(2), or fsopen/fsmount). Its exit code
+    /// is the errno of the first step that failed (0 = mounted).
+    fn userns_child(new_api: bool) -> String {
+        // SAFETY: fork, then only syscalls and _exit in the child.
+        unsafe {
+            let uid = libc::getuid();
+            let gid = libc::getgid();
+            let dir = std::env::temp_dir().join(format!("k2-probe-mnt-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            let c_dir = std::ffi::CString::new(dir.display().to_string()).unwrap_or_default();
+            let maps = [
+                (c"/proc/self/setgroups", "deny".to_string()),
+                (c"/proc/self/uid_map", format!("0 {uid} 1")),
+                (c"/proc/self/gid_map", format!("0 {gid} 1")),
+            ];
+            let pid = libc::fork();
+            if pid == 0 {
+                /// Exit `step * 8 + errno's code` ([`ERRNO_CODES`]).
+                fn fail(step: i32) -> ! {
+                    let e = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                    let k = ERRNO_CODES.iter().position(|(n, _)| *n == e).map_or(ERRNO_CODES.len() + 1, |i| i + 1) as i32;
+                    // SAFETY: leaving the forked child.
+                    unsafe { libc::_exit(step * 8 + k) }
+                }
+                if libc::syscall(libc::SYS_unshare, (libc::CLONE_NEWUSER | libc::CLONE_NEWNS) as u64) != 0 {
+                    fail(1);
+                }
+                for (path, text) in &maps {
+                    let f = libc::open(path.as_ptr(), libc::O_WRONLY);
+                    if f < 0 || libc::write(f, text.as_ptr().cast(), text.len()) != text.len() as isize {
+                        fail(2);
+                    }
+                    libc::close(f);
+                }
+                if new_api {
+                    let fs = libc::syscall(430, c"tmpfs".as_ptr(), 0u64);
+                    if fs < 0 {
+                        fail(3);
+                    }
+                    // FSCONFIG_CMD_CREATE = 6
+                    if libc::syscall(431, fs, 6u64, 0u64, 0u64, 0u64) != 0 {
+                        fail(4);
+                    }
+                    if libc::syscall(432, fs, 0u64, 0u64) < 0 {
+                        fail(5);
+                    }
+                } else if libc::mount(c"tmpfs".as_ptr(), c_dir.as_ptr(), c"tmpfs".as_ptr(), 0, std::ptr::null()) != 0 {
+                    fail(3);
+                }
+                libc::_exit(0);
+            }
+            let mut st = 0;
+            libc::waitpid(pid, &mut st, 0);
+            let _ = std::fs::remove_dir(&dir);
+            match libc::WEXITSTATUS(st) {
+                0 => "ok".into(),
+                c => {
+                    let (step, k) = ((c / 8) as usize, (c % 8) as usize);
+                    let step = ["?", "unshare", "map", "mount", "fsconfig", "fsmount"].get(step).copied().unwrap_or("?");
+                    let e = ERRNO_CODES.get(k.wrapping_sub(1)).map_or("other-errno", |(_, n)| *n);
+                    format!("{step}:{e}")
+                }
+            }
+        }
+    }
+
     pub fn syscall_probe(name: &str) -> String {
         // SAFETY (all arms): raw syscalls with harmless arguments; every
         // pointer is null or to a local that outlives the call.
@@ -651,6 +757,28 @@ mod probes {
                 "mount" => said(libc::syscall(libc::SYS_mount, 0u64, 0u64, 0u64, 0u64, 0u64)),
                 "umount2" => said(libc::syscall(libc::SYS_umount2, 0u64, 0u64)),
                 "pivot_root" => said(libc::syscall(libc::SYS_pivot_root, 0u64, 0u64)),
+                // The new mount API (one number on every ABI). fsopen of a
+                // real filesystem: what a process with CAP_SYS_ADMIN in its
+                // namespace gets a context for; the rest with bad fds.
+                "fsopen_tmpfs" => {
+                    let fs = c"tmpfs";
+                    let r = libc::syscall(430, fs.as_ptr(), 0u64);
+                    let s = said(r);
+                    if r >= 0 {
+                        libc::close(r as libc::c_int);
+                    }
+                    s
+                }
+                "fsconfig" => said(libc::syscall(431, -1i64, 0u64, 0u64, 0u64, 0u64)),
+                "fsmount" => said(libc::syscall(432, -1i64, 0u64, 0u64)),
+                "fspick" => said(libc::syscall(433, -1i64, 0u64, 0u64)),
+                "move_mount" => said(libc::syscall(429, -1i64, 0u64, -1i64, 0u64, 0u64)),
+                "open_tree" => said(libc::syscall(428, -1i64, 0u64, 0u64)),
+                "mount_setattr" => said(libc::syscall(442, -1i64, 0u64, 0u64, 0u64, 0u64)),
+                // In a child: a user and mount namespace of its own (as
+                // root there), then tmpfs over a fresh folder, with mount(2)
+                // or with the new API. What a container runtime does.
+                "userns_mount_tmpfs" | "userns_fsopen_tmpfs" => userns_child(name == "userns_fsopen_tmpfs"),
                 // ADDR_NO_RANDOMIZE: a change away from the default.
                 "personality_change" => said(libc::syscall(libc::SYS_personality, 0x0040000u64)),
                 "personality_default" => said(libc::syscall(libc::SYS_personality, 0u64)),

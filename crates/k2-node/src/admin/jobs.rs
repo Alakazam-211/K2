@@ -2349,7 +2349,7 @@ mod tests {
             "-p", "RemoveIPC=yes",
             "-p", "RestrictNamespaces=~user",
             "-p", "PrivateUsers=yes",
-            "-p", "SystemCallFilter=~bpf:EPERM perf_event_open:EPERM userfaultfd:EPERM keyctl:EPERM add_key:EPERM request_key:EPERM io_uring_setup:EPERM io_uring_enter:EPERM io_uring_register:EPERM kexec_load:EPERM kexec_file_load:EPERM init_module:EPERM finit_module:EPERM delete_module:EPERM open_by_handle_at:EPERM mount:EPERM umount:EPERM umount2:EPERM pivot_root:EPERM setns:EPERM",
+            "-p", "SystemCallFilter=~bpf:EPERM perf_event_open:EPERM userfaultfd:EPERM keyctl:EPERM add_key:EPERM request_key:EPERM io_uring_setup:EPERM io_uring_enter:EPERM io_uring_register:EPERM kexec_load:EPERM kexec_file_load:EPERM init_module:EPERM finit_module:EPERM delete_module:EPERM open_by_handle_at:EPERM mount:EPERM umount:EPERM umount2:EPERM pivot_root:EPERM fsopen:EPERM fsconfig:EPERM fsmount:EPERM fspick:EPERM move_mount:EPERM open_tree:EPERM mount_setattr:EPERM setns:EPERM",
             "-p", "TimeoutStopSec=10",
             "-p", "BindPaths=/var/lib/k2node/jobs/j1-g1/tmp:/tmp /var/lib/k2node/jobs/j1-g1/var-tmp:/var/tmp",
             "-p", "ReadWritePaths=/var/lib/k2node/jobs/j1-g1 /var/lib/k2node/cache/pk/target-1",

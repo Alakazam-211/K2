@@ -115,6 +115,13 @@ fn a_job_is_refused_the_denylist_with_or_without_userns() {
         "mount",
         "umount2",
         "pivot_root",
+        "fsopen_tmpfs",
+        "fsconfig",
+        "fsmount",
+        "fspick",
+        "move_mount",
+        "open_tree",
+        "mount_setattr",
         "personality_change",
     ];
     for mode in [None, Some(USERNS_ALLOW)] {
@@ -159,6 +166,48 @@ fn a_job_without_the_address_filter_runs_only_beside_loopback_alone() {
         (out.status.code(), (), String::from_utf8_lossy(&out.stderr).to_string())
     };
     assert_eq!(code, Some(i32::from(WALL_EXIT)), "an unknown K2_JOB_NET runs nothing: {err}");
+}
+
+/// Run the shim under an `unshare -Ur` parent: the job is root in a user
+/// namespace of its own, with every capability there, so only the filter
+/// stands between it and the mount calls. `(probe, outcome)` per probe.
+fn shim_with_caps(tag: &str, mode: &str, probes: &[&str]) -> Vec<(String, String)> {
+    let d = root(tag);
+    let mut out = Vec::new();
+    for p in probes {
+        let spec = probe_spec(&d, p);
+        let o = Command::new("unshare")
+            .args(["-Ur", "sh", "-c", "exec \"$0\" job-exec \"$1\""])
+            .arg(bin())
+            .arg(&spec)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env(ENV_USERNS, mode)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        assert!(o.status.success(), "{p}: {stdout} {}", String::from_utf8_lossy(&o.stderr));
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| panic!("{p}: {e}: {stdout}"));
+        out.push((p.to_string(), v["syscall"][*p].as_str().unwrap_or("missing").to_string()));
+    }
+    let _ = std::fs::remove_dir_all(&d);
+    out
+}
+
+/// The fail-first test for the new mount API (Linux 5.2+): a job that
+/// holds CAP_SYS_ADMIN in its own namespace still can't fsopen("tmpfs")
+/// (or mount any other way) without the grant. Without these in the
+/// filter, fsopen/fsmount/move_mount would mount where mount(2) is denied.
+#[test]
+#[ignore = "needs a process that may make user namespaces with capabilities (not under AppArmor's userns restriction; a Linux box or a node that allows it): run with --ignored"]
+fn the_mount_api_is_refused_even_to_a_job_with_capabilities() {
+    assert!(may_make_user_namespaces(), "this process can't make user namespaces: run it where it may");
+    // The control: root in its own namespace, no shim filter, gets one.
+    let control = Command::new("unshare").args(["-Ur", bin().to_str().unwrap(), "wall-probe", "--syscall", "fsopen_tmpfs"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&control.stdout).contains(r#""fsopen_tmpfs":"ok""#), "control: {}", String::from_utf8_lossy(&control.stdout));
+    for (p, got) in shim_with_caps("mntapi", USERNS_DENY, &["fsopen_tmpfs", "mount", "fsmount", "move_mount", "open_tree", "fspick", "mount_setattr", "pivot_root", "umount2"]) {
+        assert_eq!(got, "EPERM", "{p} without the grant, holding CAP_SYS_ADMIN in its own namespace");
+    }
 }
 
 /// An unknown mode from root runs nothing.

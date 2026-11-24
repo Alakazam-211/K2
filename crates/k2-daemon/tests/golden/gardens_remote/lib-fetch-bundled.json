@@ -3,14 +3,14 @@
     "cached": true,
     "files": [
       {
-        "bytes": 51081,
+        "bytes": 51174,
         "name": "uPlot.iife.min.js",
-        "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
+        "sha256": "1c5a09c211f96c25f38344d074a317b8559af207b144013725794eb6c72a776d"
       },
       {
-        "bytes": 2102,
+        "bytes": 2225,
         "name": "uplot-style.js",
-        "sha256": "fa2184990360f8b3c3ea6b964e268c36ee46851e6dad62dbc55edc96dd0828d9"
+        "sha256": "74189d4d49d797eef7e3fb0c89cf0cc4266c96be595f21a353ade2914ba9ed47"
       }
     ],
     "key": "uplot@1.6.32",

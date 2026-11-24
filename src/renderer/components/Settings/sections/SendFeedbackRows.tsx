@@ -25,7 +25,7 @@ import {
   type FeedbackSettings,
 } from '@/lib/product-feedback'
 import { openSendFeedback } from '@/stores/send-feedback'
-import { PRODUCT_NAME } from '@/lib/brand'
+import { COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
 import { openAgentReportsCard, useAgentReportsCardStore } from '@/stores/agent-reports-card'
 import { AgentReportsChoice, agentReportsCopy } from '@/components/AgentReports/AgentReportsCard'
 
@@ -177,7 +177,7 @@ export function SendFeedbackRows(): React.JSX.Element | null {
       <h3 className="type-section uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">Send feedback</h3>
       <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]">
         <p className="type-hint text-[var(--color-text-muted)] m-0 mr-3">
-          Tell Alakazam Labs, who make {PRODUCT_NAME}, about a bug or an idea: the button next to Help, or Send Feedback… in the menu.
+          Tell {COMPANY_NAME}, who make {PRODUCT_NAME}, about a bug or an idea: the button next to Help, or Send Feedback… in the menu.
         </p>
         <button
           type="button"

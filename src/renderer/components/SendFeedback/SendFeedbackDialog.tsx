@@ -47,7 +47,7 @@ import {
 } from '@/lib/product-feedback'
 import { onProductFeedbackStatus } from '@/stores/session-events'
 import { useSendFeedbackStore, type SendFeedbackTab } from '@/stores/send-feedback'
-import { PRODUCT_NAME } from '@/lib/brand'
+import { COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 async function appVersion(): Promise<string | null> {
   try {
@@ -229,7 +229,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
       setEdited({})
       setPreviewOpen(false)
       setDiagOn(settings?.rememberDiagnostics === true)
-      setSentNote('Thank you. Your feedback is saved on this server and sends to Alakazam Labs as soon as it can.')
+      setSentNote(`Thank you. Your feedback is saved on this server and sends to ${COMPANY_NAME} as soon as it can.`)
       void loadSent()
       setTab('sent')
     } catch (e) {

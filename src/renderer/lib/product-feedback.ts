@@ -9,7 +9,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 export const PRODUCT_FEEDBACK_FEATURE = 'product-feedback-v1' as const
 /** prd-feedback-screenshot-v1: the server takes one screenshot per feedback. */
@@ -35,7 +35,7 @@ export type FeedbackState = 'queued' | 'sending' | 'sent' | 'failed' | 'refused'
 
 /** The PRD's line under the text box (PF2). */
 export const WHATS_SENT_LINE =
-  `Sent to Alakazam Labs with your ${PRODUCT_NAME} and OS versions. Nothing else from your computer unless you tick the box below.`
+  `Sent to ${COMPANY_NAME} with your ${PRODUCT_NAME} and OS versions. Nothing else from your computer unless you tick the box below.`
 /** The consent checkbox and its line (PF25). */
 export const DIAGNOSTICS_LABEL = `Include details about ${PRODUCT_NAME} on this computer`
 export const DIAGNOSTICS_HINT =

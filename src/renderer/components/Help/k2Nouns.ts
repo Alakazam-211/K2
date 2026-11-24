@@ -9,7 +9,7 @@
 // `also` or `leftover`); k2Nouns.test.ts fails on a new noun so it gets a
 // family and a blurb.
 
-import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
 
 /** `sidecar` = extra chat in this workspace; `linux-sidecar` = Linux process the daemon loads. */
 export type K2NounNote = 'sidecar' | 'linux-sidecar'
@@ -304,7 +304,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'explain', blurb: 'What an App refusal id means, its fix and who fixes it.', example: `${CLI_NAME} explain apps_manage_off` },
       {
         noun: 'send-feedback',
-        blurb: `Tell Alakazam Labs, who make ${PRODUCT_NAME}, about ${PRODUCT_NAME} itself: a bug or an idea (not your human: that is tickets).`,
+        blurb: `Tell ${COMPANY_NAME}, who make ${PRODUCT_NAME}, about ${PRODUCT_NAME} itself: a bug or an idea (not your human: that is tickets).`,
         example: `${CLI_NAME} send-feedback "<text>" --category bug`,
       },
       { noun: 'glossary', blurb: `Define a ${PRODUCT_NAME} term.`, example: `${CLI_NAME} glossary inbox` },

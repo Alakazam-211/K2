@@ -20,6 +20,9 @@ login = "Globex Account"
 
 [cli]
 name = "xy"
+# A partner build carries no shell CLI (cli/k2): no copy, no embed, no
+# fallback; the k5 binary is the command (Rosson's rule).
+no_bash = true
 aliases = []
 
 # Packaging values, for the builds that are not cargo (scripts/brand-values.mjs

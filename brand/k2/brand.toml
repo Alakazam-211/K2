@@ -14,6 +14,10 @@ login = "K2 Connect"
 
 [cli]
 name = "k2"
+# no_bash: false carries the shell CLI (cli/k2) and the fallback to it,
+# as today, until 0.48.0. A brand that leaves no_bash out carries none
+# (it is not taken from this file).
+no_bash = false
 aliases = [{ name = "k2so", mode = "silent" }]
 
 # Packaging values, for the builds that are not cargo (scripts/brand-values.mjs).

@@ -24,15 +24,17 @@
 //       bundle's short description (it names the company) and homepage
 //       (the site). A brand build passes the file to
 //       `tauri build --config <file>`, which merges it over
-//       src-tauri/tauri.conf.json. For brand/k2 it changes nothing: that
+//       src-tauri/tauri.conf.json. A brand with cli.no_bash true also gets
+//       bundle.resources without the shell CLI (cli/k2, cli/k2so). For
+//       brand/k2 it changes nothing: that
 //       file already holds the same values, and
 //       src/renderer/lib/brand-values.test.ts fails when they drift.
 //   node scripts/brand-values.mjs shell
 //       print the values as shell assignments (BRAND_ID, BRAND_PRODUCT,
 //       BRAND_CLI, BRAND_CLI_ALIASES, BRAND_COMPANY, BRAND_LOCKUP,
 //       BRAND_SITE, BRAND_SUPPORT_EMAIL, BRAND_BUNDLE_ID, BRAND_UPDATE_FEED,
-//       BRAND_DESKTOP_ID, BRAND_GUI_BINARY, BRAND_UPDATE_PUBKEYS), for a
-//       packaging script to eval.
+//       BRAND_DESKTOP_ID, BRAND_GUI_BINARY, BRAND_UPDATE_PUBKEYS,
+//       BRAND_NO_BASH 1 or 0), for a packaging script to eval.
 //   node scripts/brand-values.mjs update-keys
 //       the ship check for [update]: our brands must carry exactly K2's own
 //       update keys (the ceremony's, in crates/k2-release-keys); any other
@@ -246,6 +248,11 @@ export function readBrand(dir) {
     if (name === cli) fail(file, `cli.aliases[${i}].name "${name}" is cli.name itself`)
     return { name, mode }
   })
+  // cli.no_bash: the build carries no shell CLI (cli/k2). Not taken from
+  // the default brand: left out it is true, so only a brand that says
+  // false ships the shell (brand/k2 and brand/k5 do), as k2-brand reads it.
+  const noBash = doc.tables.cli.no_bash ?? true
+  if (typeof noBash !== 'boolean') fail(file, 'cli.no_bash must be true or false')
   let pkg = null
   if (doc.tables.package) {
     const p = doc.tables.package
@@ -309,7 +316,7 @@ export function readBrand(dir) {
   itsOwn('links.repo', ownRepo, base?.repo)
   const repo = inherit(file, ownRepo, base, 'repo', 'links.repo')
   if (pkg) itsOwn('package.update_feed', pkg.update_feed, base?.pkg?.update_feed)
-  return { file, id, ours, product, cli, aliases, company, lockup, site, supportEmail, contactEmail, repo, pkg, update }
+  return { file, id, ours, product, cli, aliases, noBash, company, lockup, site, supportEmail, contactEmail, repo, pkg, update }
 }
 
 /** minisign's key id of a public key line ("Ed", 8 id bytes, 32 key bytes):
@@ -431,16 +438,41 @@ export function shortDescription(brand) {
   return `AI workspace orchestration by ${brand.company}`
 }
 
-/** The Tauri config overlay (a JSON merge patch onto tauri.conf.json). */
-export function tauriOverlay(brand) {
+/** The shell CLI's files in the app's resources: the script and its alias
+ *  shim. A build with cli.no_bash ships neither. */
+export const SHELL_CLI_RESOURCES = ['../cli/k2', '../cli/k2so']
+export const TAURI_CONF = join(ROOT, 'src-tauri/tauri.conf.json')
+
+/** The app's resources without the shell CLI's files, from `conf` (the
+ *  base tauri.conf.json). Each must be there: a rename stops the build
+ *  rather than ship a script by accident. */
+export function resourcesWithoutShell(conf) {
+  const list = conf?.bundle?.resources
+  if (!Array.isArray(list)) throw new Error(`${shown(TAURI_CONF)}: bundle.resources is not a list`)
+  for (const r of SHELL_CLI_RESOURCES) {
+    if (!list.includes(r)) throw new Error(`${shown(TAURI_CONF)}: bundle.resources has no ${r}; update SHELL_CLI_RESOURCES`)
+  }
+  return list.filter((r) => !SHELL_CLI_RESOURCES.includes(r))
+}
+
+/** The Tauri config overlay (a JSON merge patch onto tauri.conf.json). A
+ *  merge patch replaces a list whole, so a no-bash brand's overlay restates
+ *  the base's resources less the shell CLI's files, beside the bundle's
+ *  other keys. */
+export function tauriOverlay(brand, conf = null) {
   const keys = updateKeys(brand)
   const p = packageValues(brand)
-  return {
+  const overlay = {
     productName: brand.product,
     identifier: p.bundle_id,
     bundle: { shortDescription: shortDescription(brand), homepage: brand.site },
     plugins: { updater: { endpoints: [p.update_feed], pubkey: tauriPubkey(keys[0].pubkey) } },
   }
+  if (brand.noBash) {
+    const base = conf ?? JSON.parse(readFileSync(TAURI_CONF, 'utf8'))
+    overlay.bundle.resources = resourcesWithoutShell(base)
+  }
+  return overlay
 }
 
 const sh = (s) => `'${s.replace(/'/g, `'\\''`)}'`
@@ -463,6 +495,7 @@ export function shellValues(brand) {
     `BRAND_DESKTOP_ID=${sh(p.desktop_id)}`,
     `BRAND_GUI_BINARY=${sh(p.gui_binary)}`,
     `BRAND_UPDATE_PUBKEYS=${sh(keys.map((k) => k.pubkey).join(' '))}`,
+    `BRAND_NO_BASH=${sh(brand.noBash ? '1' : '0')}`,
     '',
   ].join('\n')
 }

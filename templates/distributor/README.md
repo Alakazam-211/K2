@@ -95,6 +95,7 @@ the build, naming it.
 | `names.server` | what a box is called | may (left out: `<product> Server`) |
 | `names.login` | the account your users sign in with | **must**, your own |
 | `cli.name`, `cli.aliases` | the command and its other names ("Your brand's names" above) | **must** (aliases may be `[]`) |
+| `cli.no_bash` | your build carries no shell CLI: the k5 program is the command, with no script inside or beside it and no fallback to one. Not taken from K5's file: left out it is `true` | may (left out: `true`); `--hosted` refuses `false` |
 | `package.bundle_id`, `desktop_id`, `gui_binary` | the app's ids on macOS and Linux | **must** for app builds |
 | `package.update_feed` | the desktop app's update manifest | **must**, your own |
 | `update.keys` | the update keys your build trusts, primary first; never K5's. They sign your daemon, so they are also the trust root of the Sew pins it carries (there is no separate Sew signer). The template's key is a test-only placeholder that `--hosted` refuses | **must**, your own |

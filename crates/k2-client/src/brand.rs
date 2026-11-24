@@ -33,7 +33,7 @@ pub mod session;
 // literals for `concat!` (`cli_name!()`, `product_name!()`, at this
 // crate's root, lib.rs), as consts, the command's aliases with their modes, and the
 // brand's id.
-pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
+pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, CLI_NO_BASH, LOGIN_NAME, PRODUCT_NAME};
 
 /// The repo releases come from (`owner/name`), as a literal: every
 /// release URL is built from this. The repo is moving from Alakazam-211/K2

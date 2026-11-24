@@ -9,7 +9,8 @@
 //! out, or take our value for, a field that names us or reaches us
 //! (`brand_file.rs`, `SETS_ITS_OWN` and `SETS_ON_PURPOSE`). A brand file
 //! this build can't use stops the build with a line that names the file
-//! and the field.
+//! and the field. So does a Windows target for a brand with `cli.no_bash`
+//! true.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
@@ -40,6 +41,19 @@ fn main() {
             process::exit(1);
         }
     };
+    // K2's ruling (Q2): no Windows build of a brand with no shell CLI until
+    // the k5 program ships on Windows. Windows has only the script today, so
+    // such a build would have no command at all.
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+    if brand.no_bash && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        eprintln!(
+            "brand file {}: cli.no_bash is true and the target is Windows: a build with no shell CLI \
+             has no command on Windows until the k5 program ships there (K2's ruling); no Windows \
+             build of this brand",
+            file.display()
+        );
+        process::exit(1);
+    }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("brand.rs");
     if let Err(e) = fs::write(&out, brand_file::render(&brand)) {
         eprintln!("can't write {}: {e}", out.display());

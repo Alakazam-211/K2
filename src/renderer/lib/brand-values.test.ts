@@ -276,12 +276,17 @@ describe('the packaging values', () => {
     expect(rust).toContain('pub const APP_FEED_URL: &str = concat!("https://github.com/", release_repo!(), "/releases/latest/download/latest.json");')
   })
 
-  it('a brand of its own gets its own overlay', () => {
+  it('a brand of its own gets its own overlay, with no shell CLI in its resources', () => {
+    const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri/tauri.conf.json'), 'utf8'))
     const dir = brandFolder('own', GOOD)
     expect(JSON.parse(run(['tauri', '--brand', dir]))).toEqual({
       productName: 'Acme Desk',
       identifier: 'com.example.acme',
-      bundle: { shortDescription: 'AI workspace orchestration by Acme Inc', homepage: 'https://acme.example' },
+      bundle: {
+        shortDescription: 'AI workspace orchestration by Acme Inc',
+        homepage: 'https://acme.example',
+        resources: conf.bundle.resources.filter((r: string) => r !== '../cli/k2' && r !== '../cli/k2so'),
+      },
       plugins: {
         updater: {
           endpoints: ['https://updates.example/acme/latest.json'],
@@ -289,6 +294,30 @@ describe('the packaging values', () => {
         },
       },
     })
+  })
+
+  // cli.no_bash: left out it is true (a partner never ships the shell CLI
+  // by forgetting a line); brand/k2 and brand/k5 say false.
+  it('a no-bash overlay drops only the script and its alias shim; a brand that says false keeps the base list', () => {
+    const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri/tauri.conf.json'), 'utf8'))
+    const own = JSON.parse(run(['tauri', '--brand', brandFolder('nb-own', GOOD)]))
+    expect(own.bundle.resources).not.toContain('../cli/k2')
+    expect(own.bundle.resources).not.toContain('../cli/k2so')
+    expect(own.bundle.resources).toContain('../cli/k2-widget-shot.mjs')
+    expect(own.bundle.resources.length).toBe(conf.bundle.resources.length - 2)
+    const xy = JSON.parse(run(['tauri', '--brand', join(ROOT, 'brand/xy')]))
+    expect(xy.bundle.resources).toEqual(own.bundle.resources)
+    const keeps = brandFolder('nb-false', GOOD.replace('name = "ab"\n', 'name = "ab"\nno_bash = false\n'))
+    expect(JSON.parse(run(['tauri', '--brand', keeps])).bundle).not.toHaveProperty('resources')
+    expect(JSON.parse(run(['tauri'])).bundle).not.toHaveProperty('resources')
+  })
+
+  it('the shell values say whether the build carries the shell CLI', () => {
+    const noBash = (args: string[]) => run(['shell', ...args]).split('\n').filter((l) => l.startsWith('BRAND_NO_BASH='))
+    expect(noBash([])).toEqual(["BRAND_NO_BASH='0'"])
+    expect(noBash(['--brand', join(ROOT, 'brand/k5')])).toEqual(["BRAND_NO_BASH='0'"])
+    expect(noBash(['--brand', join(ROOT, 'brand/xy')])).toEqual(["BRAND_NO_BASH='1'"])
+    expect(noBash(['--brand', brandFolder('nb-shell', GOOD)])).toEqual(["BRAND_NO_BASH='1'"])
   })
 })
 
@@ -305,6 +334,8 @@ describe('a brand file the build can\'t use stops it, naming the field', () => {
     ['spaced-lockup', GOOD.replace('product = "Acme Desk"', 'product = "Acme Desk"\nlockup = " Acme"'), 'names.lockup " Acme" must be one line'],
     ['http-site', GOOD.replace('site = "https://acme.example"', 'site = "http://acme.example"'), 'links.site "http://acme.example" must be an https URL'],
     ['bad-email', GOOD.replace('support_email = "help@acme.example"', 'support_email = "help"'), 'links.support_email "help" must be an email address'],
+    ['no-bash-text', GOOD.replace('name = "ab"\n', 'name = "ab"\nno_bash = "no"\n'), 'cli.no_bash must be true or false'],
+    ['no-bash-int', GOOD.replace('name = "ab"\n', 'name = "ab"\nno_bash = 1\n'), 'cli.no_bash must be true or false'],
   ])('%s', (name, text, msg) => {
     const dir = brandFolder(name, text)
     expect(refused(['renderer', '--print', '--brand', dir])).toContain(msg)

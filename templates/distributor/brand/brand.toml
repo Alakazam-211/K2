@@ -70,6 +70,10 @@ name = "gy"
 # here as "notice", then "tombstone" a release or two after.
 aliases = []
 
+# Your build carries no shell CLI: the k5 program is the command, with no
+# script and no fallback to one. Left out it is true; --hosted refuses false.
+no_bash = true
+
 # Packaging values. bundle_id: the macOS bundle id. update_feed: the
 # desktop app's update manifest (https). desktop_id: the Linux .desktop
 # file's and icon's name. gui_binary: the Linux GUI program's name.

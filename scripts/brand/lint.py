@@ -338,6 +338,7 @@ FIELD_SHAPES = {
     "links.repo": "url", "links.support_url": "url?",
     "links.terms": "url?", "links.privacy": "url?", "links.dashboard": "url?", "links.feedback": "url?",
     "mail.system_from": "from", "mail.system_from_name": "name", "mail.postal": "bool",
+    "cli.no_bash": "bool",
     "phone.bundle_id": "rdns", "phone.team_id": "team", "phone.push_topic": "rdns",
     "sew.call_name": "name",
 }
@@ -372,6 +373,9 @@ HOSTED_NOT_OURS = (
 # file names no root-helper key.
 ROOT_HELPER_REFUSED = ("the root helper runs as root and is signed only by K5's release keys; partner "
                        "builds ship ours (a new owner decision is needed if a partner runs its own servers)")
+# A brand that is not ours carries no shell CLI (Rosson's rule).
+NO_BASH_REFUSED = ("must not be false: a partner build carries no shell CLI (cli/k2), no copy and no "
+                   "fallback; the k5 program is the command (leave it out or set it true)")
 # [control] is all six or none (K2's ruling).
 CONTROL = ("relay", "relay_list", "connect", "cert", "push", "web_api")
 # The bash CLI's own copy of control.connect: only our default brand runs
@@ -619,6 +623,10 @@ def field_findings(doc, ours, hosted, default):
     if not ours:
         out += not_ours_findings(doc, default)
     if hosted and not ours:
+        # Rosson's rule: a partner build never carries the shell CLI. Left
+        # out, cli.no_bash is true (k2-brand and brand-values.mjs read it so).
+        if (doc.get("cli") or {}).get("no_bash") is False:
+            out.append(("cli.no_bash", "shell", NO_BASH_REFUSED))
         ids, lines = test_only_keys()
         for k in (doc.get("update") or {}).get("keys") or []:
             if isinstance(k, dict) and (k.get("key_id") in ids or k.get("pubkey") in lines):

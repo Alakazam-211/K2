@@ -233,6 +233,22 @@ own_id=25B77D84DA3C24B8 own_line=RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUP
 sed -i.bak -e "s#key_id = \"${tkey%% *}\", pubkey = \"${tkey#* }\"#key_id = \"$own_id\", pubkey = \"$own_line\"#" "$T/h-own/brand.toml" && rm -f "$T/h-own/brand.toml.bak"
 lint "$T/h-own" --hosted
 [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the hosted fields)"* ]] || die "the template with its own key --hosted: $out"; ok
+# A partner build carries no shell CLI (Rosson's rule): --hosted refuses
+# cli.no_bash = false for a brand that is not ours, and nothing else; the
+# plain lint and our own brands (which spell false) pass.
+cp -R "$T/h-own" "$T/h-bash"
+sed -i.bak 's#^no_bash = true$#no_bash = false#' "$T/h-bash/brand.toml" && rm -f "$T/h-bash/brand.toml.bak"
+grep -qx 'no_bash = false' "$T/h-bash/brand.toml" || die "the template has no no_bash = true line to flip"
+lint "$T/h-bash" --hosted
+[ "$rc" = 1 ] && [[ "$out" == *"field cli.no_bash: shell: must not be false: a partner build carries no shell CLI"* ]] \
+    && [[ "$out" == *"REFUSED (1 finding(s))"* ]] || die "no_bash = false --hosted: $out"; ok
+lint "$T/h-bash"; [ "$rc" = 0 ] || die "no_bash = false without --hosted: $out"; ok
+lint "$HERE/brand/k5" --hosted
+[ "$rc" = 0 ] || die "brand/k5 (no_bash = false, ours) --hosted: $out"; ok
+cp -R "$T/h-own" "$T/h-bashword"
+sed -i.bak 's#^no_bash = true$#no_bash = "yes"#' "$T/h-bashword/brand.toml" && rm -f "$T/h-bashword/brand.toml.bak"
+lint "$T/h-bashword"
+[ "$rc" = 1 ] && [[ "$out" == *"field cli.no_bash: shape:"* ]] || die "no_bash = \"yes\": $out"; ok
 # Ours are never a partner's box: --hosted checks their shapes only.
 lint "$HERE/brand/k2" --hosted
 [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists)"* ]] || die "brand/k2 --hosted: $out"; ok

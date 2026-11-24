@@ -50,7 +50,7 @@ pub mod ours;
 const SCHEMA: i64 = 1;
 
 /// The keys `[cli]` may hold.
-const CLI_KEYS: &[&str] = &["name", "aliases"];
+const CLI_KEYS: &[&str] = &["name", "aliases", "no_bash"];
 
 /// The keys one alias may hold.
 const ALIAS_KEYS: &[&str] = &["name", "mode"];
@@ -159,6 +159,11 @@ pub struct Brand {
     /// compiles them; this reader checks their shape and that a brand not
     /// ours carries none of the default brand's).
     pub update_keys: Vec<(String, String)>,
+    /// `cli.no_bash`: the build carries no shell CLI (`cli/k2`) at all, no
+    /// copy and no fallback. Not taken from the default brand: a file that
+    /// leaves it out gets `true`, so only a brand that says `false` ships
+    /// the shell (brand/k2 and brand/k5 do).
+    pub no_bash: bool,
     /// Every other field, each the brand's own, the default brand's, or
     /// made from the brand's names.
     pub fields: Fields,
@@ -437,7 +442,7 @@ fn parse(
     let cli = table(&doc, "cli")?;
     if let Some(key) = cli.keys().find(|k| !CLI_KEYS.contains(&k.as_str())) {
         return Err(format!(
-            "[cli] holds a key it does not know: {key} (it knows name and aliases)"
+            "[cli] holds a key it does not know: {key} (it knows name, aliases and no_bash)"
         ));
     }
     let cli_name = text_field(cli, "name", "cli.name")?;
@@ -481,6 +486,11 @@ fn parse(
             .ok_or_else(|| format!("{field}.mode {word:?} must be silent, notice or tombstone"))?;
         aliases.push(Alias { name, mode });
     }
+    let no_bash = match cli.get("no_bash") {
+        None => true,
+        Some(toml::Value::Boolean(b)) => *b,
+        Some(_) => return Err("cli.no_bash must be true or false".into()),
+    };
     let fields = parse_fields(&doc, &product, base.map(|b| &b.fields))?;
     // [package] and [update] are read by their own readers
     // (scripts/brand-values.mjs, crates/k2-release-keys; the update keys
@@ -498,6 +508,7 @@ fn parse(
         ours,
         update_feed,
         update_keys,
+        no_bash,
         fields,
     };
     if let (Some(base), false) = (base, ours) {
@@ -1372,6 +1383,10 @@ pub const CLI_ALIASES: &[&str] = &[{names}];
 /// The same names, in the same order, each with what it does.
 pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[{modes}];
 
+/// The brand file's `cli.no_bash`: this build carries no shell CLI
+/// (`cli/k2`), no copy and no fallback; the k5 binary is the command.
+pub const CLI_NO_BASH: bool = {no_bash};
+
 /// First line of the PATH block an install writes into a shell startup
 /// file: the product's name.
 pub const PATH_BLOCK_BEGIN: &str = {begin:?};
@@ -1401,6 +1416,7 @@ pub const RETIRED: &[RetiredName] = &[{retired}];
         ours = b.ours,
         names = names.join(", "),
         modes = modes.join(", "),
+        no_bash = b.no_bash,
         begin = begin,
         end = end,
         earlier = earlier.join(", "),
@@ -1613,6 +1629,10 @@ pub const CLI_ALIASES: &[&str] = &["abc", "ab1", "ab2"];
 /// The same names, in the same order, each with what it does.
 pub const CLI_ALIAS_MODES: &[(&str, AliasMode)] = &[("abc", AliasMode::Notice), ("ab1", AliasMode::Silent), ("ab2", AliasMode::Tombstone)];
 
+/// The brand file's `cli.no_bash`: this build carries no shell CLI
+/// (`cli/k2`), no copy and no fallback; the k5 binary is the command.
+pub const CLI_NO_BASH: bool = true;
+
 /// First line of the PATH block an install writes into a shell startup
 /// file: the product's name.
 pub const PATH_BLOCK_BEGIN: &str = "# >>> AB CLI >>>";
@@ -1802,6 +1822,45 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
             "pub const PATH_BLOCK_EARLIER: &[(&str, &str)] = &[];\n",
         ] {
             assert!(out.contains(line), "{line:?} in:\n{out}");
+        }
+    }
+
+    /// `cli.no_bash` is not taken from the default brand: left out it is
+    /// true (no shell CLI), and only an explicit `false` carries the shell.
+    #[test]
+    fn no_bash_left_out_is_true_and_false_must_be_said() {
+        let out = |tag: &str, text: &str| {
+            let t = TempBrand::new(tag, Some(text));
+            render(&load(&t.file(), &default_file()).expect("loads"))
+        };
+        assert!(out("nb-absent", GOOD).contains("pub const CLI_NO_BASH: bool = true;\n"));
+        let off = good_with("name = \"ab\"\n", "name = \"ab\"\nno_bash = false\n");
+        assert!(out("nb-false", &off).contains("pub const CLI_NO_BASH: bool = false;\n"));
+        let on = good_with("name = \"ab\"\n", "name = \"ab\"\nno_bash = true\n");
+        assert!(out("nb-true", &on).contains("pub const CLI_NO_BASH: bool = true;\n"));
+        for (tag, value) in [("nb-text", "\"false\""), ("nb-int", "0")] {
+            refused(
+                tag,
+                &good_with("name = \"ab\"\n", &format!("name = \"ab\"\nno_bash = {value}\n")),
+                "cli.no_bash must be true or false",
+            );
+        }
+    }
+
+    /// Our two brands carry the shell CLI (until 0.48.0); the xy stand-in
+    /// for a partner carries none.
+    #[test]
+    fn our_brands_carry_the_shell_and_xy_does_not() {
+        for (dir, want) in [("brand/k2", false), ("brand/k5", false), ("brand/xy", true)] {
+            let file = repo(&format!("{dir}/brand.toml"));
+            let b = load(&file, &default_file()).unwrap_or_else(|e| panic!("{dir}: {e}"));
+            assert_eq!(b.no_bash, want, "{dir}");
+            let text = std::fs::read_to_string(&file).expect("read the brand file");
+            let doc: toml::Table = toml::from_str(&text).expect("TOML");
+            assert!(
+                doc["cli"].get("no_bash").is_some(),
+                "{dir} spells cli.no_bash (it is not inherited)"
+            );
         }
     }
 

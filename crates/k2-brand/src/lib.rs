@@ -7,6 +7,10 @@
 //! `k2_client::brand` re-exports them; code uses that module, not this
 //! crate. No dependencies at run time.
 //!
+//! [`CLI_NO_BASH`] is the brand file's `cli.no_bash`: a build that carries
+//! no shell CLI (`cli/k2`) at all, no copy and no fallback. Left out of a
+//! brand file it is true; brand/k2 and brand/k5 say false.
+//!
 //! It also writes the tokens an install writes: the PATH block's marker
 //! lines (from the product's name, with the command-form markers of
 //! earlier builds in [`PATH_BLOCK_EARLIER`]), the fish file's name and

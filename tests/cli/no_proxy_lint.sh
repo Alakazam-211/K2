@@ -101,7 +101,10 @@ for f in files:
         if re.search(r"\bpython3\b", line):
             py_start = i
         if line.startswith("_K2_PY_PROXY_RULE='"):
-            body = "\n".join(lines[i:i + 60])
+            # The literal to its closing quote line, and the line after it
+            # (the export), however long the rule is.
+            end = next((j for j in range(i + 1, len(lines)) if lines[j] == "'"), len(lines) - 1)
+            body = "\n".join(lines[i:end + 2])
             if "class _K2ProxyRule(_k2_ur.ProxyHandler)" in body and "def proxy_open(" in body \
                     and "export _K2_PY_PROXY_RULE" in body:
                 py_rule_defined = True
@@ -430,9 +433,29 @@ qs = urllib.parse.urlencode(dict(params, token=token))
 PY
 }
 EOF
+# The rule's literal at today's length: a first part (the TLS helper)
+# longer than any fixed window, then the ProxyHandler class, then the
+# export after the closing quote. rule_long WHAT: WHAT good, no_export
+# (the export line left out) or no_handler (the class not a ProxyHandler).
+rule_long() {
+    local i
+    printf '%s\n' '_k2_curl() {' "    set -- --noproxy '*' \"\$@\"" '}' "_K2_PY_PROXY_RULE='"
+    for i in $(seq 1 70); do printf '    x%d = %d\n' "$i" "$i"; done
+    printf '%s\n' '# _K2_PY_TLS ends here.'
+    if [ "$1" = no_handler ]; then
+        printf '%s\n' 'class _K2ProxyRule(_k2_ur.BaseHandler):'
+    else
+        printf '%s\n' 'class _K2ProxyRule(_k2_ur.ProxyHandler):'
+    fi
+    printf '%s\n' '    def proxy_open(self, req, proxy, type):' '        return None' "'"
+    [ "$1" = no_export ] || printf '%s\n' 'export _K2_PY_PROXY_RULE'
+    printf '%s\n' 'h() {' "    python3 - <<'PY'" 'import os, urllib.request' 'exec(os.environ["_K2_PY_PROXY_RULE"])' 'urllib.request.urlopen(req)' 'PY' '}'
+}
+for v in good no_export no_handler; do rule_long "$v" | mk "rule_long_$v" policy.sh; done
 self_ok=1
 if ! out="$(lint "$FIX/good")"; then echo "SELF-TEST FAIL: good parts flagged: $out" >&2; self_ok=0; fi
-for b in no_noproxy bare_curl py_proxy query_token py_query_token py_rule_undefined; do
+if ! out="$(lint "$FIX/rule_long_good")"; then echo "SELF-TEST FAIL: a long rule definition flagged: $out" >&2; self_ok=0; fi
+for b in no_noproxy bare_curl py_proxy query_token py_query_token py_rule_undefined rule_long_no_export rule_long_no_handler; do
     if out="$(lint "$FIX/$b")"; then echo "SELF-TEST FAIL: $b not caught" >&2; self_ok=0; fi
 done
 mkdir -p "$FIX/named/s"

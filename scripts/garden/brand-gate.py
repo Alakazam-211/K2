@@ -694,7 +694,9 @@ def rust_cli_kinds(lines, code, known, out):
         if i not in code or ctx[m.start()] != "string":
             continue
         a = text[m.end():m.end() + 2]
-        if glued(text[m.start() - 1:m.start()], a[:1], a[1:2]):
+        # A letter that ends an escape (`\n{CLI_NAME}`) is a new line, not glue.
+        before = "" if m.start() and escaped(text, m.start() - 1, 0) else text[m.start() - 1:m.start()]
+        if glued(before, a[:1], a[1:2]):
             hits.setdefault("glued", set()).add(i)
     for m in RUST_MACRO.finditer(text):
         i = line_of(m.start())

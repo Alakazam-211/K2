@@ -330,7 +330,7 @@ crun 0 "0 value, 0 glued lines in 0 rows"
 rm "$C/crates/b/src/v.rs" "$C/src/renderer/lib/v.ts"
 # Prose beside the name is not glued.
 cat > "$C/crates/b/src/g.rs" <<'RS'
-fn p() -> Vec<String> { vec![format!("run {CLI_NAME} app list"), format!("Use {CLI_NAME}."), format!("{CLI_NAME}: no such command"), format!("in {PRODUCT_NAME}, ok")] }
+fn p() -> Vec<String> { vec![format!("run {CLI_NAME} app list"), format!("Use {CLI_NAME}."), format!("{CLI_NAME}: no such command"), format!("in {PRODUCT_NAME}, ok"), format!("```\n{CLI_NAME} app list\n```"), format!("a\r\n\t{PRODUCT_NAME} b")] }
 const S: &str = concat!("see `", cli_name!(), " study`");
 const T: &str = concat!("Nobody saves a drawing whole in ", product_name!(), ": a .dxf changes");
 const U: &str = concat!("run ", cli_name!(), "\n");

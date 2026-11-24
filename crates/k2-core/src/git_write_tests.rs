@@ -278,7 +278,14 @@ fn child_writes_without_git() {
     let refused = |what: &str, r: Result<(), String>| {
         let e = r.expect_err(what);
         assert!(e.starts_with("git_not_installed: "), "{what}: {e}");
-        assert!(e.contains("this needs git"), "{what}: a plain hint: {e}");
+        assert!(e.contains("this needs git, which isn't installed on this machine"), "{what}: a plain message: {e}");
+        // And how to install it, for this machine.
+        let how = if cfg!(target_os = "macos") {
+            "Install Apple's command line tools"
+        } else {
+            "Install it with: "
+        };
+        assert!(e.contains(how) && e.ends_with("then try again"), "{what}: an install hint: {e}");
         assert_eq!(refusal::code_of(&e), Some(refusal::GIT_NOT_INSTALLED));
     };
     refused("stage", stage_file(s(&d), "a.txt"));

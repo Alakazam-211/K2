@@ -666,3 +666,23 @@ fn prune_worktrees_route_only_prunes_that_workspaces_rows() {
     assert!(row_exists(&live), "live row kept");
     assert!(row_exists(&other_stale), "other workspace's row still kept");
 }
+
+/// No git on the machine: a write route answers 409 with the code
+/// `git_not_installed` and the plain message with its install hint (the
+/// writes themselves are proven to refuse before running anything in
+/// k2-core's write tests); a discard's error gets the same status.
+#[test]
+fn git_not_installed_reaches_the_wire_as_409_with_its_code() {
+    let e = format!("{}: {}", git::refusal::GIT_NOT_INSTALLED, k2_core::git_safe::not_installed_hint());
+    for r in [unit_ok(Err(e.clone())), serialized::<()>(Err(e.clone()))] {
+        assert_eq!(r.status, "409 Conflict", "{}", r.body);
+        let j = json(&r);
+        assert_eq!(j["code"], "git_not_installed", "{}", r.body);
+        assert!(j["error"].as_str().expect("error text").contains("this needs git"), "{}", r.body);
+    }
+    let c = changes_error(git_changes::ChangesError::new(git_changes::codes::GIT_NOT_INSTALLED, "this needs git"));
+    assert_eq!(c.status, "409 Conflict");
+    assert_eq!(json(&c)["code"], "git_not_installed");
+    // Any other write error stays a plain 400, as before.
+    assert_eq!(unit_ok(Err("Failed to stage file: nope".into())).status, "400 Bad Request");
+}

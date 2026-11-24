@@ -52,6 +52,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Everyone in the call is told.** When someone presses Record, everyone else in the call sees a notice that says who started it, how long the audio is kept and whether any agent can read the transcript. The call shows a red Recording badge the whole time. Nobody is recorded until they press OK on their own notice. In a voice room, someone who doesn't answer within a minute leaves the call. In a direct message call they stay in the call and aren't recorded.
 - **Record and Stop in voice rooms and direct message calls.** Either person in a direct message call can start or stop a recording. In a voice room, the owner or an admin chooses who may start one. The badge's tooltip says who hasn't answered the notice yet.
 - **The recording and its transcript show in the chat afterwards.** A recording card appears in the direct message or the room's chat, with Show transcript. Only the people in that conversation can read it.
+### Git
+- **Changes, commits, merges and discards now use the git installed on your computer.** If git isn't installed, K2 says so and shows how to install it. Reading changes and diffs doesn't need it.
+- **On Windows, K2 follows your git's line-ending settings when it restores or merges files.**
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

@@ -1,4 +1,4 @@
--- 0331: the hello a template hire wrote, held by the daemon (agent
+-- 0332: the hello a template hire wrote, held by the daemon (agent
 -- templates T9). At a template hire's first create K2 renders the
 -- template's hello into the workspace's .k2/agent/template.lock and keeps
 -- its sha256 here, keyed by the workspace id. At the agent's first start

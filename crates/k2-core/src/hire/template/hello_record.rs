@@ -1,4 +1,4 @@
-//! The hello a template hire wrote, held by the daemon (migration 0331;
+//! The hello a template hire wrote, held by the daemon (migration 0332;
 //! agent templates T9).
 //!
 //! A template hire's first create renders the template's hello into the

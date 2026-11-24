@@ -1000,7 +1000,7 @@ pub(crate) fn tunnel(
         (Err(_), Some(e)) => Err(Raised::url_error(e)),
         (Err((Failure::ConnectTimedOut, _)), None) => Err(Raised::url_error(timed_out())),
         (Err((Failure::Tunnel(why), got)), None) => Err(tunnel_raised(&got, &why)),
-        (Err((f, got)), None) => Err(tunnel_raised(&got, &format!("{f:?}"))),
+        (Err((f, got)), None) => Err(tunnel_raised(&got, &f.to_string())),
     }
 }
 
@@ -1444,8 +1444,7 @@ fn tls_raised(f: &super::wire::Failure) -> Raised {
             Kind::Timeout,
             "_ssl.c: The handshake operation timed out".to_string(),
         ),
-        Failure::Broken { why, .. } => (Kind::Other, format!("[SSL] {why}")),
-        other => (Kind::Other, format!("[SSL] {other:?}")),
+        other => (Kind::Other, format!("[SSL] {other}")),
     };
     Raised {
         class: Class::UrlError,

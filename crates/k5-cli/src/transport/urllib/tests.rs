@@ -733,3 +733,22 @@ fn the_ruled_opener_refuses_a_redirect_and_sends_nothing_there() {
         Err(e) => panic!("accept: {e}"),
     }
 }
+
+#[test]
+fn a_failed_handshake_s_reason_is_plain_words() {
+    use crate::transport::wire::Failure;
+    let f = Failure::Broken {
+        curl: 60,
+        why: "the certificate is for a different name".into(),
+    };
+    let r = tls_raised(&f);
+    assert_eq!(r.reason, "[SSL] the certificate is for a different name");
+    assert_eq!((r.class, r.kind), (Class::UrlError, Kind::Other));
+    assert_eq!(
+        tls_raised(&Failure::Empty).reason,
+        "[SSL] the server closed the connection without an answer"
+    );
+    let r = tls_raised(&Failure::ConnectTimedOut);
+    assert_eq!(r.reason, "_ssl.c: The handshake operation timed out");
+    assert_eq!(r.kind, Kind::Timeout);
+}

@@ -136,11 +136,11 @@ pub fn connect_with(
 ) -> Result<Stream, Failure> {
     let name = ServerName::try_from(host.to_string()).map_err(|e| Failure::Broken {
         curl: SSL_CONNECT_ERROR,
-        why: format!("TLS: {host} is no server name: {e}"),
+        why: format!("{host} isn't a name a certificate can be checked against ({e})"),
     })?;
     let mut conn = ClientConnection::new(cfg, name).map_err(|e| Failure::Broken {
         curl: SSL_CONNECT_ERROR,
-        why: format!("TLS: {e}"),
+        why: plain_words(&e),
     })?;
     while conn.is_handshaking() {
         let budget = limit
@@ -176,10 +176,73 @@ fn handshake_failure(e: &io::Error) -> Failure {
         Some(rustls::Error::InvalidCertificate(_)) => PEER_FAILED_VERIFICATION,
         _ => SSL_CONNECT_ERROR,
     };
-    Failure::Broken {
-        curl: code,
-        why: format!("TLS handshake: {e}"),
-    }
+    let why = match tls {
+        Some(t) => plain_words(t),
+        None if e.kind() == io::ErrorKind::UnexpectedEof => {
+            "the server hung up before the secure connection was set up".to_string()
+        }
+        None => format!("the secure connection failed: {e}"),
+    };
+    Failure::Broken { curl: code, why }
+}
+
+/// What a person reads for a TLS error: short plain words, never rustls's
+/// own text (much of it is Rust's debug form, `UnknownIssuer` and the
+/// like). A certificate check that failed says which check; anything else
+/// says the secure connection couldn't be set up, and why when the why
+/// is clear.
+fn plain_words(e: &rustls::Error) -> String {
+    use rustls::Error as E;
+    let words = match e {
+        E::InvalidCertificate(c) => return certificate_words(c),
+        E::NoCertificatesPresented => "the server sent no certificate",
+        E::AlertReceived(_) => "the server refused the secure connection",
+        E::PeerIncompatible(_) => {
+            "the server and this computer have no TLS version or cipher in common"
+        }
+        E::InvalidMessage(_)
+        | E::InappropriateMessage { .. }
+        | E::InappropriateHandshakeMessage { .. } => {
+            "the server didn't answer in TLS (is it plain http on this port?)"
+        }
+        E::PeerMisbehaved(_) | E::PeerSentOversizedRecord => {
+            "the server broke the TLS rules during the handshake"
+        }
+        E::DecryptError => "the server's TLS messages couldn't be decrypted",
+        E::FailedToGetCurrentTime => "this computer's clock couldn't be read",
+        _ => "the secure connection couldn't be set up",
+    };
+    words.to_string()
+}
+
+/// [`plain_words`] for a certificate that failed the check.
+fn certificate_words(c: &rustls::CertificateError) -> String {
+    use rustls::CertificateError as C;
+    let words = match c {
+        C::UnknownIssuer => {
+            "the server's certificate isn't from an authority this computer trusts. \
+             If you trust a private CA, set SSL_CERT_FILE to its certificate"
+        }
+        C::Expired | C::ExpiredContext { .. } => "the server's certificate has expired",
+        C::NotValidYet | C::NotValidYetContext { .. } => {
+            "the server's certificate isn't valid yet. Check this computer's clock"
+        }
+        C::NotValidForName | C::NotValidForNameContext { .. } => {
+            "the certificate is for a different name"
+        }
+        C::Revoked => "the server's certificate was revoked",
+        C::InvalidPurpose | C::InvalidPurposeContext { .. } => {
+            "the server's certificate isn't one for a server"
+        }
+        C::BadSignature
+        | C::UnsupportedSignatureAlgorithmContext { .. }
+        | C::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => {
+            "the server's certificate has a signature this computer can't check"
+        }
+        C::BadEncoding => "the server's certificate couldn't be read",
+        _ => "the server's certificate failed the check",
+    };
+    words.to_string()
 }
 
 /// Sets the read and write timeouts of the TCP under `s`.
@@ -344,6 +407,7 @@ mod tests {
         };
         assert_eq!(f.curl_code(), PEER_FAILED_VERIFICATION, "{f:?}");
         assert!(!f.sent(), "{f:?}");
+        assert_eq!(f.to_string(), UNKNOWN_ISSUER);
         assert!(h.join().unwrap().is_empty());
     }
 
@@ -357,6 +421,7 @@ mod tests {
             panic!("a name the certificate doesn't hold was taken");
         };
         assert_eq!(f.curl_code(), PEER_FAILED_VERIFICATION, "{f:?}");
+        assert_eq!(f.to_string(), "the certificate is for a different name");
         h.join().unwrap();
     }
 
@@ -378,7 +443,134 @@ mod tests {
         };
         assert_eq!(f.curl_code(), SSL_CONNECT_ERROR, "{f:?}");
         assert!(!f.sent(), "{f:?}");
+        assert_plain(&f.to_string());
         h.join().unwrap();
+    }
+
+    const UNKNOWN_ISSUER: &str = "the server's certificate isn't from an authority this \
+        computer trusts. If you trust a private CA, set SSL_CERT_FILE to its certificate";
+
+    /// Fails on text a person shouldn't see: Rust's debug form (braces,
+    /// `::`, a `CamelCase` name such as `UnknownIssuer` or `Broken`) or
+    /// curl's numeric code.
+    fn assert_plain(text: &str) {
+        assert!(!text.is_empty());
+        for bad in ["{", "}", "::", "Broken", "curl", "why:"] {
+            assert!(!text.contains(bad), "{bad:?} in {text:?}");
+        }
+        for word in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+            let camel = word
+                .as_bytes()
+                .windows(2)
+                .any(|p| p[0].is_ascii_lowercase() && p[1].is_ascii_uppercase());
+            assert!(!camel, "{word:?} in {text:?}");
+        }
+    }
+
+    #[test]
+    fn each_certificate_check_has_its_own_plain_words() {
+        use rustls::pki_types::UnixTime;
+        use rustls::CertificateError as C;
+        let t = UnixTime::since_unix_epoch(Duration::from_secs(1_700_000_000));
+        let cases = [
+            (C::UnknownIssuer, UNKNOWN_ISSUER),
+            (C::Expired, "the server's certificate has expired"),
+            (
+                C::ExpiredContext {
+                    time: t,
+                    not_after: t,
+                },
+                "the server's certificate has expired",
+            ),
+            (C::NotValidForName, "the certificate is for a different name"),
+            (
+                C::NotValidForNameContext {
+                    expected: ServerName::try_from("acme.example").unwrap(),
+                    presented: vec!["globex.example".into()],
+                },
+                "the certificate is for a different name",
+            ),
+            (
+                C::NotValidYet,
+                "the server's certificate isn't valid yet. Check this computer's clock",
+            ),
+            (C::Revoked, "the server's certificate was revoked"),
+            (
+                C::BadSignature,
+                "the server's certificate has a signature this computer can't check",
+            ),
+            (C::InvalidPurpose, "the server's certificate isn't one for a server"),
+            (C::BadEncoding, "the server's certificate couldn't be read"),
+            (C::UnknownRevocationStatus, "the server's certificate failed the check"),
+        ];
+        for (c, want) in cases {
+            let e = rustls::Error::InvalidCertificate(c.clone());
+            assert_eq!(plain_words(&e), want, "{c:?}");
+            assert_plain(want);
+            let f = handshake_failure(&io::Error::new(io::ErrorKind::InvalidData, e));
+            assert_eq!(f.curl_code(), PEER_FAILED_VERIFICATION, "{c:?}");
+            assert_eq!(f.to_string(), want, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn other_handshake_failures_are_plain_words_too() {
+        use rustls::{AlertDescription, InvalidMessage, PeerIncompatible, PeerMisbehaved};
+        let cases = [
+            (
+                rustls::Error::AlertReceived(AlertDescription::HandshakeFailure),
+                "the server refused the secure connection",
+            ),
+            (
+                rustls::Error::InvalidMessage(InvalidMessage::InvalidContentType),
+                "the server didn't answer in TLS (is it plain http on this port?)",
+            ),
+            (
+                rustls::Error::PeerIncompatible(PeerIncompatible::NoCipherSuitesInCommon),
+                "the server and this computer have no TLS version or cipher in common",
+            ),
+            (
+                rustls::Error::PeerMisbehaved(PeerMisbehaved::IncorrectBinder),
+                "the server broke the TLS rules during the handshake",
+            ),
+            (rustls::Error::NoCertificatesPresented, "the server sent no certificate"),
+            (rustls::Error::General("x".into()), "the secure connection couldn't be set up"),
+        ];
+        for (e, want) in cases {
+            let f = handshake_failure(&io::Error::new(io::ErrorKind::InvalidData, e));
+            assert_eq!(f.curl_code(), SSL_CONNECT_ERROR, "{f:?}");
+            assert_eq!(f.to_string(), want);
+            assert_plain(want);
+        }
+        let eof = handshake_failure(&io::Error::from(io::ErrorKind::UnexpectedEof));
+        assert_eq!(
+            eof.to_string(),
+            "the server hung up before the secure connection was set up"
+        );
+        let reset = handshake_failure(&io::Error::from(io::ErrorKind::ConnectionReset));
+        assert!(reset.to_string().starts_with("the secure connection failed: "), "{reset}");
+        assert_plain(&reset.to_string());
+    }
+
+    #[test]
+    fn every_failure_reads_as_plain_words() {
+        let all = [
+            Failure::Connect(io::Error::from(io::ErrorKind::ConnectionRefused)),
+            Failure::ConnectTimedOut,
+            Failure::NotSent(String::new()),
+            Failure::NotSent("send: closed".into()),
+            Failure::TimedOut,
+            Failure::Empty,
+            Failure::Broken {
+                curl: PEER_FAILED_VERIFICATION,
+                why: UNKNOWN_ISSUER.into(),
+            },
+            Failure::Tunnel("the proxy closed".into()),
+        ];
+        for f in &all {
+            assert_plain(&f.to_string());
+        }
+        assert_eq!(all[6].to_string(), UNKNOWN_ISSUER);
     }
 
     fn pem_file(name: &str, ders: &[&CertificateDer<'static>]) -> PathBuf {

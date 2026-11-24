@@ -122,6 +122,17 @@ fn open_tcp(t: &Target, via: Option<&Proxy>, timeout: Duration) -> Result<TcpStr
     }
 }
 
+/// A failed handshake as a `URLError`: its reason the failure's plain
+/// words ([`crate::transport::wire::Failure`]'s `Display`), which the
+/// clone's hint shows.
+fn tls_failed(f: &crate::transport::wire::Failure) -> Raised {
+    Raised {
+        class: urllib::Class::UrlError,
+        kind: urllib::Kind::Other,
+        reason: format!("[SSL] {f}"),
+    }
+}
+
 /// One urllib request to `t` (TLS for `https`), through `via` when the
 /// person's proxy carries it: `bytes` written, the answer read.
 pub fn over_tcp(t: &Target, via: Option<&Proxy>, bytes: &[u8], timeout: Duration) -> Sent {
@@ -138,13 +149,7 @@ pub fn over_tcp(t: &Target, via: Option<&Proxy>, bytes: &[u8], timeout: Duration
                 }
                 crate::transport::wire::Conn::Tls(Box::new(s))
             }
-            Err(f) => {
-                return raised(Raised {
-                    class: urllib::Class::UrlError,
-                    kind: urllib::Kind::Other,
-                    reason: format!("[SSL] {f:?}"),
-                })
-            }
+            Err(f) => return raised(tls_failed(&f)),
         }
     } else {
         if let Err(e) = tcp
@@ -204,5 +209,23 @@ pub fn wipe_bytes(d: &mut [u8]) {
     for b in d.iter_mut() {
         // SAFETY: a volatile write into a live buffer.
         unsafe { std::ptr::write_volatile(b, 0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::wire::Failure;
+
+    #[test]
+    fn a_failed_handshake_s_reason_is_plain_words() {
+        let f = Failure::Broken {
+            curl: 60,
+            why: "the server's certificate has expired".into(),
+        };
+        let r = tls_failed(&f);
+        assert_eq!(r.reason, "[SSL] the server's certificate has expired");
+        assert_eq!(r.class, urllib::Class::UrlError);
+        assert_eq!(tls_failed(&Failure::ConnectTimedOut).reason, "[SSL] the connection timed out");
     }
 }

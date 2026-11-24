@@ -348,6 +348,23 @@ impl Failure {
     }
 }
 
+/// Plain words for a person: what went wrong, with no Rust in it. A
+/// hint or a reason carries this, never the `{:?}` form.
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Connect(e) => write!(f, "couldn't connect: {e}"),
+            Failure::ConnectTimedOut => f.write_str("the connection timed out"),
+            Failure::NotSent(why) if why.is_empty() => f.write_str("the request couldn't be sent"),
+            Failure::NotSent(why) => write!(f, "the request couldn't be sent: {why}"),
+            Failure::TimedOut => f.write_str("no answer in time"),
+            Failure::Empty => f.write_str("the server closed the connection without an answer"),
+            Failure::Broken { why, .. } => f.write_str(why),
+            Failure::Tunnel(why) => write!(f, "the proxy's tunnel failed: {why}"),
+        }
+    }
+}
+
 fn broken(curl: i32, why: impl Into<String>) -> Failure {
     Failure::Broken {
         curl,

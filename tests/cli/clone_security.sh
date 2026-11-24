@@ -535,6 +535,26 @@ if [ -s "$W/port-rtls" ]; then
     expect_has "a certificate no trusted CA signed: daemon_unreachable" "$ERR" '"error": "daemon_unreachable"'
     expect_not "a certificate no trusted CA signed: no password asked" "$TTY" "Your password on"
     expect_eq "a certificate no trusted CA signed: the remote got nothing" "$(paths rtls)" ""
+    # The hint is words for a person: no Rust debug form in it (braces, a
+    # CamelCase name such as UnknownIssuer or Broken, curl's code). The
+    # binary's own words are checked too; bash's are Python's ssl text.
+    HINT="$(<<<"$ERR" "$PY" -c 'import json, sys
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(d, dict) and d.get("error") == "daemon_unreachable":
+        print(d.get("hint", ""))
+        break')"
+    expect_has "a certificate no trusted CA signed: the hint names the remote" "$HINT" "remote server https://localhost:$PT: "
+    for rusty in "{" "}" "Broken" "curl" "why:" "UnknownIssuer"; do
+        expect_not "a certificate no trusted CA signed: no $rusty in the hint" "$HINT" "$rusty"
+    done
+    if [ "$K2" != "$CLI_BASH_SOURCE" ]; then
+        expect_has "a certificate no trusted CA signed: the binary says why" "$HINT" \
+            "the server's certificate isn't from an authority this computer trusts. If you trust a private CA, set SSL_CERT_FILE to its certificate"
+    fi
 else
     bad "the https remote stub never came up (openssl: $(tail -3 "$W/tls/log" 2>/dev/null | tr '\n' ' '))"
 fi

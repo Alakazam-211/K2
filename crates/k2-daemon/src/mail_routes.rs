@@ -1004,6 +1004,23 @@ pub(crate) fn mail_send_mode_entry(
     )
 }
 
+/// The `mail.address-cap` card's writer (0.46.18): `POST
+/// /cli/mail/config/set {workspace, addressCap}` as the person who clicked
+/// (`cap` is a number, `0` = unlimited, or `"none"` to clear), after the
+/// route's own floor.
+pub(crate) fn mail_address_cap_entry(
+    who: &crate::permission::actions::Answerer,
+    project_path: &str,
+    cap: serde_json::Value,
+) -> crate::cli_response::CliResponse {
+    if let Err(r) = crate::permission::actions::switches::route_floor(who, "/cli/mail/config/set") {
+        return r;
+    }
+    routes_server::handle_config_set(
+        serde_json::json!({ "workspace": project_path, "addressCap": cap }).to_string().as_bytes(),
+    )
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Inline unit tests — shim wiring
 // ──────────────────────────────────────────────────────────────────────

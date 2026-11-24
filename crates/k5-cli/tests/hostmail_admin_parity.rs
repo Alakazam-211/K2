@@ -188,6 +188,33 @@ fn hostmail_admin_verbs_answer_as_the_shell_does() {
             3,
             1,
         ),
+        // 0.46.18: the address cap's card. An agent's own cap (owner_only,
+        // exit 3) and a mint past the cap (cap_reached, exit 1) each end with
+        // the mail.address-cap Ask line.
+        case(
+            "config, an agent's own address cap: the card",
+            &["config", "--workspace", "me", "--address-cap", "50"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"ok":false,"error":{"code":"owner_only","hint":"This agent manages email hosting, so it has no address cap unless the owner sets one, and that cap is the owner's to change. Ask your human."},"permission":{"action":"mail.address-cap","params":{"cap":"50","target":"me"},"approvers":"owner or admin","command":"k2 permission request mail.address-cap cap=50 target=me --why \"<what you need it for>\""}}"#.to_string(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
+        case(
+            "create, past the cap: the card",
+            &["create", "bot6"],
+            &[],
+            vec![Reply::Answer(
+                409,
+                r#"{"ok":false,"error":{"code":"cap_reached","hint":"address cap reached (5/5).","workspace":"me","cap":5,"capSource":"default"},"permission":{"action":"mail.address-cap","params":{"cap":null,"target":"me"},"approvers":"owner or admin","command":"k2 permission request mail.address-cap cap=<cap> target=me --why \"<what you need it for>\""}}"#.to_string(),
+            )],
+            owner_and_port,
+            1,
+            1,
+        ),
         ok_case(
             "domain add",
             &["domain", "add", "acme.example"],

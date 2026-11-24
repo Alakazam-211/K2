@@ -12,6 +12,8 @@
 #     manages email hosting)";
 #   * a number rides as a number, and the hint names the owner's cap;
 #   * anything else (None, -1, lots, no value) exits 2 and sends nothing;
+#   * the mail.address-cap card: an agent's own cap (owner_only, exit 3) and
+#     a mint past the cap (cap_reached, exit 1) end with its Ask line;
 #   * the help says none and that a manager has no cap unless one is set.
 set -euo pipefail
 
@@ -64,8 +66,8 @@ class H(BaseHTTPRequestHandler):
             cap = body["addressCap"]
             if agent and body.get("workspace") == "me":
                 return reply(self, 403, {"ok": False, "error": {"code": "owner_only", "hint": "This agent manages email hosting, so it has no address cap unless the owner sets one, and that cap is the owner's to change. Ask your human."},
-                                         "permission": {"action": "mail.address-cap", "params": {"workspace": "me", "cap": str(cap)}, "approvers": "owner or admin",
-                                                        "command": "k2 permission request mail.address-cap workspace=me cap=%s --why \"<what you need it for>\"" % cap}})
+                                         "permission": {"action": "mail.address-cap", "params": {"cap": str(cap), "target": "me"}, "approvers": "owner or admin",
+                                                        "command": "k2 permission request mail.address-cap cap=%s target=me --why \"<what you need it for>\"" % cap}})
             if cap == "none":
                 words = "Addresses: unlimited (this agent manages email hosting)"
             elif isinstance(cap, int):
@@ -74,6 +76,11 @@ class H(BaseHTTPRequestHandler):
                 return reply(self, 400, {"ok": False, "error": {"code": "usage", "hint": "'addressCap' must be a non-negative integer (0 = unlimited) or 'none'"}})
             return reply(self, 200, {"ok": True, "applied": {"workspace": {"project": "/w/alpha", "addressCap": cap, "addresses": words}},
                                      "hint": "mail config updated. %s." % words})
+        if u.path == "/cli/mail/address/create":
+            return reply(self, 409, {"ok": False, "error": {"code": "cap_reached", "hint": "address cap reached (5/5). Retire one or ask your human to raise the cap (k2 hostmail config --workspace me --address-cap <n>).",
+                                                            "workspace": "me", "cap": 5, "capSource": "default"},
+                                     "permission": {"action": "mail.address-cap", "params": {"cap": None, "target": "me"}, "approvers": "owner or admin",
+                                                    "command": "k2 permission request mail.address-cap cap=<cap> target=me --why \"<what you need it for>\""}})
         return reply(self, 404, {"ok": False, "error": {"code": "not_found", "hint": "stub: " + u.path}})
     do_GET = handle_any
     do_POST = handle_any
@@ -120,6 +127,25 @@ for args in "--address-cap None" "--address-cap -1" "--address-cap lots" "--addr
     <<<"$out" grep -q 'none' || fail "$args must say none is the other spelling: $out"
 done
 [ "$(wc -l < "$LOG")" -eq "$before" ] || fail "a usage error must send nothing: $(cat "$LOG")"
+
+# ── the card (mail.address-cap) ─────────────────────────────────────────
+# An agent that manages email hosting, on its own workspace: owner_only,
+# exit 3, the Ask line last.
+set +e
+out="$(K2_HOOK_TOKEN=agent-passport "$K2" hostmail config --workspace me --address-cap 50 2>&1)"; rc=$?
+set -e
+[ "$rc" -eq 3 ] || fail "an agent's own cap must exit 3 (got $rc): $out"
+<<<"$out" grep -q '"code": *"owner_only"' || fail "the refusal's code: $out"
+[ "$(tail -n 1 <<<"$out")" = 'Ask with: k2 permission request mail.address-cap cap=50 target=me --why "<what you need it for>"' ] \
+    || fail "the refusal must end with the card's Ask line: $out"
+# Past the cap: cap_reached (exit 1), the workspace named, the cap to fill in.
+set +e
+out="$(K2_HOOK_TOKEN=agent-passport "$K2" hostmail create bot6 2>&1)"; rc=$?
+set -e
+[ "$rc" -eq 1 ] || fail "past the cap must exit 1 (got $rc): $out"
+<<<"$out" grep -q '"code": *"cap_reached"' || fail "the refusal's code: $out"
+[ "$(tail -n 1 <<<"$out")" = 'Ask with: k2 permission request mail.address-cap cap=<cap> target=me --why "<what you need it for>"' ] \
+    || fail "cap_reached must end with the card's Ask line: $out"
 
 # ── help ────────────────────────────────────────────────────────────────
 help="$("$K2" hostmail config --help)"

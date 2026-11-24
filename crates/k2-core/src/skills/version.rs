@@ -436,7 +436,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 67;
 /// nothing).
 /// v27 = 0.46.18: a site name another workspace holds (`publish.transfer`);
 /// "Your compute node list": new nodes join it by themselves, and another
-/// workspace's list for an agent that manages it (`compute.allow-nodes-for`).
+/// workspace's list for an agent that manages it (`compute.allow-nodes-for`);
+/// "Your email address cap" (`mail.address-cap`).
 pub const SKILL_VERSION_PERMISSIONS: u32 = 27;
 
 // ── Content checksumming ─────────────────────────────────────────────

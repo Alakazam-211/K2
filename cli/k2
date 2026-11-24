@@ -99928,6 +99928,11 @@ FLAGS
                          agent, the default for any other). Each one shows
                          under workspaceAddressCaps[].text, e.g. "Addresses:
                          unlimited (this agent manages email hosting)".
+                         An agent refused this (exit 3) asks the owner or an
+                         admin with the Ask with: line the refusal ends with
+                         (permission cards on):
+                         k2 permission request mail.address-cap cap=<n|none>
+                         target=<workspace> --why "…"
   --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited,
                          and that is the default). Pair with --workspace.
                          Existing boxes need `k2 hostmail quota set`.
@@ -106995,6 +107000,14 @@ Focus groups are this server's sidebar groups of workspaces. `k2 focus-group lis
     k2 permission request llm.tokens-refresh token=<id> --why "<what you need it for>"
 
 Run it as printed (without `token=` it rechecks every token). The owner or an admin allows it once, and the `[permission:]` turn says each token's state. Nothing is signed in, switched or shown. `k2 study llm-tokens`.
+
+## Your email address cap
+
+An agent that manages hosted mail has no address cap unless the owner sets one; any other has the server's default. Past the cap, `k2 hostmail create` is refused `cap_reached` and ends with:
+
+    k2 permission request mail.address-cap cap=<cap> target=<workspace> --why "<what you need it for>"
+
+Fill in the cap you need: a number, `0` for no limit, or `none` to clear the cap set for the workspace. `k2 hostmail config --workspace <ws> --address-cap <n>|none` on your own workspace when you manage hosted mail (that cap is the owner's), or on any workspace without that switch, is refused (exit 3) and ends with the same line, filled in. The owner or an admin allows it, and the card sets the cap itself: don't run `k2 hostmail config` again. `k2 hostmail config` shows each workspace's cap.
 
 ## Apps
 

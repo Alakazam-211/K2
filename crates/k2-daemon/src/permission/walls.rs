@@ -111,6 +111,10 @@ const fn code(status: u16, code: &'static str) -> WallMatch {
 const CHAT_REFRESH_PARAMS: &[(&str, &[ParamFrom])] =
     &[("notes", &[ParamFrom::Response("/error/notes")]), ("mode", &[ParamFrom::Response("/error/mode")])];
 
+/// `mail.address-cap` from `k2 hostmail config`'s body (0.46.18).
+const MAIL_ADDRESS_CAP_PARAMS: &[(&str, &[ParamFrom])] =
+    &[("target", &[ParamFrom::Body("/workspace")]), ("cap", &[ParamFrom::Body("/addressCap")])];
+
 const ANY: WallMethod = WallMethod::Any;
 const POST: WallMethod = WallMethod::Post;
 
@@ -355,6 +359,9 @@ pub(crate) const V1_ACTIONS: &[&str] = &[
     "focus-groups.create",
     "focus-groups.rename",
     "focus-groups.assign",
+    // 0.46.18: a person sets or clears a workspace's hosted mail address
+    // cap for an agent (`k2 hostmail config --address-cap <n>|none`).
+    "mail.address-cap",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -1172,6 +1179,30 @@ pub(crate) const ROWS: &[Row] = &[
         fixed: &[("mode", "on")],
         ..row(ask("mail.send-mode", Floor::Admin), code(403, "owner_only"), "/cli/mail/config/set", POST)
     },
+    // 0.46.18: a workspace's address cap. `k2 hostmail config --workspace
+    // <ws> --address-cap <n>|none` by an agent without "manage hosted mail"
+    // (any workspace), or with it on its own workspace (the owner's cap),
+    // alone: with agentSend or always-BCC in the same call it's theirs.
+    Row {
+        body_has: Some(("/addressCap", true)),
+        body_lacks: &["/agentSend", "/alwaysBcc"],
+        params: MAIL_ADDRESS_CAP_PARAMS,
+        ..row(ask("mail.address-cap", Floor::Admin), code(403, "agent_send_path_only"), "/cli/mail/config/set", POST)
+    },
+    Row {
+        body_has: Some(("/addressCap", true)),
+        body_lacks: &["/agentSend", "/alwaysBcc"],
+        own_ws: Some("/workspace"),
+        params: MAIL_ADDRESS_CAP_PARAMS,
+        ..row(ask("mail.address-cap", Floor::Admin), code(403, "owner_only"), "/cli/mail/config/set", POST)
+    },
+    // `k2 hostmail create` past the cap: the refusal names the workspace;
+    // the agent fills in the cap it needs (the refusal never says one, so
+    // the line reads `cap=<cap>`).
+    Row {
+        params: &[("target", &[ParamFrom::Response("/error/workspace")]), ("cap", &[ParamFrom::Body("/addressCap")])],
+        ..row(ask("mail.address-cap", Floor::Admin), code(409, "cap_reached"), "/cli/mail/address/create", POST)
+    },
     Row {
         params: &[("message", &[ParamFrom::Response("/id")])],
         ..row(
@@ -1800,6 +1831,10 @@ mod tests {
             (200, "POST", "/cli/postal/invite", vec![], Some(json!({"to":"ops::beta.postal.bot","why":"to review PRs"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.invite"),
             (200, "POST", "/cli/postal/decide", vec![], Some(json!({"id":"f-1","decision":"accept"})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.pair.accept"),
             (200, "POST", "/cli/postal/link-p5", vec![], Some(json!({})), json!({"ok":true,"asked":true,"card":"c1"}), "postal.link-p5"),
+            // 0.46.18: a mint past the address cap, and an agent's
+            // `k2 hostmail config --address-cap` without "manage hosted mail".
+            (409, "POST", "/cli/mail/address/create", vec![], Some(json!({"localPart":"bot6"})), json!({"ok":false,"error":{"code":"cap_reached","hint":"x","workspace":"alpha","cap":5}}), "mail.address-cap"),
+            (403, "POST", "/cli/mail/config/set", vec![], Some(json!({"workspace":"sales","addressCap":9})), json!({"ok":false,"error":{"code":"agent_send_path_only","hint":"x"}}), "mail.address-cap"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -2405,7 +2440,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 88);
+        assert_eq!(V1_ACTIONS.len(), 89);
         let mut seen = std::collections::HashSet::new();
         for a in V1_ACTIONS {
             assert!(seen.insert(*a), "{a} is listed twice in V1_ACTIONS");
@@ -2889,6 +2924,60 @@ mod tests {
             let p = teach_as(&me.id, "/cli/mail/config/set", json!({"workspace": ws, "agentSend": "off"}), &owner_only).expect("taught");
             assert_eq!(p["command"], format!("k2 permission request mail.stop-sending target={ws} --why \"<what you need it for>\""), "{p}");
         }
+    }
+
+    /// 0.46.18: the address cap's three refusals end with the
+    /// `mail.address-cap` card's line: `k2 hostmail create` past the cap
+    /// (409, the workspace from the refusal, the cap for the agent to fill
+    /// in), `k2 hostmail config --address-cap` on its own workspace
+    /// (`owner_only`), and by an agent without "manage hosted mail"
+    /// (`agent_send_path_only`). Bundled with agentSend or always-BCC it's
+    /// theirs, and another workspace's `owner_only` stays mail.manage's.
+    #[test]
+    fn address_cap_refusals_teach_the_cap_card() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let me = crate::permission::actions::held::tests::seed("wac");
+        let other = crate::permission::actions::held::tests::seed("wad");
+        let teach_as = |status: u16, path: &str, body: Value, response: &Value| {
+            let params = HashMap::new();
+            permission_for(&Refused { status, method: "POST", path, params: &params, body: Some(&body), response, workspace_id: &me.id })
+        };
+        let full = |rest: &str| format!("{CLI_NAME} permission request mail.address-cap {rest} --why \"<what you need it for>\"");
+
+        // Past the cap: the refusal names the workspace.
+        let cap_reached = json!({"ok":false,"error":{"code":"cap_reached","hint":"x","workspace":me.handle,"cap":5}});
+        let p = teach_as(409, "/cli/mail/address/create", json!({"project": me.handle, "localPart": "bot6"}), &cap_reached).expect("taught");
+        assert_eq!(p["command"], full(&format!("cap=<cap> target={}", me.handle)), "{p}");
+        assert_eq!(p["approvers"], "owner or admin", "{p}");
+        // Another 409 on create (a taken name) is no card's.
+        let exists = json!({"ok":false,"error":{"code":"exists","hint":"x"}});
+        assert!(teach_as(409, "/cli/mail/address/create", json!({"localPart": "bot"}), &exists).is_none());
+
+        // Its own workspace's cap (it manages email hosting): owner_only.
+        let owner_only = json!({"ok":false,"error":{"code":"owner_only","hint":"x"}});
+        for (cap, word) in [(json!(50), "50"), (json!("none"), "none"), (json!(0), "0")] {
+            let p = teach_as(403, "/cli/mail/config/set", json!({"workspace": me.handle, "addressCap": cap}), &owner_only).expect("taught");
+            assert_eq!(p["command"], full(&format!("cap={word} target={}", me.handle)), "{p}");
+        }
+        // Without the switch, any workspace.
+        let path_only = json!({"ok":false,"error":{"code":"agent_send_path_only","hint":"x"}});
+        for ws in [&me.handle, &other.handle] {
+            let p = teach_as(403, "/cli/mail/config/set", json!({"workspace": ws, "addressCap": 9}), &path_only).expect("taught");
+            assert_eq!(p["command"], full(&format!("cap=9 target={ws}")), "{p}");
+        }
+        // Bundled with agent mail policy: not this card.
+        let p = teach_as(403, "/cli/mail/config/set", json!({"workspace": me.handle, "addressCap": 9, "agentSend": "on"}), &owner_only)
+            .expect("taught");
+        assert_eq!(action_of(&p), "mail.send-mode", "{p}");
+        let p = teach_as(403, "/cli/mail/config/set", json!({"workspace": me.handle, "addressCap": 9, "alwaysBcc": "audit@shop.example"}), &owner_only)
+            .expect("a refusal");
+        assert_ne!(p["action"], "mail.address-cap", "{p}");
+        // Another workspace's owner_only (the dispatcher's mail-manage wall,
+        // which names the asker's own toggle): mail.manage, as before.
+        let manage = json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":me.handle,"id":me.id}}});
+        let p = teach_as(403, "/cli/mail/config/set", json!({"workspace": other.handle, "addressCap": 9}), &manage).expect("taught");
+        assert_eq!(action_of(&p), "mail.manage", "{p}");
     }
 
     /// 0.46.17: CI on K2 Compute. Every `ci_preview_off` (a 409) and the

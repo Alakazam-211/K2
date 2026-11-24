@@ -52,6 +52,11 @@ FLAGS
                          agent, the default for any other). Each one shows
                          under workspaceAddressCaps[].text, e.g. "Addresses:
                          unlimited (this agent manages email hosting)".
+                         An agent refused this (exit 3) asks the owner or an
+                         admin with the Ask with: line the refusal ends with
+                         (permission cards on):
+                         k2 permission request mail.address-cap cap=<n|none>
+                         target=<workspace> --why "…"
   --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited,
                          and that is the default). Pair with --workspace.
                          Existing boxes need `k2 hostmail quota set`.

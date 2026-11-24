@@ -1584,6 +1584,24 @@ Run it as printed (without `token=` it rechecks every token). The owner or an ad
     cli_name!(),
     r#" study llm-tokens`.
 
+## Your email address cap
+
+An agent that manages hosted mail has no address cap unless the owner sets one; any other has the server's default. Past the cap, `"#,
+    cli_name!(),
+    r#" hostmail create` is refused `cap_reached` and ends with:
+
+    "#,
+    cli_name!(),
+    r#" permission request mail.address-cap cap=<cap> target=<workspace> --why "<what you need it for>"
+
+Fill in the cap you need: a number, `0` for no limit, or `none` to clear the cap set for the workspace. `"#,
+    cli_name!(),
+    r#" hostmail config --workspace <ws> --address-cap <n>|none` on your own workspace when you manage hosted mail (that cap is the owner's), or on any workspace without that switch, is refused (exit 3) and ends with the same line, filled in. The owner or an admin allows it, and the card sets the cap itself: don't run `"#,
+    cli_name!(),
+    r#" hostmail config` again. `"#,
+    cli_name!(),
+    r#" hostmail config` shows each workspace's cap.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
@@ -2693,6 +2711,9 @@ mod tests {
             // token needs nothing.
             concat!(cli_name!(), " permission request llm.tokens-refresh token=<id> --why"),
             "`access_expired`",
+            // 0.46.18: a workspace's hosted mail address cap.
+            concat!(cli_name!(), " permission request mail.address-cap cap=<cap> target=<workspace> --why"),
+            "`cap_reached`",
         ] {
             assert!(body.contains(must), "the k2-permissions skill must teach: {must}");
         }

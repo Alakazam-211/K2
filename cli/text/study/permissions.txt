@@ -207,6 +207,14 @@ Focus groups are this server's sidebar groups of workspaces. `k2 focus-group lis
 
 Run it as printed (without `token=` it rechecks every token). The owner or an admin allows it once, and the `[permission:]` turn says each token's state. Nothing is signed in, switched or shown. `k2 study llm-tokens`.
 
+## Your email address cap
+
+An agent that manages hosted mail has no address cap unless the owner sets one; any other has the server's default. Past the cap, `k2 hostmail create` is refused `cap_reached` and ends with:
+
+    k2 permission request mail.address-cap cap=<cap> target=<workspace> --why "<what you need it for>"
+
+Fill in the cap you need: a number, `0` for no limit, or `none` to clear the cap set for the workspace. `k2 hostmail config --workspace <ws> --address-cap <n>|none` on your own workspace when you manage hosted mail (that cap is the owner's), or on any workspace without that switch, is refused (exit 3) and ends with the same line, filled in. The owner or an admin allows it, and the card sets the cap itself: don't run `k2 hostmail config` again. `k2 hostmail config` shows each workspace's cap.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

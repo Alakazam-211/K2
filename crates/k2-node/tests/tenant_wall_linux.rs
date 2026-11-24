@@ -1083,6 +1083,18 @@ async fn userns_and_the_denylist_are_walled_for_team_own_and_owner_jobs() {
     start(&n, 0, p);
     let got = finished(&n, 0, "ns-owner-userns").await;
     assert!(got.out.contains("unshare=0"), "the owner's --userns job makes one: {} {}", got.out, got.err);
+    // With the grant it may mount in its own namespace (mount(2) and the
+    // new mount API); keyctl and bpf stay refused.
+    let bin = r.base.join("bin/k2-node").display().to_string();
+    let argv = [bin.as_str(), "wall-probe", "--syscall", "userns_mount_tmpfs", "--syscall", "userns_fsopen_tmpfs", "--syscall", "keyctl", "--syscall", "bpf"];
+    let mut p = plan("ns-owner-mount", &argv);
+    p.userns = true;
+    start(&n, 0, p);
+    let got = finished(&n, 0, "ns-owner-mount").await;
+    let v: serde_json::Value = serde_json::from_str(got.out.trim()).unwrap_or_else(|e| panic!("{e}: {} {}", got.out, got.err));
+    for (probe, want) in [("userns_mount_tmpfs", "ok"), ("userns_fsopen_tmpfs", "ok"), ("keyctl", "EPERM"), ("bpf", "EPERM")] {
+        assert_eq!(v["syscall"][probe], want, "the owner's --userns job: {probe}: {v}");
+    }
     for (userns, no_addr_filter) in [(true, false), (true, true), (false, true)] {
         let s = JobStart {
             key: "t1-00000000000000aa".into(),

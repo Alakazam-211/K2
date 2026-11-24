@@ -17,9 +17,11 @@
 //!   Root tells the shim which rules apply through the unit's own env
 //!   ([`ENV_USERNS`]); a job's `--env` can never name a `K2_` variable.
 //!
-//! With `--userns` the job skips the user-namespace rules (clone3, the
-//! `CLONE_NEWUSER` flag, `setns`, its own namespace's limit); every other
-//! denial stays.
+//! With `--userns` (the node owner's own server's trusted jobs) the job
+//! skips the user-namespace and mount rules ([`DENIED_UNLESS_USERNS`]:
+//! clone3, the `CLONE_NEWUSER` flag, `setns`, mount, umount2, pivot_root
+//! and the new mount API, and its own namespace's limit), so it can build
+//! containers in its own namespace; the [`DENIED`] list stays.
 
 /// The unit's env (set by root with `systemd-run --setenv`) that tells the
 /// shim which rules apply: [`USERNS_DENY_LIMIT`], [`USERNS_DENY`] or
@@ -81,9 +83,9 @@ pub const WALL_EXIT: u8 = 71;
 
 /// Every job is refused these (`EPERM`), `--userns` or not: the usual
 /// container denylist (eBPF, perf events, userfaultfd, the kernel keyring,
-/// io_uring, kexec, kernel modules, file handles, mounts). Personality
-/// changes are refused by `LockPersonality=yes` (and the shim's rule: only
-/// the default `PER_LINUX` or the query `0xffffffff`).
+/// io_uring, kexec, kernel modules, file handles). Personality changes are
+/// refused by `LockPersonality=yes` (and the shim's rule: only the default
+/// `PER_LINUX` or the query `0xffffffff`).
 pub const DENIED: &[&str] = &[
     "bpf",
     "perf_event_open",
@@ -100,6 +102,15 @@ pub const DENIED: &[&str] = &[
     "finit_module",
     "delete_module",
     "open_by_handle_at",
+];
+
+/// Refused unless the job has `--userns` (`EPERM`): mounts and joining
+/// namespaces. `clone3` (its flags sit in memory a filter can't read)
+/// answers `ENOSYS`, so libc falls back to `clone`, whose `CLONE_NEWUSER`
+/// flag is refused; `unshare` likewise. With `--userns` the job may mount
+/// in a namespace of its own (a container runtime's work); without it,
+/// none of these.
+pub const DENIED_UNLESS_USERNS: &[&str] = &[
     "mount",
     "umount",
     "umount2",
@@ -113,12 +124,8 @@ pub const DENIED: &[&str] = &[
     "move_mount",
     "open_tree",
     "mount_setattr",
+    "setns",
 ];
-
-/// Refused unless the job has `--userns` (`EPERM`). `clone3` (its flags sit
-/// in memory a filter can't read) answers `ENOSYS`, so libc falls back to
-/// `clone`, whose `CLONE_NEWUSER` flag is refused; `unshare` likewise.
-pub const DENIED_UNLESS_USERNS: &[&str] = &["setns"];
 
 /// The unit's syscall properties (systemd). `errno_each`: systemd ≥ 247
 /// takes `name:EPERM` per entry (refused with `EPERM`); an older one
@@ -820,8 +827,13 @@ mod tests {
             assert!(d[0].split(['~', ' ']).any(|w| w == format!("{n}:EPERM")), "{n} missing: {d:?}");
         }
         let u = unit_props(true, true);
-        assert!(!u[0].contains("setns"), "--userns keeps setns: {u:?}");
-        assert!(u[0].contains("bpf:EPERM") && u[0].contains("mount:EPERM"), "the other denials stay: {u:?}");
+        let words: Vec<&str> = u[0].trim_start_matches("SystemCallFilter=~").split(' ').collect();
+        for n in DENIED_UNLESS_USERNS {
+            assert!(!words.contains(&format!("{n}:EPERM").as_str()), "--userns keeps {n}: {u:?}");
+        }
+        for n in DENIED {
+            assert!(words.contains(&format!("{n}:EPERM").as_str()), "{n} stays denied with --userns: {u:?}");
+        }
         let old = unit_props(false, false);
         assert!(old[0].starts_with("SystemCallFilter=~bpf perf_event_open"), "{old:?}");
         assert!(!old[0].contains(':'), "{old:?}");

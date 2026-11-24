@@ -8,7 +8,11 @@
 //!   job runs in a user namespace of its own whose `max_user_namespaces`
 //!   is 0 (that namespace only, never the node's sysctl).
 //! - **`--userns`** (`k2 compute run --userns`): the job skips that
-//!   denial; every other denial stays. Only a workspace the node's owner
+//!   denial and may mount (mount, umount2, pivot_root, the new mount API)
+//!   and setns in a namespace of its own, so the owner's trusted jobs can
+//!   build containers there; the always-denied list (bpf, perf events,
+//!   userfaultfd, the keyring, io_uring, kexec, modules, file handles)
+//!   stays. Only a workspace the node's owner
 //!   granted it (`k2 compute grant <node> --workspace <w> --userns`) may
 //!   ask, and only on a node its own server owns: a server that is a
 //!   tenant of the node (its jobs run in a slot 1–7) never gets it, and

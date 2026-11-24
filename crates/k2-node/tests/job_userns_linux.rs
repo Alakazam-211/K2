@@ -112,21 +112,20 @@ fn a_job_is_refused_the_denylist_with_or_without_userns() {
         "finit_module",
         "delete_module",
         "open_by_handle_at",
-        "mount",
-        "umount2",
-        "pivot_root",
-        "fsopen_tmpfs",
-        "fsconfig",
-        "fsmount",
-        "fspick",
-        "move_mount",
-        "open_tree",
-        "mount_setattr",
         "personality_change",
     ];
     for mode in [None, Some(USERNS_ALLOW)] {
         for p in denied {
             expect("deny", mode, p, "EPERM");
+        }
+        if mode.is_none() {
+            // Mounts and the new mount API: refused without the grant (with
+            // it, a job may mount in its own namespace: the ignored test).
+            for p in ["mount", "umount2", "pivot_root", "fsopen_tmpfs", "fsconfig", "fsmount", "fspick", "move_mount", "open_tree", "mount_setattr"] {
+                expect("deny-mnt", mode, p, "EPERM");
+            }
+            expect("deny-mntns", mode, "userns_mount_tmpfs", "unshare:EPERM");
+            expect("deny-fsns", mode, "userns_fsopen_tmpfs", "unshare:EPERM");
         }
         // The default personality stays settable (systemd's LockPersonality
         // allows only the current one, not even the 0xffffffff query).
@@ -225,7 +224,7 @@ fn may_make_user_namespaces() -> bool {
     Command::new("unshare").args(["-U", "true"]).status().map(|s| s.success()).unwrap_or(false)
 }
 
-/// `--userns`: the user-namespace rules are gone (the denylist stays: the
+/// `--userns`: the user-namespace rules are gone (the always-denied list stays: the
 /// test above).
 #[test]
 #[ignore = "needs a process that may make user namespaces (k2 compute run --userns, or a Linux box): run with --ignored"]
@@ -236,6 +235,26 @@ fn with_userns_a_job_may_make_a_user_namespace() {
     expect("a-unshare", Some(USERNS_ALLOW), "unshare_newuser", "ok");
     expect("a-unsharecmd", Some(USERNS_ALLOW), "unshare_cmd", "ok");
     expect("a-setns", Some(USERNS_ALLOW), "setns", "EBADF");
+}
+
+/// `--userns` lets the owner's trusted jobs build containers in their own
+/// namespace: a user + mount namespace of the job's own, tmpfs mounted
+/// there with mount(2) and with the new mount API; keyctl and bpf stay
+/// refused even so. (Without the grant: the default tests above.)
+#[test]
+#[ignore = "needs a process that may make user namespaces with capabilities (not under AppArmor's userns restriction; a Linux box or a node that allows it): run with --ignored"]
+fn with_userns_a_job_mounts_tmpfs_in_its_own_namespace() {
+    assert!(may_make_user_namespaces(), "this process can't make user namespaces: run it where it may");
+    expect("a-mnt", Some(USERNS_ALLOW), "userns_mount_tmpfs", "ok");
+    expect("a-fsmnt", Some(USERNS_ALLOW), "userns_fsopen_tmpfs", "ok");
+    expect("a-keyctl", Some(USERNS_ALLOW), "keyctl", "EPERM");
+    expect("a-bpf", Some(USERNS_ALLOW), "bpf", "EPERM");
+    // And with CAP_SYS_ADMIN in its own namespace the grant's filter still
+    // refuses keyctl and bpf, and lets fsopen through.
+    for (p, got) in shim_with_caps("a-caps", USERNS_ALLOW, &["fsopen_tmpfs", "keyctl", "bpf"]) {
+        let want = if p == "fsopen_tmpfs" { "ok" } else { "EPERM" };
+        assert_eq!(got, want, "{p} with the grant, holding CAP_SYS_ADMIN in its own namespace");
+    }
 }
 
 /// The limit is the job's own: what root does for a unit (a user

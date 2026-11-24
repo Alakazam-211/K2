@@ -19,7 +19,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Wiki
 - If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
 ### Compute
-- Your own server's compute jobs can no longer create user namespaces unless the node's owner allows it for that job with --userns. Jobs can no longer use io_uring, bpf, userfaultfd, perf_event_open, the kernel keyring (keyctl, add_key, request_key), kexec, kernel module calls, open_by_handle_at, mount, umount2, pivot_root or personality changes.
+- Your own server's compute jobs can no longer create user namespaces unless the node's owner allows it for that job with --userns. Jobs can no longer use io_uring, bpf, userfaultfd, perf_event_open, the kernel keyring (keyctl, add_key, request_key), kexec, kernel module calls, open_by_handle_at or personality changes.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

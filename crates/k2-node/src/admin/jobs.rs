@@ -354,7 +354,7 @@ pub struct JobStart {
     pub netns_dummies: Vec<k2_node_proto::jobnet::Dummy>,
     /// 0.46.18 (`--userns`, [`k2_node_proto::userns`]): the job may make
     /// user namespaces (its unit skips the namespace rules of
-    /// [`crate::jobsec`]; the denylist stays). The owner's slot only: root
+    /// [`crate::jobsec`]; mounts in its own namespace too; the always-denied list stays). The owner's slot only: root
     /// refuses it for any other. Sent only when `Ready` said `userns`;
     /// absent when false (today's start, byte for byte).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -783,7 +783,7 @@ pub struct UnitPlan {
     /// sandbox in Playwright tests needs a user namespace).
     pub restrict_userns: bool,
     /// 0.46.18 (`--userns`, the owner's slot only): the unit skips the
-    /// user-namespace rules ([`crate::jobsec`]); the denylist stays. Never
+    /// user-namespace and mount rules ([`crate::jobsec`]); the always-denied list stays. Never
     /// with `restrict_userns`.
     pub userns: bool,
     /// 0.46.18, without `userns`: the job runs in a user namespace of its
@@ -2519,7 +2519,10 @@ mod tests {
         }
         let f: Vec<&String> = a.iter().filter(|x| x.starts_with("SystemCallFilter=")).collect();
         assert_eq!(f.len(), 1, "{a:?}");
-        assert!(!f[0].contains("setns") && f[0].contains("bpf:EPERM") && f[0].contains("pivot_root:EPERM"), "{f:?}");
+        assert!(!f[0].contains("setns") && f[0].contains("bpf:EPERM") && f[0].contains("keyctl:EPERM"), "{f:?}");
+        for n in ["mount:EPERM", "umount2:EPERM", "pivot_root:EPERM", "fsopen:EPERM", "move_mount:EPERM"] {
+            assert!(!f[0].split([' ', '~']).any(|w| w == n), "--userns may mount in its own namespace: {n}: {f:?}");
+        }
         assert!(a.iter().any(|x| x == "LockPersonality=yes") && a.iter().any(|x| x == "NoNewPrivileges=yes"));
         assert!(plain.iter().any(|x| x.starts_with("SystemCallFilter=") && x.contains("setns:EPERM")), "{plain:?}");
         let mut old = plan();

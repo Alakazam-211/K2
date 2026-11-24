@@ -460,11 +460,7 @@ fn poll_one(sid: &str, slot: &Slot, now: i64) {
 fn cadence(f: &Follower, view: &crate::activity_store::FollowView, now: i64) -> Option<i64> {
     if view.hot {
         Some(HOT_POLL_MS)
-    } else if !view.display_idle {
-        Some(WARM_POLL_MS)
-    } else if !view.had_hook && now < f.idle_follow_until {
-        Some(WARM_POLL_MS)
-    } else if now < f.rollout_watch_until {
+    } else if !view.display_idle || (!view.had_hook && now < f.idle_follow_until) || now < f.rollout_watch_until {
         Some(WARM_POLL_MS)
     } else {
         None

@@ -470,6 +470,13 @@ impl TempHome {
 
     fn at_locked(lock: EnvLock, home: PathBuf) -> Self {
         std::fs::create_dir_all(crate::paths::k2_home_in(&home)).expect("create temp HOME/.k2");
+        // Only its owner can change it, as a real home: a hire root under
+        // it passes the owner-and-mode check whatever the umask.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).expect("chmod temp HOME");
+        }
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", &home);
         crate::test_isolation::assert_isolated_from_prod();

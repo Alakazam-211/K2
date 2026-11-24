@@ -594,16 +594,7 @@ pub fn confirm_token_with(
         }
         object(o)
     } else if has_word(&methods, "terminal") {
-        if first_setup {
-            out::stderr_line("Confirming from this terminal (this server has no owner login yet)…");
-        } else {
-            // A purge on a server with no other confirm (0.46.18): the
-            // daemon's check is "outside K2's process tree", not proof of
-            // a person, so say only that.
-            out::stderr_line(&format!(
-                "Confirming from this terminal, outside {PRODUCT_NAME}'s process tree (this server has no other confirm)…"
-            ));
-        }
+        out::stderr_line("Confirming from this terminal (this server has no owner login yet)…");
         object(vec![
             ("action", a()),
             ("secretId", id()),
@@ -1151,7 +1142,6 @@ mod tests {
                     "card %s on %s'\"'\"'s Thread%s (%s)",
                     "(\" — \" + p[\"thread\"])",
                     "Confirming from this terminal (this server has no owner login yet)…",
-                    "Confirming from this terminal, outside K2's process tree (this server has no other confirm)…",
                     "Which owner login on this server (k2 users lists them): ",
                     "_k2_read_hidden pw \"Sign-in password for owner login $login: \"",
                     "_k2_read_hidden pw 'Vault password: '",

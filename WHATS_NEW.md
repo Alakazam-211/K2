@@ -115,7 +115,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 app box unprep` no longer refuses because of K2's own processes.** With every App stopped it said `apps_running`, counting Podman's pause process, the App engine and the App user's D-Bus. It now counts only processes that belong to an App.
 
 ### Command line
-- **Purge works on a server with no owner login.** `k2 app uninstall --purge` and `k2 hostchat purge` failed with `no_confirm_method` on a server with no owner login, no vault password and no Touch ID. There, run them from a terminal outside K2's process tree (your own SSH login): that terminal is the confirm, as it is for the server's first owner login. A server with any of those checks uses it as before, and nothing changes for requests from other machines, Connect logins or agents.
+- **On a server with no owner login, purge now asks you to set an owner password first, then uses it.** `k2 app uninstall --purge` and `k2 hostchat purge` failed with `no_confirm_method` and no next step on a server with no owner login, vault password or Touch ID. They now refuse with the one command to run first, from your own terminal on that server: `k2 users add <your-name> --role owner --keep-password`. After that, each purge asks for that login's password. A server with a vault password or Touch ID uses it as before, and agents still can't purge.
 - **`k2 desktop env` works in terminals K2 opens for an agent** (`k2 terminal spawn --agent <name>`), whatever program they run. A person's own shell tab is still refused.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes

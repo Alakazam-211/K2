@@ -2302,43 +2302,49 @@ fn methods(vault: &LocalVault, c: &VaultCaller) -> Vec<&'static str> {
     m
 }
 
-/// The owner's destructive steps a server with no confirm of its own may
-/// take from a terminal outside K2's process tree (0.46.18):
-/// `k2 app uninstall --purge` and `k2 hostchat purge`. Field report: a
-/// headless Linux server with no owner login and no vault password refused
-/// both (`no_confirm_method`), so its owner could never purge.
-pub(crate) const TERMINAL_ACTIONS: &[&str] = &[crate::apps::access::PURGE_CONFIRM, crate::sew::routes::CONFIRM_PURGE];
+/// The owner's purges (0.46.18): `k2 app uninstall --purge` and
+/// `k2 hostchat purge`. Field report: a headless Linux server with no owner
+/// login and no vault password refused both with `no_confirm_method` and
+/// no way forward. The Steward's ruling: no terminal-outside-K2 shortcut
+/// (anything running as the server's user can leave K2's process tree on
+/// purpose). Instead the owner token confirms them with an owner login's
+/// own sign-in password ([`owner_password_ok`]); with no owner login the
+/// refusal names the one command that makes one, and that command is
+/// the owner-login change with this computer's own check
+/// (`connect_users_routes::owner_login_gate`), which no agent passport can
+/// reach.
+pub(crate) const OWNER_PASSWORD_ACTIONS: &[&str] = &[crate::apps::access::PURGE_CONFIRM, crate::sew::routes::CONFIRM_PURGE];
 
-/// The terminal check for [`TERMINAL_ACTIONS`]: the same one a server's
-/// first owner login uses (`presence::TERMINAL`). Only the owner token, on
-/// the vault socket from a terminal outside K2's process tree
-/// (`Channel::Tty`; never TCP or a Connect login), and only where this
-/// server has no other check for it (no vault password, no Touch ID or
-/// Windows Hello, no owner login). Remote callers get exactly what they
-/// got before.
-///
-/// What `Channel::Tty` proves is the vault socket's heuristic
-/// (`vault/human.rs`): the peer has no K2 ancestor, isn't in the daemon's
-/// cgroup, carries no K2 session variables, and says it is a terminal. It
-/// is not proof of a person: an agent that deliberately leaves the
-/// daemon's tree (e.g. `systemd-run --user` on a box with a user manager)
-/// gets past it, as it does for the other steps on this channel (review
-/// B1, review-app-runtime-fixes-0.46.18). The real bar comes with the
-/// isolation work (no leaving the tree, a positive login-session check).
-fn terminal_ok(vault: &LocalVault, c: &VaultCaller, action: &str) -> bool {
-    TERMINAL_ACTIONS.contains(&action)
-        && !c.is_passport()
-        && matches!(c.actor, Actor::Owner)
-        && c.channel == Channel::Tty
-        && methods(vault, c).is_empty()
-        && presence::methods(c, presence::OWNER_LOGIN) == [presence::TERMINAL]
+/// The refusal for an owner purge on a server with no confirm at all.
+pub(crate) fn no_owner_password_hint() -> String {
+    format!(
+        "purge needs the owner's confirm, and this server has none yet (no owner login, vault password or Touch ID). Set an owner password first, from your own terminal on this server (not a {product} terminal): {cli} users add <your-name> --role owner --keep-password. Then run the purge again: it asks for that password. Agents: don't run it; tell your owner.",
+        product = k2_core::brand::PRODUCT_NAME,
+        cli = k2_core::brand::CLI_NAME,
+    )
 }
 
-/// [`methods`] for one step: plus `terminal` where [`terminal_ok`].
+/// May the owner token confirm `action` with an owner login's password?
+/// Only an owner purge, only the owner token (not a passport, not a Connect
+/// login, which has its own password), only where this server has no
+/// other check for the owner token (no vault password, no Touch ID), and
+/// only once an owner login exists. The password is the proof, whatever
+/// the channel.
+fn owner_password_ok(vault: &LocalVault, c: &VaultCaller, action: &str) -> bool {
+    OWNER_PASSWORD_ACTIONS.contains(&action)
+        && !c.is_passport()
+        && matches!(c.actor, Actor::Owner)
+        && c.channel != Channel::Login
+        && methods(vault, c).is_empty()
+        && !presence::owner_logins().is_empty()
+}
+
+/// [`methods`] for one step: plus `owner-login-password` where
+/// [`owner_password_ok`].
 fn methods_for(vault: &LocalVault, c: &VaultCaller, action: &str) -> Vec<&'static str> {
     let mut m = methods(vault, c);
-    if terminal_ok(vault, c, action) {
-        m.push(presence::TERMINAL);
+    if owner_password_ok(vault, c, action) {
+        m.push(presence::OWNER_LOGIN_PASSWORD);
     }
     m
 }
@@ -2609,11 +2615,23 @@ fn confirm_start_here(vault: &LocalVault, c: &VaultCaller, action: &str, b: &Con
     }
     let m = methods_for(vault, c, action);
     if m.is_empty() {
+        if OWNER_PASSWORD_ACTIONS.contains(&action) && matches!(c.actor, Actor::Owner) && !c.is_passport() {
+            // Fail closed, with the one step that makes a confirm (0.46.18).
+            return Err(err("no_confirm_method", 409, no_owner_password_hint()));
+        }
         return Err(err(
             "no_confirm_method",
             409,
             "set a vault password first (Settings → Vault, or k2 vault confirm-password set from a terminal outside K2)",
         ));
+    }
+    let mut owners = None;
+    let mut only_owner = None;
+    if m.contains(&presence::OWNER_LOGIN_PASSWORD) {
+        // The CLI names the login it asks for; with several, it asks which.
+        let o = presence::owner_logins();
+        only_owner = (o.len() == 1).then(|| o[0].clone());
+        owners = Some(o.len());
     }
     // The daemon's own words for what the person approves, shown before
     // they type (systemd-cred plans, rollbacks of placed secrets).
@@ -2623,7 +2641,12 @@ fn confirm_start_here(vault: &LocalVault, c: &VaultCaller, action: &str, b: &Con
         _ => None,
     };
     let (server, login) = confirm_identity(c);
-    Ok(json!({ "methods": m, "expiresIn": 60, "confirmText": text, "server": server, "login": login }))
+    let login = login.or(only_owner);
+    let mut out = json!({ "methods": m, "expiresIn": 60, "confirmText": text, "server": server, "login": login });
+    if let Some(n) = owners {
+        out["ownerLogins"] = json!(n);
+    }
+    Ok(out)
 }
 
 /// Who confirms where, for the password prompt's words (0.46.13 field
@@ -2690,7 +2713,17 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
         }
     }
     let (secret_id, reason) = bound_step(vault, c, action, &b)?;
-    let t = confirm_check(vault, c, action, secret_id.as_deref(), b.method.as_deref().unwrap_or(""), b.password.as_deref(), &reason, ingress)?;
+    let t = confirm_check_as(
+        vault,
+        c,
+        action,
+        secret_id.as_deref(),
+        b.method.as_deref().unwrap_or(""),
+        b.username.as_deref(),
+        b.password.as_deref(),
+        &reason,
+        ingress,
+    )?;
     let mut out = json!({ "token": t, "expiresIn": 60 });
     if action == crate::vault_systemd_routes::CONFIRM_ACTION || b.rollback_plan.is_some() {
         out["reason"] = json!(reason);
@@ -2800,6 +2833,23 @@ pub(crate) fn confirm_check(
     reason: &str,
     ingress: &str,
 ) -> Result<String, VaultError> {
+    confirm_check_as(vault, c, action, secret_id, method, None, password, reason, ingress)
+}
+
+/// [`confirm_check`] with the owner login named for `owner-login-password`
+/// (an owner purge, [`owner_password_ok`]).
+#[allow(clippy::too_many_arguments)]
+fn confirm_check_as(
+    vault: &LocalVault,
+    c: &VaultCaller,
+    action: &str,
+    secret_id: Option<&str>,
+    method: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+    reason: &str,
+    ingress: &str,
+) -> Result<String, VaultError> {
     human_admin(c)?;
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
@@ -2820,15 +2870,13 @@ pub(crate) fn confirm_check(
             _ => Err(err("bad_method", 400, "connect-password is for a Connect login")),
         },
         "local-auth" => local_auth(&format!("K2 vault: {}", reason.chars().filter(|ch| !ch.is_control()).take(160).collect::<String>())),
-        presence::TERMINAL if terminal_ok(vault, c, action) => Ok(()),
-        presence::TERMINAL => Err(err(
-            "confirm_failed",
-            403,
-            format!(
-                "the terminal confirm is only for the owner's purge on a server with no other confirm, from a terminal outside {}'s process tree: run the {} command yourself from your own SSH login. Agents: don't run it; tell your owner.",
-                k2_core::brand::PRODUCT_NAME,
-                k2_core::brand::CLI_NAME
-            ),
+        presence::OWNER_LOGIN_PASSWORD if owner_password_ok(vault, c, action) => {
+            presence::owner_login_check(vault, action, username, password.unwrap_or(""))
+        }
+        presence::OWNER_LOGIN_PASSWORD => Err(err(
+            "bad_method",
+            400,
+            "an owner login's password confirms only the owner's purge, on a server with no vault password or Touch ID",
         )),
         _ => Err(err("bad_method", 400, "method is vault-password, connect-password or local-auth")),
     };

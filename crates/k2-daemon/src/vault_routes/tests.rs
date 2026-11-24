@@ -2261,89 +2261,108 @@ fn ending_owner_chat_sessions_takes_a_confirm_bound_to_its_sid_or_all() {
 
 /// 0.46.18 field report: on a Linux server with no owner login and no
 /// vault password, `k2 app uninstall --purge` and `k2 hostchat purge`
-/// failed with `no_confirm_method`, so the owner could never purge. The
-/// owner token from a terminal outside K2's process tree (the vault
-/// socket's heuristic, the one a server's first owner login uses; not
-/// proof of a person, review B1) now confirms them there; TCP, logins,
-/// agents and K2 terminals get what they got before, and a server with any
-/// other check uses that one.
+/// failed with `no_confirm_method` and no way forward. The Steward's
+/// ruling: no terminal-outside-K2 shortcut. With no owner credential the
+/// purge refuses and names the one command that sets an owner password
+/// (an owner login, made with this computer's own check, which no agent
+/// can pass); after that the owner token confirms the purge with that
+/// login's password, every time.
 #[test]
-fn a_headless_servers_owner_purges_from_a_terminal_outside_k2s_tree_and_remote_callers_stay_strict() {
+fn an_owner_purge_needs_an_owner_password_and_says_how_to_set_one() {
     let _home = crate::test_support::TempHome::new();
     let t = vault();
-    let finish = |c: &VaultCaller, action: &str| {
-        call(&t, CONFIRM_FINISH, c, json!({ "action": action, "secretId": "shop", "method": "terminal" }))
+    let purge = |c: &VaultCaller, action: &str, method: &str, pw: &str| {
+        call(&t, CONFIRM_FINISH, c, json!({ "action": action, "secretId": "shop", "method": method, "password": pw }))
     };
-    for &action in TERMINAL_ACTIONS {
-        let start = json!({ "action": action, "secretId": "shop" });
-        let (s, v) = call(&t, CONFIRM_START, &owner_tty(), start.clone());
-        if cfg!(target_os = "macos") {
-            // A Mac has its own check (Touch ID): never the terminal.
+    if cfg!(target_os = "macos") {
+        // A Mac has its own check (Touch ID) for the owner token.
+        for &action in OWNER_PASSWORD_ACTIONS {
+            let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": action, "secretId": "shop" }));
             assert_eq!((s, v["methods"].clone()), (200, json!(["local-auth"])), "{action}: {v}");
-            let (s, v) = finish(&owner_tty(), action);
-            assert_eq!((s, code(&v)), (403, "confirm_failed"), "{action}: {v}");
-            continue;
         }
-        assert_eq!((s, v["methods"].clone()), (200, json!(["terminal"])), "{action}: {v}");
-        let (s, v) = finish(&owner_tty(), action);
-        assert_eq!(s, 200, "{action}: {v}");
-        let tok = v["token"].as_str().expect("token").to_string();
-        // Bound to this step, this App or install, and the owner; once.
-        assert!(t.v.confirm.take(&tok, "reveal", Some("shop"), "owner").is_err(), "another step");
-        let (_, v) = finish(&owner_tty(), action);
-        let tok = v["token"].as_str().expect("token").to_string();
-        assert!(t.v.confirm.take(&tok, action, Some("other"), "owner").is_err(), "another App");
-        let (_, v) = finish(&owner_tty(), action);
-        let tok = v["token"].as_str().expect("token").to_string();
-        assert!(t.v.confirm.take(&tok, action, Some("shop"), "connect:lee").is_err(), "another caller");
-        let (_, v) = finish(&owner_tty(), action);
-        let tok = v["token"].as_str().expect("token").to_string();
-        let proof = t.v.confirm.take(&tok, action, Some("shop"), "owner").expect("the owner's purge of shop");
-        assert!(matches!(&proof, k2_vault::HumanProof::Confirmed { method } if method == "terminal"), "{proof:?}");
-        assert!(t.v.confirm.take(&tok, action, Some("shop"), "owner").is_err(), "single use");
+        return;
+    }
 
-        // The owner token over TCP: as before, no confirm here. Channel::Plain
-        // is also what the vault socket gives a peer outside the daemon's
-        // tree that doesn't say it is a terminal (no X-K2-Tty header,
-        // `human.rs`), so that peer gets nothing either.
-        let (s, v) = call(&t, CONFIRM_START, &owner(), start.clone());
-        assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{action}: {v}");
-        let (s, v) = finish(&owner(), action);
-        assert_eq!((s, code(&v)), (403, "confirm_failed"), "{action}: {v}");
-        // A Connect login confirms with its own password, never the terminal.
-        for c in [login(Role::Owner), login(Role::Admin)] {
-            let (s, v) = call(&t, CONFIRM_START, &c, start.clone());
-            assert_eq!((s, v["methods"].clone()), (200, json!(["connect-password"])), "{c:?}: {v}");
-            let (s, v) = finish(&c, action);
-            assert_eq!((s, code(&v)), (403, "confirm_failed"), "{c:?}: {v}");
+    // 1. No owner credential at all: refused, naming the step. The old
+    // terminal route is gone.
+    for &action in OWNER_PASSWORD_ACTIONS {
+        for c in [owner_tty(), owner()] {
+            let (s, v) = call(&t, CONFIRM_START, &c, json!({ "action": action, "secretId": "shop" }));
+            assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{action}: {v}");
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains("Set an owner password first"), "{hint}");
+            assert!(hint.contains("users add <your-name> --role owner --keep-password"), "{hint}");
+            assert!(hint.contains("tell your owner"), "{hint}");
+            for method in ["terminal", presence::OWNER_LOGIN_PASSWORD] {
+                let (s, v) = purge(&c, action, method, "whatever-it-is");
+                assert_eq!((s, code(&v)), (400, "bad_method"), "{action} via {method}: {v}");
+            }
         }
-        // Agents and K2 terminals: refused outright.
+    }
+
+    // 2. That step is a person's: no agent or K2 terminal passport reaches
+    // the users routes, none may start the owner-login check, and the owner
+    // token itself needs this computer's own check for it.
+    for path in ["/cli/users/add", "/cli/users/set-role", "/cli/users/set-password"] {
+        assert!(!crate::session_token::is_agent_verb(path), "{path}");
+    }
+    for c in [agent("ws1", true), shell("ws1")] {
+        let (s, v) = call(&t, CONFIRM_START, &c, json!({ "action": presence::OWNER_LOGIN, "secretId": "role:olive" }));
+        assert_eq!(s, 403, "{c:?}: {v}");
+        let (s, v) = call(&t, CONFIRM_FINISH, &c, json!({ "action": presence::OWNER_LOGIN, "secretId": "role:olive", "method": presence::TERMINAL }));
+        assert_eq!(s, 403, "{c:?}: {v}");
+        assert!(v.get("token").is_none(), "{v}");
+    }
+    let e = presence::owner_login_change_on(Some(&t.v), "role:olive", None, "test").expect_err("no check, no owner login");
+    assert_eq!(e.code, presence::CODE, "{e:?}");
+
+    // 3. The owner sets an owner password (an owner login): purge now asks
+    // for it, and works with it, every time.
+    k2_core::connect_users::add_user("olive", "olive-pass-123").expect("olive");
+    k2_core::connect_users::set_role("olive", k2_core::connect_users::Role::Owner).expect("owner");
+    for &action in OWNER_PASSWORD_ACTIONS {
+        for c in [owner_tty(), owner()] {
+            let (s, v) = call(&t, CONFIRM_START, &c, json!({ "action": action, "secretId": "shop" }));
+            assert_eq!(
+                (s, v["methods"].clone(), v["login"].clone(), v["ownerLogins"].clone()),
+                (200, json!([presence::OWNER_LOGIN_PASSWORD]), json!("olive"), json!(1)),
+                "{v}"
+            );
+            let (s, v) = purge(&c, action, presence::OWNER_LOGIN_PASSWORD, "not-the-password");
+            assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+            let (s, v) = purge(&c, action, presence::OWNER_LOGIN_PASSWORD, "olive-pass-123");
+            assert_eq!(s, 200, "{action}: {v}");
+            let tok = v["token"].as_str().expect("token").to_string();
+            assert!(t.v.confirm.take(&tok, action, Some("other"), "owner").is_err(), "bound to the App");
+            for _ in 0..2 {
+                let (s, v) = purge(&c, action, presence::OWNER_LOGIN_PASSWORD, "olive-pass-123");
+                assert_eq!(s, 200, "every time: {v}");
+                let tok = v["token"].as_str().expect("token").to_string();
+                let proof = t.v.confirm.take(&tok, action, Some("shop"), "owner").expect("the owner's purge of shop");
+                assert!(matches!(&proof, k2_vault::HumanProof::Confirmed { method } if method == presence::OWNER_LOGIN_PASSWORD), "{proof:?}");
+                assert!(t.v.confirm.take(&tok, action, Some("shop"), "owner").is_err(), "single use");
+            }
+        }
+        // A Connect login confirms with its own password, never another's;
+        // agents get nothing.
+        let (s, v) = call(&t, CONFIRM_START, &login(Role::Owner), json!({ "action": action, "secretId": "shop" }));
+        assert_eq!((s, v["methods"].clone()), (200, json!(["connect-password"])), "{v}");
+        let (s, v) = purge(&login(Role::Owner), action, presence::OWNER_LOGIN_PASSWORD, "olive-pass-123");
+        assert_eq!((s, code(&v)), (400, "bad_method"), "{v}");
         for c in [agent("ws1", true), shell("ws1")] {
-            let (s, v) = finish(&c, action);
+            let (s, v) = purge(&c, action, presence::OWNER_LOGIN_PASSWORD, "olive-pass-123");
             assert_eq!(s, 403, "{c:?}: {v}");
             assert!(v.get("token").is_none(), "{v}");
         }
     }
-    if cfg!(target_os = "macos") {
-        return;
-    }
-    // Only the purges take it: another step from the same terminal doesn't.
-    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "reveal", "secretId": "shop" }));
-    assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{v}");
-    let (s, v) = finish(&owner_tty(), "reveal");
+    // Only the purges take an owner login's password from the owner token.
+    let (s, v) = purge(&owner_tty(), "reveal", presence::OWNER_LOGIN_PASSWORD, "olive-pass-123");
     assert!(s >= 400 && v.get("token").is_none(), "{s} {v}");
-    // A server with an owner login: that login's password is its check.
-    {
-        let _p = Presence::offers(Some(presence::OWNER_LOGIN_PASSWORD), false);
-        let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "app-purge", "secretId": "shop" }));
-        assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{v}");
-        let (s, v) = finish(&owner_tty(), "app-purge");
-        assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
-    }
-    // A server with a vault password: the vault password, not the terminal.
+
+    // 4. A server with a vault password uses it, not the login's password.
     set_vault_password(&t, "correct horse battery");
-    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "sew-purge", "secretId": "shop" }));
+    let (s, v) = call(&t, CONFIRM_START, &owner_tty(), json!({ "action": "app-purge", "secretId": "shop" }));
     assert_eq!((s, v["methods"].clone()), (200, json!(["vault-password"])), "{v}");
-    let (s, v) = finish(&owner_tty(), "sew-purge");
-    assert_eq!((s, code(&v)), (403, "confirm_failed"), "{v}");
+    let (s, v) = purge(&owner_tty(), "app-purge", presence::OWNER_LOGIN_PASSWORD, "olive-pass-123");
+    assert_eq!((s, code(&v)), (400, "bad_method"), "{v}");
 }

@@ -677,7 +677,7 @@ pub fn ticket_browser_refused() -> CliResponse {
     refusal(
         "403 Forbidden",
         "device_pairing_not_from_browser",
-        "this step is for the K2 Companion app, not a web page",
+        &format!("this step is for the {} Companion app, not a web page", k2_core::brand::PRODUCT_NAME),
     )
 }
 

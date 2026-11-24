@@ -96,6 +96,10 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
 - **Agents can ask on a card to switch a compute node's "pinned jobs only" mode.** `k2 compute node pinned-only <node> on|off` is still the owner's or an admin's, and an agent (one that may manage compute nodes too) is refused. Its refusal now ends with `Ask with: k2 permission request compute.node.pinned-only node=<node> on=true|false` instead of pointing at "Let this agent manage compute nodes", which was no help. The card shows the node, the change and the agent's reason. An owner or admin turns it on or off with one tap, as themselves, and the Access Audit names the agent that asked. Deny changes nothing.
 
+### Logins and passwords
+- **Resetting your own password is never temporary.**
+- **On a server with web access off, the phone can now finish a temporary password: sign in with it, then choose your new one.**
+
 ### Wiki
 - If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
 
@@ -112,12 +116,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it.
 - **On a server with no owner login, purge now asks you to set an owner password first, then uses it.** `k2 app uninstall --purge` and `k2 hostchat purge` failed with `no_confirm_method` and no next step on a server with no owner login, vault password or Touch ID. They now refuse with the one command to run first, from your own terminal on that server: `k2 users add <your-name> --role owner --keep-password`. After that, each purge asks for that login's password. A server with a vault password or Touch ID uses it as before, and agents still can't purge.
 - **`k2 desktop env` works in terminals K2 opens for an agent** (`k2 terminal spawn --agent <name>`), whatever program they run. A person's own shell tab is still refused.
-## 0.46.18
-
-### Fixes
-- **Resetting your own password is never temporary.**
-- **On a server with web access off, the phone can now finish a temporary password: sign in with it, then choose your new one.**
-
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

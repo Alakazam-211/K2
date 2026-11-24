@@ -279,7 +279,52 @@ fn test_store_path() -> PathBuf {
 }
 
 fn db() -> Result<Arc<Database>, String> {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(scoped) = SCOPED.with(|s| s.borrow().clone()) {
+        return Ok(scoped);
+    }
     DB.get(store_path)
+}
+
+#[cfg(any(test, feature = "test-util"))]
+thread_local! {
+    static SCOPED: std::cell::RefCell<Option<Arc<Database>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: a fresh, empty Thread store for THIS thread until the guard
+/// drops (pair it with `db::scoped_for_test`). For a test that walks the
+/// whole store, such as the ticket sweep: the process store holds every
+/// other test's conversations, whose rows are in other tests' DBs.
+#[cfg(any(test, feature = "test-util"))]
+pub fn scoped_for_test() -> ScopedStoreGuard {
+    let dir = std::env::temp_dir().join(format!(
+        "k2-threads-scoped-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let db = open_store(&dir.join("k2-threads.redb"), ALREADY_OPEN_WAIT)
+        .expect("scoped Thread store");
+    let db = Arc::new(db);
+    let prev = SCOPED.with(|s| s.borrow_mut().replace(db));
+    ScopedStoreGuard { dir, prev, _not_send: std::marker::PhantomData }
+}
+
+/// Restores the thread's previous store on drop and removes the scoped one.
+#[cfg(any(test, feature = "test-util"))]
+pub struct ScopedStoreGuard {
+    dir: PathBuf,
+    prev: Option<Arc<Database>>,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Drop for ScopedStoreGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        SCOPED.with(|s| *s.borrow_mut() = prev);
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 /// Daemon hand-off (the old daemon, at quiesce): close the store so the

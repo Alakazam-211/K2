@@ -236,6 +236,9 @@ fn the_backfill_moves_every_old_ticket() {
 #[test]
 fn a_project_delete_keeps_ticket_rows_and_a_ticket_delete_takes_its_row() {
     let _db = crate::db::scoped_for_test();
+    // The sweep walks the whole Thread store: its own, or it sweeps every
+    // other test's tickets (their rows are in their own DBs).
+    let _store = crate::overlay::store::scoped_for_test();
     let p = pid("cascade");
     let db = crate::db::shared();
     {
@@ -268,6 +271,9 @@ fn a_project_delete_keeps_ticket_rows_and_a_ticket_delete_takes_its_row() {
 #[test]
 fn the_sweep_removes_ticket_rows_without_a_ticket() {
     let _db = crate::db::scoped_for_test();
+    // The sweep walks the whole Thread store: its own, or it sweeps every
+    // other test's tickets (their rows are in their own DBs).
+    let _store = crate::overlay::store::scoped_for_test();
     let p = pid("sweep");
     let item = ask(&p, "Gone soon");
     let conv = ticket::conversation_id(&item.id);

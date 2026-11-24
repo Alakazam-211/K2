@@ -1206,7 +1206,7 @@ fn compose_agent_wake_context_as_written(
                 if entry.file_type().map_or(false, |ft| ft.is_dir()) {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if name != agent_name {
-                        let their_md = entry.path().join("AGENT.md");
+                        let their_md = persona_md_in(entry.path());
                         let their_role = if their_md.exists() {
                             let content = fs::read_to_string(&their_md).unwrap_or_default();
                             let fm = parse_frontmatter(&content);
@@ -1276,7 +1276,7 @@ fn compose_agent_wake_context_as_written(
             md.push_str("## Your Team\n\n");
             md.push_str("These are your agent templates. Read their `agent.md` profiles to understand their strengths before delegating:\n\n");
             for (name, their_role) in &other_agents {
-                let their_profile = agents_root.join(name).join("AGENT.md");
+                let their_profile = persona_md_in(agents_root.join(name));
                 md.push_str(&format!(
                     "- **{}** — {} (profile: `{}`)\n",
                     name, their_role, their_profile.to_string_lossy()
@@ -2808,6 +2808,67 @@ mod tests {
         assert!(
             wake.contains(&next),
             "no profile body follows the profile line:\n{wake}"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// A manager's workspace with one teammate under the agents folder.
+    /// Returns the workspace and the teammate's folder.
+    fn wake_team_workspace(tag: &str) -> (PathBuf, PathBuf) {
+        let proj = wake_persona_workspace(tag);
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        let persona = wake_persona("Release captain", "Leads the team.");
+        fs::write(primary.join("ROLE.md"), persona).unwrap();
+        let backend = agents_dir(path).join("backend");
+        fs::create_dir_all(&backend).unwrap();
+        (proj, backend)
+    }
+
+    /// The line the manager's team list prints for `name`.
+    fn team_line<'a>(wake: &'a str, name: &str) -> &'a str {
+        let start = format!("- **{name}** ");
+        let Some(line) = wake.lines().find(|l| l.starts_with(&start)) else {
+            panic!("no team line for {name}:\n{wake}");
+        };
+        line
+    }
+
+    /// The team list reads each teammate's persona the way AGENTS.md
+    /// does: a teammate with only ROLE.md shows its role and ROLE.md path.
+    #[test]
+    fn wake_context_team_reads_teammate_role_md() {
+        let (proj, backend) = wake_team_workspace("team-role");
+        let role_md = backend.join("ROLE.md");
+        fs::write(&role_md, "---\nrole: Backend engineer\n---\n").unwrap();
+
+        let path = proj.to_str().unwrap();
+        let wake = compose_agent_wake_context(path, "k2", None).unwrap();
+        let shown = role_md.to_string_lossy();
+        let want = format!("Backend engineer (profile: `{shown}`)");
+        let line = team_line(&wake, "backend");
+        assert!(
+            line.ends_with(&want),
+            "the teammate's role and ROLE.md path:\n{line}"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn wake_context_team_still_reads_teammate_agent_md() {
+        let (proj, backend) = wake_team_workspace("team-agent");
+        let agent_md = backend.join("AGENT.md");
+        fs::write(&agent_md, "---\nrole: Backend engineer\n---\n").unwrap();
+
+        let path = proj.to_str().unwrap();
+        let wake = compose_agent_wake_context(path, "k2", None).unwrap();
+        let shown = agent_md.to_string_lossy();
+        let want = format!("Backend engineer (profile: `{shown}`)");
+        let line = team_line(&wake, "backend");
+        assert!(
+            line.ends_with(&want),
+            "the teammate's role and AGENT.md path:\n{line}"
         );
         fs::remove_dir_all(&proj).ok();
     }

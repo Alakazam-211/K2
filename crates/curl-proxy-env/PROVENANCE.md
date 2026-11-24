@@ -22,6 +22,27 @@ How this crate was written, recorded so its licensing can be checked.
   started from the k5 command's transport (`crates/k5-cli`, MIT, Alakazam
   Labs), which was itself written from the same black-box testing of curl.
 
+## What the black-box table decided
+
+Where the documentation is silent, curl 8.5.0's behaviour in
+`tests/curl_oracle.rs` decided (observed, not read from source):
+
+- a second `@` in a proxy URL is refused (exit 5); port 0 is read, and
+  the connect fails (exit 7); a percent-encoded host is decoded;
+- `socks://` is SOCKS4; SOCKS4 and SOCKS5 resolve the target after the
+  proxy is connected (SOCKS5 after the greeting), and a name that doesn't
+  resolve fails the handshake (exit 97); SOCKS4a sends an address as
+  text too;
+- `no_proxy`: an IPv6 token matches only the same address written
+  without brackets; no IPv6 range matched;
+- the user part: a decoded byte below 0x20 (`%0a`, `%00`) makes curl drop
+  the proxy and connect direct, which this crate refuses instead (the
+  one kept difference, pinned by the table); a decoded DEL (`%7f`) is
+  sent as it is, as curl sends it;
+- an `https://` proxy's certificate is checked with the caller's config;
+  curl checks it with its built-in roots, never `SSL_CERT_FILE` (the
+  curl manual names that variable under `--cacert` only).
+
 ## What was not used
 
 curl's source code was not opened, read or copied while writing this

@@ -133,10 +133,6 @@ fn proxy_urls() {
             Err(ConfigError::ControlInCredentials),
         ),
         (
-            b"http://u%7f@proxy.example",
-            Err(ConfigError::ControlInCredentials),
-        ),
-        (
             b"http://pr\xc3\xb6xy.example",
             bad("a byte a host name can't hold"),
         ),
@@ -189,6 +185,7 @@ fn user_parts_are_percent_decoded() {
         (b"http://u:p%4@proxy.example", b"u", b"p%4"),
         (b"user@127.0.0.1:9", b"user", b""),
         (b"http://u%41:p%2@proxy.example", b"uA", b"p%2"),
+        (b"http://u%7f:p@proxy.example", b"u\x7f", b"p"),
     ];
     for (raw, user, pass) in rows {
         let p = ProxyUrl::parse(raw).unwrap();

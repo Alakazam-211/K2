@@ -251,7 +251,9 @@ impl ProxyUrl {
                     None => (u, &b""[..]),
                 };
                 let (user, password) = (percent_decode(user), percent_decode(password));
-                if user.iter().chain(&password).any(|&b| b < b' ' || b == 0x7f) {
+                // Below space only: curl 8.5 sends a decoded DEL (0x7f) as
+                // it is (the black-box table, `escaped DEL`).
+                if user.iter().chain(&password).any(|&b| b < b' ') {
                     return Err(ConfigError::ControlInCredentials);
                 }
                 Some(Credentials::new(user, password))

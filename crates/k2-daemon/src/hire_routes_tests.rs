@@ -1617,3 +1617,53 @@ fn a_recipe_hire_sends_the_template_hello_once() {
         assert!(!got[0].0.trim().is_empty(), "{tag}: {got:?}");
     }
 }
+
+/// A workspace that arrives with planted files (a clone or an import,
+/// registered here the way a clone registers one: `open_workspace_ex`, no
+/// hire) goes through the same launch and first-start steps as any other:
+/// an active work item whose `worktree_path` is outside the workspace's
+/// `.worktrees/` writes no CLAUDE.md there, and a `template.lock` with a
+/// pending hello is never delivered as the owner.
+#[cfg(unix)]
+#[test]
+fn an_opened_workspace_with_planted_files_writes_nothing_outside_and_gets_no_hello() {
+    use k2_core::hire::template::lock;
+    use std::os::unix::fs::PermissionsExt;
+    let _home = k2_core::test_env::TempHome::new();
+    let root = ensure_test_root();
+    let (st, source) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Source") }), &[]);
+    assert_eq!(st, 200, "{source}");
+    let copied = lock::read(source["path"].as_str().unwrap()).unwrap().expect("the source's lock");
+    assert!(copied.hello_pending.is_some(), "{copied:?}");
+
+    let ws = root.join(uniq("cloned"));
+    let outside = root.join(uniq("outside"));
+    for d in [&ws, &outside] {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = ws.to_string_lossy().into_owned();
+    // Planted: a persona, an active work item pointing outside, the lock.
+    std::fs::create_dir_all(ws.join(".k2so/agent")).unwrap();
+    std::fs::write(ws.join(".k2so/agent/AGENT.md"), "---\nname: scout\ntype: custom\nrole: test\n---\n\n# scout\n").unwrap();
+    let active = k2_core::workspace::scheduler::agent_work_dir(&path, "scout", "active");
+    std::fs::create_dir_all(&active).unwrap();
+    std::fs::write(
+        active.join("x.md"),
+        format!("---\ntitle: Planted\npriority: high\nworktree_path: {}\nbranch: b\n---\n\nbody\n", outside.display()),
+    )
+    .unwrap();
+    lock::write(&path, &copied).unwrap();
+    k2_core::workspace::lifecycle::open_workspace_ex(&path, false, false, false).expect("open, as a clone does");
+    let (id, handle) = workspace_at(&path);
+
+    let e = k2_core::workspace::agent_launch::k2_agents_build_launch(path.clone(), "scout".into(), Some("claude".into()), None, None, None)
+        .expect_err("a worktree outside .worktrees is refused");
+    assert!(e.starts_with("worktree_outside_workspace"), "{e}");
+    assert!(std::fs::symlink_metadata(outside.join("CLAUDE.md")).is_err(), "no CLAUDE.md written outside");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing written outside");
+
+    crate::template_hello::on_session_registered(&id, Some("claude"));
+    assert!(!crate::template_hello::launch_hello(&id), "the planted lock's hello is never delivered");
+    assert!(hellos_to(&handle).is_empty(), "no hello as the owner");
+}

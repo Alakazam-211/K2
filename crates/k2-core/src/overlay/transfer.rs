@@ -327,7 +327,9 @@ pub fn export_project_threads(
         let mut stmt = conn
             // ticket-thread-v1: a ticket's discussion travels with its ticket
             // row, and a clone carries no tickets, so it carries none of them.
-            .prepare("SELECT conversation_id FROM overlay_conversations WHERE project_id = ?1 AND kind <> 'ticket' ORDER BY conversation_id")
+            // project-chat-thread-v1: nor a project's chat (it is the
+            // project's, never one workspace's).
+            .prepare("SELECT conversation_id FROM overlay_conversations WHERE project_id = ?1 AND kind = 'thread' ORDER BY conversation_id")
             .map_err(|e| format!("export catalog: {e}"))?;
         let rows = stmt
             .query_map(params![project_id], |r| r.get::<_, String>(0))

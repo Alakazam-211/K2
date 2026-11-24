@@ -17,26 +17,36 @@ pub fn ensure_conversation(
     }
     // ticket-thread-v1: a `ticket:<id>` key is a ticket's discussion, and
     // its row says so (kind + ticket id), whichever writer makes it.
-    let (kind, ticket_id) = match super::ticket::ticket_of(conversation_id) {
-        Some(t) => (KIND_TICKET, Some(t)),
-        None => (KIND_THREAD, None),
+    // project-chat-thread-v1: a `project:<group id>` key is a project's
+    // chat (kind + group id; its `project_id` is the group id).
+    let (kind, ticket_id, group_id) = match (super::ticket::ticket_of(conversation_id), super::project::group_of(conversation_id)) {
+        (Some(t), _) => (KIND_TICKET, Some(t), None),
+        (None, Some(g)) => (KIND_PROJECT, None, Some(g)),
+        (None, None) => (KIND_THREAD, None, None),
     };
     conn.execute(
-        "INSERT INTO overlay_conversations (conversation_id, project_id, last_thread_seq, last_chatter_seq, kind, ticket_id) \
-         VALUES (?1, ?2, 0, 0, ?3, ?4) \
+        "INSERT INTO overlay_conversations (conversation_id, project_id, last_thread_seq, last_chatter_seq, kind, ticket_id, group_id) \
+         VALUES (?1, ?2, 0, 0, ?3, ?4, ?5) \
          ON CONFLICT(conversation_id) DO UPDATE SET project_id = excluded.project_id",
-        params![conversation_id, project_id, kind, ticket_id],
+        params![conversation_id, project_id, kind, ticket_id, group_id],
     )
     .map_err(|e| format!("overlay catalog ensure: {e}"))?;
     Ok(())
 }
 
-/// `overlay_conversations.kind` of an agent's Thread (every key but a ticket's).
+/// `overlay_conversations.kind` of an agent's Thread (every key but a
+/// ticket's or a project's).
 pub const KIND_THREAD: &str = "thread";
 /// `overlay_conversations.kind` of a ticket's discussion (`ticket:<id>`):
 /// it lives as long as its ticket, and the cross-conversation walkers
 /// (unread summary, badges, mark all read, clone export) leave it out.
 pub const KIND_TICKET: &str = "ticket";
+/// `overlay_conversations.kind` of a project's chat (`project:<group id>`,
+/// project-chat-thread-v1): it lives as long as its project, its
+/// `project_id` is the group id (never a workspace), and the
+/// cross-conversation walkers leave it out (a project chat is counted from
+/// `project_groups`, kind `project`).
+pub const KIND_PROJECT: &str = "project";
 
 pub fn next_thread_seq(
     conn: &Connection,

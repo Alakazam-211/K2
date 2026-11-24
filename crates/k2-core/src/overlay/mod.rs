@@ -13,6 +13,7 @@ pub mod catalog;
 pub mod doc;
 pub mod doc_meta;
 pub mod options;
+pub mod project;
 pub mod store;
 pub mod summary;
 pub mod thumbs;

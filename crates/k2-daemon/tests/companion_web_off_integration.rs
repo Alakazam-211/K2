@@ -1088,3 +1088,82 @@ async fn change_password_answers_tell_wrong_locked_and_dead_apart() {
     }
     assert_code(&ask_ticket(d.tunnel_port, "tp_nobody", "x"), 423, "locked", "a name with no login locks the same way");
 }
+
+/// 0.46.18: an OWNER login with a temporary password, on a server with web
+/// access off, gets a ticket and sets its own password through it (no
+/// on-server owner check stands in the way of a self change), then signs
+/// in fully and pairs a phone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_temporary_owner_with_web_off_sets_its_password_with_a_ticket_then_signs_in_and_pairs() {
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    connect_users::add_user("tp_owner", PW).expect("add");
+    connect_users::set_role("tp_owner", Role::Owner).expect("owner");
+    let chief = add_login("tp_chief", Role::Owner);
+    // Another Owner resets it: someone else's password, so temporary.
+    let r = http(
+        d.port,
+        "POST",
+        "/cli/users/set-password",
+        Some(&format!(r#"{{"username":"tp_owner","password":"{TEMP_PW}"}}"#)),
+        &[&bearer(&chief)],
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        (r.json()["mustChangePassword"].clone(), r.json()["ownLogin"].clone()),
+        (Value::from(true), Value::from(false)),
+        "{}",
+        r.body
+    );
+    set_web(d.port, false);
+
+    // Web off: the password sign-in through the edge is walled, and the
+    // wall's refusal is in the access audit.
+    let login = format!(r#"{{"username":"tp_owner","password":"{TEMP_PW}"}}"#);
+    let r = http(d.tunnel_port, "POST", "/cli/auth/login", Some(&login), EDGE);
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "the temporary Owner's sign-in through the edge");
+    let walled = audit_rows(d.port, "login");
+    assert!(walled.iter().any(|e| e["user"] == "tp_owner" && e["outcome"] == "web_client_disabled"), "{walled:?}");
+    // No pairing code for it yet; the 409 names the way out.
+    let r = http(d.port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"tp_owner"}"#), &[]);
+    assert_code(&r, 409, "password_change_required", "a code for the temporary Owner");
+    let e = r.json()["error"].clone();
+    assert_eq!(
+        (e["user"].clone(), e["ticketPath"].clone()),
+        (Value::from("tp_owner"), Value::from("/cli/auth/device/password-ticket")),
+        "{}",
+        r.body
+    );
+    assert_eq!(
+        e["hint"],
+        "This password is temporary. Sign in on the desktop and choose a new one, then pair from Settings → Network → Companion with a QR code.",
+        "{}",
+        r.body
+    );
+
+    // The ticket, and the change through it, both through the edge.
+    let ticket = ticket_of(&ask_ticket(d.tunnel_port, "tp_owner", TEMP_PW), "tp_owner");
+    let r = change_with(d.tunnel_port, &ticket, TEMP_PW, NEW_PW, EDGE);
+    assert_eq!(r.status, 200, "the Owner's own change with a ticket: {}", r.body);
+    assert!(!connect_users::must_change_password("tp_owner"));
+    assert!(connect_users::verify("tp_owner", NEW_PW));
+
+    // A full sign-in (the desktop's direct path) and a pairing code.
+    let login = format!(r#"{{"username":"tp_owner","password":"{NEW_PW}"}}"#);
+    let r = http(d.port, "POST", "/cli/auth/login", Some(&login), &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["mustChangePassword"], false, "{}", r.body);
+    assert_eq!(r.json().get("hint"), None, "{}", r.body);
+    let session = r.json()["token"].as_str().expect("token").to_string();
+    let r = http(d.port, "GET", "/cli/auth/devices", None, &[&bearer(&session)]);
+    assert_eq!(r.status, 200, "no longer restricted: {}", r.body);
+    let r = http(d.port, "POST", "/cli/auth/device/pair-code", Some(&format!(r#"{{"password":"{NEW_PW}"}}"#)), &[&bearer(&session)]);
+    assert_eq!(r.status, 200, "pair-code for itself: {}", r.body);
+    assert_eq!(r.json()["user"], "tp_owner", "{}", r.body);
+    let paired = pair_through_edge(d.port, r.json()["code"].as_str().expect("code"), "tp-owner-phone");
+    assert_eq!(paired["username"], "tp_owner");
+    let device = paired["token"].as_str().expect("token").to_string();
+    let r = http(d.tunnel_port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&device)])));
+    assert_eq!(r.status, 200, "the paired phone through the edge with web off: {}", r.body);
+}

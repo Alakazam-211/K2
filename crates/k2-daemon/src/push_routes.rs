@@ -1221,11 +1221,14 @@ pub(crate) fn deliver_thread(event: PushEvent) {
         let Some(cloud) = current_cloud() else {
             return;
         };
-        let PushEvent::ThreadPost(t) = &event else {
-            return;
+        // project-chat-thread-v1 (P6): a project chat line's coalesced push
+        // comes this way too; it was dropped here (only ThreadPost was
+        // sent), so no phone heard a project line outside test builds.
+        let (principal, logins) = match &event {
+            PushEvent::ThreadPost(t) => (t.principal.clone(), t.device_usernames.clone()),
+            PushEvent::ProjectPost(p) => (p.principal.clone(), p.device_usernames.clone()),
+            _ => return,
         };
-        let principal = t.principal.clone();
-        let logins = t.device_usernames.clone();
         std::thread::spawn(move || {
             let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
             if let Err(e) = cloud.dispatch_rechecked(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {

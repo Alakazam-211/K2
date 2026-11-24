@@ -208,10 +208,19 @@ async fn s2_an_agent_adds_app_users_of_its_own_apps_only() {
     let u2 = format!("u2{tag}");
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2 })).await;
     assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "{}", r.body);
-    assert_eq!(
-        r.json()["error"]["hint"],
-        "Agents add App users only: name one of your workspace's Apps (k2 app user add <u> --app <app>). Box logins are the owner's (ask your human)."
+    // 0.46.18 papercut 1: the same sentence, then who this terminal acts as.
+    let hint = r.json()["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(
+        hint.starts_with(
+            "Agents add App users only: name one of your workspace's Apps (k2 app user add <u> --app <app>). Box logins are the owner's (ask your human)."
+        ),
+        "{hint}"
     );
+    assert!(
+        hint.contains(&format!("This terminal acts as agent @{} (its passport), even when you type here", sales.handle)),
+        "{hint}"
+    );
+    assert_eq!(r.json()["error"]["actingAs"], json!(format!("agent:{}", sales.handle)), "{}", r.body);
     assert!(!principal_exists(&u2));
     // `host` is the box login: the same refusal.
     let r = post(port, "/cli/skin/users", &agent, json!({ "username": u2, "app": "host" })).await;

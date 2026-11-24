@@ -58,10 +58,18 @@ async fn the_chat_refusals_teach_their_cards_only_while_both_switches_are_on() {
     k2_core::workspace::settings::set_agents_can_manage_chat(&ws.id, true).expect("Manage Sew");
     let agent = passport(&ws);
     let key_body = json!({ "app": name, "caps": ["chat:read", "voice:join"], "maxLevel": "admin" });
-    let key_today = json!({ "error": { "code": "owner_only", "hint":
-        "only the server's owner, in person, gives an App a chat key (k2 app grant <app> --kind chat-key); an agent may only narrow or revoke its own App's key (the owner token or an Owner login plus a confirm; never an agent)"
+    // The route's refusal, then (0.46.18 papercut 1) who this terminal acts as.
+    let key_hint = "only the server's owner, in person, gives an App a chat key (k2 app grant <app> --kind chat-key); an agent may only narrow or revoke its own App's key (the owner token or an Owner login plus a confirm; never an agent)";
+    let key_today = json!({ "error": {
+        "actingAs": format!("agent:{}", ws.handle),
+        "code": "owner_only",
+        "hint": format!("{key_hint} {}", k2_daemon::acting_as::sentence(&ws.handle)),
     } })
     .to_string();
+    assert!(
+        k2_daemon::acting_as::sentence(&ws.handle).starts_with(&format!("This terminal acts as agent @{} (its passport), even when you type here", ws.handle)),
+        "the line says plainly who this terminal acts as"
+    );
     let gov_body = json!({ "app": name, "spaceId": "5101", "governance": "app" });
 
     // Off: today's bytes, no permission.

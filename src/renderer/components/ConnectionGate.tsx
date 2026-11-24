@@ -52,7 +52,6 @@ import {
   protocolInRange,
   shouldRetryWithoutToken,
   tokenNotAccepted,
-  webBundleReloadUrl,
 } from '@/lib/boot-status-view'
 import { noteReportedBrand, PRODUCT_NAME } from '@/lib/brand'
 import { useConnectHostStore, activeHostKey, hostBaseUrl, type ConnectHost } from '@/stores/connect-host'
@@ -62,6 +61,7 @@ import { VoiceChatOnlyGate } from './VoiceChatOnlyGate'
 import { useVoiceOpenRequest } from '@/stores/voice-open-request'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { isWebClient } from '@/lib/is-web'
+import { noteServerBundleVersion } from '@/web/bundle-version'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import {
   deriveRecovery,
@@ -535,35 +535,6 @@ export function noteAcceptedBootStatus(
   // them (lib/brand). A body without them changes nothing.
   noteReportedBrand(status)
   return opts.isRemote && tokenNotAccepted(opts.tokenSent, status)
-}
-
-const WEB_BUNDLE_RELOAD_KEY = 'k2.webBundleReloadTried'
-
-/** See {@link webBundleReloadUrl}. One try per tab session: a missing
- *  bundle for that version keeps the current one (logged). */
-function reloadOntoServerBundleOnce(status: DaemonBootStatus | null): void {
-  if (typeof window === 'undefined' || !isWebClient()) return
-  let tried = false
-  try {
-    tried = sessionStorage.getItem(WEB_BUNDLE_RELOAD_KEY) !== null
-  } catch {
-    tried = true // no storage → never risk a reload loop
-  }
-  const url = webBundleReloadUrl({
-    isWeb: true,
-    body: status,
-    bundleVersion: import.meta.env.VITE_APP_VERSION as string | undefined,
-    pathname: window.location.pathname,
-    alreadyTried: tried,
-  })
-  if (!url) return
-  try {
-    sessionStorage.setItem(WEB_BUNDLE_RELOAD_KEY, url)
-  } catch {
-    return
-  }
-  console.warn(`[connection-gate] web bundle ${import.meta.env.VITE_APP_VERSION} ≠ server ${status?.version}; reloading via ${url}`)
-  window.location.replace(url)
 }
 
 /** What the authenticated /cli/settings/get probe found (0.46.18):
@@ -1463,10 +1434,11 @@ export function ConnectionGate(): React.ReactElement {
         } else if (bootViewOf(status) === 'full') {
           staleViewReviveStarted = false
         }
-        // Hosted web on a ghost server: the loader started the newest
-        // published bundle as the sign-in shell; now that the daemon tells
-        // us its own version, reload onto it once (loader `?v=`).
-        reloadOntoServerBundleOnce(status)
+        // Hosted web: keep this tab on the server's own web client
+        // version (a saved `/app/<old>/` link, the ghost sign-in shell, or
+        // a daemon upgraded while the tab was open). Boot moves, later
+        // changes offer a Reload bar; see web/bundle-version.
+        void noteServerBundleVersion(status)
         // Remember this host reached 'accept' at least once → a later
         // drop becomes a SOFT reconnect (overlay) instead of a blank.
         acceptedOnce = true

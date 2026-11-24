@@ -86,30 +86,9 @@ export function nextKnownVersion(
   return null
 }
 
-/**
- * Hosted web (§3.1): a server in ghost mode hides its version from a
- * signed-out browser, so the loader started the newest published bundle
- * (`app/current.json`) as the sign-in shell. Once signed in (a `full` body
- * naming the server's own version), reload ONCE onto that version through
- * the loader's `?v=` override. Returns the URL, or null to stay.
- */
-export function webBundleReloadUrl(args: {
-  isWeb: boolean
-  body: BootStatusLike | null | undefined
-  bundleVersion: string | undefined
-  pathname: string
-  alreadyTried: boolean
-}): string | null {
-  const { isWeb, body, bundleVersion, pathname, alreadyTried } = args
-  if (!isWeb || alreadyTried || !bundleVersion) return null
-  // Only a loader-started bundle (`/app/<ver>/…`), never the dev server.
-  if (!pathname.startsWith('/app/')) return null
-  if (bootViewOf(body) !== 'full') return null
-  const v = body?.version
-  if (typeof v !== 'string' || !/^\d+\.\d+\.\d+[a-zA-Z0-9.+-]*$/.test(v)) return null
-  if (v === bundleVersion) return null
-  return `/?v=${encodeURIComponent(v)}`
-}
+// Hosted web bundle moves (the ghost sign-in shell onto the server's own
+// version, saved `/app/<old>/` links, live upgrades) live in
+// web/bundle-version.
 
 /** The airgap flag to apply, or `undefined` to keep the current one (a
  *  partial view without `airgap`). */

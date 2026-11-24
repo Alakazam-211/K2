@@ -9,6 +9,8 @@ import { installRandomUUIDPolyfill } from './lib/random-uuid'
 import { desktopOsFromNavigator } from './lib/desktop-chrome'
 import { installDocHiddenAttr } from './lib/doc-hidden'
 import { bootWebHostIfNeeded } from './web/boot-host'
+import { WebBundleBar } from './web/WebBundleBar'
+import { isWebClient } from './lib/is-web'
 import { installRendererHeartbeat } from './lib/renderer-heartbeat'
 import { bootZenPausedStart, noteZenWidgetsHeartbeat, noteZenWidgetsVisibility } from './lib/zen/zen-widgets-running'
 import { bootStores } from './boot-stores'
@@ -109,6 +111,9 @@ if (roomFrameProbe) {
   void import('./dev/zen-spike-s0').then((m) => m.startZenSpikeS0(root))
 } else {
   ReactDOM.createRoot(root).render(
-    <ConnectionGate />
+    <>
+      <ConnectionGate />
+      {isWebClient() && <WebBundleBar />}
+    </>
   )
 }

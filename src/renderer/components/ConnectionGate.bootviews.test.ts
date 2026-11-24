@@ -26,7 +26,6 @@ import {
   shouldRetryWithoutToken,
   tokenNotAccepted,
   bootStatusUrl,
-  webBundleReloadUrl,
 } from '@/lib/boot-status-view'
 
 const HOST: ConnectHost = {
@@ -175,18 +174,6 @@ describe('lib/boot-status-view', () => {
     expect(nextAirgap(COMPAT)).toBe(false)
     expect(nextAirgap({ airgap: { enabled: true } })).toBe(true)
     expect(nextAirgap({})).toBe(false)
-  })
-
-  it('hosted web reloads once onto the server bundle after a full body (ghost sign-in shell)', () => {
-    const base = { isWeb: true, body: FULL, bundleVersion: '0.46.4', pathname: '/app/0.46.4/', alreadyTried: false }
-    expect(webBundleReloadUrl(base)).toBe('/?v=0.46.3')
-    expect(webBundleReloadUrl({ ...base, bundleVersion: '0.46.3' })).toBeNull()
-    expect(webBundleReloadUrl({ ...base, alreadyTried: true })).toBeNull()
-    expect(webBundleReloadUrl({ ...base, isWeb: false })).toBeNull()
-    expect(webBundleReloadUrl({ ...base, pathname: '/' })).toBeNull()
-    expect(webBundleReloadUrl({ ...base, body: PUBLIC })).toBeNull()
-    expect(webBundleReloadUrl({ ...base, body: { ...FULL, version: '../x' } })).toBeNull()
-    expect(webBundleReloadUrl({ ...base, bundleVersion: undefined })).toBeNull()
   })
 
   it('urls, retry rule and protocol range', () => {

@@ -24,20 +24,22 @@ impl Default for Limits {
 }
 
 /// What `sub` is on a third-party token's requests (§6.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SubMode {
     /// (a) the issuer's own id (the cut-over setting).
+    #[default]
     Token,
     /// (b) the App user's id; the issuer's id moves to `<issuer_key>_uid`.
     User,
 }
 
 /// A valid third-party token whose email is no user of the App (§6.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UnknownEmail {
     /// 403 `not_a_user` (the default).
+    #[default]
     Refuse,
     /// Supabase's behaviour: `authenticated` with the token's own claims.
     Authenticated,

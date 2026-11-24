@@ -5,9 +5,6 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
-/// The Supabase-compatible App data layer (prd-app-supabase-compat-v1):
-/// the `/storage/v1` door and storage import (lane D) so far.
-pub mod compat;
 // 0.46.9: one-click suite Apps (prd-one-click-suite-apps-v1): the catalog
 // routes and the daemon install job.
 pub mod catalog_job;
@@ -104,7 +101,8 @@ pub mod egress_proxy;
 pub mod cron;
 pub mod db_connect;
 /// The Supabase-compatible data layer, one App at a time: identity (lane
-/// A) and the /rest/v1, /auth/v1 doors and their pool (lane C).
+/// A), the /rest/v1, /auth/v1 doors and their pool (lane C), and the
+/// /storage/v1 door and storage import (lane D).
 pub mod compat;
 // prd-app-supabase-compat-v1 S2: k2 app user import (given ids, bcrypt).
 pub mod user_import;

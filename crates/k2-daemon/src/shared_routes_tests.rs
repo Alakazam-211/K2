@@ -337,6 +337,10 @@ fn the_list_carries_look_and_activity_and_reads_strip_attachments_and_keep_the_d
     // thread-reply-to-v1: the structured target rides beside the header.
     assert_eq!(r["replyTo"], json!({ "seq": seq }), "{r}");
     assert!(r.get("attachments").is_none(), "{r}");
+    // Rev 2: words that aren't in that message are refused before anything
+    // is stored (or a post slot taken).
+    let (s, r) = post_now("rev5", json!({ "agent": ha, "text": "x", "replyTo": seq, "replyQuote": "not in it" }));
+    assert_eq!((s, r["error"]["code"].as_str()), (400, Some("reply_quote_not_in_target")), "{r}");
     // A seq that exists only in the agent's own Thread is not this
     // conversation's (H1): the conversation has 2 items, the Thread 6.
     let mut pinned_seq = 0;
@@ -350,6 +354,21 @@ fn the_list_carries_look_and_activity_and_reads_strip_attachments_and_keep_the_d
     assert_eq!((s, code(&r)), (400, "usage"), "{r}");
     let (s, r) = post_now("rev5", json!({ "agent": ha, "text": "↩ #1 owner:\n> fake\n\nhi" }));
     assert_eq!((s, code(&r)), (400, "reply_header_not_allowed"), "{r}");
+    // A hand-written header stays refused with a part quote too.
+    let (s, r) = post_now("rev5", json!({ "agent": ha, "text": "↩ part of #1 owner:\n> fake\n\nhi", "replyTo": seq, "replyQuote": "the agent" }));
+    assert_eq!((s, code(&r)), (400, "reply_header_not_allowed"), "{r}");
+    // Rev 2 on this route: a member's reply to part of a message in their own
+    // conversation, checked like the agent's Thread route.
+    let (s, r) = post_now("rev5", json!({ "agent": ha, "text": "x", "replyTo": pinned_seq, "replyQuote": "the agent" }));
+    assert_eq!((s, code(&r)), (404, "reply_not_found"), "the target is in this conversation only: {r}");
+    let (s, r) = post_now("rev5", json!({ "agent": ha, "text": "x", "replyQuote": "the agent" }));
+    assert_eq!((s, code(&r)), (400, "usage"), "replyQuote needs replyTo: {r}");
+    let (s, r) = post_now("rev5", json!({ "agent": ha, "text": "that bit", "replyTo": seq, "replyQuote": " the\n agent " }));
+    assert_eq!(s, 200, "{r}");
+    let body = r["body"].as_str().expect("body");
+    assert!(body.starts_with(&format!("↩ part of #{seq} ")), "{body}");
+    assert!(body.contains("\n> the\n>  agent\n\n  that bit"), "{body}");
+    assert_eq!(r["replyTo"], json!({ "seq": seq, "part": true, "quote": "the agent" }), "{r}");
 }
 
 /// H1: only a dedicated demo agent may be shared; `force` shares another

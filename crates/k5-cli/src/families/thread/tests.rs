@@ -109,6 +109,15 @@ fn a_reply_names_its_target_by_number() {
     assert!(text.starts_with("Error: --reply-to replies with your words"), "{text}");
     // The value is skipped when the verb is looked for.
     assert_eq!(first_word(&["--reply-to", "ask", "bob", "hi"]), "bob");
+    assert_eq!(first_word(&["--reply-quote", "ask", "bob", "hi"]), "bob");
+    // Rev 2: part of it.
+    let l = line(&["bob", "ok", "--reply-to", "4", "--reply-quote", "the pass"]);
+    assert_eq!(
+        post::form(&l, "me", "k1", None),
+        "addr=bob&text=ok&from=me&via=thread&clientMsgId=k1&replyTo=4&replyQuote=the%20pass"
+    );
+    assert_eq!(stop(&["bob", "ok", "--reply-quote", "x"]), (post::REPLY_QUOTE_ALONE.into(), Exit::Error));
+    assert_eq!(stop(&["bob", "ok", "--reply-to", "4", "--reply-quote"]), (post::REPLY_QUOTE_NEEDS.into(), Exit::Error));
 }
 
 #[test]

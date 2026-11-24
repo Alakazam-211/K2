@@ -65,7 +65,7 @@ class H(BaseHTTPRequestHandler):
         if u.path != "/cli/thread/post":
             return self.reply(404, {"ok": False, "error": "unexpected route"})
         with open(LOG, "a") as f:
-            f.write("%s\n" % json.dumps({k: form[k] for k in ("addr", "text", "replyTo") if k in form}, sort_keys=True))
+            f.write("%s\n" % json.dumps({k: form[k] for k in ("addr", "text", "replyTo", "replyQuote") if k in form}, sort_keys=True))
         ref = form.get("replyTo")
         if ref is None:
             return self.reply(200, {"ok": True, "id": "p1", "seq": 20, "from": "ledger", "body": form.get("text")})
@@ -76,6 +76,12 @@ class H(BaseHTTPRequestHandler):
         target = {"seq": int(ref)}
         if kind != "text":
             target["cardId"] = rid
+        if "replyQuote" in form:
+            if form["replyQuote"] not in "Review it? The contrast pass":
+                return self.reply(400, {"ok": False, "error": {"code": "reply_quote_not_in_target",
+                                        "hint": "replyQuote must be words from message #%s (as it reads in the Thread); these aren't in it" % ref}})
+            target["part"] = True
+            target["quote"] = form["replyQuote"]
         return self.reply(200, {"ok": True, "id": "p2", "seq": 21, "from": "ledger",
                                 "body": "↩ #%s ledger:\n> Review it?\n\n  %s" % (ref, form.get("text")), "replyTo": target})
 
@@ -113,6 +119,8 @@ help_out="$("$K2_CLI" thread --help 2>&1)"
 assert_contains "help: the reply form" "$help_out" "k2 thread <addr> --reply-to '#N' \"text\""
 assert_contains "help: point your person at a card" "$help_out" "To point your person at a card or message, reply to it:"
 assert_contains "help: the example" "$help_out" "k2 thread <addr> --reply-to '#<card or seq>' '…'"
+assert_contains "help: part of it" "$help_out" '[--reply-quote "words of N"]'
+assert_contains "schema: --reply-quote flag" "$("$K2_CLI" --schema 2>&1)" '"name": "--reply-quote"'
 study="$("$K2_CLI" study human 2>&1)"
 assert_contains "study human: the line" "$study" "To point your person at a card or message, reply to it:"
 schema="$("$K2_CLI" --schema 2>&1)"
@@ -133,6 +141,17 @@ out="$("$K2_CLI" thread ledger --from ledger "ok" --reply-to 0004 --json 2>/dev/
 assert_eq "json: replyTo in the answer" "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(json.dumps(d["replyTo"]))' "$out")" '{"seq": 4}'
 assert_eq "message reply: replyTo=4" "$(cat "$LOG")" '{"addr": "ledger", "replyTo": "4", "text": "ok"}'
 
+echo "== rev 2: a reply to part of it sends the words as replyQuote =="
+: > "$LOG"
+out="$("$K2_CLI" thread ledger --from ledger "yes" --reply-to 4 --reply-quote "contrast pass" --json 2>/dev/null)"
+assert_eq "part: replyTo in the answer" "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(json.dumps(d["replyTo"], sort_keys=True))' "$out")" '{"part": true, "quote": "contrast pass", "seq": 4}'
+assert_eq "part: replyQuote sent as typed" "$(cat "$LOG")" '{"addr": "ledger", "replyQuote": "contrast pass", "replyTo": "4", "text": "yes"}'
+set +e
+out="$("$K2_CLI" thread ledger --from ledger "hm" --reply-to 4 --reply-quote "not there" 2>&1 >/dev/null)"; rc=$?
+set -e
+assert_eq "part not in it: exit 2" "$rc" "2"
+assert_contains "part not in it: the daemon's code" "$out" "reply_quote_not_in_target: "
+
 echo "== a post without --reply-to sends no replyTo =="
 : > "$LOG"
 "$K2_CLI" thread ledger --from ledger "plain" >/dev/null 2>&1
@@ -147,12 +166,12 @@ assert_eq "not here: the daemon's words" "$out" "reply_not_found: no message or 
 
 echo "== usage errors (no daemon reached) =="
 : > "$LOG"
-for args in "--reply-to" "x --reply-to 0" "x --reply-to #0" "x --reply-to ##4" "x --reply-to -1" "x --reply-to 1.5" "x --reply-to #" "--reply-to 4"; do
+for args in "--reply-to" "x --reply-to 0" "x --reply-to #0" "x --reply-to ##4" "x --reply-to -1" "x --reply-to 1.5" "x --reply-to #" "--reply-to 4" "x --reply-quote y" "x --reply-to 4 --reply-quote"; do
     set +e
     # shellcheck disable=SC2086
     out="$("$K2_CLI" thread ledger --from ledger $args 2>&1)"; rc=$?
     set -e
-    if [ "$rc" -eq 1 ] && grep -q -- "--reply-to" <<<"$out"; then ok "refused: $args"; else bad "refused: $args (rc=$rc out=$out)"; fi
+    if [ "$rc" -eq 1 ] && grep -q -- "--reply-" <<<"$out"; then ok "refused: $args"; else bad "refused: $args (rc=$rc out=$out)"; fi
 done
 assert_eq "no request for a usage error" "$(cat "$LOG")" ""
 

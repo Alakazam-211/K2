@@ -802,6 +802,9 @@ export async function postThreadCompose(
      *  once the send is on this computer's disk): the message box may let
      *  its saved draft go then. Only with `pending`. */
     onQueued?: (saved: Promise<boolean>) => void
+    /** thread-reply-to-v1: a reply the server writes (`text` is then the
+     *  words alone); `shown` is how it will read, for the pending bubble. */
+    reply?: { replyTo: number; replyQuote?: string; shown: string }
   },
 ): Promise<ThreadComposeResult> {
   const body: {
@@ -813,12 +816,18 @@ export async function postThreadCompose(
     attachments?: ThreadPostAttachment[]
     context?: ThreadContextBody
     clientMsgId?: string
+    replyTo?: number
+    replyQuote?: string
   } = {
     addr,
     text,
     via: 'compose',
   }
   if (command) body.command = command
+  if (extra?.reply) {
+    body.replyTo = extra.reply.replyTo
+    if (extra.reply.replyQuote) body.replyQuote = extra.reply.replyQuote
+  }
   if (extra?.origin) body.origin = threadWidgetOriginBody(extra.origin)
   if (extra?.context) {
     const o = extra.context.origin
@@ -851,7 +860,8 @@ export async function postThreadCompose(
     hostKey: scope.hostKey,
     scope,
     addr: addr.trim(),
-    text,
+    // The pending bubble reads as the reply will.
+    text: extra.reply?.shown ?? text,
     body,
     keyed: scope.serverSupports(POST_IDEMPOTENCY_FEATURE),
     createdAtSec: Math.floor(Date.now() / 1000),

@@ -768,7 +768,7 @@ fn message_at(address: &str, seq: i64) -> Option<(String, String, k2_core::overl
     let body = doc["body"].as_str().unwrap_or_default().to_string();
     let card = doc["kind"].as_str().is_some_and(|k| k != "text");
     let card_id = item["id"].as_str().filter(|_| card).map(str::to_string);
-    Some((from, body, k2_core::overlay::ReplyTo { seq, card_id }))
+    Some((from, body, k2_core::overlay::ReplyTo { seq, card_id, part: false, quote: None }))
 }
 
 /// The desktop's reply text (`src/renderer/lib/thread-reply.ts`), built
@@ -778,6 +778,12 @@ fn message_at(address: &str, seq: i64) -> Option<(String, String, k2_core::overl
 /// a person's or K2's own (the same reason a plain post quotes its later
 /// lines); the header and the quote are K2's.
 pub fn reply_text(seq: i64, from: &str, quoted: &str, words: &str) -> String {
+    reply_text_as(seq, from, quoted, words, false)
+}
+
+/// [`reply_text`]; `part`: a reply to part of the message
+/// (`↩ part of #N <from>:`, the quote the selected words).
+pub fn reply_text_as(seq: i64, from: &str, quoted: &str, words: &str, part: bool) -> String {
     let from: String = from
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -801,7 +807,8 @@ pub fn reply_text(seq: i64, from: &str, quoted: &str, words: &str) -> String {
         .map(|l| if l.is_empty() { String::new() } else { format!("  {l}") })
         .collect::<Vec<_>>()
         .join("\n");
-    format!("↩ #{seq} {from}:\n{quote}\n\n{w}")
+    let part = if part { "part of " } else { "" };
+    format!("↩ {part}#{seq} {from}:\n{quote}\n\n{w}")
 }
 
 /// Every kind of line break as `\n` (the same set `quote_guest_lines`
@@ -824,6 +831,10 @@ struct PostBody {
     /// the reply header and quote from the stored message.
     #[serde(default, rename = "replyTo")]
     reply_to: Option<i64>,
+    /// thread-reply-to-v1 rev 2: reply to part of it, these words (they
+    /// must be in the message).
+    #[serde(default, rename = "replyQuote")]
+    reply_quote: Option<String>,
 }
 
 /// Longest post a shared Thread takes (H2).
@@ -863,10 +874,24 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
         return refuse("400 Bad Request", "reply_header_not_allowed", "send replyTo (the message's seq) instead of a reply header; K2 writes the header");
     }
     // H1: a reply quotes only this person's own conversation.
+    let part = b.reply_quote.as_deref().map(crate::overlay_routes::strip_untrusted_controls);
+    if part.is_some() && b.reply_to.is_none() {
+        return refuse("400 Bad Request", "usage", "replyQuote needs replyTo (the message the words are from)");
+    }
     let (text, reply_to) = match b.reply_to {
         None => (text.to_string(), None),
         Some(seq) if seq > 0 => match message_at(&vc, seq) {
-            Some((from, body, r)) => (reply_text(seq, &from, &body, text), Some(r)),
+            Some((from, body, mut r)) => match part.as_deref() {
+                None => (reply_text(seq, &from, &body, text), Some(r)),
+                Some(q) => match crate::overlay_routes::reply_to::part_of(seq, &crate::overlay_routes::reply_to::quotable_text(&body), q) {
+                    Ok((shown, squashed)) => {
+                        r.part = true;
+                        r.quote = Some(squashed);
+                        (reply_text_as(seq, &from, &shown, text, true), Some(r))
+                    }
+                    Err(e) => return e,
+                },
+            },
             None => return refuse("404 Not Found", "reply_not_found", format!("no message #{seq} in this Thread")),
         },
         Some(_) => return refuse("400 Bad Request", "usage", "replyTo is a message's seq (a whole number above 0)"),

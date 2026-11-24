@@ -152,7 +152,7 @@ export async function openThreadMessageMenu(
   if (picked === 'reply' && args.reply) {
     useThreadReplyStore.getState().set(args.reply.key, args.reply.target)
   } else if (picked === 'reply-selection' && args.reply && selection) {
-    useThreadReplyStore.getState().set(args.reply.key, { ...args.reply.target, text: selection, part: true })
+    useThreadReplyStore.getState().set(args.reply.key, { ...args.reply.target, text: selection, part: true, whole: args.reply.target.text })
   } else if (picked === 'copy') {
     try {
       await copyToClipboard(selection ?? args.text)

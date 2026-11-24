@@ -19,6 +19,17 @@
 //! `reply_not_found`) and nothing is stored; so is a deleted one
 //! (`reply_deleted`), and words that already start with a reply header
 //! (`reply_header_not_allowed`: K2 writes the header).
+//!
+//! Rev 2: `replyQuote` replies to part of the target, the selected words.
+//! Squashed to single spaces they must be in the target's quotable words
+//! ([`quote_of`], squashed the same way), else 400
+//! `reply_quote_not_in_target` and nothing is stored. The header says
+//! `↩ part of #N <from>:`, the quote is the selection (trimmed), and the
+//! doc's `replyTo` carries `part: true` and `quote` (the squashed words).
+//!
+//! A post with no `replyTo` whose words start with a reply header (the
+//! desktop's and the phone's own reply text, from before this) is stored
+//! as it always was.
 
 use super::*;
 
@@ -26,6 +37,46 @@ use super::*;
 pub(crate) const FEATURE: &str = "thread-reply-to-v1";
 /// The post's param.
 pub(crate) const PARAM: &str = "replyTo";
+/// Rev 2: reply to part of the target, these words.
+pub(crate) const QUOTE_PARAM: &str = "replyQuote";
+/// The refusal for a selection that isn't in the target.
+pub(crate) const QUOTE_NOT_IN_TARGET: &str = "reply_quote_not_in_target";
+
+/// `replyQuote`, as sent (None: none, or empty).
+pub(crate) fn quote_param(params: &HashMap<String, String>) -> Option<String> {
+    params
+        .get(QUOTE_PARAM)
+        .or_else(|| params.get("reply_quote"))
+        .map(|q| strip_untrusted_controls(q.as_str()))
+        .filter(|q| !q.trim().is_empty())
+}
+
+/// Runs of whitespace (line breaks too) as one space, trimmed.
+fn squash(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Rev 2: the selection `q` of message `seq` whose quotable words are
+/// `quotable`: what the quote shows (`q` trimmed) and what `replyTo.quote`
+/// keeps (`q` squashed). Refused when, squashed, it is empty or not in the
+/// squashed words.
+pub(crate) fn part_of(seq: i64, quotable: &str, q: &str) -> Result<(String, String), CliResponse> {
+    let squashed = squash(q);
+    if squashed.is_empty() || !squash(quotable).contains(&squashed) {
+        return Err(error_json(
+            "400 Bad Request",
+            QUOTE_NOT_IN_TARGET,
+            format!("replyQuote must be words from message #{seq} (as it reads in the Thread); these aren't in it"),
+        ));
+    }
+    Ok((q.trim().to_string(), squashed))
+}
+
+/// What a reply may quote of a stored body: a reply's own words, else the
+/// body ([`quote_of`] for a text message).
+pub(crate) fn quotable_text(body: &str) -> String {
+    words_of_reply(body).unwrap_or_else(|| body.to_string())
+}
 
 /// The seq `replyTo` names: `N` or `#N`, a whole number above 0. None: the
 /// post is no reply.
@@ -88,8 +139,9 @@ fn words_of_reply(body: &str) -> Option<String> {
 }
 
 /// The stored reply for `words` to message `seq` of `conversation_id`: the
-/// text to store (header, quote, words) and the doc's `replyTo`.
-pub(crate) fn build(conversation_id: &str, seq: i64, words: &str) -> Result<(String, overlay::ReplyTo), CliResponse> {
+/// text to store (header, quote, words) and the doc's `replyTo`. `part`:
+/// reply to part of it, these words (rev 2).
+pub(crate) fn build(conversation_id: &str, seq: i64, words: &str, part: Option<&str>) -> Result<(String, overlay::ReplyTo), CliResponse> {
     if words.trim_start().starts_with(crate::shared_routes::REPLY_MARK) {
         return Err(error_json(
             "400 Bad Request",
@@ -111,14 +163,24 @@ pub(crate) fn build(conversation_id: &str, seq: i64, words: &str) -> Result<(Str
     if item.doc.deleted {
         return Err(error_json("404 Not Found", "reply_deleted", format!("message #{seq} was deleted; there is nothing to reply to")));
     }
-    let text = crate::shared_routes::reply_text(seq, &item.doc.from, &quote_of(&item.doc), words);
-    Ok((text.trim_end().to_string(), reply_to_of(&item)))
+    let quotable = quote_of(&item.doc);
+    let mut reply_to = reply_to_of(&item);
+    let text = match part {
+        None => crate::shared_routes::reply_text(seq, &item.doc.from, &quotable, words),
+        Some(q) => {
+            let (shown, squashed) = part_of(seq, &quotable, q)?;
+            reply_to.part = true;
+            reply_to.quote = Some(squashed);
+            crate::shared_routes::reply_text_as(seq, &item.doc.from, &shown, words, true)
+        }
+    };
+    Ok((text.trim_end().to_string(), reply_to))
 }
 
 /// The doc's `replyTo` for a reply to `item`: its seq, and its id when it
 /// is a card (any kind but `text`).
 pub(crate) fn reply_to_of(item: &overlay::OverlayItem) -> overlay::ReplyTo {
-    overlay::ReplyTo { seq: item.seq, card_id: (item.doc.kind != "text").then(|| item.id.clone()) }
+    overlay::ReplyTo { seq: item.seq, card_id: (item.doc.kind != "text").then(|| item.id.clone()), part: false, quote: None }
 }
 
 #[cfg(test)]
@@ -131,6 +193,17 @@ mod tests {
         assert_eq!(words_of_reply("↩ #3 sales:\n> ship?").as_deref(), Some(""));
         assert_eq!(words_of_reply("plain words"), None);
         assert_eq!(words_of_reply("↩ #3 sales:\nno quote"), None);
+    }
+
+    #[test]
+    fn a_part_must_be_words_of_the_target_whatever_the_spacing() {
+        let (shown, kept) = part_of(4, "Ship the\n contrast   pass today?", "  contrast pass\n").unwrap_or_else(|r| panic!("in it: {}", r.body));
+        assert_eq!((shown.as_str(), kept.as_str()), ("contrast pass", "contrast pass"));
+        for bad in ["", "   ", "contrast fail", "Ship today"] {
+            let r = part_of(4, "Ship the contrast pass today?", bad).expect_err(bad);
+            assert_eq!(r.status, "400 Bad Request", "{bad}");
+            assert!(r.body.contains(QUOTE_NOT_IN_TARGET), "{bad}: {}", r.body);
+        }
     }
 
     #[test]

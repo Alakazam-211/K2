@@ -117,7 +117,7 @@ import { ComposeModelButton } from '@/components/Thread/ComposeModelButton'
 import { ThreadTypingSliver } from '@/components/Thread/ThreadTypingSliver'
 import { useThreadTyping, useThreadTypingSignal } from '@/lib/thread-typing'
 import { THREAD_EAR_INSET_PX, ThreadReplyBar } from '@/components/Thread/ThreadReplyBar'
-import { formatThreadReply, threadReplyKey } from '@/lib/thread-reply'
+import { THREAD_REPLY_TO_FEATURE, threadReplyKey, threadReplyPost } from '@/lib/thread-reply'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
 import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
@@ -1085,11 +1085,14 @@ export function TerminalComposeBar({
 
     try {
       if (sendOnThread) {
+        // A Reply: the quote and its reference line, then the words. A
+        // server with thread-reply-to-v1 writes them from the stored
+        // message (`replyTo`, and `replyQuote` for a part).
+        const replyPost = replyTo ? threadReplyPost(replyTo, text, scope.serverSupports(THREAD_REPLY_TO_FEATURE)) : null
         const result = await postThreadCompose(
           scope,
           threadAddr,
-          // A Reply: the quote and its reference line, then the words.
-          replyTo ? formatThreadReply(replyTo, text) : text,
+          replyPost ? replyPost.text : text,
           command,
           // Remote Thread load Fix 3: the words show in the Thread at once
           // as a pending bubble until the server confirms them.
@@ -1097,6 +1100,9 @@ export function TerminalComposeBar({
           // (on disk) before it goes; the saved draft goes once it is.
           {
             ...(files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })) } : {}),
+            ...(replyPost?.replyTo
+              ? { reply: { replyTo: replyPost.replyTo, shown: replyPost.shown, ...(replyPost.replyQuote ? { replyQuote: replyPost.replyQuote } : {}) } }
+              : {}),
             pending: true,
             onQueued: (saved) => {
               void saved.then((onDisk) => {

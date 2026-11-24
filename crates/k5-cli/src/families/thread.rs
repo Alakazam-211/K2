@@ -71,6 +71,7 @@ pub const VALUE_FLAGS: &[&str] = &[
     "--before-seq",
     "--seq",
     "--reply-to",
+    "--reply-quote",
     "--file",
     "--scope",
     "--for",

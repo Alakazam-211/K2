@@ -41,6 +41,41 @@ export interface ThreadReplyTarget {
   text: string
   /** True: a reply to a selected piece of the message. */
   part: boolean
+  /** A part reply: the whole message's words the piece was taken from
+   *  (the server checks the piece is in them, thread-reply-to-v1 rev 2). */
+  whole?: string
+}
+
+/** The server takes `replyTo` / `replyQuote` and writes the reply itself. */
+export const THREAD_REPLY_TO_FEATURE = 'thread-reply-to-v1'
+
+/** Runs of whitespace as one space, trimmed (the server's own squash). */
+function squashSpaces(s: string): string {
+  return s.split(/\s+/).filter(Boolean).join(' ')
+}
+
+/** What a reply post sends. `text`: the words alone when the server writes
+ *  the reply (`replyTo`, and `replyQuote` for a part), else the whole reply
+ *  text as before. `shown`: the reply as it will read (the pending bubble). */
+export interface ThreadReplyPost {
+  text: string
+  shown: string
+  replyTo?: number
+  replyQuote?: string
+}
+
+/** The post for `text` replying to `target`. A reply to part of a message
+ *  (Reply to selection), to a server with THREAD_REPLY_TO_FEATURE, goes as
+ *  `replyTo` + `replyQuote` (rev 2) when the piece is in the message's
+ *  words as they are stored (a piece picked across rendered Markdown, say,
+ *  goes the old way). A whole reply, and anything to an older server, is
+ *  the text form, as before. */
+export function threadReplyPost(target: ThreadReplyTarget, text: string, serverWritesReplies: boolean): ThreadReplyPost {
+  const shown = formatThreadReply(target, text)
+  if (!serverWritesReplies || target.seq <= 0 || !target.part) return { text: shown, shown }
+  const piece = squashSpaces(target.text)
+  if (!piece || target.whole === undefined || !squashSpaces(target.whole).includes(piece)) return { text: shown, shown }
+  return { text: text.trim(), shown, replyTo: target.seq, replyQuote: threadReplyQuote(target) }
 }
 
 /** The quoted words: a selection exactly (outer blank lines dropped); a

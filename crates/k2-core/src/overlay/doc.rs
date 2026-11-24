@@ -645,12 +645,19 @@ pub struct OverlayDoc {
 
 /// [`OverlayDoc::reply_to`]: what a reply points at. `seq` is the target's
 /// Thread seq (a card's number is its seq); `card_id` is the card's id when
-/// the target is a card (any kind but `text`).
+/// the target is a card (any kind but `text`). A reply to part of the
+/// target (rev 2) has `part` and `quote`: the selected words, whitespace
+/// squashed to single spaces, which the daemon checked are in the target,
+/// so a client can find and highlight them there.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReplyTo {
     pub seq: i64,
     #[serde(default, rename = "cardId", skip_serializing_if = "Option::is_none")]
     pub card_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub part: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
 }
 
 /// [`SystemNotice::kind`]: something K2 says (a job was added, a reminder fired).

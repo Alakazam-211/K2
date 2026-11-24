@@ -11,7 +11,8 @@
 //!    text, `--file`, `--limit`, `--all` or `--before-seq`; it reads the
 //!    newest one below N+1. `--reply-to #N` (or `N`, thread-reply-to-v1)
 //!    must be a whole number of at least 1, with text or files; the form
-//!    then carries `replyTo=N`.
+//!    then carries `replyTo=N`; `--reply-quote "…"` (only with
+//!    `--reply-to`) adds `replyQuote`, a reply to part of message N.
 //! 2. The sender ([`sender`]): `--from`, a sidecar cell's
 //!    `<primary>/<sidecar>`, else the folder's handle
 //!    (`/cli/workspace/handle` over TCP, its refusal no refusal of the
@@ -77,6 +78,8 @@ pub struct Line {
     /// `--reply-to`'s number (a leading `#` taken off), normalised; empty
     /// for none.
     pub reply_to: String,
+    /// `--reply-quote`: reply to part of message N, these words (rev 2).
+    pub reply_quote: String,
     pub idem_key: String,
     pub files: Vec<String>,
 }
@@ -131,6 +134,11 @@ fn reply_whole() -> String {
         "Error: --reply-to needs #N or N, a whole number >= 1 (the [N] in {CLI_NAME} thread <addr>, or a card's number)\n"
     )
 }
+
+/// `--reply-quote` with no words.
+pub const REPLY_QUOTE_NEEDS: &str = "Error: --reply-quote needs the words of message N you reply to (part of it)\n";
+/// `--reply-quote` with no `--reply-to`.
+pub const REPLY_QUOTE_ALONE: &str = "Error: --reply-quote needs --reply-to (#N: the message the words are from)\n";
 
 fn reply_words() -> String {
     format!("Error: --reply-to replies with your words: {CLI_NAME} thread <addr> --reply-to '#N' \"text\"\n")
@@ -194,6 +202,13 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
                 }
                 _ => return stop(reply_needs(), Exit::Error),
             },
+            "--reply-quote" => match next {
+                Some(v) if !v.is_empty() => {
+                    l.reply_quote = v.to_string();
+                    i += 2;
+                }
+                _ => return stop(REPLY_QUOTE_NEEDS.into(), Exit::Error),
+            },
             "--file" => match next {
                 Some(v) if !v.is_empty() => {
                     if !resolvable(v) {
@@ -245,6 +260,9 @@ pub fn parse(words: &[&str]) -> Option<Parsed> {
         l.one_seq = n.to_string();
         l.before_seq = n.wrapping_add(1).to_string();
         l.limit = "1".into();
+    }
+    if !l.reply_quote.is_empty() && l.reply_to.is_empty() {
+        return stop(REPLY_QUOTE_ALONE.into(), Exit::Error);
     }
     if !l.reply_to.is_empty() {
         // `${reply_to#\#}`: one leading `#` off.
@@ -431,6 +449,9 @@ pub fn form(l: &Line, from: &str, key: &str, attachments: Option<&str>) -> Strin
     );
     if !l.reply_to.is_empty() {
         p.push_str(&format!("&replyTo={}", l.reply_to));
+        if !l.reply_quote.is_empty() {
+            p.push_str(&format!("&replyQuote={}", quote(&l.reply_quote)));
+        }
     }
     if let Some(a) = attachments {
         p.push_str(&format!("&attachments={}", quote(a)));

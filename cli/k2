@@ -28582,7 +28582,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--reply-to|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--reply-to|--reply-quote|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
                 skip_next=1
                 continue
                 ;;
@@ -28613,6 +28613,7 @@ cmd_thread() {
     local before_seq=""
     local one_seq=""
     local reply_to=""
+    local reply_quote=""
     local idem_key=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
@@ -28631,6 +28632,9 @@ cmd_thread() {
             --reply-to)
                 [[ -z "${2:-}" ]] && { echo "Error: --reply-to needs a message or card number (#N or N: the [N] in k2 thread <addr>)" >&2; exit 1; }
                 reply_to="$2"; shift 2 ;;
+            --reply-quote)
+                [[ -z "${2:-}" ]] && { echo "Error: --reply-quote needs the words of message N you reply to (part of it)" >&2; exit 1; }
+                reply_quote="$2"; shift 2 ;;
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
@@ -28683,6 +28687,10 @@ cmd_thread() {
     # --reply-to N (thread-reply-to-v1): this post replies to message or
     # card N of this Thread (#N or N). K2 writes the `↩ #N <from>:` line and
     # the quote from the stored message, and refuses an N that isn't here.
+    if [[ -n "$reply_quote" && -z "$reply_to" ]]; then
+        echo "Error: --reply-quote needs --reply-to (#N: the message the words are from)" >&2
+        exit 1
+    fi
     if [[ -n "$reply_to" ]]; then
         local reply_n="${reply_to#\#}"
         if [[ ! "$reply_n" =~ ^[0-9]+$ ]] || [[ $((10#$reply_n)) -lt 1 ]]; then
@@ -28714,6 +28722,9 @@ cmd_thread() {
         params="${params}&clientMsgId=$(urlencode "$_K2_IDEM_KEY")"
         if [[ -n "$reply_to" ]]; then
             params="${params}&replyTo=${reply_to}"
+            if [[ -n "$reply_quote" ]]; then
+                params="${params}&replyQuote=$(urlencode "$reply_quote")"
+            fi
         fi
         if [[ ${#files[@]} -gt 0 ]]; then
             local attachments_json
@@ -29462,6 +29473,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
   k2 thread <addr> --reply-to '#N' "text"         # reply to message or card N (#N or N)
+      [--reply-quote "words of N"]                # reply to part of it: those words are the quote
   k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
       --option "…"       repeatable, one per button; commas inside are fine
       --options "a; b; c"  one string, split on ';' only (a comma never splits;
@@ -29552,8 +29564,9 @@ To point your person at a card or message, reply to it:
 K2 puts the `↩ #N <from>:` line and the start of it above your words, and the
 person clicks that line to jump to it. Quote '#N' (the shell reads a bare # as a
 comment) or give N alone. An N that isn't on this Thread is refused
-(reply_not_found) and nothing is posted. A #N in your text that names a message or
-card on this Thread is a link too.
+(reply_not_found) and nothing is posted. --reply-quote "…" replies to part of it
+(`↩ part of #N`): the words must be in message N, else reply_quote_not_in_target.
+A #N in your text that names a message or card on this Thread is a link too.
 
 Attach the files you mention (--file): the person taps them to open (desktop and
 phone). A file is a pointer to this workspace's copy, not a copy: it shows
@@ -56507,6 +56520,7 @@ cmd_schema() {
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
         {"name": "--seq", "arg": "N", "description": "Read exactly message N (the [N] in a read; a person's `↩ #N` reply names it), whole. Alone: no text, --file, --limit, --all or --before-seq."},
         {"name": "--reply-to", "arg": "#N|N", "description": "Reply to message or card N of this Thread (the [N] in a read; a card's number). K2 writes the ↩ #N line and quote; the person clicks it to jump there. An N not on this Thread is refused (reply_not_found)."},
+        {"name": "--reply-quote", "arg": "words", "description": "With --reply-to: reply to part of message N, these words (the quote; ↩ part of #N). They must be in message N, else reply_quote_not_in_target."},
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label, one per button; commas inside are fine. Mix with --options is 400."},

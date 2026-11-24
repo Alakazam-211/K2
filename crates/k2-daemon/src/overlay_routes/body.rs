@@ -41,6 +41,7 @@ pub(super) fn thread_post_body_type_error(body: &[u8]) -> Option<CliResponse> {
             "clientMsgId" if !(v.is_string() || v.is_null()) => "a string of 1-64 A-Z, a-z, 0-9, '-' or '_'",
             // thread-reply-to-v1: a seq, as a number or "#N".
             "replyTo" if !(v.is_string() || v.is_number() || v.is_null()) => "a message's or card's number (N or \"#N\")",
+            "replyQuote" if !(v.is_string() || v.is_null()) => "a string (the words of the message you reply to part of)",
             _ => continue,
         };
         return Some(usage(format!("{k} must be {want}, not {}", json_type_name(v))));

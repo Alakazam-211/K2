@@ -1791,6 +1791,11 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         Ok(s) => s,
         Err(r) => return r,
     };
+    // Rev 2: part of it (the selected words).
+    let reply_part = reply_to::quote_param(params);
+    if reply_part.is_some() && reply_seq.is_none() {
+        return usage("replyQuote needs replyTo (the message the words are from)");
+    }
     let via_in = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
     // Skin 403 stays first. A skin token on this arm has no principal.
     if request_skin().is_some() && via_in == "compose" {
@@ -1853,7 +1858,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     // isn't here is refused and nothing is stored.
     let (text, reply_target) = match reply_seq {
         None => (text, None),
-        Some(seq) => match reply_to::build(&resolved.conversation_id, seq, &text) {
+        Some(seq) => match reply_to::build(&resolved.conversation_id, seq, &text, reply_part.as_deref()) {
             Ok((t, r)) => (t, Some(r)),
             Err(e) => return e,
         },

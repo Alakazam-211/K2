@@ -142,6 +142,12 @@ export const REPORTED_FEATURES = {
    *  agent). The renderer reads both through `isAgentThreadPost` /
    *  `isPersonThreadPost` (lib/thread-viewer), so it needs no gate. */
   'thread-author-agent-v1': 'thread-author-agent-v1',
+  /** thread-reply-to-v1 (0.46.18): `POST /cli/thread/post` takes `replyTo`
+   *  (and rev 2's `replyQuote`) and writes the reply from the stored
+   *  message, storing `replyTo {seq, cardId?, part?, quote?}`. With it, Reply
+   *  to selection sends the snippet as `replyQuote`; without it, the text
+   *  form, as before. */
+  'thread-reply-to-v1': 'thread-reply-to-v1',
   /** thread-system-notice-v1 (0.46.15): K2's own Thread lines carry
    *  `author: {kind: 'system', login: 'k2'}`, `from: 'k2'` and
    *  `systemNotice: {kind, code, actions?}`, and `POST /cli/thread/resend

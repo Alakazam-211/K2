@@ -6,6 +6,7 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread <addr> --seq N                        # read message N (the [N] in a read), whole
   k2 thread <addr> --reply-to '#N' "text"         # reply to message or card N (#N or N)
+      [--reply-quote "words of N"]                # reply to part of it: those words are the quote
   k2 thread ask <addr> "prompt" --option "…" --option "…"  # choice card; do not wait
       --option "…"       repeatable, one per button; commas inside are fine
       --options "a; b; c"  one string, split on ';' only (a comma never splits;
@@ -96,8 +97,9 @@ To point your person at a card or message, reply to it:
 K2 puts the `↩ #N <from>:` line and the start of it above your words, and the
 person clicks that line to jump to it. Quote '#N' (the shell reads a bare # as a
 comment) or give N alone. An N that isn't on this Thread is refused
-(reply_not_found) and nothing is posted. A #N in your text that names a message or
-card on this Thread is a link too.
+(reply_not_found) and nothing is posted. --reply-quote "…" replies to part of it
+(`↩ part of #N`): the words must be in message N, else reply_quote_not_in_target.
+A #N in your text that names a message or card on this Thread is a link too.
 
 Attach the files you mention (--file): the person taps them to open (desktop and
 phone). A file is a pointer to this workspace's copy, not a copy: it shows

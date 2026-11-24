@@ -181,6 +181,66 @@ fn a_post_without_reply_to_is_unchanged() {
     assert!(doc.get("replyTo").is_none(), "{doc}");
 }
 
+/// Rev 2: a reply to part of a message: `↩ part of #N`, the selection as
+/// the quote, `replyTo {seq, part, quote}`. The selection may be spaced
+/// and broken otherwise than the message; words not in it are refused.
+#[test]
+fn a_reply_to_part_of_a_message_quotes_only_the_selection() {
+    let _home_lock = crate::test_support::lock_home();
+    let (handle, project_id) = room("rtpart");
+    let first = ok_body(&agent_post(&project_id, &handle, serde_json::json!({ "text": "Ship the contrast pass today.\nThen the fonts." })));
+    let seq = first["seq"].as_i64().expect("seq");
+    let from = first["from"].as_str().expect("from").to_string();
+    let answer = ok_body(&agent_post(
+        &project_id,
+        &handle,
+        serde_json::json!({ "text": "Yes, this part.", "replyTo": format!("#{seq}"), "replyQuote": "  contrast\n pass today. " }),
+    ));
+    let want = serde_json::json!({ "seq": seq, "part": true, "quote": "contrast pass today." });
+    assert_eq!(answer["replyTo"], want, "{answer}");
+    assert_eq!(answer["body"], format!("↩ part of #{seq} {from}:\n> contrast\n>  pass today.\n\n  Yes, this part."), "{answer}");
+    assert_eq!(doc_of(&handle, answer["id"].as_str().expect("id"))["replyTo"], want);
+
+    let before = items(&handle).len();
+    for (quote, reply_to) in [("the fonts first", Some(seq)), ("   ", Some(seq)), ("contrast", None)] {
+        let mut body = serde_json::json!({ "text": "hm", "replyQuote": quote });
+        if let Some(s) = reply_to {
+            body["replyTo"] = serde_json::json!(s.to_string());
+        }
+        let resp = agent_post(&project_id, &handle, body);
+        match (quote.trim().is_empty(), reply_to) {
+            (_, None) => assert_error_code(&resp, "400 Bad Request", "usage"),
+            // An empty selection is no selection: a whole reply.
+            (true, Some(_)) => assert_eq!(resp.status, "200 OK", "{}", resp.body),
+            (false, Some(_)) => assert_error_code(&resp, "400 Bad Request", "reply_quote_not_in_target"),
+        }
+    }
+    assert_eq!(items(&handle).len(), before + 1, "only the empty selection (a whole reply) was stored");
+}
+
+/// The store phones (and older desktops) send their own reply text with no
+/// `replyTo`: it is stored as it always was, header and all, with no
+/// `replyTo` on the doc.
+#[test]
+fn a_reply_written_as_text_without_reply_to_is_still_accepted() {
+    let _home_lock = crate::test_support::lock_home();
+    let (handle, _) = room("rtold");
+    let target = ok_body(&post_json(
+        "/cli/thread/post",
+        &HashMap::new(),
+        serde_json::json!({ "addr": handle, "text": "Ship it?", "via": "compose" }),
+    ));
+    for text in [
+        format!("↩ #{} sales:\n> Ship it?\n\nyes", target["seq"]),
+        format!("↩ part of #{} sales:\n> Ship\n\nthat", target["seq"]),
+    ] {
+        let answer = ok_body(&post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": handle, "text": text, "via": "compose" })));
+        assert_eq!(answer["body"], text.as_str(), "{answer}");
+        assert!(answer.get("replyTo").is_none(), "{answer}");
+        assert!(doc_of(&handle, answer["id"].as_str().expect("id")).get("replyTo").is_none());
+    }
+}
+
 #[test]
 fn boot_status_names_the_feature() {
     let features = crate::boot_status::features();

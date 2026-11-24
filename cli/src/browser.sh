@@ -397,7 +397,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--reply-to|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--seq|--reply-to|--reply-quote|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format|--why|--reason|--idempotency-key|--meta|--meta-json)
                 skip_next=1
                 continue
                 ;;
@@ -428,6 +428,7 @@ cmd_thread() {
     local before_seq=""
     local one_seq=""
     local reply_to=""
+    local reply_quote=""
     local idem_key=""
     local -a files=()
     while [[ $# -gt 0 ]]; do
@@ -446,6 +447,9 @@ cmd_thread() {
             --reply-to)
                 [[ -z "${2:-}" ]] && { echo "Error: --reply-to needs a message or card number (#N or N: the [N] in k2 thread <addr>)" >&2; exit 1; }
                 reply_to="$2"; shift 2 ;;
+            --reply-quote)
+                [[ -z "${2:-}" ]] && { echo "Error: --reply-quote needs the words of message N you reply to (part of it)" >&2; exit 1; }
+                reply_quote="$2"; shift 2 ;;
             --file)
                 [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
                 files+=("$2"); shift 2 ;;
@@ -498,6 +502,10 @@ cmd_thread() {
     # --reply-to N (thread-reply-to-v1): this post replies to message or
     # card N of this Thread (#N or N). K2 writes the `↩ #N <from>:` line and
     # the quote from the stored message, and refuses an N that isn't here.
+    if [[ -n "$reply_quote" && -z "$reply_to" ]]; then
+        echo "Error: --reply-quote needs --reply-to (#N: the message the words are from)" >&2
+        exit 1
+    fi
     if [[ -n "$reply_to" ]]; then
         local reply_n="${reply_to#\#}"
         if [[ ! "$reply_n" =~ ^[0-9]+$ ]] || [[ $((10#$reply_n)) -lt 1 ]]; then
@@ -529,6 +537,9 @@ cmd_thread() {
         params="${params}&clientMsgId=$(urlencode "$_K2_IDEM_KEY")"
         if [[ -n "$reply_to" ]]; then
             params="${params}&replyTo=${reply_to}"
+            if [[ -n "$reply_quote" ]]; then
+                params="${params}&replyQuote=$(urlencode "$reply_quote")"
+            fi
         fi
         if [[ ${#files[@]} -gt 0 ]]; then
             local attachments_json

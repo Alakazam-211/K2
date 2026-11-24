@@ -140,6 +140,51 @@ fn thread_writes_as_the_shell_does() {
             2,
         ),
         plain(
+            "a reply to part of a message",
+            &[
+                "bob",
+                "yes, that",
+                "--reply-to",
+                "4",
+                "--reply-quote",
+                "the contrast pass",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ],
+            vec![
+                ok(ON),
+                ok(r#"{"ok":true,"id":"m3","seq":6,"from":"me","replyTo":{"seq":4,"part":true,"quote":"the contrast pass"}}"#),
+            ],
+            0,
+            2,
+        ),
+        plain(
+            "a reply to part, words not in the message",
+            &[
+                "bob",
+                "hm",
+                "--reply-to",
+                "4",
+                "--reply-quote",
+                "not there",
+                "--from",
+                "me",
+                "--idempotency-key",
+                KEY,
+            ],
+            vec![
+                ok(ON),
+                Reply::Answer(
+                    400,
+                    r#"{"ok":false,"error":{"code":"reply_quote_not_in_target","hint":"replyQuote must be words from message #4 (as it reads in the Thread); these aren't in it"}}"#.into(),
+                ),
+            ],
+            2,
+            2,
+        ),
+        plain(
             "a reply to a message not on the Thread",
             &[
                 "bob",
@@ -700,6 +745,8 @@ fn thread_stops_before_it_sends() {
         ("--reply-to 0", &["bob", "t", "--reply-to", "#0"], 1),
         ("--reply-to x", &["bob", "t", "--reply-to", "x"], 1),
         ("--reply-to, no words", &["bob", "--reply-to", "4"], 1),
+        ("--reply-quote alone", &["bob", "t", "--reply-quote", "x"], 1),
+        ("--reply-quote last", &["bob", "t", "--reply-to", "4", "--reply-quote"], 1),
         ("--file empty", &["bob", "--file", ""], 1),
         (
             "--idempotency-key last",

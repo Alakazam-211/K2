@@ -10,6 +10,7 @@
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
         {"name": "--seq", "arg": "N", "description": "Read exactly message N (the [N] in a read; a person's `↩ #N` reply names it), whole. Alone: no text, --file, --limit, --all or --before-seq."},
         {"name": "--reply-to", "arg": "#N|N", "description": "Reply to message or card N of this Thread (the [N] in a read; a card's number). K2 writes the ↩ #N line and quote; the person clicks it to jump there. An N not on this Thread is refused (reply_not_found)."},
+        {"name": "--reply-quote", "arg": "words", "description": "With --reply-to: reply to part of message N, these words (the quote; ↩ part of #N). They must be in message N, else reply_quote_not_in_target."},
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label, one per button; commas inside are fine. Mix with --options is 400."},

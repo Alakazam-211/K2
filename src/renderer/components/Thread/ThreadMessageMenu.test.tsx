@@ -69,6 +69,9 @@ const ID = '3f2a9c1e-5b7d-4e2a-9c1e-5b7d4e2a9c1e'
 const OWNER = { principal: 'owner', aliases: [] as string[] }
 
 const scope: ServerScope = fakeScope('local', { remote: false })
+const sharedScope = scope
+/** A server from before thread-reply-to-v1. */
+const olderScope: ServerScope = { ...fakeScope('local', { remote: false }), serverSupports: (f: string) => f !== 'thread-reply-to-v1' }
 
 const chrome = {
   viewTab: 'thread',
@@ -86,7 +89,8 @@ function item(seq: number, body: string, doc: Partial<OverlayThreadItem['doc']> 
 
 /** The desktop Thread: bubbles (with the Thread's server and address) and
  *  the Thread's message box, as TerminalPane puts them side by side. */
-function renderThread(items: OverlayThreadItem[], opts: { box?: boolean } = {}): void {
+function renderThread(items: OverlayThreadItem[], opts: { box?: boolean; scope?: ServerScope } = {}): void {
+  const scope = opts.scope ?? sharedScope
   const room = testRoom({
     tabs: {},
     scope,
@@ -132,8 +136,8 @@ function selectIn(el: HTMLElement, text: string, from: number, to: number): void
   sel.addRange(range)
 }
 
-function threadPosts(): Array<{ text: string }> {
-  return h.daemonCliPost.mock.calls.filter((c) => c[1] === 'thread/post').map((c) => c[2] as { text: string })
+function threadPosts(): Array<{ text: string; replyTo?: number; replyQuote?: string }> {
+  return h.daemonCliPost.mock.calls.filter((c) => c[1] === 'thread/post').map((c) => c[2] as { text: string; replyTo?: number; replyQuote?: string })
 }
 
 beforeEach(() => {
@@ -360,8 +364,22 @@ describe('Reply', () => {
 })
 
 describe('Reply to selection', () => {
-  it('shows for a selection inside one message and quotes exactly the snippet', async () => {
+  it('to a server with thread-reply-to-v1: the words, replyTo and the snippet as replyQuote (rev 2)', async () => {
     renderThread([item(42, 'Ship it today or wait for QA'), item(43, 'Second message')])
+    selectIn(bubbles()[0], 'Ship it today', 17, 28)
+    fireEvent.contextMenu(bubbles()[0])
+    act(() => useContextMenuStore.getState().selectItem('reply-selection'))
+    await screen.findByTestId('thread-reply-chip')
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'Why wait?' } })
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+    expect(threadPosts().map((p) => [p.text, p.replyTo, p.replyQuote])).toEqual([['Why wait?', 42, 'wait for QA']])
+  })
+
+  it('shows for a selection inside one message and quotes exactly the snippet (an older server: the text form)', async () => {
+    renderThread([item(42, 'Ship it today or wait for QA'), item(43, 'Second message')], { scope: olderScope })
     selectIn(bubbles()[0], 'Ship it today', 17, 28)
     fireEvent.contextMenu(bubbles()[0])
     expect(menuLabels()).toEqual(['Reply to selection', 'Reply', 'Copy selection', 'Save to stash'])

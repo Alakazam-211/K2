@@ -227,9 +227,9 @@ fn word(d: &SeccompData, off: u32) -> u32 {
         4 => d.arch,
         8 => d.instruction_pointer as u32,
         12 => (d.instruction_pointer >> 32) as u32,
-        16..=63 if off % 4 == 0 => {
+        16..=63 if off.is_multiple_of(4) => {
             let a = d.args[((off - 16) / 8) as usize];
-            if (off - 16) % 8 == 0 {
+            if (off - 16).is_multiple_of(8) {
                 a as u32
             } else {
                 (a >> 32) as u32

@@ -244,7 +244,10 @@ mod paths {
         let _bus = UnixListener::bind(out.join("bus")).unwrap();
         std::fs::write(tmp.join("plain"), "x").unwrap();
         std::os::unix::fs::symlink(out.join("bus"), tmp.join("link")).unwrap();
-        std::os::unix::fs::symlink(tmp.join("sub/own.sock"), tmp.join("inside")).unwrap();
+        std::os::unix::fs::symlink("sub/own.sock", tmp.join("inside")).unwrap();
+        // An absolute link counts as leaving, even to a socket inside (what
+        // openat2's RESOLVE_BENEATH does).
+        std::os::unix::fs::symlink(tmp.join("sub/own.sock"), tmp.join("inside_abs")).unwrap();
         std::os::unix::fs::symlink(&out, tmp.join("dirlink")).unwrap();
         let r = rules(&tmp, None, 0);
         allowed(&r, &tmp.join("sub/own.sock")).expect("a real socket in its temp folder");
@@ -252,6 +255,7 @@ mod paths {
         allowed(&r, &tmp.join("sub/../sub/own.sock")).expect(".. that stays inside");
         for (p, what) in [
             (tmp.join("link"), "a link out to another socket"),
+            (tmp.join("inside_abs"), "an absolute link, even to a socket inside"),
             (tmp.join("dirlink/bus"), "a link to another folder on the way"),
             (tmp.join("../o/bus"), ".. out of the folder"),
             (tmp.join("sub/../../o/bus"), ".. out, deeper"),

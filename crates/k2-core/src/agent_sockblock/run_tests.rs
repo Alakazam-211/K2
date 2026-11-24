@@ -20,6 +20,8 @@ use super::supervisor::{self, HookRule, Log, Prepared, Rules, TmpRule};
 use super::{sys, Mode};
 
 const ROLE: &str = "K2_SB_ROLE";
+/// How long one role run may take.
+const ROLE_WAIT: Duration = Duration::from_secs(150);
 
 fn role_is(r: &str) -> bool {
     std::env::var(ROLE).as_deref() == Ok(r)
@@ -91,11 +93,31 @@ fn run(w: &World, mode: Option<Mode>, client: &str) -> (i32, HashMap<String, Str
         }
     };
     c.env("K2_SB_ROOT", &w.root).env("K2_SB_TCP", w.tcp.to_string()).env("K2_SB_ABS", &w.abs).env("K2_SB_MODE_SEEN", mode.map_or("none", Mode::as_str));
-    let out = c.stdin(Stdio::null()).stderr(Stdio::inherit()).output().expect("run the role");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut child = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().expect("run the role");
+    let mut pipe = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = pipe.read_to_string(&mut s);
+        s
+    });
+    let t = Instant::now();
+    let status = loop {
+        if let Some(st) = child.try_wait().unwrap() {
+            break st;
+        }
+        if t.elapsed() > ROLE_WAIT {
+            // The helper killed: its program goes with it (its parent-death signal).
+            let _ = child.kill();
+            let _ = child.wait();
+            let partial = reader.join().unwrap();
+            panic!("{client} ({}) didn't finish in {ROLE_WAIT:?}; what it printed:\n{partial}", mode.map_or("no block", Mode::as_str));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let text = reader.join().unwrap();
     println!("──── {client} ({}) ────\n{text}", mode.map_or("no block", Mode::as_str));
     let rows = text.lines().filter_map(|l| l.strip_prefix("R ")).filter_map(|l| l.split_once(' ')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
-    (out.status.code().unwrap_or(-1), rows, text)
+    (status.code().unwrap_or(-1), rows, text)
 }
 
 fn preflight() {
@@ -181,7 +203,9 @@ fn a_session_under_the_block_recorded() {
     assert_eq!(get("link"), "ok other");
     assert_eq!(get("abstract"), "ok abs");
     assert_eq!(get("dgram"), "ok");
-    assert_eq!(get("listener"), "ok", "record lets its own listener through (in a child that exits)");
+    // Record lets the call run; the kernel itself refuses a second listener
+    // in a filter chain that has one (EBUSY).
+    assert_eq!(get("listener"), "err 16", "a listener of its own under ours: the kernel refuses it");
     assert_eq!(get("tcp"), "ok");
     assert_eq!(status, 0);
     let log = std::fs::read_to_string(w.root.join("log")).unwrap();
@@ -293,6 +317,8 @@ fn role_client() {
     if !role_is("client") {
         return;
     }
+    // The harness prints the test's name without a newline first.
+    println!();
     let root = PathBuf::from(env("K2_SB_ROOT"));
     let enforced = env("K2_SB_MODE_SEEN") == "enforce";
     // Row 9: nothing above 2 came with the program.
@@ -506,6 +532,7 @@ fn role_bench() {
     if !role_is("client") {
         return;
     }
+    println!();
     let root = PathBuf::from(env("K2_SB_ROOT"));
     let tcp: u16 = env("K2_SB_TCP").parse().unwrap();
     let hook = root.join("cells/hook.sock");

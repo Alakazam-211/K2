@@ -272,10 +272,11 @@ pub fn captured_form(argv: &[&str]) -> Option<&'static HelpForm> {
 /// a newline and a tab, `\c` the command's name
 /// ([`k2_client::brand::CLI_NAME`]), `\p` the product's
 /// ([`k2_client::brand::PRODUCT_NAME`]), `\o` the company's
-/// ([`k2_client::brand::COMPANY_NAME`]) and `\l` the sign-in service's
-/// ([`k2_client::brand::LOGIN_NAME`]); in the default build those are
-/// `k2`, `K2`, `Alakazam Labs` and `K2 Connect`, as the shell printed
-/// them. `build.rs` lets no other escape in.
+/// ([`k2_client::brand::COMPANY_NAME`]), `\l` the sign-in service's
+/// ([`k2_client::brand::LOGIN_NAME`]) and `\m` the contact address
+/// ([`k2_client::brand::CONTACT_EMAIL`]); in the default build those are
+/// `k2`, `K2`, `Alakazam Labs`, `K2 Connect` and our contact address, as
+/// the shell printed them. `build.rs` lets no other escape in.
 pub fn render(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + text.len() / 8);
     let mut chars = text.chars();
@@ -291,6 +292,7 @@ pub fn render(text: &str) -> String {
             Some('p') => out.push_str(k2_client::brand::PRODUCT_NAME),
             Some('o') => out.push_str(k2_client::brand::COMPANY_NAME),
             Some('l') => out.push_str(k2_client::brand::LOGIN_NAME),
+            Some('m') => out.push_str(k2_client::brand::CONTACT_EMAIL),
             Some(other) => out.push(other),
             None => out.push('\\'),
         }
@@ -308,7 +310,7 @@ mod brand_text;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k2_client::brand::{COMPANY_NAME, LOGIN_NAME};
+    use k2_client::brand::{COMPANY_NAME, CONTACT_EMAIL, LOGIN_NAME, REPO_URL};
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
@@ -334,22 +336,38 @@ mod tests {
         } else {
             brand_text::rewrite(&text, brand_text::SOURCE_NAME, name, verbs())
         };
-        brand_text::fill(&text, COMPANY_NAME, LOGIN_NAME).into_bytes()
+        brand_text::fill(&text, &this_brand()).into_bytes()
+    }
+
+    /// The values this build fills the slots with.
+    fn this_brand() -> brand_text::Values<'static> {
+        brand_text::Values {
+            company: COMPANY_NAME,
+            login: LOGIN_NAME,
+            contact_email: CONTACT_EMAIL,
+            repo: REPO_URL,
+        }
     }
 
     /// `[names] <key>` of the default brand's file (`brand/k2`): what the
     /// sources' slots are filled with in the default build.
     fn default_name(key: &str) -> String {
+        default_value("names", key)
+    }
+
+    /// `[<table>] <key>` of the default brand's file, a one-line string.
+    fn default_value(table: &str, key: &str) -> String {
         let toml = std::fs::read_to_string(root().join("brand/k2/brand.toml")).unwrap();
+        let head = format!("[{table}]");
         let prefix = format!("{key} = \"");
         let value = toml
             .lines()
-            .skip_while(|l| l.trim() != "[names]")
-            .take_while(|l| !l.starts_with('[') || l.trim() == "[names]")
+            .skip_while(|l| l.trim() != head)
+            .take_while(|l| !l.starts_with('[') || l.trim() == head)
             .find_map(|l| l.strip_prefix(prefix.as_str()))
             .and_then(|l| l.strip_suffix('"'));
         value
-            .unwrap_or_else(|| panic!("brand/k2/brand.toml has no [names] {key}"))
+            .unwrap_or_else(|| panic!("brand/k2/brand.toml has no [{table}] {key}"))
             .to_string()
     }
 
@@ -675,7 +693,7 @@ mod tests {
             crate::families::schema::BODY.to_string(),
         ));
         for (what, text) in &texts {
-            for slot in [brand_text::COMPANY_SLOT, brand_text::LOGIN_SLOT] {
+            for slot in brand_text::SLOTS {
                 assert!(!text.contains(slot), "{what} holds the raw slot {slot}");
             }
         }
@@ -684,74 +702,154 @@ mod tests {
             .values()
             .filter(|b| {
                 let s = String::from_utf8_lossy(b);
-                s.contains(brand_text::COMPANY_SLOT) || s.contains(brand_text::LOGIN_SLOT)
+                brand_text::SLOTS.iter().any(|slot| s.contains(slot))
             })
             .count();
         assert!(slotted > 5, "only {slotted} study files hold a slot");
     }
 
-    /// The pages a partner's build prints name its company and its
-    /// sign-in service, never ours (rebrand B7): `study send-feedback`,
-    /// `help setup` and `--schema` hold this build's `names.company` (and
-    /// the two with a sign-in, `names.login`) where the sources hold the
-    /// slots, and in another brand's build neither of the default brand's
-    /// two names; `help setup` has no word of our company's at all. Holds
-    /// for any brand (`K2_BRAND_DIR`). The study page still says our
-    /// company's first word alone in four lines and gives our contact
-    /// address, and the manifest names the release repo: none of those is
-    /// a slot yet, so only the full names are checked there.
+    /// The pages a partner's build prints name its company, its sign-in
+    /// service and its contact address, never ours (rebrand B7):
+    /// `study send-feedback`, `help setup`, `help send-feedback` (the file
+    /// and its captured form) and `--schema` hold this build's
+    /// `names.company`, `names.login` and `links.contact_email` where the
+    /// sources hold the slots, and in another brand's build none of the
+    /// default brand's, nor its company's first word alone, nor our repo
+    /// (`links.repo`, its `owner/name`). Holds for any brand
+    /// (`K2_BRAND_DIR`). `--schema` is not held to the repo: its one repo
+    /// URL is the root helper's install line, ours in every brand (partner
+    /// builds ship our root helper, and the daemon's real 409 names ours),
+    /// and no other line of it prints a repo. It also names our Sew
+    /// release repo (`<owner>/sew-releases`, which is not the word alone):
+    /// partner builds ship our Sew.
     #[test]
     fn brand_free_pages_name_this_brands_company() {
-        let (our_company, our_login) = (default_name("company"), default_name("login"));
+        let ours = brand_text::Values {
+            company: &default_name("company"),
+            login: &default_name("login"),
+            contact_email: &default_value("links", "contact_email"),
+            repo: &default_value("links", "repo"),
+        };
+        let our_repo_name = ours
+            .repo
+            .strip_prefix("https://github.com/")
+            .expect("our links.repo is a GitHub page");
+        let our_word = ours.company.split(' ').next().unwrap();
         let source = |which: &str, key: &str| {
             std::fs::read_to_string(text_dir(which).join(format!("{key}.txt"))).unwrap()
         };
-        let slotted = source("study", "send-feedback");
-        assert!(
-            slotted.contains(brand_text::COMPANY_SLOT),
-            "study send-feedback"
-        );
-        assert!(
-            slotted.contains(brand_text::LOGIN_SLOT),
-            "study send-feedback"
-        );
-        assert!(
-            source("help", "setup").contains(brand_text::COMPANY_SLOT),
-            "help setup"
-        );
-
-        let feedback = study("send-feedback").expect("cli/text/study/send-feedback.txt");
-        let setup = page("setup").expect("help setup prints cli/text/help/setup.txt");
-        let schema = crate::families::schema::BODY;
-        let (company, login) = (COMPANY_NAME.to_string(), LOGIN_NAME.to_string());
-        let json = |name: &str| brand_text::json_escaped(name);
-        let (json_company, json_login) = (json(COMPANY_NAME), json(LOGIN_NAME));
-        let pages = [
-            ("study send-feedback", feedback, &company, Some(&login)),
-            ("help setup", setup, &company, None),
-            ("--schema", schema, &json_company, Some(&json_login)),
-        ];
-        for (what, text, company, login) in pages {
-            assert!(
-                text.contains(company.as_str()),
-                "{what} does not name {company}"
-            );
-            if let Some(login) = login {
-                assert!(
-                    text.contains(login.as_str()),
-                    "{what} does not name {login}"
-                );
-            }
-            if COMPANY_NAME != our_company {
-                assert!(!text.contains(&our_company), "{what} names {our_company}");
-            }
-            if LOGIN_NAME != our_login {
-                assert!(!text.contains(&our_login), "{what} names {our_login}");
+        for (which, key, slots) in [
+            (
+                "study",
+                "send-feedback",
+                &[
+                    brand_text::COMPANY_SLOT,
+                    brand_text::LOGIN_SLOT,
+                    brand_text::CONTACT_EMAIL_SLOT,
+                ][..],
+            ),
+            ("help", "setup", &[brand_text::COMPANY_SLOT][..]),
+            (
+                "help",
+                "send-feedback",
+                &[
+                    brand_text::COMPANY_SLOT,
+                    brand_text::LOGIN_SLOT,
+                    brand_text::CONTACT_EMAIL_SLOT,
+                ][..],
+            ),
+        ] {
+            let text = source(which, key);
+            for slot in slots {
+                assert!(text.contains(slot), "{which} {key} holds {slot}");
             }
         }
-        if COMPANY_NAME != our_company {
-            let word = our_company.split(' ').next().unwrap();
-            assert!(!setup.contains(word), "help setup says {word}");
+
+        let mine = this_brand();
+        let json = |v: &str| brand_text::json_escaped(v);
+        let (company, login) = (json(mine.company), json(mine.login));
+        let (contact, repo) = (json(mine.contact_email), json(mine.repo));
+        let schema = brand_text::Values {
+            company: &company,
+            login: &login,
+            contact_email: &contact,
+            repo: &repo,
+        };
+        let captured = captured_form(&["send-feedback", "help"])
+            .and_then(|f| f.captured)
+            .map(|n| render(CAPTURED[n].out) + &render(CAPTURED[n].err))
+            .expect("send-feedback help is a captured form");
+        let printed = |what: &str, text: Option<&str>| {
+            text.unwrap_or_else(|| panic!("{what} is embedded"))
+                .to_string()
+        };
+        // Each page, what it must name of this brand's, and whether our
+        // repo may be in it (the root helper's line, ours in every brand).
+        let pages: [(&str, String, Vec<&str>, bool); 5] = [
+            (
+                "study send-feedback",
+                printed("study send-feedback", study("send-feedback")),
+                vec![mine.company, mine.login, mine.contact_email],
+                false,
+            ),
+            (
+                "help setup",
+                printed("help setup", page("setup")),
+                vec![mine.company],
+                false,
+            ),
+            (
+                "help send-feedback",
+                printed("help send-feedback", page("send-feedback")),
+                vec![mine.company, mine.login, mine.contact_email],
+                false,
+            ),
+            (
+                "help send-feedback (captured)",
+                captured,
+                vec![mine.company, mine.login, mine.contact_email],
+                false,
+            ),
+            (
+                "--schema",
+                crate::families::schema::BODY.to_string(),
+                vec![schema.company, schema.login],
+                true,
+            ),
+        ];
+        // `word` alone: no letter or digit before it, none after it, and
+        // no `-` after it (an `owner-211/name` is not the word).
+        let says = |text: &str, word: &str| {
+            text.match_indices(word).any(|(i, _)| {
+                let before = text[..i].chars().next_back();
+                let after = text[i + word.len()..].chars().next();
+                !before.is_some_and(char::is_alphanumeric)
+                    && !after.is_some_and(|c| c.is_alphanumeric() || c == '-')
+            })
+        };
+        for (what, text, want, our_repo_kept) in &pages {
+            for v in want {
+                assert!(text.contains(v), "{what} does not name {v}");
+            }
+            for (theirs, this) in [
+                (ours.company, mine.company),
+                (ours.login, mine.login),
+                (ours.contact_email, mine.contact_email),
+            ] {
+                if this != theirs {
+                    assert!(!text.contains(theirs), "{what} names {theirs}");
+                }
+            }
+            if mine.repo != ours.repo && !*our_repo_kept {
+                assert!(!text.contains(ours.repo), "{what} names {}", ours.repo);
+                assert!(
+                    !text.contains(our_repo_name),
+                    "{what} names {our_repo_name}"
+                );
+            }
+            if mine.company != ours.company {
+                assert!(!says(text.as_str(), our_word), "{what} says {our_word}");
+            }
         }
     }
 
@@ -766,6 +864,10 @@ mod tests {
         assert_eq!(
             render("Tell \\o; over \\l (\\\\l)"),
             format!("Tell {COMPANY_NAME}; over {LOGIN_NAME} (\\l)")
+        );
+        assert_eq!(
+            render("email \\m (\\\\m)"),
+            format!("email {CONTACT_EMAIL} (\\m)")
         );
         assert_eq!(render(""), "");
         assert_eq!(render("plain \u{2014} text"), "plain \u{2014} text");

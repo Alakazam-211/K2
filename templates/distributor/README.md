@@ -107,6 +107,8 @@ the build, naming it.
 | `look.accent` | your accent colour | may (left out: the style's own) |
 | `links.site` | your public website | **must**, your own |
 | `links.support_email` | where your users write for help | **must**, your own |
+| `links.contact_email` | where your users write when their box can't send feedback (the CLI's send-feedback pages print it) | **must**, your own |
+| `links.repo` | your public source repo's page, https (where the CLI's text names the brand's repo) | **must**, your own |
 | `links.support_url`, `terms`, `privacy` | your support page, terms of service and privacy policy | **must (--hosted)**, not `""` |
 | `links.dashboard` | where a user manages their account | **must**, your own, or `""` (none) |
 | `links.feedback` | where Send feedback goes | **must**, your own, or `""` (the button is off) |

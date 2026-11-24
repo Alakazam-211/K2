@@ -28,8 +28,8 @@ as text, line by line. Five judges, each on its own:
          name before its version (`xy 0.46.17`).
      A hit fails unless it is a `debt` row for judge c.
   d  no slot is left unfilled: no line holds `{cli}` or `{product}` (rebrand
-     B7, trap 2), nor a page's `{company}` or `{login}` (the build fills
-     those: crates/k5-cli/build.rs). A template is filled by the CLI that
+     B7, trap 2), nor a page's `{company}`, `{login}`, `{contact_email}` or
+     `{repo}` (the build fills those: crates/k5-cli/build.rs). A template is filled by the CLI that
      prints it, or by the server where it is made; a slot that reaches a
      person or an agent is a command nobody can type, or a name nobody
      reads. No allow list, no debt: one hit fails.
@@ -152,7 +152,7 @@ def corpus_files(corpus):
 
 # The slots a template carries (k2_core::brand::CLI_SLOT, PRODUCT_SLOT), and
 # the brand slots of the CLI's pages (crates/k5-cli/src/brand_text.rs).
-SLOTS = ("{cli}", "{product}", "{company}", "{login}")
+SLOTS = ("{cli}", "{product}", "{company}", "{login}", "{contact_email}", "{repo}")
 COMMAND_LEAD = re.compile(r"(^\s*|(Usage:|usage:|\brun|\bRun|\btry|\bTry|\$)\s+)[`'\"]?$")
 FLAG_AFTER = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
 

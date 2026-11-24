@@ -24,11 +24,12 @@
 # and the join puts the file's bytes in that line's place. Every file under
 # cli/text is included exactly once (see join_parts).
 #
-# A page or an entry names the company and the sign-in service by slot,
-# {company} and {login} (scripts/brand/page_slots.py). The join fills them
-# with our names (brand/k2: bash is built in the default brand only), so
-# cli/k2 never holds a slot; the k5 binary's build fills them with its own
-# brand's (crates/k5-cli/build.rs).
+# A page or an entry names the company, the sign-in service, the contact
+# address and the source repo by slot, {company}, {login}, {contact_email}
+# and {repo} (scripts/brand/page_slots.py). The join fills them with ours
+# (brand/k2: bash is built in the default brand only), so cli/k2 never
+# holds a slot; the k5 binary's build fills them with its own brand's
+# (crates/k5-cli/build.rs).
 #
 # Edit a part, never cli/k2: the next build would undo an edit made there.
 # cli/k2 stays committed, because the app bundle, the installers, the

@@ -66,6 +66,12 @@ links.site	""	shape
 links.support_email	"help@example.invalid"	ok
 links.support_email	"help"	shape
 links.support_email	"help@example"	shape
+links.contact_email	"hello@example.invalid"	ok
+links.contact_email	"hello"	shape
+links.contact_email	""	shape
+links.repo	"https://example.invalid/source"	ok
+links.repo	"http://example.invalid/source"	shape
+links.repo	""	shape
 links.support_url	"https://example.invalid/support"	ok
 links.terms	""	ok
 links.terms	"http://example.invalid/terms"	shape

@@ -15,13 +15,14 @@
 //! other use stay as they are. `text.rs`'s tests hold this port to the
 //! Python, file by file.
 //!
-//! The company and the sign-in service are slots in the same text,
-//! `{company}` and `{login}` ([`COMPANY_SLOT`], [`LOGIN_SLOT`]): every
-//! build fills them with its brand's `names.company` and `names.login`
-//! ([`fill`]; `scripts/build-cli.sh` fills bash's with ours, through
-//! `scripts/brand/page_slots.py`), after the rewrite, so a brand's names
-//! are never read as the command. In the default brand the filled text is
-//! the text as it was before the slots, byte for byte.
+//! The company, the sign-in service, the contact address and the source
+//! repo are slots in the same text, `{company}`, `{login}`,
+//! `{contact_email}` and `{repo}` ([`SLOTS`]): every build fills them with
+//! its brand's `names.company`, `names.login`, `links.contact_email` and
+//! `links.repo` ([`fill`]; `scripts/build-cli.sh` fills bash's with ours,
+//! through `scripts/brand/page_slots.py`), after the rewrite, so a brand's
+//! names are never read as the command. In the default brand the filled
+//! text is the text as it was before the slots, byte for byte.
 //!
 //! Used by `build.rs` (by path) and by the tests; nothing at run time.
 
@@ -293,11 +294,49 @@ pub const COMPANY_SLOT: &str = "{company}";
 /// The slot for the sign-in service's name (`names.login`).
 pub const LOGIN_SLOT: &str = "{login}";
 
-/// `text` with every [`COMPANY_SLOT`] spelled `company` and every
-/// [`LOGIN_SLOT`] spelled `login`. Every other byte is kept.
-pub fn fill(text: &str, company: &str, login: &str) -> String {
-    text.replace(COMPANY_SLOT, company)
-        .replace(LOGIN_SLOT, login)
+/// The slot for the address people write to when a server can't send
+/// feedback (`links.contact_email`).
+pub const CONTACT_EMAIL_SLOT: &str = "{contact_email}";
+
+/// The slot for the source repo's page (`links.repo`).
+pub const REPO_SLOT: &str = "{repo}";
+
+/// Every slot, in the order [`fill`] fills them.
+pub const SLOTS: [&str; 4] = [COMPANY_SLOT, LOGIN_SLOT, CONTACT_EMAIL_SLOT, REPO_SLOT];
+
+/// What a build fills the slots with: its brand's values.
+#[derive(Clone, Copy, Debug)]
+pub struct Values<'a> {
+    /// For [`COMPANY_SLOT`].
+    pub company: &'a str,
+    /// For [`LOGIN_SLOT`].
+    pub login: &'a str,
+    /// For [`CONTACT_EMAIL_SLOT`].
+    pub contact_email: &'a str,
+    /// For [`REPO_SLOT`].
+    pub repo: &'a str,
+}
+
+impl<'a> Values<'a> {
+    /// Each slot of [`SLOTS`] with its value, in that order.
+    fn pairs(&self) -> [(&'static str, &'a str); 4] {
+        [
+            (COMPANY_SLOT, self.company),
+            (LOGIN_SLOT, self.login),
+            (CONTACT_EMAIL_SLOT, self.contact_email),
+            (REPO_SLOT, self.repo),
+        ]
+    }
+}
+
+/// `text` with every slot of [`SLOTS`] spelled as `values` says. Every
+/// other byte is kept.
+pub fn fill(text: &str, values: &Values) -> String {
+    let mut out = text.to_string();
+    for (slot, value) in values.pairs() {
+        out = out.replace(slot, value);
+    }
+    out
 }
 
 /// `name` as it goes inside a JSON string: the schema manifest's slots
@@ -311,14 +350,30 @@ pub fn json_escaped(name: &str) -> String {
 mod tests {
     use super::*;
 
+    const ACME: Values<'static> = Values {
+        company: "Acme",
+        login: "Acme ID",
+        contact_email: "hello@acme.example",
+        repo: "https://acme.example/source",
+    };
+
     #[test]
     fn the_slots_are_filled_and_nothing_else_moves() {
         assert_eq!(
-            fill("Tell {company}; {login} ({login}).", "Acme", "Acme ID"),
+            fill("Tell {company}; {login} ({login}).", &ACME),
             "Tell Acme; Acme ID (Acme ID)."
         );
-        let other = "{cli} {product} {Company} {company";
-        assert_eq!(fill(other, "A", "B"), other);
+        assert_eq!(
+            fill(
+                "email {contact_email}; curl {repo}/releases/x.sh ({repo})",
+                &ACME
+            ),
+            "email hello@acme.example; curl https://acme.example/source/releases/x.sh (https://acme.example/source)"
+        );
+        let other = "{cli} {product} {Company} {company {contact} {repos} {Repo}";
+        assert_eq!(fill(other, &ACME), other);
+        let filled = fill(&SLOTS.join(" "), &ACME);
+        assert!(SLOTS.iter().all(|s| !filled.contains(s)), "{filled}");
         assert_eq!(json_escaped(r#"Say "hi" \ bye"#), r#"Say \"hi\" \\ bye"#);
         assert_eq!(json_escaped("Globex Corporation"), "Globex Corporation");
     }

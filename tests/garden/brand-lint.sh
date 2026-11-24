@@ -69,6 +69,8 @@ keys = [{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23J
 [links]
 site = "https://q8.example.invalid"
 support_email = "help@q8.example.invalid"
+contact_email = "hello@q8.example.invalid"
+repo = "https://q8.example.invalid/source"
 dashboard = ""
 feedback = ""
 
@@ -80,7 +82,7 @@ bundle_id = "invalid.example.q8"
 team_id = "ABCDE12345"
 push_topic = "invalid.example.q8"
 '
-REQUIRED_OWN="names.company names.login zones.label links.site links.support_email links.dashboard links.feedback feeds.daemon feeds.downloads package.update_feed update.keys"
+REQUIRED_OWN="names.company names.login zones.label links.site links.support_email links.contact_email links.repo links.dashboard links.feedback feeds.daemon feeds.downloads package.update_feed update.keys"
 REQUIRED_SET="mail.postal phone.bundle_id phone.team_id phone.push_topic"
 brand() { # brand <folder> <id> <command> <product> [<alias>...]: names and the fields above
     bare "$@"
@@ -247,7 +249,7 @@ for f in $REQUIRED_SET; do
     [[ "$out" == *"field $f: required: is missing: a brand that isn't ours sets it on purpose (the default brand's is ours)"* ]] \
         || die "a bare brand names $f: $out"
 done
-[ "$(printf '%s\n' "$out" | grep -c ': required: ')" = 15 ] || die "a bare brand: 15 fields: $out"
+[ "$(printf '%s\n' "$out" | grep -c ': required: ')" = 17 ] || die "a bare brand: 17 fields: $out"
 [[ "$out" != *": hosted: "* ]] || die "without --hosted the hosted fields are not asked for: $out"; ok
 lint "$T/h-bare" --hosted
 [ "$rc" = 1 ] || die "a bare brand --hosted: $out"
@@ -255,7 +257,7 @@ for f in look.icons links.support_url links.terms links.privacy; do
     [[ "$out" == *"field $f: hosted: a hosted box needs it set"* ]] || die "a bare brand --hosted names $f: $out"
 done
 [ "$(printf '%s\n' "$out" | grep -c ': hosted: ')" = 4 ] || die "a bare brand --hosted: 4 more fields: $out"
-[ "$(printf '%s\n' "$out" | grep -c ': required: ')" = 15 ] || die "a bare brand --hosted: each required field once: $out"; ok
+[ "$(printf '%s\n' "$out" | grep -c ': required: ')" = 17 ] || die "a bare brand --hosted: each required field once: $out"; ok
 # System mail has no fleet-wide sender: left out, it is noreply@{server}.
 [[ "$out" != *"mail.system_from"* ]] || die "mail.system_from is not asked of a hosted brand: $out"; ok
 # A link that may not be none, and a value that is the default brand's own.

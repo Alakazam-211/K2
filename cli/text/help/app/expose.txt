@@ -3,8 +3,8 @@ k2 app expose <app-id> --tunnel [--transfer] | --local [--json]
 Turn an installed App's public URL on or off, with no reinstall.
 
   --tunnel     Give the App its public URL, https://<app-id>.<box>.k2.dev
-               (the same one k2 app install --tunnel makes). Needs K2
-               Connect with a Pro plan on this box; without it the answer
+               (the same one k2 app install --tunnel makes). Needs
+               {login} with a Pro plan on this box; without it the answer
                is exit 3 (engine_unavailable) and nothing changes.
   --transfer   With --tunnel, owner or admin only. Use it when that name
                already points at something else on this box (a hostname

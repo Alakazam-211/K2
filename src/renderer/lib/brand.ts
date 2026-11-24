@@ -2,7 +2,7 @@
  * The product's names, one definition each, for the renderer.
  *
  * The product's name, the command's name and its aliases, the company, the
- * lockup, the public site and the support address come from the brand file (`brand/<id>/brand.toml`, `brand/k2` unless `K2_BRAND_DIR`
+ * lockup, the public site, the support address and the contact address come from the brand file (`brand/<id>/brand.toml`, `brand/k2` unless `K2_BRAND_DIR`
  * names another) through `brand.generated.ts`, which
  * `scripts/brand-values.mjs` writes when building; Rust reads the same file
  * through crates/k2-brand. Two names, never made from each other: the
@@ -30,6 +30,7 @@ export {
   CLI_ALIASES,
   CLI_NAME,
   COMPANY_NAME,
+  CONTACT_EMAIL,
   PRODUCT_LOCKUP,
   PRODUCT_NAME,
   PUBLIC_SITE,

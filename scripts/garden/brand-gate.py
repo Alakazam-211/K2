@@ -34,7 +34,8 @@ Kinds in scripts/brand-allowlist.txt, the product's names:
         brand-inventory product-name rule, less Rust paths
   K5    the word K5 on its own: today the K5 Space and old review labels;
         a new one is either the future name used too early or a collision
-  repo  the release repo, Alakazam-211/K2 (not K2SO)
+  repo  the release repo, Alakazam-211/K2 (not K2SO). Also in the CLI's
+        printed text (below), where its page is the {repo} slot.
   company  the company's name, Alakazam Labs (rebrand B7 follow-up): a
         partner build names its own maker, so copy uses COMPANY_NAME or
         PRODUCT_LOCKUP (k2_core::brand, @/lib/brand), both the brand
@@ -45,16 +46,24 @@ Kinds in scripts/brand-allowlist.txt, the product's names:
   login  the sign-in service's name, K2 Connect, in the CLI's printed text
         only (below), where it is the {login} slot. Code is not counted for
         it (LOGIN_NAME and login_name!() name it there).
+  contact  an address of ours at alakazamlabs.com (hello@: rebrand B7
+        follow-up): code uses CONTACT_EMAIL (k2_core::brand, @/lib/brand,
+        the brand file's links.contact_email); the CLI's printed text the
+        {contact_email} slot, a captured help page \\m.
 
-The CLI's printed text, for company and login only: every cli/text page,
-every cli/src/schema/*.entries file and crates/k5-cli/src/help_captured.txt,
-every line. The pages and entries name the company and the sign-in service
-by slot, {company} and {login}, which each build fills with its brand's
-names (crates/k5-cli/build.rs; scripts/build-cli.sh fills bash's with ours,
-scripts/brand/page_slots.py); the captured help pages by the escapes \\o and
-\\l (crates/k5-cli/src/text.rs). So a literal name there is one a partner's
-build would print as ours. The captured pages' old spelling of the
-sign-in name, `\\p Connect` (the product's escape and a word), counts too.
+The CLI's printed text, for company, login, repo and contact only: every
+cli/text page, every cli/src/schema/*.entries file and
+crates/k5-cli/src/help_captured.txt, every line. The pages and entries name
+the company, the sign-in service, the source repo and the contact address
+by slot, {company}, {login}, {repo} and {contact_email}, which each build
+fills with its brand's values (crates/k5-cli/build.rs; scripts/build-cli.sh
+fills bash's with ours, scripts/brand/page_slots.py); the captured help
+pages by the escapes \\o, \\l and \\m (crates/k5-cli/src/text.rs). So a
+literal name there is one a partner's build would print as ours. In the
+text the company kind is the company's first word alone too (Alakazam),
+and the login kind is also K2 at a line's end with Connect starting the
+next, and the captured pages' old spellings, `\\p Connect` and `\\p\\nConnect`
+(the product's escape and a word).
 
 Kinds in scripts/cli-name-allowlist.txt, the command's name (`k2` and `k5`,
 the word scripts/garden/cli-name-flip.py matches, either digit):
@@ -175,18 +184,28 @@ BRAND_KINDS = {
     "K5": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)K5(?![A-Za-z0-9_])"),
     "repo": re.compile(r"Alakazam-211/K2(?![A-Za-z0-9_])"),
     "company": re.compile(r"Alakazam\s+Labs\b"),
-    "login": re.compile(r"(?:(?<![A-Za-z0-9_])K2|(?<!\\)\\p)\s+Connect\b"),
+    "login": re.compile(r"(?:(?<![A-Za-z0-9_])K2|(?<!\\)\\p)(?:\s|\\n)+Connect\b"),
+    "contact": re.compile(r"[A-Za-z0-9._%+-]+@alakazamlabs\.com\b", re.IGNORECASE),
 }
+# The CLI's printed text reads the company's first word alone as the
+# company too ("sends it to Alakazam"), but not inside the repo's owner
+# (Alakazam-211, the repo kind's).
+TEXT_KIND_RE = dict(BRAND_KINDS, company=re.compile(r"(?<![A-Za-z0-9_])Alakazam(?![A-Za-z0-9_-])"))
+# K2 at a line's end, Connect at the next one's start: the sign-in name
+# split by a wrap.
+LOGIN_WRAP_END = re.compile(r"(?<![A-Za-z0-9_])K2\s*$")
+LOGIN_WRAP_START = re.compile(r"^\s*Connect\b")
 # The kinds code is counted for; the CLI's printed text is counted for TEXT_KINDS.
-CODE_KINDS = ("K2", "K5", "repo", "company")
-TEXT_KINDS = ("company", "login")
+CODE_KINDS = ("K2", "K5", "repo", "company", "contact")
+TEXT_KINDS = ("company", "login", "repo", "contact")
 CLI_KINDS = ("cli", "value", "glued")
 HINT = {
     "K2": "use k2_core::brand or @/lib/brand",
     "K5": "use k2_core::brand or @/lib/brand",
-    "repo": "use k2_core::brand or @/lib/brand",
+    "repo": "use k2_core::brand or @/lib/brand; in a page or a schema entry the {repo} slot",
     "company": "use COMPANY_NAME or PRODUCT_LOCKUP (k2_core::brand, @/lib/brand); in a page or a schema entry the {company} slot, in a captured help page \\o",
     "login": "use the {login} slot (a page or a schema entry), or \\l in a captured help page",
+    "contact": "use CONTACT_EMAIL (k2_core::brand, @/lib/brand); in a page or a schema entry the {contact_email} slot, in a captured help page \\m",
     "cli": "use CLI_NAME or cli_name!() (k2_core::brand, @/lib/brand)",
     "value": "use CLI_NAME, or add a keeper: row that says its class and who reads the value",
     "glued": "keep the name apart from the token, or add a keeper: row that says who reads this name",
@@ -871,12 +890,18 @@ def text_places(root):
 
 
 def text_names(root, found):
-    """Add the company and login lines of the CLI's printed text to `found`."""
+    """Add the company, login, repo and contact lines of the CLI's printed
+    text to `found`."""
     for rel in text_places(root):
         with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
             lines = f.read().split("\n")
         for kind in TEXT_KINDS:
-            hits = [(i + 1, line.strip()) for i, line in enumerate(lines) if BRAND_KINDS[kind].search(line)]
+            hits = [(i + 1, line.strip()) for i, line in enumerate(lines) if TEXT_KIND_RE[kind].search(line)]
+            if kind == "login":
+                at = {n for n, _ in hits}
+                hits += [(i + 2, lines[i + 1].strip()) for i in range(len(lines) - 1)
+                         if i + 2 not in at and LOGIN_WRAP_END.search(lines[i]) and LOGIN_WRAP_START.match(lines[i + 1])]
+                hits.sort()
             if hits:
                 found[(kind, rel)] = hits
 

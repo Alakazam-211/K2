@@ -5,11 +5,11 @@
 //
 // Every shape is parsed defensively: the daemon is the truth, and an older
 // server has no route (`PRODUCT_FEEDBACK_FEATURE`), in which case the dialog
-// offers Copy as text and Alakazam's address instead.
+// offers Copy as text and the brand's contact address instead.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import { CLI_NAME, COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
+import { CLI_NAME, COMPANY_NAME, CONTACT_EMAIL, PRODUCT_NAME } from '@/lib/brand'
 
 export const PRODUCT_FEEDBACK_FEATURE = 'product-feedback-v1' as const
 /** prd-feedback-screenshot-v1: the server takes one screenshot per feedback. */
@@ -19,7 +19,9 @@ export const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 export const MAX_SCREENSHOT_SIDE = 4096
 /** The button's tooltip and label, and the dialog's title (PRD §3). */
 export const SEND_FEEDBACK_LABEL = `Send feedback to ${PRODUCT_NAME}`
-export const CONTACT_ADDRESS = 'hello@alakazamlabs.com'
+/** Where people write when their server can't send (the brand file's
+ *  links.contact_email). */
+export const CONTACT_ADDRESS = CONTACT_EMAIL
 export const MAX_TEXT_BYTES = 20_000
 
 export type FeedbackCategory = 'bug' | 'idea' | 'praise' | 'other'

@@ -6,6 +6,7 @@ import {
   CLI_ALIASES,
   CLI_NAME,
   COMPANY_NAME,
+  CONTACT_EMAIL,
   HOSTED_ZONES,
   INFRA_ZONE,
   PRODUCT_LOCKUP,
@@ -104,11 +105,15 @@ describe('the renderer brand module', () => {
     expect(RELEASE_REPO_NAMES).toEqual(rustRepoNames())
   })
 
-  it('the company, lockup, site and support address are the brand file\'s, on both sides', () => {
+  it('the company, lockup, site, support and contact addresses are the brand file\'s, on both sides', () => {
     expect(COMPANY_NAME).toBe(brandString('names', 'company'))
     expect(PRODUCT_LOCKUP).toBe(brandString('names', 'lockup'))
     expect(PUBLIC_SITE).toBe(brandString('links', 'site'))
     expect(SUPPORT_EMAIL).toBe(brandString('links', 'support_email'))
+    expect(CONTACT_EMAIL).toBe(brandString('links', 'contact_email'))
+    expect(CONTACT_EMAIL).toBe(generated.CONTACT_EMAIL)
+    expect(rustConstValue('CONTACT_EMAIL')).toBe('k2_brand::links::CONTACT_EMAIL')
+    expect(rustConstValue('REPO_URL')).toBe('k2_brand::links::REPO')
     // The renderer re-exports the generated module and builds none of them.
     expect(COMPANY_NAME).toBe(generated.COMPANY_NAME)
     expect(PRODUCT_LOCKUP).toBe(generated.PRODUCT_LOCKUP)
@@ -123,6 +128,10 @@ describe('the renderer brand module', () => {
 
   it('one repo name everywhere: the CLI, the release tooling and the signer agree with brand.rs', () => {
     const repo = rustMacro('release_repo')
+    // The one place the repo's URL is written for text is brand/k2's
+    // links.repo; release_repo!() and every copy below are its owner/name.
+    expect(brandString('links', 'repo')).toBe(`https://github.com/${repo}`)
+    expect(RELEASE_REPO_URL).toBe(brandString('links', 'repo'))
     expect(bashVar(CLI_PRELUDE, '_K2_RELEASE_REPO', 'cli/src/prelude.sh')).toBe(repo)
     expect(bashVar(RELEASE_REPO_SH, 'K2_RELEASE_REPO_DEFAULT', 'scripts/lib/release-repo.sh')).toBe(repo)
     expect(bashVar(RELEASE_REPO_SH, 'K2_RELEASE_REPO_NAMES', 'scripts/lib/release-repo.sh').split(' ')).toEqual(rustRepoNames())

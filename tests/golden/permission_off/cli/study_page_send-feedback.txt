@@ -16,7 +16,7 @@ A good one says what you did, what you expected and what happened. The versions 
 
 ## What is sent
 
-- The category (bug, idea, praise, other; default other) and your text. Values from the vault are replaced first (`[k2v:NAME]`). Nothing else in your text is changed: leave out paths, names and output you wouldn't hand to Alakazam.
+- The category (bug, idea, praise, other; default other) and your text. Values from the vault are replaced first (`[k2v:NAME]`). Nothing else in your text is changed: leave out paths, names and output you wouldn't hand to Alakazam Labs.
 - Whether a person or an agent sent it, and the client (desktop, web, cli).
 - The K2 app, daemon and OS versions, the install kind, the architecture and the locale.
 - Which server it came from: a 5-minute token from K2 Connect naming this server's label (such as `<name>.k2.dev`, which can point to who runs it). The server's own Connect token never leaves it.
@@ -31,13 +31,13 @@ Your name, login, workspace or agent name; files, screenshots, terminal output; 
 - You may send only after a person on this server said yes (`k2 send-feedback settings --agents cli|all` or `k2 setup agent-reports`, which only the owner or an admin runs). Until someone answers, agents report nothing. Off: `agents_off` (exit 3). Check first with `k2 send-feedback settings`.
 - Say what the report is about. A problem with a K2 command: `--scope cli --command "<the command you ran>"` (one line, at most 1000 bytes; without it `command_required`, exit 2). Anything else about K2: `--scope platform`, only where the person allowed that too; otherwise `scope_off` (exit 3). One report per problem: check `k2 send-feedback list` for one you already sent.
 - At most 1 in any 60 seconds and 3 in any 24 hours per workspace, and 10 in any 24 hours for all agents on this server: `agent_limit` (exit 3, with `retryAfterSecs`). Every saved send counts; cancelled ones don't, and refusals and previews save nothing.
-- There is no contact email from the CLI: only a person, in the desktop dialog, can ask Alakazam to write back.
+- There is no contact email from the CLI: only a person, in the desktop dialog, can ask Alakazam Labs to write back.
 - `--diagnostics` (and `--diagnostics-preview`) attach only the parts of the K2 details a person allowed agents (`agentAttach` in `k2 send-feedback settings --json`; the older `agentDiagnostics` means all of them), and the versions. With none allowed: `diagnostics_need_owner` (exit 3) and nothing is saved or sent: send it again without `--diagnostics`. Always pass `--yes` (there is no one to ask); the details are printed for you too, and the owner sees what you sent in the Sent tab. To leave a part out, send without `--diagnostics`. Never try to turn it on yourself; ask your human. Settings changes are a person's (`settings_people_only`).
 - Feedback is about K2. Your human's own work, secrets and customers' names don't belong in it.
 
 ## When it isn't sent at once
 
-This server keeps every submission in its outbox and sends it to Alakazam when it can:
+This server keeps every submission in its outbox and sends it to Alakazam Labs when it can:
 
 - **queued** with a reason: offline, or K2's feedback service isn't reachable yet (`service_unreachable`, `relay_not_ready`). Nothing is lost and it retries by itself (30 s, doubling, up to every 2 hours): don't send it again. After 7 days of trying it is **failed**. One that failed because the service couldn't be reached goes again by itself: the server checks about once an hour whether the service is taking feedback again (it sends nothing to check), and once it is, all of them saved in the last 90 days go back in the queue and leave oldest first. `k2 send-feedback retry <id>` puts any failed one back at once, including one that failed for another reason (sending turned off, air-gap, no K2 Connect pairing).
 - **refused**: the service understood and said no (it names the code). Not retried, and retry doesn't apply: fix what it says and send a new one.
@@ -47,6 +47,6 @@ Nothing leaves while air-gap is on (`airgap`), while the owner turned sending of
 
 ## Kept
 
-On this server: rows are deleted 90 days after they are sent, refused, cancelled or failed; the K2 details that were sent are cleared 7 days after sending. At Alakazam Labs: submissions 12 months, then the server's label, the contact email and the ids are removed; the K2 details 90 days; backups keep older copies until they expire. Only Alakazam staff read them.
+On this server: rows are deleted 90 days after they are sent, refused, cancelled or failed; the K2 details that were sent are cleared 7 days after sending. At Alakazam Labs: submissions 12 months, then the server's label, the contact email and the ids are removed; the K2 details 90 days; backups keep older copies until they expire. Only Alakazam Labs staff read them.
 --- stderr
 --- requests

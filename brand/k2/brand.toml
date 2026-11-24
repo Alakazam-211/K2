@@ -87,6 +87,13 @@ unit_prefix = "k2"
 [links]
 site = "https://k2.dev"
 support_email = "support@k2.dev"
+# Where people write when their server can't send feedback, and the
+# address a person may ask to be written back from.
+contact_email = "hello@alakazamlabs.com"
+# The public source repo's page. The release URLs are built from
+# release_repo!() (crates/k2-client/src/brand.rs) and its copies, which
+# brand/k2 holds equal to this (brand.rs and brand.test.ts test it).
+repo = "https://github.com/Alakazam-211/K2"
 support_url = ""
 terms = ""
 privacy = ""

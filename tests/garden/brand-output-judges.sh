@@ -2,8 +2,8 @@
 # Tests for scripts/brand/output-judges.py on small corpora: a planted
 # `k2 msg` fails judges a and b, a name out of its place fails judge c, a
 # keep pattern and a debt row let a line through, a stale debt row fails,
-# an unfilled {cli}, {product}, {company} or {login} slot fails judge d with
-# no way to allow it.
+# an unfilled {cli}, {product}, {company}, {login}, {contact_email} or
+# {repo} slot fails judge d with no way to allow it.
 # Text files only: no CLI, no daemon, no cargo.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -64,7 +64,8 @@ done
 # pattern or debt row lets it through. A word that only starts like a slot
 # ({clients}) is not one.
 for line in 'Run {cli} app list' 'from a terminal outside {product}' '"hint": "{cli} x"' 'a {cli}{product} b' \
-    'Tell {company} about it.' 'a tunnel through {login}' '"description": "{login} Pro"'; do
+    'Tell {company} about it.' 'a tunnel through {login}' '"description": "{login} Pro"' \
+    'email {contact_email} instead' '"description": "curl -fsSL {repo}/releases/x.sh"'; do
     run d "$line"
     [ "$rc" = 1 ] && [ "$(hits d)" = 1 ] && [ "$(hits a)" = 0 ] && [ "$(hits b)" = 0 ] && [ "$(hits c)" = 0 ] || die "judge d on $line: $err"; ok
     case "$err" in *"FAILED (d)"*"the slot {"*) ;; *"the slot {"*"FAILED (d)"*) ;; *) die "judge d's line on $line: $err" ;; esac; ok

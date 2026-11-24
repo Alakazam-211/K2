@@ -88,8 +88,8 @@ is_ours, the rule crates/k2-brand/src/ours.rs keeps) sets every field whose
 default names us or reaches us, to a value of its own: SETS_ITS_OWN, the
 same list crates/k2-brand refuses at build time. Left out (required) or set
 to the default brand's own value (ours), a partner's build would show our
-company, our sign-in name, our site or our support address, or take our
-updates. A link there may be "" (none). The fields in SETS_ON_PURPOSE
+company, our sign-in name, our site, our support or contact address or our
+source repo, or take our updates. A link there may be "" (none). The fields in SETS_ON_PURPOSE
 (mail.postal, the phone app) are required too, but may be ours.
 
 --hosted also checks a brand (not ours) as the brand of a hosted box: every
@@ -317,7 +317,8 @@ TABLES = {
     "feeds": ("daemon", "downloads"),
     "machine": ("home", "binary_prefix", "unit_prefix"),
     "look": ("icons", "accent"),
-    "links": ("site", "support_email", "support_url", "terms", "privacy", "dashboard", "feedback"),
+    "links": ("site", "support_email", "contact_email", "repo", "support_url", "terms", "privacy",
+              "dashboard", "feedback"),
     "mail": ("system_from", "system_from_name", "postal"),
     "phone": ("bundle_id", "team_id", "push_topic"),
     "sew": ("call_name",),
@@ -333,7 +334,8 @@ FIELD_SHAPES = {
     "update.keys": "keys",
     "machine.home": "home", "machine.binary_prefix": "prefix", "machine.unit_prefix": "prefix",
     "look.icons": "path", "look.accent": "colour",
-    "links.site": "url", "links.support_email": "email", "links.support_url": "url?",
+    "links.site": "url", "links.support_email": "email", "links.contact_email": "email",
+    "links.repo": "url", "links.support_url": "url?",
     "links.terms": "url?", "links.privacy": "url?", "links.dashboard": "url?", "links.feedback": "url?",
     "mail.system_from": "from", "mail.system_from_name": "name", "mail.postal": "bool",
     "phone.bundle_id": "rdns", "phone.team_id": "team", "phone.push_topic": "rdns",
@@ -345,7 +347,8 @@ FIELD_SHAPES = {
 # until then only --hosted asks for it.
 SETS_ITS_OWN = (
     "names.company", "names.login", "zones.label", "links.site", "links.support_email",
-    "links.dashboard", "links.feedback", "feeds.daemon", "feeds.downloads",
+    "links.contact_email", "links.repo", "links.dashboard", "links.feedback", "feeds.daemon",
+    "feeds.downloads",
     "package.update_feed", "update.keys",
 )
 SETS_ON_PURPOSE = ("mail.postal", "phone.bundle_id", "phone.team_id", "phone.push_topic")
@@ -355,14 +358,15 @@ SETS_ON_PURPOSE = ("mail.postal", "phone.bundle_id", "phone.team_id", "phone.pus
 HOSTED = (
     "names.company", "names.login", "zones.label", "package.update_feed",
     "update.keys", "feeds.daemon", "feeds.downloads", "look.icons", "links.site",
-    "links.support_email", "links.support_url", "links.terms", "links.privacy",
-    "links.dashboard", "links.feedback", "mail.postal",
+    "links.support_email", "links.contact_email", "links.repo", "links.support_url", "links.terms",
+    "links.privacy", "links.dashboard", "links.feedback", "mail.postal",
 )
 HOSTED_SOME = ("links.support_url", "links.terms", "links.privacy")
 HOSTED_NOT_OURS = (
     "names.company", "names.login", "zones.label", "package.update_feed", "update.keys",
-    "feeds.daemon", "feeds.downloads", "links.site", "links.support_email", "links.support_url",
-    "links.terms", "links.privacy", "links.dashboard", "links.feedback",
+    "feeds.daemon", "feeds.downloads", "links.site", "links.support_email", "links.contact_email",
+    "links.repo", "links.support_url", "links.terms", "links.privacy", "links.dashboard",
+    "links.feedback",
 )
 # Every brand's build ships our signed root helper (K2's ruling): a brand
 # file names no root-helper key.

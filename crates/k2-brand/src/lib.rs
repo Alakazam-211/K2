@@ -204,6 +204,7 @@ mod tests {
             feeds::DAEMON,
             feeds::DOWNLOADS,
             links::SITE,
+            links::REPO,
         ] {
             assert!(brand_file::is_https_url(url), "{url}");
         }
@@ -230,7 +231,11 @@ mod tests {
         ] {
             assert!(!name.is_empty() && name.trim() == name, "{name:?}");
         }
-        assert!(mail::SYSTEM_FROM.contains('@') && links::SUPPORT_EMAIL.contains('@'));
+        assert!(
+            mail::SYSTEM_FROM.contains('@')
+                && links::SUPPORT_EMAIL.contains('@')
+                && links::CONTACT_EMAIL.contains('@')
+        );
         // `{server}` is the box's own name; any other brace is a typo.
         let domain = mail::SYSTEM_FROM.rsplit('@').next().expect("a domain");
         assert!(

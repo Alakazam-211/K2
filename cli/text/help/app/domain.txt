@@ -68,8 +68,8 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
                               k2 firewall says whether that list is applied.
 
   Path B, then:
-    1. k2 app domain add <app-id> shop.example.com claims the name at K2
-       Connect and prints (when Path B is open to this box; k2 app domains
+    1. k2 app domain add <app-id> shop.example.com claims the name at
+       {login} and prints (when Path B is open to this box; k2 app domains
        <app-id> shows them again):
          CNAME  shop.example.com              <app-id>.<box>.k2.dev
          TXT    _k2-domain.shop.example.com   "k2-verify=<token>"

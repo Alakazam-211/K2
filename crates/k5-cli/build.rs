@@ -32,13 +32,15 @@
 //! another command (`K2_BRAND_DIR`, read through the `k2-brand` build
 //! dependency) each page and the manifest are rewritten to that name by
 //! the CLI name rule (`brand_text::rewrite`). Then, in every build, their
-//! `{company}` and `{login}` slots are filled with the brand's
-//! `names.company` and `names.login` (`brand_text::fill`; in the
-//! manifest, escaped for its JSON strings), so no slot reaches a person.
-//! A page that changes is embedded from its copy under `$OUT_DIR/text`,
-//! any other from its file. In the default brand the embedded bytes are
-//! the bytes `cli/k2` prints. The captured help forms hold the two names
-//! as escapes (`\o`, `\l`), which `text::render` spells at run time.
+//! `{company}`, `{login}`, `{contact_email}` and `{repo}` slots are filled
+//! with the brand's `names.company`, `names.login`, `links.contact_email`
+//! and `links.repo` (`brand_text::fill`; in the manifest, escaped for its
+//! JSON strings), so no slot reaches a person. A page that changes is
+//! embedded from its copy under `$OUT_DIR/text`, any other from its file.
+//! In the default brand the embedded bytes are the bytes `cli/k2` prints.
+//! The captured help forms hold the company, the sign-in service and the
+//! contact address as escapes (`\o`, `\l`, `\m`), which `text::render`
+//! spells at run time.
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -52,13 +54,13 @@ mod schema_join;
 #[path = "src/brand_text.rs"]
 mod brand_text;
 
-/// This build's brand, as its text needs it: the names the slots take
-/// (the brand file's `names.company` and `names.login`, the default
-/// brand's where it leaves one out), and the command's rewrite when its
-/// name differs from the one the sources spell.
+/// This build's brand, as its text needs it: the values the slots take
+/// (the brand file's `names.company`, `names.login`,
+/// `links.contact_email` and `links.repo`, the default brand's where it
+/// leaves one out), and the command's rewrite when its name differs from
+/// the one the sources spell.
 struct Brand {
-    company: &'static str,
-    login: &'static str,
+    values: brand_text::Values<'static>,
     rename: Option<Rename>,
 }
 
@@ -87,8 +89,12 @@ impl Rename {
 impl Brand {
     fn of_this_build(manifest: &Path) -> Brand {
         Brand {
-            company: k2_brand::names::COMPANY,
-            login: k2_brand::LOGIN_NAME,
+            values: brand_text::Values {
+                company: k2_brand::names::COMPANY,
+                login: k2_brand::LOGIN_NAME,
+                contact_email: k2_brand::links::CONTACT_EMAIL,
+                repo: k2_brand::links::REPO,
+            },
             rename: Rename::of_this_build(manifest),
         }
     }
@@ -102,25 +108,31 @@ impl Brand {
 
     /// A page as this build prints it: rewritten, then its slots filled.
     fn page(&self, text: &str, at: &Path) -> String {
-        filled(
-            brand_text::fill(&self.rewrite(text), self.company, self.login),
-            at,
-        )
+        filled(brand_text::fill(&self.rewrite(text), &self.values), at)
     }
 
-    /// The manifest as this build prints it: the same, with the names
+    /// The manifest as this build prints it: the same, with the values
     /// escaped for the JSON strings the slots sit in.
     fn manifest(&self, text: &str, at: &Path) -> String {
-        let company = brand_text::json_escaped(self.company);
-        let login = brand_text::json_escaped(self.login);
-        filled(brand_text::fill(&self.rewrite(text), &company, &login), at)
+        let v = &self.values;
+        let company = brand_text::json_escaped(v.company);
+        let login = brand_text::json_escaped(v.login);
+        let contact_email = brand_text::json_escaped(v.contact_email);
+        let repo = brand_text::json_escaped(v.repo);
+        let escaped = brand_text::Values {
+            company: &company,
+            login: &login,
+            contact_email: &contact_email,
+            repo: &repo,
+        };
+        filled(brand_text::fill(&self.rewrite(text), &escaped), at)
     }
 }
 
-/// `text`, which must hold no slot now: a brand name that is itself a
+/// `text`, which must hold no slot now: a brand value that is itself a
 /// slot would leave one.
 fn filled(text: String, at: &Path) -> String {
-    for slot in [brand_text::COMPANY_SLOT, brand_text::LOGIN_SLOT] {
+    for slot in brand_text::SLOTS {
         assert!(
             !text.contains(slot),
             "{}: the slot {slot} is still there after the fill",
@@ -430,14 +442,14 @@ fn built(list: Vec<(String, PathBuf)>, brand: &Brand, dir: &Path) -> Vec<(String
 
 /// Whether `text` uses only the escapes `src/help_captured.txt` has:
 /// `\\`, `\n`, `\t`, `\c` (the command's name), `\p` (the
-/// product's), `\o` (the company's) and `\l` (the sign-in service's),
-/// and no tab or newline of its own.
+/// product's), `\o` (the company's), `\l` (the sign-in service's) and
+/// `\m` (the contact address), and no tab or newline of its own.
 fn escapes_ok(text: &str) -> Result<(), String> {
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
         match c {
             '\\' => match chars.next() {
-                Some('\\' | 'n' | 't' | 'c' | 'p' | 'o' | 'l') => {}
+                Some('\\' | 'n' | 't' | 'c' | 'p' | 'o' | 'l' | 'm') => {}
                 other => return Err(format!("an escape it doesn't know: \\{other:?}")),
             },
             '\t' | '\n' | '\r' => return Err(format!("a raw {c:?} in a text")),

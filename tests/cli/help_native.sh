@@ -155,8 +155,8 @@ root, script, bash_bin, sandbox, list_path, write = sys.argv[1:7]
 text_dir = os.path.join(root, "cli/text/help")
 
 # A page's bytes as bash prints them: the file's, with its brand slots
-# ({company}, {login}) filled with our names, as scripts/build-cli.sh fills
-# them (scripts/brand/page_slots.py).
+# ({company}, {login}, {contact_email}, {repo}) filled with ours, as
+# scripts/build-cli.sh fills them (scripts/brand/page_slots.py).
 import importlib.util
 sys.dont_write_bytecode = True
 _slots_spec = importlib.util.spec_from_file_location(
@@ -964,7 +964,8 @@ if os.environ.get("HELP_NATIVE_WHY"):
 # printed it. Our company's name is \o and our sign-in service's \l (the
 # pages' {company} and {login} slots, which bash fills with ours), each
 # where the product's would start and nothing a name goes on with is
-# after it.
+# after it; our contact address is \m (the {contact_email} slot) wherever
+# it stands.
 CAPTURED = os.environ.get("HELP_NATIVE_CAPTURED") or os.path.join(root, "crates/k5-cli/src/help_captured.txt")
 FORMS_TSV = os.path.join(root, "crates/k5-cli/tests/data/router_forms.tsv")
 EXIT_CODES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 26, 69, 127, 130}
@@ -1483,19 +1484,21 @@ PRODUCT_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])K2(?![A-Za-z0-9_/~|<-])(?![.
 NAME_BEFORE = r"(?<![A-Za-z0-9_./~|<:-])"
 COMPANY_WORD = re.compile(NAME_BEFORE + re.escape(OUR_NAMES["company"]) + r"(?![A-Za-z0-9_])")
 LOGIN_WORD = re.compile(NAME_BEFORE + re.escape(OUR_NAMES["login"]) + r"(?![A-Za-z0-9_])")
+CONTACT = re.compile(re.escape(OUR_NAMES["contact_email"]))
 def escaped(s):
     """The text as the list holds it: \\ \\n \\t escaped, \\c for the
-    command's name, \\p for the product's, \\o for the company's and \\l
-    for the sign-in service's."""
-    if any(c in s for c in "\x01\x02\x03\x04"):
+    command's name, \\p for the product's, \\o for the company's, \\l
+    for the sign-in service's and \\m for the contact address."""
+    if any(c in s for c in "\x01\x02\x03\x04\x05"):
         sys.exit("FAIL: a help text with a byte this list uses: %r" % s[:80])
     s = "\n".join(cli_words(l) for l in s.split("\n"))
+    s = CONTACT.sub("\x05", s)
     s = COMPANY_WORD.sub("\x03", s)
     s = LOGIN_WORD.sub("\x04", s)
     s = PRODUCT_WORD.sub("\x02", s)
     s = s.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
     return (s.replace("\x01", "\\c").replace("\x02", "\\p")
-            .replace("\x03", "\\o").replace("\x04", "\\l"))
+            .replace("\x03", "\\o").replace("\x04", "\\l").replace("\x05", "\\m"))
 
 seen_before = len(requests_seen)
 captured, ckept = {}, {}
@@ -1549,7 +1552,7 @@ CHEAD = """# The other help forms the k5 binary answers itself: what bash printe
 # by tests/cli/help_native.sh --write; do not edit by hand.
 # P<tab><page><tab><exit code><tab><stdout><tab><stderr>: the text with
 #   \\\\, \\n and \\t escaped, \\c for the command's name and \\p for the product's,
-#   \\o for the company's and \\l for the sign-in service's.
+#   \\o for the company's, \\l for the sign-in service's and \\m for the contact address.
 # F<tab><argv, words between single spaces><tab><page>
 # C<tab><argv><tab><page while permission cards are off><tab><page while on>:
 #   a page through the cards filter; the binary asks as bash asks.

@@ -224,4 +224,9 @@
 1 K5 crates/k5-cli/src/families/voice.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design), as the shell CLI's voice lines do
 1 K5 crates/kessel-attest/src/verify.rs keeper: the repo's new name, AlakazamLabs/K5, in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
 2 repo crates/kessel-attest/src/main.rs keeper: kessel-attest does not link k2-client; its help names the format docs in this repo
+1 repo cli/src/schema/hostmail.entries keeper: partner builds ship our root helper, and the daemon's real 409 names ours
+1 repo cli/text/help/hostmail/enable.txt keeper: partner builds ship our root helper, and the daemon's real 409 names ours
+1 repo cli/text/help/hostmail/status.txt keeper: partner builds ship our root helper, and the daemon's real 409 names ours
+1 repo cli/text/study/ci-release.txt keeper: where k2-signer's installer is, in K2's own repo (the upstream software every brand builds, a fact the same in every brand)
+1 repo cli/text/study/tauri-voice.txt keeper: where the voice check that tested K2's patched wry is, in K2's own repo (the upstream repo, a fact the same in every brand)
 1 repo crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)

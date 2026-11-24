@@ -36,8 +36,9 @@ pub const DEFAULT_ENDPOINT: &str = crate::hosts::FEEDBACK_ENDPOINT;
 /// Tests and dev only: another intake base URL (the `K2_PUSH_GATEWAY_URL`
 /// pattern).
 pub const ENDPOINT_ENV: &str = "K2_PRODUCT_FEEDBACK_URL";
-/// Where people write when their box can't send (PF7, Rosson 11-06).
-pub const CONTACT_ADDRESS: &str = "hello@alakazamlabs.com";
+/// Where people write when their box can't send (PF7): the brand file's
+/// `links.contact_email`.
+pub const CONTACT_ADDRESS: &str = crate::brand::CONTACT_EMAIL;
 /// The text a person or agent types, in bytes (PRD §4).
 pub const MAX_TEXT_BYTES: usize = 20_000;
 /// The intake's own ceiling (`octet_length(body) BETWEEN 1 AND 20480`): the

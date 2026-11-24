@@ -10,7 +10,8 @@
 //   node scripts/brand-values.mjs renderer [--check]
 //       write src/renderer/lib/brand.generated.ts (the product's name, the
 //       command's name, its aliases, the brand id, the company, the lockup,
-//       the site and the support address); --check exits 1 when the file is
+//       the site, the support address and the contact address); --check
+//       exits 1 when the file is
 //       not what this brand makes. The committed file is brand/k2's.
 //   node scripts/brand-values.mjs renderer --print
 //       print that file instead of writing it.
@@ -47,14 +48,15 @@
 // ([names] product, for prose and screens) and the command's ([cli] name,
 // for anything typed or copied). The app's shown name is the product's.
 //
-// The company, the lockup, the site and the support address resolve the way
-// k2-brand resolves them (crates/k2-brand/src/brand_file.rs parse_fields):
-// names.company, links.site and links.support_email are the file's own, else
-// the default brand file's (brand/k2); names.lockup is the file's own, else
-// "<product> by <company>". A brand that isn't ours must set those three,
-// and not to the default brand's value, nor package.update_feed (when it
-// has [package]), the way k2-brand refuses them (SETS_ITS_OWN), with the
-// same words.
+// The company, the lockup, the site, the support and contact addresses and
+// the source repo resolve the way k2-brand resolves them
+// (crates/k2-brand/src/brand_file.rs parse_fields): names.company,
+// links.site, links.support_email, links.contact_email and links.repo are
+// the file's own, else the default brand file's (brand/k2); names.lockup is
+// the file's own, else "<product> by <company>". A brand that isn't ours
+// must set those five, and not to the default brand's value, nor
+// package.update_feed (when it has [package]), the way k2-brand refuses
+// them (SETS_ITS_OWN), with the same words.
 //
 // The reader takes the brand file's own small shape (top-level keys,
 // [tables], strings, integers, true and false, a list of inline tables)
@@ -300,8 +302,14 @@ export function readBrand(dir) {
   const ownSupport = own(file, doc, 'links', 'support_email', checkEmail)
   itsOwn('links.support_email', ownSupport, base?.supportEmail)
   const supportEmail = inherit(file, ownSupport, base, 'supportEmail', 'links.support_email')
+  const ownContact = own(file, doc, 'links', 'contact_email', checkEmail)
+  itsOwn('links.contact_email', ownContact, base?.contactEmail)
+  const contactEmail = inherit(file, ownContact, base, 'contactEmail', 'links.contact_email')
+  const ownRepo = own(file, doc, 'links', 'repo', checkHttps)
+  itsOwn('links.repo', ownRepo, base?.repo)
+  const repo = inherit(file, ownRepo, base, 'repo', 'links.repo')
   if (pkg) itsOwn('package.update_feed', pkg.update_feed, base?.pkg?.update_feed)
-  return { file, id, ours, product, cli, aliases, company, lockup, site, supportEmail, pkg, update }
+  return { file, id, ours, product, cli, aliases, company, lockup, site, supportEmail, contactEmail, repo, pkg, update }
 }
 
 /** minisign's key id of a public key line ("Ed", 8 id bytes, 32 key bytes):
@@ -410,6 +418,9 @@ export function rendererModule(brand) {
     '',
     '/** Where people write for help. */',
     `export const SUPPORT_EMAIL: string = ${q(brand.supportEmail)}`,
+    '',
+    '/** Where people write when their server can\'t send feedback. */',
+    `export const CONTACT_EMAIL: string = ${q(brand.contactEmail)}`,
     '',
   ].join('\n')
 }

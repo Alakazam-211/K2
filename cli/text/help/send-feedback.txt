@@ -17,7 +17,7 @@ for you. At most 20,000 bytes as typed.
 What is sent: the category (default other); your text, with values from
 the vault replaced by [k2v:NAME] (anything else you type is sent as
 written, so leave out paths, names and output you wouldn't hand to
-Alakazam); whether a person or an agent sent it; the client (cli); the K2,
+{company}); whether a person or an agent sent it; the client (cli); the K2,
 daemon and OS versions, install kind, architecture and locale; and a
 5-minute {login} token naming this server's label (such as
 <name>.k2.dev, which can point to who runs it), the proof of which server
@@ -47,7 +47,7 @@ addresses.
   --json                 the saved row as JSON
 
 The plain output prints the id (pf_…) that show, retry and cancel take.
-This server keeps what you send in its outbox and sends it to Alakazam
+This server keeps what you send in its outbox and sends it to {company}
 when it can. Offline, or while K2's feedback service isn't reachable yet,
 it waits as queued with the reason, and nothing is lost: don't send it
 again, check it with show. After 7 days of trying it is failed. One that
@@ -55,8 +55,8 @@ failed because the service couldn't be reached goes again by itself: this
 server checks about once an hour whether the service is taking feedback
 again (it sends nothing to check), and once it is, all of them saved in
 the last 90 days go back in the queue and leave oldest first. Retry puts any failed one back at once, including one
-that failed for another reason (sending turned off, air-gap, no K2
-Connect pairing). A refused one (the service said no; the reason names why)
+that failed for another reason (sending turned off, air-gap, no
+{login} pairing). A refused one (the service said no; the reason names why)
 is not retried: fix what it says and send a new one. Rows are deleted 90
 days after they are sent, refused, cancelled or failed.
 
@@ -84,7 +84,7 @@ seconds and 3 in any 24 hours per workspace, and 10 in any 24 hours for
 all agents on this server. Every saved send counts (cancelled ones don't;
 refusals and previews save nothing and don't count). There is no contact
 email from the CLI: only a person, in the desktop dialog, can ask
-Alakazam to write back. An agent's report says its scope: --scope cli
+{company} to write back. An agent's report says its scope: --scope cli
 --command "<the command you ran>" for a problem with a K2 command, or
 --scope platform for anything else (only where a person allowed that
 too: otherwise scope_off). --diagnostics and --diagnostics-preview from an
@@ -92,7 +92,7 @@ agent attach only the parts a person allowed (and the versions); with
 none allowed nothing is saved or sent (diagnostics_need_owner): send it
 again without --diagnostics. The details are printed for you too and the
 owner sees them in the Sent tab. When this server can't send at all,
-tell your human: they can email hello@alakazamlabs.com.
+tell your human: they can email {contact_email}.
 
 Text that is exactly list, show, retry, cancel, settings or help, or
 starts with a dash: send it from stdin (echo "settings" | k2 send-feedback -).
@@ -102,8 +102,8 @@ for the flag; 2 a usage or input mistake (bad_category, text_required,
 text_too_long, command_required, bad_command, bad_scope, bad_attach_part,
 platform_needs_agents); 3 refused, nothing saved or changed: disabled,
 agents_off, scope_off, answer_agents_first, agent_limit (with retryAfterSecs),
-diagnostics_need_owner, needs_connect (this server isn't paired with K2
-Connect), airgap, settings_people_only, admin_only, not_found, wrong_state
+diagnostics_need_owner, needs_connect (this server isn't paired with
+{login}), airgap, settings_people_only, admin_only, not_found, wrong_state
 (retry on a row that isn't failed, cancel on one that isn't queued). A
 refusal prints one JSON line on stderr: {"error": <code>, "hint": <why>}.
 A later refusal by the service shows as refused in list. More:

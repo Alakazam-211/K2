@@ -79,6 +79,20 @@ pub const HOSTED_ZONES: &[&str] = &[crate::hosts::PRIMARY_ZONE];
 /// the default brand's ("support@k2.dev" in ours).
 pub const SUPPORT_EMAIL: &str = k2_brand::links::SUPPORT_EMAIL;
 
+/// Where people write when their server can't send feedback: the brand
+/// file's `links.contact_email`, or the default brand's
+/// ("hello@alakazamlabs.com" in ours).
+pub const CONTACT_EMAIL: &str = k2_brand::links::CONTACT_EMAIL;
+
+/// The brand's public source repo page: the brand file's `links.repo`
+/// (a CLI page's `{repo}` slot). In ours it is [`RELEASE_REPO_URL`]: brand/k2's
+/// `links.repo` is the one place the repo's URL is written for text, and
+/// `release_repo!()` (with its bash, release and signer copies) is held
+/// equal to it by `brand_repo_link_is_the_release_repo` and brand.test.ts.
+/// A partner's build names its own here, while every release URL stays
+/// ours (partner builds ship our root helper).
+pub const REPO_URL: &str = k2_brand::links::REPO;
+
 /// The repo releases come from, `owner/name`.
 pub const RELEASE_REPO: &str = release_repo!();
 
@@ -181,6 +195,8 @@ mod tests {
         assert_eq!(PUBLIC_SITE, "https://k2.dev");
         assert_eq!(INFRA_ZONE, "k2.dev");
         assert_eq!(SUPPORT_EMAIL, "support@k2.dev");
+        assert_eq!(CONTACT_EMAIL, "hello@alakazamlabs.com");
+        assert_eq!(REPO_URL, "https://github.com/Alakazam-211/K2");
         assert_eq!(RELEASE_REPO_NAMES, &["Alakazam-211/K2", "AlakazamLabs/K5"]);
         assert!(RELEASE_REPO_NAMES.contains(&RELEASE_REPO), "the repo releases come from is one of its names");
     }
@@ -193,6 +209,7 @@ mod tests {
         assert_eq!(k2_brand::names::LOCKUP, PRODUCT_LOCKUP);
         assert_eq!(k2_brand::links::SITE, PUBLIC_SITE);
         assert_eq!(k2_brand::links::SUPPORT_EMAIL, SUPPORT_EMAIL);
+        assert_eq!(k2_brand::links::CONTACT_EMAIL, CONTACT_EMAIL);
         assert_eq!(k2_brand::feeds::DAEMON, DAEMON_FEED_URL);
         assert_eq!(k2_brand::feeds::DOWNLOADS, RELEASE_DOWNLOAD_BASE);
         assert_eq!(k2_brand::zones::LABEL, INFRA_ZONE);
@@ -248,6 +265,18 @@ mod tests {
         ] {
             assert!(!is_release_repo_url(no), "{no}");
         }
+    }
+
+    /// The repo's URL lives in one place for text, brand/k2's `links.repo`;
+    /// the release URLs' `release_repo!()` is its `owner/name`, so a move
+    /// (Alakazam-211/K2 to AlakazamLabs/K5) changes both or this fails.
+    /// The bash, release and signer copies are held to `release_repo!()`
+    /// by src/renderer/lib/brand.test.ts. The default brand's file (these
+    /// tests run on it).
+    #[test]
+    fn brand_repo_link_is_the_release_repo() {
+        assert_eq!(k2_brand::links::REPO, RELEASE_REPO_URL);
+        assert_eq!(REPO_URL, format!("https://github.com/{}", release_repo!()));
     }
 
     #[test]

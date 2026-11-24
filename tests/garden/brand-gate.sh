@@ -50,7 +50,7 @@ printf 'fn clean() {}\n' > "$T/src-tauri/src/main.rs"
 
 # Two K2 lines and one K5 line at their rows pass. Comments, the test module,
 # test files, look-alike names and the brand modules are not counted.
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
 run 0 "K2 crates/a/src/old.rs:3: fn a()" --list
 run 0 "K2 crates/a/src/old.rs:4: fn b()" --list
 run 0 "K5 crates/a/src/old.rs:5: fn c()" --list K5
@@ -106,7 +106,7 @@ run 1 "src/renderer/lib/f.ts:1 spells out company and has no company row"
 rm "$T/src/renderer/lib/f.ts"
 cp "$T/a.txt" "$T/a.before"
 printf '1 company crates/a/src/feedback.rs keeper: a licence line that names the real company\n' >> "$T/a.txt"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 1 company, 0 login lines in 3 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 1 company, 0 login, 0 contact lines in 3 rows still spell a name out)."
 printf 'fn g() -> &str { "K2 by Alakazam Labs" }\n' >> "$T/crates/a/src/feedback.rs"
 run 1 "crates/a/src/feedback.rs has 2 company lines, its row allows 1"
 cp "$T/a.before" "$T/a.txt"
@@ -115,10 +115,23 @@ printf 'fn t() { assert_eq!(x, "Alakazam Labs"); }\n' > "$T/crates/a/src/feedbac
 printf "it('names us', () => expect(n).toBe('Alakazam Labs'))\n" > "$T/src/renderer/lib/f.test.ts"
 printf "// Alakazam Labs in a comment\nexport const COMPANY_NAME = 'Alakazam Labs'\n" >> "$T/src/renderer/lib/brand.ts"
 printf '// Alakazam Labs in a comment\n#[cfg(test)]\nmod tests {\n    fn t() { let c = "Alakazam Labs"; }\n}\n' > "$T/crates/a/src/quiet.rs"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
 lacks "company " --list company
 rm "$T/crates/a/src/feedback_tests.rs" "$T/src/renderer/lib/f.test.ts" "$T/crates/a/src/quiet.rs"
 printf "export const PRODUCT_NAME = 'K2'\n" > "$T/src/renderer/lib/brand.ts"
+
+# Our contact address in shipped code fails, Rust and renderer, and names
+# CONTACT_EMAIL; a test file is not counted. Another host of ours with no
+# address (a mirror URL) is not an address.
+printf 'pub const CONTACT_ADDRESS: &str = "hello@alakazamlabs.com";\n' > "$T/crates/a/src/contact.rs"
+run 1 "crates/a/src/contact.rs:1 spells out contact and has no contact row: use CONTACT_EMAIL (k2_core::brand, @/lib/brand)"
+printf "export const CONTACT_ADDRESS = 'Hello@AlakazamLabs.com'\n" > "$T/src/renderer/lib/c.ts"
+run 1 "src/renderer/lib/c.ts:1 spells out contact and has no contact row"
+printf 'pub const CONTACT_ADDRESS: &str = crate::brand::CONTACT_EMAIL;\npub const M: &str = "https://mirror.alakazamlabs.com:8443";\n' > "$T/crates/a/src/contact.rs"
+printf "it('names ours', () => expect(a).toBe('hello@alakazamlabs.com'))\n" > "$T/src/renderer/lib/c.test.ts"
+rm "$T/src/renderer/lib/c.ts"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
+rm "$T/crates/a/src/contact.rs" "$T/src/renderer/lib/c.test.ts"
 
 # The CLI's printed text (the cli/text pages, the schema entries, the
 # captured help pages) names the company and the sign-in service by slot:
@@ -137,21 +150,59 @@ run 1 "crates/k5-cli/src/help_captured.txt:1 spells out login and has no login r
 printf 'P\t0\t0\tTell Alakazam Labs\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
 run 1 "crates/k5-cli/src/help_captured.txt:1 spells out company and has no company row"
 printf 'P\t0\t0\tTell \\o, over \\l, a \\\\p Connect\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
+# The company's first word alone is the company in the text; the repo's
+# owner (Alakazam-211/sew-releases) is not.
+printf 'Tell {company} about K2 itself.\nIt sends it to Alakazam when it can.\n' > "$T/cli/text/study/feedback.txt"
+run 1 "cli/text/study/feedback.txt:2 spells out company and has no company row"
+printf 'Tell {company} about K2 itself, from github.com/Alakazam-211/sew-releases.\n' > "$T/cli/text/study/feedback.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
+# Our contact address: a page, an entry and a captured page fail; the
+# {contact_email} slot and the \m escape pass.
+printf 'Tell your human; people can email hello@alakazamlabs.com instead.\n' >> "$T/cli/text/study/feedback.txt"
+run 1 "cli/text/study/feedback.txt:2 spells out contact and has no contact row: use CONTACT_EMAIL (k2_core::brand, @/lib/brand); in a page or a schema entry the {contact_email} slot, in a captured help page \\m"
+printf 'Tell {company} about K2 itself.\nTell your human; people can email {contact_email} instead.\n' > "$T/cli/text/study/feedback.txt"
+printf '    {"name": "f", "usage": "k2 f", "description": "Email hello@alakazamlabs.com."},\n' > "$T/cli/src/schema/f.entries"
+run 1 "cli/src/schema/f.entries:1 spells out contact and has no contact row"
+rm "$T/cli/src/schema/f.entries"
+printf 'P\t0\t0\tthey can email hello@alakazamlabs.com.\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 1 "crates/k5-cli/src/help_captured.txt:1 spells out contact and has no contact row"
+printf 'P\t0\t0\tthey can email \\m.\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
+# Our repo's URL in a page or an entry fails and names the {repo} slot;
+# the slot passes.
+printf '    {"name": "m", "usage": "k2 m", "description": "curl -fsSL https://github.com/Alakazam-211/K2/releases/download/v<version>/x.sh"},\n' > "$T/cli/src/schema/m.entries"
+run 1 "cli/src/schema/m.entries:1 spells out repo and has no repo row: use k2_core::brand or @/lib/brand; in a page or a schema entry the {repo} slot"
+printf '    {"name": "m", "usage": "k2 m", "description": "curl -fsSL {repo}/releases/download/v<version>/x.sh"},\n' > "$T/cli/src/schema/m.entries"
+printf 'It is in the repo (github.com/Alakazam-211/K2).\n' > "$T/cli/text/study/repo.txt"
+run 1 "cli/text/study/repo.txt:1 spells out repo and has no repo row"
+rm "$T/cli/text/study/repo.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
+# The sign-in name split by a wrap fails, at the line Connect starts: K2
+# at one line's end in a page, \p\nConnect in a captured page.
+printf 'this server is not paired with K2\nConnect, so nothing is sent.\n' > "$T/cli/text/study/wrap.txt"
+run 1 "cli/text/study/wrap.txt:2 spells out login and has no login row"
+printf 'this server is not paired with\n{login}, so nothing is sent.\n' > "$T/cli/text/study/wrap.txt"
+printf 'P\t0\t0\tno \\p\\nConnect pairing\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 1 "crates/k5-cli/src/help_captured.txt:1 spells out login and has no login row"
+printf 'P\t0\t0\tno\\n\\l pairing, K2\\nConnections\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
+rm "$T/cli/text/study/wrap.txt" "$T/cli/src/schema/m.entries"
+printf 'Tell {company} about K2 itself.\n' > "$T/cli/text/study/feedback.txt"
 printf 'Sign in with K2 Connect.\n' >> "$T/cli/text/study/feedback.txt"
 cp "$T/a.txt" "$T/a.before"
 printf '1 login cli/text/study/feedback.txt keeper: a page that must name our service\n' >> "$T/a.txt"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 1 login lines in 3 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 1 login, 0 contact lines in 3 rows still spell a name out)."
 run 0 "login cli/text/study/feedback.txt:2: Sign in with K2 Connect." --list login
 cp "$T/a.before" "$T/a.txt"
 rm -r "$T/cli" "$T/crates/k5-cli"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login, 0 contact lines in 2 rows still spell a name out)."
 
 # A row needs a reason that says keeper or debt.
 printf '2 K2 crates/a/src/old.rs because\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n' > "$T/a.txt"
 run 1 "the reason must start 'keeper: ' or 'debt: '"
 printf '2 K9 crates/a/src/old.rs debt: x\n' > "$T/a.txt"
-run 1 "want '<lines> <K2|K5|repo|company|login> <path> <keeper|debt>: <reason>'"
+run 1 "want '<lines> <K2|K5|repo|company|login|contact> <path> <keeper|debt>: <reason>'"
 
 # --tighten lowers a row to today's count, drops one at zero, keeps reasons.
 printf '# head\n\n5 K2 crates/a/src/old.rs debt: copy\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n3 repo crates/a/src/gone.rs debt: gone\n' > "$T/a.txt"

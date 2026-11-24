@@ -148,6 +148,7 @@ fn render(text: &str) -> String {
             'p' => out.push_str(k2_client::brand::PRODUCT_NAME),
             'o' => out.push_str(k2_client::brand::COMPANY_NAME),
             'l' => out.push_str(k2_client::brand::LOGIN_NAME),
+            'm' => out.push_str(k2_client::brand::CONTACT_EMAIL),
             other => panic!("an escape the list doesn't have: \\{other}"),
         }
     }

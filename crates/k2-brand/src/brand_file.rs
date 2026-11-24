@@ -23,9 +23,9 @@
 //! us or reaches us: it sets each one in [`SETS_ITS_OWN`] to a value that
 //! is not the default brand's (a link may be `""`, none), and each one in
 //! [`SETS_ON_PURPOSE`] to any value. Left out, a partner's build would say
-//! our company, our sign-in name, our site or our support address, look
-//! for our updates, or join our mail and phone app without anyone
-//! choosing it. `[control]` (our control endpoints, on purpose) and
+//! our company, our sign-in name, our site, our support or contact
+//! address or our repo, look for our updates, or join our mail and phone
+//! app without anyone choosing it. `[control]` (our control endpoints, on purpose) and
 //! `[machine]` (the code's own names) stay ours when left out.
 //!
 //! The tokens an install writes (the PATH block's two marker lines, the
@@ -78,6 +78,8 @@ const TABLE_KEYS: &[(&str, &[&str])] = &[
         &[
             "site",
             "support_email",
+            "contact_email",
+            "repo",
             "support_url",
             "terms",
             "privacy",
@@ -108,15 +110,17 @@ const KEY_KEYS: &[&str] = &["role", "key_id", "pubkey"];
 
 /// The fields a brand that isn't ours must set to a value of its own: each
 /// one's default names us or reaches us (our company, our sign-in name,
-/// our zone, our site, our support address, our account page, our
-/// feedback form, our update feeds, our update keys). A link here may be
-/// `""` (none), which is not ours.
+/// our zone, our site, our support and contact addresses, our source
+/// repo, our account page, our feedback form, our update feeds, our update
+/// keys). A link here may be `""` (none), which is not ours.
 pub const SETS_ITS_OWN: &[&str] = &[
     "names.company",
     "names.login",
     "zones.label",
     "links.site",
     "links.support_email",
+    "links.contact_email",
+    "links.repo",
     "links.dashboard",
     "links.feedback",
     "feeds.daemon",
@@ -206,6 +210,14 @@ pub struct Fields {
     pub site: String,
     /// `links.support_email`: where people write for help.
     pub support_email: String,
+    /// `links.contact_email`: where people write when their server can't
+    /// send feedback (the CLI's send-feedback pages print it).
+    pub contact_email: String,
+    /// `links.repo`: the public source repo's page (a page that names the
+    /// brand's repo fills its `{repo}` slot from it). Ours is the release
+    /// repo's page; the release URLs are built from `release_repo!()` in
+    /// k2-client, held equal to it.
+    pub repo: String,
     /// `links.support_url`: the support page. None: no link.
     pub support_url: Option<String>,
     /// `links.terms`: the terms of service. None: no link.
@@ -533,6 +545,11 @@ fn check_not_ours(doc: &toml::Table, b: &Brand, base: &Brand) -> Result<(), Stri
             "links.support_email",
             same(&f.support_email, &o.support_email),
         ),
+        (
+            "links.contact_email",
+            same(&f.contact_email, &o.contact_email),
+        ),
+        ("links.repo", same(&f.repo, &o.repo)),
         ("links.dashboard", same_link(&f.dashboard, &o.dashboard)),
         ("links.feedback", same_link(&f.feedback, &o.feedback)),
         ("feeds.daemon", same(&f.daemon_feed, &o.daemon_feed)),
@@ -721,6 +738,16 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         b(|f| &f.support_email),
         "links.support_email",
     )?;
+    let contact_email = inherit(
+        get_str(doc, "links", "contact_email", check_email)?,
+        b(|f| &f.contact_email),
+        "links.contact_email",
+    )?;
+    let repo = inherit(
+        get_str(doc, "links", "repo", check_https)?,
+        b(|f| &f.repo),
+        "links.repo",
+    )?;
     let link = |key: &str, f: fn(&Fields) -> &Option<String>| -> Result<Option<String>, String> {
         inherit(
             get_opt(doc, "links", key, check_https)?,
@@ -784,6 +811,8 @@ fn parse_fields(doc: &toml::Table, product: &str, base: Option<&Fields>) -> Resu
         accent,
         site,
         support_email,
+        contact_email,
+        repo,
         support_url,
         terms,
         privacy,
@@ -1176,6 +1205,10 @@ pub mod links {{
     pub const SITE: &str = {site:?};
     /// Where people write for help.
     pub const SUPPORT_EMAIL: &str = {support_email:?};
+    /// Where people write when their server can't send feedback.
+    pub const CONTACT_EMAIL: &str = {contact_email:?};
+    /// The public source repo's page.
+    pub const REPO: &str = {repo:?};
     /// The support page.
     pub const SUPPORT_URL: Option<&str> = {support_url};
     /// The terms of service.
@@ -1236,6 +1269,8 @@ pub mod sew {{
         accent = opt(&f.accent),
         site = f.site,
         support_email = f.support_email,
+        contact_email = f.contact_email,
+        repo = f.repo,
         support_url = opt(&f.support_url),
         terms = opt(&f.terms),
         privacy = opt(&f.privacy),
@@ -1449,6 +1484,8 @@ keys = [{ role = "primary", key_id = "25B77D84DA3C24B8", pubkey = "RWS4JDzahH23J
 [links]
 site = "https://ab.example.invalid"
 support_email = "help@ab.example.invalid"
+contact_email = "hello@ab.example.invalid"
+repo = "https://ab.example.invalid/source"
 dashboard = ""
 feedback = ""
 [mail]
@@ -2060,6 +2097,8 @@ accent = "#3A6FF7"
 [links]
 site = "https://example.invalid"
 support_email = "help@example.invalid"
+contact_email = "hello@example.invalid"
+repo = "https://example.invalid/source"
 support_url = "https://example.invalid/support"
 terms = "https://example.invalid/terms"
 privacy = "https://example.invalid/privacy"
@@ -2125,6 +2164,8 @@ call_name = "Hub Calls"
             accent: Some(s("#3A6FF7")),
             site: s("https://example.invalid"),
             support_email: s("help@example.invalid"),
+            contact_email: s("hello@example.invalid"),
+            repo: s("https://example.invalid/source"),
             support_url: Some(s("https://example.invalid/support")),
             terms: Some(s("https://example.invalid/terms")),
             privacy: Some(s("https://example.invalid/privacy")),
@@ -2148,6 +2189,8 @@ call_name = "Hub Calls"
             "    pub const DAEMON: &str = \"https://updates.example.invalid/daemon-latest.json\";\n",
             "    pub const ICONS: Option<&str> = Some(\"assets/icons\");\n",
             "    pub const ACCENT: Option<&str> = Some(\"#3A6FF7\");\n",
+            "    pub const CONTACT_EMAIL: &str = \"hello@example.invalid\";\n",
+            "    pub const REPO: &str = \"https://example.invalid/source\";\n",
             "    pub const SUPPORT_URL: Option<&str> = Some(\"https://example.invalid/support\");\n",
             "    pub const DASHBOARD: Option<&str> = None;\n",
             "    pub const FEEDBACK: Option<&str> = None;\n",
@@ -2181,6 +2224,8 @@ call_name = "Hub Calls"
             downloads: s("https://updates.example.invalid/ab/download"),
             site: s("https://ab.example.invalid"),
             support_email: s("help@ab.example.invalid"),
+            contact_email: s("hello@ab.example.invalid"),
+            repo: s("https://ab.example.invalid/source"),
             dashboard: None,
             feedback: None,
             system_from_name: s("AB"),
@@ -2233,8 +2278,14 @@ call_name = "Hub Calls"
                 format!("[control] leaves out {k}: a brand that sets [control] sets all six");
             gaps.push((k.to_string(), want));
         }
-        let field = "feeds.daemon is missing; the default brand file spells every field";
-        gaps.push(("daemon".to_string(), field.to_string()));
+        for (key, field) in [
+            ("daemon", "feeds.daemon"),
+            ("contact_email", "links.contact_email"),
+            ("repo", "links.repo"),
+        ] {
+            let want = format!("{field} is missing; the default brand file spells every field");
+            gaps.push((key.to_string(), want));
+        }
         for (key, want) in gaps {
             let gap: String = text
                 .lines()
@@ -2279,6 +2330,10 @@ call_name = "Hub Calls"
             ("icons = \"assets/icons\"", "icons = \"/abs/icons\"", "look.icons \"/abs/icons\" must be a folder from the brand folder"),
             ("icons = \"assets/icons\"", "icons = \"assets//icons\"", "look.icons \"assets//icons\" must be a folder"),
             ("support_email = \"help@example.invalid\"", "support_email = \"help\"", "links.support_email \"help\" must be an email address"),
+            ("contact_email = \"hello@example.invalid\"", "contact_email = \"hello\"", "links.contact_email \"hello\" must be an email address"),
+            ("contact_email = \"hello@example.invalid\"", "contact_email = \"\"", "links.contact_email is empty"),
+            ("repo = \"https://example.invalid/source\"", "repo = \"http://example.invalid/source\"", "links.repo \"http://example.invalid/source\" must be an https URL"),
+            ("repo = \"https://example.invalid/source\"", "repo = \"git@example.invalid:source\"", "links.repo \"git@example.invalid:source\" must be an https URL"),
             ("terms = \"https://example.invalid/terms\"", "terms = \"http://example.invalid/terms\"", "links.terms \"http://example.invalid/terms\" must be an https URL"),
             ("dashboard = \"\"", "dashboard = 7", "links.dashboard must be a string (\"\" for none)"),
             ("site = \"https://example.invalid\"", "site = \"\"", "links.site is empty"),
@@ -2503,6 +2558,12 @@ call_name = "Hub Calls"
                 &b.fields.support_email,
                 &base.support_email,
             ),
+            (
+                "links.contact_email",
+                &b.fields.contact_email,
+                &base.contact_email,
+            ),
+            ("links.repo", &b.fields.repo, &base.repo),
             ("feeds.daemon", &b.fields.daemon_feed, &base.daemon_feed),
         ] {
             assert_ne!(mine, ours, "the template sets its own {what}");
@@ -2720,6 +2781,12 @@ call_name = "Hub Calls"
                 &xy.fields.support_email,
                 &base.support_email,
             ),
+            (
+                "links.contact_email",
+                &xy.fields.contact_email,
+                &base.contact_email,
+            ),
+            ("links.repo", &xy.fields.repo, &base.repo),
             ("feeds.daemon", &xy.fields.daemon_feed, &base.daemon_feed),
             ("feeds.downloads", &xy.fields.downloads, &base.downloads),
         ] {

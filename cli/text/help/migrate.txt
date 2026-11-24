@@ -42,8 +42,8 @@ THE STEPS (in this order)
 
 WHO
   export, import --apply, --undo and --unfreeze are for the box owner as a
-  person, with the vault confirm (Touch ID, the vault password or a K2
-  Connect owner login). Run from your own terminal or SSH login (not a K2
+  person, with the vault confirm (Touch ID, the vault password or a
+  {login} owner login). Run from your own terminal or SSH login (not a K2
   terminal), k2 asks for the confirm. Anyone else (an agent, a script, an
   SSH session without a terminal) gets the step HELD as mv_… (exit 2, a
   "HELD: …" line on stderr; with --json, "status": "held" on stdout).

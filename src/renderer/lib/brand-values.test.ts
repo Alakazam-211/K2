@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSyn
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { BRAND_ID, CLI_ALIASES, CLI_NAME, COMPANY_NAME, PRODUCT_LOCKUP, PRODUCT_NAME, PUBLIC_SITE, RELEASE_REPO, SUPPORT_EMAIL } from './brand'
+import { BRAND_ID, CLI_ALIASES, CLI_NAME, COMPANY_NAME, CONTACT_EMAIL, PRODUCT_LOCKUP, PRODUCT_NAME, PUBLIC_SITE, RELEASE_REPO, SUPPORT_EMAIL } from './brand'
 
 const ROOT = resolve(__dirname, '../../..')
 const SCRIPT = join(ROOT, 'scripts/brand-values.mjs')
@@ -75,8 +75,9 @@ function xyWithKey(name: string, k: { id: string; line: string }): string {
   return brandFolder(name, xy.slice(0, at + 1) + updateTable(k) + rest.slice(end + 3))
 }
 
-/** A brand that isn't ours: it sets its own company, site, support address
- *  and update feed (k2-brand's SETS_ITS_OWN, the ones this script reads). */
+/** A brand that isn't ours: it sets its own company, site, support and
+ *  contact addresses, source repo and update feed (k2-brand's SETS_ITS_OWN,
+ *  the ones this script reads). */
 const GOOD = [
   'id = "ab"',
   'schema = 1',
@@ -91,6 +92,8 @@ const GOOD = [
   '[links]',
   'site = "https://acme.example"',
   'support_email = "help@acme.example"',
+  'contact_email = "hello@acme.example"',
+  'repo = "https://acme.example/source"',
   '[package]',
   'bundle_id = "com.example.acme"',
   'update_feed = "https://updates.example/acme/latest.json"',
@@ -114,6 +117,7 @@ describe('the renderer module', () => {
     expect(PRODUCT_LOCKUP).toBe(field(file, 'names', 'lockup'))
     expect(PUBLIC_SITE).toBe(field(file, 'links', 'site'))
     expect(SUPPORT_EMAIL).toBe(field(file, 'links', 'support_email'))
+    expect(CONTACT_EMAIL).toBe(field(file, 'links', 'contact_email'))
   })
 
   it('brand/xy\'s overlay and shell values name its own company and site', () => {
@@ -140,7 +144,9 @@ describe('the renderer module', () => {
     expect(made).toContain("export const PRODUCT_LOCKUP: string = 'Globex Desk by Globex Corporation'")
     expect(made).toContain("export const PUBLIC_SITE: string = 'https://desk.example.invalid'")
     expect(made).toContain(`export const SUPPORT_EMAIL: string = '${field(file, 'links', 'support_email')}'`)
+    expect(made).toContain("export const CONTACT_EMAIL: string = 'hello@desk.example.invalid'")
     expect(made).not.toContain('Alakazam')
+    expect(made).not.toContain('alakazamlabs')
     expect(made).not.toContain('k2.dev')
     expect(readFileSync(join(ROOT, 'src/renderer/lib/brand.generated.ts'), 'utf8')).toBe(committed)
   })
@@ -155,6 +161,8 @@ describe('the renderer module', () => {
     ['names.company', 'company = "Acme Inc"\n'],
     ['links.site', 'site = "https://acme.example"\n'],
     ['links.support_email', 'support_email = "help@acme.example"\n'],
+    ['links.contact_email', 'contact_email = "hello@acme.example"\n'],
+    ['links.repo', 'repo = "https://acme.example/source"\n'],
   ])('a brand that isn\'t ours with no %s is refused, naming it, as k2-brand refuses it', (name, line) => {
     expect(GOOD).toContain(line)
     const dir = brandFolder(`no-${name}`, GOOD.replace(line, ''))
@@ -167,6 +175,8 @@ describe('the renderer module', () => {
     ['names.company', 'company = "Acme Inc"', 'names', 'company'],
     ['links.site', 'site = "https://acme.example"', 'links', 'site'],
     ['links.support_email', 'support_email = "help@acme.example"', 'links', 'support_email'],
+    ['links.contact_email', 'contact_email = "hello@acme.example"', 'links', 'contact_email'],
+    ['links.repo', 'repo = "https://acme.example/source"', 'links', 'repo'],
     ['package.update_feed', 'update_feed = "https://updates.example/acme/latest.json"', 'package', 'update_feed'],
   ])('a brand that isn\'t ours given the default brand\'s own %s is refused', (name, line, table, key) => {
     const ours = field(join(ROOT, 'brand/k2/brand.toml'), table, key)
@@ -182,6 +192,7 @@ describe('the renderer module', () => {
     expect(out).toContain("export const PRODUCT_LOCKUP: string = 'Acme Desk by Acme Inc'")
     expect(out).toContain("export const PUBLIC_SITE: string = 'https://acme.example'")
     expect(out).toContain("export const SUPPORT_EMAIL: string = 'help@acme.example'")
+    expect(out).toContain("export const CONTACT_EMAIL: string = 'hello@acme.example'")
   })
 
   it('every brand in the repo makes a module with its own two names', () => {
@@ -414,14 +425,19 @@ describe('the update keys', () => {
     const company = field(join(ROOT, 'brand/k2/brand.toml'), 'names', 'company')
     const copy = brandFolder('copy/brand/k2', k2)
     expect(refused(['update-keys', '--brand', copy])).toContain(`names.company is the default brand's own value "${company}": a brand that isn't ours sets its own`)
-    // Its own names, site, support address and feed, but still our keys.
+    // Its own names, site, support and contact addresses, repo and feed,
+    // but still our keys.
     const site = field(join(ROOT, 'brand/k2/brand.toml'), 'links', 'site')
     const support = field(join(ROOT, 'brand/k2/brand.toml'), 'links', 'support_email')
+    const contact = field(join(ROOT, 'brand/k2/brand.toml'), 'links', 'contact_email')
+    const repo = field(join(ROOT, 'brand/k2/brand.toml'), 'links', 'repo')
     const feed = field(join(ROOT, 'brand/k2/brand.toml'), 'package', 'update_feed')
     const own = k2
       .replace(`company = "${company}"`, 'company = "Acme Inc"')
       .replace(`site = "${site}"`, 'site = "https://acme.example"')
       .replace(`support_email = "${support}"`, 'support_email = "help@acme.example"')
+      .replace(`contact_email = "${contact}"`, 'contact_email = "hello@acme.example"')
+      .replace(`repo = "${repo}"`, 'repo = "https://acme.example/source"')
       .replace(`update_feed = "${feed}"`, 'update_feed = "https://updates.example/acme/latest.json"')
     const ownCopy = brandFolder('copy-own/brand/k2', own)
     expect(refused(['update-keys', '--brand', ownCopy])).toContain(`carries the ceremony's update key ${K2_PRIMARY.id}; only k2 and k5 may ship it`)

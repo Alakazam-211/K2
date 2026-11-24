@@ -12,9 +12,10 @@
 #                    the bash itself (bash -n, grep or sed on the file). A
 #                    binary can't stand in for that.
 #   cli_page FILE    a cli/text page as both CLIs print it in the default
-#                    brand: its {company} and {login} slots filled with our
-#                    names, as scripts/build-cli.sh and the k5 build fill
-#                    them (scripts/brand/page_slots.py). A test that compares
+#                    brand: its {company}, {login}, {contact_email} and
+#                    {repo} slots filled with ours, as scripts/build-cli.sh
+#                    and the k5 build fill them
+#                    (scripts/brand/page_slots.py). A test that compares
 #                    what a CLI prints with a page reads the page this way.
 #
 # Both are absolute paths. A relative K5_CLI_UNDER_TEST is taken from the
@@ -51,7 +52,7 @@ CLI_PAGE_PYTHON="$(command -v python3 || true)"
 unset _cut_root _cut_prog
 
 cli_page() {
-    if grep -qF -e '{company}' -e '{login}' "$1"; then
+    if grep -qF -e '{company}' -e '{login}' -e '{contact_email}' -e '{repo}' "$1"; then
         [ -n "$CLI_PAGE_PYTHON" ] || { echo "FAIL: cli_page needs python3 for $1" >&2; return 1; }
         "$CLI_PAGE_PYTHON" "$CLI_PAGE_SLOTS" < "$1"
     else

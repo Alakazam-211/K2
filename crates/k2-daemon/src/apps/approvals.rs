@@ -526,8 +526,12 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the owner approves a change to a box-wide role (every login holding it gets it, box logins too): \
-             an admin can't. The owner approves it in the K2 app (Settings → App Approvals) or with k2 app approve <id> from a terminal outside K2.",
+            format!(
+                "only the owner approves a change to a box-wide role (every login holding it gets it, box logins too): \
+                 an admin can't. The owner approves it in the {product} app (Settings → App Approvals) or with {cli} app approve <id> from a terminal outside {product}.",
+                product = k2_core::brand::PRODUCT_NAME,
+                cli = k2_core::brand::CLI_NAME,
+            ),
         ));
     }
     // The confirm comes first (bound to this request, single use); the

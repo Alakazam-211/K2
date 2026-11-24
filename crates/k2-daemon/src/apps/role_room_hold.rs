@@ -177,9 +177,10 @@ fn hold_box_wide(who: &Who, ws: &str, role: &skin::SkinRole, room: &str, caps: O
         ),
     };
     let instead = format!(
-        "or, instead, make an App role: the agent makes a role of its own App with that room itself (k2 app role create <name> --app <its app>, \
-         then k2 app role room <name> {room_h} …), and the box-wide role {} stays as it is",
-        role.name
+        "or, instead, make an App role: the agent makes a role of its own App with that room itself ({cli} app role create <name> --app <its app>, \
+         then {cli} app role room <name> {room_h} …), and the box-wide role {} stays as it is",
+        role.name,
+        cli = k2_core::brand::CLI_NAME,
     );
     let mut out = hold(
         Step {
@@ -200,7 +201,8 @@ fn hold_box_wide(who: &Who, ws: &str, role: &skin::SkinRole, room: &str, caps: O
             lines: vec![
                 change,
                 format!(
-                    "{reach}; nothing else on the role changes. Undo: k2 app role room {} {room_h} {}",
+                    "{reach}; nothing else on the role changes. Undo: {} app role room {} {room_h} {}",
+                    k2_core::brand::CLI_NAME,
                     role.name,
                     match now {
                         Some(old) => format!("--caps {}", old.join(",")),
@@ -219,8 +221,9 @@ fn hold_box_wide(who: &Who, ws: &str, role: &skin::SkinRole, room: &str, caps: O
     let held = out.get("hint").and_then(J::as_str).unwrap_or_default().to_string();
     out["hint"] = json!(format!(
         "role '{}' is box-wide (no App): every login holding it gets its rooms, box logins too. Better: make a role of your own App with that room \
-         (k2 app role create <name> --app <your app>, then k2 app role room <name> {room_h} --caps …). If it must be this role: {held}",
-        role.name
+         ({cli} app role create <name> --app <your app>, then {cli} app role room <name> {room_h} --caps …). If it must be this role: {held}",
+        role.name,
+        cli = k2_core::brand::CLI_NAME,
     ));
     Ok(out)
 }

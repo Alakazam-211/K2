@@ -713,6 +713,7 @@
 1 value crates/k2-daemon/src/apps/podman_install.rs keeper: wire; the Podman install decision's source
 1 value crates/k2-daemon/src/ci_release.rs keeper: outside; k2sign's project id for this repo's releases
 1 value crates/k2-daemon/src/client_ip.rs keeper: stored; app_requests.closed_early
+1 value crates/k2-daemon/src/connection_note.rs keeper: stored; an inbox note's from (frontmatter)
 1 value crates/k2-daemon/src/daemon_stop.rs keeper: outside; launchd's job label (dev.k2.daemon); B9 reads it again
 1 value crates/k2-daemon/src/docs/annotations.rs keeper: wire; a key in the purge answer, read by the CLI
 1 value crates/k2-daemon/src/domains/renew.rs keeper: stored; the domain renew record's source; the app reads it

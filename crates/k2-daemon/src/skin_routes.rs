@@ -1226,8 +1226,10 @@ fn runtime_app_name(svc: &str) -> String {
 /// Where the owner changes a login's role, in words (papercut 2's path).
 pub(crate) fn owners_role_path(username: &str) -> String {
     format!(
-        "Only the owner changes it: in the K2 app, Settings → Access → User Access → {username} → What they can use → Sign-in and Apps → the App's Role, \
-         or k2 app user role {username} <role> from a terminal outside K2"
+        "Only the owner changes it: in the {product} app, Settings → Access → User Access → {username} → What they can use → Sign-in and Apps → the App's Role, \
+         or {cli} app user role {username} <role> from a terminal outside {product}",
+        product = k2_core::brand::PRODUCT_NAME,
+        cli = k2_core::brand::CLI_NAME,
     )
 }
 
@@ -2766,8 +2768,11 @@ pub fn handle_roles_get() -> CliResponse {
 
 /// What a box-wide role reaches, in one line (`role create` without an App,
 /// 0.46.18 papercut 3).
-pub const BOX_WIDE_HINT: &str = "box-wide: every App and the box login can use it, and only the owner edits it; for one App: --app <app> \
-     (to narrow this one: k2 app role update <role> --app <app>)";
+pub const BOX_WIDE_HINT: &str = concat!(
+    "box-wide: every App and the box login can use it, and only the owner edits it; for one App: --app <app> (to narrow this one: ",
+    k2_core::cli_name!(),
+    " app role update <role> --app <app>)"
+);
 
 /// A role on the wire, with its scope (0.46.18 papercut 3): `scope` is
 /// `box` (no App: every App and the box login) or `app`, and `appLabel`
@@ -2904,8 +2909,9 @@ fn narrow_role(id_or_name: &str, app: &str, actor: &str) -> Result<(), CliRespon
         }
         Err(skin::NarrowRefused::Unknown) => Err(CliResponse::bad_request(format!("unknown skin role '{id_or_name}'"))),
         Err(skin::NarrowRefused::OtherApp(other)) => Err(conflict(format!(
-            "role '{id_or_name}' belongs to the App {} already: make a role of the other App instead (k2 app role create <name> --app <app>)",
-            app_label(&other)
+            "role '{id_or_name}' belongs to the App {} already: make a role of the other App instead ({} app role create <name> --app <app>)",
+            app_label(&other),
+            k2_core::brand::CLI_NAME
         ))),
         Err(skin::NarrowRefused::HeldElsewhere(who)) => Err(conflict(format!(
             "role '{id_or_name}' is held outside the App {} by {}: they would lose it. Give them another role first \

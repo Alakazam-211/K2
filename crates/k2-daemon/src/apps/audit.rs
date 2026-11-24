@@ -509,7 +509,8 @@ pub fn repeat_text(app: &str, actor: &str, verb: &str, room: &str, why: &str, n:
     };
     format!(
         "[k2 apps] {app}: {who}: {verb} refused {n}× in 5 minutes{room_words} ({what}). A page asking for what its role lacks, not an attack: \
-         add it with k2 app role room <role> <room> --caps …, or have the page check /api/me before it calls. k2 app audit {app} --denied --since 5m"
+         add it with {cli} app role room <role> <room> --caps …, or have the page check /api/me before it calls. {cli} app audit {app} --denied --since 5m",
+        cli = k2_core::brand::CLI_NAME,
     )
 }
 

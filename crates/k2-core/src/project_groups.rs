@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 
 /// The layout blob a fresh dashboard starts with (versioned; the
 /// structure inside is renderer-owned — core only guarantees valid

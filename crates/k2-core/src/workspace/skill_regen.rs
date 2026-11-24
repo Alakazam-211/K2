@@ -963,7 +963,7 @@ sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
 publish-visibility, publish-dev, compute, compute-shared, ci, ci-release, ci-stats, provenance, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, docs, sim, design, db-upgrade, app-databases, supabase-compat, app-cron, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
-email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization,
+isolation, email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization,
 agent-templates, suite-apps, postal.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `"#, cli_name!(), r#" study live`: every surface, its caps, read + live verbs, and

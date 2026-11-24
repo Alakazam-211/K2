@@ -38,7 +38,7 @@ fn input(env: &str) -> Option<PathBuf> {
     static INPUTS: std::sync::OnceLock<HashMap<&'static str, PathBuf>> = std::sync::OnceLock::new();
     INPUTS
         .get_or_init(|| {
-            ["K2_ISO_DAEMON_BIN", "K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_ISO_CLI", "K2_ISO_TOOLCHAIN_HOME", "K2_ISO_PERSIST_HOME", "K2_ISO_EXPECT", "K2_ISO_USER_BUS", "K2_ISO_TMUX_SOCK"]
+            ["K2_ISO_DAEMON_BIN", "K2_PTYD_BIN", "K2_PTYD_TEST_AGENT", "K2_ISO_CLI", "K2_ISO_TOOLCHAIN_HOME", "K2_ISO_PERSIST_HOME", "K2_ISO_EXPECT", "K2_ISO_USER_BUS", "K2_ISO_TMUX_SOCK", "K2_ISO_SOCKBLOCK"]
                 .into_iter()
                 .filter_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()).map(|v| (k, PathBuf::from(v))))
                 .collect()
@@ -1612,4 +1612,72 @@ echo "done" >> $R; exec sleep 3600
     let logs = sockblock_logs(&d.k2);
     println!("──── sockblock.log (record) ────\n{logs}");
     assert!(logs.contains("\"event\":\"start\""), "the session ran under the block in record mode");
+}
+
+/// The A2 ruling's fenced regression rows (2026-11-23): from a FENCED
+/// session, `systemd-run --user` (J1) is refused, no crontab is installed,
+/// no ssh session to localhost opens (and ~/.ssh can't be written), and a
+/// unit started in k2apps.slice gets nothing extra. J1 and the k2apps row
+/// need the Unix-socket block in enforce mode (`K2_ISO_SOCKBLOCK=enforce`);
+/// in record mode (the default) they RECORD what would be refused, read
+/// from the session's sockblock.log. Run from
+/// `scripts/agent-isolation-b4-prerows.sh` (lingering on, so the user bus
+/// exists).
+#[test]
+#[ignore = "needs a delegated unit and a user manager: scripts/agent-isolation-b4-prerows.sh"]
+fn a2_fenced_regression_rows() {
+    let _unit = preflight();
+    let bus = input("K2_ISO_USER_BUS").expect("K2_ISO_USER_BUS: the K2 user's bus socket (the script turns lingering on)");
+    let mode = input("K2_ISO_SOCKBLOCK").map(|p| p.display().to_string()).unwrap_or_else(|| "record".into());
+    assert!(mode == "record" || mode == "enforce", "K2_ISO_SOCKBLOCK is record or enforce: {mode}");
+    let mut d = Daemon::new("a2rows");
+    d.env.push(("K2_AGENT_SOCKBLOCK".into(), mode.clone()));
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    d.set_fence(&a_id, true);
+    let ssh = d.home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    std::fs::write(ssh.join("id_test"), "PRIVATE KEY\n").unwrap();
+    let rt = bus.parent().expect("runtime dir");
+    let script = format!(
+        r#"R={a}/results; : > $R; echo $$ > {a}/pid
+export XDG_RUNTIME_DIR={rt} DBUS_SESSION_BUS_ADDRESS=unix:path={bus}
+systemd-run --user --quiet --collect --wait --pipe -- sh -c 'cat {key} > /dev/null 2>&1 && echo key=read || echo key=refused' > {a}/o1 2>&1; echo "j1 $? $(tail -c 200 {a}/o1 | tr '\n' ' ')" >> $R
+echo '* * * * * true' | crontab - > {a}/o2 2>&1; echo "crontab_install $? $(tail -c 200 {a}/o2 | tr '\n' ' ')" >> $R
+crontab -l > {a}/o3 2>&1; echo "crontab_list $? $(tail -c 200 {a}/o3 | tr '\n' ' ')" >> $R
+ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 localhost true > {a}/o4 2>&1; echo "ssh_localhost $? $(tail -c 200 {a}/o4 | tr '\n' ' ')" >> $R
+sh -c 'echo k >> {ssh}/authorized_keys' 2> {a}/o5; echo "ssh_authorized_keys $? $(cat {a}/o5)" >> $R
+systemd-run --user --quiet --collect --slice=k2apps.slice --unit=k2iso-a2app -- sleep 30 > {a}/o6 2>&1; echo "k2apps_unit $? $(tail -c 200 {a}/o6 | tr '\n' ' ')" >> $R
+echo "k2apps_cgroup $(systemctl --user show -p ControlGroup --value k2iso-a2app.service 2>&1 | tail -c 200)" >> $R
+systemctl --user stop k2iso-a2app.service > /dev/null 2>&1
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        rt = rt.display(),
+        bus = bus.display(),
+        key = ssh.join("id_test").display(),
+        ssh = ssh.display(),
+    );
+    d.spawn("tab-a", &a_ws, &script);
+    let r = results(&a_ws.join("results"), "done");
+    d.pids.push(std::fs::read_to_string(a_ws.join("pid")).unwrap().trim().parse().unwrap());
+    let logs = sockblock_logs(&d.k2);
+    let bus_lines: Vec<&str> = logs.lines().filter(|l| l.contains("/run/user") || l.contains("bus")).collect();
+    println!("row A2-mode: sockblock {mode}");
+    println!("row A2-J1: systemd-run --user from a fenced session: {}", r["j1"]);
+    println!("row A2-cron: crontab install: {} · list: {}", r["crontab_install"], r["crontab_list"]);
+    println!("row A2-ssh: ssh localhost: {} · write ~/.ssh/authorized_keys: {}", r["ssh_localhost"], r["ssh_authorized_keys"]);
+    println!("row A2-k2apps: a unit in k2apps.slice: {} · its cgroup: {}", r["k2apps_unit"], r["k2apps_cgroup"]);
+    println!("row A2-log: {} sockblock decision(s) on the user bus: {}", bus_lines.len(), bus_lines.join(" | ").chars().take(600).collect::<String>());
+    // Held in either mode: cron and ssh.
+    assert!(!r["crontab_install"].starts_with('0'), "no crontab installed from a fenced session: {}", r["crontab_install"]);
+    assert!(!r["ssh_localhost"].starts_with('0'), "no ssh session to localhost from a fenced session: {}", r["ssh_localhost"]);
+    assert!(denied(&r["ssh_authorized_keys"]), "~/.ssh can't be written: {}", r["ssh_authorized_keys"]);
+    assert!(!ssh.join("authorized_keys").exists());
+    if mode == "enforce" {
+        assert!(!r["j1"].starts_with('0') && !r["j1"].contains("key=read"), "J1 refused under enforce: {}", r["j1"]);
+        assert!(!r["k2apps_unit"].starts_with('0'), "no unit in k2apps.slice under enforce: {}", r["k2apps_unit"]);
+    } else {
+        assert!(!bus_lines.is_empty(), "record mode logged the user-bus connects it would refuse: {logs}");
+    }
 }

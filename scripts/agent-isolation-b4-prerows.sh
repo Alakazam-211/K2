@@ -148,6 +148,32 @@ if [ "$rc" != 0 ] || ! grep -q '^row P7' "$log"; then
 else
     ran=$((ran + 3))
 fi
+# A2 ruling's fenced regression rows (J1 fenced, cron, ssh to localhost,
+# k2apps.slice), in the socket block's mode K2_ISO_SOCKBLOCK (record or
+# enforce; default record: J1 and k2apps are then recorded, not refused).
+a2log="$(mktemp)"
+sudo systemd-run --uid="$uid" --gid="$(id -g)" \
+    -p Delegate=yes -p DelegateSubgroup=daemon -p KillMode=process \
+    --wait --pipe --collect --quiet \
+    --setenv=HOME="$HOME" --setenv=USER="$user" --setenv=PATH=/usr/local/bin:/usr/bin:/bin \
+    --setenv=K2_ISO_DAEMON_BIN="$dir/k2-daemon" \
+    --setenv=K2_PTYD_BIN="$dir/k2-ptyd" \
+    --setenv=K2_PTYD_TEST_AGENT="$dir/k2-ptyd-test-agent" \
+    --setenv=K2_ISO_CLI="$dir/k2" \
+    --setenv=K2_ISO_USER_BUS="/run/user/$uid/bus" \
+    --setenv=K2_ISO_SOCKBLOCK="${K2_ISO_SOCKBLOCK:-record}" \
+    --setenv=RUST_BACKTRACE=1 \
+    "$dir/agent_isolation_kernel_integration" a2_fenced_regression_rows \
+    --exact --ignored --nocapture --test-threads=1 > "$a2log" 2>&1
+a2rc=$?
+grep -E '^row A2' "$a2log"
+if [ "$a2rc" != 0 ] || ! grep -q '^row A2-log' "$a2log"; then
+    echo "the A2 fenced rows failed or did not run (rc=$a2rc):" >&2
+    tail -40 "$a2log" >&2
+    fenced_ok=0
+else
+    ran=$((ran + 1))
+fi
 
 # P4. The daemon unit after a Delegate=no drop-in, with a live ptyd.
 port_file="$persist/home/.k2/daemon.port"

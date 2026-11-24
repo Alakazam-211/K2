@@ -29,7 +29,7 @@ echo "box: $(hostname) · $(. /etc/os-release && echo "$PRETTY_NAME") · kernel 
 echo "LSMs: $(cat /sys/kernel/security/lsm)"
 # The M1b test runs against the persistent unit (agent-isolation-m1b-kernel-tests.sh);
 # the B4 pre-rows test runs from agent-isolation-b4-prerows.sh.
-args=(--ignored --test-threads=1 --nocapture --skip root_owned_agent_cgroups_refuse_a_sibling --skip b4_prerows_from_a_fenced_session)
+args=(--ignored --test-threads=1 --nocapture --skip root_owned_agent_cgroups_refuse_a_sibling --skip b4_prerows_from_a_fenced_session --skip a2_fenced_regression_rows)
 [ -n "$filter" ] && args=("$filter" "${args[@]}")
 # One test (review T1) narrows the ephemeral port range for a moment and
 # puts it back; the range must be the same after the run.

@@ -2,7 +2,7 @@
 //! ([`common::parity`]): the same requests, stdout, stderr and exit code.
 //!
 //! - Every verb's request and output: `status`, `index` (and more than
-//!   256 KiB of nodes), `note`, `seed`, `serve on|off`, `chat off`,
+//!   256 KiB of nodes), `note`, `seed`, `location`, `serve on|off`, `chat off`,
 //!   `unpublish`; `--json`; the workspace as a folder and as a name the
 //!   daemon resolves (or doesn't).
 //! - The CLI's own refusals (`_wiki_err usage`, `chat on`'s exit 3), the
@@ -31,6 +31,10 @@ const STATUS: &str = r#"{"enabled":true,"port":4711,"url":"http://127.0.0.1:4711
 const INDEX: &str = r#"{"workspacePath":"/srv/acme","wikiRel":".k2/wiki","generatedAt":"2026-11-20T10:00:00Z","nodes":[{"id":"Home.md","title":"Home é"},{"id":"_Index.md","title":"Index"},{"id":"Gone.md","exists":false}],"links":[{"from":"Home.md","to":"_Index.md"}]}"#;
 const NOTE: &str =
     r##"{"id":"Home.md","title":"Home","tags":["start","é"],"body":"# Home\n\nSee [[_Index]]."}"##;
+
+/// `wiki location`'s answer: a linked wiki not approved yet, with a
+/// doctor line (stderr).
+const LOCATION: &str = r#"{"linked":true,"approved":false,"lines":["The wiki is a link to /srv/shared/acme-wiki (é).","Approved: no: API keys and templates are not written there until the owner approves it."],"doctor":["linked wiki not approved: acme"]}"#;
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
@@ -421,6 +425,26 @@ fn wiki_answers_as_the_shell_does() {
             owner_and_port,
             2,
             0,
+        ),
+        // covers: wiki location
+        case(
+            "location",
+            &["location"],
+            &[],
+            vec![ok(LOCATION)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: wiki location --json
+        case(
+            "location --json",
+            &["location", "--json"],
+            &[],
+            vec![ok(LOCATION)],
+            owner_and_port,
+            0,
+            1,
         ),
         // covers: wiki serve
         case(

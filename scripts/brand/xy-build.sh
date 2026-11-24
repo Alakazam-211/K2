@@ -58,12 +58,27 @@ if [ -z "$free_gb" ] || [ "$free_gb" -lt "$XY_MIN_FREE_GB" ]; then
 fi
 XY_TARGET="$(mktemp -d "$XY_PARENT/k2-xy-build.XXXXXX")"
 W="$(mktemp -d "$XY_PARENT/k2-xy-corpus.XXXXXX")"
+# Its size is printed before it goes, and over XY_MAX_TARGET_GB (default
+# 50) the run fails even when everything passed: a job of ours once drained
+# a node's disk, and the xy folder must stay well under that node's
+# budget. Debug builds here carry no debuginfo (CARGO_PROFILE_DEV_DEBUG=0),
+# which the checks don't read and which is most of a debug build's size.
+XY_MAX_TARGET_GB="${XY_MAX_TARGET_GB:-50}"
 cleanup() {
+    local rc=$? kb
+    kb="$(du -sk "$XY_TARGET" 2>/dev/null | awk '{ print $1 }')"
+    echo "M xy target size: $(du -sh "$XY_TARGET" 2>/dev/null | awk '{ print $1 }') (${kb:-0} KB; limit ${XY_MAX_TARGET_GB} GB)"
     rm -rf "$XY_TARGET" "$W"
     echo "M xy target removed: $([ -e "$XY_TARGET" ] && echo no || echo yes)"
+    if [ "${kb:-0}" -gt $((XY_MAX_TARGET_GB * 1048576)) ]; then
+        echo "M xy build=1 failed: [the xy target folder grew past ${XY_MAX_TARGET_GB} GB]"
+        exit 1
+    fi
+    exit "$rc"
 }
 trap cleanup EXIT
 export CARGO_TARGET_DIR="$XY_TARGET"
+export CARGO_PROFILE_DEV_DEBUG=0
 
 step "cargo check, K2_BRAND_DIR=brand/xy"
 cargo check --locked -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node \

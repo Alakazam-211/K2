@@ -194,13 +194,14 @@ def main(argv):
         if os.path.isfile(p):
             with open(p, "rb") as f:
                 shims.add(f.read())
-    bad, n = [], 0
+    bad, unread, n = [], 0, 0
     for path in files(paths):
         n += 1
         try:
             found = check_file(path, cli, marks, shims)
         except OSError as e:
             bad.append(f"{path}: can't read it ({e.strerror})")
+            unread += 1
             continue
         bad += [f"{path}: at byte {at}: {why}" for at, why in found]
     if n == 0:
@@ -209,7 +210,12 @@ def main(argv):
     if bad:
         for b in bad:
             print(f"check-no-bash: {b}", file=sys.stderr)
-        print("check-no-bash: REFUSED: the build carries the shell CLI", file=sys.stderr)
+        if unread == len(bad):
+            # Fail closed, but say what happened: nothing was found, the
+            # file just wasn't there to read.
+            print("check-no-bash: REFUSED: a file could not be read, so the build was not checked", file=sys.stderr)
+        else:
+            print("check-no-bash: REFUSED: the build carries the shell CLI", file=sys.stderr)
         return 1
     print(f"check-no-bash: {n} files, no copy of the shell CLI")
     return 0

@@ -75,7 +75,10 @@ check --cli "$CLI" "$T/clean/k5-cli" "$T/gz/k5-cli"
 [ "$rc" = 1 ] && [[ "$out" != *"clean/k5-cli"* ]] || die "clean beside dirty: $out"; ok
 
 check --cli "$CLI" "$T/nowhere"
-[ "$rc" = 1 ] && [[ "$out" == *"nowhere: can't read it"* ]] || die "a missing file: $out"; ok
+[ "$rc" = 1 ] && [[ "$out" == *"nowhere: can't read it"* ]] \
+    && [[ "$out" == *"REFUSED: a file could not be read, so the build was not checked"* ]] || die "a missing file: $out"; ok
+check --cli "$CLI" "$T/nowhere" "$T/gz/k5-cli"
+[ "$rc" = 1 ] && [[ "$out" == *"REFUSED: the build carries the shell CLI"* ]] || die "a missing file beside a dirty one: $out"; ok
 check --cli "$T/clean/k5-cli" "$T/clean/k5-cli"
 [ "$rc" = 2 ] && [[ "$out" == *"does not start with #!/bin/bash: not the shell CLI"* ]] || die "--cli not the script: $out"; ok
 mkdir "$T/empty"

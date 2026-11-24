@@ -1,0 +1,2427 @@
+{
+  "about": "Shared test vectors for the Amendment 2 names block (names[], primaryZone, namesVersion, namesStatus). CANONICAL copy: k2-connect control-plane/src/testdata/names-vectors.json (run by zones.rs names_vectors_tests). k2-dev-web keeps a byte-identical copy at tests/fixtures/names-vectors.json (run by its /api/tunnel/relays port). zoneRows null = the K2X zones read failed. Regenerate expectations: NAMES_VECTORS_BLESS=1 cargo test names_vectors.",
+  "cases": [
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 5672229452998704,
+        "primaryZone": "k2.dev"
+      },
+      "name": "k2-only-free",
+      "note": "Today's K2X zones; label lists k2.dev only; free: one name, no turn.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "free",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k2.dev\",\"turn\":\"turn.alice.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"alice.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k2.dev",
+            "turn": "turn.alice.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "alice.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 8217991586159369,
+        "primaryZone": "k2.dev"
+      },
+      "name": "k2-and-postal-pro",
+      "note": "Today's zones; k2.dev + postal.bot on Pro: turn only on k2.dev.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k2.dev\",\"turn\":\"turn.alice.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"alice.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k2.dev",
+            "turn": "turn.alice.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "alice.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 8217991586159369,
+        "primaryZone": "k2.dev"
+      },
+      "name": "pending-k5-not-served",
+      "note": "k5.dev is pending: listed on the row but never served.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "postal.bot",
+          "k5.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "only-pending-zone-real-read",
+      "note": "Real read, the label's only zone is pending: namesStatus none.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "five",
+        "tier": "free",
+        "zones": [
+          "k5.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":null,\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesVersion": 3118105012120227
+      },
+      "name": "only-pending-zone-read-failed",
+      "note": "The zones read failed (built-in set): no names, namesStatus omitted, never none.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "five",
+        "tier": "free",
+        "zones": [
+          "k5.dev"
+        ]
+      },
+      "zoneRows": null
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"bob.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"bob.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "bob.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "bob.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 8818371623126813,
+        "primaryZone": "k2.dev"
+      },
+      "name": "read-failed-legacy-row",
+      "note": "Read failed; zones/tier missing (legacy row): built-in k2.dev + postal.bot, ok.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "bob",
+        "tier": null,
+        "zones": null
+      },
+      "zoneRows": null
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"bob.k2.dev\",\"turn\":\"turn.bob.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"bob.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "bob.k2.dev",
+            "turn": "turn.bob.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "bob.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 5116801905429778,
+        "primaryZone": "k2.dev"
+      },
+      "name": "read-failed-pro",
+      "note": "Read failed; built-in set still gives turn on k2.dev for Pro.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "bob",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "postal.bot"
+        ]
+      },
+      "zoneRows": null
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":null,\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesVersion": 3118105012120227
+      },
+      "name": "no-active-zone-is-a-failed-read",
+      "note": "A read with no active zone counts as failed (built-in set, status omitted).",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "five",
+        "tier": "pro",
+        "zones": [
+          "k5.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k2.dev\",\"turn\":\"turn.alice.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k2.dev",
+            "turn": "turn.alice.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 6510482731604302,
+        "primaryZone": "k2.dev"
+      },
+      "name": "no-active-zone-builtin-names",
+      "note": "A read with no active zone: the built-in set serves k2.dev.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":null,\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesVersion": 3118105012120227
+      },
+      "name": "empty-read-is-a-failed-read",
+      "note": "An empty zones read counts as failed.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "five",
+        "tier": "free",
+        "zones": [
+          "k5.dev"
+        ]
+      },
+      "zoneRows": []
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":null,\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesVersion": 3118105012120227
+      },
+      "name": "malformed-row-fails-read",
+      "note": "A row without a string status fails the whole read (built-in set; k5.dev-only label gets status omitted).",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "five",
+        "tier": "pro",
+        "zones": [
+          "k5.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "status": null
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"alice.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"postal.bot\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "alice.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 7784811615223184,
+        "primaryZone": "postal.bot"
+      },
+      "name": "malformed-row-builtin-names",
+      "note": "A malformed row fails the read: built-in names, ok.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "pro",
+        "zones": [
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": 7,
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"carol.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"carol.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "carol.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "carol.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 871445193533937,
+        "primaryZone": "k2.dev"
+      },
+      "name": "empty-zones-array-is-legacy",
+      "note": "An empty subdomains.zones = both of today's zones.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "carol",
+        "tier": "single",
+        "zones": []
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k2.dev\",\"turn\":\"turn.alice.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k5.dev\",\"zone\":\"k5.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k2.dev",
+            "turn": "turn.alice.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k5.dev",
+            "zone": "k5.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 5161388356332665,
+        "primaryZone": "k2.dev"
+      },
+      "name": "k5-active-k2-primary",
+      "note": "k5.dev active: it joins after k2.dev; no turn on k5.dev.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "pro",
+        "zones": [
+          "k5.dev",
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k5.dev\",\"zone\":\"k5.dev\"},{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice.k2.dev\",\"turn\":\"turn.alice.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k5.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k5.dev",
+            "zone": "k5.dev"
+          },
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice.k2.dev",
+            "turn": "turn.alice.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 2112223810027058,
+        "primaryZone": "k5.dev"
+      },
+      "name": "k5-active-k5-primary",
+      "note": "Relay primary k5.dev: k5.dev first and primaryZone.",
+      "primaryZone": "k5.dev",
+      "subdomain": {
+        "label": "alice",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "k5.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"pat.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"postal.bot\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "pat.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 3888417596747835,
+        "primaryZone": "postal.bot"
+      },
+      "name": "primary-not-on-label",
+      "note": "Label without the primary zone: primaryZone is its first zone.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "pat",
+        "tier": "pro",
+        "zones": [
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"staging.rosson.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "staging.rosson.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 670792805369045,
+        "primaryZone": "k2.dev"
+      },
+      "name": "nested-label",
+      "note": "Nested label: only nested zones, no turn.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "staging.rosson",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "nested-label-only-non-nested-zone",
+      "note": "Nested label in postal.bot only: none.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "staging.rosson",
+        "tier": "pro",
+        "zones": [
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "reserved-explicit",
+      "note": "Reserved base label (api): no names, none.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "api",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "reserved-short",
+      "note": "Two-char label is reserved.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "xy",
+        "tier": "free",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "reserved-numeric",
+      "note": "All-numeric label is reserved.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "1234",
+        "tier": "free",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "reserved-turn-prefix",
+      "note": "turn- prefix is reserved.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "turn-alice",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":null,\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesVersion": 3118105012120227
+      },
+      "name": "reserved-read-failed",
+      "note": "Reserved label on the built-in set: status omitted.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "api",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": null
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"turnip.k2.dev\",\"turn\":\"turn.turnip.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "turnip.k2.dev",
+            "turn": "turn.turnip.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 7545851659520662,
+        "primaryZone": "k2.dev"
+      },
+      "name": "turnip-not-reserved",
+      "note": "turnip is not the turn- prefix.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "turnip",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"sam.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "sam.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 648579177897005,
+        "primaryZone": "k2.dev"
+      },
+      "name": "single-tier-no-turn",
+      "note": "Single tier: no turn.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "sam",
+        "tier": "single",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"sam.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "sam.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 648579177897005,
+        "primaryZone": "k2.dev"
+      },
+      "name": "tier-is-case-sensitive",
+      "note": "Stored tier 'Pro' is not 'pro': free, no turn.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "sam",
+        "tier": "Pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"alice-smith.k2.dev\",\"turn\":\"turn.alice-smith.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"alice-smith.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "alice-smith.k2.dev",
+            "turn": "turn.alice-smith.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "alice-smith.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 6170413383868555,
+        "primaryZone": "k2.dev"
+      },
+      "name": "label-normalised",
+      "note": " Alice_Smith  -> alice-smith; row zones trimmed and lower-cased.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": " Alice_Smith ",
+        "tier": "pro",
+        "zones": [
+          " K2.DEV ",
+          "Postal.Bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"user.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "user.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 6786091482639019,
+        "primaryZone": "k2.dev"
+      },
+      "name": "label-garbage-becomes-user",
+      "note": "@@@ sanitises to 'user' (not reserved).",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "@@@",
+        "tier": "free",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.k2.dev\",\"turn\":\"turn.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.k2.dev",
+            "turn": "turn.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 4926512390448052,
+        "primaryZone": "k2.dev"
+      },
+      "name": "label-clamped-63",
+      "note": "A 70-char label is clamped to 63.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}",
+      "expect": {
+        "names": [],
+        "namesStatus": "none",
+        "namesVersion": 8244969387096288
+      },
+      "name": "unknown-zone-on-row",
+      "note": "Row lists a zone that is not in K2X: none after a real read.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "dave",
+        "tier": "pro",
+        "zones": [
+          "example.com"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":false,\"e2e\":true,\"mail\":true,\"nested\":true,\"voice\":false},\"fqdn\":\"app.erin.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":true,\"e2e\":false,\"mail\":true,\"nested\":true,\"voice\":true},\"fqdn\":\"app.erin.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": true,
+              "mail": true,
+              "nested": true,
+              "voice": false
+            },
+            "fqdn": "app.erin.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": false,
+              "mail": true,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "app.erin.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 5595050570154512,
+        "primaryZone": "k2.dev"
+      },
+      "name": "features-differences",
+      "note": "Custom features: postal.bot with voice+mail+nested, k2.dev without voice: no turn anywhere; nested label gets both.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "app.erin",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": false,
+            "e2e": true,
+            "mail": true,
+            "nested": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": true,
+            "e2e": false,
+            "mail": true,
+            "nested": true,
+            "voice": true
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":false},\"fqdn\":\"erin.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"erin.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": false
+            },
+            "fqdn": "erin.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "erin.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 2993359936762302,
+        "primaryZone": "k2.dev"
+      },
+      "name": "features-voice-off-k2",
+      "note": "k2.dev voice off: no turn even on Pro.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "erin",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "postal.bot"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"fay.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":true,\"voice\":false},\"fqdn\":\"fay.cloud.example.com\",\"zone\":\"cloud.example.com\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"fay.postal.bot\",\"zone\":\"postal.bot\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "fay.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": true,
+              "voice": false
+            },
+            "fqdn": "fay.cloud.example.com",
+            "zone": "cloud.example.com"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "fay.postal.bot",
+            "zone": "postal.bot"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 8992796691020683,
+        "primaryZone": "k2.dev"
+      },
+      "name": "features-malformed",
+      "note": "features null / array / non-bool values: all false.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "fay",
+        "tier": "pro",
+        "zones": [
+          "cloud.example.com",
+          "postal.bot",
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": null,
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": [
+            true
+          ],
+          "status": "active"
+        },
+        {
+          "apex": "cloud.example.com",
+          "features": {
+            "e2e": "true",
+            "mail": null,
+            "nested": true,
+            "voice": 1
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"gil.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "gil.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 3133484721456540,
+        "primaryZone": "k2.dev"
+      },
+      "name": "features-missing",
+      "note": "features key missing on a row: all false.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "gil",
+        "tier": "pro",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":false,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"hal.k2.dev\",\"turn\":\"turn.hal.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"hal.a.example.com\",\"zone\":\"a.example.com\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "hal.k2.dev",
+            "turn": "turn.hal.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "hal.a.example.com",
+            "zone": "a.example.com"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 8788116515047721,
+        "primaryZone": "k2.dev"
+      },
+      "name": "zone-rows-normalised",
+      "note": "Apex trimmed / lower-cased / trailing dots dropped, status trimmed + case-folded; dup and invalid apexes skipped; unknown status never served.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "hal",
+        "tier": "pro",
+        "zones": [
+          "k2.dev",
+          "live.example.com",
+          "leaving.example.com",
+          "a.example.com",
+          "bad.d3v"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": " K2.Dev.. ",
+          "features": {
+            "e2e": true,
+            "nested": true,
+            "voice": true
+          },
+          "status": " ACTIVE "
+        },
+        {
+          "apex": "k2.dev",
+          "features": {
+            "e2e": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "*.bad.dev",
+          "features": {},
+          "status": "active"
+        },
+        {
+          "apex": "nodot",
+          "features": {},
+          "status": "active"
+        },
+        {
+          "apex": "bad.d3v",
+          "features": {},
+          "status": "active"
+        },
+        {
+          "apex": "live.example.com",
+          "features": {},
+          "status": "live"
+        },
+        {
+          "apex": "leaving.example.com",
+          "features": {},
+          "status": "leaving"
+        },
+        {
+          "apex": "a.example.com",
+          "features": {
+            "nested": false
+          },
+          "status": "Active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"ida.k2.dev\",\"zone\":\"k2.dev\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"ida.aa.example.com\",\"zone\":\"aa.example.com\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"ida.postal.bot\",\"zone\":\"postal.bot\"},{\"features\":{\"apps_edge\":false,\"e2e\":false,\"mail\":false,\"nested\":false,\"voice\":false},\"fqdn\":\"ida.zz.example.com\",\"zone\":\"zz.example.com\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "ida.k2.dev",
+            "zone": "k2.dev"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "ida.aa.example.com",
+            "zone": "aa.example.com"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "ida.postal.bot",
+            "zone": "postal.bot"
+          },
+          {
+            "features": {
+              "apps_edge": false,
+              "e2e": false,
+              "mail": false,
+              "nested": false,
+              "voice": false
+            },
+            "fqdn": "ida.zz.example.com",
+            "zone": "zz.example.com"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 4493691923172653,
+        "primaryZone": "k2.dev"
+      },
+      "name": "zone-order",
+      "note": "Served order: primary first, then by apex (not the row's order).",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "ida",
+        "tier": "free",
+        "zones": [
+          "zz.example.com",
+          "postal.bot",
+          "aa.example.com",
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "zz.example.com",
+          "features": {},
+          "status": "active"
+        },
+        {
+          "apex": "aa.example.com",
+          "features": {},
+          "status": "active"
+        },
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"cafÉ.\\\"q\\\\\\u0001x.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "cafÉ.\"q\\\u0001x.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 2304420939960091,
+        "primaryZone": "k2.dev"
+      },
+      "name": "nested-escaping",
+      "note": "Nested labels are kept as stored (trimmed, ASCII lower-case only): JSON escaping must match.",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "  CafÉ.\"Q\\\u0001x\t ",
+        "tier": "free",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "canonical": "{\"names\":[{\"features\":{\"apps_edge\":true,\"e2e\":true,\"mail\":false,\"nested\":true,\"voice\":true},\"fqdn\":\"a.carol﻿.k2.dev\",\"zone\":\"k2.dev\"}],\"namesStatus\":\"ok\",\"primaryZone\":\"k2.dev\"}",
+      "expect": {
+        "names": [
+          {
+            "features": {
+              "apps_edge": true,
+              "e2e": true,
+              "mail": false,
+              "nested": true,
+              "voice": true
+            },
+            "fqdn": "a.carol﻿.k2.dev",
+            "zone": "k2.dev"
+          }
+        ],
+        "namesStatus": "ok",
+        "namesVersion": 7986286199210063,
+        "primaryZone": "k2.dev"
+      },
+      "name": "rust-trim-not-js-trim",
+      "note": "Rust trim drops U+0085 but keeps U+FEFF (JS String.trim does the opposite).",
+      "primaryZone": "k2.dev",
+      "subdomain": {
+        "label": "a.carol﻿",
+        "tier": "free",
+        "zones": [
+          "k2.dev"
+        ]
+      },
+      "zoneRows": [
+        {
+          "apex": "k2.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "active"
+        },
+        {
+          "apex": "postal.bot",
+          "features": {
+            "apps_edge": false,
+            "e2e": false,
+            "nested": false,
+            "terminate": true,
+            "voice": false
+          },
+          "status": "active"
+        },
+        {
+          "apex": "k5.dev",
+          "features": {
+            "apps_edge": true,
+            "e2e": true,
+            "nested": true,
+            "terminate": true,
+            "voice": true
+          },
+          "status": "pending"
+        }
+      ]
+    }
+  ],
+  "env": "K2C_RESERVED_EXTRA and K2C_RESERVED_ALLOW unset",
+  "format": 1,
+  "hash": [
+    {
+      "fnv1a53": 5239054864098085,
+      "input": ""
+    },
+    {
+      "fnv1a53": 1086646154030220,
+      "input": "a"
+    },
+    {
+      "fnv1a53": 5701457269057512,
+      "input": "foobar"
+    },
+    {
+      "fnv1a53": 8244969387096288,
+      "input": "{\"names\":[],\"namesStatus\":\"none\",\"primaryZone\":null}"
+    }
+  ],
+  "reservedLabels": [
+    "www",
+    "app",
+    "api",
+    "admin",
+    "dashboard",
+    "console",
+    "panel",
+    "portal",
+    "hub",
+    "status",
+    "health",
+    "healthz",
+    "metrics",
+    "monitor",
+    "grafana",
+    "prometheus",
+    "logs",
+    "log",
+    "debug",
+    "internal",
+    "system",
+    "root",
+    "ops",
+    "infra",
+    "ci",
+    "cd",
+    "build",
+    "registry",
+    "git",
+    "repo",
+    "ns",
+    "ns1",
+    "ns2",
+    "mx",
+    "mail",
+    "smtp",
+    "imap",
+    "pop",
+    "pop3",
+    "webmail",
+    "email",
+    "ftp",
+    "sftp",
+    "dns",
+    "cdn",
+    "edge",
+    "origin",
+    "gateway",
+    "proxy",
+    "vhost",
+    "static",
+    "assets",
+    "media",
+    "img",
+    "images",
+    "files",
+    "download",
+    "downloads",
+    "acme",
+    "_acme-challenge",
+    "ssl",
+    "tls",
+    "cert",
+    "certs",
+    "ca",
+    "secure",
+    "login",
+    "logout",
+    "signin",
+    "signup",
+    "register",
+    "auth",
+    "oauth",
+    "sso",
+    "account",
+    "accounts",
+    "billing",
+    "pay",
+    "payment",
+    "payments",
+    "checkout",
+    "pricing",
+    "subscribe",
+    "token",
+    "verify",
+    "verification",
+    "k2",
+    "k2dev",
+    "k2connect",
+    "connect",
+    "companion",
+    "daemon",
+    "server",
+    "tunnel",
+    "alakazam",
+    "alakazamlabs",
+    "push",
+    "postal",
+    "postalbot",
+    "about",
+    "contact",
+    "legal",
+    "terms",
+    "tos",
+    "privacy",
+    "careers",
+    "jobs",
+    "press",
+    "brand",
+    "blog",
+    "docs",
+    "doc",
+    "help",
+    "support",
+    "kb",
+    "home",
+    "landing",
+    "dev",
+    "test",
+    "testing",
+    "staging",
+    "stage",
+    "prod",
+    "production",
+    "beta",
+    "alpha",
+    "demo",
+    "sandbox",
+    "preview",
+    "abuse",
+    "postmaster",
+    "hostmaster",
+    "webmaster",
+    "security",
+    "noc",
+    "noreply",
+    "no-reply",
+    "info",
+    "sales",
+    "hello"
+  ]
+}

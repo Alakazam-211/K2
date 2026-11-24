@@ -571,6 +571,11 @@ pub fn version() -> Option<u64> {
     lock().held.as_ref().map(BoxNames::version)
 }
 
+// The shared names vectors (K2 Web's block), run through the parser.
+#[cfg(test)]
+#[path = "names_vectors_tests.rs"]
+mod vectors_tests;
+
 /// Forget the in-memory state, as at a daemon start (tests).
 #[cfg(test)]
 pub(crate) fn reset_for_test() {

@@ -85,7 +85,7 @@ fn rich(tag: &str) -> std::path::PathBuf {
     write(&d, "keep.txt", lines(40, "keep"));
     write(&d, "gone.txt", "bye\nnow\n");
     write(&d, "rename_src.txt", lines(12, "moving"));
-    write(&d, "bin.dat", b"\0\x01\x02binary\0".to_vec());
+    write(&d, "bin.dat", b"\0\x01\x02binary\0");
     write(&d, "unicodé 名前.txt", "héllo\nwörld\n");
     write(&d, "big.txt", lines(2000, "big"));
     write(&d, "no_newline.txt", "first\nlast without newline");
@@ -112,7 +112,7 @@ fn rich(tag: &str) -> std::path::PathBuf {
     moved.push_str("moving tail\n");
     write(&d, "renamed.txt", &moved);
     fx::stage(&d, "renamed.txt");
-    write(&d, "bin.dat", b"\0\x01\x03binary changed\0".to_vec());
+    write(&d, "bin.dat", b"\0\x01\x03binary changed\0");
     write(&d, "unicodé 名前.txt", "héllo\nwörld\n!\n");
     let mut big: Vec<String> = lines(2000, "big").lines().map(str::to_string).collect();
     big[100] = "big staged".into();
@@ -223,10 +223,13 @@ fn oracle_status_matches_git_porcelain() {
     }
 }
 
+/// One hunk: old start and count, new start and count, its lines.
+type Hunk = (u32, u32, u32, u32, Vec<(LineKind, Vec<u8>)>);
+
 /// `git diff -U3` hunks of one file (index → work tree).
-fn git_hunks(d: &Path, file: &str) -> Vec<(u32, u32, u32, u32, Vec<(LineKind, Vec<u8>)>)> {
+fn git_hunks(d: &Path, file: &str) -> Vec<Hunk> {
     let raw = fx::git_raw(d, &["diff", "-U3", "--no-ext-diff", "--no-textconv", "--no-color", "--", file]);
-    let mut out: Vec<(u32, u32, u32, u32, Vec<(LineKind, Vec<u8>)>)> = Vec::new();
+    let mut out: Vec<Hunk> = Vec::new();
     let lines: Vec<&[u8]> = raw.split_inclusive(|b| *b == b'\n').collect();
     let num = |s: &str| -> (u32, u32) {
         let mut it = s.splitn(2, ',');
@@ -306,10 +309,10 @@ fn oracle_unborn_and_empty_repos() {
 fn stats_stop_at_the_size_cap_and_flag_binary() {
     let d = fx::init("oracle-cap");
     write(&d, "huge.txt", "x\n".repeat(10));
-    write(&d, "bin.dat", b"\0\0\0".to_vec());
+    write(&d, "bin.dat", b"\0\0\0");
     fx::commit_all(&d, "c1");
     write(&d, "huge.txt", "y\n".repeat(600_000));
-    write(&d, "bin.dat", b"\0\0\0\0".to_vec());
+    write(&d, "bin.dat", b"\0\0\0\0");
     let repo = super::discover(&d).expect("repo");
     let changes = diff::index_to_worktree(&repo).expect("i2w");
     let mut reader = diff::WorktreeReader::new(&repo).expect("reader");

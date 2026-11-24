@@ -316,10 +316,11 @@ pub fn tree_to_worktree(repo: &gix::Repository, tree: Option<gix::ObjectId>, ren
         };
         // A work-tree file that came back to the tree's content is no change.
         if let (Side::Object { kind: ko, id: io }, Side::Worktree { kind: kn }) = (&old, &new) {
-            if ko == kn && kn.is_blob() || *ko == EntryKind::Link && *kn == EntryKind::Link {
-                if reader.blob_id(&r.path).as_ref() == Some(io) && r.renamed_from.is_none() {
-                    continue;
-                }
+            if (ko == kn && kn.is_blob() || *ko == EntryKind::Link && *kn == EntryKind::Link)
+                && reader.blob_id(&r.path).as_ref() == Some(io)
+                && r.renamed_from.is_none()
+            {
+                continue;
             }
         }
         if let (Side::Object { kind: ko, id: io }, Side::Object { kind: kn, id: inn }) = (&old, &new) {

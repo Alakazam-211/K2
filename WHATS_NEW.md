@@ -92,6 +92,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Permission cards
 - **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
+- **Agents can ask on a card to switch a compute node's "pinned jobs only" mode.** `k2 compute node pinned-only <node> on|off` is still the owner's or an admin's, and an agent (one that may manage compute nodes too) is refused. Its refusal now ends with `Ask with: k2 permission request compute.node.pinned-only node=<node> on=true|false` instead of pointing at "Let this agent manage compute nodes", which was no help. The card shows the node, the change and the agent's reason. An owner or admin turns it on or off with one tap, as themselves, and the Access Audit names the agent that asked. Deny changes nothing.
 
 ### Wiki
 - If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
@@ -107,11 +108,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 terminal spawn` in a workspace's folder no longer ends that workspace's chat.** With `--cwd` (or the project path) pointing at a workspace, the new terminal took the workspace's own session: its pinned chat was stopped and the command ran in its place. Every spawn now starts a terminal of its own beside the chat, also when you spawn with the same `--agent` again.
 - **Messages to agents on other servers retry briefly when the other server is busy, and say clearly if they still couldn't be delivered.** `k2 msg <agent>::<host>` (live text and `--inbox-wake` / `--inbox-silent` files) asks the other server up to three times, a few seconds apart, when it doesn't answer or answers that it is busy; a refusal (such as 401 or 403) is never asked again. A send that still fails exits non-zero with one line naming the server, the step (roster or send), the attempts and the last error, and says nothing was delivered and to send again; for a file package it names every file. A message that reached this server's outbox but not the other server still says QUEUED (not delivered yet), for file packages too, and K2 delivers it from the outbox later. A retry never delivers a message twice.
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it.
-## 0.46.18
-
-### Permission cards
-- **Agents can ask on a card to switch a compute node's "pinned jobs only" mode.** `k2 compute node pinned-only <node> on|off` is still the owner's or an admin's, and an agent (one that may manage compute nodes too) is refused. Its refusal now ends with `Ask with: k2 permission request compute.node.pinned-only node=<node> on=true|false` instead of pointing at "Let this agent manage compute nodes", which was no help. The card shows the node, the change and the agent's reason. An owner or admin turns it on or off with one tap, as themselves, and the Access Audit names the agent that asked. Deny changes nothing.
-
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

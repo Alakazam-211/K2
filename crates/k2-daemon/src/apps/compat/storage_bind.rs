@@ -18,6 +18,7 @@
 use super::door_config::DoorConfig;
 use super::storage_err::{SResult, StorageError};
 use super::storage_pg::PgTarget;
+use k2_core::brand::CLI_NAME;
 
 /// The App's door settings, if compat is on for it.
 pub fn config(app_id: &str) -> Option<DoorConfig> {
@@ -73,9 +74,8 @@ pub async fn install_schema(db: &str) -> SResult<()> {
         .collect();
     if !missing.is_empty() {
         return Err(StorageError::unavailable(format!(
-            "the cluster has no {} role yet: turn the Supabase-compatible layer on first ({cli} app compat on)",
-            missing.join(", "),
-            cli = k2_core::brand::CLI_NAME
+            "the cluster has no {} role yet: turn the Supabase-compatible layer on first ({CLI_NAME} app compat on)",
+            missing.join(", ")
         )));
     }
     c.batch_execute(super::storage_sql::SCHEMA).await.map_err(super::storage_pg::pgerr)?;

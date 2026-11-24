@@ -1439,7 +1439,7 @@ pub(crate) fn ask_command(action: &str, params: &Map<String, Value>) -> String {
 
 /// [`ask_command`] with the command's name as a value.
 fn ask_command_named(cli: &str, action: &str, params: &Map<String, Value>) -> String {
-    format!("{cli} {}", ask_tail(action, params))
+    format!("{} {}", cli, ask_tail(action, params))
 }
 
 /// The Ask line after the command's name, quoted for a shell: the one

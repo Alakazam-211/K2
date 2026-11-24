@@ -789,6 +789,7 @@ pub(crate) fn bad_sender_response() -> CliResponse {
 /// The peer free-text rule, one definition in k2-core (the roster heal
 /// uses it too).
 pub(crate) use k2_core::federation::{escape_capped, PEER_TEXT_CAP};
+use k2_core::brand::PRODUCT_NAME;
 
 /// A peer's raw `reason` for this daemon's log only: the first 200
 /// characters, every character outside printable ASCII escaped.
@@ -1814,15 +1815,13 @@ fn tray_queued_hint(
     let hint = if v.get("delivery").and_then(|d| d.as_str()) == Some(DELIVERY_UNKNOWN) {
         // 0.46.18: the POST may have reached the peer.
         format!(
-            "{} for {agent}::{host} may or may not have been delivered{why}. {product} retries it from this server's outbox (next try in about 30 s); check with them before sending it again.",
+            "{} for {agent}::{host} may or may not have been delivered{why}. {PRODUCT_NAME} retries it from this server's outbox (next try in about 30 s); check with them before sending it again.",
             tray_parts(spec),
-            product = k2_core::brand::PRODUCT_NAME,
         )
     } else {
         format!(
-            "{} for {agent}::{host} is not delivered yet{why}. {product} retries it from this server's outbox (next try in about 30 s); don't send it again.",
+            "{} for {agent}::{host} is not delivered yet{why}. {PRODUCT_NAME} retries it from this server's outbox (next try in about 30 s); don't send it again.",
             tray_parts(spec),
-            product = k2_core::brand::PRODUCT_NAME,
         )
     };
     v["hint"] = serde_json::json!(hint);

@@ -36,7 +36,7 @@ use serde_json::{json, Value as J};
 use super::egress_routes::codes;
 use crate::cli_response::CliResponse;
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
@@ -528,9 +528,7 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
             403,
             format!(
                 "only the owner approves a change to a box-wide role (every login holding it gets it, box logins too): \
-                 an admin can't. The owner approves it in the {product} app (Settings → App Approvals) or with {cli} app approve <id> from a terminal outside {product}.",
-                product = k2_core::brand::PRODUCT_NAME,
-                cli = k2_core::brand::CLI_NAME,
+                 an admin can't. The owner approves it in the {PRODUCT_NAME} app (Settings → App Approvals) or with {CLI_NAME} app approve <id> from a terminal outside {PRODUCT_NAME}.",
             ),
         ));
     }

@@ -203,7 +203,7 @@ fn normalize_cli(cli: &str) -> Result<String, SidecarError> {
         Err(err(
             "bad_request",
             400,
-            format!("unknown cli '{cli}' (claude, codex, grok, gemini, cursor, pi, hermes)"),
+            format!("unknown cli '{}' (claude, codex, grok, gemini, cursor, pi, hermes)", cli),
         ))
     }
 }
@@ -681,7 +681,7 @@ fn preset_for(cli: &str, harness: Option<&str>) -> Result<core::HarnessPreset, S
             return Err(err(
                 "cli_mismatch",
                 409,
-                format!("this conversation is a {cli} chat; preset '{}' runs {}", p.label, p.provider),
+                format!("this conversation is a {} chat; preset '{}' runs {}", cli, p.label, p.provider),
             ));
         }
         return Ok(p);
@@ -695,7 +695,7 @@ fn preset_for(cli: &str, harness: Option<&str>) -> Result<core::HarnessPreset, S
     }
     core::resolve_preset(&conn, cli).map_err(|e| {
         if e.code == "harness_unknown" {
-            err("harness_not_installed", 409, format!("no enabled {cli} preset (k2 preset list)"))
+            err("harness_not_installed", 409, format!("no enabled {} preset (k2 preset list)", cli))
         } else {
             e
         }
@@ -1010,7 +1010,7 @@ pub fn handle_open(caller: &Caller, v: &Value, extra: OpenExtra) -> Result<Opene
         let conn = db.lock();
         core::meta(&conn, &ws.id, &pg).and_then(|m| m.created_by)
     };
-    log_debug!("[sessions-open] {address} pg={pg} cli={cli} conversation={cid} new_row={new_row}");
+    log_debug!("[sessions-open] {address} pg={pg} cli={} conversation={cid} new_row={new_row}", cli);
     Ok(Opened {
         body: json!({
             "ok": true,

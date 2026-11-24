@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use sha2::{Digest, Sha256};
 
 use super::actor::GuestActor;
 use super::paths::{resolve_in_path, resolve_out_path, InPathError};
 use super::secrets::{generate_secret, SecretStore};
 use super::supervisor::current_status;
-use super::cluster::{self, Cluster};
-use super::sysops::SystemOps;
+use super::{cluster::{self, Cluster}, sysops::SystemOps};
 
 #[derive(Debug)]
 pub enum OpsError {
@@ -1522,7 +1522,7 @@ pub fn dsn_for_db(
         Err(OpsError::NotFound(_)) => {}
         Err(e) => return Err(e),
     }
-    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to this workspace — see '{cli} db list' (another workspace's: {cli} db browse, then {cli} db request-read --db <name>)", spec.trim(), cli = k2_core::brand::CLI_NAME));
+    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to this workspace — see '{CLI_NAME} db list' (another workspace's: {CLI_NAME} db browse, then {CLI_NAME} db request-read --db <name>)", spec.trim()));
     let row = find_database(spec, None).map_err(|e| match e {
         OpsError::NotFound(_) => missing(),
         other => other,
@@ -2996,8 +2996,7 @@ fn normalize_relations(raw: &[String]) -> Result<Vec<(String, String)>, OpsError
         // read only through K2's SECURITY DEFINER functions.
         if schema == "k2" || schema == "auth" {
             return Err(OpsError::Usage(format!(
-                "relation {trimmed:?} is in {product}'s own schema {schema}: it can't be granted (auth.users is read through your own SECURITY DEFINER functions)",
-                product = k2_core::brand::PRODUCT_NAME
+                "relation {trimmed:?} is in {PRODUCT_NAME}'s own schema {schema}: it can't be granted (auth.users is read through your own SECURITY DEFINER functions)"
             )));
         }
         if out.iter().any(|(s, n)| s == &schema && n == &name) {

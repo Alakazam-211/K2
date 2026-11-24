@@ -342,6 +342,43 @@ rows "1 glued crates/b/src/lib.rs debt: should move"
 crun 1 "a glued row is always 'keeper: <who reads this name>'"
 rows
 
+# The slot rule (B7 trap 1): a {cli} or {product} slot in a format-family
+# macro's format string is a capture, and fails with no row to allow it,
+# in code and tests alike. {{cli}} is the slot's form there; a plain
+# literal, a json! value, a .replace pattern and a value compared by
+# assert_eq! are not format strings. The k5 CLI and the brand crate are not
+# read.
+slot() {
+    local file="$1" body="$2" hole="$3"
+    mkdir -p "$(dirname "$C/$file")"
+    printf '%s\n' "$body" > "$C/$file"
+    crun 1 "$file:1 has the slot $hole in a format string, where Rust reads it as a capture: in a format string write the slot {{cli}} or {{product}}"
+    rm "$C/$file"
+}
+slot crates/b/src/s.rs 'fn s(cli: &str) -> String { format!("run {cli} app list") }' '{cli}'
+slot crates/b/src/s.rs 'fn s() -> String { format!("in {product}, run x", product = PRODUCT_NAME) }' '{product}'
+slot crates/b/src/s.rs 'fn s(w: &mut String, cli: &str) { let _ = writeln!(w, "{cli:>8} x"); }' '{cli:>8}'
+slot crates/b/src/s.rs 'fn s(cli: &str) { log_debug!("open cli={cli}"); }' '{cli}'
+slot crates/b/src/s.rs 'fn s(cli: &str) -> Result<(), E> { bail!("no {cli} here") }' '{cli}'
+slot crates/b/src/s.rs 'fn s(x: bool, cli: &str) { assert!(x, "{cli}"); }' '{cli}'
+slot crates/b/src/s.rs 'fn s(cli: &str) { tracing::warn!(target: "t", n = 1, "a {cli}"); }' '{cli}'
+slot crates/b/tests/it.rs 'fn s(cli: &str) -> String { format!("K2CLI={cli}") }' '{cli}'
+slot src-tauri/src/s.rs 'fn s(cli: &str) -> String { std::format!("{cli} x") }' '{cli}'
+cat > "$C/crates/b/src/s.rs" <<'RS'
+fn s(cli: &str, t: &str) -> Vec<String> {
+    let a = json!({"hintTemplate": "run {cli} app list from outside {product}"});
+    let b = "run {cli} x".replace("{cli}", CLI_NAME);
+    assert_eq!(t, "run {cli} x", "{t}");
+    vec![format!("run {{cli}} app list in {{product}}, here {CLI_NAME} {PRODUCT_NAME} {}", cli), format!("{t}"), b]
+}
+const T: &str = "run {cli} app list";
+RS
+mkdir -p "$C/crates/k5-cli/src" "$C/crates/k2-brand/src"
+printf 'fn s(cli: &str) -> String { format!("{cli}: no such command") }\n' > "$C/crates/k5-cli/src/s.rs"
+printf 'fn s(product: &str) -> String { format!("{product} Server") }\n' > "$C/crates/k2-brand/src/s.rs"
+crun 0 "brand-gate: ok (no {cli} or {product} slot in a format string)."
+rm -r "$C/crates/b/src/s.rs" "$C/crates/k5-cli" "$C/crates/k2-brand/src/s.rs"
+
 # Gate 2, value, in the bash CLI's parts (cli/src, and cli/text where it
 # exists): a line where the flip finds a string that is exactly the name, or
 # the name as a word in shell code. The flip calls both kept; the row holds

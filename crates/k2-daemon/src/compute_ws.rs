@@ -46,6 +46,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::compute_hold as hold;
 use crate::routes::dispatcher::Ingress;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ATTACH_PATH: &str = "/cli/compute/attach";
 pub const ENROLL_PATH: &str = "/cli/compute/enroll";
@@ -1716,9 +1717,8 @@ pub fn settle_unanswered(node_id: &str, j: &store::JobRow, ask: &store::NodeAsk,
     };
     if ask.marker == pending::CANCEL {
         let detail = format!(
-            "{name} hasn't answered the cancel in {}; {cli} compute cancel {short} --force stops it",
-            k2_core::compute::attempts::ask_settle_words(),
-            cli = k2_core::brand::CLI_NAME
+            "{name} hasn't answered the cancel in {}; {CLI_NAME} compute cancel {short} --force stops it",
+            k2_core::compute::attempts::ask_settle_words()
         );
         if j.detail.as_deref() != Some(detail.as_str()) {
             let db = k2_core::db::shared();
@@ -2880,14 +2880,12 @@ pub fn artifacts_upgrade_hint(node_id: &str, offer: &Offer) -> String {
     let who = match node.as_ref().filter(|n| n.is_tenant()) {
         Some(n) => format!("it belongs to {}, so that server's owner updates it", n.owner_label.as_deref().unwrap_or("the server that shares it with you")),
         None => format!(
-            "its owner updates it on that machine (sudo k2-node setup) or from here ({cli} compute node update {name})",
-            cli = k2_core::brand::CLI_NAME
+            "its owner updates it on that machine (sudo k2-node setup) or from here ({CLI_NAME} compute node update {name})"
         ),
     };
     format!(
-        "node '{name}' runs {runs}, which can't send artifacts (this server runs {product} {}): the node needs the update, not this server; {who}",
-        env!("CARGO_PKG_VERSION"),
-        product = k2_core::brand::PRODUCT_NAME
+        "node '{name}' runs {runs}, which can't send artifacts (this server runs {PRODUCT_NAME} {}): the node needs the update, not this server; {who}",
+        env!("CARGO_PKG_VERSION")
     )
 }
 

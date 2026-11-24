@@ -17,6 +17,7 @@ use std::time::Duration;
 use super::login_path;
 #[cfg(unix)]
 use super::path_env;
+use crate::brand::PRODUCT_NAME;
 
 /// How long the installer may run before its process group is killed.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
@@ -74,8 +75,7 @@ fn no_installer(program: &str) -> String {
     }
     if cfg!(windows) && program == "agy" {
         return format!(
-            "agy has no Windows installer {product} can run; install it from antigravity.google, then try again",
-            product = crate::brand::PRODUCT_NAME
+            "agy has no Windows installer {PRODUCT_NAME} can run; install it from antigravity.google, then try again"
         );
     }
     format!("unknown program: {program}")

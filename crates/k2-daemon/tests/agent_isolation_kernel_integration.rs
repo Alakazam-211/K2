@@ -376,7 +376,7 @@ echo "cgroup_after $(cat /proc/self/cgroup)" >> $R
 unshare -U -m true > out 2> err; echo "unshare_rc $? $(cat err)" >> $R
 sudo -n true > out 2> err; echo "sudo_rc $? $(cat err)" >> $R
 # Its own k2 call goes over its session socket (the CLI's own route).
-bash -x {cli} whoami --json > k2.out 2> k2.err; echo "k2_whoami_rc $? $(cat k2.out | tr '\n' ' ' | cut -c1-300) trace: $(grep -v "^+* *_" k2.err | tail -n 12 | tr '\n' ' ' | cut -c1-900)" >> $R
+bash -x {cli_path} whoami --json > k2.out 2> k2.err; echo "k2_whoami_rc $? $(cat k2.out | tr '\n' ' ' | cut -c1-300) trace: $(grep -v "^+* *_" k2.err | tail -n 12 | tr '\n' ' ' | cut -c1-900)" >> $R
 echo "phase1 done" >> $R
 # 5. A stolen passport is worthless.
 while [ ! -f {ws}/stolen ]; do sleep 0.2; done
@@ -386,7 +386,7 @@ code=$(curl -s -o o2 -w '%{{http_code}}' --unix-socket "$STOLEN_SOCK" -H "Author
 code=$(curl -s -o o3 -w '%{{http_code}}' -H "Authorization: Bearer $STOLEN_TOKEN" http://127.0.0.1:$PORT/cli/whoami); echo "stolen_over_tcp $code $(cat o3)" >> $R
 code=$(curl -s -o o4 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $STOLEN_TOKEN" http://localhost/cli/whoami); echo "stolen_on_own_socket $code $(cat o4)" >> $R
 code=$(curl -s -o o5 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "own_on_own_socket $code $(cat o5 | cut -c1-300)" >> $R
-bash {cli} capabilities --json > o9 2>&1; echo "own_cli_rc $? $(cat o9 | tr '\n' ' ' | cut -c1-300)" >> $R
+bash {cli_path} capabilities --json > o9 2>&1; echo "own_cli_rc $? $(cat o9 | tr '\n' ' ' | cut -c1-300)" >> $R
 # A request the socket doesn't serve, with no X-K2-Via-Tcp (a client that
 # used to take "not served" to TCP): the socket hands it on itself.
 code=$(curl -s -o o12 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -X POST -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "unserved_handed_on $code $(cut -c1-200 o12)" >> $R
@@ -421,7 +421,7 @@ exec sleep 3600
         sibling = sibling.display(),
         sib_cg = sibling_cgroup.display(),
         k2_home = k2_home.display(),
-        cli = cli.display(),
+        cli_path = cli.display(),
         bpid = sibling_pid,
     )
 }
@@ -1483,7 +1483,7 @@ systemd-run --user --quiet --scope -- true > {a}/o4 2>&1; echo "user_scope $? $(
 tmux -S {tmux} new-window -d "touch {a}/p7" > {a}/o5 2>&1; echo "tmux_new_window $? $(head -c 200 {a}/o5 | tr '\n' ' ')" >> $R
 sleep 2; test -e {a}/p7; echo "tmux_window_ran $?" >> $R
 code=$(curl -s -o {a}/o6 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "hook $code" >> $R
-bash {cli} capabilities --json > {a}/o7 2>&1; echo "own_cli $? $(head -c 200 {a}/o7 | tr '\n' ' ')" >> $R
+bash {cli_path} capabilities --json > {a}/o7 2>&1; echo "own_cli $? $(head -c 200 {a}/o7 | tr '\n' ' ')" >> $R
 ( ( sleep 1; curl -s -o /dev/null -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities > {a}/df 2>&1 ) & )
 sleep 3; echo "doublefork $(cat {a}/df 2>/dev/null || echo none)" >> $R
 if command -v node > /dev/null; then
@@ -1509,7 +1509,7 @@ echo "done" >> $R; exec sleep 3600
         rt = rt.display(),
         bus = bus.display(),
         tmux = tmux.display(),
-        cli = cli.display(),
+        cli_path = cli.display(),
         port = port,
         prlimit = u8::from(prlimit),
     )

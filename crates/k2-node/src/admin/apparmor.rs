@@ -20,6 +20,7 @@
 //! is loaded and no unit names it.
 
 use std::path::Path;
+use k2_brand::PRODUCT_NAME;
 
 /// The profile's name (what `AppArmorProfile=` names).
 pub const PROFILE: &str = "k2-job-userns";
@@ -286,8 +287,7 @@ pub fn doctor_line_for(loaded: bool, on_disk: bool) -> Option<String> {
 /// The refusal text when it can't be loaded: why, and the fix.
 pub fn unavailable(why: &str) -> String {
     format!(
-        "this node's kernel restricts user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and {product} couldn't load its AppArmor profile for --userns jobs ({why}). The node's owner can fix it: install AppArmor's tools (apparmor_parser) and run the job again, or load the profile by hand with: sudo apparmor_parser -r {PROFILE_PATH}",
-        product = k2_brand::PRODUCT_NAME,
+        "this node's kernel restricts user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and {PRODUCT_NAME} couldn't load its AppArmor profile for --userns jobs ({why}). The node's owner can fix it: install AppArmor's tools (apparmor_parser) and run the job again, or load the profile by hand with: sudo apparmor_parser -r {PROFILE_PATH}",
     )
 }
 

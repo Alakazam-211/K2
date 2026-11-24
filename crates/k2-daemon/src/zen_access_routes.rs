@@ -55,6 +55,7 @@ use k2_core::zen::{ZenError, ZenFile, ZenFiles};
 use crate::cli_response::CliResponse;
 use crate::zen_garden_cards::{self as cards, GardenAsk};
 use crate::sidecar_routes::Caller;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// `GET` the list (the person) or whether you're on it (a passport);
 /// `POST {garden, agent, allow}` changes it (the person).
@@ -1024,13 +1025,12 @@ pub(crate) fn carry_review(widget: &str, hash: &str) -> J {
         Some(d) => {
             // `ask` with this server's name, and `askTail`, the same line
             // after the name: a CLI puts its own in front (white-label C5).
-            let (cli, product) = (k2_core::brand::CLI_NAME, k2_core::brand::PRODUCT_NAME);
             let tail = format!("zen widget sign {widget} --ask");
             json!({
                 "changes": format!("Since it was signed, this widget {d}."),
-                "ask": format!("{cli} {tail}"),
+                "ask": format!("{CLI_NAME} {tail}"),
                 "askTail": tail,
-                "message": format!("{product} kept {widget}'s signature at upgrade although its manifest changed after it was signed; ask the person to look: {cli} {tail}"),
+                "message": format!("{PRODUCT_NAME} kept {widget}'s signature at upgrade although its manifest changed after it was signed; ask the person to look: {CLI_NAME} {tail}"),
             })
         }
         None => J::Null,

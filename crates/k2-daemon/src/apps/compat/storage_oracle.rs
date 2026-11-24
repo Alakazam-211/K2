@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::storage_real_pg::{call, person, req, storage_app, Server};
+use k2_core::brand::PRODUCT_NAME;
 
 /// Differences K2 and Supabase agree to have: `(step, what)`. Empty.
 const AGREED: &[(&str, &str)] = &[];
@@ -265,14 +266,14 @@ async fn oracle_storage_diff() {
         let (kj, oj) = (norm(&body_of(&kb)), norm(&body_of(&ob)));
         let mut what = Vec::new();
         if ks != os {
-            what.push(format!("status {product} {ks} vs Supabase {os}", product = k2_core::brand::PRODUCT_NAME));
+            what.push(format!("status {PRODUCT_NAME} {ks} vs Supabase {os}"));
         }
         if kj != oj {
-            what.push(format!("body\n      {product}:       {kj}\n      Supabase: {oj}", product = k2_core::brand::PRODUCT_NAME));
+            what.push(format!("body\n      {PRODUCT_NAME}:       {kj}\n      Supabase: {oj}"));
         }
         for h in s.compare_headers {
             if kh.get(*h) != oh2.get(*h) {
-                what.push(format!("header {h}: {product} {:?} vs Supabase {:?}", kh.get(*h), oh2.get(*h), product = k2_core::brand::PRODUCT_NAME));
+                what.push(format!("header {h}: {PRODUCT_NAME} {:?} vs Supabase {:?}", kh.get(*h), oh2.get(*h)));
             }
         }
         for w in what {

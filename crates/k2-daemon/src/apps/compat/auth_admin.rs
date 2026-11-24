@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use super::auth_door_v1::{gerr, user_json, API_VERSION};
 use super::door::Ctx;
 use super::http::{DoorAnswer, DoorRequest};
+use k2_core::brand::PRODUCT_NAME;
 
 fn ok(status: u16, v: Value) -> DoorAnswer {
     DoorAnswer::json(status, &v).header("x-supabase-api-version", API_VERSION)
@@ -134,7 +135,7 @@ pub fn route(req: &DoorRequest, ctx: &Ctx, key_id: &str, grant: &AppKeyGrant, q:
                 _ => Err(gerr(405, "method_not_allowed", "GET, PUT or DELETE")),
             }
         }
-        _ => Err(gerr(404, "not_found", format!("{} /auth/v1/admin{rest}: not supported by {product}", req.method, product = k2_core::brand::PRODUCT_NAME))),
+        _ => Err(gerr(404, "not_found", format!("{} /auth/v1/admin{rest}: not supported by {PRODUCT_NAME}", req.method))),
     };
     let a = r.unwrap_or_else(|a| a);
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
@@ -239,7 +240,7 @@ fn generate_link(req: &DoorRequest, ctx: &Ctx, actor: &str) -> Result<DoorAnswer
     let purpose = match kind {
         "invite" => skin::invites::PURPOSE_INVITE,
         "recovery" => skin::invites::PURPOSE_RESET,
-        k => return Err(gerr(422, "not_supported", format!("generate_link type {k} is not supported by {product} (invite and recovery are)", product = k2_core::brand::PRODUCT_NAME))),
+        k => return Err(gerr(422, "not_supported", format!("generate_link type {k} is not supported by {PRODUCT_NAME} (invite and recovery are)"))),
     };
     let email = v.get("email").and_then(Value::as_str).map(str::trim).filter(|e| !e.is_empty()).ok_or_else(|| gerr(400, "validation_failed", "email is required"))?;
     let email = skin::normalize_email(email).map_err(|e| gerr(400, "validation_failed", e))?.unwrap_or_default();

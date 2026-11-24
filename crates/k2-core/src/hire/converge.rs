@@ -11,6 +11,7 @@ use serde::Deserialize;
 use super::recipe::{InlineLayer, WikiNote};
 use super::steps::{self, PersonaSource};
 use super::{HireCaller, HireError};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The converge request (the `/v1/w` body; the CLI sends the same shape).
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -259,10 +260,8 @@ fn exists_refusal(path: &Path, what: &str) -> HireError {
         403,
         "owner_only",
         format!(
-            "{} {what}. An agent's hire only makes a new workspace: pick a folder that doesn't exist yet (or another --name). A person changes an existing workspace: Settings → Workspaces / Agents → (workspace), or `{cli} agent hire <dir>` from a terminal outside a {product} agent session.",
+            "{} {what}. An agent's hire only makes a new workspace: pick a folder that doesn't exist yet (or another --name). A person changes an existing workspace: Settings → Workspaces / Agents → (workspace), or `{CLI_NAME} agent hire <dir>` from a terminal outside a {PRODUCT_NAME} agent session.",
             path.display(),
-            cli = crate::brand::CLI_NAME,
-            product = crate::brand::PRODUCT_NAME,
         ),
     )
 }

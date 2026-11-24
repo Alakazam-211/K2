@@ -13,6 +13,7 @@
 use serde_json::{json, Value as J};
 
 use super::copy::{parse_text_array, CopyTable};
+use k2_core::brand::CLI_NAME;
 
 /// One migration, renamed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,9 +69,8 @@ pub fn plan(t: &CopyTable) -> Result<Vec<Mapped>, String> {
     for (i, (version, name, statements)) in rows.into_iter().enumerate() {
         let k2_version = format!("{:04}_{}", i + 1, slug(name.as_deref().unwrap_or("migration")));
         let mut sql = format!(
-            "-- Supabase migration {version}{} ({cli} db import supabase). Already applied: {cli} db migrate skips it.\n",
-            name.as_deref().map(|n| format!("_{n}")).unwrap_or_default(),
-            cli = k2_core::brand::CLI_NAME
+            "-- Supabase migration {version}{} ({CLI_NAME} db import supabase). Already applied: {CLI_NAME} db migrate skips it.\n",
+            name.as_deref().map(|n| format!("_{n}")).unwrap_or_default()
         );
         match statements {
             Some(list) if !list.is_empty() => {

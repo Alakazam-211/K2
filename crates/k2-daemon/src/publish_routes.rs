@@ -14,6 +14,7 @@ use crate::cli::{need_project, opt_param, str_param};
 use crate::cli_response::CliResponse;
 use crate::label_owner;
 use crate::publish_runtime::{self, ProbeTimeout, PublishError, RunSpec};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 const FOREIGN_STICKER: &str =
     "label_owned_by_other_workspace: not yours; ask the server owner to transfer it";
@@ -1487,10 +1488,8 @@ fn handle_expose(params: &HashMap<String, String>) -> CliResponse {
             "403 Forbidden",
             "owner_only",
             &format!(
-                "{cli} publish expose is the owner's: a service that listens beyond this server skips its front door (:443) and any sign-in. \
-                 Ask your human to run it from a terminal outside {product}. To listen on this server only, use HOST and PORT ({product} sets them).",
-                cli = k2_core::brand::CLI_NAME,
-                product = k2_core::brand::PRODUCT_NAME,
+                "{CLI_NAME} publish expose is the owner's: a service that listens beyond this server skips its front door (:443) and any sign-in. \
+                 Ask your human to run it from a terminal outside {PRODUCT_NAME}. To listen on this server only, use HOST and PORT ({PRODUCT_NAME} sets them).",
             ),
         );
     }

@@ -325,7 +325,7 @@ pub fn summary() -> serde_json::Value {
     if only_bytes > cap {
         line.push_str(&format!(" · over the cap: {} held as only copies (they go by age, never for the cap)", human_bytes(only_bytes)));
     } else if total > cap {
-        line.push_str(&format!(" · OVER THE CAP ({cli} compute prune --dry-run shows what goes)", cli = CLI_NAME));
+        line.push_str(&format!(" · OVER THE CAP ({CLI_NAME} compute prune --dry-run shows what goes)"));
     }
     serde_json::json!({
         "bytes": total,
@@ -433,9 +433,8 @@ pub fn outcome_json(o: &Outcome, now: i64) -> serde_json::Value {
         ));
     } else if over {
         text.push(format!(
-            "still over the cap: pinned, unfinished and in-use files hold {} ({cli} compute unpin <job>, or {cli} compute retention set --cap SIZE)",
-            human_bytes(stuck),
-            cli = CLI_NAME
+            "still over the cap: pinned, unfinished and in-use files hold {} ({CLI_NAME} compute unpin <job>, or {CLI_NAME} compute retention set --cap SIZE)",
+            human_bytes(stuck)
         ));
     }
     for (u, w) in o.removed.iter().take(20) {
@@ -518,8 +517,7 @@ fn retention_route(who: &Who) -> R<serde_json::Value> {
         ));
     }
     text.push(format!(
-        "change it: {cli} compute retention set --max-age 7d --cap 20G (or default / auto); remove now: {cli} compute prune",
-        cli = CLI_NAME
+        "change it: {CLI_NAME} compute retention set --max-age 7d --cap 20G (or default / auto); remove now: {CLI_NAME} compute prune"
     ));
     v["pins"] = serde_json::to_value(pins.values().collect::<Vec<_>>()).unwrap_or_default();
     v["text"] = text.into();
@@ -557,7 +555,7 @@ fn retention_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     drop(conn);
     let disk_total = compute::advertise::probe(&compute::compute_dir()).disk_total_bytes;
     let line = p.line(disk_total);
-    Ok(serde_json::json!({"policy": policy_json(&p, disk_total), "text": [format!("compute store retention: {line} (the hourly sweep applies it; {cli} compute prune --dry-run shows what goes now)", cli = CLI_NAME)]}))
+    Ok(serde_json::json!({"policy": policy_json(&p, disk_total), "text": [format!("compute store retention: {line} (the hourly sweep applies it; {CLI_NAME} compute prune --dry-run shows what goes now)")]}))
 }
 
 /// `POST /cli/compute/pin|unpin {job}`.
@@ -592,24 +590,21 @@ fn pin_route(who: &Who, body: &[u8], on: bool) -> R<serde_json::Value> {
     }
     let text = if on {
         let mut t = vec![format!(
-            "{} {short}: retention never removes its files on this server ({here} of its {all} artifacts are here, {}) until {cli} compute unpin {short}",
+            "{} {short}: retention never removes its files on this server ({here} of its {all} artifacts are here, {}) until {CLI_NAME} compute unpin {short}",
             if changed { "pinned" } else { "already pinned" },
-            human_bytes(bytes),
-            cli = CLI_NAME
+            human_bytes(bytes)
         )];
         if here < all {
             t.push(format!(
-                "the other {} are only on the node, which drops them 7 days after the job ended: {cli} compute fetch {short} copies them here, and the pin keeps them",
-                all - here,
-                cli = CLI_NAME
+                "the other {} are only on the node, which drops them 7 days after the job ended: {CLI_NAME} compute fetch {short} copies them here, and the pin keeps them",
+                all - here
             ));
         }
         t
     } else {
         vec![format!(
-            "{} {short}: its files here follow the retention rule again ({cli} compute retention shows it)",
-            if changed { "unpinned" } else { "wasn't pinned:" },
-            cli = CLI_NAME
+            "{} {short}: its files here follow the retention rule again ({CLI_NAME} compute retention shows it)",
+            if changed { "unpinned" } else { "wasn't pinned:" }
         )]
     };
     Ok(serde_json::json!({"job": j.id, "short": short, "pinned": on, "changed": changed, "filesHere": here, "files": all, "bytesHere": bytes, "text": text}))

@@ -46,6 +46,7 @@ use tokio::io::AsyncWriteExt;
 use super::storage_bytes::{hash_file, Staged};
 use super::storage_err::{SResult, StorageError};
 use super::storage_ops::{self as ops, Ctx, Imported};
+use k2_core::brand::CLI_NAME;
 
 /// Objects listed per source call (Supabase's own cap is 1000).
 const PAGE: i64 = 1000;
@@ -678,8 +679,7 @@ pub fn source_key(ws_id: &str, name: &str, base: &str) -> SResult<String> {
     let host = origin.host_str();
     let r = vault.resolve(&Selector::user(Scope::workspace(ws_id), name), Use::Fetch(&origin), &who).map_err(|e| match e.code {
         "no_allowed_hosts" | "host_not_allowed" => StorageError::access_denied(format!(
-            "{name} may not be sent to {host}: a person runs {cli} vault hosts {name} --add {host}",
-            cli = k2_core::brand::CLI_NAME
+            "{name} may not be sent to {host}: a person runs {CLI_NAME} vault hosts {name} --add {host}"
         )),
         _ if e.status == 404 => StorageError::invalid_request(format!("no secret {name} in this workspace's vault: store the project's service-role key there")),
         c => StorageError::access_denied(format!("the vault refused {name} ({c}): {}", e.hint)),

@@ -27,6 +27,7 @@ use serde_json::{json, Value};
 use sha2::Sha256;
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// The route (a person's pass, on the App's gateway link only).
 pub const ROUTE: &str = "/cli/skin/identity-token";
@@ -82,7 +83,7 @@ pub fn handle(pass: &k2_core::skin::SkinPass, on_link: bool) -> CliResponse {
         return refusal("404 Not Found", "app_not_found", "this pass is not for an App on this server");
     };
     let Some(stored) = super::door_config::load(&app.app_id).ok().flatten() else {
-        return refusal("409 Conflict", "compat_off", format!("the Supabase-compatible layer is off for {} ({cli} app compat on)", app.app_id, cli = k2_core::brand::CLI_NAME));
+        return refusal("409 Conflict", "compat_off", format!("the Supabase-compatible layer is off for {} ({CLI_NAME} app compat on)", app.app_id));
     };
     let user = match k2_core::skin::compat::app_user(&app.service_id, principal) {
         Ok(Some(u)) if u.enabled => u,
@@ -93,7 +94,7 @@ pub fn handle(pass: &k2_core::skin::SkinPass, on_link: bool) -> CliResponse {
         use crate::sql::secrets::SecretStore as _;
         match crate::sql::secrets::FileSecretStore::default().resolve(&stored.claims_key_ref) {
             Ok(Some(k)) => k,
-            Ok(None) => return refusal("409 Conflict", "compat_key_missing", format!("{}'s claims key is missing ({cli} app compat on {} puts it back)", app.app_id, app.app_id, cli = k2_core::brand::CLI_NAME)),
+            Ok(None) => return refusal("409 Conflict", "compat_key_missing", format!("{}'s claims key is missing ({CLI_NAME} app compat on {} puts it back)", app.app_id, app.app_id)),
             Err(e) => return CliResponse::internal_error(e),
         }
     };

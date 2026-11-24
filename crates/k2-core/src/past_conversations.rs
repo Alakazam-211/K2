@@ -159,7 +159,7 @@ fn read_cli(cli: &str, root: &str, since_ms: i64, unsupported: &mut Vec<(String,
     match res {
         Ok(rows) => rows,
         Err(e) => {
-            unsupported.push((cli.to_string(), format!("could not read {cli} chats: {e}")));
+            unsupported.push((cli.to_string(), format!("could not read {} chats: {e}", cli)));
             Vec::new()
         }
     }

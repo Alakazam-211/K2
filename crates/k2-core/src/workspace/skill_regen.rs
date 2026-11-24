@@ -603,7 +603,7 @@ pub(crate) fn licence_line(product: &str) -> String {
     if product == UPSTREAM {
         format!("{UPSTREAM} is MIT-licensed open source")
     } else {
-        format!("{product} is built on {UPSTREAM}, which is MIT-licensed open source")
+        format!("{} is built on {UPSTREAM}, which is MIT-licensed open source", product)
     }
 }
 

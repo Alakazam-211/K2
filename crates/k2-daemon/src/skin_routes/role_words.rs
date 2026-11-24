@@ -5,6 +5,7 @@
 use k2_core::skin;
 
 use super::{app_name_of, app_of_workspace, role_in_workspace, rooms_in};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Why login `p` isn't wholly `ws`'s (0.46.18 papercut 4): the first of
 /// [`super::principal_in_workspace`]'s and `apps::user_hold::own_login`'s reasons
@@ -74,10 +75,8 @@ pub(super) fn runtime_app_name(svc: &str) -> String {
 /// Where the owner changes a login's role, in words (papercut 2's path).
 pub(crate) fn owners_role_path(username: &str) -> String {
     format!(
-        "Only the owner changes it: in the {product} app, Settings → Access → User Access → {username} → What they can use → Sign-in and Apps → the App's Role, \
-         or {cli} app user role {username} <role> from a terminal outside {product}",
-        product = k2_core::brand::PRODUCT_NAME,
-        cli = k2_core::brand::CLI_NAME,
+        "Only the owner changes it: in the {PRODUCT_NAME} app, Settings → Access → User Access → {username} → What they can use → Sign-in and Apps → the App's Role, \
+         or {CLI_NAME} app user role {username} <role> from a terminal outside {PRODUCT_NAME}",
     )
 }
 

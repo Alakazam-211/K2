@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use super::proto::results::Outputs;
 use super::store::{JobCtl, JobRow};
 use super::{logs, message};
+use crate::brand::CLI_NAME;
 
 /// Records kept per job. Past it, the oldest generation that never
 /// started goes first (it has no log and no files).
@@ -204,7 +205,7 @@ pub fn next_words(next: &str, node: &str, then: Option<&str>) -> String {
         next::WITHDRAWN => format!("taken back from {node}'s queue before it started, to move it{} (no retry used)", then.map(|t| format!(" to {t}")).unwrap_or_default()),
         next::NODE_LOST => format!("{node} went offline before it started it; placed again{elsewhere} (no retry used)"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue; placed again{elsewhere} (no retry used)"),
-        next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({cli} compute move); placed again{elsewhere} (no retry used)", cli = crate::brand::CLI_NAME),
+        next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({CLI_NAME} compute move); placed again{elsewhere} (no retry used)"),
         next::WITHDRAW_UNANSWERED => format!(
             "{node} didn't answer a request to give it back within {}; {k2} took it back ({node} is told not to run it) and placed it again{elsewhere} (no retry used)",
             ask_settle_words(),
@@ -223,7 +224,7 @@ pub fn move_words(next: &str, node: &str, then: Option<&str>) -> Option<String> 
         next::RESENT => format!("{node} gave it back from its queue to take the grant's new caps"),
         next::NODE_LOST => format!("{node} went offline before it started it"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue"),
-        next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({cli} compute move)", cli = crate::brand::CLI_NAME),
+        next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({CLI_NAME} compute move)"),
         next::WITHDRAW_UNANSWERED => format!("{node} didn't answer a request to give it back within {}; {k2} took it back ({node} is told not to run it)", ask_settle_words(), k2 = crate::brand::PRODUCT_NAME),
         _ => return None,
     })

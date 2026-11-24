@@ -2860,6 +2860,7 @@ pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
 }
 
 pub use crate::skin_role_paths_routes::handle_roles_paths;
+use k2_core::brand::CLI_NAME;
 
 pub fn handle_roles_remove(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
@@ -3166,9 +3167,8 @@ fn tied_room_hint(raw: &str) -> Option<String> {
     if skin::test_guests::get(pid).ok().flatten().is_some() {
         return Some(format!(
             "this pass cannot use that agent. This test login reaches only its App's own room until a person opens the others for it: {} stays closed. \
-             What opens it: {cli} app user rooms-ok {app} {user} (an owner or admin answers the card; it lasts as long as the test login).",
+             What opens it: {CLI_NAME} app user rooms-ok {app} {user} (an owner or admin answers the card; it lasts as long as the test login).",
             held.join(", "),
-            cli = k2_core::brand::CLI_NAME,
             user = pass.username,
             app = runtime_app_name(&pass.app),
         ));

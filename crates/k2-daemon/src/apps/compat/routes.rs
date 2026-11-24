@@ -12,6 +12,7 @@ use serde_json::{json, Value as J};
 use super::super::routes::{app_for, json_body, need_build, need_credential, no, s, Who, R};
 use super::door_config::{self, DoorConfig, Limits, Stored, SubMode, UnknownEmail};
 use crate::sql::compat_ops;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ON: &str = "/cli/app/compat/on";
 pub const OFF: &str = "/cli/app/compat/off";
@@ -87,7 +88,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
 fn loaded(app_id: &str) -> R<Stored> {
     door_config::load(app_id)
         .map_err(failed)?
-        .ok_or_else(|| no(codes::OFF, 409, format!("the Supabase-compatible layer is off for {app_id} ({cli} app compat on {app_id} --db <db>)", cli = k2_core::brand::CLI_NAME)))
+        .ok_or_else(|| no(codes::OFF, 409, format!("the Supabase-compatible layer is off for {app_id} ({CLI_NAME} app compat on {app_id} --db <db>)")))
 }
 
 /// Warnings for the App's current settings (R6: tools and warnings).
@@ -157,7 +158,7 @@ fn on(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 codes::OTHER_DB,
                 409,
-                format!("the layer is on for {} with {}: {cli} app compat off {} first", app.app_id, e.config.database, app.app_id, cli = k2_core::brand::CLI_NAME),
+                format!("the layer is on for {} with {}: {CLI_NAME} app compat off {} first", app.app_id, e.config.database, app.app_id),
             ));
         }
     }
@@ -166,7 +167,7 @@ fn on(who: &Who, body: &[u8]) -> R<J> {
     let others: Vec<String> = door_config::all().map_err(failed)?.into_iter().map(|s| s.config.database).collect();
     let made = compat_ops::turn_on(crate::sql::routes::current_ops(), &secrets, &db_name, refs, &others).map_err(ops_refusal)?;
     if !made.stripped.is_empty() {
-        eprintln!("[compat] {}: memberships of the standard roles that weren't {product}'s were revoked: {}", db_name, made.stripped, product = k2_core::brand::PRODUCT_NAME);
+        eprintln!("[compat] {}: memberships of the standard roles that weren't {PRODUCT_NAME}'s were revoked: {}", db_name, made.stripped);
     }
     let t = now();
     let stored = match existing {
@@ -198,12 +199,12 @@ fn on(who: &Who, body: &[u8]) -> R<J> {
         },
     };
     door_config::upsert(&stored, t).map_err(failed)?;
-    let users = super::users_sync::sync_database(&db_name).map_err(|e| failed(format!("the layer is on, but auth.users wasn't written: {e} ({cli} app compat sync-users {})", app.app_id, cli = k2_core::brand::CLI_NAME)))?;
+    let users = super::users_sync::sync_database(&db_name).map_err(|e| failed(format!("the layer is on, but auth.users wasn't written: {e} ({CLI_NAME} app compat sync-users {})", app.app_id)))?;
     audit(&app.app_id, "compat.on", who, json!({ "db": db_name, "authenticator": made.authenticator, "rolesStripped": made.stripped }));
     let stored = door_config::load(&app.app_id).map_err(failed)?.unwrap_or(stored);
     let mut w = warnings(&stored.config);
     if !made.stripped.is_empty() {
-        w.push(format!("memberships of the standard roles that weren't {product}'s were revoked: {}", made.stripped, product = k2_core::brand::PRODUCT_NAME));
+        w.push(format!("memberships of the standard roles that weren't {PRODUCT_NAME}'s were revoked: {}", made.stripped));
     }
     Ok(json!({ "ok": true, "compat": view(&stored), "users": users, "rolesStripped": made.stripped, "warnings": w }))
 }
@@ -370,7 +371,7 @@ fn app_user(service_id: &str, who: &str) -> R<k2_core::skin::compat::AppUser> {
         .map_err(failed)?
         .into_iter()
         .find(|u| u.id == who || u.username.to_lowercase() == w || u.email.as_deref().is_some_and(|e| e.to_lowercase() == w))
-        .ok_or_else(|| no(codes::USER_NOT_FOUND, 404, format!("{who} is not a user of this App ({cli} app guests)", cli = k2_core::brand::CLI_NAME)))
+        .ok_or_else(|| no(codes::USER_NOT_FOUND, 404, format!("{who} is not a user of this App ({CLI_NAME} app guests)")))
 }
 
 fn unlink(who: &Who, body: &[u8]) -> R<J> {

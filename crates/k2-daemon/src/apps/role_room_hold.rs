@@ -22,6 +22,7 @@ use serde_json::{json, Value as J};
 use super::agent_grants::{hold, Step, SWITCH_NAME};
 use super::routes::{no, respond, ws_handle, Who, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// The route this answers for.
 pub const PATH: &str = "/cli/skin/roles/room";
@@ -177,10 +178,9 @@ fn hold_box_wide(who: &Who, ws: &str, role: &skin::SkinRole, room: &str, caps: O
         ),
     };
     let instead = format!(
-        "or, instead, make an App role: the agent makes a role of its own App with that room itself ({cli} app role create <name> --app <its app>, \
-         then {cli} app role room <name> {room_h} …), and the box-wide role {} stays as it is",
+        "or, instead, make an App role: the agent makes a role of its own App with that room itself ({CLI_NAME} app role create <name> --app <its app>, \
+         then {CLI_NAME} app role room <name> {room_h} …), and the box-wide role {} stays as it is",
         role.name,
-        cli = k2_core::brand::CLI_NAME,
     );
     let mut out = hold(
         Step {
@@ -221,9 +221,8 @@ fn hold_box_wide(who: &Who, ws: &str, role: &skin::SkinRole, room: &str, caps: O
     let held = out.get("hint").and_then(J::as_str).unwrap_or_default().to_string();
     out["hint"] = json!(format!(
         "role '{}' is box-wide (no App): every login holding it gets its rooms, box logins too. Better: make a role of your own App with that room \
-         ({cli} app role create <name> --app <your app>, then {cli} app role room <name> {room_h} --caps …). If it must be this role: {held}",
+         ({CLI_NAME} app role create <name> --app <your app>, then {CLI_NAME} app role room <name> {room_h} --caps …). If it must be this role: {held}",
         role.name,
-        cli = k2_core::brand::CLI_NAME,
     ));
     Ok(out)
 }

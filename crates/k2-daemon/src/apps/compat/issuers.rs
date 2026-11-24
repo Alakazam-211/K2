@@ -31,6 +31,7 @@ use serde_json::{json, Map, Value};
 
 use super::claims::DoorRole;
 use super::door_config::{SubMode, UnknownEmail};
+use k2_core::brand::CLI_NAME;
 
 /// Slack on `exp` and `iat` (§6).
 pub const LEEWAY_SECS: u64 = 60;
@@ -335,7 +336,7 @@ pub fn verify(app_id: &str, service_id: &str, token: &str, now: i64) -> Result<V
             return Err(refuse(
                 "identity_changed",
                 403,
-                format!("this sign-in doesn't match the one recorded for {} ({cli} app identity unlink {app_id} {} clears it)", user.username, user.username, cli = k2_core::brand::CLI_NAME),
+                format!("this sign-in doesn't match the one recorded for {} ({CLI_NAME} app identity unlink {app_id} {} clears it)", user.username, user.username),
             ));
         }
     }

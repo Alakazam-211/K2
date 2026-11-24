@@ -44,6 +44,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
 
 /// Sessions one linked inbox may have open at once.
 pub const MAX_SESSIONS_PER_INBOX: usize = 4;
@@ -128,8 +129,7 @@ pub fn busy_error(retry_after_s: u64) -> String {
          sessions open — no more are opened, so the provider won't lock the account. Run your \
          mail calls one at a time (or a few), and retry this one in {retry_after_s}s. A stalled \
          session is closed on its own (within {stuck_min} min); if this still says busy after \
-         that with nothing reading, restarting the {product} server clears stuck sessions",
-        product = k2_core::brand::PRODUCT_NAME,
+         that with nothing reading, restarting the {PRODUCT_NAME} server clears stuck sessions",
     )
 }
 

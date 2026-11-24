@@ -49,6 +49,7 @@ use super::http::{query_pairs, DoorAnswer, DoorRequest};
 pub const PENDING_TTL: Duration = Duration::from_secs(15 * 60);
 /// A pending pass's prefix (the door's own).
 pub use super::door::PENDING_PREFIX;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 /// Most pending passes held at once (the oldest go first past it).
 const MAX_PENDING: usize = 10_000;
 /// supabase-js refreshes a session this close to its end (its auto-refresh
@@ -341,7 +342,7 @@ fn route(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             Some("password") => sign_in(req, ctx),
             Some("refresh_token") => refresh(req, ctx),
             Some("pkce") => pkce(req, ctx),
-            Some(g) => gerr(400, "unsupported_grant_type", format!("grant_type {g} is not supported by {product}", product = k2_core::brand::PRODUCT_NAME)),
+            Some(g) => gerr(400, "unsupported_grant_type", format!("grant_type {g} is not supported by {PRODUCT_NAME}")),
             None => gerr(400, "unsupported_grant_type", "grant_type is required"),
         },
         ("POST", "/verify") => verify_post(req, ctx),
@@ -352,7 +353,7 @@ fn route(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
             None => gerr(403, "not_admin", "User not allowed: the admin routes take the App's server key (the service scope)"),
         },
         ("POST", "/signup") | ("POST", "/otp") | ("POST", "/magiclink") | ("POST", "/recover") | ("GET", "/authorize") | ("POST", "/factors") | ("GET", "/settings") => {
-            gerr(404, "not_supported", format!("{m} /auth/v1{rest} is not supported by {product} ({cli} study app-rest)", product = k2_core::brand::PRODUCT_NAME, cli = k2_core::brand::CLI_NAME))
+            gerr(404, "not_supported", format!("{m} /auth/v1{rest} is not supported by {PRODUCT_NAME} ({CLI_NAME} study app-rest)"))
         }
         _ => gerr(404, "not_found", format!("{m} /auth/v1{rest}: no such route")),
     }
@@ -585,7 +586,7 @@ fn verify_post(req: &DoorRequest, ctx: &Ctx) -> DoorAnswer {
     };
     let kind = text(&v, "type").unwrap_or("");
     if !matches!(kind, "invite" | "recovery") {
-        return gerr(400, "not_supported", format!("verifyOtp type {kind} is not supported by {product} (invite and recovery are)", product = k2_core::brand::PRODUCT_NAME));
+        return gerr(400, "not_supported", format!("verifyOtp type {kind} is not supported by {PRODUCT_NAME} (invite and recovery are)"));
     }
     let Some(token) = text(&v, "token_hash").or_else(|| text(&v, "token")) else {
         return gerr(400, "validation_failed", "send token_hash");

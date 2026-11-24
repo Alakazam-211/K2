@@ -99,12 +99,12 @@ mod tests {
 
     #[test]
     fn says_exactly_what_is_allowed() {
-        let cli = agents_md_section(&answered(true, false, &[])).expect("on");
-        assert!(cli.starts_with(HEADING), "{cli}");
-        assert!(cli.contains("--scope cli --command"), "{cli}");
-        assert!(cli.contains("Not on this server: report only CLI problems"), "{cli}");
-        assert!(cli.contains("Nothing: send text only"), "{cli}");
-        assert!(!cli.contains("Also allowed: `--scope platform`"), "{cli}");
+        let section = agents_md_section(&answered(true, false, &[])).expect("on");
+        assert!(section.starts_with(HEADING), "{section}");
+        assert!(section.contains("--scope cli --command"), "{section}");
+        assert!(section.contains("Not on this server: report only CLI problems"), "{section}");
+        assert!(section.contains("Nothing: send text only"), "{section}");
+        assert!(!section.contains("Also allowed: `--scope platform`"), "{section}");
 
         let all = agents_md_section(&answered(true, true, &["log-tail", "computer"])).expect("on");
         assert!(all.contains("Also allowed: `--scope platform`"), "{all}");

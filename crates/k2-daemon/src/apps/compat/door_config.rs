@@ -4,6 +4,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use k2_core::brand::CLI_NAME;
 
 /// Supabase's defaults (§7.1): 1,000 rows a response, 8 s a statement for
 /// `authenticated`, 3 s for `anon`, none for `service_role`, 10 MiB bodies.
@@ -71,7 +72,7 @@ impl DoorConfig {
         use crate::sql::secrets::SecretStore as _;
         crate::sql::secrets::FileSecretStore::default()
             .resolve(&self.authenticator_secret_ref)?
-            .ok_or_else(|| format!("the door login's password for {} is missing from the vault ({cli} app compat on {} again)", self.app_id, self.app_id, cli = k2_core::brand::CLI_NAME))
+            .ok_or_else(|| format!("the door login's password for {} is missing from the vault ({CLI_NAME} app compat on {} again)", self.app_id, self.app_id))
     }
 }
 

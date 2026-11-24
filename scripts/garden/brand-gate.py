@@ -99,6 +99,17 @@ string (write it as text, a comment or a name set with `=`). The Rust area
 has no ceiling here: its code lines are `cli` and `value`, and its tests may
 name the command freely.
 
+And one rule with no allowlist, the slot rule (rebrand B7, trap 1): a
+`{cli}` or `{product}` slot in the format string of a format-family macro
+(format!, write!, println!, eprintln!, format_args!, panic!, assert!,
+anyhow!, log_debug! and the like: FORMAT_MACROS) fails, in every Rust file
+of crates/ and src-tauri/, tests too, but not the k5 CLI (its `cli` is the
+name it was called by; it fills slots, it never writes one) nor the brand
+crate. Rust reads it as a capture: where a local `cli` or `product` exists
+it builds and prints that local. The one form: a slot in a format string
+is `{{cli}}` / `{{product}}`, this build's name `{CLI_NAME}` /
+`{PRODUCT_NAME}`; a plain literal writes the slot `{cli}`.
+
 `k2.dev` is the zone gate's (scripts/garden/zone-gate.py); scripts/brand-gate.sh
 runs both.
 
@@ -535,6 +546,94 @@ def rust_value_glued(text, ctx, add):
                 right = lit_first(text, *rp) if rp else ""
             if glued(left, right[:1], right[1:2]):
                 add(s)
+
+
+# The slot rule (rebrand B7, trap 1). A `{cli}` or `{product}` slot in a
+# format-family macro's format string is not a slot: Rust reads it as a
+# capture of a local named `cli` or `product`, and where one exists (a
+# harness name, a path) the line builds and prints that in its place. In a
+# format string a slot is written `{{cli}}` and `{{product}}`; this build's
+# name is `{CLI_NAME}` and `{PRODUCT_NAME}`. A plain literal (a const, a
+# json! value, a `.replace` pattern) writes the slot `{cli}`. No allowlist:
+# every hit fails, in any Rust file, tests too.
+SLOT_NAMES = ("cli", "product")
+# The macros whose arguments hold a format string, and that string's place
+# among the arguments; None is the first argument that is a whole string
+# literal (the log macros, which take `target:` and fields first).
+FORMAT_MACROS = {
+    "format": 0, "format_args": 0, "print": 0, "println": 0, "eprint": 0, "eprintln": 0,
+    "write": 1, "writeln": 1, "panic": 0, "unreachable": 0, "todo": 0, "unimplemented": 0,
+    "assert": 1, "debug_assert": 1, "assert_eq": 2, "assert_ne": 2, "debug_assert_eq": 2,
+    "debug_assert_ne": 2, "anyhow": 0, "bail": 0, "ensure": 1, "format_err": 0, "eyre": 0,
+    "log_debug": 0, "log_info": 0, "log_warn": 0, "log_error": 0, "nlog": 0,
+    "trace": None, "debug": None, "info": None, "warn": None, "error": None,
+}
+SLOT_HINT = ("in a format string write the slot {{cli}} or {{product}}, and this build's name "
+             "{CLI_NAME} or {PRODUCT_NAME}; a local named cli or product is captured under another name")
+
+
+def rust_slot_captures(text, ctx):
+    """(position, hole) of each `{cli}` or `{product}` hole in the format
+    string of a format-family macro call (FORMAT_MACROS), with or without
+    a format spec (`{cli:>8}`). `{{cli}}` is text, not a hole."""
+    out = []
+    for m in RUST_MACRO_CALL.finditer(text):
+        if ctx[m.start()] != "code" or m.group(1) not in FORMAT_MACROS:
+            continue
+        close = rust_close(text, ctx, m.end() - 1)
+        if close < 0:
+            continue
+        args = rust_args(text, ctx, m.end(), close)
+        at = FORMAT_MACROS[m.group(1)]
+        lit = None
+        if at is None:
+            for s, e in args:
+                lit = rust_literal(text, ctx, s, e)
+                if lit:
+                    break
+        elif at < len(args):
+            lit = rust_literal(text, ctx, *args[at])
+        if not lit:
+            continue
+        for hs, he, arg in fmt_holes(text, *lit):
+            if arg in SLOT_NAMES:
+                out.append((hs, text[hs:he]))
+    return out
+
+
+# Not read by the slot rule: the CLI, whose `cli` local is the name it was
+# called by and which never writes a slot (it fills them), and the brand
+# crate, whose `product` and `cli` are the brand file's values.
+SLOT_SKIP = ("crates/k5-cli/", "crates/k2-brand/")
+
+
+def slot_scan(root):
+    """[(relative path, line number, hole, line)] of every slot captured
+    in a format string, over every Rust file of crates/ and src-tauri/
+    (tests too; not vendored code, build output or SLOT_SKIP)."""
+    found = []
+    skip = {"target", "node_modules", ".git", "vendor", "third_party"}
+    for top in ("crates", "src-tauri"):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, top)):
+            dirnames[:] = sorted(d for d in dirnames if d not in skip)
+            if (os.path.relpath(dirpath, root).replace(os.sep, "/") + "/").startswith(SLOT_SKIP):
+                dirnames[:] = []
+                continue
+            for name in sorted(filenames):
+                if not name.endswith(".rs"):
+                    continue
+                full = os.path.join(dirpath, name)
+                with open(full, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                if not re.search(r"\{(cli|product)[}:]", text):
+                    continue
+                ctx = flip.rust_contexts(text)
+                rel = os.path.relpath(full, root).replace(os.sep, "/")
+                for pos, hole in rust_slot_captures(text, ctx):
+                    n = text.count("\n", 0, pos)
+                    line = text.split("\n")[n]
+                    found.append((rel, n + 1, hole, line.strip()))
+    return found
 
 
 def ts_value_glued(line):
@@ -989,6 +1088,10 @@ def main(argv):
         fix = CLOSED.get(r, "write the line so it is plainly text, or plainly code")
         print(f"brand-gate: FAIL {unsure[r]} unsure uses of the command name in the CLI's parts ({r}), the ceiling is {c_rows.get(r, 0)}: "
               f"{fix} (scripts/garden/cli-name-flip.py --unsure lists them).")
+    slots = slot_scan(root)
+    for rel, n, hole, text in slots:
+        bad = True
+        print(f"brand-gate: FAIL {rel}:{n} has the slot {hole} in a format string, where Rust reads it as a capture: {SLOT_HINT}. {text[:120]}")
     if bad:
         return 1
     for path, kinds, head, rows, mine, over, kept in results:
@@ -1006,6 +1109,7 @@ def main(argv):
     command = sum(int(m.group(1)) for k, v in results[1][3].items() if k[0] == "value" for m in [VALUE_DEBT.match(v[1])] if m)
     print("brand-gate: ok (" + ", ".join(f"{total(k)} {k}" for k in BRAND_KINDS) + f" lines in {len(brand_mine)} rows still spell a name out).")
     print("brand-gate: ok (" + ", ".join(f"{total(k)} {k}" for k in CLI_KINDS) + f" lines in {len(cli_mine)} rows type the command name; {command} value lines are the command).")
+    print("brand-gate: ok (no {cli} or {product} slot in a format string).")
     print("brand-gate: ok (unsure in the CLI's parts: " + (", ".join(f"{unsure[r]} {r}" for r in sorted(unsure, key=lambda r: (-unsure[r], r))) or "none") + ").")
     return 0
 

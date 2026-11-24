@@ -60,6 +60,7 @@ use serde_json::{json, Value as J};
 
 use super::gateway::LinkCtx;
 use super::routes::{app_for, need_credential, no, Who, R};
+use k2_core::brand::CLI_NAME;
 
 /// The stamp an App note starts with (the same in every brand: it names the
 /// notice's source, not a command).
@@ -517,8 +518,7 @@ pub fn repeat_text(app: &str, actor: &str, verb: &str, room: &str, why: &str, n:
     };
     format!(
         "{STAMP} {app}: {who}: {verb} refused {n}× in 5 minutes{room_words} ({what}). A page asking for what its role lacks, not an attack: \
-         add it with {cli} app role room <role> <room> --caps …, or have the page check /api/me before it calls. {cli} app audit {app} --denied --since 5m",
-        cli = k2_core::brand::CLI_NAME,
+         add it with {CLI_NAME} app role room <role> <room> --caps …, or have the page check /api/me before it calls. {CLI_NAME} app audit {app} --denied --since 5m",
     )
 }
 
@@ -660,11 +660,10 @@ pub fn digest_text(app: &str, verbs: &[String]) -> String {
     let shown: Vec<&str> = verbs.iter().take(8).map(String::as_str).collect();
     let more = if verbs.len() > shown.len() { format!(" and {} more", verbs.len() - shown.len()) } else { String::new() };
     format!(
-        "{STAMP} {app} used {} write verb{} for the first time: {}{more}. {cli} app audit {app}",
+        "{STAMP} {app} used {} write verb{} for the first time: {}{more}. {CLI_NAME} app audit {app}",
         verbs.len(),
         if verbs.len() == 1 { "" } else { "s" },
         shown.join(", "),
-        cli = k2_core::brand::CLI_NAME,
     )
 }
 

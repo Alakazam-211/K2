@@ -51,6 +51,7 @@ use k2_vault::{Kind, Namespace, Scope, SecretStore as _};
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, json_body, need_credential, no, Who, R};
+use k2_core::brand::CLI_NAME;
 
 pub const CONNECT: &str = "/cli/app/db/connect";
 pub const STATUS: &str = "/cli/app/db/status";
@@ -781,9 +782,9 @@ fn hold(who: &Who, app: &AppRow, ask: &Ask, plan: &Plan, needs: &[Switch], reaso
     out["switches"] = json!(needs);
     out["hint"] = json!(format!(
         "one card for everything connecting needs: an owner or admin approves it once (its permission card, Settings → App \
-         Approvals, or {cli} app approve {} from a terminal outside K2); then K2 turns those switches on, connects {} and checks \
-         it. Wait for it: {cli} app db connect {} … --wait, or {cli} app db status {}",
-        r.id, app.app_id, app.app_id, app.app_id, cli = k2_core::brand::CLI_NAME
+         Approvals, or {CLI_NAME} app approve {} from a terminal outside K2); then K2 turns those switches on, connects {} and checks \
+         it. Wait for it: {CLI_NAME} app db connect {} … --wait, or {CLI_NAME} app db status {}",
+        r.id, app.app_id, app.app_id, app.app_id
     ));
     Ok(out)
 }

@@ -14,6 +14,7 @@ use k2_root_proto::k2_auth;
 use super::ops::{self, OpsError};
 use super::secrets::{generate_secret, SecretStore};
 use super::sysops::SystemOps;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The door's login: at most this many connections (lane C's pool is 10;
 /// room for a restart overlap and the daemon's own sync).
@@ -24,7 +25,7 @@ pub(crate) fn owned_db(project_id: &str, name: &str) -> Result<(String, String),
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = ops::load_active_by_name(&conn, project_id, name)
-        .ok_or_else(|| OpsError::NotFound(format!("no database {name} in the App's workspace ({cli} db list)", cli = k2_core::brand::CLI_NAME)))?;
+        .ok_or_else(|| OpsError::NotFound(format!("no database {name} in the App's workspace ({CLI_NAME} db list)")))?;
     Ok((row.id.clone(), row.name.clone()))
 }
 
@@ -73,10 +74,8 @@ pub(crate) fn turn_on(ops: &dyn SystemOps, secrets: &dyn SecretStore, db: &str, 
             return Err(OpsError::Refused(
                 "compat_auth_schema_taken",
                 format!(
-                    "{db} already has a schema named auth that {product} didn't make ({other}): rename or drop it first \
-                     (a Supabase dump: {cli} db import supabase maps it)",
-                    product = k2_core::brand::PRODUCT_NAME,
-                    cli = k2_core::brand::CLI_NAME
+                    "{db} already has a schema named auth that {PRODUCT_NAME} didn't make ({other}): rename or drop it first \
+                     (a Supabase dump: {CLI_NAME} db import supabase maps it)"
                 ),
             ))
         }

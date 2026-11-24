@@ -61,16 +61,16 @@ fn k2_cli() -> PathBuf {
 /// `board-keeper`: emits its lifecycle through the real CLI (once
 /// directly, once from a grandchild `sh -c`), then logs every stdin line.
 fn keeper_script(home: &Path) -> String {
-    let cli = k2_cli();
+    let cli_path = k2_cli();
     format!(
         "#!/bin/sh\n\
-         K2CLI='{cli}'\n\
+         K2CLI='{cli_path}'\n\
          \"$K2CLI\" hooks emit SessionStart --json '{{\"source\":\"startup\"}}' > '{home}/emit1.out' 2>&1\n\
          echo \"rc=$?\" >> '{home}/emit1.out'\n\
          /bin/sh -c \"'$K2CLI' hooks emit UserPromptSubmit\" > '{home}/emit2.out' 2>&1\n\
          echo \"rc=$?\" >> '{home}/emit2.out'\n\
          while IFS= read -r line; do printf '%s\\n' \"$line\" >> '{home}/keeper.log'; done\n",
-        cli = cli.display(),
+        cli_path = cli_path.display(),
         home = home.display(),
     )
 }

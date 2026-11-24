@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use crate::brand::CLI_NAME;
 
 /// The policy's settings key.
 pub const POLICY_KEY: &str = "artifact_retention";
@@ -131,8 +132,7 @@ pub fn save(conn: &Connection, p: &Policy, by: &str, at: i64) -> Result<(), Stri
     }
     if p.max_age_secs.is_some_and(|a| a < 3600) {
         return Err(format!(
-            "the max age is at least 1h ({cli} compute prune --older-than removes younger files once)",
-            cli = crate::brand::CLI_NAME
+            "the max age is at least 1h ({CLI_NAME} compute prune --older-than removes younger files once)",
         ));
     }
     if *p == Policy::default() {

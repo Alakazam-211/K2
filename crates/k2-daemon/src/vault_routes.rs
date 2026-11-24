@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The computer's own user check for the vault's first-setup steps.
 pub(crate) mod presence;
@@ -2318,9 +2319,7 @@ pub(crate) const OWNER_PASSWORD_ACTIONS: &[&str] = &[crate::apps::access::PURGE_
 /// The refusal for an owner purge on a server with no confirm at all.
 pub(crate) fn no_owner_password_hint() -> String {
     format!(
-        "purge needs the owner's confirm, and this server has none yet (no owner login, vault password or Touch ID). Set an owner password first, from your own terminal on this server (not a {product} terminal): {cli} users add <your-name> --role owner --keep-password. Then run the purge again: it asks for that password. On a server with no owner yet, creating the first owner login is only as strong as access to this server's terminal. Agents: don't run it; tell your owner.",
-        product = k2_core::brand::PRODUCT_NAME,
-        cli = k2_core::brand::CLI_NAME,
+        "purge needs the owner's confirm, and this server has none yet (no owner login, vault password or Touch ID). Set an owner password first, from your own terminal on this server (not a {PRODUCT_NAME} terminal): {CLI_NAME} users add <your-name> --role owner --keep-password. Then run the purge again: it asks for that password. On a server with no owner yet, creating the first owner login is only as strong as access to this server's terminal. Agents: don't run it; tell your owner.",
     )
 }
 

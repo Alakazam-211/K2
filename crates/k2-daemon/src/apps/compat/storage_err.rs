@@ -15,6 +15,7 @@
 //! duplicate answer being exactly this.
 
 use serde_json::{json, Value};
+use k2_core::brand::PRODUCT_NAME;
 
 /// One storage refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,7 +122,7 @@ impl StorageError {
     /// K2's own refusal for a part of the API v1 doesn't carry (a 400 with
     /// a code naming the part, never a wrong answer: PRD §7.2's rule).
     pub fn unsupported(part: &str) -> Self {
-        Self::new(400, "NotSupported", "k2_unsupported", format!("{part} is not supported by {product}'s storage door in v1", product = k2_core::brand::PRODUCT_NAME))
+        Self::new(400, "NotSupported", "k2_unsupported", format!("{part} is not supported by {PRODUCT_NAME}'s storage door in v1"))
     }
 
     /// Map a Postgres error the way Supabase Storage does.

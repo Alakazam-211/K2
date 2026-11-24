@@ -466,7 +466,7 @@ pub fn skill_checksum_hex(bytes: &[u8]) -> String {
 /// file's order. The product and the command are separate values (a
 /// partner's are unrelated words); a change to any of them is a new key.
 pub fn brand_names_key(product: &str, name: &str, aliases: &[(&str, AliasMode)]) -> String {
-    let mut text = format!("product={product};name={name}");
+    let mut text = format!("product={};name={name}", product);
     for (alias, mode) in aliases {
         let mode = match mode {
             AliasMode::Silent => "silent",

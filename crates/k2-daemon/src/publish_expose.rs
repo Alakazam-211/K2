@@ -29,6 +29,7 @@ use std::process::Command;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The value that marks a service public.
 pub const PUBLIC: &str = "public";
@@ -131,12 +132,10 @@ pub fn apply(cmd: &mut Command, service_id: &str, port: u16) {
 pub fn warning(name: &str, port: i64, addrs: &[String]) -> String {
     format!(
         "{name} listens on {}, beyond this server: anyone who can reach this machine on port {port} gets it without the server's front door (:443) or any sign-in. \
-         Fix: make it listen on 127.0.0.1 ({product} gives it HOST=127.0.0.1 and PORT={port}; a server that ignores them needs its own flag, such as --host 127.0.0.1), \
-         then restart it: {cli} publish stop {name} && {cli} publish start {name}. \
-         If it is public on purpose, the owner runs: {cli} publish expose {name} public",
+         Fix: make it listen on 127.0.0.1 ({PRODUCT_NAME} gives it HOST=127.0.0.1 and PORT={port}; a server that ignores them needs its own flag, such as --host 127.0.0.1), \
+         then restart it: {CLI_NAME} publish stop {name} && {CLI_NAME} publish start {name}. \
+         If it is public on purpose, the owner runs: {CLI_NAME} publish expose {name} public",
         addrs.join(", "),
-        cli = k2_core::brand::CLI_NAME,
-        product = k2_core::brand::PRODUCT_NAME,
     )
 }
 

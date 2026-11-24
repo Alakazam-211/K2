@@ -6,7 +6,7 @@ import http from "node:http";
 import fs from "node:fs";
 import net from "node:net";
 import dns from "node:dns/promises";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 
 const port = Number(process.env.PORT);
 const here = new URL(".", import.meta.url).pathname;
@@ -228,6 +228,28 @@ async function box(p, bytes) {
   return { env, get: await get(`http://127.0.0.1:${p}/hello`, 4000), upload: await upload(p, bytes), upgrade: await upgrade(p) };
 }
 
+// 0.46.18 (AppArmor, k2-app//&k2-crun): the App signals its own child,
+// USR1 (caught) then KILL, as a server does its workers. A denied signal
+// throws (EACCES) instead of arriving.
+async function signals() {
+  const out = { usr1: null, kill: null, exit: null };
+  const c = spawn(process.execPath, ["-e", 'process.on("SIGUSR1",()=>console.log("usr1"));console.log("up");setInterval(()=>{},1000)'], { stdio: ["ignore", "pipe", "inherit"] });
+  let seen = "";
+  const saw = (w, ms) => new Promise((r) => {
+    const t = setTimeout(() => r(false), ms);
+    const f = () => { if (seen.includes(w)) { clearTimeout(t); r(true); } };
+    c.stdout.on("data", (d) => { seen += d; f(); });
+    f();
+  });
+  const exited = new Promise((r) => c.on("exit", (code, sig) => r(sig || `code ${code}`)));
+  if (!(await saw("up", 5000))) return { ...out, error: "the child never started" };
+  try { process.kill(c.pid, "SIGUSR1"); out.usr1 = await saw("usr1", 3000); } catch (e) { out.usr1 = e.code || String(e); }
+  try { process.kill(c.pid, "SIGKILL"); out.kill = true; } catch (e) { out.kill = e.code || String(e); }
+  out.exit = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running"), 3000))]);
+  if (out.exit === "still running") c.kill("SIGKILL");
+  return out;
+}
+
 const server = http.createServer(async (req, res) => {
   inflight++;
   try {
@@ -246,6 +268,9 @@ const server = http.createServer(async (req, res) => {
     } else if (u.pathname === "/box") {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(await box(Number(u.searchParams.get("port")), Number(u.searchParams.get("bytes") || 0))));
+    } else if (u.pathname === "/signals") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(await signals()));
     } else if (u.pathname === "/flood") {
       for (let i = 0; i < 20000; i++) console.log(`flood ${TAG} line ${i}`);
       res.end("flooded\n");

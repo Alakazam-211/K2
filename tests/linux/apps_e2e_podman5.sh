@@ -240,6 +240,13 @@ if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
 	DEN="$(dmesg | grep 'apparmor="DENIED"' | grep -c -E 'profile="k2-(crun|podman|pasta)"' || true)"
 	[ "$DEN" = 0 ] || fail "$DEN AppArmor denials from K2's Podman profiles: $(dmesg | grep 'apparmor="DENIED"' | grep -E 'profile="k2-(crun|podman|pasta)"' | tail -n 3)"
 	ok "the App runs as $LBL; no denials from K2's Podman profiles"
+	# 0.46.18: signals between the App's own tasks (stack k2-app//&k2-crun)
+	# were denied, so podman-init's stop signal never reached the App.
+	curl -s "http://127.0.0.1:$FA/signals" >/tmp/sig.json
+	jq_ 'assert v["usr1"] is True and v["kill"] is True and v["exit"] == "SIGKILL", v' /tmp/sig.json || fail "the App signalling its own child: $(cat /tmp/sig.json)"
+	SIGDEN="$(dmesg | grep 'apparmor="DENIED"' | grep 'operation="signal"' | grep -c 'k2-app' || true)"
+	[ "$SIGDEN" = 0 ] || fail "$SIGDEN AppArmor signal denials for k2-app: $(dmesg | grep 'apparmor="DENIED"' | grep 'operation="signal"' | grep k2-app | tail -n 3)"
+	ok "the App sends its own child USR1 and KILL; no k2-app signal denials"
 fi
 # Debian 13's passt (2025_05_03) logged "Flow N (TCP connection
 # (spliced)): ERROR on epoll_ctl(): No such file or directory" for Hearth;
@@ -262,6 +269,20 @@ set -e
 [ "$rc" = 3 ] && grep -q apps_running /tmp/u0.txt || fail "uninstall while an App runs: rc $rc $(cat /tmp/u0.txt)"
 [ -x /opt/k2/podman/bin/podman ] || fail "the refused uninstall removed something"
 ok "uninstall refused while hello runs"
+# 0.46.18: podman-init passes the stop signal on to the App (it was denied
+# by AppArmor, so the App never drained).
+K2 app stop hello >/dev/null
+for _ in $(seq 1 30); do
+	K2 app logs hello >/tmp/stoplog.txt 2>&1 || true
+	grep -q "SIGTERM, draining" /tmp/stoplog.txt && break
+	sleep 1
+done
+grep -q "SIGTERM, draining" /tmp/stoplog.txt || { tail -n 20 /tmp/stoplog.txt; fail "hello never got the stop signal"; }
+if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+	SIGDEN="$(dmesg | grep 'apparmor="DENIED"' | grep 'operation="signal"' | grep -c 'k2-app' || true)"
+	[ "$SIGDEN" = 0 ] || fail "$SIGDEN AppArmor signal denials for k2-app after the stop: $(dmesg | grep 'apparmor="DENIED"' | grep 'operation="signal"' | grep k2-app | tail -n 3)"
+fi
+ok "k2 app stop: hello got SIGTERM and drained; no k2-app signal denials"
 K2 app uninstall hello --purge >/dev/null
 for _ in $(seq 1 60); do
 	has hello "$(asapp systemctl --user list-units --type=service --no-legend)" || break

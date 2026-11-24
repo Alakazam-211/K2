@@ -1262,9 +1262,10 @@ pub fn apparmor_profile() -> &'static str {
      \x20 # K2's Podman bundle (Ubuntu 24.04) runs its crun as k2-crun, and the\n\
      \x20 # App's tasks (podman-init too) carry the stack k2-app//&k2-crun: the\n\
      \x20 # kernel writes a stack's names in sorted order, the only spelling a\n\
-     \x20 # rule matches. podman-init passes the stop signal (TERM) on to the\n\
-     \x20 # App; no other signal crosses inside the stack.\n\
-     \x20 signal (send) set=(term) peer=\"k2-app//&k2-crun\",\n\
+     \x20 # rule matches. Like crun//&k2-app above: any signal between the\n\
+     \x20 # App's own tasks (podman-init's stop signal, a server's HUP/USR1 to\n\
+     \x20 # its workers, kill -9 in the App).\n\
+     \x20 signal (send,receive) peer=\"k2-app//&k2-crun\",\n\
      \x20 signal (receive) peer=k2-crun,\n\
      \x20 ptrace (trace,read,tracedby,readby) peer=k2-app,\n\
      }\n"
@@ -1824,27 +1825,33 @@ mod tests {
     /// 0.46.18 (Ubuntu 24.04 field test): the kernel logged
     /// `apparmor="DENIED" operation="signal" profile="k2-app"
     /// peer="k2-app//&k2-crun"` when podman-init passed the stop signal on
-    /// to the App. The one rule that lets it is TERM only, send only, to
-    /// exactly that stack (spelt as the kernel writes it), and nothing
-    /// else inside the stack or toward an unconfined peer can send.
+    /// to the App. Every task of the App carries that stack, so the rule
+    /// for it governs every signal between the App's own processes (a
+    /// server's HUP/USR1 to its workers, Postgres in an App, kill -9, a
+    /// Seed whose stop signal isn't TERM): any signal, like the distro
+    /// crun's twin, and only to and from exactly that stack (spelt as the
+    /// kernel writes it). Nothing toward an unconfined peer or crun.
     #[test]
-    fn podman_init_may_pass_on_term_and_nothing_wider() {
+    fn signals_stay_inside_the_apps_own_stack() {
         let p = apparmor_profile();
         let rules: Vec<&str> = p.lines().map(str::trim).filter(|l| !l.starts_with('#') && l.starts_with("signal")).collect();
-        let term = "signal (send) set=(term) peer=\"k2-app//&k2-crun\",";
-        assert_eq!(rules.iter().filter(|l| **l == term).count(), 1, "the TERM rule, once: {rules:#?}");
-        // The old spelling (names out of the kernel's order) never matched,
-        // and allowed every signal: gone.
+        let stack = "signal (send,receive) peer=\"k2-app//&k2-crun\",";
+        let twin = "signal (send,receive) peer=\"crun//&k2-app\",";
+        assert_eq!(rules.iter().filter(|l| **l == stack).count(), 1, "the App's own stack, once: {rules:#?}");
+        assert_eq!(rules.iter().filter(|l| **l == twin).count(), 1, "its distro-crun twin: {rules:#?}");
+        // The old spelling (names out of the kernel's order) never matched: gone.
         assert!(!p.contains("k2-crun//&k2-app"), "{p}");
-        // No bare `signal,` and no rule without a peer.
-        assert!(rules.iter().all(|l| l.contains("peer=")), "{rules:#?}");
-        // Only the TERM rule names a signal set, and its set is TERM alone.
-        let with_set: Vec<&&str> = rules.iter().filter(|l| l.contains("set=")).collect();
-        assert_eq!(with_set, vec![&term], "{rules:#?}");
-        // Every rule that reaches the k2-crun stack: receive from crun
-        // itself, or the TERM rule.
+        // No bare `signal,`, no rule without a peer, no signal set.
+        assert!(rules.iter().all(|l| l.contains("peer=") && !l.contains("set=")), "{rules:#?}");
+        // Every rule that reaches the k2-crun stack: the App's own stack, or
+        // receive from crun itself.
         let crun: Vec<&&str> = rules.iter().filter(|l| l.contains("k2-crun")).collect();
-        assert_eq!(crun, vec![&term, &"signal (receive) peer=k2-crun,"], "{rules:#?}");
+        assert_eq!(crun, vec![&stack, &"signal (receive) peer=k2-crun,"], "{rules:#?}");
+        // Sending anywhere: only within k2-app and its stacks.
+        for l in rules.iter().filter(|l| l.contains("send")) {
+            let peer = l.split("peer=").nth(1).unwrap().trim_end_matches(',').trim_matches('"');
+            assert!(peer == "k2-app" || peer == "k2-app//&k2-crun" || peer == "crun//&k2-app", "{l}");
+        }
         // Unconfined and distro-crun peers may only signal the App, never
         // be signalled by it.
         for l in &rules {

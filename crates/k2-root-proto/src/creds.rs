@@ -193,6 +193,13 @@ pub const K2_OWN_UNITS: &[&str] = &[
     // setup`, protocol 19). Never a real unit; denied so the name can never
     // become one that gets owner credentials.
     "k2-agents-probe.service",
+    // The isolation test box's transient user units, started from the
+    // kernel rows (crates/k2-daemon/tests/agent_isolation_kernel_integration.rs
+    // A2 row: a unit in k2apps.slice; scripts/agent-isolation-b4-policy-rows.sh
+    // J1: a process run by the K2 user's manager). Never fleet units; denied
+    // so neither name can ever be one that gets owner credentials.
+    "k2iso-a2app.service",
+    "k2isoj-run.service",
 ];
 
 /// K2's generated families, as (prefix, middle) patterns: the stem starts

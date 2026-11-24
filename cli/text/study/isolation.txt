@@ -54,6 +54,11 @@ LABELLED BY AGENT (on wherever the server can have it)
   Emergency off-switch for a broken box: K2_AGENT_CGROUP_IDENTITY=0 in the
   daemon's environment (logged at boot, shown in the doctor).
 
+  Open agents are not fenced: for an agent without the fence, its limits
+  and K2's port rules stop accidents, not an agent that sets out to get
+  around them. Only fenced sessions are held. k2 agent isolation layout
+  status says whether this box is a server or a desktop (the rules differ).
+
 THE FOLDER FENCE (per agent, off by default, the owner's switch; experimental)
   k2 agent isolation <workspace> fence. The agent's next terminals, job runs
   and services open only their workspace, their own temp folder, their own

@@ -677,6 +677,21 @@ pub fn boot_scan(a: &Avail) -> (usize, usize) {
     (live, removed)
 }
 
+/// `server` when this daemon runs in a system unit (its cgroup outside
+/// `user.slice`), `desktop` otherwise (a user unit, a login session); the
+/// A2 ruling's firewall lines differ between the two.
+pub fn box_kind() -> &'static str {
+    box_kind_of(cgroup_of_pid(std::process::id()).ok().as_deref())
+}
+
+/// [`box_kind`] from a cgroup path (pure).
+pub fn box_kind_of(cgroup: Option<&str>) -> &'static str {
+    match cgroup {
+        Some(p) if p.starts_with('/') && !p.starts_with("/user.slice") && p != "/" => "server",
+        _ => "desktop",
+    }
+}
+
 /// For `/boot-status` and `k2 app doctor`.
 pub fn status_json() -> serde_json::Value {
     let landlock = crate::agent_fence::landlock_abi();
@@ -709,6 +724,11 @@ pub fn status_json() -> serde_json::Value {
         }),
     };
     v["switch"] = serde_json::json!(format!("{ENV_SWITCH}={}", if switch_off() { "0 (emergency off)" } else { "unset (on)" }));
+    // A2 ruling: what is held, said plainly, and which kind of box this is
+    // (a server: the daemon a system unit under its own user; else a
+    // desktop, where the K2 user's own programs share its user manager).
+    v["openAgents"] = serde_json::json!("open agents are not fenced; only fenced sessions are held");
+    v["boxKind"] = serde_json::json!(box_kind());
     // Secrets-view review V3: on a box that keeps session secrets under
     // /dev/shm the fence leaves /dev/shm as it was at the session's start.
     if let Some(r) = crate::agent_fence::shm_secrets_root(&crate::agent_fence::secrets_roots()) {
@@ -903,6 +923,18 @@ mod tests {
         assert_eq!(decide_in(placed, &old, false, none), Decision::Allow, "scopes off: M1b's rule");
         let other = PeerAgent::Agent { ws: "B".into(), cgroup: "/k2agents.slice/k2agents-open.slice/k2-agent-B:0123456789abcdef.scope".into(), root_owned: true };
         assert!(matches!(decide_in(placed, &other, true, none), Decision::Refuse { .. }), "another agent's scope");
+    }
+
+    /// A2 ruling: a daemon in a system unit is a server; in the user's tree
+    /// (a user unit or a login session) a desktop.
+    #[test]
+    fn the_box_kind_comes_from_the_daemons_cgroup() {
+        assert_eq!(box_kind_of(Some("/k2cores.slice/k2-daemon.service/daemon")), "server");
+        assert_eq!(box_kind_of(Some("/system.slice/k2-daemon.service")), "server");
+        assert_eq!(box_kind_of(Some("/user.slice/user-1000.slice/user@1000.service/app.slice/k2-daemon.service")), "desktop");
+        assert_eq!(box_kind_of(Some("/user.slice/user-1000.slice/session-3.scope")), "desktop");
+        assert_eq!(box_kind_of(None), "desktop");
+        assert_eq!(box_kind_of(Some("/")), "desktop");
     }
 
     /// B4 fix review N3 (test 2): a scoped session's passport counts only

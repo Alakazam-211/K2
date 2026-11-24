@@ -319,6 +319,7 @@ mod tests {
             sha256: None,
             line: None,
             line_end: None,
+            workspace: None,
         };
         #[cfg(not(windows))]
         let (root, want) = (Path::new("/ws/sales"), "/ws/sales/out/a.png");

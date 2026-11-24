@@ -22,6 +22,7 @@ fn file(path: &str) -> ThreadAttachment {
         sha256: None,
         line: None,
         line_end: None,
+        workspace: None,
     }
 }
 

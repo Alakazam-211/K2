@@ -69,6 +69,13 @@ pub struct ThreadAttachment {
     /// Last line of a range (≥ `line`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_end: Option<u32>,
+    /// project-chat-thread-v1: the workspace (`projects.id`) `path` is
+    /// relative to, when it isn't the conversation's own (a project chat's
+    /// files live in its point of contact's workspace, and stay there when
+    /// the point of contact changes). `None`: the conversation's workspace,
+    /// as every attachment before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 /// One attachment as a sender asks for it (`attachments` on
@@ -230,6 +237,7 @@ fn snapshot_one(root: &Path, home: Option<&Path>, req: &AttachmentRequest) -> Re
         sha256,
         line: req.line,
         line_end: req.line_end,
+        workspace: None,
     })
 }
 

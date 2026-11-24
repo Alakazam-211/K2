@@ -2723,6 +2723,7 @@ mod delete_tests {
             sha256: None,
             line: None,
             line_end: None,
+            workspace: None,
         };
         let (item, _) = post_thread_with_attachments(&c, conv, project_id, "ada", "ledger", body, "compose", None, Some(author), vec![att], None)
             .expect("post");

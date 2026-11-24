@@ -1123,6 +1123,7 @@ mod tests {
             sha256: None,
             line: None,
             line_end: None,
+            workspace: None,
         }
     }
 

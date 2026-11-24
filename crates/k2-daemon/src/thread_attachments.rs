@@ -132,13 +132,25 @@ pub(crate) fn guest_may_attach(
 /// `live`: stat each file (GET); else every visible one is `ok` (a frame
 /// sent at post time).
 pub(crate) fn view_list(root: Option<&Path>, atts: &[ThreadAttachment], viewer: &Viewer<'_>, live: bool) -> Vec<serde_json::Value> {
-    let can_download = match viewer {
-        Viewer::Full => Some(true),
-        Viewer::Agent => None,
-        Viewer::Guest { pass, project_id } => Some(guest_may_download(pass, project_id)),
-    };
     atts.iter()
         .map(|a| {
+            // project-chat-thread-v1: a file kept in another workspace (a
+            // project chat's point of contact) is read against that one.
+            let own_root = a.workspace.as_deref().and_then(project_root);
+            let root = if a.workspace.is_some() { own_root.as_deref() } else { root };
+            let ws_viewer;
+            let viewer: &Viewer<'_> = match (a.workspace.as_deref(), viewer) {
+                (Some(ws), Viewer::Guest { pass, .. }) => {
+                    ws_viewer = Viewer::Guest { pass, project_id: ws };
+                    &ws_viewer
+                }
+                (_, v) => v,
+            };
+            let can_download = match viewer {
+                Viewer::Full => Some(true),
+                Viewer::Agent => None,
+                Viewer::Guest { pass, project_id } => Some(guest_may_download(pass, project_id)),
+            };
             if let Viewer::Guest { pass, project_id } = viewer {
                 match root {
                     Some(r) if guest_sees(pass, project_id, r, a) => {}
@@ -298,7 +310,7 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         surface: "thread",
         detail: format!("conversation={} doc={}", resolved.conversation_id, doc.id),
     };
-    serve(params, &req, a, &resolved.project_id, pass, &audit_ctx)
+    serve(params, &req, a, a.workspace.as_deref().unwrap_or(&resolved.project_id), pass, &audit_ctx)
 }
 
 /// `POST /cli/thread/attachment/token` (`thread.attachmentToken`, 0.46.9):
@@ -336,7 +348,7 @@ pub(crate) fn handle_token(params: &HashMap<String, String>, resolved: &Resolved
         detail: format!("conversation={} doc={}", resolved.conversation_id, doc.id),
     };
     let req = DoorRequest { n, mode: MODE_TOKEN.to_string(), px: 256 };
-    serve(params, &req, a, &resolved.project_id, pass, &audit_ctx)
+    serve(params, &req, a, a.workspace.as_deref().unwrap_or(&resolved.project_id), pass, &audit_ctx)
 }
 
 /// Serve one loaded attachment: the part both doors share (Thread and
@@ -757,6 +769,7 @@ mod tests {
             sha256: None,
             line: Some(3),
             line_end: None,
+            workspace: None,
         };
         let v = view_list(None, std::slice::from_ref(&a), &Viewer::Full, true);
         assert_eq!(v[0]["state"], "gone");
@@ -777,6 +790,7 @@ mod tests {
             sha256: None,
             line: None,
             line_end: None,
+            workspace: None,
         };
         let v = view_list(None, std::slice::from_ref(&a), &Viewer::Full, false);
         assert_eq!(v[0]["canDownload"], serde_json::json!(true), "a person may save what they may open: {}", v[0]);

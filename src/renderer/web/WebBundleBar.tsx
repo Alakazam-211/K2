@@ -7,12 +7,13 @@
  */
 
 import React from 'react'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { reloadOntoOfferedBundle, useWebBundleBar, type BundleBar } from './bundle-version'
 
 /** The bar's words (exported for tests). */
 export function webBundleBarText(bar: BundleBar): string {
-  if (bar.kind === 'updated') return `K2 was updated to ${bar.version}.`
-  return `This server runs K2 ${bar.version}, but its web client isn't published yet. You're on ${bar.bundleVersion || 'an older client'}, so some things may not work.`
+  if (bar.kind === 'updated') return `${PRODUCT_NAME} was updated to ${bar.version}.`
+  return `This server runs ${PRODUCT_NAME} ${bar.version}, but its web client isn't published yet. You're on ${bar.bundleVersion || 'an older client'}, so some things may not work.`
 }
 
 const buttonStyle: React.CSSProperties = {

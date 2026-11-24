@@ -33,7 +33,10 @@ pub const LOADED: &str = "/sys/kernel/security/apparmor/profiles";
 /// The whole profile: unconfined but for one more permission, `userns`
 /// (abi 4.0 is the first that knows the rule). No attachment path, no
 /// local include: nothing can widen it or attach it to anything else.
-pub const PROFILE_TEXT: &str = "# K2 compute: a --userns job's unit (the node owner's own server's job,
+pub const PROFILE_TEXT: &str = concat!(
+    "# ",
+    k2_brand::product_name!(),
+    " compute: a --userns job's unit (the node owner's own server's job,
 # granted by the node's owner) may create user namespaces on kernels that
 # restrict them for unconfined processes
 # (kernel.apparmor_restrict_unprivileged_userns=1). Otherwise unconfined, as
@@ -44,7 +47,8 @@ abi <abi/4.0>,
 profile k2-job-userns flags=(unconfined) {
   userns,
 }
-";
+"
+);
 
 /// Whether the kernel restricts user namespaces for unconfined processes
 /// (the sysctl's text; `None` = no such sysctl).
@@ -282,7 +286,8 @@ pub fn doctor_line_for(loaded: bool, on_disk: bool) -> Option<String> {
 /// The refusal text when it can't be loaded: why, and the fix.
 pub fn unavailable(why: &str) -> String {
     format!(
-        "this node's kernel restricts user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and K2 couldn't load its AppArmor profile for --userns jobs ({why}). The node's owner can fix it: install AppArmor's tools (apparmor_parser) and run the job again, or load the profile by hand with: sudo apparmor_parser -r {PROFILE_PATH}"
+        "this node's kernel restricts user namespaces (kernel.apparmor_restrict_unprivileged_userns=1) and {product} couldn't load its AppArmor profile for --userns jobs ({why}). The node's owner can fix it: install AppArmor's tools (apparmor_parser) and run the job again, or load the profile by hand with: sudo apparmor_parser -r {PROFILE_PATH}",
+        product = k2_brand::PRODUCT_NAME,
     )
 }
 

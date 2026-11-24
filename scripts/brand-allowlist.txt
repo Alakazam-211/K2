@@ -960,3 +960,5 @@
 1 K5 crates/k5-cli/src/families/voice.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design), as the shell CLI's voice lines do
 2 repo crates/kessel-attest/src/main.rs keeper: kessel-attest does not link k2-client; its help names the format docs in this repo
 1 repo crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
+2 K2 crates/k2-root-proto/src/agent_scope_policy.rs keeper: stored; comments inside the D-Bus policy and the daemon unit drop-in the root helper writes for agent scopes (k2-root-proto links no brand)
+5 K2 crates/k2-root-proto/src/agent_scope.rs keeper: stored; the systemd Description= values and unit comments of the agent slices and scopes the root helper creates (k2-root-proto links no brand; read in systemctl status)

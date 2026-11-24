@@ -558,7 +558,7 @@ pub fn wrong_cgroup_body(detail: &str) -> String {
     serde_json::json!({
         "error": format!("this passport works only from its own agent's terminals: {detail}"),
         "code": "passport_wrong_cgroup",
-        "hint": "run k2 from the agent's own terminal; a passport copied to another shell doesn't work",
+        "hint": format!("run {} from the agent's own terminal; a passport copied to another shell doesn't work", k2_core::brand::CLI_NAME),
     })
     .to_string()
 }

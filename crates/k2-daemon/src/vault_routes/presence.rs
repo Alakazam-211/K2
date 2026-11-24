@@ -143,7 +143,7 @@ fn command(action: &str) -> &'static str {
         BACKUP_EXPORT_INITIAL => "k2 vault backup <folder>",
         BOX_MOVE_EXPORT => "k2 migrate export-secrets",
         BACKUP_KEY_ADD => "k2 vault backup key <age1…>",
-        ISOLATION_LAYOUT => "k2 agent isolation layout on",
+        ISOLATION_LAYOUT => concat!(k2_core::cli_name!(), " agent isolation layout on"),
         _ => "the k2 users command",
     }
 }

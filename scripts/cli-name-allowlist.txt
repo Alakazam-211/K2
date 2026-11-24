@@ -800,3 +800,4 @@
 1 value crates/k5-cli/src/families/hostmail/admin.rs keeper: wire; the cert owner the daemon's /cli/mail/status answer sends
 1 value crates/k5-cli/src/families/doc/print.rs keeper: wire; the key of a not-reached entry's command in the daemon's comment purge and erase answers (n["k2"])
 1 value crates/k5-cli/src/families/agent/hire.rs keeper: wire; the agent mode the daemon stores (--mode k2), as the shell's agent hire takes it
+1 value crates/k2-core/src/agent_fence.rs keeper: stored; the runtime folder $XDG_RUNTIME_DIR/k2 the fence opens, where the daemon keeps its runtime files

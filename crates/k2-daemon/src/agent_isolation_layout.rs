@@ -465,7 +465,7 @@ fn turn_off(host: &dyn Host, who: &Who, ingress: &str) -> CliResponse {
         "placing": false,
         "setting": "off",
         "wasPlacing": was_placing,
-        "appliesTo": "new sessions, job runs and services start without a scope from now on (the layout from before; the next daemon start says which in k2 app doctor)",
+        "appliesTo": format!("new sessions, job runs and services start without a scope from now on (the layout from before; the next daemon start says which in {} app doctor)", k2_core::brand::CLI_NAME),
         "liveScopes": scopes.len(),
     });
     match &layout {

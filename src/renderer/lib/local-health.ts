@@ -23,6 +23,7 @@
 
 import { createStore } from 'zustand/vanilla'
 import { jittered } from '@/lib/backoff'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 export type LocalHealth =
   | { kind: 'ok' }
@@ -62,8 +63,8 @@ export function localProbeDelayMs(attempt: number): number {
 
 /** The note's copy, or null when there is nothing to say. */
 export function localHealthText(h: LocalHealth): string | null {
-  if (h.kind === 'busy') return 'This computer’s K2 server is busy. Reconnecting…'
-  if (h.kind === 'unreachable') return 'Can’t reach this computer’s K2 server. Reconnecting…'
+  if (h.kind === 'busy') return `This computer’s ${PRODUCT_NAME} server is busy. Reconnecting…`
+  if (h.kind === 'unreachable') return `Can’t reach this computer’s ${PRODUCT_NAME} server. Reconnecting…`
   return null
 }
 

@@ -9,8 +9,15 @@
 //! - nothing leaves while air-gap is on, sending is turned off, or the box
 //!   isn't paired with K2 Connect: rows stay `queued`, the reason shown
 //!   (`airgap`, `disabled`, `needs_connect`), no attempt counted;
-//! - a box token comes from the relay (cached until shortly before it
-//!   expires); `401` from the intake drops it and fetches a new one once;
+//! - every POST gets its own fresh box token from the relay (0.46.18: the
+//!   intake spends a token's `jti` on first sight, so a reused token is
+//!   `401 replayed`). A `401 replayed` anyway mints a fresh one and sends
+//!   the same row again at once, one time (safe: the intake keeps one row
+//!   per clientId and answers a resend `200 {id, duplicate: true}`, which
+//!   is sent). Any other `401` is a retryable failure, as before;
+//! - at boot, once per server, rows an older drain left `failed` with
+//!   `token_rejected: replayed` (it reused one token for a whole batch) go
+//!   back to `queued` ([`requeue_replayed_once`]);
 //! - `201`/`200 {id}` → `sent`; another `4xx` → `refused`, never retried;
 //! - a row with a person's screenshot sends it in the same request (the
 //!   stored bytes, every attempt, the same `clientId`), waiting up to 90 s;
@@ -59,11 +66,11 @@ const TICK_SECS: u64 = 60;
 const HOLD_RECHECK_MS: i64 = 60_000;
 /// Rows per pass.
 const BATCH: i64 = 20;
+/// The code migration that marks [`requeue_replayed_once`] done.
+pub const REPLAYED_REQUEUE_ID: &str = "0.46.18-product-feedback-replayed-requeue";
 /// The intake's health check is asked at most this often (only while rows
 /// that couldn't reach the service wait and nothing else is queued).
 const PROBE_EVERY_MS: i64 = 60 * 60_000;
-/// A cached token is used only while it has this long left.
-const TOKEN_MARGIN_MS: i64 = 30_000;
 
 /// Sweep cadence; `K2_PRODUCT_FEEDBACK_TICK_SECS` for tests.
 fn tick() -> Duration {
@@ -114,7 +121,6 @@ struct DrainState {
     next_try_ms: i64,
     /// The intake's `retryAfterSecs`: nothing at all before this.
     hold_until_ms: i64,
-    token: Option<BoxToken>,
     seen: Option<ServiceSeen>,
     tunnel_was_up: bool,
     /// No health check before this.
@@ -149,7 +155,7 @@ pub fn service_seen() -> Option<ServiceSeen> {
     lock().seen.clone()
 }
 
-/// Test hook: forget backoff, the cached token and what was seen.
+/// Test hook: forget backoff and what was seen.
 pub fn reset_for_tests() {
     *lock() = DrainState::default();
 }
@@ -220,7 +226,8 @@ fn emit_row(id: &str, st: State, error: Option<&str>) {
     });
 }
 
-/// Boot: `sending` rows go back to `queued` (PF16).
+/// Boot: `sending` rows go back to `queued` (PF16), and, once per server,
+/// [`requeue_replayed_once`].
 pub fn recover_at_boot() {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -229,6 +236,36 @@ pub fn recover_at_boot() {
         Ok(n) => log_debug!("[product-feedback] boot: {n} row(s) were sending; queued again"),
         Err(e) => log_debug!("[product-feedback] boot recover failed: {e}"),
     }
+    drop(conn);
+    requeue_replayed_once();
+}
+
+/// Once per server (code migration [`REPLAYED_REQUEUE_ID`]): every `failed`
+/// row whose last error is exactly `token_rejected: replayed` (what a drain
+/// before 0.46.18 stored when it reused one box token for a batch), created
+/// within 90 days, goes back to `queued` with a fresh 7-day window. Rows that
+/// failed for any other reason stay failed. Returns the ids it queued.
+pub fn requeue_replayed_once() -> Vec<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if k2_core::db::has_code_migration_applied(&conn, REPLAYED_REQUEUE_ID) {
+        return Vec::new();
+    }
+    let ids = match store::requeue_replayed_failed(&conn, now_ms()) {
+        Ok(ids) => ids,
+        Err(e) => {
+            // Not marked: tried again at the next boot.
+            log_debug!("[product-feedback] boot: requeue of replayed rows failed: {e}");
+            return Vec::new();
+        }
+    };
+    k2_core::db::mark_code_migration_applied(&conn, REPLAYED_REQUEUE_ID, Some(format!("{} row(s)", ids.len()).as_str()));
+    drop(conn);
+    if !ids.is_empty() {
+        log_debug!("[product-feedback] boot: {} row(s) refused for a reused box token queued to send again", ids.len());
+    }
+    emit_requeued(&ids);
+    ids
 }
 
 /// Why a pass was skipped or what it did (for tests and logs).
@@ -422,14 +459,10 @@ enum Applied {
     Skipped,
 }
 
-fn token(force_new: bool) -> Result<BoxToken, Outcome> {
+/// A fresh box token from the relay: one per POST (its `jti` is spent on
+/// first sight), never cached.
+fn mint() -> Result<BoxToken, Outcome> {
     let now = now_ms();
-    if !force_new {
-        if let Some(t) = lock().token.clone().filter(|t| t.expires_at_ms - TOKEN_MARGIN_MS > now) {
-            return Ok(t);
-        }
-    }
-    lock().token = None;
     let (tunnel_token, label) = tunnel_creds().ok_or(Outcome::Retry {
         code: "needs_connect".into(),
         detail: Hold::NeedsConnect.message(),
@@ -437,13 +470,7 @@ fn token(force_new: bool) -> Result<BoxToken, Outcome> {
         reauth: false,
     })?;
     let base = k2_core::tunnel::subdomains::control_plane_base();
-    match wire::fetch_token(&base, &tunnel_token, &label, &pf::audience(), now) {
-        Ok(t) => {
-            lock().token = Some(t.clone());
-            Ok(t)
-        }
-        Err(e) => Err(e.as_retry()),
-    }
+    wire::fetch_token(&base, &tunnel_token, &label, &pf::audience(), now).map_err(|e| e.as_retry())
 }
 
 /// The row's picture as it goes out, when it has one still on the box.
@@ -476,10 +503,11 @@ fn send_one(row: &Row) -> Applied {
     };
     emit_row(&row.id, State::Sending, None);
     let endpoint = pf::endpoint();
-    let outcome = match token(false) {
+    let outcome = match mint() {
         Err(o) => o,
         Ok(t) => match wire::post_submission(&endpoint, &t.token, row, shot.as_ref()) {
-            Outcome::Retry { reauth: true, .. } => match token(true) {
+            // `401 replayed`: a fresh token, the same row, once.
+            Outcome::Retry { reauth: true, .. } => match mint() {
                 Ok(t2) => wire::post_submission(&endpoint, &t2.token, row, shot.as_ref()),
                 Err(o) => o,
             },

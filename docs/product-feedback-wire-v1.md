@@ -39,8 +39,9 @@ Content-Type: application/json
 Answer: `200 {"token": "<ES256 JWT>", "expiresAt": <unix seconds>}`. The JWT
 names this server's label, the audience and a hash of the account, and lives
 5 minutes. The tunnel token itself is sent only to K2 Connect (which already
-holds it), never to the intake. The daemon keeps the box token in memory
-until 30 seconds before it expires.
+holds it), never to the intake. Each token works once (the intake spends its
+jti on first sight), so the daemon asks for a new one for every submission
+it posts and keeps none (0.46.18; before, it reused one for a batch).
 
 ## 2. Submission
 
@@ -135,7 +136,8 @@ again).
 | Answer | What your server does |
 |---|---|
 | `201 {"id"}` or `200 {"id", "duplicate": true}` | **sent** |
-| `401 {"code"}` | fetches a new box token once, then retries later |
+| `401 {"code": "replayed"}` | mints a fresh box token and sends the same submission again at once, one time (the intake keeps one row per clientId, so a stored one answers `200 duplicate`) |
+| another `401 {"code"}` | keeps it **queued** with the reason and retries later |
 | `429 {"retryAfterSecs", "scope"}`, `503 {"code": "intake_paused", "retryAfterSecs"}` | waits that long, then retries |
 | `404`, `405`, `502`, `503`, `504`, another `5xx`, no answer | keeps it **queued** ("isn't reachable yet") and retries: 30 s, doubling, up to every 2 hours, ±20 % |
 | another `4xx` (`400`, `403 box_blocked`, `413`, …) | **refused**, never retried |

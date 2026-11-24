@@ -52,6 +52,8 @@ pub const E_RELAY_REFUSED: &str = "relay_refused";
 pub const E_RATE_LIMITED: &str = "rate_limited";
 pub const E_PAUSED: &str = "intake_paused";
 pub const E_TOKEN: &str = "token_rejected";
+/// The intake's `401` code for a box token whose `jti` it already saw.
+pub const E_REPLAYED: &str = "replayed";
 
 /// The intake's health check: `GET <intake>/health`, no auth.
 pub const HEALTH_PATH: &str = "/health";
@@ -184,8 +186,12 @@ pub fn submission_body(row: &Row, shot: Option<&Screenshot>) -> J {
 pub enum Outcome {
     /// `201 {id}` or `200 {id, duplicate: true}`.
     Sent { remote_id: String, duplicate: bool },
-    /// Try again later. `after_secs` is the intake's `retryAfterSecs`;
-    /// `reauth` = drop the box token and fetch a new one.
+    /// Try again later. `after_secs` is the intake's `retryAfterSecs`.
+    /// `reauth`: the intake answered `401 replayed` (the token's one-use
+    /// `jti` was already spent), so the drain mints a fresh token and sends
+    /// the same submission again at once, one time. That is safe: the
+    /// intake keeps one row per `(box label, clientId)` and answers a
+    /// resend of a stored one `200 {id, duplicate: true}`.
     Retry { code: String, detail: String, after_secs: Option<u64>, reauth: bool },
     /// The intake understood and rejected it: never retried.
     Refused { code: String, detail: String },
@@ -229,12 +235,10 @@ pub fn classify(status: u16, body: &str, retry_after_header: Option<&str>) -> Ou
                 },
             }
         }
-        401 => Outcome::Retry {
-            code: E_TOKEN.into(),
-            detail: code.unwrap_or_else(|| "bad_assertion".into()),
-            after_secs: None,
-            reauth: true,
-        },
+        401 => {
+            let detail = code.unwrap_or_else(|| "bad_assertion".into());
+            Outcome::Retry { code: E_TOKEN.into(), reauth: detail == E_REPLAYED, detail, after_secs: None }
+        }
         429 => Outcome::Retry {
             code: E_RATE_LIMITED.into(),
             detail: serde_json::from_str::<J>(body)
@@ -523,6 +527,10 @@ mod tests {
         assert_eq!(classify(200, r#"{"id":"u1","duplicate":true}"#, None), Outcome::Sent { remote_id: "u1".into(), duplicate: true });
         assert!(matches!(classify(200, "<html>portal</html>", None), Outcome::Retry { ref code, .. } if code == E_UNREACHABLE));
         assert!(matches!(classify(401, r#"{"code":"replayed"}"#, None), Outcome::Retry { reauth: true, ref detail, .. } if detail == "replayed"));
+        // Any other 401 is no reason to send again at once.
+        for b in [r#"{"code":"bad_assertion"}"#, r#"{"code":"assertion_expired"}"#, ""] {
+            assert!(matches!(classify(401, b, None), Outcome::Retry { reauth: false, ref code, .. } if code == E_TOKEN), "{b}");
+        }
         assert_eq!(
             classify(429, r#"{"retryAfterSecs":120,"scope":"box"}"#, None),
             Outcome::Retry { code: E_RATE_LIMITED.into(), detail: "scope box".into(), after_secs: Some(120), reauth: false }

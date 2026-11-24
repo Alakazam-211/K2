@@ -456,6 +456,35 @@ pub fn requeue_unreachable_failed(conn: &Connection, now: i64) -> rusqlite::Resu
     })
 }
 
+/// The `last_error` a row was left with when the intake refused a box token
+/// it had already seen (`401 replayed`): before 0.46.18 the drain reused one
+/// token for a whole batch, and every post after the first was refused.
+pub const REPLAYED_ERROR: &str = "token_rejected: replayed";
+
+/// `failed` rows left by [`REPLAYED_ERROR`] (created within
+/// [`RESEND_MAX_AGE_MS`]) go back to `queued`, due now, with a fresh 7-day
+/// window, oldest first. Returns their ids. The daemon runs this once per
+/// server (a code migration), at boot.
+pub fn requeue_replayed_failed(conn: &Connection, now: i64) -> rusqlite::Result<Vec<String>> {
+    atomically(conn, || {
+        let ids: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM product_feedback_outbox WHERE state = 'failed' AND last_error = ?1 AND created_at >= ?2 \
+                 ORDER BY created_at ASC, id ASC",
+            )?;
+            let rows = stmt.query_map(params![REPLAYED_ERROR, now - RESEND_MAX_AGE_MS], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let mut out = Vec::new();
+        for id in ids {
+            if retry(conn, &id, now)? {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    })
+}
+
 /// Whether any `failed` row would go again by itself: only then is the
 /// intake's health check worth asking.
 pub fn has_resendable_failed(conn: &Connection, now: i64) -> rusqlite::Result<bool> {
@@ -886,6 +915,32 @@ mod tests {
         assert_eq!(requeue_unreachable_failed(&c, now).unwrap(), vec!["pf_edge".to_string()]);
         assert_eq!(get(&c, "pf_old").unwrap().unwrap().state, State::Failed);
         assert!(!has_resendable_failed(&c, now).unwrap(), "the old one alone asks nothing");
+    }
+
+    /// 0.46.18: rows a reused box token left failed (`401 replayed`) go
+    /// back to the queue; no other failure does, nor one older than 90 days.
+    #[test]
+    fn rows_failed_on_a_replayed_token_go_back_and_nothing_else() {
+        assert_eq!(REPLAYED_ERROR, format!("{}: {}", super::super::wire::E_TOKEN, super::super::wire::E_REPLAYED), "what the drain stores");
+        let c = db();
+        let day = 86_400_000;
+        let now = 200 * day;
+        failed_row(&c, "pf_p2", now - 2 * day, REPLAYED_ERROR);
+        failed_row(&c, "pf_p1", now - 3 * day, REPLAYED_ERROR);
+        failed_row(&c, "pf_old", now - RESEND_MAX_AGE_MS - 1, REPLAYED_ERROR);
+        failed_row(&c, "pf_bad", now - day, "token_rejected: bad_assertion");
+        failed_row(&c, "pf_off", now - day, "disabled: Sending feedback to K2 is turned off on this server");
+        failed_row(&c, "pf_net", now - day, "service_unreachable: connection refused");
+        let ids = requeue_replayed_failed(&c, now).unwrap();
+        assert_eq!(ids, ["pf_p1", "pf_p2"].map(String::from).to_vec(), "oldest first");
+        for id in &ids {
+            let r = get(&c, id).unwrap().unwrap();
+            assert_eq!((r.state, r.queued_at, r.next_attempt_at, r.attempts), (State::Queued, now, now, 0), "{id}");
+        }
+        for id in ["pf_old", "pf_bad", "pf_off", "pf_net"] {
+            assert_eq!(get(&c, id).unwrap().unwrap().state, State::Failed, "{id}");
+        }
+        assert!(requeue_replayed_failed(&c, now).unwrap().is_empty(), "nothing left");
     }
 
     #[test]

@@ -11,8 +11,13 @@
 //!   and the clientId as the idempotency key; the body is exactly the wire
 //!   contract and a vault value is `[k2v:NAME]`;
 //! - a restart mid-`sending` resends with the same key (200 duplicate →
-//!   sent); `429`/`503` honour `retryAfterSecs`; `401` fetches a new token
-//!   once; another `4xx` is `refused` and never retried;
+//!   sent); `429`/`503` honour `retryAfterSecs`; `401 replayed` mints a
+//!   fresh token and sends again once, another `401` waits; another `4xx`
+//!   is `refused` and never retried;
+//! - 0.46.18: every POST has its own box token, so a batch against an
+//!   intake that spends each `jti` lands whole; a lost answer (stored, then
+//!   `401 replayed`) is resent and its `200 duplicate` is delivered with the
+//!   stored id; rows an older drain left failed on `replayed` go back once;
 //! - agents: the switch, the box limits, no contact email, no settings;
 //!   people: Member sees only their own rows, the owner sees all; App
 //!   passes are refused; GET on every POST route is 405;
@@ -1503,4 +1508,197 @@ async fn a_real_answer_to_a_send_also_requeues_and_air_gap_or_off_asks_nothing()
     assert_eq!(health_checks(&e.intake), checks);
     assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
     assert_eq!(show(port, OWNER, &stranded)["state"], json!("sent"));
+}
+
+// ── 0.46.18: a fresh box token for every POST ────────────────────────
+
+/// A relay that mints a different token each time (as the real one does:
+/// each has its own one-use `jti`).
+fn relay_minting() -> impl Fn(&Req) -> (u16, String) + Send + 'static {
+    let n = std::sync::atomic::AtomicUsize::new(0);
+    move |_| {
+        let i = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        (200, json!({ "token": format!("{JWT}{i}"), "expiresAt": 4_102_444_800i64 }).to_string())
+    }
+}
+
+/// What the strict intake keeps.
+#[derive(Default)]
+struct Strict {
+    /// Every box token it has seen (its `jti`, spent on first sight).
+    spent: std::collections::HashSet<String>,
+    /// One row per clientId, as `UNIQUE (box_label, client_id)`.
+    rows: BTreeMap<String, String>,
+    /// Resends of a stored row it answered `200 {duplicate: true}`.
+    duplicates: usize,
+    /// Store the next submission but answer it `401 replayed` (its answer
+    /// was lost: the token was spent and the row stored).
+    lose_next_answer: bool,
+}
+
+/// The intake as K2 Web runs it: a token seen before is `401 replayed`
+/// whatever the body; a clientId it already stored is `200 {id, duplicate:
+/// true}`; a new one is `201 {id}`.
+fn intake_one_use(st: Arc<Mutex<Strict>>) -> impl Fn(&Req) -> (u16, String) + Send + 'static {
+    move |r| {
+        let mut s = st.lock().unwrap();
+        let tok = r.header("Authorization").unwrap_or("").to_string();
+        if !s.spent.insert(tok) {
+            return (401, json!({ "code": "replayed" }).to_string());
+        }
+        let key = r.header("Idempotency-Key").unwrap_or("none").to_string();
+        if let Some(id) = s.rows.get(&key).cloned() {
+            s.duplicates += 1;
+            return (200, json!({ "id": id, "duplicate": true }).to_string());
+        }
+        let id = format!("ticket-{}", s.rows.len() + 1);
+        s.rows.insert(key, id.clone());
+        if std::mem::take(&mut s.lose_next_answer) {
+            return (401, json!({ "code": "replayed" }).to_string());
+        }
+        (201, json!({ "id": id }).to_string())
+    }
+}
+
+/// The submissions the intake saw for `id`, in order.
+fn posts_for(intake: &Fake, id: &str) -> Vec<Req> {
+    intake
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "POST" && r.path == "/v1/submissions" && r.header("Idempotency-Key") == Some(id))
+        .collect()
+}
+
+/// Send `text` while the relay has no route, and wait until its attempt is
+/// over (queued with `relay_not_ready`), so no kick is left to race.
+fn send_and_hold(port: u16, text: &str) -> String {
+    let (s, v) = send(port, OWNER, json!({ "text": text }));
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let it = show(port, OWNER, &id);
+        if it["error"] == json!("relay_not_ready") {
+            return id;
+        }
+        assert!(Instant::now() < deadline, "{id}: never tried: {it}");
+        due_now(&id);
+        let _ = drain_now();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_batch_against_one_use_box_tokens_all_lands() {
+    let e = setup(true);
+    let port = e.port;
+    empty_outbox();
+    e.relay.set(|_| (404, "not found".into()));
+    let ids: Vec<String> = ["one", "two", "three"].iter().map(|t| send_and_hold(port, t)).collect();
+
+    let st = Arc::new(Mutex::new(Strict::default()));
+    e.relay.set(relay_minting());
+    e.intake.set(intake_one_use(st.clone()));
+    let n_relay = e.relay.requests().len();
+    for id in &ids {
+        due_now(id);
+    }
+    drain::reset_for_tests();
+    assert_eq!(drain_now(), Pass::Ran { sent: 3, refused: 0, retried: 0 }, "the whole batch in one pass");
+    let s = st.lock().unwrap();
+    for id in &ids {
+        let it = show(port, OWNER, id);
+        assert_eq!((it["state"].clone(), it["remoteId"].clone()), (json!("sent"), json!(s.rows[id])), "{it}");
+        assert_eq!(posts_for(&e.intake, id).len(), 1, "{id}: one POST, no 401 to recover from");
+    }
+    let auths: std::collections::HashSet<String> =
+        ids.iter().map(|id| posts_for(&e.intake, id)[0].header("Authorization").unwrap().to_string()).collect();
+    assert_eq!(auths.len(), 3, "a fresh token for every POST");
+    assert_eq!(e.relay.requests().len(), n_relay + 3, "one mint per POST");
+    assert_eq!(s.duplicates, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_replayed_answer_is_sent_again_once_with_a_fresh_token_and_the_duplicate_is_delivered() {
+    let e = setup(true);
+    let port = e.port;
+    empty_outbox();
+    let st = Arc::new(Mutex::new(Strict { lose_next_answer: true, ..Strict::default() }));
+    e.relay.set(relay_minting());
+    e.intake.set(intake_one_use(st.clone()));
+    let n_relay = e.relay.requests().len();
+
+    // The intake stores it but answers 401 replayed; the resend with a fresh
+    // token is 200 duplicate: delivered, with the stored row's id.
+    let (s, v) = send(port, OWNER, json!({ "text": "its answer was lost" }));
+    assert_eq!(s, 200, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    let it = wait_row(port, OWNER, &id, "sent", |it| it["state"] == json!("sent"));
+    let stored = st.lock().unwrap().rows[&id].clone();
+    assert_eq!((it["remoteId"].clone(), it["error"].clone()), (json!(stored), J::Null), "{it}");
+    let posts = posts_for(&e.intake, &id);
+    assert_eq!(posts.len(), 2, "the first and one resend");
+    assert_ne!(posts[0].header("Authorization"), posts[1].header("Authorization"), "the resend has a fresh token");
+    assert_eq!(posts[0].body, posts[1].body, "the same submission");
+    assert_eq!(e.relay.requests().len(), n_relay + 2);
+    {
+        let s = st.lock().unwrap();
+        assert_eq!((s.duplicates, s.rows.len()), (1, 1), "one row at the intake, the resend its duplicate");
+    }
+
+    // Any other 401 is not sent again at once: queued with the reason.
+    e.intake.set(|_| (401, json!({ "code": "bad_assertion" }).to_string()));
+    let n_relay = e.relay.requests().len();
+    let (_, v) = send(port, OWNER, json!({ "text": "a bad token" }));
+    let bad = v["id"].as_str().unwrap().to_string();
+    let it = wait_row(port, OWNER, &bad, "refused the token", |it| it["error"] == json!("token_rejected"));
+    assert_eq!(it["state"], json!("queued"), "{it}");
+    assert_eq!(posts_for(&e.intake, &bad).len(), 1, "no resend for bad_assertion");
+    assert_eq!(e.relay.requests().len(), n_relay + 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rows_failed_on_a_replayed_token_go_back_once_at_boot() {
+    let e = setup(true);
+    let port = e.port;
+    empty_outbox();
+    e.relay.set(|_| (404, "not found".into()));
+    let replayed = send_and_hold(port, "a reused token");
+    let other_401 = send_and_hold(port, "a bad token");
+    let off = send_and_hold(port, "sending was off");
+    fail_row(&replayed, 3, k2_core::product_feedback::store::REPLAYED_ERROR);
+    fail_row(&other_401, 3, "token_rejected: bad_assertion");
+    fail_row(&off, 3, "disabled: Sending feedback to K2 is turned off on this server");
+    forget_requeue_marker();
+
+    drain::recover_at_boot();
+    let it = show(port, OWNER, &replayed);
+    assert_eq!((it["state"].clone(), it["attempts"].clone()), (json!("queued"), json!(0)), "queued again, a fresh window: {it}");
+    for id in [&other_401, &off] {
+        assert_eq!(show(port, OWNER, id)["state"], json!("failed"), "{id} stays failed");
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert!(k2_core::db::has_code_migration_applied(&conn, drain::REPLAYED_REQUEUE_ID));
+    }
+    // Once: a row that fails that way again stays failed.
+    fail_row(&replayed, 3, k2_core::product_feedback::store::REPLAYED_ERROR);
+    drain::recover_at_boot();
+    assert!(drain::requeue_replayed_once().is_empty());
+    assert_eq!(show(port, OWNER, &replayed)["state"], json!("failed"), "only once per server");
+
+    // And a requeued one sends with a fresh token.
+    forget_requeue_marker();
+    assert_eq!(drain::requeue_replayed_once(), vec![replayed.clone()]);
+    e.relay.set(relay_minting());
+    e.intake.set(intake_one_use(Arc::new(Mutex::new(Strict::default()))));
+    drain::reset_for_tests();
+    assert_eq!(drain_now(), Pass::Ran { sent: 1, refused: 0, retried: 0 });
+    assert_eq!(show(port, OWNER, &replayed)["state"], json!("sent"));
+}
+
+fn forget_requeue_marker() {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("DELETE FROM code_migrations WHERE id = ?1", [drain::REPLAYED_REQUEUE_ID]).unwrap();
 }

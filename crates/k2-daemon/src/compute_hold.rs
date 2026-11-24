@@ -118,21 +118,88 @@ pub fn any_hold(auto: bool, starts_now: bool) -> Option<frames::Refusal> {
     (auto && !starts_now).then(|| frames::Refusal::new(ANY_HOLD, "held on this server until a node that fits has a free slot (never into a node's queue)"))
 }
 
-/// Tier rank for [`dispatch_order`]: CI, Priority, Standard, Batch.
-fn rank(t: Tier) -> u8 {
-    match t {
-        Tier::Ci => 0,
-        Tier::Priority => 1,
-        Tier::Batch => 3,
-        _ => 2,
-    }
+/// A job row's estimate as the scheduler reads it.
+fn est_of(j: &store::JobRow) -> Option<u64> {
+    j.est_secs.filter(|e| *e > 0).map(|e| e as u64)
 }
 
 /// The order the sweeper offers held jobs to nodes that free up: by tier
 /// (CI, Priority, Standard, Batch), then first queued first (the sweep's
-/// list is oldest first; the sort is stable).
-pub fn dispatch_order(jobs: &mut [store::JobRow]) {
-    jobs.sort_by_key(|j| rank(j.tier()));
+/// list is oldest first; the sort is stable). In a tier where some job
+/// has an expected run time (design-compute-duration-aware-queue-v1), but
+/// never CI: hour-old jobs first, then the sooner expected end first, a
+/// long job rising as it waits ([`scheduler::dispatch_key`]).
+pub fn dispatch_order(jobs: &mut [store::JobRow], now: i64) {
+    let timed: std::collections::HashSet<u8> = jobs.iter().filter(|j| est_of(j).is_some()).map(|j| scheduler::dispatch_rank(j.tier())).collect();
+    jobs.sort_by_key(|j| scheduler::dispatch_key(j.tier(), j.created_at, est_of(j), now, timed.contains(&scheduler::dispatch_rank(j.tier()))));
+}
+
+// ── the fleet reservation ────────────────────────────────────────────
+//
+// An hour-old auto job no node can start now reserves the node it would
+// start on first ([`reserve`], by the sweeper). Until the next sweep
+// renews it, nothing else starts there ([`reserved_against`], read by
+// placement's "starts now") unless it is expected to end, with a quarter
+// more, before that node's soonest expected end, or within
+// [`scheduler::AGED_IDLE_BOUND_SECS`] when that isn't known: its wait is
+// bounded, and the node is never held idle long.
+
+/// A reservation lapses unless a sweep renews it within this long.
+pub const RESERVE_TTL_SECS: i64 = 30;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Reservation {
+    job_id: String,
+    bound_secs: u64,
+    at: i64,
+}
+
+static RESERVED: std::sync::Mutex<Option<std::collections::HashMap<String, Reservation>>> = std::sync::Mutex::new(None);
+
+fn reserved<T>(f: impl FnOnce(&mut std::collections::HashMap<String, Reservation>) -> T) -> T {
+    let mut g = RESERVED.lock().unwrap_or_else(|p| p.into_inner());
+    f(g.get_or_insert_with(Default::default))
+}
+
+/// A sweep starts: every reservation is made again from its jobs.
+pub fn clear_reservations() {
+    reserved(|m| m.clear());
+}
+
+/// Reserve `node_id` for `job_id` (the first job to ask wins it this
+/// sweep). `bound_secs`: how long other jobs may still use it meanwhile.
+pub fn reserve(node_id: &str, job_id: &str, bound_secs: u64, now: i64) -> bool {
+    reserved(|m| match m.get(node_id) {
+        Some(r) if r.job_id != job_id && now - r.at <= RESERVE_TTL_SECS => false,
+        _ => {
+            m.insert(node_id.to_string(), Reservation { job_id: job_id.to_string(), bound_secs, at: now });
+            true
+        }
+    })
+}
+
+/// Is `node_id` reserved for another job that a job expected to run
+/// `est_secs` would delay?
+pub fn reserved_against(node_id: &str, est_secs: Option<u64>, now: i64) -> bool {
+    reserved(|m| match m.get(node_id) {
+        Some(r) if now - r.at <= RESERVE_TTL_SECS => {
+            let left = r.bound_secs.saturating_sub((now - r.at).max(0) as u64);
+            !scheduler::ends_within(est_secs, Some(left))
+        }
+        _ => false,
+    })
+}
+
+/// The job a node is reserved for now (display).
+pub fn reserved_for(node_id: &str, now: i64) -> Option<String> {
+    reserved(|m| m.get(node_id).filter(|r| now - r.at <= RESERVE_TTL_SECS).map(|r| r.job_id.clone()))
+}
+
+/// Does this held job reserve a node: an auto job, not Batch, that has
+/// waited an hour?
+pub fn reserves(j: &store::JobRow, now: i64) -> bool {
+    use k2_core::compute::proto::tiers;
+    j.ctl.any.is_some() && j.state == "queued" && !j.node_queued && j.tier() != Tier::Batch && j.ctl.shards.is_empty() && tiers::aged(now - j.created_at, tiers::AGE_SECS)
 }
 
 /// An auto job waiting on this server only because no node that fits has
@@ -196,7 +263,7 @@ mod tests {
     fn dispatch_order_is_tier_then_first_queued() {
         let job = |id: &str, tier: &str, at: i64| store::JobRow { id: id.into(), tier: tier.into(), created_at: at, ..Default::default() };
         let mut v = vec![job("s1", "normal", 1), job("b1", "batch", 2), job("p1", "priority", 3), job("s2", "normal", 4), job("c1", "ci", 5), job("p2", "priority", 6)];
-        dispatch_order(&mut v);
+        dispatch_order(&mut v, 10);
         assert_eq!(v.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec!["c1", "p1", "p2", "s1", "s2", "b1"]);
     }
 
@@ -211,5 +278,64 @@ mod tests {
         assert!(!is_held(&pinned, ANY_HOLD));
         let in_queue = store::JobRow { state: "assigned".into(), node_queued: true, ..auto };
         assert!(!is_held(&in_queue, ANY_HOLD));
+    }
+
+    /// With run times known (design-compute-duration-aware-queue-v1): in a
+    /// tier, hour-old jobs first by arrival, then the sooner expected end;
+    /// CI keeps arrival; a tier with no estimate keeps oldest first.
+    #[test]
+    fn dispatch_order_puts_the_sooner_end_first_inside_a_tier() {
+        let now = 10_000;
+        let job = |id: &str, tier: &str, at: i64, est: Option<i64>| store::JobRow { id: id.into(), tier: tier.into(), created_at: at, est_secs: est, ..Default::default() };
+        let mut v = vec![
+            job("long", "normal", now - 100, Some(7200)),
+            job("old", "normal", now - 4000, Some(9000)),
+            job("short", "normal", now - 50, Some(60)),
+            job("unknown", "normal", now - 60, None),
+            job("ci-long", "ci", now - 30, Some(9000)),
+            job("ci-short", "ci", now - 20, Some(60)),
+            job("b1", "batch", now - 10, None),
+            job("b2", "batch", now - 5, None),
+        ];
+        v.sort_by_key(|j| j.created_at);
+        dispatch_order(&mut v, now);
+        assert_eq!(v.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec!["ci-long", "ci-short", "old", "short", "unknown", "long", "b1", "b2"]);
+    }
+
+    /// The fleet reservation: an hour-old auto job's node starts only what
+    /// ends (with a quarter more) within the bound left; it lapses unless
+    /// renewed; the first job to reserve a node keeps it.
+    #[test]
+    fn a_reserved_node_starts_only_what_ends_first_and_the_reservation_lapses() {
+        let n = "node-reservation-test";
+        assert!(reserve(n, "aged", 600, 1_000));
+        assert_eq!(reserved_for(n, 1_000).as_deref(), Some("aged"));
+        assert!(!reserved_against(n, Some(300), 1_000), "375 s fits in 600 s");
+        assert!(reserved_against(n, Some(600), 1_000), "750 s doesn't");
+        assert!(reserved_against(n, None, 1_000), "unknown never goes");
+        assert!(!reserved_against(n, Some(470), 1_000), "587 s fits in 600 s");
+        assert!(reserved_against(n, Some(470), 1_020), "20 s later only 580 s are left");
+        assert!(!reserve(n, "other", 600, 1_010), "another job can't take it while it holds");
+        assert!(reserve(n, "aged", 600, 1_010), "its own job renews it");
+        assert!(!reserved_against("another-node", None, 1_000), "other nodes are free");
+        assert!(!reserved_against(n, None, 1_010 + RESERVE_TTL_SECS + 1), "not renewed: it lapses");
+        assert!(reserve(n, "other", 600, 1_010 + RESERVE_TTL_SECS + 1), "a lapsed one can be taken");
+    }
+
+    #[test]
+    fn only_an_hour_old_auto_job_below_batch_reserves() {
+        let now = 10_000;
+        let auto = store::JobRow {
+            state: "queued".into(),
+            tier: "normal".into(),
+            created_at: now - 3600,
+            ctl: store::JobCtl { any: Some(Default::default()), ..Default::default() },
+            ..Default::default()
+        };
+        assert!(reserves(&auto, now));
+        assert!(!reserves(&store::JobRow { created_at: now - 3599, ..auto.clone() }, now), "under an hour");
+        assert!(!reserves(&store::JobRow { ctl: store::JobCtl::default(), ..auto.clone() }, now), "pinned: never");
+        assert!(!reserves(&store::JobRow { tier: "batch".into(), ..auto.clone() }, now), "Batch waits for idle anyway");
+        assert!(!reserves(&store::JobRow { node_queued: true, ..auto }, now), "already in a node's queue");
     }
 }

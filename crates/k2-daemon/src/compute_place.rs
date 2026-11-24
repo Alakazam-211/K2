@@ -170,7 +170,14 @@ pub struct Want {
     /// none`): also a node offering `no-addr-filter` and a grant with
     /// `allow_no_addr_filter`.
     pub no_addr_filter: bool,
+    /// Its expected run time, seconds (design-compute-duration-aware-queue-v1):
+    /// a long one ([`LONG_JOB_SECS`]) prefers the bigger of the nodes that
+    /// start it now.
+    pub est_secs: Option<u64>,
 }
+
+/// A job expected to run this long or more prefers a bigger node.
+pub const LONG_JOB_SECS: u64 = 30 * 60;
 
 impl Want {
     /// GPU jobs S6: the job's memory on the node behind `offer`: its
@@ -212,6 +219,7 @@ impl Want {
             network: plan.network.clone(),
             userns: plan.userns,
             no_addr_filter: plan.no_addr_filter,
+            est_secs: j.est_secs.filter(|e| *e > 0).map(|e| e as u64),
         }
     }
 
@@ -227,6 +235,7 @@ impl Want {
             needs_git: self.needs_git,
             tier: self.tier, submitter: None,
             gpus: self.gpu.map_or(0, |g| g.count),
+            est_secs: self.est_secs,
         }
     }
 
@@ -472,8 +481,15 @@ impl Cand {
 
     /// Starts the job now (as far as the last offer, the pending asks and
     /// our registry say; on a shared node, as far as its quote says, and
-    /// node-wide free memory and CPU allow, CP-A6).
+    /// node-wide free memory and CPU allow, CP-A6). A node reserved for an
+    /// hour-old job starts only what ends before that job could start
+    /// ([`crate::compute_hold::reserved_against`]).
     pub fn starts_now(&self, w: &Want) -> bool {
+        self.starts_now_free(w) && !crate::compute_hold::reserved_against(&self.node.id, w.est_secs, compute::now())
+    }
+
+    /// [`Cand::starts_now`] without the fleet reservation.
+    fn starts_now_free(&self, w: &Want) -> bool {
         if let Some(v) = self.shared_view() {
             // A10: a shared node's quote doesn't know its GPU is held, so
             // a GPU job also needs a free GPU in the offer. A node its owner
@@ -1714,9 +1730,10 @@ fn rank_v1<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: 
 enum V2Key {
     /// Starts now: not the node that holds the `--cache` (CE-6: that one
     /// first), a `sys:` need it can't install (CE-1: last), band (warmth
-    /// worth one band), `prefer_not`, warmth, recent placements, this
-    /// workspace's running jobs, load, free CPU, `sys:` support, name.
-    Now(bool, bool, u8, bool, Reverse<u8>, u32, u32, u32, Reverse<u64>, bool, String),
+    /// worth one band), `prefer_not`, warmth, a long job's bigger CPU cap
+    /// ([`LONG_JOB_SECS`]), recent placements, this workspace's running
+    /// jobs, load, free CPU, `sys:` support, name.
+    Now(bool, bool, u8, bool, Reverse<u8>, Reverse<u64>, u32, u32, u32, Reverse<u64>, bool, String),
     /// Busy everywhere: a node held for a job the mover is bringing there
     /// last (a job queued there would start first and bounce it),
     /// `prefer_not`, a `sys:` need it can't install, a known ETA (`(0,
@@ -1737,7 +1754,9 @@ fn v2_key(c: &Cand, tier: Tier, w: &Want, prefer_not: &[String], project_key: Op
             let band = c.band(w).saturating_sub(u8::from(warm >= 1));
             let no_sys = w.wants_sys() && !c.offer.features.iter().any(|f| f == needs::FEATURE_SYSTEM_PACKAGES);
             let cache_elsewhere = !(c.holds_cache && w.cache.is_some());
-            V2Key::Now(cache_elsewhere, unsupported, band, avoid, Reverse(warm), c.recent, c.ws_running(w), c.load_after(w), Reverse(c.free_now().1), no_sys, name)
+            // A long job (design-compute-duration-aware-queue-v1): the bigger node.
+            let long_big = if w.est_secs.is_some_and(|e| e >= LONG_JOB_SECS) { c.offer.caps.cpu_millis } else { 0 };
+            V2Key::Now(cache_elsewhere, unsupported, band, avoid, Reverse(warm), Reverse(long_big), c.recent, c.ws_running(w), c.load_after(w), Reverse(c.free_now().1), no_sys, name)
         }
         Tier::Busy => {
             let eta = c.wait_eta(w).map(|(e, _)| (0, e)).unwrap_or((1, 0));
@@ -2540,7 +2559,10 @@ pub fn sweep(now: i64) {
         // A pooled read: the sweep's snapshot never holds the writer's lock.
         k2_core::db::read(store::queued_jobs)
     };
-    crate::compute_hold::dispatch_order(&mut queued);
+    crate::compute_hold::dispatch_order(&mut queued, now);
+    // The hour-old jobs below reserve their nodes again (an hour-old job
+    // first in the order tries its node before its own reservation).
+    crate::compute_hold::clear_reservations();
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
     let mut changed = false;
     for j in queued {
@@ -2577,11 +2599,38 @@ pub fn sweep(now: i64) {
             if try_move(&j, &[], hard, why).is_some() {
                 decisions.clear();
                 changed = true;
+                continue;
             }
+        }
+        // Still waiting after an hour: it reserves the node it would start
+        // on first, so its wait is bounded (the fleet reservation).
+        if crate::compute_hold::reserves(&j, now) {
+            reserve_first_busy(&j, now);
         }
     }
     if changed {
         compute_ws::notify_change();
+    }
+}
+
+/// Reserve the first busy node (placement's order) that `j` fits and no
+/// older job holds: other jobs may use it meanwhile only within its
+/// soonest expected end (a solo node whose running jobs' ends are all
+/// known), else [`scheduler::AGED_IDLE_BOUND_SECS`].
+fn reserve_first_busy(j: &JobRow, now: i64) {
+    let Some(plan) = j.plan() else { return };
+    let w = Want::of_job(j, &plan);
+    let report = candidates_report(&w, &[], now);
+    let pk = plan.src.as_ref().map(|s| s.project_key.clone());
+    let commit = plan.src.as_ref().map(|s| s.commit.clone());
+    for (c, tier) in rank(compute::placement_policy(), &report.cands, &w, &[], pk.as_deref(), commit.as_deref()) {
+        if tier != Tier::Busy || scheduler::never_fits(&c.offer, &w.probe_on(&c.offer)).is_some() {
+            continue;
+        }
+        let shadow = if share::is_shared(&c.offer) { None } else { c.load.shadow() };
+        if crate::compute_hold::reserve(&c.node.id, &j.id, shadow.unwrap_or(scheduler::AGED_IDLE_BOUND_SECS), now) {
+            return;
+        }
     }
 }
 

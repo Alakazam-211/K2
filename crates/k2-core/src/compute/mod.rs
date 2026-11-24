@@ -24,6 +24,7 @@ pub mod advertise;
 /// Which repo a run ships when the caller is in another repo than the workspace's.
 pub mod caller_repo;
 pub mod enroll;
+pub mod estimate;
 pub mod git;
 /// prd-compute-blacksmith-class-v1 O2: job stats series, `k2 compute stats`.
 pub mod job_stats;

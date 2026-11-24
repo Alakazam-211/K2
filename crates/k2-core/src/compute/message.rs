@@ -32,6 +32,9 @@ pub struct Extra<'a> {
     /// A stalled job: which stall rule ended it, in this server's own
     /// words ([`super::proto::stall::words_for`]), never the node's text.
     pub stall: Option<&'static str>,
+    /// A finished run: the `--expect` its next submission should pass
+    /// ([`super::estimate::expect_flag`], `12m`).
+    pub next_expect: Option<&'a str>,
 }
 
 /// Keep only plain characters of a controller- or node-made fact.
@@ -64,11 +67,14 @@ pub fn completion_text(
         );
     }
     let after = secs.map(|s| format!(" after {}", duration(s))).unwrap_or_default();
+    // A finished run says what to pass next time (design-compute-duration-
+    // aware-queue-v1), so the next submission needn't guess.
+    let next = extra.next_expect.map(|n| format!("; next time: --expect {}", plain(n, 12))).unwrap_or_default();
     let what = match state {
         "done" => match (exit_code, signal) {
-            (Some(c), _) => format!("exit {c}{after}"),
+            (Some(c), _) => format!("exit {c}{after}{next}"),
             (None, Some(sig)) => format!("killed by signal {sig}{after}"),
-            _ => format!("finished{after}"),
+            _ => format!("finished{after}{next}"),
         },
         "failed" => format!("failed ({}){after}", reason.unwrap_or("infrastructure")),
         "timeout" if reason == Some("stalled") => format!(
@@ -194,5 +200,17 @@ mod tests {
             completion_text("7f3a0000aaaa", "k2n7-vin", "done", Some(0), None, None, Some(372), None, &x),
             "[compute] job 7f3a0000 on k2n7-vin: exit 0 after 6m12s (rustc 1.99.1) (this server heard of it 2h56m late). k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
         );
+    }
+
+    /// A finished run says what to pass next time; any other end doesn't.
+    #[test]
+    fn a_finished_run_says_the_next_expect() {
+        let x = Extra { next_expect: Some("12m"), ..Default::default() };
+        assert_eq!(
+            completion_text("7f3a0000aaaa", "k2n7-vin", "done", Some(0), None, None, Some(700), None, &x),
+            "[compute] job 7f3a0000 on k2n7-vin: exit 0 after 11m40s; next time: --expect 12m. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
+        );
+        let failed = completion_text("7f3a0000aaaa", "n", "timeout", None, None, None, Some(700), None, &x);
+        assert!(!failed.contains("--expect"), "{failed}");
     }
 }

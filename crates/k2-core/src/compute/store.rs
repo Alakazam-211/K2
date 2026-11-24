@@ -711,6 +711,27 @@ pub struct JobCtl {
     /// `A-Za-z0-9._:/-`). `jobs --tag` filters on `$.k2ctl.tag`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// `--expect <duration>` (design-compute-duration-aware-queue-v1): how
+    /// long the submitter said it takes, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_secs: Option<i64>,
+    /// `--expect unknown`: the submitter said it doesn't know (a first run).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expect_unknown: bool,
+    /// Where `est_secs` came from ([`super::estimate::Basis`]'s code).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub est_basis: Option<String>,
+    /// How many earlier runs of its family the estimate read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub est_runs: Option<u32>,
+    /// The family's history median when the estimate came from elsewhere
+    /// or disagreed with `expect_secs` (display).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub est_history_secs: Option<i64>,
+    /// `--expect` is ignored for this family until then (a run took far
+    /// longer than it said).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_ignored_until: Option<i64>,
     /// CE-15: the env names K2 set to the job's CPUs (the caller set none
     /// of them), so a move recomputes them for the new node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2794,5 +2815,37 @@ mod tests {
         let old: AnyFilter = serde_json::from_str("{\"avoid\":[\"id-11\"]}").unwrap();
         assert!(old.avoid_names.is_empty() && old.avoids("id-11", "x"), "a row from before keeps reading");
         assert!(!serde_json::to_string(&AnyFilter::default()).unwrap().contains("avoidNames"), "empty: not written");
+    }
+
+    /// A job family's runs (design-compute-duration-aware-queue-v1): by
+    /// `--tag` when given, else by argv; on one node when asked; only
+    /// `done` runs, newest first, each with the `--expect` it was sent with.
+    #[test]
+    fn family_runs_read_done_runs_by_tag_or_argv_with_their_expect() {
+        use super::super::estimate::{family_runs, Run};
+        let c = conn();
+        let add = |i: usize, node: &str, argv: &[&str], tag: Option<&str>, expect: Option<i64>, state: &str, start: i64, end: i64| {
+            let id = format!("fa{i:030}");
+            let mut p = plan(&id, node, "ws");
+            p.argv = argv.iter().map(|s| s.to_string()).collect();
+            let ctl = JobCtl { tag: tag.map(str::to_string), expect_secs: expect, ..JobCtl::default() };
+            insert_job(&c, &NewJob { plan: &p, client_job_id: &format!("client-family-{i}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl }).unwrap();
+            c.execute("UPDATE compute_jobs SET state = ?2, started_at = ?3, ended_at = ?4 WHERE id = ?1", params![id, state, start, end]).unwrap();
+        };
+        add(1, "n1", &["cargo", "test"], None, Some(60), "done", 100, 700);
+        add(2, "n2", &["cargo", "test"], None, None, "done", 1000, 1500);
+        add(3, "n1", &["cargo", "test"], None, None, "failed", 2000, 2100);
+        add(4, "n1", &["cargo", "test", "-p", "x"], Some("suite"), None, "done", 3000, 3900);
+        add(5, "n1", &["npx", "vitest"], Some("suite"), Some(800), "done", 4000, 4800);
+        let argv = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        assert_eq!(
+            family_runs(&c, "ws", &argv(&["cargo", "test"]), None, None, 20),
+            vec![Run { secs: 500, expect_secs: None, ended_at: 1500 }, Run { secs: 600, expect_secs: Some(60), ended_at: 700 }],
+            "done runs only, newest first"
+        );
+        assert_eq!(family_runs(&c, "ws", &argv(&["cargo", "test"]), None, Some("n1"), 20).len(), 1, "this node only");
+        let tagged = family_runs(&c, "ws", &argv(&["anything"]), Some("suite"), None, 20);
+        assert_eq!(tagged.iter().map(|r| r.secs).collect::<Vec<_>>(), vec![800, 900], "the tag names the family, whatever the argv");
+        assert!(family_runs(&c, "other", &argv(&["cargo", "test"]), None, None, 20).is_empty(), "another workspace's runs never count");
     }
 }

@@ -30,7 +30,7 @@ use k2_core::compute::proto::share as pshare;
 use k2_core::compute::proto::tiers::{self, Tier};
 use k2_core::compute::proto::{crypto, env as penv, needs, pairing, results};
 use k2_core::compute::share::{self, pending};
-use k2_core::compute::{self as compute, codes, scheduler, store};
+use k2_core::compute::{self as compute, codes, estimate, scheduler, store};
 use k2_core::connect_users::Role;
 
 use crate::cli_response::CliResponse;
@@ -1634,6 +1634,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         gpu_mem: None,
         network: None,
         userns: false, no_addr_filter: false,
+        est_secs: None,
     };
     // Every matching node: each one's package states are reported, and the
     // names their owners must approve go out as ONE batched request (§7.3).
@@ -1897,6 +1898,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let supersede_key = supersede_from(v)?;
     let submitter_name = submitter_name_from(v)?;
     let tag = tag_from(v)?;
+    let said = expect_from(v)?;
     // Never stuck (G3/G4): queue timeout, infra retries. Batch: 48 h.
     let tun = compute::retry::tuning();
     let queue_timeout = match n(&v, "queueTimeoutSecs") {
@@ -1988,6 +1990,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         gpu_mem,
         network,
         userns, no_addr_filter,
+        est_secs: None,
     };
     // `--mem auto` never asks more than the largest node this job could
     // run on allows per job (R1: capped at the node's cap; the job still
@@ -2003,6 +2006,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         None => None,
     };
     let mem_bytes = mem_auto.as_ref().map(|(b, _)| *b).or(mem_bytes);
+    // Its family's expected time on any node: placement sends a long job
+    // to the bigger of the nodes that start it now.
+    want.est_secs = estimate_for(ws, &argv, tag.as_deref(), None, said).secs.map(|s| s.max(0) as u64);
     let want = want;
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = avoid_notes;
@@ -2410,12 +2416,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         }
         None => tier.class(),
     };
-    let est = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::median_p90(&store::recent_durations(&conn, &ws.id, &argv, Some(&node.id), 20))
-            .or_else(|| store::median_p90(&store::recent_durations(&conn, &ws.id, &argv, None, 20)))
-    };
+    // The expected run time (design-compute-duration-aware-queue-v1): its
+    // family's history, else the `--expect` it was sent with.
+    let estimate = estimate_for(ws, &argv, tag.as_deref(), Some(&node.id), said);
+    let est = estimate.secs.map(|m| (m, estimate.p90.unwrap_or(m)));
+    if matches!(estimate.basis, estimate::Basis::HistoryOverExpect | estimate::Basis::HistoryOnly) {
+        warnings.push(format!("--expect: {}", estimate::words(&estimate, said, scheduler::AVG_EST_SECS)));
+    }
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
     if opts.dry {
         // `--plan` checks the source exactly as `run` does (K2 Engine
@@ -2513,6 +2520,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cpu_hints,
         tag: tag.clone(),
         cpus_burst,
+        expect_secs: said.secs(),
+        expect_unknown: said == estimate::Said::Unknown,
+        est_basis: Some(estimate.basis.code().to_string()),
+        est_runs: Some(estimate.runs as u32),
+        est_history_secs: estimate.history_secs,
+        expect_ignored_until: estimate.expect_ignored_until,
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, tier, &node_features(&node), timeout as u64);
@@ -2949,6 +2962,30 @@ fn tag_from(v: &serde_json::Value) -> R<Option<String>> {
         Some(serde_json::Value::String(t)) if valid_tag(t) => Ok(Some(t.clone())),
         Some(_) => Err(no(TAG_INVALID, 400, format!("--tag is 1–{TAG_MAX} of A-Z a-z 0-9 . _ : / - (e.g. fuzz:p3)"))),
     }
+}
+
+/// `--expect <duration>|unknown` (design-compute-duration-aware-queue-v1):
+/// `expectSecs` (1 s–7 d) or `expectUnknown`, never both.
+fn expect_from(v: &serde_json::Value) -> R<estimate::Said> {
+    let unknown = b(v, "expectUnknown") == Some(true);
+    match (n(v, "expectSecs"), unknown) {
+        (Some(_), true) => Err(no(codes::BAD_REQUEST, 400, "--expect takes a duration or unknown, not both")),
+        (Some(x), false) if (1..=estimate::EXPECT_MAX_SECS).contains(&x) => Ok(estimate::Said::Secs(x)),
+        (Some(_), false) => Err(no(codes::BAD_REQUEST, 400, "--expect is between 1s and 7d, or unknown on a first run (e.g. --expect 12m)")),
+        (None, true) => Ok(estimate::Said::Unknown),
+        (None, false) => Ok(estimate::Said::Nothing),
+    }
+}
+
+/// A job's expected run time from its family's runs (on `node` first when
+/// named) and what its submitter said. A pooled read.
+fn estimate_for(ws: &Ws, argv: &[String], tag: Option<&str>, node: Option<&str>, said: estimate::Said) -> estimate::Estimate {
+    let now = compute::now();
+    k2_core::db::read(|conn| {
+        let any = estimate::family_runs(conn, &ws.id, argv, tag, None, estimate::HISTORY);
+        let here = node.map(|n| estimate::family_runs(conn, &ws.id, argv, tag, Some(n), estimate::HISTORY)).unwrap_or_default();
+        estimate::pick(&here, &any, said, now)
+    })
 }
 
 /// `--submitter NAME` (1–40 of a-z 0-9 . _ -).
@@ -3642,6 +3679,7 @@ fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes:
         needs_git: b(v, "noSource") != Some(true),
         tier: Tier::Normal, submitter: None,
         gpus: u32::from(v.get("gpu").is_some_and(|g| !g.is_null())),
+        est_secs: None,
     }
 }
 

@@ -179,6 +179,7 @@ pub(super) fn want(mem_gb: u64) -> Want {
         network: None,
         userns: false,
         no_addr_filter: false,
+        est_secs: None,
     }
 }
 

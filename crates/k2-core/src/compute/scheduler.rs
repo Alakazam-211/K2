@@ -28,9 +28,25 @@
 //!   the head of the order waiting for an idle node, so a stream of small
 //!   jobs can't starve it. Batch never holds.
 //!
+//! - **expected run time** (design-compute-duration-aware-queue-v1): inside
+//!   each rotation round of Priority, Standard and Batch (one job per
+//!   workspace, one per submitter there), the job expected to end sooner
+//!   goes first: key = its estimate ([`QueuedJob::est_secs`]; none counts
+//!   as [`AVG_EST_SECS`]) less the time it has waited, so a long job rises
+//!   as it waits. A round with no estimate at all keeps today's order, and
+//!   CI stays strict arrival. An hour-old Standard job waiting for room
+//!   that this server's running jobs hold takes the next free slot (its
+//!   wait is bounded). **Backfill**: a newer job may start ahead of a job
+//!   that waits for room only when its own estimate is known and, with a
+//!   quarter more, it ends before the soonest expected end of a running
+//!   job ([`Load::shadow`]): the waiting job can't start before then, so
+//!   the newer one never delays it. Under an hour-old hold whose running
+//!   jobs' ends aren't all known, [`AGED_IDLE_BOUND_SECS`] stands in, so
+//!   the hold never leaves a node idle long.
+//!
 //! Tiers never stop a running job (R3): this only ever places queued ones.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use super::proto::frames::{Offer, Refusal};
 use super::proto::refusal::{self, JobAsk};
@@ -54,6 +70,72 @@ pub struct QueuedJob {
     pub submitter: Option<String>,
     /// GPU jobs (0.46.11): GPUs it needs (`Plan.gpu`; 0 = none).
     pub gpus: u32,
+    /// Its expected run time in seconds (earlier runs of its family, else
+    /// the `--expect` it was sent with; `compute_jobs.est_secs`). `None`:
+    /// unknown, ordered as [`AVG_EST_SECS`] and never backfilled.
+    pub est_secs: Option<u64>,
+}
+
+/// What a job with no estimate counts as when jobs are ordered by expected
+/// run time (the node queue's `default_est_secs`).
+pub const AVG_EST_SECS: u64 = 600;
+
+/// An hour-old job holding the next free slot while the ends of the jobs
+/// running aren't all known: jobs that end (with a quarter more) within
+/// this long may still start meanwhile, so the hold never idles a node
+/// for long.
+pub const AGED_IDLE_BOUND_SECS: u64 = 600;
+
+/// A job started ahead of a waiting one (backfill).
+pub const BACKFILLED: &str = "backfilled";
+
+/// The duration rules on or off (the simulation's "before" turns them off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Opts {
+    /// Order by expected run time, backfill and the hour-old hold.
+    pub by_duration: bool,
+}
+
+impl Default for Opts {
+    fn default() -> Self {
+        Self { by_duration: true }
+    }
+}
+
+/// Ordering key: expected seconds less seconds waited (never below 0).
+pub fn duration_key(est_secs: Option<u64>, waited_secs: i64) -> u64 {
+    est_secs.unwrap_or(AVG_EST_SECS).saturating_sub(waited_secs.max(0) as u64)
+}
+
+/// The central hold's offer order (the sweeper, design-compute-duration-
+/// aware-queue-v1): tier (CI, Priority, Standard, Batch); then, in a tier
+/// where some job has an estimate (`tier_timed`) and never in CI,
+/// hour-old jobs first by arrival and the rest by [`duration_key`]. Sort
+/// a list that is oldest first, stably, by this key: a tier with no
+/// estimate keeps oldest first, as before.
+pub fn dispatch_key(tier: Tier, created_at: i64, est_secs: Option<u64>, now: i64, tier_timed: bool) -> (u8, u8, u64) {
+    let rank = dispatch_rank(tier);
+    let waited = now - created_at;
+    if !tier_timed || tier.line() == Line::Ci || tiers::aged(waited, tiers::AGE_SECS) {
+        return (rank, 0, 0);
+    }
+    (rank, 1, duration_key(est_secs, waited))
+}
+
+/// Tier rank for [`dispatch_key`]: CI, Priority, Standard, Batch.
+pub fn dispatch_rank(t: Tier) -> u8 {
+    match t.line() {
+        Line::Ci => 0,
+        Line::Priority => 1,
+        Line::Batch => 3,
+        _ => 2,
+    }
+}
+
+/// Does a job expected to run `est` seconds end, with a quarter more,
+/// within `bound` seconds? Unknown either way: no.
+pub fn ends_within(est: Option<u64>, bound: Option<u64>) -> bool {
+    matches!((est, bound), (Some(e), Some(b)) if e.saturating_add(e / 4) <= b)
 }
 
 impl QueuedJob {
@@ -69,6 +151,9 @@ pub struct Load {
     pub exclusive_running: bool,
     /// Running non-CI jobs per (workspace, submitter) (L3).
     pub running_by_submitter: HashMap<(String, String), u32>,
+    /// Each running job's expected seconds left (`None`: unknown). The
+    /// backfill shadow is their soonest end, known only when every one is.
+    pub running_left: Vec<Option<u64>>,
 }
 
 /// Who got the last placements on a node (the engine keeps one per node).
@@ -107,6 +192,15 @@ impl Load {
     pub fn total(&self) -> u32 {
         self.running_by_workspace.values().sum()
     }
+
+    /// The soonest expected end of a running job, in seconds from now,
+    /// when every running job's end is known (none running: `None`).
+    pub fn shadow(&self) -> Option<u64> {
+        if self.running_left.is_empty() || self.running_left.len() as u32 != self.total() {
+            return None;
+        }
+        self.running_left.iter().copied().collect::<Option<Vec<u64>>>()?.into_iter().min()
+    }
 }
 
 /// The scheduler's answer.
@@ -116,6 +210,9 @@ pub struct Decision {
     pub place: Option<String>,
     /// Every queued job's 1-based position and why it waits.
     pub waiting: BTreeMap<String, (usize, Refusal)>,
+    /// `place` starts ahead of an older job that waits for room
+    /// (backfill): why it may ([`BACKFILLED`]).
+    pub backfill: Option<Refusal>,
 }
 
 /// Grant cap reached for a workspace.
@@ -224,28 +321,39 @@ fn rotated<'a>(mut keys: Vec<&'a str>, last: Option<&str>) -> Vec<&'a str> {
     keys
 }
 
-/// Round-robin over `groups` in `keys` order until all are empty.
-fn round_robin<'a, 'k>(keys: &[&'k str], mut groups: HashMap<&'k str, VecDeque<&'a QueuedJob>>) -> Vec<&'a QueuedJob> {
+/// Round-robin over `groups` in `keys` order until all are empty, one
+/// round (one job per group) at a time.
+fn rounds<'a, 'k>(keys: &[&'k str], mut groups: HashMap<&'k str, VecDeque<&'a QueuedJob>>) -> Vec<Vec<&'a QueuedJob>> {
     let mut out = Vec::new();
     loop {
-        let mut any = false;
-        for k in keys {
-            if let Some(j) = groups.get_mut(k).and_then(VecDeque::pop_front) {
-                out.push(j);
-                any = true;
-            }
-        }
-        if !any {
+        let round: Vec<&QueuedJob> = keys.iter().filter_map(|k| groups.get_mut(k).and_then(VecDeque::pop_front)).collect();
+        if round.is_empty() {
             return out;
         }
+        out.push(round);
     }
+}
+
+/// The rounds in order, each by [`duration_key`] when any job in it has
+/// an estimate (`by_duration`). Ties, and a round with no estimate, keep
+/// the rotation order (a stable sort): with no history, today's order.
+fn flatten<'a>(now: i64, rounds: Vec<Vec<&'a QueuedJob>>, by_duration: bool) -> Vec<&'a QueuedJob> {
+    let mut out = Vec::new();
+    for mut r in rounds {
+        if by_duration && r.iter().any(|j| j.est_secs.is_some()) {
+            r.sort_by_key(|j| duration_key(j.est_secs, now - j.created_at));
+        }
+        out.extend(r);
+    }
+    out
 }
 
 /// One line's order: aged jobs by `created_at` (they skip the turns); then
 /// workspaces round-robin (after the last placed), each workspace's own
 /// sequence round-robin over its submitters (after the last placed
-/// there), FIFO per submitter.
-fn line_order<'a>(now: i64, jobs: Vec<&'a QueuedJob>, turns: &Turns) -> Vec<&'a QueuedJob> {
+/// there), FIFO per submitter; inside each round the sooner expected end
+/// first ([`flatten`]), so every workspace still gets one start a round.
+fn line_order<'a>(now: i64, jobs: Vec<&'a QueuedJob>, turns: &Turns, by_duration: bool) -> Vec<&'a QueuedJob> {
     let (mut old, mut fresh): (Vec<&QueuedJob>, Vec<&QueuedJob>) = jobs.into_iter().partition(|j| aged(j, now));
     old.sort_by(fifo);
     fresh.sort_by(fifo);
@@ -258,10 +366,10 @@ fn line_order<'a>(now: i64, jobs: Vec<&'a QueuedJob>, turns: &Turns) -> Vec<&'a 
         for j in mine {
             by_sub.entry(j.sub()).or_default().push_back(j);
         }
-        per_ws.insert(w, round_robin(&subs, by_sub).into());
+        per_ws.insert(w, flatten(now, rounds(&subs, by_sub), by_duration).into());
     }
     let mut out = old;
-    out.extend(round_robin(&wss, per_ws));
+    out.extend(flatten(now, rounds(&wss, per_ws), by_duration));
     out
 }
 
@@ -269,11 +377,17 @@ fn line_order<'a>(now: i64, jobs: Vec<&'a QueuedJob>, turns: &Turns) -> Vec<&'a 
 /// Standard alternating (after `turns.last_line`); then Batch. Each line
 /// but CI by [`line_order`]. Positions follow this order.
 pub fn order_with<'a>(now: i64, queue: &'a [QueuedJob], turns: &Turns) -> Vec<&'a QueuedJob> {
+    order_opts(now, queue, turns, &Opts::default())
+}
+
+/// [`order_with`] with the duration rules on or off.
+pub fn order_opts<'a>(now: i64, queue: &'a [QueuedJob], turns: &Turns, opts: &Opts) -> Vec<&'a QueuedJob> {
+    let by = opts.by_duration;
     let of = |line: Line| queue.iter().filter(|j| j.tier.line() == line).collect::<Vec<&QueuedJob>>();
     let mut out = of(Line::Ci);
     out.sort_by(fifo);
-    let mut pri: VecDeque<&QueuedJob> = line_order(now, of(Line::Priority), turns).into();
-    let mut std: VecDeque<&QueuedJob> = line_order(now, of(Line::Standard), turns).into();
+    let mut pri: VecDeque<&QueuedJob> = line_order(now, of(Line::Priority), turns, by).into();
+    let mut std: VecDeque<&QueuedJob> = line_order(now, of(Line::Standard), turns, by).into();
     let mut next = tiers::alternate_after(turns.last_line);
     while !pri.is_empty() || !std.is_empty() {
         let (a, b) = if next == Line::Priority { (&mut pri, &mut std) } else { (&mut std, &mut pri) };
@@ -282,7 +396,7 @@ pub fn order_with<'a>(now: i64, queue: &'a [QueuedJob], turns: &Turns) -> Vec<&'
         }
         next = if next == Line::Priority { Line::Standard } else { Line::Priority };
     }
-    out.extend(line_order(now, of(Line::Batch), turns));
+    out.extend(line_order(now, of(Line::Batch), turns, by));
     out
 }
 
@@ -299,6 +413,25 @@ fn hold_reason(j: &QueuedJob, line: Line) -> Refusal {
         _ if j.exclusive => Refusal::new(refusal::WAITING_FOR_IDLE, "an exclusive job ahead of it waits for an idle node"),
         _ => Refusal::new(tiers::codes::TIER_HOLD, "a job ahead of it takes the next free slot"),
     }
+}
+
+/// Why everything after an hour-old job waiting for room waits (its wait
+/// is bounded: design-compute-duration-aware-queue-v1).
+fn aged_hold_reason() -> Refusal {
+    Refusal::new(tiers::codes::TIER_HOLD, "a job that has waited over an hour takes the next free slot (jobs expected to end before it can start may still go)")
+}
+
+/// The words on a backfilled start.
+fn backfill_words(est: Option<u64>, bound: Option<u64>) -> Refusal {
+    let m = |s: u64| s.div_ceil(60).max(1);
+    Refusal::new(
+        BACKFILLED,
+        format!(
+            "started ahead of an older job that waits for room: expected ~{}m, and that job can't start for ~{}m",
+            m(est.unwrap_or(0)),
+            m(bound.unwrap_or(0))
+        ),
+    )
 }
 
 /// [`decide_with`] with only a workspace rotation and no per-submitter cap
@@ -332,8 +465,23 @@ pub struct Limits<'a> {
 /// - `controller_pause`: `Some("paused"|"draining")` when the controller
 ///   owner stopped new assignments.
 pub fn decide_with(now: i64, queue: &[QueuedJob], turns: &Turns, load: &Load, caps: &Limits<'_>, offer: Option<&Offer>, controller_pause: Option<&str>) -> Decision {
+    decide_opts(now, queue, turns, load, caps, offer, controller_pause, &Opts::default())
+}
+
+/// [`decide_with`] with the duration rules on or off.
+#[allow(clippy::too_many_arguments)]
+pub fn decide_opts(
+    now: i64,
+    queue: &[QueuedJob],
+    turns: &Turns,
+    load: &Load,
+    caps: &Limits<'_>,
+    offer: Option<&Offer>,
+    controller_pause: Option<&str>,
+    opts: &Opts,
+) -> Decision {
     let grant_max_parallel = caps.grant_max_parallel;
-    let jobs = order_with(now, queue, turns);
+    let jobs = order_opts(now, queue, turns, opts);
     let position: HashMap<&str, usize> = jobs.iter().enumerate().map(|(i, j)| (j.id.as_str(), i + 1)).collect();
     let mut waiting: BTreeMap<String, (usize, Refusal)> = BTreeMap::new();
     let wait_all = |why: Refusal, waiting: &mut BTreeMap<String, (usize, Refusal)>| {
@@ -342,22 +490,28 @@ pub fn decide_with(now: i64, queue: &[QueuedJob], turns: &Turns, load: &Load, ca
         }
     };
     if jobs.is_empty() {
-        return Decision { place: None, waiting };
+        return Decision { place: None, waiting, backfill: None };
     }
     if let Some(p) = controller_pause {
         wait_all(Refusal::new(CONTROLLER_PAUSED, format!("the server's owner {p} this node")), &mut waiting);
-        return Decision { place: None, waiting };
+        return Decision { place: None, waiting, backfill: None };
     }
     let Some(offer) = offer else {
         wait_all(Refusal::new("node_offline", "the node is offline; the job starts when it reconnects"), &mut waiting);
-        return Decision { place: None, waiting };
+        return Decision { place: None, waiting, backfill: None };
     };
+    // The soonest a job waiting for room can start: the first expected end
+    // of a running job (known only when every running job's end is).
+    let shadow = load.shadow();
     let mut place: Option<String> = None;
-    let mut hold: Option<Refusal> = None;
+    let mut backfill: Option<Refusal> = None;
+    // The hold (next free slot) and how long it leaves for backfill.
+    let mut hold: Option<(Refusal, Option<u64>)> = None;
     let mut head_seen = false;
     // (workspace, submitter) pairs whose oldest Standard or Batch job was
-    // already looked at (strict FIFO per submitter inside a workspace).
-    let mut seen: HashSet<(&str, &str, Line)> = HashSet::new();
+    // already looked at (strict FIFO per submitter inside a workspace),
+    // and whether that one waits for room (then a newer one may backfill).
+    let mut seen: HashMap<(&str, &str, Line), bool> = HashMap::new();
     for j in &jobs {
         let pos = position[j.id.as_str()];
         // A job over the node's caps can never start: report it (the
@@ -368,14 +522,36 @@ pub fn decide_with(now: i64, queue: &[QueuedJob], turns: &Turns, load: &Load, ca
             continue;
         }
         let is_head = !std::mem::replace(&mut head_seen, true);
-        if let Some(h) = &hold {
-            waiting.insert(j.id.clone(), (pos, h.clone()));
-            continue;
-        }
         let line = j.tier.line();
-        if matches!(line, Line::Standard | Line::Batch) && !seen.insert((j.workspace_id.as_str(), j.sub(), line)) {
-            waiting.insert(j.id.clone(), (pos, Refusal::new("behind_older_job", "an older job from the same submitter goes first")));
-            continue;
+        let key = (j.workspace_id.as_str(), j.sub(), line);
+        let fifo_line = matches!(line, Line::Standard | Line::Batch);
+        // Backfill: past a waiting job only when this one is expected to
+        // end before that one can start (it never delays it).
+        let bound = hold.as_ref().map_or(shadow, |(_, b)| *b);
+        let may_pass = opts.by_duration && ends_within(j.est_secs, bound);
+        let mut passing = false;
+        if let Some((h, _)) = &hold {
+            if !may_pass {
+                waiting.insert(j.id.clone(), (pos, h.clone()));
+                if fifo_line {
+                    seen.entry(key).or_insert(true);
+                }
+                continue;
+            }
+            passing = true;
+        }
+        let first_of_key = !fifo_line || !seen.contains_key(&key);
+        if fifo_line {
+            match seen.get(&key) {
+                None => {
+                    seen.insert(key, false);
+                }
+                Some(&older_waits_for_room) if older_waits_for_room && may_pass => passing = true,
+                Some(_) => {
+                    waiting.insert(j.id.clone(), (pos, Refusal::new("behind_older_job", "an older job from the same submitter goes first")));
+                    continue;
+                }
+            }
         }
         let verdict = match refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(j)) {
             Some(r) => Err(with_numbers(r, offer, j, load.total())),
@@ -390,22 +566,39 @@ pub fn decide_with(now: i64, queue: &[QueuedJob], turns: &Turns, load: &Load, ca
             None => Ok(()),
         };
         match verdict {
-            Ok(()) if place.is_none() => place = Some(j.id.clone()),
+            Ok(()) if place.is_none() => {
+                place = Some(j.id.clone());
+                if passing {
+                    backfill = Some(backfill_words(j.est_secs, bound));
+                }
+            }
             Ok(()) => {
                 waiting.insert(j.id.clone(), (pos, Refusal::new("next_in_turn", "next in turn")));
             }
             Err(r) => {
+                let room = tiers::waits_for_room(&r.code);
+                if room && fifo_line && first_of_key {
+                    seen.insert(key, true);
+                }
                 // Next free slot: only while it waits for room, never for a
                 // refusal that could last (T3); CI and Priority, and an
-                // exclusive job at the head of the order.
-                if tiers::waits_for_room(&r.code) && (line.holds() || (is_head && j.exclusive && line != Line::Batch)) {
-                    hold = Some(hold_reason(j, line));
+                // exclusive job at the head of the order. A job passing a
+                // hold never sets one of its own.
+                if room && hold.is_none() && !passing {
+                    if line.holds() || (is_head && j.exclusive && line != Line::Batch) {
+                        hold = Some((hold_reason(j, line), shadow));
+                    } else if opts.by_duration && line == Line::Standard && aged(j, now) && load.total() > 0 {
+                        // An hour-old Standard job whose room this server's
+                        // running jobs hold: bounded wait. Unknown ends:
+                        // the idle bound stands in for backfill.
+                        hold = Some((aged_hold_reason(), Some(shadow.unwrap_or(AGED_IDLE_BOUND_SECS))));
+                    }
                 }
                 waiting.insert(j.id.clone(), (pos, r));
             }
         }
     }
-    Decision { place, waiting }
+    Decision { place, waiting, backfill }
 }
 
 fn within_grant(j: &QueuedJob, load: &Load, cap: &dyn Fn(&str) -> u32) -> bool {
@@ -522,7 +715,7 @@ mod tests {
     const T0: i64 = 0;
 
     fn job(id: &str, ws: &str, at: i64) -> QueuedJob {
-        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None, gpus: 0 }
+        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None, gpus: 0, est_secs: None }
     }
 
     fn tiered(id: &str, ws: &str, at: i64, tier: Tier) -> QueuedJob {
@@ -954,4 +1147,244 @@ mod tests {
         let d = decide_with(T0, &q, &Turns::default(), &load, &off, Some(&offer(8)), None);
         assert_eq!(d.place.as_deref(), Some("a0"));
     }
+
+    // ── expected run time (design-compute-duration-aware-queue-v1) ──────
+
+    fn timed(id: &str, ws: &str, at: i64, est: Option<u64>) -> QueuedJob {
+        QueuedJob { est_secs: est, ..job(id, ws, at) }
+    }
+
+    fn gb(j: QueuedJob, gb: u64) -> QueuedJob {
+        QueuedJob { mem_bytes: Some(gb << 30), ..j }
+    }
+
+    /// A node with 4 GB of 16 free, 2 of 4 slots running (workspace R),
+    /// whose running jobs end in `left`.
+    fn busy(left: &[Option<u64>]) -> (Offer, Load) {
+        let mut o = offer(4);
+        o.free.mem_bytes = 4 << 30;
+        let mut load = Load::default();
+        load.running_by_workspace.insert("R".into(), left.len() as u32);
+        load.running_left = left.to_vec();
+        (o, load)
+    }
+
+    fn decide_now(now: i64, q: &[QueuedJob], o: &Offer, load: &Load) -> Decision {
+        decide_with(now, q, &Turns::default(), load, &Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 }, Some(o), None)
+    }
+
+    /// Inside a rotation round the sooner expected end goes first; a long
+    /// job's key falls as it waits; with no estimate, today's rotation.
+    #[test]
+    fn shorter_expected_first_inside_a_round_and_a_long_job_rises_as_it_waits() {
+        let now = 10_000;
+        let q = vec![by("long", "W", now - 10, "w/s/a", Tier::Normal), by("short", "W", now - 5, "w/s/b", Tier::Normal)];
+        assert_eq!(ids(&order_with(now, &q, &Turns::default())), ["long", "short"], "no estimates: the rotation (a before b)");
+        let mut q2 = q.clone();
+        q2[0].est_secs = Some(7200);
+        q2[1].est_secs = Some(120);
+        assert_eq!(ids(&order_with(now, &q2, &Turns::default())), ["short", "long"]);
+        assert_eq!(ids(&order_opts(now, &q2, &Turns::default(), &Opts { by_duration: false })), ["long", "short"], "off: today's order");
+        // A job expected to take 1000 s that has waited 950 s (key 50) goes
+        // before a fresh 120 s one.
+        q2[0].est_secs = Some(1000);
+        q2[0].created_at = now - 950;
+        assert_eq!(ids(&order_with(now, &q2, &Turns::default())), ["long", "short"]);
+        // Across workspaces too, and an unknown one counts as the average.
+        let q3 = vec![timed("a", "A", now - 9, None), timed("b", "B", now - 8, Some(60)), timed("c", "C", now - 7, Some(3000))];
+        assert_eq!(ids(&order_with(now, &q3, &Turns::default())), ["b", "a", "c"]);
+        // FIFO per submitter stays: one submitter's newer short job never
+        // jumps its own older long one in the order.
+        let q4 = vec![
+            QueuedJob { est_secs: Some(7200), ..by("a1", "W", now - 10, "w/s/a", Tier::Normal) },
+            QueuedJob { est_secs: Some(60), ..by("a2", "W", now - 5, "w/s/a", Tier::Normal) },
+        ];
+        assert_eq!(ids(&order_with(now, &q4, &Turns::default())), ["a1", "a2"]);
+    }
+
+    /// Tiers stay as they are: CI first by arrival whatever its run time,
+    /// a Priority job ahead of the Standard work it alternates with.
+    #[test]
+    fn ci_and_priority_stay_ahead_of_shorter_standard_work() {
+        let now = 10_000;
+        let q = vec![
+            QueuedJob { est_secs: Some(9000), ..tiered("ci2", "A", now - 2, Tier::Ci) },
+            QueuedJob { est_secs: Some(60), ..tiered("ci1", "A", now - 3, Tier::Ci) },
+            QueuedJob { est_secs: Some(8000), ..tiered("p", "B", now - 1, Tier::Priority) },
+            timed("s", "C", now - 9, Some(30)),
+        ];
+        assert_eq!(ids(&order_with(now, &q, &Turns::default())), ["ci1", "ci2", "p", "s"]);
+    }
+
+    /// With no estimate anywhere the order and the decision are exactly
+    /// today's (the duration rules off), over many random queues.
+    #[test]
+    fn with_no_history_the_order_and_decisions_are_todays() {
+        let mut seed: u64 = 0x2545f4914f6cdd1d;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let tiers = [Tier::Normal, Tier::Normal, Tier::Priority, Tier::Batch, Tier::Ci];
+        for case in 0..300 {
+            let now = 20_000;
+            let n = 1 + (rand() % 12) as usize;
+            let q: Vec<QueuedJob> = (0..n)
+                .map(|i| {
+                    let mut j = by(&format!("j{i}"), &format!("w{}", rand() % 3), now - (rand() % 8000) as i64, &format!("s{}", rand() % 3), tiers[(rand() % 5) as usize]);
+                    j.mem_bytes = Some(((rand() % 14) + 1) << 30);
+                    j
+                })
+                .collect();
+            let turns = Turns { last_ws: Some(format!("w{}", rand() % 3)), ..Default::default() };
+            let off = Opts { by_duration: false };
+            assert_eq!(ids(&order_with(now, &q, &turns)), ids(&order_opts(now, &q, &turns, &off)), "case {case}");
+            let (o, mut load) = busy(&[Some(600), Some(900)]);
+            if rand() % 2 == 0 {
+                load.running_left.clear();
+            }
+            let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+            let on = decide_opts(now, &q, &turns, &load, &caps, Some(&o), None, &Opts::default());
+            let today = decide_opts(now, &q, &turns, &load, &caps, Some(&o), None, &off);
+            // The hour-old hold is the one new rule that needs no estimate:
+            // compare queues where nothing has waited an hour.
+            if q.iter().all(|j| !aged(j, now) || j.tier.line() != Line::Standard) {
+                assert_eq!(on, today, "case {case}");
+            }
+        }
+    }
+
+    /// Backfill: a short job may start ahead of a CI job waiting for room
+    /// only when it ends (with a quarter more) before the soonest end of
+    /// what runs; unknown either way, it waits as today.
+    #[test]
+    fn short_jobs_backfill_around_a_held_head_only_when_they_end_first() {
+        let now = 10_000;
+        let head = gb(tiered("ci", "A", now - 100, Tier::Ci), 12);
+        let (o, load) = busy(&[Some(1800), Some(2400)]);
+        let short = |est| gb(timed("s", "B", now - 50, est), 2);
+        let d = decide_now(now, &[head.clone(), short(Some(300))], &o, &load);
+        assert_eq!(d.place.as_deref(), Some("s"), "{d:?}");
+        let b = d.backfill.expect("marked as a backfill");
+        assert_eq!(b.code, BACKFILLED);
+        assert_eq!(b.message, "started ahead of an older job that waits for room: expected ~5m, and that job can't start for ~30m");
+        assert_eq!(d.waiting["ci"].1.code, refusal::LOCAL_RESOURCE_LIMIT);
+        for est in [Some(1500), None] {
+            let d = decide_now(now, &[head.clone(), short(est)], &o, &load);
+            assert_eq!(d.place, None, "est {est:?}: it could still be running when the CI job can start");
+            assert_eq!(d.waiting["s"].1.code, tiers::codes::TIER_HOLD);
+        }
+        // A running job with no estimate: no shadow, no backfill.
+        let (o2, load2) = busy(&[Some(1800), None]);
+        assert_eq!(decide_now(now, &[head.clone(), short(Some(60))], &o2, &load2).place, None);
+        // The duration rules off: today's hold.
+        let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+        let off = decide_opts(now, &[head, short(Some(60))], &Turns::default(), &load, &caps, Some(&o), None, &Opts { by_duration: false });
+        assert_eq!(off.place, None);
+    }
+
+    /// "Never moves past" reframed: a newer job of the same submitter may
+    /// start ahead of its older one only while that one waits for room and
+    /// the newer one ends before it could start.
+    #[test]
+    fn a_newer_job_passes_its_own_older_one_only_when_it_cannot_delay_it() {
+        let now = 10_000;
+        let older = gb(QueuedJob { est_secs: Some(7200), ..by("a1", "W", now - 100, "w/s/a", Tier::Normal) }, 12);
+        let newer = |est| gb(QueuedJob { est_secs: est, ..by("a2", "W", now - 50, "w/s/a", Tier::Normal) }, 2);
+        let (o, load) = busy(&[Some(1800), Some(2400)]);
+        let d = decide_now(now, &[older.clone(), newer(Some(300))], &o, &load);
+        assert_eq!(d.place.as_deref(), Some("a2"));
+        assert_eq!(d.backfill.map(|b| b.code), Some(BACKFILLED.to_string()));
+        let d = decide_now(now, &[older.clone(), newer(None)], &o, &load);
+        assert_eq!(d.place, None);
+        assert_eq!(d.waiting["a2"].1.code, "behind_older_job");
+        // The older one waits for a lasting reason (its grant cap), not
+        // room: the newer one still waits behind it.
+        let mut capped = load.clone();
+        capped.running_by_workspace.insert("W".into(), 1);
+        capped.running_left.push(Some(2000));
+        let caps = Limits { grant_max_parallel: &|_| 1, submitter_max_running: &|_| 0 };
+        let small_older = QueuedJob { mem_bytes: Some(2 << 30), ..older };
+        let d = decide_with(now, &[small_older, newer(Some(300))], &Turns::default(), &capped, &caps, Some(&o), None);
+        assert_eq!(d.waiting["a1"].1.code, GRANT_PARALLEL_FULL);
+        assert_eq!(d.waiting["a2"].1.code, "behind_older_job");
+    }
+
+    /// An hour-old Standard job waiting for room this server's jobs hold
+    /// takes the next free slot (bounded wait); jobs that end before it can
+    /// start still go, and with unknown ends the 10-minute idle bound
+    /// stands in, so the node isn't held idle long.
+    #[test]
+    fn an_hour_old_standard_job_holds_the_next_slot_with_bounded_backfill() {
+        let now = 10_000;
+        let big = gb(timed("big", "A", now - 4000, Some(3000)), 12);
+        let fresh = |est| gb(timed("f", "B", now - 10, est), 2);
+        let (o, load) = busy(&[Some(1800), Some(2400)]);
+        let d = decide_now(now, &[big.clone(), fresh(None)], &o, &load);
+        assert_eq!(d.place, None, "the hour-old job holds the slot");
+        assert_eq!(d.waiting["f"].1.code, tiers::codes::TIER_HOLD);
+        assert!(d.waiting["f"].1.message.contains("waited over an hour"), "{:?}", d.waiting["f"]);
+        assert_eq!(decide_now(now, &[big.clone(), fresh(Some(1200))], &o, &load).place.as_deref(), Some("f"), "ends before the first slot frees");
+        // Ends unknown: the idle bound (600 s): 300 s goes, 600 s waits.
+        let (o2, load2) = busy(&[None, Some(2400)]);
+        assert_eq!(decide_now(now, &[big.clone(), fresh(Some(300))], &o2, &load2).place.as_deref(), Some("f"));
+        assert_eq!(decide_now(now, &[big.clone(), fresh(Some(600))], &o2, &load2).place, None);
+        // Nothing of this server runs (the room is someone else's): no hold.
+        let mut idle = o.clone();
+        idle.running = 0;
+        assert_eq!(decide_now(now, &[big, fresh(None)], &idle, &Load::default()).place.as_deref(), Some("f"));
+    }
+
+    /// Simulated: a big Standard job that needs the whole node's memory,
+    /// under a stream of small 2–5 minute jobs from other submitters (one a
+    /// minute for 3.5 h). Today it starts only once the stream stops; now
+    /// within an hour plus the longest small job.
+    #[test]
+    fn a_long_jobs_wait_is_bounded_under_a_stream_of_short_jobs() {
+        let run = |opts: Opts| -> Option<i64> {
+            let mut q = vec![QueuedJob { est_secs: Some(1800), mem_bytes: Some(16 << 30), ..by("big", "W", 0, "w/s/big", Tier::Normal) }];
+            let mut running: Vec<(i64, u64)> = Vec::new(); // end, mem GB
+            let mut turns = Turns::default();
+            let mut n = 0;
+            for t in (0..4 * 3600).step_by(10) {
+                running.retain(|r| r.0 > t);
+                if t % 60 == 0 && t < 3 * 3600 + 1800 {
+                    n += 1;
+                    let est = 120 + (n % 4) * 60;
+                    q.push(QueuedJob { est_secs: Some(est as u64), mem_bytes: Some(4 << 30), ..by(&format!("s{n}"), "W", t, &format!("w/s/{}", n % 6), Tier::Normal) });
+                }
+                loop {
+                    let mut o = offer(4);
+                    let used: u64 = running.iter().map(|r| r.1).sum();
+                    o.free.mem_bytes = (16u64 << 30) - (used << 30);
+                    let mut load = Load::default();
+                    for r in &running {
+                        *load.running_by_workspace.entry("W".into()).or_insert(0) += 1;
+                        load.running_left.push(Some((r.0 - t).max(0) as u64));
+                    }
+                    let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+                    let d = decide_opts(t, &q, &turns, &load, &caps, Some(&o), None, &opts);
+                    let Some(id) = d.place else { break };
+                    let i = q.iter().position(|j| j.id == id).unwrap();
+                    let j = q.remove(i);
+                    if j.id == "big" {
+                        return Some(t);
+                    }
+                    turns.served(&j);
+                    running.push((t + j.est_secs.unwrap() as i64, j.mem_bytes.unwrap() >> 30));
+                }
+            }
+            None
+        };
+        let today = run(Opts { by_duration: false }).expect("it starts once the stream stops");
+        assert!(today >= 3 * 3600 + 1800, "today: the stream holds it off until it stops ({today}s)");
+        let started = run(Opts::default()).expect("it starts");
+        assert!(started <= 3600 + 300 + 60, "it started at {started}s: an hour plus the longest small job (5 min), plus a step");
+    }
 }
+
+#[cfg(test)]
+#[path = "scheduler_sim_tests.rs"]
+mod sim_tests;

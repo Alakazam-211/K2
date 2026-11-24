@@ -1915,7 +1915,13 @@ pub fn finalize(job_id: &str) {
     let rustc = rust_need
         .then(|| compute::result::tools(&job))
         .and_then(|t| t.get("versions").and_then(|v| v.get("rustc")).and_then(|r| r.as_str()).map(|r| if r.starts_with("rustc") { r.to_string() } else { format!("rustc {r}") }));
+    // A finished run: what to pass as `--expect` next time (its own run
+    // time, from its real start, as the history counts it).
+    let next_expect = (job.state == "done")
+        .then(|| job.started_at.zip(job.ended_at).map(|(s, e)| compute::estimate::expect_flag(e - s)))
+        .flatten();
     let extra = compute::message::Extra {
+        next_expect: next_expect.as_deref(),
         // Only the controller's own words for a queue timeout's wait.
         detail: job.detail.as_deref().filter(|_| job.reason.as_deref() == Some("queue_timeout")),
         late_secs: job.ctl.reported_late_secs,
@@ -3178,6 +3184,10 @@ pub fn queued_view_of(queued: &[store::JobRow], active: &[store::JobRow], offer:
     for j in active {
         *load.running_by_workspace.entry(j.workspace_id.clone()).or_insert(0) += 1;
         load.exclusive_running |= j.exclusive;
+        // Its expected time left (the backfill shadow): from its start, or
+        // all of it while it is still being sent or prepared.
+        let ran = j.started_at.map_or(0, |s| (now - s).max(0) as u64);
+        load.running_left.push(j.est_secs.filter(|e| *e > 0).map(|e| (e as u64).saturating_sub(ran)));
         // L3: CI never counts toward a per-submitter cap.
         if j.tier() != Tier::Ci {
             *load.running_by_submitter.entry((j.workspace_id.clone(), j.submitter.clone().unwrap_or_default())).or_insert(0) += 1;
@@ -3202,6 +3212,7 @@ fn qjob_of(j: &store::JobRow, offer: Option<&Offer>) -> scheduler::QueuedJob {
         tier: j.tier(),
         submitter: j.submitter.clone(),
         gpus: plan.as_ref().and_then(|p| p.gpu).map_or(0, |g| g.count),
+        est_secs: j.est_secs.filter(|e| *e > 0).map(|e| e as u64),
     }
 }
 
@@ -3300,6 +3311,7 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             needs_git: plan.src.is_some(),
             tier: j.tier(), submitter: j.submitter.clone(),
             gpus: plan.gpu.map_or(0, |g| g.count),
+            est_secs: j.est_secs.filter(|e| *e > 0).map(|e| e as u64),
         };
         if let Some(r) = scheduler::never_fits(offer, &probe) {
             pass.fail.push((j.id.clone(), r));
@@ -3420,7 +3432,7 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
             waiting.insert(id, (0, r));
         }
         backoff(&queued, &mut waiting);
-        return scheduler::Decision { place: None, waiting };
+        return scheduler::Decision { place: None, waiting, backfill: None };
     }
     let (pause, queued, active, grants) = k2_core::db::read(|conn| {
         (
@@ -3683,7 +3695,13 @@ pub fn kick(node_id: &str) {
         let _ = store::set_job_state(&conn, &job.id, JobState::Queued, Some("node_offline"), None, compute::now());
         return;
     }
-    store::record_event(&conn, "controller", "assign", Some(node_id), Some(&job.workspace_id), Some(&job.id), serde_json::json!({"generation": job.generation}));
+    // A backfilled start (it went ahead of an older job waiting for room)
+    // says so on its assign event.
+    let mut ev = serde_json::json!({"generation": job.generation});
+    if let Some(b) = decision.backfill.as_ref() {
+        ev["backfill"] = b.message.clone().into();
+    }
+    store::record_event(&conn, "controller", "assign", Some(node_id), Some(&job.workspace_id), Some(&job.id), ev);
     drop(conn);
     crate::compute_place::note_pending(node_id, &job.id, ask_mem, ask_cpu, offer.as_ref().map(|o| o.revision).unwrap_or(0), compute::now());
     note_turn(node_id, &job);

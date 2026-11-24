@@ -558,6 +558,19 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     if !secrets.is_empty() {
         v["secrets"] = secrets.into();
     }
+    // Its expected run time and where it came from (design-compute-
+    // duration-aware-queue-v1); a finished run: the time it took and the
+    // `--expect` to pass next time. Absent on jobs stored before.
+    let expected = compute::estimate::shown(j.est_secs.filter(|e| *e > 0), &j.ctl, scheduler::AVG_EST_SECS);
+    if !expected.is_null() {
+        v["expected"] = expected;
+    }
+    if j.state == "done" {
+        if let Some(secs) = j.started_at.zip(j.ended_at).map(|(s, e)| e - s) {
+            v["took"] = compute::estimate::took_words(secs).into();
+            v["nextExpect"] = format!("--expect {}", compute::estimate::expect_flag(secs)).into();
+        }
+    }
     v
 }
 
@@ -769,6 +782,10 @@ fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &schedul
     if let Some(p) = r.plan() {
         e["cpuMillis"] = p.limits.cpu_millis.into();
     }
+    // Its expected run time (what orders it in its tier).
+    if let Some(s) = r.est_secs.filter(|e| *e > 0) {
+        e["estSecs"] = s.into();
+    }
     if let Some((p, w)) = decision.waiting.get(&r.id) {
         e["reason"] = w.code.clone().into();
         e["position"] = (*p).into();
@@ -881,7 +898,7 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     // it goes to the first of them that frees (`held`, the nodes it fits).
     let held = crate::compute_hold::is_held(j, &why.code);
     let fits = if held { crate::compute_hold::fits(j, now) } else { Vec::new() };
-    let (line, node_words, words) = if held {
+    let (mut line, node_words, words) = if held {
         let h = crate::compute_hold::held_words(&fits);
         (h.clone(), Some(words), h)
     } else if on_shared {
@@ -889,6 +906,14 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     } else {
         (format!("queued on {node_name}: {pos} of {} — {words}{tail}", queued.len()), None, words)
     };
+    // Its expected run time, and the rule its place follows when run times
+    // are known (design-compute-duration-aware-queue-v1).
+    let expected = compute::estimate::shown(j.est_secs.filter(|e| *e > 0), &j.ctl, scheduler::AVG_EST_SECS);
+    if let Some(w) = expected.get("words").and_then(|w| w.as_str()).filter(|_| j.est_secs.is_some_and(|e| e > 0)) {
+        line.push_str(&format!(" · expected {w}"));
+    }
+    let timed = j.est_secs.is_some_and(|e| e > 0) || before.iter().any(|(_, q)| q.est_secs.is_some_and(|e| e > 0));
+    let order_words = timed.then_some(ORDER_WORDS);
     Some(serde_json::json!({
         "where": if on_shared || held { "server" } else { "node" },
         "position": pos,
@@ -908,8 +933,15 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
         "parallel": parallel,
         "tier": j.tier().as_str(),
         "aheadTiers": {"ci": ahead_ci, "priority": ahead_p},
+        "expected": expected,
+        "order": order_words,
     }))
 }
+
+/// How a queue's order reads once run times are known.
+pub(crate) const ORDER_WORDS: &str = "in its tier, the job expected to end sooner goes first (no run time known counts as 10m); \
+     a job's place rises as it waits, and after 1h it goes first and holds the next free slot; \
+     a newer job starts ahead of a waiting one only if it should end before that one could start";
 
 /// A follower's wait line (an attached `run`, `logs --follow`): a waiting
 /// auto job's line also says why no other node can start it now, in

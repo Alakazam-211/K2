@@ -12,7 +12,7 @@
 //   5. The typing bar names who is typing (not agent activity).
 //   6. `@name` is plain text (no mentions in v1).
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), listen: vi.fn(async () => () => undefined) }))
@@ -467,6 +467,15 @@ describe('pasting into a DM or channel box', () => {
   })
 
   it('files on: a pasted picture is attached (an upload starts), no note', async () => {
+    // jsdom draws no blob: URLs (as HomeChatAttach.test.tsx stubs them).
+    const made = URL.createObjectURL
+    const revoked = URL.revokeObjectURL
+    URL.createObjectURL = vi.fn(() => 'blob:test')
+    URL.revokeObjectURL = vi.fn()
+    onTestFinished(() => {
+      URL.createObjectURL = made
+      URL.revokeObjectURL = revoked
+    })
     setFiles(true)
     await open()
     paste({ items: [new File(['png'], 'a.png', { type: 'image/png' })] })

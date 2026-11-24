@@ -97,6 +97,15 @@ fn setup() -> TestEnv {
     let shim_dir = home.join("shim");
     let shim_log = home.join("shim-log");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
+    // The hire root under this HOME must be the server user's alone: a hire
+    // refuses a folder on its way another user could change
+    // (hire_root_unsafe), and a node's umask (002) leaves the made folder
+    // group-writable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).expect("chmod 700 the test HOME");
+    }
     std::fs::create_dir_all(&shim_log).expect("shim log dir");
     // One shim body for every harness: `create-chat` prints a fresh id (the
     // cursor-agent subcommand); `--help` answers like Codex 0.155+ (the

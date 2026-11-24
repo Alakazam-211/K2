@@ -332,9 +332,17 @@ fn compose_agents_md(project_path: &str) -> String {
     }
     // Permission cards (Beta, PRD rev 3.1 §11.4): only while both switches
     // are on for this workspace. Off = no pointer, today's bytes.
+    // Its send-feedback clause only while agents may report (the 0.46.17
+    // opt-in: off = agents read nothing about reporting).
+    let feedback = crate::product_feedback::settings::load();
+    let reports = crate::product_feedback::teach::agents_md_section(&feedback);
     if permission_cards_on(project_path) {
         out.push('\n');
-        out.push_str(&teach(AGENTS_MD_PERMISSIONS_POINTER));
+        out.push_str(&teach(if reports.is_some() {
+            AGENTS_MD_PERMISSIONS_POINTER
+        } else {
+            AGENTS_MD_PERMISSIONS_POINTER_NO_REPORTS
+        }));
     }
     // The Org Chart (prd-org-chart-v1 §6.3): only while it is on. Off =
     // no block, today's bytes. It names the verb, never today's text.
@@ -344,7 +352,7 @@ fn compose_agents_md(project_path: &str) -> String {
     }
     // Reporting problems to Alakazam Labs (the agent opt-in, 0.46.17): only
     // while a person allowed agents to report. Off = no section.
-    if let Some(section) = crate::product_feedback::teach::agents_md_section(&crate::product_feedback::settings::load()) {
+    if let Some(section) = reports {
         out.push('\n');
         out.push_str(&teach(&section));
     }
@@ -445,6 +453,19 @@ When ", product_name!(), " refuses you (exit 3) or holds a change (exit 2), the 
 line: `Ask with: ", cli_name!(), " permission request …` (run it as printed, filling in only \
 `--why`) or `It can't be requested.` (no card for it: send feedback with `", cli_name!(), " send-feedback`, \
 and ", product_name!(), "'s team sees it). Load the **k2-permissions** skill \
+(`.k2/skills/k2-permissions/SKILL.md`, or `", cli_name!(), " study permissions`) for the rules.\n");
+
+/// [`AGENTS_MD_PERMISSIONS_POINTER`] while agents may not report problems
+/// (the 0.46.17 opt-in off, not asked, or sending off): without the
+/// send-feedback clause, so an agent reads nothing about reporting until a
+/// person allows it (`product_feedback::teach`), and is never pointed at a
+/// verb that refuses it (`agents_off`).
+pub const AGENTS_MD_PERMISSIONS_POINTER_NO_REPORTS: &str = concat!("\
+## Permission cards (Beta)\n\
+\n\
+When ", product_name!(), " refuses you (exit 3) or holds a change (exit 2), the error ends with one \
+line: `Ask with: ", cli_name!(), " permission request …` (run it as printed, filling in only \
+`--why`) or `It can't be requested.` Load the **k2-permissions** skill \
 (`.k2/skills/k2-permissions/SKILL.md`, or `", cli_name!(), " study permissions`) for the rules.\n");
 
 /// Both permission-card switches are on for the workspace at `project_path`

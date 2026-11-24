@@ -167,7 +167,7 @@ fn a_job_without_the_address_filter_runs_only_beside_loopback_alone() {
     assert_eq!(code, Some(i32::from(WALL_EXIT)), "an unknown K2_JOB_NET runs nothing: {err}");
 }
 
-/// Run the shim under an `unshare -Ur` parent: the job is root in a user
+/// Run the shim under an `unshare -Urm` parent: the job is root in a user (and mount)
 /// namespace of its own, with every capability there, so only the filter
 /// stands between it and the mount calls. `(probe, outcome)` per probe.
 fn shim_with_caps(tag: &str, mode: &str, probes: &[&str]) -> Vec<(String, String)> {
@@ -176,7 +176,7 @@ fn shim_with_caps(tag: &str, mode: &str, probes: &[&str]) -> Vec<(String, String
     for p in probes {
         let spec = probe_spec(&d, p);
         let o = Command::new("unshare")
-            .args(["-Ur", "sh", "-c", "exec \"$0\" job-exec \"$1\""])
+            .args(["-Urm", "sh", "-c", "exec \"$0\" job-exec \"$1\""])
             .arg(bin())
             .arg(&spec)
             .env_clear()
@@ -202,7 +202,7 @@ fn shim_with_caps(tag: &str, mode: &str, probes: &[&str]) -> Vec<(String, String
 fn the_mount_api_is_refused_even_to_a_job_with_capabilities() {
     assert!(may_make_user_namespaces(), "this process can't make user namespaces: run it where it may");
     // The control: root in its own namespace, no shim filter, gets one.
-    let control = Command::new("unshare").args(["-Ur", bin().to_str().unwrap(), "wall-probe", "--syscall", "fsopen_tmpfs"]).output().unwrap();
+    let control = Command::new("unshare").args(["-Urm", bin().to_str().unwrap(), "wall-probe", "--syscall", "fsopen_tmpfs"]).output().unwrap();
     assert!(String::from_utf8_lossy(&control.stdout).contains(r#""fsopen_tmpfs":"ok""#), "control: {}", String::from_utf8_lossy(&control.stdout));
     for (p, got) in shim_with_caps("mntapi", USERNS_DENY, &["fsopen_tmpfs", "mount", "fsmount", "move_mount", "open_tree", "fspick", "mount_setattr", "pivot_root", "umount2"]) {
         assert_eq!(got, "EPERM", "{p} without the grant, holding CAP_SYS_ADMIN in its own namespace");

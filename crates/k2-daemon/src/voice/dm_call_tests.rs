@@ -612,9 +612,12 @@ fn a_dm_record_goes_to_sew_on_the_held_session_with_the_keep_days() {
     crate::home_chat::set_deps(None);
 }
 
-/// Sew 0.11.3: with `recording.dm_enabled` off, Record in a DM is
-/// `403 dm_recording_disabled` (as a reason or as the code): K2 names it
-/// and says who turns it on, never the room words (`cannot_record`).
+/// Sew 0.11.3's contract: with `recording.dm_enabled` off, Record in a DM
+/// is `403 policy_denied` with `details.reason: dm_recording_disabled`. K2
+/// reads the reason (never the code): it names the refusal and says who
+/// turns it on, never the room words (`cannot_record`). A body that puts
+/// the word only in the code is not Sew's contract and stays the plain
+/// refusal.
 #[test]
 fn a_dm_record_with_dm_recording_off_says_so() {
     let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
@@ -624,16 +627,16 @@ fn a_dm_record_with_dm_recording_off_says_so() {
     sam_in_dm_900();
     let path = "/api/v1/channels/900/recording/start";
     let c = ctx(false, Arc::new(LoginSew::default()));
-    for body in [
-        json!({"ok": false, "error": {"code": "policy_denied", "hint": "", "details": {"reason": "dm_recording_disabled"}}}),
-        json!({"ok": false, "error": {"code": "dm_recording_disabled", "hint": ""}}),
-    ] {
-        api.answer(path, 403, body.clone());
-        let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
-        assert_eq!((r.status, r.code.as_str()), (403, "dm_recording_disabled"), "{body}");
-        assert!(r.hint.contains("policy set dm_enabled on"), "{}", r.hint);
-        assert_eq!(r.details.unwrap()["sew"], body["error"], "Sew's own error kept");
-    }
+    let body = json!({"ok": false, "error": {"code": "policy_denied", "hint": "", "details": {"reason": "dm_recording_disabled"}}});
+    api.answer(path, 403, body.clone());
+    let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (403, "dm_recording_disabled"));
+    assert!(r.hint.contains("policy set dm_enabled on"), "{}", r.hint);
+    assert_eq!(r.details.unwrap()["sew"], body["error"], "Sew's own error kept");
+    // The word in the code only: not the contract, read as a plain 403.
+    api.answer(path, 403, json!({"ok": false, "error": {"code": "dm_recording_disabled", "hint": ""}}));
+    let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
+    assert_eq!((r.status, r.code.as_str()), (403, "cannot_record"), "only details.reason names a recording refusal");
     follower::release_all();
     crate::home_chat::set_deps(None);
 }

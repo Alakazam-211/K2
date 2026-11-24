@@ -1168,15 +1168,10 @@ pub enum RecordingAct {
 /// A Sew refusal of a Record or Stop, in K2's words. Sew's own error stays
 /// under `details.sew` (its `reason` is what a client branches on).
 pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
-    // Sew's reason, else its code (Sew 0.11.3 may name a refusal either way,
-    // as sew-call-client's `from_sew_error` reads it).
-    let reason = a
-        .body
-        .pointer("/error/details/reason")
-        .and_then(Value::as_str)
-        .filter(|r| !r.is_empty())
-        .or_else(|| a.body.pointer("/error/code").and_then(Value::as_str))
-        .unwrap_or("");
+    // Sew's contract (0.11.3): every recording refusal names itself in
+    // `details.reason` (the code is generic, e.g. `policy_denied`). Only the
+    // reason is read.
+    let reason = a.body.pointer("/error/details/reason").and_then(Value::as_str).unwrap_or("");
     let sew = a.body.get("error").cloned().unwrap_or(Value::Null);
     let status = if a.status >= 400 { a.status } else { 502 };
     let (code, hint): (&str, &str) = match reason {

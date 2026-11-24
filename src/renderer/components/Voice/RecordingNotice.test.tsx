@@ -109,6 +109,16 @@ describe('RecordingNotice', () => {
     expect(screen.getByTestId('recording-notice-countdown').textContent).toMatch(/^You won’t join the call if you don’t answer in [01]:\d\d$/)
   })
 
+  it("a DM call whose prompt says not_join (an org turned require_consent_to_join on): the countdown and the leaving words, from the prompt, not from 'is a DM'", () => {
+    const c = call({ roomId: 'dm:conv-1', roomName: 'Alice' })
+    expect(c.recordingNotice!.prompt.declineMode).toBe('not_join')
+    render(<RecordingNotice call={c} agentReaders={null} onAnswer={vi.fn()} />)
+    expect(screen.getByTestId('recording-notice-countdown').textContent).toMatch(/^You’ll leave the call in [01]:\d\d if you don’t answer$/)
+    const text = screen.getByRole('alertdialog').textContent ?? ''
+    expect(text).toContain('Staying in the call means being recorded.')
+    expect(text).not.toContain('You’re recorded only after you press OK.')
+  })
+
   it("Sew 0.11.3's DM call (join_unrecorded): no countdown, since nobody is dropped; it says you're recorded only after OK", () => {
     for (const ask of ['in_call', 'join'] as const) {
       const c = call({ roomId: 'dm:conv-1', roomName: 'Alice' })

@@ -50,7 +50,7 @@ impl ThreadDeliveryJob {
     /// delivery (its own take check and one retry), with no Thread turn of
     /// its own (the first one ran its course). The post it carries stays
     /// named, so a post deleted since is never sent.
-    fn for_resend(&self) -> Self {
+    pub(super) fn for_resend(&self) -> Self {
         let mut job = self.clone();
         job.retry = false;
         job.turn = None;

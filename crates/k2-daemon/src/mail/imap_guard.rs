@@ -128,7 +128,8 @@ pub fn busy_error(retry_after_s: u64) -> String {
          sessions open — no more are opened, so the provider won't lock the account. Run your \
          mail calls one at a time (or a few), and retry this one in {retry_after_s}s. A stalled \
          session is closed on its own (within {stuck_min} min); if this still says busy after \
-         that with nothing reading, restarting the K2 server clears stuck sessions"
+         that with nothing reading, restarting the {product} server clears stuck sessions",
+        product = k2_core::brand::PRODUCT_NAME,
     )
 }
 
@@ -469,7 +470,7 @@ mod tests {
         // Young places are left alone.
         let busy = acquire_aged(&id, Duration::ZERO, MAX_PLACE_AGE).err().expect("busy");
         assert_eq!(parse_tag(&busy).map(|t| t.0), Some("inbox_busy"), "{busy}");
-        assert!(busy.contains("restarting the K2 server clears stuck sessions"), "{busy}");
+        assert!(busy.contains(&format!("restarting the {} server clears stuck sessions", k2_core::brand::PRODUCT_NAME)), "{busy}");
         std::thread::sleep(Duration::from_millis(100));
         let fresh = acquire_aged(&id, Duration::ZERO, Duration::from_millis(50)).expect("stuck places are taken back");
         // Every stuck socket was shut down, which wakes its reader at once.

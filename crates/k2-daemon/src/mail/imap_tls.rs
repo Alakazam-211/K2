@@ -99,8 +99,9 @@ pub fn timed_out_error(io: Duration) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::TimedOut,
         format!(
-            "the mail server did not answer within {}s, so K2 closed this connection",
-            io.as_secs().max(1)
+            "the mail server did not answer within {}s, so {} closed this connection",
+            io.as_secs().max(1),
+            k2_core::brand::PRODUCT_NAME,
         ),
     )
 }

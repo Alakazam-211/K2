@@ -30,12 +30,15 @@ fn says(status: u16, body: &str) -> Answer {
     Answer::Says(status, body.to_string())
 }
 
+/// Every request a stub peer saw: its request line and its body.
+type Seen = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
 /// A peer that answers its roster GETs and inbound POSTs from two scripts,
 /// in order (the last answer repeats). Keeps every request's path line and
 /// body.
 struct Peer {
     base: String,
-    seen: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+    seen: Seen,
 }
 
 impl Peer {
@@ -59,7 +62,7 @@ impl Peer {
 fn scripted_peer(roster: Vec<Answer>, inbound: Vec<Answer>) -> Peer {
     let l = TcpListener::bind(("127.0.0.1", 0)).expect("bind peer stub");
     let port = l.local_addr().unwrap().port();
-    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
     std::thread::spawn(move || {
         let (mut r_n, mut i_n) = (0usize, 0usize);

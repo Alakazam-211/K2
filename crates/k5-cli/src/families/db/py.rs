@@ -53,6 +53,10 @@ pub const REFUSED: &[&str] = &[
     "helper_needed",
     "db_upgrade_off",
     "major_mismatch",
+    "import_unresolved",
+    "import_target_not_empty",
+    "import_migrations_folder",
+    "roles_conflict",
 ];
 
 /// The lines of `_db_py`'s script (line 1 is the one after `<<'PYEOF'`)
@@ -60,79 +64,79 @@ pub const REFUSED: &[&str] = &[
 pub mod line {
     pub const DIE_IN: u32 = 20;
     pub const DIE_ADD: u32 = 21;
-    pub const REQUEST_DIE: u32 = 47;
-    pub const REQUEST_HTTP_READ: u32 = 44;
-    pub const GRANT_RELATIONS: u32 = 162;
-    pub const PUT_JSON: u32 = 199;
-    pub const NOTE: u32 = 247;
-    pub const DIE_OK_FALSE: u32 = 248;
-    pub const NOTE_STATUS: u32 = 250;
-    pub const DIE_STATUS_ERROR: u32 = 252;
-    pub const DIE_STATUS: u32 = 253;
-    pub const STATUS: u32 = 260;
-    pub const STATUS_SRC: u32 = 275;
-    pub const STATUS_CLUSTERS: u32 = 276;
-    pub const STATUS_CLUSTER: u32 = 277;
-    pub const STATUS_UPGRADES: u32 = 278;
-    pub const STATUS_UPGRADE: u32 = 279;
-    pub const STATUS_UPGRADE_CHECK: u32 = 280;
-    pub const STATUS_UPGRADE_LATER: u32 = 282;
-    pub const STATUS_FIRST: u32 = 284;
-    pub const STATUS_STALE: u32 = 286;
-    pub const STATUS_STALE_LINE: u32 = 288;
-    pub const CLUSTERS: u32 = 290;
-    pub const CLUSTERS_HEAD: u32 = 291;
-    pub const CLUSTERS_FOR: u32 = 292;
-    pub const CLUSTERS_LABEL: u32 = 293;
-    pub const CLUSTERS_NAMED_N: u32 = 296;
-    pub const CLUSTERS_MAIN_N: u32 = 298;
-    pub const CLUSTERS_ROLE: u32 = 300;
-    pub const CLUSTERS_ROW: u32 = 304;
-    pub const CLUSTERS_HEALTH: u32 = 305;
-    pub const CLUSTERS_SIZES: u32 = 312;
-    pub const CLUSTERS_ARCHIVER: u32 = 313;
-    pub const CLUSTERS_CONNECTIONS: u32 = 314;
-    pub const CLUSTERS_WAL: u32 = 316;
-    pub const CLUSTERS_LSN: u32 = 317;
-    pub const CLUSTERS_LSN_PRINT: u32 = 318;
-    pub const CLUSTERS_UPGRADES: u32 = 319;
-    pub const CLUSTERS_UPGRADE: u32 = 320;
-    pub const DEFAULT_MAJOR: u32 = 322;
-    pub const STATE: u32 = 324;
-    pub const CREATE: u32 = 326;
-    pub const CREATE_KEPT: u32 = 338;
-    pub const CREATE_CAP: u32 = 344;
-    pub const CREATE_APPS: u32 = 345;
-    pub const CREATE_APP: u32 = 346;
-    pub const DSN: u32 = 350;
-    pub const LIST: u32 = 361;
-    pub const LIST_LEN: u32 = 362;
-    pub const LIST_FOR: u32 = 363;
-    pub const LIST_ROW: u32 = 364;
-    pub const MIGRATE: u32 = 366;
-    pub const MIGRATE_APPLIED: u32 = 369;
-    pub const MIGRATE_NOOP: u32 = 370;
-    pub const MIGRATE_NONE: u32 = 373;
-    pub const DUMP: u32 = 375;
-    pub const RESTORE: u32 = 377;
-    pub const DROP: u32 = 379;
-    pub const DROP_APPS: u32 = 380;
-    pub const DROP_APP: u32 = 381;
-    pub const GRANT: u32 = 383;
-    pub const GRANT_APPS: u32 = 386;
-    pub const GRANT_APP: u32 = 387;
-    pub const REVOKE: u32 = 389;
-    pub const REVOKE_APPS: u32 = 390;
-    pub const REVOKE_APP: u32 = 391;
-    pub const BIND: u32 = 393;
-    pub const DOCTOR: u32 = 395;
-    pub const DOCTOR_CLUSTERS: u32 = 401;
-    pub const DOCTOR_CLUSTER: u32 = 403;
-    pub const DOCTOR_RAM: u32 = 405;
-    pub const DOCTOR_GUCS: u32 = 415;
-    pub const DOCTOR_GUC: u32 = 416;
-    pub const DOCTOR_HINT: u32 = 417;
-    pub const OTHER: u32 = 420;
+    pub const REQUEST_DIE: u32 = 48;
+    pub const REQUEST_HTTP_READ: u32 = 45;
+    pub const GRANT_RELATIONS: u32 = 214;
+    pub const PUT_JSON: u32 = 251;
+    pub const NOTE: u32 = 299;
+    pub const DIE_OK_FALSE: u32 = 300;
+    pub const NOTE_STATUS: u32 = 302;
+    pub const DIE_STATUS_ERROR: u32 = 304;
+    pub const DIE_STATUS: u32 = 305;
+    pub const STATUS: u32 = 312;
+    pub const STATUS_SRC: u32 = 327;
+    pub const STATUS_CLUSTERS: u32 = 328;
+    pub const STATUS_CLUSTER: u32 = 329;
+    pub const STATUS_UPGRADES: u32 = 330;
+    pub const STATUS_UPGRADE: u32 = 331;
+    pub const STATUS_UPGRADE_CHECK: u32 = 332;
+    pub const STATUS_UPGRADE_LATER: u32 = 334;
+    pub const STATUS_FIRST: u32 = 336;
+    pub const STATUS_STALE: u32 = 338;
+    pub const STATUS_STALE_LINE: u32 = 340;
+    pub const CLUSTERS: u32 = 342;
+    pub const CLUSTERS_HEAD: u32 = 343;
+    pub const CLUSTERS_FOR: u32 = 344;
+    pub const CLUSTERS_LABEL: u32 = 345;
+    pub const CLUSTERS_NAMED_N: u32 = 348;
+    pub const CLUSTERS_MAIN_N: u32 = 350;
+    pub const CLUSTERS_ROLE: u32 = 352;
+    pub const CLUSTERS_ROW: u32 = 356;
+    pub const CLUSTERS_HEALTH: u32 = 357;
+    pub const CLUSTERS_SIZES: u32 = 364;
+    pub const CLUSTERS_ARCHIVER: u32 = 365;
+    pub const CLUSTERS_CONNECTIONS: u32 = 366;
+    pub const CLUSTERS_WAL: u32 = 368;
+    pub const CLUSTERS_LSN: u32 = 369;
+    pub const CLUSTERS_LSN_PRINT: u32 = 370;
+    pub const CLUSTERS_UPGRADES: u32 = 371;
+    pub const CLUSTERS_UPGRADE: u32 = 372;
+    pub const DEFAULT_MAJOR: u32 = 374;
+    pub const STATE: u32 = 376;
+    pub const CREATE: u32 = 378;
+    pub const CREATE_KEPT: u32 = 390;
+    pub const CREATE_CAP: u32 = 396;
+    pub const CREATE_APPS: u32 = 397;
+    pub const CREATE_APP: u32 = 398;
+    pub const DSN: u32 = 402;
+    pub const LIST: u32 = 413;
+    pub const LIST_LEN: u32 = 414;
+    pub const LIST_FOR: u32 = 415;
+    pub const LIST_ROW: u32 = 416;
+    pub const MIGRATE: u32 = 418;
+    pub const MIGRATE_APPLIED: u32 = 421;
+    pub const MIGRATE_NOOP: u32 = 422;
+    pub const MIGRATE_NONE: u32 = 425;
+    pub const DUMP: u32 = 427;
+    pub const RESTORE: u32 = 429;
+    pub const DROP: u32 = 433;
+    pub const DROP_APPS: u32 = 434;
+    pub const DROP_APP: u32 = 435;
+    pub const GRANT: u32 = 437;
+    pub const GRANT_APPS: u32 = 440;
+    pub const GRANT_APP: u32 = 441;
+    pub const REVOKE: u32 = 443;
+    pub const REVOKE_APPS: u32 = 444;
+    pub const REVOKE_APP: u32 = 445;
+    pub const BIND: u32 = 447;
+    pub const DOCTOR: u32 = 449;
+    pub const DOCTOR_CLUSTERS: u32 = 455;
+    pub const DOCTOR_CLUSTER: u32 = 457;
+    pub const DOCTOR_RAM: u32 = 459;
+    pub const DOCTOR_GUCS: u32 = 469;
+    pub const DOCTOR_GUC: u32 = 470;
+    pub const DOCTOR_HINT: u32 = 471;
+    pub const OTHER: u32 = 474;
 }
 
 /// The verbs `_db_py` takes (`D_VERB`).
@@ -168,36 +172,36 @@ impl Verb {
     /// The line `request(...)` is called from, for its frame.
     fn call_line(self) -> u32 {
         match self {
-            Verb::Status => 62,
-            Verb::Enable => 65,
-            Verb::Disable => 68,
-            Verb::Uninstall => 71,
-            Verb::Doctor => 74,
-            Verb::Create => 88,
-            Verb::Clusters => 91,
-            Verb::DefaultMajor => 107,
-            Verb::List => 110,
-            Verb::Dsn => 126,
-            Verb::Migrate => 134,
-            Verb::Dump => 142,
-            Verb::Restore => 148,
-            Verb::Drop => 156,
-            Verb::Grant => 172,
-            Verb::Revoke => 179,
-            Verb::Bind => 185,
-            Verb::StoreCreate => 188,
-            Verb::StoreList => 191,
-            Verb::StorePut => 201,
-            Verb::StoreGet => 204,
-            Verb::StoreQuery => 210,
-            Verb::StoreRm => 213,
-            Verb::StoreDrop => 216,
+            Verb::Status => 99,
+            Verb::Enable => 102,
+            Verb::Disable => 105,
+            Verb::Uninstall => 108,
+            Verb::Doctor => 111,
+            Verb::Create => 125,
+            Verb::Clusters => 128,
+            Verb::DefaultMajor => 144,
+            Verb::List => 147,
+            Verb::Dsn => 163,
+            Verb::Migrate => 171,
+            Verb::Dump => 179,
+            Verb::Restore => 185,
+            Verb::Drop => 208,
+            Verb::Grant => 224,
+            Verb::Revoke => 231,
+            Verb::Bind => 237,
+            Verb::StoreCreate => 240,
+            Verb::StoreList => 243,
+            Verb::StorePut => 253,
+            Verb::StoreGet => 256,
+            Verb::StoreQuery => 262,
+            Verb::StoreRm => 265,
+            Verb::StoreDrop => 268,
         }
     }
 }
 
 /// `clusters`' second call (`GET /cli/db/clusters`).
-const CLUSTERS_CALL: u32 = 100;
+const CLUSTERS_CALL: u32 = 137;
 
 /// The `D_*` settings the shell hands `_db_py`: the strings as the shell
 /// set them (`""` for one it didn't), the `true`/`false` ones as flags.

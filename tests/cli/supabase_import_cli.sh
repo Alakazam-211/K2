@@ -100,6 +100,7 @@ run db import supabase --db supa
 [ "$RC" -eq 2 ] || fail "k2 db import supabase without a dump is usage, got $RC"
 [ ! -s "$FAKE_DIR/requests.log" ] || fail "usage errors sent requests: $(cat "$FAKE_DIR/requests.log")"
 
+# covers: db import supabase
 run db import supabase .k2/db/dumps/s.dump --db supa --dry-run
 [ "$RC" -eq 0 ] || fail "a dry run exits 0, got $RC: $ERR"
 last_req | grep -q '^POST /cli/db/import/supabase ' || fail "posts the import: $(last_req)"
@@ -117,6 +118,7 @@ grep -q '"allowUnresolved":true' <<<"$(last_req)" || fail "sends allowUnresolved
 grep -q '^unresolved: FUNCTION public.read_secret(text) -> vault.decrypted_secrets' <<<"$OUT" || fail "the report prints before the error: $OUT"
 grep -q 'import_unresolved' <<<"$ERR" || fail "names the refusal: $ERR"
 
+# covers: db import supabase --json
 run db import supabase .k2/db/dumps/s.dump --db supa --json
 [ "$RC" -eq 0 ] || fail "--json exits 0"
 python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["db"] == "supa" and v["authUsers"] == 3' "$OUT" || fail "--json is the report: $OUT"
@@ -133,6 +135,7 @@ run app user import feedback --file nope.jsonl
 [ "$RC" -eq 1 ] || fail "an unreadable file is usage, got $RC"
 [ ! -s "$FAKE_DIR/requests.log" ] || fail "usage errors sent requests: $(cat "$FAKE_DIR/requests.log")"
 
+# covers: app user import
 run app user import feedback --file users.jsonl
 [ "$RC" -eq 0 ] || fail "a dry run exits 0, got $RC: $ERR"
 last_req | grep -q '^POST /cli/app/user/import ' || fail "posts the import: $(last_req)"
@@ -152,6 +155,7 @@ run app user import clash --file users.jsonl --apply
 grep -q 'refused, nothing written' <<<"$OUT" || fail "says refused: $OUT"
 grep -q 'clash line 2: email_taken' <<<"$OUT" || fail "lists the clash: $OUT"
 
+# covers: app user import --json
 run app user import clash --file users.jsonl --json
 [ "$RC" -eq 1 ] || fail "--json with clashes exits 1, got $RC"
 

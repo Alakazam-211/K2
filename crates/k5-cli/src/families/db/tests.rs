@@ -188,15 +188,15 @@ fn each_verb_calls_from_its_line() {
 fn verb_line(v: Verb) -> u32 {
     // The same table `Py::request`'s frames use.
     match v {
-        Verb::Status => 62,
-        Verb::Enable => 65,
-        Verb::Create => 88,
-        Verb::Clusters => 91,
-        Verb::DefaultMajor => 107,
-        Verb::Dsn => 126,
-        Verb::Grant => 172,
-        Verb::StorePut => 201,
-        Verb::StoreDrop => 216,
+        Verb::Status => 99,
+        Verb::Enable => 102,
+        Verb::Create => 125,
+        Verb::Clusters => 128,
+        Verb::DefaultMajor => 144,
+        Verb::Dsn => 163,
+        Verb::Grant => 224,
+        Verb::StorePut => 253,
+        Verb::StoreDrop => 268,
         other => panic!("{other:?}"),
     }
 }

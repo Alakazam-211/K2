@@ -968,47 +968,47 @@ fn named_show(what: What, body: &[u8]) -> Shown {
                 p.print(format!("restarted {}", st(py_get(&v, "cluster", 11)?)));
             }
             What::Archive => {
-                // Each `.get` at its line; only line 13's can raise (a `v`
+                // Each `.get` at its line; only line 90's can raise (a `v`
                 // that is no dict).
                 let on = |k: &str, n: u32| -> Result<bool, Raise> {
                     Ok(py_get(&v, k, n)?.is_some_and(py::truthy))
                 };
-                let wal = on("walArchive", 13)?;
+                let wal = on("walArchive", 90)?;
                 let state = if wal { "on" } else { "off" };
-                if !on("changed", 14)? {
-                    let c = st(py_get(&v, "cluster", 15)?);
+                if !on("changed", 91)? {
+                    let c = st(py_get(&v, "cluster", 92)?);
                     p.print(format!(
                         "WAL archiving on {c} is already {state} (nothing changed)"
                     ));
                 } else {
-                    let c = st(py_get(&v, "cluster", 17)?);
-                    let when = if on("restarted", 17)? {
+                    let c = st(py_get(&v, "cluster", 94)?);
+                    let when = if on("restarted", 94)? {
                         " (restarted)"
                     } else {
                         " (applies when it next starts)"
                     };
                     p.print(format!("WAL archiving on {c} is now {state}{when}"));
                 }
-                if on("walArchive", 18)? {
-                    let spool = st(py_get(&v, "walSpool", 19)?);
+                if on("walArchive", 95)? {
+                    let spool = st(py_get(&v, "walSpool", 96)?);
                     p.print(format!("spool: {spool} (a backup ships and prunes it)"));
-                } else if on("walSpoolKept", 20)? {
-                    let spool = st(py_get(&v, "walSpool", 21)?);
+                } else if on("walSpoolKept", 97)? {
+                    let spool = st(py_get(&v, "walSpool", 98)?);
                     p.print(format!("spool kept: {spool} (nothing in it was removed)"));
                 }
             }
             What::CreateDb => {
-                let name = st(py_get(&v, "name", 23)?);
-                let cluster = or(py_get(&v, "cluster", 23)?, s("?"));
+                let name = st(py_get(&v, "name", 100)?);
+                let cluster = or(py_get(&v, "cluster", 100)?, s("?"));
                 p.print(format!("created {name} in {}", py::str_of(&cluster)));
-                if py_get(&v, "existing", 24)?.is_some_and(py::truthy) {
+                if py_get(&v, "existing", 101)?.is_some_and(py::truthy) {
                     p.print("(already there: same --id or name)");
                 }
-                if let Some(d) = py_get(&v, "dsn", 26)?.filter(|x| py::truthy(x)) {
+                if let Some(d) = py_get(&v, "dsn", 103)?.filter(|x| py::truthy(x)) {
                     p.print(format!("dsn: {}", py::str_of(d)));
                 }
-                if py_get(&v, "dsnHint", 28)?.is_some_and(py::truthy) {
-                    let h = index(&v, "dsnHint", 29)?;
+                if py_get(&v, "dsnHint", 105)?.is_some_and(py::truthy) {
+                    let h = index(&v, "dsnHint", 106)?;
                     p.print(format!("no password shown; {}", py::str_of(h)));
                 }
             }
@@ -1322,20 +1322,20 @@ mod tests {
             (2, "v=json.load(sys.stdin)"),
             (5, "c=v.get(\"cluster\") or {}"),
             (11, "print(\"restarted %s\" % v.get(\"cluster\"))"),
-            (12, "elif w == \"archive\":"),
-            (13, "state = \"on\" if v.get(\"walArchive\") else \"off\""),
-            (14, "if not v.get(\"changed\"):"),
-            (15, "print(\"WAL archiving on %s is already %s (nothing changed)\" % (v.get(\"cluster\"), state))"),
-            (17, "print(\"WAL archiving on %s is now %s%s\" % (v.get(\"cluster\"), state, \" (restarted)\" if v.get(\"restarted\") else \" (applies when it next starts)\"))"),
-            (18, "if v.get(\"walArchive\"):"),
-            (19, "print(\"spool: %s (a backup ships and prunes it)\" % v.get(\"walSpool\"))"),
-            (20, "elif v.get(\"walSpoolKept\"):"),
-            (21, "print(\"spool kept: %s (nothing in it was removed)\" % v.get(\"walSpool\"))"),
-            (23, "print(\"created %s in %s\" % (v.get(\"name\"), v.get(\"cluster\") or \"?\"))"),
-            (24, "if v.get(\"existing\"):"),
-            (26, "if v.get(\"dsn\"):"),
-            (28, "if v.get(\"dsnHint\"):"),
-            (29, "print(\"no password shown; %s\" % v[\"dsnHint\"])'"),
+            (89, "elif w == \"archive\":"),
+            (90, "state = \"on\" if v.get(\"walArchive\") else \"off\""),
+            (91, "if not v.get(\"changed\"):"),
+            (92, "print(\"WAL archiving on %s is already %s (nothing changed)\" % (v.get(\"cluster\"), state))"),
+            (94, "print(\"WAL archiving on %s is now %s%s\" % (v.get(\"cluster\"), state, \" (restarted)\" if v.get(\"restarted\") else \" (applies when it next starts)\"))"),
+            (95, "if v.get(\"walArchive\"):"),
+            (96, "print(\"spool: %s (a backup ships and prunes it)\" % v.get(\"walSpool\"))"),
+            (97, "elif v.get(\"walSpoolKept\"):"),
+            (98, "print(\"spool kept: %s (nothing in it was removed)\" % v.get(\"walSpool\"))"),
+            (100, "print(\"created %s in %s\" % (v.get(\"name\"), v.get(\"cluster\") or \"?\"))"),
+            (101, "if v.get(\"existing\"):"),
+            (103, "if v.get(\"dsn\"):"),
+            (105, "if v.get(\"dsnHint\"):"),
+            (106, "print(\"no password shown; %s\" % v[\"dsnHint\"])'"),
         ] {
             assert_eq!(at(n), want, "line {n}");
         }
@@ -1351,7 +1351,7 @@ mod tests {
             r#"case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster archive <name> on|off"; exit 2 ;; esac"#,
             r#"case "$c_state" in on|off) ;; *) _db_err "usage" "k2 db cluster archive <name> on|off (got '${c_state}')"; exit 2 ;; esac"#,
             r#"_db_named_post "$(_compute_json K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_archive="$c_state")" "$as_json" archive /cli/db/clusters/archive ;;"#,
-            r#"*) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off"; exit 2 ;;"#,
+            r#"*) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off | k2 db cluster basebackup|backups <name> | k2 db cluster restore <name> --to <time> --as <new> | k2 db cluster restore-drill <name> [--to <time>] | k2 db cluster drop-drill <name> | k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;;"#,
             r#"local body="$1" as_json="$2" what="$3" path="${4:-/cli/db/clusters}""#,
         ] {
             assert!(text.contains(shell), "db-store.sh no longer has {shell:?}");

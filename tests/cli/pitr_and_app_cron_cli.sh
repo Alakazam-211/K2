@@ -128,14 +128,17 @@ done
 [ ! -s "$FAKE_DIR/requests.log" ] || fail "usage errors send nothing: $(cat "$FAKE_DIR/requests.log")"
 
 # PITR verbs.
+# covers: db cluster basebackup
 run db cluster basebackup feedback
 [ "$RC" = 0 ] || fail "basebackup: $OUT"
 echo "$OUT" | grep -q 'base backup 20261122T040000Z of 17/feedback' || fail "basebackup output: $OUT"
 last_body | grep -q '"op": *"basebackup"' || fail "basebackup body: $(last_body)"
+# covers: db cluster backups
 run db cluster backups feedback
 [ "$RC" = 0 ] || fail "backups: $OUT"
 echo "$OUT" | grep -q 'GAP      segment 000000010000000000000007' || fail "backups shows a gap: $OUT"
 echo "$OUT" | grep -q 'warning: no good restore drill yet' || fail "backups warns about drills: $OUT"
+# covers: db cluster restore
 run db cluster restore feedback --to "2026-11-22 10:00" --as fb_old
 [ "$RC" = 0 ] || fail "restore: $OUT"
 echo "$OUT" | grep -q 'restored 17/feedback to 2026-11-22T10:00:00Z UTC as 17/fb_old (port 5435)' || fail "restore output: $OUT"
@@ -143,6 +146,7 @@ python3 -c 'import json,sys; b=json.loads(sys.argv[1]); assert b["op"]=="restore
 run db cluster restore feedback --to 2099-01-01T00:00:00Z --as fb_old
 [ "$RC" = 3 ] || fail "a refused restore exits 3 (got $RC): $OUT"
 echo "$OUT" | grep -q 'target_after_wal' || fail "refusal names the reason: $OUT"
+# covers: db cluster restore-drill
 run db cluster restore-drill feedback
 [ "$RC" = 0 ] || fail "a passing drill exits 0: $OUT"
 echo "$OUT" | grep -q 'PASS' || fail "drill PASS: $OUT"
@@ -150,6 +154,7 @@ run db cluster restore-drill bad --to -1h
 [ "$RC" = 1 ] || fail "a failing drill exits 1 (got $RC): $OUT"
 echo "$OUT" | grep -q 'public.orders: 3 at the moment, 4 restored' || fail "drill diffs: $OUT"
 last_body | grep -q '"to": *"-1h"' || fail "drill --to: $(last_body)"
+# covers: db cluster drop-drill
 run db cluster drop-drill feedback_drill --major 17
 [ "$RC" = 0 ] || fail "drop-drill: $OUT"
 echo "$OUT" | grep -q 'removed 17/feedback_drill' || fail "drop-drill output: $OUT"
@@ -157,6 +162,7 @@ echo "$OUT" | grep -q 'removed 17/feedback_drill' || fail "drop-drill output: $O
 # Switch: no --yes shows the moment, sends no confirm and exits 2 (no
 # terminal here); --yes confirms.
 : >"$FAKE_DIR/requests.log"
+# covers: db cluster switch
 run db cluster switch app_db --to fb_old
 [ "$RC" = 2 ] || fail "switch without --yes exits 2 (got $RC): $OUT"
 echo "$OUT" | grep -q 'moment: 2026-11-22T10:00:00Z UTC' || fail "the preview shows the moment: $OUT"
@@ -173,20 +179,25 @@ run db cluster switch app_db
 [ "$RC" = 2 ] || fail "switch without --to is a usage error"
 
 # App cron.
+# covers: app cron add
 run app cron add shop "*/15 * * * *" --path /api/cron/sync --method post --timeout 2m
 [ "$RC" = 0 ] || fail "cron add: $OUT"
 echo "$OUT" | grep -q 'CRON_SECRET made and granted to the App (not shown); the App was re-hosted' || fail "cron add output: $OUT"
 python3 -c 'import json,sys; b=json.loads(sys.argv[1]); assert b=={"app":"shop","schedule":"*/15 * * * *","path":"/api/cron/sync","method":"post","timeout":"2m"}, b' "$(last_body)" || fail "cron add body"
+# covers: app cron list
 run app cron list shop
 [ "$RC" = 0 ] || fail "cron list: $OUT"
 echo "$OUT" | grep -q '3 failures in a row' || fail "cron list shows the streak: $OUT"
 tail -1 "$FAKE_DIR/requests.log" | grep -q '^GET /cli/app/cron {"app": "shop"}' || fail "list is a GET: $(tail -1 "$FAKE_DIR/requests.log")"
+# covers: app cron run-now
 run app cron run-now shop c0123456789
 [ "$RC" = 1 ] || fail "a failed run-now exits 1 (got $RC): $OUT"
+# covers: app cron logs
 run app cron logs shop c0123456789 --limit 5
 [ "$RC" = 0 ] || fail "cron logs: $OUT"
 echo "$OUT" | grep -q 'skipped_overlap' || fail "cron logs output: $OUT"
 tail -1 "$FAKE_DIR/requests.log" | grep -q '"id": "c0123456789", "limit": "5"' || fail "logs query: $(tail -1 "$FAKE_DIR/requests.log")"
+# covers: app cron rm
 run app cron rm shop c0123456789
 [ "$RC" = 0 ] || fail "cron rm: $OUT"
 echo "$OUT" | grep -q 'removed c0123456789 from shop' || fail "cron rm output: $OUT"

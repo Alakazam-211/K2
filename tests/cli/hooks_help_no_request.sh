@@ -91,7 +91,7 @@ export K2_HOOK_TOKEN="owner-token-for-test"
 export K2_PROJECT_PATH="$WORK/proj"
 cd "$WORK/proj"
 
-REF="$(cat "$TEXT/hooks.txt")"
+REF="$(cli_page "$TEXT/hooks.txt")"
 
 # run <args...>: sets OUT (stdout), ERR (stderr), RC. stdin is empty.
 run() {
@@ -148,7 +148,7 @@ check hooks nope -h
 echo "== emit keeps its own page =="
 : >"$REQ_LOG"
 run hooks emit -h
-expect "k2 hooks emit -h" 0 "$(cat "$TEXT/hooks/emit.txt")" ""
+expect "k2 hooks emit -h" 0 "$(cli_page "$TEXT/hooks/emit.txt")" ""
 sent_nothing "k2 hooks emit -h"
 
 echo "== hooks takes no bare --: -h after one is the usage error =="

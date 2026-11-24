@@ -1,4 +1,4 @@
-List your K2 Connect subdomains (primary + nested).
+List your {login} subdomains (primary + nested).
 
 USAGE
   k2 publish subdomain list [--json]

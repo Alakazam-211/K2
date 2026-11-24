@@ -136,7 +136,7 @@ page_once() {
     [ "$home" = "$HOME_OFF" ] && label="$label (no daemon)"
     run "$home" "$@"
     [ "$RC" -eq 0 ] && ok || bad "$label: exit $RC (want 0)"
-    cmp -s "$WORK/out" "$TEXT/$page" && ok \
+    cmp -s "$WORK/out" <(cli_page "$TEXT/$page") && ok \
         || { bad "$label: stdout is not $page"; show "$WORK/out"; }
     [ ! -s "$WORK/err" ] && ok || { bad "$label: stderr"; show "$WORK/err"; }
     [ ! -s "$REQ_LOG" ] && ok || { bad "$label: sent a request"; show "$REQ_LOG"; }

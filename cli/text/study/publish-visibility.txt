@@ -56,6 +56,6 @@ WHAT CAN'T BE PRIVATE OR PIN
   asks for --yes when there is no terminal.
   K2 uses the path /_k2/site/ on a private or PIN site, so your site's own files
   under that path aren't reachable there.
-  With K2 Connect's end-to-end encryption off, private and PIN are refused
+  With {login}'s end-to-end encryption off, private and PIN are refused
   (visibility_door_unsupported), because K2 can't check visitors on that path.
   Apps are not covered: their own logins decide.

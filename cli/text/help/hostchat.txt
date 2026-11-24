@@ -235,10 +235,10 @@ Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
                                             changes nothing and exits 0 (changed: false).
   k2 hostchat media tier tunnel|direct [--json]
                                             (preview: k2 settings set voiceTunnelPreview true, or
-                                            K2_VOICE_TUNNEL=1; direct also works with it off) tunnel: all voice through K2 Connect, at
+                                            K2_VOICE_TUNNEL=1; direct also works with it off) tunnel: all voice through {login}, at
                                             turn.<label>.k2.dev:443 (the relay's port, nothing to open
                                             here), on a second frpc. The box's IP leaves voice DNS and K2
-                                            opens no voice port. Needs K2 Connect Pro, Sew 0.7.0 and root
+                                            opens no voice port. Needs {login} Pro, Sew 0.7.0 and root
                                             helper protocol 12: media preflight checks them.
                                             direct (the way back): public TCP 5349 + UDP 7882 at
                                             turn-<label>.k2.dev. The box's IP becomes public, in DNS, in
@@ -314,7 +314,7 @@ Recording (Sew, this box's chat and voice service: its recorder and transcriber;
   sew_feature_missing (exit 3).
 
 Meet (the reserved meet.<box>.k2.dev label):
-  k2 hostchat meet bind <app-id> [--json]   point meet.<box>.k2.dev at an installed App (K2 Connect
+  k2 hostchat meet bind <app-id> [--json]   point meet.<box>.k2.dev at an installed App ({login}
                                             needed); restart the App once so K2_APP_ORIGINS has it
   k2 hostchat meet unbind [--json]
 

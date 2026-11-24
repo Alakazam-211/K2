@@ -5,7 +5,7 @@ k2 app domain — more hostnames for an App (0.46.4; custom domains 0.46.6)
   k2 app domain rm <app-id> <subdomain>    back to what it served before (or removed)
   k2 app domains <app-id>                  its own label, taken labels, attached ones,
                                            custom domains (state + the DNS to set)
-  <box> is this box's K2 Connect name (<box>.k2.dev).
+  <box> is this box's {login} name (<box>.k2.dev).
 
 CUSTOM DOMAINS (your own name, e.g. shop.example.com)
   k2 app domain add <app-id> shop.example.com
@@ -48,10 +48,10 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
 
   TWO WAYS IN, chosen per name by where its DNS points (k2 app domains
   shows both, and which one DNS shows now):
-    Path B, through K2 Connect (Pro): the name points at K2's relays. No
+    Path B, through {login} (Pro): the name points at K2's relays. No
       sudo, nothing on this box's :443; another web server may keep :443.
       Works on a Linux server, behind a router, on a Mac or Windows
-      computer. Needs this box on K2 Connect with a Pro plan.
+      computer. Needs this box on {login} with a Pro plan.
     Path A, this box's own address (free; Linux with a public IP): the
       name points here and K2's :443 front serves it.
 
@@ -73,9 +73,9 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
        <app-id> shows them again):
          CNAME  shop.example.com              <app-id>.<box>.k2.dev
          TXT    _k2-domain.shop.example.com   "k2-verify=<token>"
-       K2 Connect picks that TXT value: set exactly what K2 prints. If the
+       {login} picks that TXT value: set exactly what K2 prints. If the
        claim doesn't go through yet, K2 prints the CNAME alone and says why;
-       it tries again, and prints the TXT once K2 Connect has given it.
+       it tries again, and prints the TXT once {login} has given it.
        At an apex (example.com itself), which can't hold a CNAME: ALIAS,
        ANAME or CNAME flattening to <app-id>.<box>.k2.dev if your DNS host
        has it (Cloudflare, DNSimple, Route 53 alias...). If it has none, use
@@ -83,16 +83,16 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
        A records: they aren't promised to stay.
     2. Set them, DNS-only (no proxy; Cloudflare: grey cloud), and wait for
        state live: K2 checks every 10 minutes, or k2 app domain check
-       <app-id> shop.example.com now. K2 Connect also checks the TXT itself.
+       <app-id> shop.example.com now. {login} also checks the TXT itself.
        The tunnel restarts once when a name joins or leaves (a few seconds'
        blip for everything on the tunnel), and K2 gets the certificate
        through the relay.
     3. Primary and restart as in step 4 below.
     The box holds the key and ends TLS: the relay only passes the encrypted
     stream through by name. At most 20 names per box through K2's relays
-    (100 custom names per box on both paths together; K2 Connect also caps
+    (100 custom names per box on both paths together; {login} also caps
     the account). Not Pro: the refusal has the upgrade link and says so.
-    K2 Connect decides whether it routes a name: its release (after 7 days
+    {login} decides whether it routes a name: its release (after 7 days
     of failing its own check) moves the name to failing, and a failed check
     on this box alone only says so.
 
@@ -126,7 +126,7 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com)
   external: your own web server serves it (--external); K2 leaves it be.
 
   Where this works: Path A on a Linux server with its own public IP (a
-  datacentre box). Path B anywhere on K2 Connect with Pro: a Mac or Windows
+  datacentre box). Path B anywhere on {login} with Pro: a Mac or Windows
   computer has only Path B (without Pro, add prints no records and says
   so). A Linux server behind a home or office router: Path B is the way
   (your address stays hidden); without Pro, if you forward the router's

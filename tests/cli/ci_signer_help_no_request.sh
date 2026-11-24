@@ -128,7 +128,7 @@ echo "== the reference: k2 ci --help =="
 run ci --help
 REF="$OUT"
 [ "$RC" -eq 0 ] && ok "k2 ci --help: exit 0" || bad "k2 ci --help: exit $RC (want 0)"
-[ "$REF" = "$(cat "$TEXT/ci.txt")" ] && ok "k2 ci --help: the ci usage" \
+[ "$REF" = "$(cli_page "$TEXT/ci.txt")" ] && ok "k2 ci --help: the ci usage" \
     || { bad "k2 ci --help: not the ci usage"; printf '%s\n' "$REF" | sed 's/^/      | /' >&2; }
 sent_nothing "k2 ci --help"
 

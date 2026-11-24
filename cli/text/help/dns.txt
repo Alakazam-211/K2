@@ -1,4 +1,4 @@
-k2 dns — manage DNS records for zones on this K2 Connect account (toggle-gated)
+k2 dns — manage DNS records for zones on this {login} account (toggle-gated)
 
 Agents can list zones, list/add/remove user-managed records, and verify
 delegation when the owner opts in. Zone create/delete is owner/dashboard-only.

@@ -32,7 +32,7 @@ ADDRESSES
   <app>-chat). Rerun with --address <suggestion> or --address auto.
   chat, meet, mail, voice, skin are reserved: only their own family's App.
   One level only (x.chat.<box>.k2.dev is refused).
-  A K2 address needs K2 Connect Pro (pro_required). In this K2 every
+  A K2 address needs {login} Pro (pro_required). In this K2 every
   one-click deploy needs one, so no Pro = no one-click deploy yet. Your own
   domain goes on afterwards: k2 app domain add <app-id> <host>, where
   <app-id> is the App id (hearth, sew-meet), not the entry; it prints the DNS

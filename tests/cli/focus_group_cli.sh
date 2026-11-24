@@ -298,8 +298,8 @@ check_eq "a large list: every row, with its group" "$(python3 -c 'import json,sy
 rm -f "$WORK/big"
 
 echo "== -h or --help anywhere prints help and sends nothing =="
-REF="$(cat "$TEXT/focus-group.txt")"
-SETREF="$(cat "$TEXT/agent/set.txt")"
+REF="$(cli_page "$TEXT/focus-group.txt")"
+SETREF="$(cli_page "$TEXT/agent/set.txt")"
 for form in "focus-group -h" "focus-group --help" "focus-group list -h" "focus-group create X -h" "focus-group create -h X" \
     "focus-group rename Infra Ops --help" "focus-group add Infra sales -h" "focus-group remove Infra sales --help" \
     "focus-group bogus -h"; do

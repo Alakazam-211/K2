@@ -52,7 +52,7 @@
     {
       "name": "dns",
       "usage": "k2 dns <access|list|records|record|verify> ...",
-      "description": "Manage DNS records for K2 Connect zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → Network → Tunnel → Policies → \"Agents can change DNS records\", or Settings → Workspaces / Agents → <workspace> → Permissions → DNS → \"Let this agent manage DNS\". Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
+      "description": "Manage DNS records for {login} zones (toggle-gated). access/list/records/record add|remove/verify. Exit 3 when off — Settings → Network → Tunnel → Policies → \"Agents can change DNS records\", or Settings → Workspaces / Agents → <workspace> → Permissions → DNS → \"Let this agent manage DNS\". Not for nested *.k2.dev (publish) or tunnel. ID/locked tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },

@@ -119,7 +119,7 @@
     {
       "name": "front http",
       "usage": "k2 front http on|off [--json]",
-      "description": "The https redirect for people who type http://: on K2's relays for names through K2 Connect, and on this box's :80 where K2's front runs. On by default; on takes :80 (the daemon restarts once), off frees it.",
+      "description": "The https redirect for people who type http://: on K2's relays for names through {login}, and on this box's :80 where K2's front runs. On by default; on takes :80 (the daemon restarts once), off frees it.",
       "args": [{"name": "state", "required": true, "description": "on | off"}],
       "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON."}]
     },

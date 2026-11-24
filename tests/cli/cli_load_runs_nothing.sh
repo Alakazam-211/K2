@@ -200,7 +200,7 @@ fi
 # The daily tier, cards off and agents allowed to report: what `k2 --help`
 # and `k2 help` print when no daemon answers.
 DAILY="$WORK/daily.txt"
-cat "$HELP_TEXT/_daily.txt" "$HELP_TEXT/_daily-feedback.txt" "$HELP_TEXT/_daily-end.txt" >"$DAILY"
+{ cli_page "$HELP_TEXT/_daily.txt"; cli_page "$HELP_TEXT/_daily-feedback.txt"; cli_page "$HELP_TEXT/_daily-end.txt"; } >"$DAILY"
 [ -s "$DAILY" ] || { echo "FAIL: no daily help text under $HELP_TEXT" >&2; exit 1; }
 
 # run <tag> <expected exit> <args...>: one command, checked on its own.

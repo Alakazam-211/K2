@@ -140,7 +140,7 @@ check() {
 page() {
     local file="$1"; shift
     local label="k2 $*" first
-    first="$(head -n 1 "$TEXT/$file")"
+    first="$(cli_page "$TEXT/$file" | sed -n 1p)"
     : >"$REQ_LOG"
     run "$@"
     [ "$RC" -eq 0 ] && ok "$label: exit 0" || bad "$label: exit $RC (want 0)"
@@ -184,7 +184,7 @@ echo "== the reference: k2 publish --help =="
 run publish --help
 REF="$ERR"
 [ "$RC" -eq 0 ] && ok "k2 publish --help: exit 0" || bad "k2 publish --help: exit $RC (want 0)"
-[ "$REF" = "$(cat "$TEXT/publish.txt")" ] && ok "k2 publish --help: the publish usage" \
+[ "$REF" = "$(cli_page "$TEXT/publish.txt")" ] && ok "k2 publish --help: the publish usage" \
     || { bad "k2 publish --help: not the publish usage"; printf '%s\n' "$REF" | sed 's/^/      | /' >&2; }
 sent_nothing "k2 publish --help"
 

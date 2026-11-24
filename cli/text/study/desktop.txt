@@ -23,10 +23,10 @@ WHO MAY DO WHAT
   agents, App passes,    refused: desktop_people_only (an agent's one
   API keys               verb is k2 desktop env, its own desktop)
   Nobody watches from this same computer, a login included ("You're on
-  this computer"): you watch from another device, over K2 Connect or the
+  this computer"): you watch from another device, over {login} or the
   LAN, signed in with a login.
 
-TURN IT ON (the owner, at this computer or over K2 Connect)
+TURN IT ON (the owner, at this computer or over {login})
   1. k2 desktop enable          (or Settings → Remote Desktop → Turn on).
      It prints what that allows: anyone allowed can see and do anything you
      can on this computer, mail, files and passwords included.

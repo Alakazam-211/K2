@@ -18,7 +18,7 @@ closed.
                                     the mail server restarts once
   k2 front disable [--json]         give :443 back (voice to TCP 5349, mail to :443)
   k2 front http on|off [--json]     the https redirect for people who type http://: on
-                                    K2's relays for names through K2 Connect, and on this
+                                    K2's relays for names through {login}, and on this
                                     box's :80 where K2's front runs (K2's own HTTP-01
                                     certificates answer there too). On by default:
                                     k2 front enable installs :80 when it is free. On takes

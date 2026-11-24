@@ -71,7 +71,7 @@ WHERE THE DOOR IS
 THE VISITOR'S ADDRESS (X-K2-Client-IP)
   K2 drops every copy a visitor sends. It sets X-K2-Client-IP (and
   X-Forwarded-For, X-Real-IP) only when it knows the visitor: through the
-  box's own :443 (k2 front), or through K2 Connect once its relay passes
+  box's own :443 (k2 front), or through {login} once its relay passes
   addresses (k2 tunnel status: Visitor IPs). Until then, and for callers on
   the box itself, there is none: per-visitor limits wait and per-App ones
   hold, so one flood of wrong passwords can close the App's sign-in for

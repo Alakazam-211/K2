@@ -13,8 +13,12 @@
 //! [`CAPTURED_FORMS`] is `src/help_captured.txt`: every other help
 //! command line of the router that the shell only prints for, the same
 //! in every environment (the same script proves it and writes the list),
-//! with what it printed ([`CAPTURED`]). That text names the command and
-//! the product by the brand ([`render`]). A captured form whose page bash
+//! with what it printed ([`CAPTURED`]). That text names the command, the
+//! product, the company and the sign-in service by the brand ([`render`]).
+//!
+//! The pages name the company and the sign-in service by slot (`{company}`,
+//! `{login}`), which `build.rs` fills with this build's brand: what is
+//! embedded holds the names, never a slot. A captured form whose page bash
 //! puts through the permission cards filter, or that prints chat's usage,
 //! has a page for each way its switch goes ([`Variant`]); a `zen` form
 //! runs the router arm's Garden changes hint first ([`Variant::GardenHint`]).
@@ -266,10 +270,12 @@ pub fn captured_form(argv: &[&str]) -> Option<&'static HelpForm> {
 
 /// A captured text as it prints: `\\`, `\n` and `\t` are a backslash,
 /// a newline and a tab, `\c` the command's name
-/// ([`k2_client::brand::CLI_NAME`]) and `\p` the product's
-/// ([`k2_client::brand::PRODUCT_NAME`]); in the default build those are
-/// `k2` and `K2`, as the shell printed them. `build.rs` lets no other
-/// escape in.
+/// ([`k2_client::brand::CLI_NAME`]), `\p` the product's
+/// ([`k2_client::brand::PRODUCT_NAME`]), `\o` the company's
+/// ([`k2_client::brand::COMPANY_NAME`]) and `\l` the sign-in service's
+/// ([`k2_client::brand::LOGIN_NAME`]); in the default build those are
+/// `k2`, `K2`, `Alakazam Labs` and `K2 Connect`, as the shell printed
+/// them. `build.rs` lets no other escape in.
 pub fn render(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + text.len() / 8);
     let mut chars = text.chars();
@@ -283,6 +289,8 @@ pub fn render(text: &str) -> String {
             Some('t') => out.push('\t'),
             Some('c') => out.push_str(k2_client::brand::CLI_NAME),
             Some('p') => out.push_str(k2_client::brand::PRODUCT_NAME),
+            Some('o') => out.push_str(k2_client::brand::COMPANY_NAME),
+            Some('l') => out.push_str(k2_client::brand::LOGIN_NAME),
             Some(other) => out.push(other),
             None => out.push('\\'),
         }
@@ -300,6 +308,7 @@ mod brand_text;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k2_client::brand::{COMPANY_NAME, LOGIN_NAME};
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
@@ -315,14 +324,33 @@ mod tests {
     }
 
     /// A page's bytes as this build embeds them: the file's, with the
-    /// command's name rewritten in a brand's build (`K2_BRAND_DIR`).
+    /// command's name rewritten in a brand's build (`K2_BRAND_DIR`), then
+    /// the slots filled with the brand's names.
     fn as_built(bytes: Vec<u8>) -> Vec<u8> {
         let name = k2_client::brand::CLI_NAME;
-        if name == brand_text::SOURCE_NAME {
-            return bytes;
-        }
         let text = String::from_utf8(bytes).expect("a page is UTF-8");
-        brand_text::rewrite(&text, brand_text::SOURCE_NAME, name, verbs()).into_bytes()
+        let text = if name == brand_text::SOURCE_NAME {
+            text
+        } else {
+            brand_text::rewrite(&text, brand_text::SOURCE_NAME, name, verbs())
+        };
+        brand_text::fill(&text, COMPANY_NAME, LOGIN_NAME).into_bytes()
+    }
+
+    /// `[names] <key>` of the default brand's file (`brand/k2`): what the
+    /// sources' slots are filled with in the default build.
+    fn default_name(key: &str) -> String {
+        let toml = std::fs::read_to_string(root().join("brand/k2/brand.toml")).unwrap();
+        let prefix = format!("{key} = \"");
+        let value = toml
+            .lines()
+            .skip_while(|l| l.trim() != "[names]")
+            .take_while(|l| !l.starts_with('[') || l.trim() == "[names]")
+            .find_map(|l| l.strip_prefix(prefix.as_str()))
+            .and_then(|l| l.strip_suffix('"'));
+        value
+            .unwrap_or_else(|| panic!("brand/k2/brand.toml has no [names] {key}"))
+            .to_string()
     }
 
     fn text_dir(which: &str) -> PathBuf {
@@ -628,6 +656,90 @@ mod tests {
         );
     }
 
+    /// What this build embeds and prints holds no brand slot: every page,
+    /// the `--schema` manifest and every captured help page as it renders.
+    /// The sources do hold slots, so this reads the fill's work.
+    #[test]
+    fn no_raw_brand_slot_is_embedded() {
+        let mut texts: Vec<(String, String)> = Vec::new();
+        for (which, list) in [("study", STUDY), ("help", HELP)] {
+            for (key, page) in list {
+                texts.push((format!("cli/text/{which}/{key}.txt"), page.to_string()));
+            }
+        }
+        for (n, c) in CAPTURED.iter().enumerate() {
+            texts.push((format!("captured page {n}"), render(c.out) + &render(c.err)));
+        }
+        texts.push((
+            "--schema".to_string(),
+            crate::families::schema::BODY.to_string(),
+        ));
+        for (what, text) in &texts {
+            for slot in [brand_text::COMPANY_SLOT, brand_text::LOGIN_SLOT] {
+                assert!(!text.contains(slot), "{what} holds the raw slot {slot}");
+            }
+        }
+        let files = on_disk(&text_dir("study"));
+        let slotted = files
+            .values()
+            .filter(|b| {
+                let s = String::from_utf8_lossy(b);
+                s.contains(brand_text::COMPANY_SLOT) || s.contains(brand_text::LOGIN_SLOT)
+            })
+            .count();
+        assert!(slotted > 5, "only {slotted} study files hold a slot");
+    }
+
+    /// The pages a partner's build prints name its company and its
+    /// sign-in service, never ours (rebrand B7): `study send-feedback`,
+    /// `help setup` and `--schema` hold this build's `names.company` (and
+    /// the two with a sign-in, `names.login`) where the sources hold the
+    /// slots, and in another brand's build neither of the default brand's
+    /// two names; `help setup` has no word of our company's at all. Holds
+    /// for any brand (`K2_BRAND_DIR`). The study page still says our
+    /// company's first word alone in four lines and gives our contact
+    /// address, and the manifest names the release repo: none of those is
+    /// a slot yet, so only the full names are checked there.
+    #[test]
+    fn brand_free_pages_name_this_brands_company() {
+        let (our_company, our_login) = (default_name("company"), default_name("login"));
+        let source = |which: &str, key: &str| {
+            std::fs::read_to_string(text_dir(which).join(format!("{key}.txt"))).unwrap()
+        };
+        let slotted = source("study", "send-feedback");
+        assert!(slotted.contains(brand_text::COMPANY_SLOT), "study send-feedback");
+        assert!(slotted.contains(brand_text::LOGIN_SLOT), "study send-feedback");
+        assert!(source("help", "setup").contains(brand_text::COMPANY_SLOT), "help setup");
+
+        let feedback = study("send-feedback").expect("cli/text/study/send-feedback.txt");
+        let setup = page("setup").expect("help setup prints cli/text/help/setup.txt");
+        let schema = crate::families::schema::BODY;
+        let (company, login) = (COMPANY_NAME.to_string(), LOGIN_NAME.to_string());
+        let json = |name: &str| brand_text::json_escaped(name);
+        let (json_company, json_login) = (json(COMPANY_NAME), json(LOGIN_NAME));
+        let pages = [
+            ("study send-feedback", feedback, &company, Some(&login)),
+            ("help setup", setup, &company, None),
+            ("--schema", schema, &json_company, Some(&json_login)),
+        ];
+        for (what, text, company, login) in pages {
+            assert!(text.contains(company.as_str()), "{what} does not name {company}");
+            if let Some(login) = login {
+                assert!(text.contains(login.as_str()), "{what} does not name {login}");
+            }
+            if COMPANY_NAME != our_company {
+                assert!(!text.contains(&our_company), "{what} names {our_company}");
+            }
+            if LOGIN_NAME != our_login {
+                assert!(!text.contains(&our_login), "{what} names {our_login}");
+            }
+        }
+        if COMPANY_NAME != our_company {
+            let word = our_company.split(' ').next().unwrap();
+            assert!(!setup.contains(word), "help setup says {word}");
+        }
+    }
+
     #[test]
     fn render_reads_the_escapes() {
         let cli = k2_client::brand::CLI_NAME;
@@ -635,6 +747,10 @@ mod tests {
         assert_eq!(
             render("Usage: \\c agent\\n\\tx \\\\n \\p's"),
             format!("Usage: {cli} agent\n\tx \\n {product}'s")
+        );
+        assert_eq!(
+            render("Tell \\o; over \\l (\\\\l)"),
+            format!("Tell {COMPANY_NAME}; over {LOGIN_NAME} (\\l)")
         );
         assert_eq!(render(""), "");
         assert_eq!(render("plain \u{2014} text"), "plain \u{2014} text");

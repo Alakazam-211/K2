@@ -125,7 +125,7 @@ sent_nothing() {
 page() {
     local file="$1"; shift
     local label="k2 $*" want
-    want="$(cat "$TEXT/$file")"
+    want="$(cli_page "$TEXT/$file")"
     run "$@"
     [ "$RC" -eq 0 ] && ok "$label: exit 0" || bad "$label: exit $RC (want 0)"
     [ "$OUT" = "$want" ] && ok "$label: prints $file" \

@@ -794,7 +794,7 @@ This computer (its owner):
   k2 compute local remote-admin off|policy|full   change it later (root: one
                           sudo or admin prompt; off = K2 can't update the node).
                           Only the owner: this machine's K2, or the owner
-                          signed in over K2 Connect; never an agent
+                          signed in over {login}; never an agent
   k2 compute local disable [--yes]   lists the jobs running here first; with
                           jobs running it asks (or needs --yes): they stop now
 

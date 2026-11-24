@@ -154,13 +154,26 @@ import concurrent.futures, http.server, json, os, re, shlex, shutil, socketserve
 root, script, bash_bin, sandbox, list_path, write = sys.argv[1:7]
 text_dir = os.path.join(root, "cli/text/help")
 
+# A page's bytes as bash prints them: the file's, with its brand slots
+# ({company}, {login}) filled with our names, as scripts/build-cli.sh fills
+# them (scripts/brand/page_slots.py).
+import importlib.util
+sys.dont_write_bytecode = True
+_slots_spec = importlib.util.spec_from_file_location(
+    "page_slots", os.path.join(root, "scripts", "brand", "page_slots.py"))
+SLOTS = importlib.util.module_from_spec(_slots_spec)
+_slots_spec.loader.exec_module(SLOTS)
+OUR_NAMES = SLOTS.names()
+def page_bytes(p):
+    return SLOTS.fill(open(p, "rb").read().decode("utf-8"), OUR_NAMES).encode("utf-8")
+
 # The pages and their bytes.
 files = {}
 for d, _, names in os.walk(text_dir):
     for n in names:
         if n.endswith(".txt"):
             p = os.path.join(d, n)
-            files[os.path.relpath(p, text_dir)[:-4]] = open(p, "rb").read()
+            files[os.path.relpath(p, text_dir)[:-4]] = page_bytes(p)
 if len(files) < 200:
     sys.exit("FAIL: only %d help files under %s" % (len(files), text_dir))
 by_bytes = {}
@@ -171,7 +184,7 @@ for rel in sorted(files):
 study_dir = os.path.join(root, "cli/text/study")
 for n in sorted(os.listdir(study_dir)):
     if n.endswith(".txt"):
-        by_bytes.setdefault(open(os.path.join(study_dir, n), "rb").read(), []).append("study:" + n[:-4])
+        by_bytes.setdefault(page_bytes(os.path.join(study_dir, n)), []).append("study:" + n[:-4])
 
 # help_text.sh's ENTRY table: pages another command prints. They stay bash.
 ht = open(os.path.join(root, "tests/cli/help_text.sh")).read()
@@ -948,7 +961,10 @@ if os.environ.get("HELP_NATIVE_WHY"):
 # when no letter, digit, `_` or `/` follows), each where no letter, digit,
 # `_`, `.`, `/`, `~`, `|`, `<`, `:` or `-` is before it; everything else
 # (`~/.k2`, `K2_HOME`, `k2.dev`, `--managed-by k2|owner`) is kept as bash
-# printed it.
+# printed it. Our company's name is \o and our sign-in service's \l (the
+# pages' {company} and {login} slots, which bash fills with ours), each
+# where the product's would start and nothing a name goes on with is
+# after it.
 CAPTURED = os.environ.get("HELP_NATIVE_CAPTURED") or os.path.join(root, "crates/k5-cli/src/help_captured.txt")
 FORMS_TSV = os.path.join(root, "crates/k5-cli/tests/data/router_forms.tsv")
 EXIT_CODES = {0, 1, 2, 3, 4, 5, 6, 7, 8, 26, 69, 127, 130}
@@ -1464,15 +1480,22 @@ def cli_words(line):
         line = line[:m.start()] + "\x01" + line[m.end():]
     return line
 PRODUCT_WORD = re.compile(r"(?<![A-Za-z0-9_./~|<:-])K2(?![A-Za-z0-9_/~|<-])(?![.:][A-Za-z0-9_/])")
+NAME_BEFORE = r"(?<![A-Za-z0-9_./~|<:-])"
+COMPANY_WORD = re.compile(NAME_BEFORE + re.escape(OUR_NAMES["company"]) + r"(?![A-Za-z0-9_])")
+LOGIN_WORD = re.compile(NAME_BEFORE + re.escape(OUR_NAMES["login"]) + r"(?![A-Za-z0-9_])")
 def escaped(s):
     """The text as the list holds it: \\ \\n \\t escaped, \\c for the
-    command's name and \\p for the product's."""
-    if "\x01" in s or "\x02" in s:
+    command's name, \\p for the product's, \\o for the company's and \\l
+    for the sign-in service's."""
+    if any(c in s for c in "\x01\x02\x03\x04"):
         sys.exit("FAIL: a help text with a byte this list uses: %r" % s[:80])
     s = "\n".join(cli_words(l) for l in s.split("\n"))
+    s = COMPANY_WORD.sub("\x03", s)
+    s = LOGIN_WORD.sub("\x04", s)
     s = PRODUCT_WORD.sub("\x02", s)
     s = s.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
-    return s.replace("\x01", "\\c").replace("\x02", "\\p")
+    return (s.replace("\x01", "\\c").replace("\x02", "\\p")
+            .replace("\x03", "\\o").replace("\x04", "\\l"))
 
 seen_before = len(requests_seen)
 captured, ckept = {}, {}
@@ -1525,7 +1548,8 @@ CHEAD = """# The other help forms the k5 binary answers itself: what bash printe
 # each, proved the same in every environment from bash's own trace. Written
 # by tests/cli/help_native.sh --write; do not edit by hand.
 # P<tab><page><tab><exit code><tab><stdout><tab><stderr>: the text with
-#   \\\\, \\n and \\t escaped, \\c for the command's name and \\p for the product's.
+#   \\\\, \\n and \\t escaped, \\c for the command's name and \\p for the product's,
+#   \\o for the company's and \\l for the sign-in service's.
 # F<tab><argv, words between single spaces><tab><page>
 # C<tab><argv><tab><page while permission cards are off><tab><page while on>:
 #   a page through the cards filter; the binary asks as bash asks.

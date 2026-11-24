@@ -4,7 +4,7 @@ THE MODEL
   Your App's own phone app (your bundle id, Apple team, Firebase project)
   gets notifications from K2. The owner gives K2 the App's Apple key and/or
   Firebase service account once; K2 keeps them in the vault and the daemon
-  sends to Apple and Google itself (no K2 Connect relay). The App, its agent
+  sends to Apple and Google itself (no {login} relay). The App, its agent
   and other Apps use the keys, never read them. Push is per App and off
   until the owner approves push:send (or runs k2 app push on).
 

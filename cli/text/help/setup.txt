@@ -33,7 +33,7 @@ k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok
                         sidecar, another agent or a person (exit 3).
 k2 setup dismiss-offer  "Not now" on the Meet Kessel offer (yours only)
 k2 setup agent-reports [--agents off|cli|all] [--attach <parts>|none|all]
-                        whether agents may report K2 problems to Alakazam Labs
+                        whether agents may report K2 problems to {company}
                         on their own: off, problems with K2 commands (cli), or
                         anything about K2 (all); and which parts of the K2
                         details they may attach (joined by commas, none or

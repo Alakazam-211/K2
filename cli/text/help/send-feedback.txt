@@ -8,7 +8,7 @@ k2 send-feedback cancel <id>               a queued one is not sent
 k2 send-feedback settings [--enabled on|off] [--agents off|cli|all] [--attach <parts>|none|all]
                           [--agent-diagnostics on|off] [--json]
 
-Tell Alakazam Labs, the people who make K2, about K2 itself: a bug, an
+Tell {company}, the people who make K2, about K2 itself: a bug, an
 idea, praise. Not for your human: to ask the people on this server, use
 k2 tickets ask "<question>" (k2 feedback ask is the same command). Write
 what you did, what you expected and what happened; the versions are added
@@ -19,7 +19,7 @@ the vault replaced by [k2v:NAME] (anything else you type is sent as
 written, so leave out paths, names and output you wouldn't hand to
 Alakazam); whether a person or an agent sent it; the client (cli); the K2,
 daemon and OS versions, install kind, architecture and locale; and a
-5-minute K2 Connect token naming this server's label (such as
+5-minute {login} token naming this server's label (such as
 <name>.k2.dev, which can point to who runs it), the proof of which server
 it came from. Never sent: your name, login or workspace, files, terminal
 output, chats, mail, tickets, environment variables, your own tokens, IP

@@ -124,7 +124,7 @@ echo "== the reference: k2 desktop --help =="
 run desktop --help
 REF="$OUT"
 [ "$RC" -eq 0 ] && ok "k2 desktop --help: exit 0" || bad "k2 desktop --help: exit $RC (want 0)"
-[ "$REF" = "$(cat "$TEXT/desktop.txt")" ] && ok "k2 desktop --help: the desktop usage" \
+[ "$REF" = "$(cli_page "$TEXT/desktop.txt")" ] && ok "k2 desktop --help: the desktop usage" \
     || { bad "k2 desktop --help: not the desktop usage"; printf '%s\n' "$REF" | sed 's/^/      | /' >&2; }
 sent_nothing "k2 desktop --help"
 

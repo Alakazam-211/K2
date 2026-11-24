@@ -81,7 +81,7 @@
     {
       "name": "setup agent-reports",
       "usage": "k2 setup agent-reports [--agents off|cli|all] [--attach <parts>|none|all] [--json]",
-      "description": "Whether agents may report K2 problems to Alakazam Labs on their own: off, problems with K2 commands (cli) or anything about K2 (all), and which parts of the K2 details they may attach. No flags: what is set, who answered and when. Until a person answers, agents report nothing. The same POST as k2 send-feedback settings (/cli/product-feedback/settings). The owner or an admin; a passport is refused (settings_people_only, exit 3).",
+      "description": "Whether agents may report K2 problems to {company} on their own: off, problems with K2 commands (cli) or anything about K2 (all), and which parts of the K2 details they may attach. No flags: what is set, who answered and when. Until a person answers, agents report nothing. The same POST as k2 send-feedback settings (/cli/product-feedback/settings). The owner or an admin; a passport is refused (settings_people_only, exit 3).",
       "args": [],
       "flags": [
         {"name": "--agents", "arg": "off|cli|all", "description": "off: nothing; cli: problems with K2 commands; all: anything about K2 too. on is the same as cli."},

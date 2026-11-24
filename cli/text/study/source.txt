@@ -19,7 +19,7 @@ WHAT LIVES IN THIS REPO
   - Workspace compose (AGENTS.md, skills, inboxes, db/mail sidecars)
 
 WHAT DOES NOT
-  K2 Connect — the control plane for purchased hostnames, accounts,
+  {login} — the control plane for purchased hostnames, accounts,
   and nested labels — is a separate product. Pairing
   (`k2 connect login`) talks to that plane; it is not "the daemon
   with a public IP". See `k2 study connect-boundary`.
@@ -29,7 +29,7 @@ WHAT DOES NOT
   NOTICE.md is the trademark + third-party map, not a second license.
 
 HOSTING
-  The MIT License puts no limit on hosting K2. K2 Connect (accounts,
+  The MIT License puts no limit on hosting K2. {login} (accounts,
   hostnames, tunnels) is a separate service with its own terms; see
   `k2 study connect-boundary`. Do not invent a hosting story from CLI
   flags.

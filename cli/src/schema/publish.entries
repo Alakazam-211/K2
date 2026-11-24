@@ -1,7 +1,7 @@
     {
       "name": "tunnel",
       "usage": "k2 tunnel [...]",
-      "description": "K2 Connect tunnel — expose this daemon at https://<user>.k2.dev.",
+      "description": "{login} tunnel — expose this daemon at https://<user>.k2.dev.",
       "args": [],
       "flags": []
     },
@@ -29,14 +29,14 @@
     {
       "name": "tunnel release",
       "usage": "k2 tunnel release --confirm",
-      "description": "DESTRUCTIVE: unpair THIS DEVICE from its subdomain — deletes the local tunnel identity. K2 Connect is told only when this device's tunnel is connected (it holds the name); otherwise it is local only. The account keeps the subdomain. Not a pause; that is 'k2 tunnel disable'.",
+      "description": "DESTRUCTIVE: unpair THIS DEVICE from its subdomain — deletes the local tunnel identity. {login} is told only when this device's tunnel is connected (it holds the name); otherwise it is local only. The account keeps the subdomain. Not a pause; that is 'k2 tunnel disable'.",
       "args": [],
       "flags": [{"name": "--confirm", "arg": null, "description": "Required — the release cannot be undone on this device."}]
     },
     {
       "name": "tunnel forget",
       "usage": "k2 tunnel forget --confirm",
-      "description": "Forget this device's tunnel locally (tunnel.json, frpc.toml, certificate) and tell K2 Connect NOTHING. For stale config from a migrated or cloned machine whose subdomain another box holds.",
+      "description": "Forget this device's tunnel locally (tunnel.json, frpc.toml, certificate) and tell {login} NOTHING. For stale config from a migrated or cloned machine whose subdomain another box holds.",
       "args": [],
       "flags": [{"name": "--confirm", "arg": null, "description": "Required."}]
     },

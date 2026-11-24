@@ -127,9 +127,9 @@ for id in $ids; do
     seen="$seen$page "
     want="$SANDBOX/out/want"
     case "$id" in
-        skins) { printf '%s\n\n' "k2 study skins is now k2 study apps — this page still works."; cat "$file"; } > "$want" ;;
-        llm-accounts) { printf '%s\n\n' "k2 study llm-accounts is now k2 study llm-tokens — this page still works."; cat "$file"; } > "$want" ;;
-        *) cat "$file" > "$want" ;;
+        skins) { printf '%s\n\n' "k2 study skins is now k2 study apps — this page still works."; cli_page "$file"; } > "$want" ;;
+        llm-accounts) { printf '%s\n\n' "k2 study llm-accounts is now k2 study llm-tokens — this page still works."; cli_page "$file"; } > "$want" ;;
+        *) cli_page "$file" > "$want" ;;
     esac
     if [ "$page" = apps ]; then
         # Cards off: drop ` #if-cards` lines, untag ` #if-no-cards` lines.
@@ -143,9 +143,11 @@ for id in $BASH_PAGES; do
     grep -qx -- "$id" <<<"$ids" || bad "BASH_PAGES names $id, which is not a topic"
 done
 run "$NEW" "$SANDBOX/out/list" study
-same "k2 study is cli/text/study/_catalog.txt" "$SANDBOX/out/list" "$TEXT/_catalog.txt"
+cli_page "$TEXT/_catalog.txt" > "$SANDBOX/out/catalog.want"
+same "k2 study is cli/text/study/_catalog.txt" "$SANDBOX/out/list" "$SANDBOX/out/catalog.want"
 run "$NEW" "$SANDBOX/out/usage" study --help
-same "k2 study --help is cli/text/study/_usage.txt" "$SANDBOX/out/usage" "$TEXT/_usage.txt"
+cli_page "$TEXT/_usage.txt" > "$SANDBOX/out/usage.want"
+same "k2 study --help is cli/text/study/_usage.txt" "$SANDBOX/out/usage" "$SANDBOX/out/usage.want"
 for f in "$TEXT"/*.txt; do
     name="$(basename "$f" .txt)"
     case "$seen" in *" $name "*) ;; *) bad "cli/text/study/$name.txt is not a page any topic prints" ;; esac
@@ -246,7 +248,7 @@ if [ "$NEW" != "$CLI_BASH_SOURCE" ]; then
     RUN_ENV=("K2_HOOK_TOKEN=sessT.notreal1" "$BROKEN")
     run "$NEW" "$SANDBOX/out/bin" study errors
     RUN_ENV=()
-    if [ "$(cat "$SANDBOX/out/bin.code")" = 0 ] && cmp -s "$SANDBOX/out/bin" "$TEXT/errors.txt"; then
+    if [ "$(cat "$SANDBOX/out/bin.code")" = 0 ] && cmp -s "$SANDBOX/out/bin" <(cli_page "$TEXT/errors.txt"); then
         ok "with a passport the binary answers k2 study errors"
     else
         bad "with a passport k2 study errors was not the binary's page"
@@ -383,7 +385,7 @@ PY
     RUN_ENV=("K2_HOOK_SOCK=$SANDBOX/cards-on.sock" "$BROKEN")
     run "$NEW" "$SANDBOX/out/bin" study list
     RUN_ENV=()
-    if [ "$(requests)" = "$n0" ] && cmp -s "$SANDBOX/out/bin" "$TEXT/_catalog.txt"; then
+    if [ "$(requests)" = "$n0" ] && cmp -s "$SANDBOX/out/bin" <(cli_page "$TEXT/_catalog.txt"); then
         ok "no passport: the binary's own list, nothing asked"
     else
         bad "no passport: k2 study list asked the stub or was not the plain list"

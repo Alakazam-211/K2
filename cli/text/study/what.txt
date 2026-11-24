@@ -16,7 +16,7 @@ WHAT YOU GET
 WHAT K2 IS NOT
   - Not a hosted model. Bring your own keys / subscriptions.
   - Not a hosted SaaS. K2 is MIT-licensed software you run — see `k2 study source`.
-  - Not K2 Connect. Connect is a separate product (tunnel + account).
+  - Not {login}. Connect is a separate product (tunnel + account).
     The app, daemon, and CLI live in the K2 repo. See `k2 study connect-boundary`.
   - Not a dump of this workspace's wiki, PRDs, or release runbooks.
 

@@ -177,9 +177,9 @@ opener_of() {
 want_of() {
     if [[ "$(opener_of "$1")" == *"| _perm_lines"* ]]; then
         grep -q ' #if-cards$' "$TEXT/$1" || bad "$1 is piped through _perm_lines but has no #if-cards line"
-        sed -e '/ #if-cards$/d' -e 's/ #if-no-cards$//' "$TEXT/$1" > "$2"
+        cli_page "$TEXT/$1" | sed -e '/ #if-cards$/d' -e 's/ #if-no-cards$//' > "$2"
     else
-        cat "$TEXT/$1" > "$2"
+        cli_page "$TEXT/$1" > "$2"
     fi
 }
 

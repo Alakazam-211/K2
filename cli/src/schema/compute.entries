@@ -1185,7 +1185,7 @@
     {
       "name": "compute local remote-admin",
       "usage": "k2 compute local remote-admin off|policy|full",
-      "description": "Change the remote-admin level later (root: one sudo or admin prompt; off = K2 can't update the node). Only the owner: this machine's K2, or the owner signed in over K2 Connect; never an agent.",
+      "description": "Change the remote-admin level later (root: one sudo or admin prompt; off = K2 can't update the node). Only the owner: this machine's K2, or the owner signed in over {login}; never an agent.",
       "args": [{"name": "off|policy|full", "required": true}],
       "flags": []
     },

@@ -91,7 +91,7 @@ export K2_HOOK_TOKEN="owner-token-for-test"
 export K2_PROJECT_PATH="$WORK/proj"
 cd "$WORK/proj"
 
-REF="$(cat "$TEXT/app/catalog.txt")"
+REF="$(cli_page "$TEXT/app/catalog.txt")"
 
 run() {
     : >"$REQ_LOG"

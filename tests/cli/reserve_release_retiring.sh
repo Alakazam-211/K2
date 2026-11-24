@@ -127,7 +127,7 @@ helped() { # helped <case> <verb> <agent> <args...>
     ok
     [ -z "$ERR" ] || die "$name: stderr: $ERR"
     ok
-    [ "$OUT" = "$(cat "$PROJECT_ROOT/cli/text/help/$verb.txt")" ] || die "$name: stdout was: $OUT"
+    [ "$OUT" = "$(cli_page "$PROJECT_ROOT/cli/text/help/$verb.txt")" ] || die "$name: stdout was: $OUT"
     ok
 }
 helped "reserve --help"              reserve tester --help

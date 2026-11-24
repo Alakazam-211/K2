@@ -11,6 +11,11 @@
 #   CLI_BASH_SOURCE  this checkout's cli/k2, always. For a test that reads
 #                    the bash itself (bash -n, grep or sed on the file). A
 #                    binary can't stand in for that.
+#   cli_page FILE    a cli/text page as both CLIs print it in the default
+#                    brand: its {company} and {login} slots filled with our
+#                    names, as scripts/build-cli.sh and the k5 build fill
+#                    them (scripts/brand/page_slots.py). A test that compares
+#                    what a CLI prints with a page reads the page this way.
 #
 # Both are absolute paths. A relative K5_CLI_UNDER_TEST is taken from the
 # current directory. Exits 1 with a message when the program is not an
@@ -40,4 +45,16 @@ if [ ! -f "$_cut_prog" ] || [ ! -x "$_cut_prog" ]; then
     exit 1
 fi
 CLI_UNDER_TEST="$_cut_prog"
+CLI_PAGE_SLOTS="$_cut_root/scripts/brand/page_slots.py"
+# The python3 on PATH now, before a test puts its stubs first.
+CLI_PAGE_PYTHON="$(command -v python3 || true)"
 unset _cut_root _cut_prog
+
+cli_page() {
+    if grep -qF -e '{company}' -e '{login}' "$1"; then
+        [ -n "$CLI_PAGE_PYTHON" ] || { echo "FAIL: cli_page needs python3 for $1" >&2; return 1; }
+        "$CLI_PAGE_PYTHON" "$CLI_PAGE_SLOTS" < "$1"
+    else
+        cat "$1"
+    fi
+}

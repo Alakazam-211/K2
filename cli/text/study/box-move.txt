@@ -4,7 +4,7 @@ WHY A STEP OF ITS OWN
   Copying /home moves vault.db but not the key that opens it: on a Linux box
   the key lives with the root helper (/var/lib/k2-root-helper/keep/), on a
   Mac in the Keychain. A copied vault.db alone stays closed
-  (vault_key_missing), and the K2 Connect tunnel token is a secret IN the
+  (vault_key_missing), and the {login} tunnel token is a secret IN the
   vault, so the box also can't connect. k2 tunnel status then says
   "Token: LOCKED — the tunnel token is in the vault, which isn't open", not
   "not paired".
@@ -43,7 +43,7 @@ WHO DOES WHAT
   begin, status and the dry run: the owner, an admin, or an agent.
   export, import --apply, --undo, --unfreeze: the box OWNER, as a person,
   with the vault confirm. From your own terminal or SSH login K2 asks for it
-  (Touch ID, the vault password; a K2 Connect owner login uses its own
+  (Touch ID, the vault password; a {login} owner login uses its own
   password). An agent, a script or an SSH session without a terminal never
   runs these: the step is HELD as mv_… (exit 2) for the owner, who runs
   k2 migrate approve mv_… or taps the Thread card an agent asks for with

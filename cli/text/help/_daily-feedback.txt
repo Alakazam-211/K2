@@ -1,5 +1,5 @@
 
 K2 ITSELF
-  send-feedback "<text>"                Tell Alakazam Labs (K2's makers) about K2: a bug, an
+  send-feedback "<text>"                Tell {company} (K2's makers) about K2: a bug, an
                                         idea (not your human: that's feedback ask)
                                         (list/show/retry — `k2 send-feedback --help`)

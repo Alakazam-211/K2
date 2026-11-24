@@ -8,7 +8,7 @@ THE SHAPE
   Either way K2 runs the parts around it: its users, the update feed, its
   "open in app" links and push. The usual shape: the phone and desktop apps
   talk to the App's server, and the App's server talks to K2.
-  <box> on this page is this server's K2 Connect name (k2 connect status).
+  <box> on this page is this server's {login} name (k2 connect status).
   Sew is K2's chat and voice server. K2 Web is the team that runs k2.dev:
   reach it through your K2 contact.
 

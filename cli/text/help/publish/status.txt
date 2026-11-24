@@ -1,4 +1,4 @@
-Show the connected K2 Connect subdomain and plan for this device, or one
+Show the connected {login} subdomain and plan for this device, or one
 published App's state (loopable: an agent can wait on it).
 
 USAGE

@@ -15,7 +15,7 @@ EMAIL (K2 Mail — real addresses for agents; server runs on Linux daemons)
                                         refused on a read-only link)
   calendar link --request <address>     Ask your human to link their calendar read-only
 
-DNS (K2 Connect zones — toggle-gated)
+DNS ({login} zones — toggle-gated)
   dns access                            Capability probe (allowed? types? zones)
   dns list                              List zones
   dns records <domain>                  List records (daemon resolves zone)

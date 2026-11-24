@@ -14,7 +14,7 @@ USAGE
                                    --token-stdin reads the tunnel token from stdin;
                                    a token on the command line (--token <t>) is
                                    visible to other users on this machine
-  k2 tunnel release --confirm      (tells K2 Connect only when this device holds the name)
+  k2 tunnel release --confirm      (tells {login} only when this device holds the name)
   k2 tunnel forget --confirm       (local only: stale config from another machine)
   k2 tunnel status [--json]
   k2 tunnel subdomains [--json]

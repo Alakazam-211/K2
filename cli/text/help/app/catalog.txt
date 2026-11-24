@@ -25,7 +25,7 @@ verified by K2: each version is pinned by sha256 inside this K2 release.
                                           sew_unreachable, not_ready or deploy_failed step.
 
 Entries: sew/hearth (chat.<box>.k2.dev), sew/meet (meet.<box>.k2.dev, one per box).
-A K2 address needs K2 Connect Pro (pro_required). Your own domain: deploy first,
+A K2 address needs {login} Pro (pro_required). Your own domain: deploy first,
 then k2 app domain add <app> <host>.
 --json: each reason, wait and error has "text" (plain words for people) and "hint"
 (the command to run, or null); a done job's "next" lines carry the commands.

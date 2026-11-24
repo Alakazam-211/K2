@@ -1,6 +1,6 @@
 k2 migrate — move this K2 box's vault to new hardware (0.46.6+ on both boxes)
 
-The vault (every secret, including the K2 Connect tunnel token and the mail
+The vault (every secret, including the {login} tunnel token and the mail
 and database passwords) moves as one encrypted file. The old box's key never
 leaves it: the new box makes a one-time move key, the old box exports its
 vault to that key, and the new box re-wraps the vault to its own key.
@@ -57,7 +57,7 @@ WHO
   file then). A held step waits 24 h, then expires: run the step again.
   begin, status and the dry run need no approval (an agent may run them).
   On a box whose vault is closed there is no vault confirm: there the
-  person's own terminal or SSH login (or a K2 Connect owner login) is the
+  person's own terminal or SSH login (or a {login} owner login) is the
   check.
 
 CALLING IT OFF

@@ -123,7 +123,7 @@ echo "== the reference: k2 inbox --help =="
 run inbox --help
 REF="$OUT"
 [ "$RC" -eq 0 ] && ok "k2 inbox --help: exit 0" || bad "k2 inbox --help: exit $RC (want 0)"
-[ "$REF" = "$(cat "$TEXT/inbox.txt")" ] && ok "k2 inbox --help: the inbox help" \
+[ "$REF" = "$(cli_page "$TEXT/inbox.txt")" ] && ok "k2 inbox --help: the inbox help" \
     || { bad "k2 inbox --help: not the inbox help"; printf '%s\n' "$REF" | sed 's/^/      | /' >&2; }
 sent_nothing "k2 inbox --help"
 

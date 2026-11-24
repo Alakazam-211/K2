@@ -87,7 +87,7 @@ for common key formats, so you usually just confirm.
 
 K2_HOST on another computer over plain http: a password, key or value
 for the daemon is refused before it is asked for or read (k2 vault set,
-k2 vault rotate). The vault and K2 Connect passwords of a confirm, a value
+k2 vault rotate). The vault and {login} passwords of a confirm, a value
 for k2 vault send --stdin, confirm-password set and restore still work:
 they go only to this computer's vault socket, never over http.
 

@@ -138,7 +138,7 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
     K2_APP_ORIGIN    the primary one: the custom domain you picked with
                      k2 app domain primary <app-id> <host> (once it is
                      live), else https://<app-id>.<box>.k2.dev
-                     (<box>: this box's K2 Connect name)
+                     (<box>: this box's {login} name)
     K2_APP_ORIGINS   all of them, comma-separated, primary first; the
                      App's k2.dev labels always stay listed
   A custom domain counts once this box actually serves it (state live,
@@ -146,13 +146,13 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   not an origin:
     k2 app domain add <app-id> app.example.com
   First the owner or an Admin runs k2 domain add <apex> (and k2 front
-  enable, unless the name goes through K2 Connect); then DNS records at
+  enable, unless the name goes through {login}); then DNS records at
   your DNS host. Steps: k2 app domain --help.
   A name your own web server serves (not K2's front) counts once added
   with --external: k2 app domain add <app-id> <host> --external.
   K2 reads them at every start, so a changed binding reaches the App on
   its next deploy or restart (k2 app restart <app-id>). No public URL
-  (a local-only App, no K2 Connect subdomain, no custom domain): neither
+  (a local-only App, no {login} subdomain, no custom domain): neither
   is set. Treat unset as "loopback only", never as "allow any Origin".
   A manifest can't set them. --cmd services get them too.
 

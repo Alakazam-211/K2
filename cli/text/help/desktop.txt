@@ -83,7 +83,7 @@ On a Linux server with no screen (a virtual desktop K2 starts; never on a Mac):
 
 (Owner) means an Owner login, or the owner at this computer: a plain
 terminal or a K2 shell tab here. The owner at this computer can run every
-verb above; they just never watch from here. You watch from another device, over K2 Connect or the LAN, signed in
+verb above; they just never watch from here. You watch from another device, over {login} or the LAN, signed in
 with a login: Owner and Admin logins watch and drive; a Member login only
 with a grant, and only to watch (a Member can still use terminal sessions,
 which run as this server's user); Voice & Chat only never. No one at the

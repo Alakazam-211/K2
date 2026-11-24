@@ -96,8 +96,8 @@ The pack takes the kit by path: `crates/blend/Cargo.toml` names
 release `CHANGELOG.md` names. A host vendors both side by side: the kit at `vendor/k2-mpc-base`,
 this pack at `vendor/k2-mpc-blend`. `Cargo.lock` is committed. A public reader gets the kit
 from K2's repository, https://github.com/Alakazam-211/K2, where it is vendored at
-`vendor/k2-mpc-base`: check that folder out beside this repo as `k2-mpc-base`. Kit v0.23.0, the
-release this pack pairs with, is vendored there from the K2 release that vendors kit v0.23.0
+`vendor/k2-mpc-base`: check that folder out beside this repo as `k2-mpc-base`. Kit v0.24.0, the
+release this pack pairs with, is vendored there from the K2 release that vendors kit v0.24.0
 on.
 
 Build and test: `scripts/check.sh`. One of its steps, `scripts/check-private.sh`, **fails without

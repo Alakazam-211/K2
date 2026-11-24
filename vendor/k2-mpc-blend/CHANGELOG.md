@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.2: pairs with kit v0.24.0
+
+**Requires `k2-mpc-base` v0.24.0**. BLEND files behave as in v0.3.1.
+
+- Pairs with kit v0.24.0. Its one pack API addition is opt-in: a container's own record
+  (`DraftNode::own`, declared with `IndexSpec::with_own_records`; index row format 3). Its other
+  changes are the host's (a person's edit never waits behind an agent flood; the store checks a log
+  entry's engine, `MPC-E527`; commit durability changed live; memory: shared texts, the undo
+  history's size, freed memory after write-backs) and the native engine's (off).
+- `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.24.0 and the crate version 0.3.2; `README.md`'s
+  kit line names v0.24.0.
+
 ## v0.3.1: pairs with kit v0.23.0
 
 **Requires `k2-mpc-base` v0.23.0**. BLEND files behave as in v0.3.0.

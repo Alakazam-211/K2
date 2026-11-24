@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "libc",
  "redb",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-blend"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "flate2",
  "k2-mpc-base",

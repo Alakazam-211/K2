@@ -511,6 +511,19 @@ fn live_session_passport_and_id(
     (mint(&out.session_id, &ws.id, key), out.session_id)
 }
 
+/// A plain shell tab the way a person's K2 client opens one (the owner
+/// token on `/cli/sessions/v2/spawn`, a `tab-*` key, no command), and a
+/// passport bound to its session.
+#[cfg(unix)]
+fn person_shell_tab_passport(port: u16, ws: &Ws) -> String {
+    let key = format!("tab-{}", uuid::Uuid::new_v4());
+    let body = serde_json::json!({ "agent_name": key, "cwd": ws.path.to_string_lossy(), "cols": 80, "rows": 24 });
+    let r = post(port, "/cli/sessions/v2/spawn", OWNER, &body);
+    assert_eq!(r.status, 200, "person shell tab spawn: {}", r.body);
+    let sid = json(&r.body)["sessionId"].as_str().and_then(SessionId::parse).unwrap_or_else(|| panic!("no sessionId: {}", r.body));
+    mint(&sid, &ws.id, &key)
+}
+
 /// One raw request over a cell's own socket (one request per connection).
 // The per-cell socket is a Unix socket; Windows cells use the TCP arm.
 #[cfg(unix)]
@@ -1559,12 +1572,17 @@ async fn agent_permission_refusals() {
     // Pi's preset carries no skip flag: allowed.
     ok_new(&new_sidecar(d.port, &careful, &ws2, "gentle", "pi", None));
 
-    // A plain shell tab is a human typing: treated as the owner, even with
-    // the switch off.
+    // A plain shell tab a person's K2 client opened is a human typing:
+    // treated as the owner, even with the switch off.
     let ws3 = seed_ws(&env, &unique("sh"));
-    let shell = live_session_passport(&ws3, &format!("tab-{}", uuid::Uuid::new_v4()), "cat", &[]);
+    let shell = person_shell_tab_passport(d.port, &ws3);
     let v = ok_new(&new_sidecar(d.port, &shell, &ws3, "byhand", "claude", None));
     assert_eq!(v["createdBy"], format!("{} (shell)", ws3.handle));
+    // 0.46.18: a `tab-*` session K2 started for an agent is the agent's,
+    // whatever it runs (`cat` here): the switch still gates it.
+    let not_a_tab = live_session_passport(&ws3, &format!("tab-{}", uuid::Uuid::new_v4()), "cat", &[]);
+    let r = new_sidecar(d.port, &not_a_tab, &ws3, "byagent", "claude", None);
+    assert_eq!((r.status, error_code(&r).as_str()), (403, "gated"), "{}", r.body);
 
     // An API host-session passport → wrong_credential.
     let api = mint(&SessionId::new(), &ws.id, "api-owner-cell");

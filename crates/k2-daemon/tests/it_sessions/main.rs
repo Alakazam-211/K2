@@ -48,6 +48,8 @@ mod pinned_chat_ensure_integration;
 mod reaper_close_guard_integration;
 mod remote_session_layer0_integration;
 mod remote_session_shell_integration;
+#[cfg(unix)]
+mod session_origin_integration;
 mod sidecar_cli_integration;
 #[cfg(unix)]
 mod sidecar_worktree_integration;

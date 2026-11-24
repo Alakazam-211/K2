@@ -46,6 +46,19 @@ use std::path::Path;
 #[path = "ours.rs"]
 pub mod ours;
 
+/// Why this brand can't be built for `target_os` (cargo's
+/// `CARGO_CFG_TARGET_OS`), if it can't: a brand with `cli.no_bash` true has
+/// no command on Windows, which has only the shell CLI until the k5
+/// program ships there (K2's ruling), so no Windows build of it is made.
+pub fn target_refusal(b: &Brand, target_os: &str) -> Option<String> {
+    (b.no_bash && target_os == "windows").then(|| {
+        "cli.no_bash is true and the target is Windows: a build with no shell CLI has no \
+         command on Windows until the k5 program ships there (K2's ruling); no Windows build \
+         of this brand"
+            .to_string()
+    })
+}
+
 /// The one schema this reader knows.
 const SCHEMA: i64 = 1;
 
@@ -1844,6 +1857,22 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
                 &good_with("name = \"ab\"\n", &format!("name = \"ab\"\nno_bash = {value}\n")),
                 "cli.no_bash must be true or false",
             );
+        }
+    }
+
+    /// A no-bash brand is never built for Windows; one that carries the
+    /// shell is, and no other target is refused.
+    #[test]
+    fn a_no_bash_brand_has_no_windows_build() {
+        let xy = load(&repo("brand/xy/brand.toml"), &default_file()).expect("brand/xy loads");
+        let k2 = load(&default_file(), &default_file()).expect("brand/k2 loads");
+        let why = target_refusal(&xy, "windows").expect("xy on Windows is refused");
+        assert!(why.contains("no Windows build of this brand"), "{why}");
+        for os in ["linux", "macos"] {
+            assert_eq!(target_refusal(&xy, os), None, "{os}");
+        }
+        for os in ["windows", "linux", "macos"] {
+            assert_eq!(target_refusal(&k2, os), None, "{os}");
         }
     }
 

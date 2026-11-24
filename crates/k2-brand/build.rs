@@ -45,13 +45,9 @@ fn main() {
     // the k5 program ships on Windows. Windows has only the script today, so
     // such a build would have no command at all.
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
-    if brand.no_bash && env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        eprintln!(
-            "brand file {}: cli.no_bash is true and the target is Windows: a build with no shell CLI \
-             has no command on Windows until the k5 program ships there (K2's ruling); no Windows \
-             build of this brand",
-            file.display()
-        );
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if let Some(why) = brand_file::target_refusal(&brand, &target_os) {
+        eprintln!("brand file {}: {why}", file.display());
         process::exit(1);
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).join("brand.rs");

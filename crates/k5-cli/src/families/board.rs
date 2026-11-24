@@ -136,19 +136,13 @@ pub fn random_hex(n: usize) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-#[cfg(unix)]
 fn random_bytes(n: usize) -> Vec<u8> {
-    use std::io::Read;
     let mut buf = vec![0u8; n];
-    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)) {
-        Ok(()) => buf,
-        Err(_) => seeded_bytes(n),
+    if crate::sysrand::fill(&mut buf) {
+        buf
+    } else {
+        seeded_bytes(n)
     }
-}
-
-#[cfg(not(unix))]
-fn random_bytes(n: usize) -> Vec<u8> {
-    seeded_bytes(n)
 }
 
 /// Bytes from the standard library's hasher keys, which the OS seeds.

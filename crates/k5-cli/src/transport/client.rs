@@ -1885,7 +1885,7 @@ fn os_denied(e: &io::Error, _host: &str) -> bool {
 pub fn tmpdir_unusable() -> bool {
     let td = std::env::var_os("TMPDIR")
         .filter(|t| !t.is_empty())
-        .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+        .map_or_else(|| PathBuf::from(crate::offline::default_tmpdir()), PathBuf::from);
     !td.is_dir() || !writable(&td)
 }
 
@@ -3056,6 +3056,8 @@ mod tests {
             assert_eq!(healer.healed(&cur), None, "a link");
             std::fs::remove_file(&file).unwrap();
         }
+        #[cfg(not(unix))]
+        std::fs::remove_file(&file).unwrap();
         std::fs::create_dir(&file).unwrap();
         assert_eq!(healer.healed(&cur), None, "a folder");
         assert_eq!(
@@ -3302,75 +3304,80 @@ mod tests {
                 VIA_HEADER
             ]
         );
-        // The cell socket: after the passport.
-        let mut pass = Client::new(
-            "127.0.0.1",
-            9,
-            "/p",
-            Auth::Passport {
-                passport: Passport::new("s.t").unwrap(),
-                sock: Some(PathBuf::from("/tmp/cell.sock")),
-            },
-        );
-        pass.conversation = conv.clone();
-        for kind in [Kind::Request, Kind::SendJsonPost] {
+        // The cell socket and the vault socket: Unix only (no Unix
+        // sockets elsewhere, `uds_target`).
+        #[cfg(unix)]
+        {
+            // The cell socket: after the passport.
+            let mut pass = Client::new(
+                "127.0.0.1",
+                9,
+                "/p",
+                Auth::Passport {
+                    passport: Passport::new("s.t").unwrap(),
+                    sock: Some(PathBuf::from("/tmp/cell.sock")),
+                },
+            );
+            pass.conversation = conv.clone();
+            for kind in [Kind::Request, Kind::SendJsonPost] {
+                let (_, r) = pass
+                    .build(kind, Channel::Uds, "/cli/x", &[], b"{}")
+                    .unwrap();
+                let n = names(&r);
+                assert_eq!(
+                    &n[..5],
+                    [
+                        "Authorization",
+                        CONVERSATION_HEADER,
+                        THREAD_HEADER,
+                        VERSION_HEADER,
+                        VIA_HEADER
+                    ],
+                    "{kind:?}"
+                );
+            }
+            // The vault socket: GET first; POST (stdin) after the hand-over ones.
+            pass.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), true));
             let (_, r) = pass
-                .build(kind, Channel::Uds, "/cli/x", &[], b"{}")
+                .build(
+                    Kind::VaultSockGet,
+                    Channel::Uds,
+                    "/cli/vault/status",
+                    &[],
+                    &[],
+                )
                 .unwrap();
-            let n = names(&r);
             assert_eq!(
-                &n[..5],
+                names(&r),
                 [
-                    "Authorization",
                     CONVERSATION_HEADER,
                     THREAD_HEADER,
                     VERSION_HEADER,
-                    VIA_HEADER
-                ],
-                "{kind:?}"
+                    VIA_HEADER,
+                    TTY_HEADER
+                ]
+            );
+            let (_, r) = pass
+                .build(
+                    Kind::VaultSockPost,
+                    Channel::Uds,
+                    "/cli/vault/reveal",
+                    &[],
+                    b"{}",
+                )
+                .unwrap();
+            assert_eq!(
+                names(&r),
+                [
+                    VERSION_HEADER,
+                    VIA_HEADER,
+                    CONVERSATION_HEADER,
+                    THREAD_HEADER,
+                    TTY_HEADER,
+                    "Content-Type"
+                ]
             );
         }
-        // The vault socket: GET first; POST (stdin) after the hand-over ones.
-        pass.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), true));
-        let (_, r) = pass
-            .build(
-                Kind::VaultSockGet,
-                Channel::Uds,
-                "/cli/vault/status",
-                &[],
-                &[],
-            )
-            .unwrap();
-        assert_eq!(
-            names(&r),
-            [
-                CONVERSATION_HEADER,
-                THREAD_HEADER,
-                VERSION_HEADER,
-                VIA_HEADER,
-                TTY_HEADER
-            ]
-        );
-        let (_, r) = pass
-            .build(
-                Kind::VaultSockPost,
-                Channel::Uds,
-                "/cli/vault/reveal",
-                &[],
-                b"{}",
-            )
-            .unwrap();
-        assert_eq!(
-            names(&r),
-            [
-                VERSION_HEADER,
-                VIA_HEADER,
-                CONVERSATION_HEADER,
-                THREAD_HEADER,
-                TTY_HEADER,
-                "Content-Type"
-            ]
-        );
         // The Connect control plane is not the daemon: none.
         let (_, r) = owner
             .build(

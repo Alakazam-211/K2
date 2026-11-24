@@ -35,6 +35,14 @@
 //! length only (no FIN bit, no mask, no continuation frames), and each
 //! frame the client sends is masked with a fresh key.
 //!
+//! On Windows the same session runs on the console: raw is the console's
+//! modes (no line input, echo or Ctrl-C handling; keys as VT sequences,
+//! and VT output with no newline translation), put back after; the
+//! window's size is looked at every 200 ms and a change sent as the
+//! resize; stdin and the socket are read on threads of their own. The
+//! daemon on a Windows box answers the handshake itself (guarded Apps are
+//! Linux-only there: `exec_unavailable`, exit 3).
+//!
 //! Where this differs from the shell: the Python's traceback names its
 //! own library's frames (the socket module's lines), which this doesn't
 //! (the parity rows compare a traceback by its exception); and the named
@@ -56,7 +64,9 @@ use crate::transport::{urllib, Auth};
 use k2_client::cli_name;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
@@ -146,13 +156,12 @@ fn os_raise(frames: &[(u32, &'static str)], e: &std::io::Error) -> Raise {
 /// `os.urandom(n)`.
 fn urandom(n: usize) -> Vec<u8> {
     let mut b = vec![0u8; n];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut b);
-    }
+    let _ = crate::sysrand::fill(&mut b);
     b
 }
 
 /// `os.get_terminal_size(0)`: `(columns, lines)`, or `None` (`OSError`).
+#[cfg(unix)]
 fn terminal_size() -> Option<(u16, u16)> {
     let mut ws = std::mem::MaybeUninit::<libc::winsize>::zeroed();
     // SAFETY: TIOCGWINSZ fills the struct when it returns 0.
@@ -162,6 +171,31 @@ fn terminal_size() -> Option<(u16, u16)> {
     // SAFETY: zeroed, then filled by the ioctl.
     let ws = unsafe { ws.assume_init() };
     Some((ws.ws_col, ws.ws_row))
+}
+
+/// `os.get_terminal_size()` on Windows: the console window's columns and
+/// lines (not the buffer's), or `None` when stdout is no console.
+#[cfg(windows)]
+fn terminal_size() -> Option<(u16, u16)> {
+    use windows_sys::Win32::System::Console::{
+        GetConsoleScreenBufferInfo, GetStdHandle, CONSOLE_SCREEN_BUFFER_INFO, STD_OUTPUT_HANDLE,
+    };
+    let mut info = std::mem::MaybeUninit::<CONSOLE_SCREEN_BUFFER_INFO>::zeroed();
+    // SAFETY: the call fills the struct when it returns non-zero; the
+    // handle is the process's own standard output.
+    if unsafe { GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), info.as_mut_ptr()) } == 0 {
+        return None;
+    }
+    // SAFETY: zeroed, then filled by the call.
+    let w = unsafe { info.assume_init() }.srWindow;
+    let cols = u16::try_from(i32::from(w.Right) - i32::from(w.Left) + 1).ok()?;
+    let rows = u16::try_from(i32::from(w.Bottom) - i32::from(w.Top) + 1).ok()?;
+    Some((cols, rows))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn terminal_size() -> Option<(u16, u16)> {
+    None
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -280,10 +314,16 @@ fn session(host: &str, port: u16, token: &str, a: &Ask) -> Shown {
         code: Value::Null,
     };
     let raw = if tty { Raw::enter() } else { None };
-    let winch = if tty { Winch::install() } else { None };
-    let r = ws.drive(tty, winch.as_ref());
+    #[cfg(unix)]
+    let r = {
+        let winch = if tty { Winch::install() } else { None };
+        let r = ws.drive(tty, winch.as_ref());
+        drop(winch);
+        r
+    };
+    #[cfg(not(unix))]
+    let r = ws.drive(tty);
     // `finally:` the terminal as it was, then the close frame.
-    drop(winch);
     if let Some(raw) = raw {
         raw.restore();
     }
@@ -504,6 +544,7 @@ impl Ws {
 
     /// The `try:` block: the frames already read, then stdin and the
     /// socket until the server closes or ends the connection.
+    #[cfg(unix)]
     fn drive(&mut self, tty: bool, winch: Option<&Winch>) -> Result<(), Raise> {
         let mut done = self.handle(128)?;
         let mut stdin_open = true;
@@ -593,16 +634,213 @@ impl Ws {
     }
 }
 
+/// What the threads of the Windows session's loop ([`Ws::drive`]) hand it.
+#[cfg(not(unix))]
+enum Event {
+    /// Bytes read from stdin.
+    Stdin(Vec<u8>),
+    /// The end of stdin.
+    StdinEnd,
+    StdinErr(std::io::Error),
+    /// Bytes from the server.
+    Sock(Vec<u8>),
+    /// The server ended the connection.
+    SockEnd,
+    SockErr(std::io::Error),
+    /// The console window's new size.
+    Size(u16, u16),
+}
+
+#[cfg(not(unix))]
+impl Ws {
+    /// The `try:` block on Windows, where `select` takes no stdin: stdin,
+    /// the socket and (on a console) the window's size are each watched
+    /// on a thread, and their events handled here in the order they come,
+    /// as the Unix loop handles what `poll` says is ready. The stdin
+    /// thread may stay blocked in its read after the session ends; the
+    /// process exits next.
+    fn drive(&mut self, tty: bool) -> Result<(), Raise> {
+        use std::sync::mpsc;
+        if self.handle(128)? {
+            return Ok(());
+        }
+        let (tx, rx) = mpsc::channel::<Event>();
+        let mut from_server = self
+            .s
+            .try_clone()
+            .map_err(|e| os_raise(&[(144, "<module>")], &e))?;
+        let t = tx.clone();
+        std::thread::spawn(move || {
+            let mut c = vec![0u8; 65536];
+            loop {
+                let ev = match from_server.read(&mut c) {
+                    Ok(0) => Event::SockEnd,
+                    Ok(n) => Event::Sock(c[..n].to_vec()),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => Event::SockErr(e),
+                };
+                let last = matches!(ev, Event::SockEnd | Event::SockErr(_));
+                if t.send(ev).is_err() || last {
+                    return;
+                }
+            }
+        });
+        let t = tx.clone();
+        std::thread::spawn(move || {
+            let mut d = [0u8; 4096];
+            loop {
+                let ev = match std::io::stdin().read(&mut d) {
+                    Ok(0) => Event::StdinEnd,
+                    Ok(n) => Event::Stdin(d[..n].to_vec()),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => Event::StdinErr(e),
+                };
+                let last = matches!(ev, Event::StdinEnd | Event::StdinErr(_));
+                if t.send(ev).is_err() || last {
+                    return;
+                }
+            }
+        });
+        if tty {
+            let t = tx.clone();
+            std::thread::spawn(move || {
+                let mut was = terminal_size();
+                loop {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let now = terminal_size();
+                    if now != was {
+                        was = now;
+                        if let Some((c, r)) = now {
+                            if t.send(Event::Size(c, r)).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        drop(tx);
+        for ev in rx {
+            match ev {
+                Event::Size(c, r) => {
+                    // `winch()`: the size now, sent.
+                    let msg = dumps(vec![
+                        ("type", Value::Str(Text::from("resize"))),
+                        ("cols", Value::Int(c.to_string())),
+                        ("rows", Value::Int(r.to_string())),
+                    ]);
+                    if let Err(e) = self.send(1, msg.as_bytes()) {
+                        return Err(os_raise(&[(95, "winch"), (66, "send")], &e));
+                    }
+                }
+                Event::Stdin(d) => self.send_at(&[(138, "<module>")], 2, &d)?,
+                Event::StdinEnd => {
+                    if !tty {
+                        self.send_at(&[(142, "<module>")], 2, b"\x04")?;
+                    }
+                }
+                Event::StdinErr(e) => return Err(os_raise(&[(136, "<module>")], &e)),
+                Event::Sock(c) => {
+                    self.buf.extend_from_slice(&c);
+                    if self.handle(148)? {
+                        return Ok(());
+                    }
+                }
+                Event::SockEnd => return Ok(()),
+                Event::SockErr(e) => return Err(os_raise(&[(144, "<module>")], &e)),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The console in raw mode on Windows: its input and output modes as they
+/// were, to put back.
+#[cfg(windows)]
+struct Raw {
+    input: (windows_sys::Win32::Foundation::HANDLE, u32),
+    output: Option<(windows_sys::Win32::Foundation::HANDLE, u32)>,
+}
+
+#[cfg(windows)]
+impl Raw {
+    /// `tty.setraw(0)` on the console: input with no line editing, echo
+    /// or Ctrl-C handling (Ctrl-C goes to the App as `\x03`) and keys as
+    /// VT sequences; output that reads VT sequences and leaves newlines as
+    /// they are (the App's terminal sends `\r\n` itself). `None` when
+    /// stdin is no console.
+    fn enter() -> Option<Raw> {
+        use windows_sys::Win32::System::Console::{
+            GetConsoleMode, GetStdHandle, SetConsoleMode, DISABLE_NEWLINE_AUTO_RETURN,
+            ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+            ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_INPUT_HANDLE,
+            STD_OUTPUT_HANDLE,
+        };
+        // SAFETY: the process's own standard handles; GetConsoleMode only
+        // fills the u32, and SetConsoleMode takes plain flags.
+        unsafe {
+            let hin = GetStdHandle(STD_INPUT_HANDLE);
+            let mut old_in = 0u32;
+            if GetConsoleMode(hin, &mut old_in) == 0 {
+                return None;
+            }
+            let new_in = (old_in & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
+                | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if SetConsoleMode(hin, new_in) == 0 {
+                return None;
+            }
+            let hout = GetStdHandle(STD_OUTPUT_HANDLE);
+            let mut old_out = 0u32;
+            let output = (GetConsoleMode(hout, &mut old_out) != 0).then(|| {
+                SetConsoleMode(
+                    hout,
+                    old_out | ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN,
+                );
+                (hout, old_out)
+            });
+            Some(Raw {
+                input: (hin, old_in),
+                output,
+            })
+        }
+    }
+
+    /// The console's modes as they were.
+    fn restore(self) {
+        use windows_sys::Win32::System::Console::SetConsoleMode;
+        // SAFETY: the handles and modes `enter` read.
+        unsafe {
+            SetConsoleMode(self.input.0, self.input.1);
+            if let Some((h, m)) = self.output {
+                SetConsoleMode(h, m);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+struct Raw;
+
+#[cfg(not(any(unix, windows)))]
+impl Raw {
+    fn enter() -> Option<Raw> {
+        None
+    }
+    fn restore(self) {}
+}
+
 /// `err.write(text); err.flush()`.
 fn err_write(text: &str) {
     let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), text.as_bytes());
 }
 
 /// The terminal in raw mode: what it was, to put back.
+#[cfg(unix)]
 struct Raw {
     old: libc::termios,
 }
 
+#[cfg(unix)]
 impl Raw {
     /// `old = termios.tcgetattr(0); tty.setraw(0)`, as Python 3.12's
     /// `tty.cfmakeraw` sets it (`TCSAFLUSH`).
@@ -654,8 +892,10 @@ impl Raw {
 }
 
 /// The write end of the pipe SIGWINCH's handler writes a byte to.
+#[cfg(unix)]
 static WINCH_FD: AtomicI32 = AtomicI32::new(-1);
 
+#[cfg(unix)]
 extern "C" fn on_winch(_: libc::c_int) {
     let fd = WINCH_FD.load(Ordering::Relaxed);
     if fd >= 0 {
@@ -667,12 +907,14 @@ extern "C" fn on_winch(_: libc::c_int) {
 
 /// `signal.signal(signal.SIGWINCH, winch)`: the handler marks a pipe the
 /// session's poll watches, so a resize is sent from the loop.
+#[cfg(unix)]
 struct Winch {
     read_fd: libc::c_int,
     write_fd: libc::c_int,
     before: libc::sigaction,
 }
 
+#[cfg(unix)]
 impl Winch {
     fn install() -> Option<Winch> {
         let mut fds = [0 as libc::c_int; 2];
@@ -715,6 +957,7 @@ impl Winch {
     }
 }
 
+#[cfg(unix)]
 impl Drop for Winch {
     fn drop(&mut self) {
         // SAFETY: puts back the handler there was, then closes this pipe.

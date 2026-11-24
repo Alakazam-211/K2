@@ -526,12 +526,18 @@ fn read_recipe(file: &str) -> Result<Vec<u8>, Shown> {
 }
 
 /// `[ -r "$file" ]`.
+#[cfg(unix)]
 fn readable(file: &str) -> bool {
     let Ok(c) = std::ffi::CString::new(file) else {
         return false;
     };
     // SAFETY: a NUL-terminated path; access reads it and keeps nothing.
     unsafe { libc::access(c.as_ptr(), libc::R_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn readable(file: &str) -> bool {
+    std::fs::File::open(file).is_ok()
 }
 
 /// What `cat` says of an error: the C library's words.

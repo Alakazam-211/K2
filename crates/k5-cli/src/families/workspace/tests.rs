@@ -515,6 +515,7 @@ fn the_words_of_create_and_open() {
     );
 }
 
+#[cfg(unix)]
 fn scratch(tag: &str) -> String {
     let dir = std::env::temp_dir().join(format!("k5-ws-{tag}-{}", std::process::id()));
     if dir.exists() {

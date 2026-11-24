@@ -73,6 +73,8 @@
 //!   native command runs without one.
 //! - [`retired`]: the shell's table of retired verbs, for the line a
 //!   retired verb gets and the deprecated tier of the help.
+//! - [`sysrand`]: the system's random bytes (`/dev/urandom` on Unix, the
+//!   system's generator on Windows).
 
 pub mod airgap;
 pub mod brand_check;
@@ -103,6 +105,7 @@ pub mod python;
 pub mod retired;
 pub mod route;
 pub mod spec;
+pub mod sysrand;
 pub mod text;
 pub mod tools;
 pub mod trace;

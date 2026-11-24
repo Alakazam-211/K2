@@ -589,11 +589,17 @@ fn ptr_set_py(py_: &mut Py) -> R<()> {
 
 /// `os.open(out, flags, 0o600)`, `fchmod` and the write of `xml`; the
 /// error's text as `e.strerror` gives it.
+///
+/// Off Unix there is no mode to set: the open and the write.
 fn write_profile(out: &str, force: bool, xml: &[u8]) -> Result<(), String> {
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut o = std::fs::OpenOptions::new();
-    o.write(true).mode(0o600);
+    o.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
     if force {
         o.create(true).truncate(true);
     } else {
@@ -601,8 +607,12 @@ fn write_profile(out: &str, force: bool, xml: &[u8]) -> Result<(), String> {
     }
     let strerror = |e: std::io::Error| strerror(&e);
     let mut f = o.open(out).map_err(strerror)?;
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))
-        .map_err(strerror)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(strerror)?;
+    }
     f.write_all(xml).map_err(strerror)
 }
 

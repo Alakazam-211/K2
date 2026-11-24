@@ -482,16 +482,19 @@ fn save_py(py_: &mut Py) -> R<()> {
 }
 
 /// `os.open(out, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)` and the
-/// write.
+/// write. Off Unix the create alone: a new file only (`CREATE_NEW`, which
+/// a link or anything else at the path refuses, so no link is followed),
+/// and no mode to give it.
 fn write_new(path: &str, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .mode(0o600)
-        .open(path)?;
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+    }
+    let mut f = o.open(path)?;
     f.write_all(data)
 }
 

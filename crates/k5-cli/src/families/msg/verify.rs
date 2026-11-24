@@ -431,8 +431,14 @@ pub fn now_local(secs: i64) -> Option<String> {
     }
 }
 
+/// On Windows, the C library there.
+#[cfg(windows)]
+pub fn now_local(secs: i64) -> Option<String> {
+    crate::out::pylib::time::strftime_local(secs, "%Y-%m-%d %H:%M:%S %Z").ok()
+}
+
 /// Elsewhere: UTC.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn now_local(secs: i64) -> Option<String> {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);

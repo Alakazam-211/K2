@@ -1844,11 +1844,8 @@ pub fn shown(text: &str) -> String {
 
 /// 16 random bytes from the system.
 fn random16() -> [u8; 16] {
-    use std::io::Read;
     let mut b = [0u8; 16];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut b);
-    }
+    let _ = crate::sysrand::fill(&mut b);
     b
 }
 

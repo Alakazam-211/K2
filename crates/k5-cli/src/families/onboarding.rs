@@ -28,7 +28,7 @@ use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Error};
 use k2_client::cli_name;
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The router arm's words: this family's row of [`crate::route::TABLE`].
 pub const WORDS: &[&str] = &["onboarding"];
@@ -120,9 +120,10 @@ pub fn parse(words: &[&str]) -> Ask {
 
 /// `$(cd "$dir" && pwd)` from the logical folder `pwd`: `.` and `..`
 /// taken off the words, links kept. `None`: `cd` can't enter it.
+#[cfg(unix)]
 pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
     let base = if dir.starts_with('/') {
-        PathBuf::from(dir)
+        std::path::PathBuf::from(dir)
     } else {
         pwd.join(dir)
     };
@@ -140,6 +141,13 @@ pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
     Path::new(&joined)
         .is_dir()
         .then(|| joined.trim_end_matches('\n').to_string())
+}
+
+/// Off Unix: the folder by its parts (`.` gone, `..` taken back), from
+/// `pwd` unless `dir` is absolute ([`crate::out::pylib::path::cd_pwd`]).
+#[cfg(not(unix))]
+pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
+    crate::out::pylib::path::cd_pwd(pwd, dir)
 }
 
 /// `k5 onboarding ...`: `args` is the whole command line after
@@ -263,6 +271,18 @@ mod tests {
         ));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn cd_then_pwd_on_windows() {
+        let tmp = std::env::temp_dir();
+        let t = tmp.to_string_lossy().trim_end_matches('\\').to_string();
+        assert_eq!(cd_pwd(Path::new("D:\\"), &t).as_deref(), Some(t.as_str()));
+        assert_eq!(cd_pwd(&tmp, ".").as_deref(), Some(t.as_str()));
+        assert_eq!(cd_pwd(&tmp.join("x"), "..").as_deref(), Some(t.as_str()));
+        assert_eq!(cd_pwd(&tmp, "no-such-folder-k5"), None);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn cd_then_pwd() {
         let tmp = std::env::temp_dir();

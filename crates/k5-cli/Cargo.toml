@@ -52,6 +52,13 @@ rustls-native-certs = "0.8"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# windows-sys (Windows): the console for `app shell` (raw mode, the
+# window's size), what stdin is (a pipe or a file, `app exec`), and the
+# system's random bytes where Unix reads /dev/urandom (src/sysrand.rs).
+# k2-client and k2-core already use 0.61, so Cargo.lock gains no crate.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console"] }
+
 # build.rs packs cli/k2 into the binary: gzip, and its BLAKE3. k2-brand
 # gives it the command's name of this build (K2_BRAND_DIR), so a brand's
 # build embeds its pages with its own name (src/brand_text.rs). k2-brand

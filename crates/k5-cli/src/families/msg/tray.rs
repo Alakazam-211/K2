@@ -1103,7 +1103,7 @@ pub fn tmpdir() -> String {
     std::env::var("TMPDIR")
         .ok()
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "/tmp".into())
+        .unwrap_or_else(|| crate::offline::default_tmpdir().into())
 }
 
 /// `_msg_inbox_stage_file <target> <local>`: the staged path, or
@@ -1299,9 +1299,7 @@ fn upload(client: &mut Client, local: &Path, dir: &str, filename: &str) -> Resul
 /// bash's `$RANDOM`: 0 to 32767.
 fn random15() -> u32 {
     let mut b = [0u8; 2];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = std::io::Read::read_exact(&mut f, &mut b);
-    }
+    let _ = crate::sysrand::fill(&mut b);
     u32::from(u16::from_le_bytes(b) & 0x7fff)
 }
 

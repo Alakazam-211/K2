@@ -193,7 +193,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 /// ([`super::update::shell_program`]): the shell's.
 fn temp_shell() -> bool {
     crate::transport::client::tmpdir_unusable()
-        && super::update::shell_program(&crate::offline::Env::current(), "mktemp").is_none()
+        && !super::update::shell_has(&crate::offline::Env::current(), "mktemp")
 }
 
 /// `x="$(mktemp [-d] "${TMPDIR:-/tmp}/<name>XXXXXX")"` failing where
@@ -208,7 +208,7 @@ pub fn temp_fails(folder: bool, name: &str, line: &str) -> Option<crate::familie
     }
     let mut template = std::env::var_os("TMPDIR")
         .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| OsString::from("/tmp"));
+        .unwrap_or_else(|| OsString::from(crate::offline::default_tmpdir()));
     template.push("/");
     template.push(name);
     template.push("XXXXXX");

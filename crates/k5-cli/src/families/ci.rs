@@ -519,7 +519,7 @@ fn shell_free(a: &Ask) -> bool {
         }
         "logs" | "log" if !p0.is_empty() => {
             let env = crate::offline::Env::current();
-            if crate::families::update::shell_program(&env, "mktemp").is_none() {
+            if !crate::families::update::shell_has(&env, "mktemp") {
                 return false;
             }
         }

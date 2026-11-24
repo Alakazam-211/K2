@@ -253,7 +253,7 @@ pub fn temp_usable() -> bool {
             || can_make_in(std::path::Path::new("/tmp"));
     }
     let dir = tmpdir.map_or_else(
-        || std::path::PathBuf::from("/tmp"),
+        || std::path::PathBuf::from(crate::offline::default_tmpdir()),
         std::path::PathBuf::from,
     );
     can_make_in(&dir)
@@ -264,7 +264,14 @@ fn can_make_in(dir: &std::path::Path) -> bool {
     if !dir.is_dir() {
         return false;
     }
-    let probe = dir.join(format!("k5-compute-wait-probe.{}", std::process::id()));
+    // One name per probe: two at once in one process (threads) never
+    // share a folder, so neither takes the other's away.
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let probe = dir.join(format!(
+        "k5-compute-wait-probe.{}.{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     match std::fs::create_dir(&probe) {
         Ok(()) => std::fs::remove_dir(&probe).is_ok(),
         Err(_) => false,

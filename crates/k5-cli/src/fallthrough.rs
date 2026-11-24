@@ -25,26 +25,27 @@
 //! digest or the cache file's name.
 //!
 //! A copy that doesn't match is never run. The copy is opened once, and
-//! the open file is both what is hashed and what bash reads: on Unix bash
-//! runs `/dev/fd/N`, a descriptor of that open file, so a file swapped in
-//! at the path after the check is not what runs. On Windows (no
-//! `/dev/fd`) bash still runs the path, a moment after the check.
+//! the open file is both what is hashed and what bash reads: bash runs
+//! `/dev/fd/N`, a descriptor of that open file, so a file swapped in at
+//! the path after the check is not what runs.
 //!
 //! The bash: `/bin/bash` on macOS; elsewhere on Unix the first of
-//! `/bin/bash` and `/usr/bin/bash` that is there. On Windows, Git Bash, by
-//! the search of `k2.cmd` (`k2_client::win_cli::find_git_bash`).
+//! `/bin/bash` and `/usr/bin/bash` that is there.
 //!
 //! What the shell needs must be there, or nothing is handed over: one
 //! plain line on stderr names what is missing and how to get it, and the
-//! front exits with a code of its own for it.
-//! On macOS and Linux that is Python 3 ([`crate::python`]: none on `PATH`,
-//! or only macOS's stand-in), exit 69 ([`FrontError::NoPython`]). Which
-//! verbs need it can't be told before they run, and one that sends its
-//! request first and reads the answer with Python would act and then
-//! fail, so every hand-off checks, before bash starts or the cache is
-//! written. On Windows it is Git Bash, exit 9009, as `k2.cmd` does
-//! ([`FrontError::NoGitBash`]); the shell's prelude there finds its own
-//! Python and says so itself when there is none.
+//! front exits with a code of its own for it: Python 3
+//! ([`crate::python`]: none on `PATH`, or only macOS's stand-in), exit 69
+//! ([`FrontError::NoPython`]). Which verbs need it can't be told before
+//! they run, and one that sends its request first and reads the answer
+//! with Python would act and then fail, so every hand-off checks, before
+//! bash starts or the cache is written.
+//!
+//! On Windows nothing is handed over, ever: the binary doesn't look for a
+//! bash (Git Bash or any other), write the cache or start a program. A
+//! command it doesn't answer itself there gets one plain line saying it
+//! is not built into k5 for Windows yet, and exit 9009
+//! ([`FrontError::NotOnWindows`]).
 //!
 //! On Unix the front becomes bash (`exec`): the process id, the terminal,
 //! signals and the process ancestry the passport check walks are bash's
@@ -53,8 +54,7 @@
 //! the folder where an install keeps the files shipped beside the CLI
 //! ([`script_dir_for`]). The shell closes N first thing, so the commands
 //! it starts don't inherit it; bash reads the script through its own
-//! descriptor. On Windows bash runs as a child, `$0` is the path, and the
-//! front exits with bash's code.
+//! descriptor.
 
 use crate::called_as::{fallthrough_env, SCRIPT_DIR_VAR};
 use crate::embedded;
@@ -162,8 +162,8 @@ fn open_matching(path: &Path, want: &str, follow_links: bool) -> Option<fs::File
 }
 
 /// The front's own failures. Each is one line on stderr and exit 1;
-/// no Python 3 is exit 69, and Windows without Git Bash is exit 9009, as
-/// `k2.cmd` does.
+/// no Python 3 is exit 69, and a command not built into k5 for Windows is
+/// exit 9009.
 #[derive(Debug)]
 pub enum FrontError {
     /// The K2 home can't be found, so the cache has nowhere to go.
@@ -178,8 +178,9 @@ pub enum FrontError {
     NoBash { looked: Vec<PathBuf> },
     /// macOS or Linux: no Python 3 for the shell. Carries the verb.
     NoPython { noun: String },
-    /// Windows: no Git Bash. Carries the verb.
-    NoGitBash { noun: String },
+    /// Windows: a command the binary doesn't answer itself, which is
+    /// never handed to a bash there. Carries the verb.
+    NotOnWindows { noun: String },
     /// bash could not be started.
     Run { bash: PathBuf, err: io::Error },
 }
@@ -189,7 +190,7 @@ impl FrontError {
     pub fn exit(&self) -> Exit {
         match self {
             FrontError::NoPython { .. } => Exit::NoPython,
-            FrontError::NoGitBash { .. } => Exit::NoGitBash,
+            FrontError::NotOnWindows { .. } => Exit::NotOnWindows,
             _ => Exit::Error,
         }
     }
@@ -204,7 +205,7 @@ impl FrontError {
     /// front was called by.
     pub fn line(&self) -> String {
         match self {
-            FrontError::NoPython { .. } | FrontError::NoGitBash { .. } => self.to_string(),
+            FrontError::NoPython { .. } | FrontError::NotOnWindows { .. } => self.to_string(),
             _ => format!("{}: {self}", k2_client::brand::CLI_NAME),
         }
     }
@@ -228,11 +229,7 @@ impl fmt::Display for FrontError {
                 "k5 {noun}: this command is not built into k5 yet and needs Python 3. {}, then open a new terminal.",
                 python_how(cfg!(target_os = "macos"))
             ),
-            FrontError::NoGitBash { noun } => write!(
-                f,
-                "k5 {noun}: this command is not built into k5 yet and needs {}",
-                git_bash_how()
-            ),
+            FrontError::NotOnWindows { noun } => f.write_str(&not_on_windows_line(noun)),
             FrontError::Run { bash, err } => write!(f, "can't run {}: {err}", bash.display()),
         }
     }
@@ -240,13 +237,11 @@ impl fmt::Display for FrontError {
 
 impl std::error::Error for FrontError {}
 
-/// What Git Bash is and how to get it, in `k2.cmd`'s words
-/// ([`k2_client::win_cli::GIT_BASH_NEEDED`] after its "need").
-pub fn git_bash_how() -> &'static str {
-    k2_client::win_cli::GIT_BASH_NEEDED
-        .split_once(" need ")
-        .map(|(_, how)| how)
-        .expect("GIT_BASH_NEEDED names what the tools need")
+/// [`FrontError::NotOnWindows`]'s line for the verb `noun`.
+pub fn not_on_windows_line(noun: &str) -> String {
+    format!(
+        "k5 {noun}: this command is not built into k5 for Windows yet. k5 never hands a command to bash on Windows; run this one on a Mac or Linux machine for now."
+    )
 }
 
 /// How to get Python 3, on macOS (`macos`) or Linux.
@@ -447,18 +442,10 @@ pub fn find_unix_bash(macos: bool, is_file: impl Fn(&Path) -> bool) -> Result<Pa
     }
 }
 
-/// The bash for this system.
-pub fn interpreter(args: &[OsString]) -> Result<PathBuf, FrontError> {
-    #[cfg(windows)]
-    {
-        k2_client::win_cli::find_git_bash(|name| std::env::var_os(name), |p| p.is_file())
-            .ok_or_else(|| FrontError::NoGitBash { noun: noun(args) })
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = args;
-        find_unix_bash(cfg!(target_os = "macos"), |p| p.is_file())
-    }
+/// The bash for this system (Unix only: on Windows nothing is handed to
+/// a bash, [`run`]).
+pub fn interpreter() -> Result<PathBuf, FrontError> {
+    find_unix_bash(cfg!(target_os = "macos"), |p| p.is_file())
 }
 
 /// The command that runs `script` (`/dev/fd/N` on Unix) in `bash` with
@@ -529,15 +516,18 @@ pub fn hand_off(args: &[OsString]) -> Exit {
 }
 
 /// Hands `args` to the shell CLI. On Unix this process becomes bash, so
-/// this returns only when that fails; on Windows bash runs as a child and
-/// this process exits with its code. What comes back is the front's own
-/// error.
+/// this returns only when that fails; what comes back is the front's own
+/// error. On Windows nothing is handed over: the answer is always
+/// [`FrontError::NotOnWindows`], before anything is looked for or written.
 pub fn run(args: &[OsString]) -> FrontError {
+    if !cfg!(unix) {
+        return FrontError::NotOnWindows { noun: noun(args) };
+    }
     if crate::python::here() == crate::python::Python3::Missing {
         return FrontError::NoPython { noun: noun(args) };
     }
     trace::mark("python3");
-    let bash = match interpreter(args) {
+    let bash = match interpreter() {
         Ok(b) => b,
         Err(e) => return e,
     };
@@ -565,13 +555,9 @@ pub fn run(args: &[OsString]) -> FrontError {
     }
     #[cfg(not(unix))]
     {
-        // No /dev/fd: bash runs the path. The open file stays open until
-        // bash is done.
-        trace::finish("command");
-        match command(&bash, script.path.as_os_str(), args, dir.as_deref()).status() {
-            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-            Err(err) => FrontError::Run { bash, err },
-        }
+        // Never reached: off Unix `run` answered first.
+        let _ = (script, dir);
+        FrontError::NoBash { looked: vec![bash] }
     }
 }
 
@@ -956,16 +942,26 @@ mod tests {
         assert_eq!(err.exit_code(), 1);
     }
 
+    /// Off Unix the hand-off is always the refusal: no bash is looked
+    /// for and no cache is written, so a K2 home that can't be found
+    /// changes nothing.
+    #[cfg(not(unix))]
     #[test]
-    fn without_git_bash_windows_says_so_and_exits_9009() {
-        let err = FrontError::NoGitBash {
+    fn off_unix_nothing_is_handed_over() {
+        let args = [OsString::from("inbox"), OsString::from("list")];
+        let err = run(&args);
+        assert!(matches!(&err, FrontError::NotOnWindows { noun } if noun == "inbox"), "{err:?}");
+        assert_eq!(err.exit_code(), 9009);
+        let err = run(&[]);
+        assert!(matches!(&err, FrontError::NotOnWindows { noun } if noun == "help"), "{err:?}");
+    }
+
+    #[test]
+    fn a_command_not_built_for_windows_says_so_and_exits_9009() {
+        let err = FrontError::NotOnWindows {
             noun: noun(&[OsString::from("msg"), OsString::from("x")]),
         };
-        let line = "k5 msg: this command is not built into k5 yet and needs Git for Windows (Git Bash). Download it from https://git-scm.com/download/win , then open a new terminal.";
-        assert_eq!(
-            k2_client::win_cli::GIT_BASH_NEEDED,
-            format!("K2's command-line tools need {}", git_bash_how())
-        );
+        let line = "k5 msg: this command is not built into k5 for Windows yet. k5 never hands a command to bash on Windows; run this one on a Mac or Linux machine for now.";
         assert_eq!(err.line(), line);
         assert_eq!(err.exit_code(), 9009);
         assert_eq!(noun(&[]), "help");
@@ -995,6 +991,7 @@ mod tests {
 
     #[test]
     fn the_command_passes_the_arguments_as_they_came() {
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut args = vec![
             OsString::from("msg"),
             OsString::from("a b"),

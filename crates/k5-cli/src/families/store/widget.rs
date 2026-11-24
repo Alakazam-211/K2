@@ -1157,7 +1157,7 @@ fn temp_check() -> R<()> {
     let dir = std::env::var_os("TMPDIR")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "/tmp".into());
+        .unwrap_or_else(|| crate::offline::default_tmpdir().into());
     match make_temp(&dir.join("k2-gd-next.")) {
         Some((path, _)) => {
             let _ = std::fs::remove_file(path);

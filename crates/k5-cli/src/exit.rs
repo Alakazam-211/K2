@@ -72,10 +72,14 @@ pub enum Exit {
     /// support program does not exist". The binary's own: the shell CLI
     /// never ends with it (`k2 study errors` lists it).
     NoPython,
-    /// 9009: Windows, and no Git Bash to run the shell CLI. `k2.cmd`
-    /// exits 9009 there, the code `cmd.exe` gives for a program it can't
-    /// find ([`crate::fallthrough::FrontError::NoGitBash`]).
-    NoGitBash,
+    /// 9009: Windows, and a command the binary doesn't answer itself
+    /// there. The Windows binary never hands a command to bash: its one
+    /// line says the command is not built into k5 for Windows yet
+    /// ([`crate::fallthrough::FrontError::NotOnWindows`]). 9009 is the code
+    /// `cmd.exe` gives for a program it can't find, and the one `k2.cmd`
+    /// exits with when it has no Git Bash. The binary's own: the shell CLI
+    /// never ends with it.
+    NotOnWindows,
     /// Any other code curl ends with, passed on as it is: a call whose
     /// last step is curl ends with it, as the shell runs under `set -e`
     /// (28 no answer in time, 52 an empty reply, 55 and 56 a write or a
@@ -106,7 +110,7 @@ impl Exit {
         Exit::WaitTimedOut,
         Exit::Tombstone,
         Exit::Interrupted,
-        Exit::NoGitBash,
+        Exit::NotOnWindows,
     ];
 
     /// The number the process exits with.
@@ -126,7 +130,7 @@ impl Exit {
             Exit::WaitTimedOut => 124,
             Exit::Tombstone => 127,
             Exit::Interrupted => 130,
-            Exit::NoGitBash => 9009,
+            Exit::NotOnWindows => 9009,
             Exit::Curl(code) => code,
         }
     }
@@ -177,7 +181,7 @@ mod tests {
                 (Exit::WaitTimedOut, 124),
                 (Exit::Tombstone, 127),
                 (Exit::Interrupted, 130),
-                (Exit::NoGitBash, 9009),
+                (Exit::NotOnWindows, 9009),
             ]
         );
     }

@@ -427,11 +427,19 @@ pub fn shell_program(env: &Env, name: &str) -> Option<PathBuf> {
     daemon::find_on_path(name, path.to_os_string())
 }
 
+/// Whether the shell would find `name`, for a line the binary answers
+/// without running it (a gate that sends the line to the shell when the
+/// shell's program is missing). Off Unix no shell runs, so nothing of its
+/// can be missing: always.
+pub fn shell_has(env: &Env, name: &str) -> bool {
+    !cfg!(unix) || shell_program(env, name).is_some()
+}
+
 /// `"${TMPDIR:-/tmp}/k2-update.XXXXXX"`, mktemp's argument.
 pub fn temp_template(tmpdir: Option<&OsStr>) -> OsString {
     let mut s = match tmpdir {
         Some(t) if !t.is_empty() => t.to_os_string(),
-        _ => OsString::from("/tmp"),
+        _ => OsString::from(crate::offline::default_tmpdir()),
     };
     s.push("/");
     s.push(TEMP_NAME);
@@ -1016,9 +1024,14 @@ mod tests {
 
     #[test]
     fn the_temp_file_s_place() {
+        // With no TMPDIR, `/tmp` (off Unix, the system's temp folder).
+        let unset = format!("{}/k2-update.XXXXXX", crate::offline::default_tmpdir());
+        if cfg!(unix) {
+            assert_eq!(unset, "/tmp/k2-update.XXXXXX");
+        }
         for (tmpdir, want) in [
-            (None, "/tmp/k2-update.XXXXXX"),
-            (Some(""), "/tmp/k2-update.XXXXXX"),
+            (None, unset.as_str()),
+            (Some(""), unset.as_str()),
             (Some("/var/t"), "/var/t/k2-update.XXXXXX"),
             (Some("/var/t/"), "/var/t//k2-update.XXXXXX"),
             (Some("rel"), "rel/k2-update.XXXXXX"),

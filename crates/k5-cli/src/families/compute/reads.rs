@@ -567,8 +567,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     // logs runs the shell's mktemp: one it can't find or run as the shell
     // would is the shell's.
     if matches!(ask, Ok(Ask::Logs(_)))
-        && crate::families::update::shell_program(&crate::offline::Env::current(), "mktemp")
-            .is_none()
+        && !crate::families::update::shell_has(&crate::offline::Env::current(), "mktemp")
     {
         return None;
     }

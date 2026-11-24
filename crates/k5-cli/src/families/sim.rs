@@ -1086,6 +1086,13 @@ pub fn cd_searches(dir: &str) -> bool {
 /// `cd <dir> && pwd` from the logical folder `pwd`: the path by its words
 /// (`.` gone, `..` taken back, each `..` only from a folder), else the
 /// folder as the system names it.
+#[cfg(not(unix))]
+pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
+    crate::out::pylib::path::cd_pwd(pwd, dir)
+}
+
+/// [`cd_pwd`] on Unix.
+#[cfg(unix)]
 pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
     let full = if dir.starts_with('/') {
         dir.to_string()

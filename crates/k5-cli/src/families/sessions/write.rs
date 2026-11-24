@@ -368,7 +368,7 @@ pub fn temp_folder_usable() -> bool {
     use std::os::unix::ffi::OsStrExt;
     let dir = std::env::var_os("TMPDIR")
         .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| "/tmp".into());
+        .unwrap_or_else(|| crate::offline::default_tmpdir().into());
     let Ok(c) = std::ffi::CString::new(dir.as_bytes()) else {
         return false;
     };

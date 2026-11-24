@@ -451,6 +451,11 @@ fn paths() {
     );
     assert_eq!((dirname("/"), basename("/")), ("/".into(), "/".into()));
     assert_eq!((dirname("/x"), basename("//x//")), ("/".into(), "x".into()));
+}
+
+#[cfg(unix)]
+#[test]
+fn cd_pwd_by_its_words() {
     let tmp = std::env::temp_dir().canonicalize().unwrap();
     let t = tmp.to_string_lossy();
     assert_eq!(cd_pwd(&tmp, ".").as_deref(), Some(&*t));

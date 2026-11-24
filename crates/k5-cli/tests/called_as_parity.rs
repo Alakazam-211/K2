@@ -67,6 +67,7 @@ fn the_fallthrough_env_is_what_the_shell_reads() {
 
 /// The prelude's lines that read the folder the front passes and close the
 /// script's descriptor the front handed over.
+#[cfg(unix)]
 fn script_dir_block() -> String {
     common::block(
         &common::prelude(),

@@ -451,17 +451,16 @@ fn a_refused_connect_is_url_error() {
     };
     let errno = if cfg!(target_os = "macos") { 61 } else { 111 };
     assert_eq!(r.kind, Kind::Refused);
-    assert_eq!(
-        r.reason_text(),
+    let want = if cfg!(windows) {
+        "[WinError 10061] No connection could be made because the target machine actively refused it.".to_string()
+    } else {
         format!("[Errno {errno}] Connection refused")
-    );
-    assert_eq!(
-        r.text(),
-        format!("<urlopen error [Errno {errno}] Connection refused>")
-    );
+    };
+    assert_eq!(r.reason_text(), want);
+    assert_eq!(r.text(), format!("<urlopen error {want}>"));
     assert_eq!(
         r.traceback_line(),
-        format!("urllib.error.URLError: <urlopen error [Errno {errno}] Connection refused>")
+        format!("urllib.error.URLError: <urlopen error {want}>")
     );
 }
 

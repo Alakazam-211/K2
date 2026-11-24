@@ -17,10 +17,14 @@
 //!
 //! Where the shell would print something else first, the command goes to
 //! the shell ([`Check::Shell`]): bash's own start-up settings (`BASH_ENV`
-//! and the others in [`crate::offline::STARTUP`]), Windows, and, for the
-//! saved port, anything the prelude stops on or warns about before it
-//! reads the file ([`crate::offline::prelude`]: a NUL in a file it reads,
-//! a program missing from `PATH`).
+//! and the others in [`crate::offline::STARTUP`]), and, for the saved
+//! port, anything the prelude stops on or warns about before it reads the
+//! file ([`crate::offline::prelude`]: a NUL in a file it reads, a program
+//! missing from `PATH`).
+//!
+//! Off Unix (Windows) there is no shell to go to ([`crate::fallthrough`]):
+//! a port that isn't one is always refused here, the saved one read from
+//! k2-client's K2 home ([`crate::offline::shell_k2_home`]).
 
 use crate::offline::{self, Env};
 use k2_client::env_names;
@@ -70,11 +74,12 @@ fn bytes(s: &std::ffi::OsStr) -> &[u8] {
     s.as_encoded_bytes()
 }
 
-/// bash would run something of its own before the prelude.
+/// bash would run something of its own before the prelude. Never off
+/// Unix, where no bash runs.
 fn shell_starts_otherwise(env: &Env) -> bool {
-    !cfg!(unix)
-        || offline::STARTUP.iter().any(|n| env.get(n).is_some())
-        || env.any_named("BASH_FUNC_")
+    cfg!(unix)
+        && (offline::STARTUP.iter().any(|n| env.get(n).is_some())
+            || env.any_named("BASH_FUNC_"))
 }
 
 /// The shell prelude's port check for `env`, run from `cwd` (the shell's
@@ -113,12 +118,16 @@ pub fn check(env: &Env, cwd: Option<&Path>) -> Check {
         return Check::Go;
     }
     let quiet_before = cwd.is_some_and(|cwd| offline::prelude(env, cwd).is_ok());
-    if nul || shell_starts_otherwise(env) || !quiet_before {
+    if cfg!(unix) && (nul || shell_starts_otherwise(env) || !quiet_before) {
         return Check::Shell;
     }
     let mut what = b"the port in ".to_vec();
     what.extend_from_slice(bytes(k2_home.as_os_str()));
-    what.extend_from_slice(b"/heartbeat.port");
+    what.extend_from_slice(if cfg!(windows) {
+        b"\\heartbeat.port"
+    } else {
+        b"/heartbeat.port"
+    });
     Check::Refuse(refusal(&what, &text))
 }
 
@@ -245,5 +254,47 @@ mod tests {
             "a NUL dropped leaves a port"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// With no shell to go to, a port setting that isn't one is refused
+    /// here, bash's start-up settings or not.
+    #[test]
+    fn a_bad_setting_is_refused_with_no_shell() {
+        let env = Env::of(&[("K5_PORT", "0"), ("BASH_ENV", "x")]);
+        assert_eq!(
+            check(&env, None),
+            Check::Refuse(b"Error: K5_PORT must be a number from 1 to 65535 (got: 0)\n".to_vec())
+        );
+        assert_eq!(check(&Env::of(&[("K5_PORT", "8080")]), None), Check::Go);
+    }
+
+    /// The saved port is read from k2-client's K2 home (USERPROFILE here)
+    /// and one that isn't a port is refused with its Windows path; a NUL
+    /// in it is dropped, as the shell's `$(cat)` drops it.
+    #[test]
+    fn a_bad_saved_port_is_refused_with_no_shell() {
+        let user: PathBuf = std::env::temp_dir().join(format!("k5-port-win-{}", std::process::id()));
+        let k2 = user.join(".k2");
+        std::fs::create_dir_all(&k2).unwrap();
+        std::fs::write(k2.join("heartbeat.port"), "70000\0\n").unwrap();
+        let profile = user.to_str().unwrap();
+        let env = Env::of(&[("USERPROFILE", profile)]);
+        let want = format!(
+            "Error: the port in {}\\heartbeat.port must be a number from 1 to 65535 (got: 70000)\n",
+            k2.display()
+        );
+        assert_eq!(check(&env, Some(&user)), Check::Refuse(want.into_bytes()));
+        // Without a folder to start from, too: there is no prelude to
+        // stay quiet for.
+        assert!(matches!(check(&env, None), Check::Refuse(_)));
+        std::fs::write(k2.join("heartbeat.port"), "43210\n").unwrap();
+        assert_eq!(check(&env, Some(&user)), Check::Go);
+        std::fs::remove_dir_all(&user).unwrap();
     }
 }

@@ -4,6 +4,10 @@
 //! (`scripts/spec-census.py`, which says how each column is read). It is
 //! read from cli/src, so it must be current, and its spec rows must be the
 //! spec table's.
+//!
+//! A check of the repo's sources by its Python script, the same on every
+//! OS: it runs where the scripts' `python3` is (macOS and Linux).
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::Command;

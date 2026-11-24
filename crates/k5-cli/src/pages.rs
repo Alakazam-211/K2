@@ -1180,6 +1180,25 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// `Env::of`; off Unix a Unix-style `HOME` is also given as
+    /// `USERPROFILE` on a drive, since only an absolute Windows path is a
+    /// user home there (the K2 home is k2-client's, `offline::shell_k2_home`).
+    fn env_of(pairs: &[(&str, &str)]) -> Env {
+        let mut all: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        if cfg!(windows) {
+            for (k, v) in pairs {
+                if *k == "HOME" && v.starts_with('/') {
+                    all.push(("USERPROFILE".into(), format!("C:{}", v.replace('/', "\\"))));
+                }
+            }
+        }
+        let refs: Vec<(&str, &str)> = all.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        Env::of(&refs)
+    }
+
     fn src(file: &str) -> String {
         let p = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cli/src")
@@ -1391,6 +1410,17 @@ mod tests {
         );
     }
 
+    /// Off Unix no shell's Python reads a page: the binary prints every
+    /// one, whatever the locale or the PYTHON settings.
+    #[cfg(not(unix))]
+    #[test]
+    fn off_unix_every_page_is_the_binary_s() {
+        for pairs in [&[][..], &[("LANG", "en_US.ISO8859-1")], &[("PYTHONPATH", "/x")]] {
+            assert!(native_json(&Env::of(pairs), "\u{2014}"), "{pairs:?}");
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn the_locale_python_reads_as_utf8() {
         let d = std::env::temp_dir().join(format!("k5-pages-py-{}", std::process::id()));
@@ -1684,7 +1714,7 @@ mod tests {
     fn a_captured_form_prints_what_the_shell_printed() {
         // A HOME, so a form the cards answer decides finds the shell's
         // settings: no passport there, so cards are off, nothing asked.
-        let none = Env::of(&[("HOME", "/nonexistent-k5-pages")]);
+        let none = env_of(&[("HOME", "/nonexistent-k5-pages")]);
         let ok = prelude(true, true, false, false);
         for f in text::CAPTURED_FORMS {
             let c = &text::CAPTURED[f.captured.expect("a captured form")];
@@ -1741,7 +1771,7 @@ mod tests {
                     // No project path: the hint does nothing.
                     hint += 1;
                     assert_eq!(f.argv[0], "zen", "{:?}", f.argv);
-                    let env = Env::of(&[("HOME", "/x")]);
+                    let env = env_of(&[("HOME", "/x")]);
                     assert_eq!(shown(f, &env), want(first), "{:?}", f.argv);
                 }
                 Some(Variant::CardsOn(on)) => {
@@ -1752,7 +1782,7 @@ mod tests {
                         &[("HOME", "/x"), ("K2_HOOK_SOCK", "/x/no.sock")],
                     ];
                     for owner in owners {
-                        let env = Env::of(owner);
+                        let env = env_of(owner);
                         assert_eq!(shown(f, &env), want(first), "{:?} {owner:?}", f.argv);
                     }
                 }
@@ -1767,8 +1797,8 @@ mod tests {
                     ];
                     for (v, n) in values {
                         let env = match v {
-                            None => Env::of(&[("HOME", "/x")]),
-                            Some(v) => Env::of(&[("HOME", "/x"), (CHAT_MANAGE, v)]),
+                            None => env_of(&[("HOME", "/x")]),
+                            Some(v) => env_of(&[("HOME", "/x"), (CHAT_MANAGE, v)]),
                         };
                         assert_eq!(shown(f, &env), want(n), "{:?} {CHAT_MANAGE}={v:?}", f.argv);
                     }
@@ -1798,14 +1828,14 @@ mod tests {
         let ok = prelude(true, true, false, false);
         let marker = ws.join(".k2/.garden-changes-hint");
         let s = |p: &Path| p.to_str().unwrap().to_string();
-        let env = Env::of(&[("HOME", &s(&home)), ("K2_PROJECT_PATH", &s(&ws))]);
+        let env = env_of(&[("HOME", &s(&home)), ("K2_PROJECT_PATH", &s(&ws))]);
         let page = help_page(f, &ok, &env, || false).expect("a page");
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "0.46.3\n");
         std::fs::write(&marker, "kept\n").unwrap();
         assert_eq!(help_page(f, &ok, &env, || false), Some(page));
         assert_eq!(std::fs::read_to_string(&marker).unwrap(), "kept\n");
         for root in [&home, &bare] {
-            let env = Env::of(&[("HOME", &s(&home)), ("K2_PROJECT_PATH", &s(root))]);
+            let env = env_of(&[("HOME", &s(&home)), ("K2_PROJECT_PATH", &s(root))]);
             help_page(f, &ok, &env, || false).expect("a page");
         }
         assert!(!home.join(".k2/.garden-changes-hint").exists());
@@ -1894,7 +1924,7 @@ mod tests {
     #[test]
     fn the_daily_page_needs_the_gate_and_its_switch() {
         // No passport: cards off, nothing asked.
-        let env = Env::of(&[("HOME", "/nonexistent/k5-daily")]);
+        let env = env_of(&[("HOME", "/nonexistent/k5-daily")]);
         let never = || -> bool { panic!("nothing is asked") };
         let owner = prelude(true, true, false, false);
         let page = daily_page(&owner, &env, never);
@@ -2180,7 +2210,7 @@ mod tests {
 
     #[test]
     fn the_switches_decide() {
-        let env = Env::of(&[("HOME", "/nonexistent/k5-composed")]);
+        let env = env_of(&[("HOME", "/nonexistent/k5-composed")]);
         let never = || -> bool { panic!("nothing is asked") };
         let owner = prelude(true, true, false, false);
         let tier = composed_page(Composed::Daily, &["-h"], &owner, &env, never);

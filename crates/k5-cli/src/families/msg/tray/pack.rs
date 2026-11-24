@@ -138,9 +138,49 @@ fn pad(w: &mut impl Write, n: u64) -> std::io::Result<()> {
     Ok(())
 }
 
-fn entry(w: &mut impl Write, path: &Path, name: &str) -> std::io::Result<()> {
+/// What `tarfile` takes from `os.lstat` for an entry: the permission bits,
+/// the owner's ids and the modified time in whole seconds.
+#[cfg(unix)]
+fn stat_of(meta: &std::fs::Metadata, _path: &Path) -> (u32, u64, u64, u64) {
     use std::os::unix::fs::MetadataExt;
+    (
+        meta.mode() & 0o7777,
+        u64::from(meta.uid()),
+        u64::from(meta.gid()),
+        u64::try_from(meta.mtime()).unwrap_or(0),
+    )
+}
+
+/// Off Unix, what Python's `os.lstat` makes of a file there: 0o444 for a
+/// read-only file, else 0o666, with 0o111 added for a name ending in
+/// `.exe`, `.bat`, `.cmd` or `.com`, and a link 0o777; owner ids 0.
+#[cfg(not(unix))]
+fn stat_of(meta: &std::fs::Metadata, path: &Path) -> (u32, u64, u64, u64) {
+    let mode = if meta.file_type().is_symlink() {
+        0o777
+    } else {
+        let base = if meta.permissions().readonly() { 0o444 } else { 0o666 };
+        let runs = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| ["exe", "bat", "cmd", "com"].iter().any(|x| e.eq_ignore_ascii_case(x)));
+        if runs {
+            base | 0o111
+        } else {
+            base
+        }
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    (mode, 0, 0, mtime)
+}
+
+fn entry(w: &mut impl Write, path: &Path, name: &str) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(path)?;
+    let (mode, uid, gid, mtime) = stat_of(&meta, path);
     let (kind, link, size) = if meta.file_type().is_symlink() {
         let target = std::fs::read_link(path)?;
         (b'2', target.into_os_string().into_encoded_bytes(), 0)
@@ -155,7 +195,6 @@ fn entry(w: &mut impl Write, path: &Path, name: &str) -> std::io::Result<()> {
     if link.len() > 100 || !link.is_ascii() {
         pax.extend(record("linkpath", &link));
     }
-    let mtime = u64::try_from(meta.mtime()).unwrap_or(0);
     if !pax.is_empty() {
         let h = header(&Head {
             name: b"././@PaxHeader",
@@ -173,9 +212,9 @@ fn entry(w: &mut impl Write, path: &Path, name: &str) -> std::io::Result<()> {
     }
     let h = header(&Head {
         name: name_b,
-        mode: meta.mode() & 0o7777,
-        uid: u64::from(meta.uid()),
-        gid: u64::from(meta.gid()),
+        mode,
+        uid,
+        gid,
         size,
         mtime,
         kind,
@@ -257,5 +296,37 @@ mod tests {
         let r = record("path", &long);
         assert_eq!(r.len(), format!("{}", r.len()).len() + 1 + 5 + 95 + 1);
         assert!(r.starts_with(format!("{} path=", r.len()).as_bytes()));
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod windows_tests {
+    use super::*;
+
+    /// Python's `os.lstat` modes on Windows: 0o666, 0o444 read-only, and
+    /// the run bits for the four program extensions; owner ids 0.
+    #[test]
+    #[allow(clippy::permissions_set_readonly_false)]
+    fn modes_are_python_s_on_windows() {
+        let dir = std::env::temp_dir().join(format!("k5-pack-win-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("a.txt");
+        let prog = dir.join("b.CMD");
+        std::fs::write(&plain, "x").unwrap();
+        std::fs::write(&prog, "x").unwrap();
+        let m = std::fs::symlink_metadata(&plain).unwrap();
+        let (mode, uid, gid, mtime) = stat_of(&m, &plain);
+        assert_eq!((mode, uid, gid), (0o666, 0, 0));
+        assert!(mtime > 1_600_000_000, "{mtime}");
+        let m = std::fs::symlink_metadata(&prog).unwrap();
+        assert_eq!(stat_of(&m, &prog).0, 0o777);
+        let mut perms = std::fs::metadata(&plain).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&plain, perms.clone()).unwrap();
+        let m = std::fs::symlink_metadata(&plain).unwrap();
+        assert_eq!(stat_of(&m, &plain).0, 0o444);
+        perms.set_readonly(false);
+        std::fs::set_permissions(&plain, perms).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

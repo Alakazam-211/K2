@@ -530,11 +530,21 @@ mod tests {
             stamp(&Value::Bool(true), 0).unwrap(),
             stamp(&Value::Int("1".into()), 0).unwrap()
         );
-        assert_ne!(
-            stamp(&Value::Float(-0.5), 0).unwrap(),
-            stamp(&Value::Int("0".into()), 0).unwrap(),
-            "floor, not toward zero"
-        );
+        // Floor, not toward zero: -0.5 is -1. Windows' C library takes no
+        // time before 1970 (Python there raises the same).
+        if cfg!(unix) {
+            assert_ne!(
+                stamp(&Value::Float(-0.5), 0).unwrap(),
+                stamp(&Value::Int("0".into()), 0).unwrap(),
+                "floor, not toward zero"
+            );
+        } else {
+            assert_eq!(
+                stamp(&Value::Float(-0.5), 0),
+                Err("OSError: [Errno 22] Invalid argument".into())
+            );
+            assert!(stamp(&Value::Float(0.5), 0).is_ok());
+        }
         assert!(stamp(&Value::Int("99999999999999999999".into()), 0).is_err());
         assert_eq!(
             stamp(&Value::Array(vec![]), 0),

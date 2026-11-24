@@ -181,9 +181,13 @@ pub fn file_state(file: &Path) -> State {
 }
 
 /// The shell's settings file in `env`: `${K2_HOME}/settings.json`.
-/// `None` when `HOME` is not set.
+/// `None` when `HOME` is not set. Off Unix, `settings.json` in
+/// k2-client's K2 home ([`offline::shell_k2_home`]), the daemon's file.
 pub fn settings_file(env: &Env) -> Option<PathBuf> {
     let home = offline::shell_k2_home(env)?;
+    if !cfg!(unix) {
+        return Some(home.join(FILE));
+    }
     let mut s = home.into_os_string();
     s.push("/");
     s.push(FILE);
@@ -441,6 +445,19 @@ mod tests {
         assert_eq!(values(br#""airgap"airgap":x"#), vec![&b"x"[..]]);
     }
 
+    /// Off Unix: the daemon's file, in k2-client's K2 home.
+    #[cfg(windows)]
+    #[test]
+    fn the_file_is_the_k2_home_s_on_windows() {
+        let env = Env::of(&[("USERPROFILE", r"D:\u")]);
+        assert_eq!(
+            settings_file(&env),
+            Some(PathBuf::from(r"D:\u\.k2\settings.json"))
+        );
+        assert_eq!(settings_file(&Env::of(&[])), None);
+    }
+
+    #[cfg(unix)]
     #[test]
     fn the_file_is_the_shell_s_k2_home_s() {
         let d = scratch("home");

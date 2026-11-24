@@ -692,13 +692,10 @@ fn uuid4() -> String {
 
 /// The system's random bytes (`os.urandom`).
 fn random(buf: &mut [u8]) {
-    use std::io::Read;
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        if f.read_exact(buf).is_ok() {
-            return;
-        }
+    if crate::sysrand::fill(buf) {
+        return;
     }
-    // No /dev/urandom: the clock and the process, never all zeroes.
+    // No system random bytes: the clock and the process, never all zeroes.
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())

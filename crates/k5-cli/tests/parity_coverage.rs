@@ -8,6 +8,10 @@
 //! K5-only forms (`tests/data/k5_only_forms.tsv`) are out of
 //! the count; each names the unit tests that cover it, and those must be
 //! `#[test]` fns in their files. A form leaves the count only by that list.
+//!
+//! A check of the repo's sources by its Python script, the same on every
+//! OS: it runs where the scripts' `python3` is (macOS and Linux).
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

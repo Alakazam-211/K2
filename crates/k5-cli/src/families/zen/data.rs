@@ -481,7 +481,7 @@ fn export(gd: &mut Gd, words: &[String]) -> R<()> {
     let dir = std::env::var_os("TMPDIR")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "/tmp".into());
+        .unwrap_or_else(|| crate::offline::default_tmpdir().into());
     match gd::make_temp(&dir.join("k2-gd-export.")) {
         Some((p, _)) => {
             let _ = std::fs::remove_file(p);

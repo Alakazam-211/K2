@@ -107,12 +107,33 @@ pub fn parse(words: &[&str]) -> Option<Result<Ask, Stop>> {
 }
 
 /// `[ ! -t 0 ] && { [ -p /dev/stdin ] || [ -f /dev/stdin ]; }`.
+#[cfg(unix)]
 fn stdin_is_data() -> bool {
     use std::os::unix::fs::FileTypeExt;
     if crate::prompt::stdin_is_tty() {
         return false;
     }
     std::fs::metadata("/dev/stdin").is_ok_and(|m| m.file_type().is_fifo() || m.is_file())
+}
+
+/// Off Unix: stdin is not a console and is a pipe or a file on disk
+/// (`GetFileType`), the same test without `/dev/stdin`.
+#[cfg(windows)]
+fn stdin_is_data() -> bool {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_DISK, FILE_TYPE_PIPE};
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
+    if crate::prompt::stdin_is_tty() {
+        return false;
+    }
+    // SAFETY: GetStdHandle and GetFileType only read the process's
+    // standard input handle; a missing or bad one is FILE_TYPE_UNKNOWN.
+    let kind = unsafe { GetFileType(GetStdHandle(STD_INPUT_HANDLE)) };
+    kind == FILE_TYPE_PIPE || kind == FILE_TYPE_DISK
+}
+
+#[cfg(not(any(unix, windows)))]
+fn stdin_is_data() -> bool {
+    false
 }
 
 /// `tmpd="$(mktemp -d "${TMPDIR:-/tmp}/k2-exec-XXXXXX")"`: the shell
@@ -124,7 +145,7 @@ fn stage() -> Result<(), Exit> {
     let dir = std::env::var_os("TMPDIR")
         .filter(|d| !d.is_empty())
         .map_or_else(
-            || std::path::PathBuf::from("/tmp"),
+            || std::path::PathBuf::from(crate::offline::default_tmpdir()),
             std::path::PathBuf::from,
         );
     let template = format!("{}/k2-exec-XXXXXX", dir.display());
@@ -138,10 +159,15 @@ fn stage() -> Result<(), Exit> {
             .take(6)
             .collect();
         let path = dir.join(format!("k2-exec-{tag}"));
+        #[cfg(unix)]
         let made = {
             use std::os::unix::fs::DirBuilderExt;
             std::fs::DirBuilder::new().mode(0o700).create(&path)
         };
+        // Off Unix a new folder is its owner's by the folder above's
+        // permissions; there is no mode to give it.
+        #[cfg(not(unix))]
+        let made = std::fs::DirBuilder::new().create(&path);
         match made {
             Ok(()) => {
                 let _ = std::fs::remove_dir(&path);

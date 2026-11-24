@@ -16,10 +16,14 @@
 //! ([`crate::daemon::developer_dir_in`]); `xcode-select` is not started.
 //!
 //! [`Python3::Unknown`]: the binary can't tell what the shell's `python3`
-//! is. On Windows the shell's prelude tries `py -3` and `python` too
-//! (`cli/src/prelude.sh`); anywhere, an exported shell function named
-//! `python3` runs in its place. What depends on the shell's Python goes
-//! to the shell then.
+//! is: an exported shell function named `python3` runs in its place.
+//! What depends on the shell's Python goes to the shell then.
+//!
+//! Off Unix (Windows) there is no shell: the binary never hands a command
+//! to bash there ([`crate::fallthrough`]), so no shell's Python is there
+//! for a native command to match, and none is looked for. It counts as
+//! [`Python3::Missing`]: a native command runs and prints what it prints
+//! ([`NATIVE_WITHOUT_PYTHON3`]).
 
 use crate::daemon;
 use crate::offline::Env;
@@ -42,14 +46,15 @@ pub enum Python3 {
     Present,
     /// There is none (or only macOS's stand-in with no developer tools).
     Missing,
-    /// The binary can't tell (Windows, or a `python3` shell function).
+    /// The binary can't tell (a `python3` shell function).
     Unknown,
 }
 
 /// The shell's `python3` in `env`.
 pub fn in_env(env: &Env) -> Python3 {
     if !cfg!(unix) {
-        return Python3::Unknown;
+        // No shell, so no shell's Python (the module's notes).
+        return Python3::Missing;
     }
     // Exported as `BASH_FUNC_python3%%` (bash 4.3 and later) or
     // `BASH_FUNC_python3()` (before).
@@ -229,5 +234,20 @@ mod tests {
         assert!(family_native(Python3::Present));
         assert!(!family_native(Python3::Unknown));
         assert_eq!(family_native(Python3::Missing), NATIVE_WITHOUT_PYTHON3);
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod windows_tests {
+    use super::*;
+
+    /// No shell, so no shell's Python: a native family runs, whatever is
+    /// on PATH or exported.
+    #[test]
+    fn off_unix_a_native_family_runs() {
+        let env = Env::of(&[("PATH", r"C:\Python312"), ("BASH_FUNC_python3%%", "() { :; }")]);
+        assert_eq!(in_env(&env), Python3::Missing);
+        assert!(family_native(in_env(&env)));
+        assert!(family_native(here()));
     }
 }

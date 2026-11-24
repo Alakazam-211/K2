@@ -883,9 +883,10 @@ pub fn local_text(fmt: &str, secs: i64) -> R<String> {
     }
 }
 
+/// Off Unix, the C library there ([`crate::out::pylib::time::strftime_local`]).
 #[cfg(not(unix))]
-pub fn local_text(_fmt: &str, _secs: i64) -> R<String> {
-    Err("OSError: no local time here".into())
+pub fn local_text(fmt: &str, secs: i64) -> R<String> {
+    crate::out::pylib::time::strftime_local(secs, fmt)
 }
 
 /// `int(time.time())`.

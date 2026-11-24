@@ -314,7 +314,7 @@ pub fn decode_utf8(bytes: &[u8]) -> Result<String, Failed> {
 
 /// An `OSError` as Python names it: its class and `str(e)`, with the path.
 pub fn os_error(e: &std::io::Error, path: &str) -> Failed {
-    let code = e.raw_os_error().unwrap_or(0);
+    let code = errno_of(e);
     let class = match code {
         2 => "FileNotFoundError",
         13 | 1 => "PermissionError",
@@ -336,11 +336,83 @@ pub fn os_error(e: &std::io::Error, path: &str) -> Failed {
 /// The C library's words for an errno, as Python prints them (the
 /// standard library's text without its ` (os error N)` tail). The codes
 /// above are the same on Linux and macOS.
+#[cfg(unix)]
 fn strerror(code: i32) -> String {
     let text = std::io::Error::from_raw_os_error(code).to_string();
     match text.rfind(" (os error ") {
         Some(at) => text[..at].to_string(),
         None => text,
+    }
+}
+
+/// Off Unix, the C library's words ([`c_strerror`]): a raw code there is
+/// Windows' own, which [`errno_of`] has already turned into an errno.
+#[cfg(not(unix))]
+fn strerror(code: i32) -> String {
+    c_strerror(code).to_string()
+}
+
+/// The errno Python's `OSError` carries for `e`. On Unix the OS's code.
+/// On Windows the Windows error turned into one, as the C library Python
+/// uses there turns it for `open` (a missing file or folder is `ENOENT`,
+/// access denied `EACCES`, and so on), so the line is the one Python
+/// prints there too.
+pub fn errno_of(e: &std::io::Error) -> i32 {
+    let code = e.raw_os_error().unwrap_or(0);
+    if cfg!(windows) {
+        windows_errno(code)
+    } else {
+        code
+    }
+}
+
+/// A Windows error's errno, by the C library's table (`_dosmaperr`) for
+/// the codes a file call gives; anything else is `EINVAL` (22), as there.
+pub fn windows_errno(code: i32) -> i32 {
+    match code {
+        // FILE_NOT_FOUND, PATH_NOT_FOUND, INVALID_DRIVE, NO_MORE_FILES,
+        // BAD_NETPATH, BAD_NET_NAME, BAD_PATHNAME, FILENAME_EXCED_RANGE
+        2 | 3 | 15 | 18 | 53 | 67 | 161 | 206 => 2,
+        // ACCESS_DENIED, CURRENT_DIRECTORY, NETWORK_ACCESS_DENIED,
+        // CANNOT_MAKE, FAIL_I24, DRIVE_LOCKED, SEEK_ON_DEVICE, LOCK_FAILED,
+        // NOT_LOCKED, SHARING_VIOLATION, LOCK_VIOLATION
+        5 | 16 | 65 | 82 | 83 | 108 | 132 | 167 | 158 | 32 | 33 => 13,
+        // FILE_EXISTS, ALREADY_EXISTS
+        80 | 183 => 17,
+        // INVALID_HANDLE, INVALID_TARGET_HANDLE, DIRECT_ACCESS_HANDLE
+        6 | 114 | 130 => 9,
+        // NOT_ENOUGH_MEMORY, OUTOFMEMORY
+        8 | 14 => 12,
+        // DIR_NOT_EMPTY
+        145 => 41,
+        // TOO_MANY_OPEN_FILES
+        4 => 24,
+        // DISK_FULL
+        112 => 28,
+        // BROKEN_PIPE, NO_DATA
+        109 | 232 => 32,
+        _ => 22,
+    }
+}
+
+/// The C library's words for the errnos Python's file errors carry, as
+/// glibc, macOS and the UCRT all word them.
+pub fn c_strerror(errno: i32) -> &'static str {
+    match errno {
+        1 => "Operation not permitted",
+        2 => "No such file or directory",
+        9 => "Bad file descriptor",
+        12 => "Not enough space",
+        13 => "Permission denied",
+        17 => "File exists",
+        20 => "Not a directory",
+        21 => "Is a directory",
+        22 => "Invalid argument",
+        24 => "Too many open files",
+        28 => "No space left on device",
+        32 => "Broken pipe",
+        41 => "Directory not empty",
+        _ => "Unknown error",
     }
 }
 
@@ -443,5 +515,27 @@ mod tests {
             e(b"a\xe2\x82"),
             "'utf-8' codec can't decode bytes in position 1-2: unexpected end of data"
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// A missing file or folder is Python's `FileNotFoundError` with the
+    /// C library's errno and words, not Windows' own code and text.
+    #[test]
+    fn a_windows_error_is_python_s_errno() {
+        let missing = std::env::temp_dir().join("k5-no-such-folder-7171").join("x");
+        let e = std::fs::File::open(&missing).unwrap_err();
+        assert_eq!(e.raw_os_error(), Some(3), "PATH_NOT_FOUND");
+        let f = os_error(&e, "x");
+        assert_eq!(f.class, "FileNotFoundError");
+        assert_eq!(f.message, "[Errno 2] No such file or directory: 'x'");
+        assert_eq!(windows_errno(2), 2);
+        assert_eq!(windows_errno(5), 13);
+        assert_eq!(windows_errno(183), 17);
+        assert_eq!(windows_errno(9999), 22);
+        assert_eq!(c_strerror(13), "Permission denied");
     }
 }

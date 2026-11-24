@@ -174,6 +174,7 @@ pub fn exists(p: &str) -> bool {
 /// has no entry for leaves `p` as it is, and so does no entry for this
 /// user. `None`: the binary can't tell what Python would give (a folder
 /// that is not UTF-8, or no password database here).
+#[cfg(unix)]
 pub fn expanduser(p: &str, home: Option<&str>) -> Option<String> {
     let Some(rest) = p.strip_prefix('~') else {
         return Some(p.to_string());
@@ -193,6 +194,42 @@ pub fn expanduser(p: &str, home: Option<&str>) -> Option<String> {
     } else {
         joined
     })
+}
+
+/// `os.path.expanduser(p)` on Windows (`ntpath`): `~` and `~/...` (or
+/// `~\...`) take `USERPROFILE`, else `HOMEDRIVE` and `HOMEPATH`; `HOME`
+/// doesn't count there (`home` is not read). `~name` is the folder named
+/// `name` beside this user's, unless it is this user's own. With no user
+/// folder known, `p` as it is.
+#[cfg(not(unix))]
+pub fn expanduser(p: &str, _home: Option<&str>) -> Option<String> {
+    let Some(rest) = p.strip_prefix('~') else {
+        return Some(p.to_string());
+    };
+    let cut = rest.find(['/', '\\']).unwrap_or(rest.len());
+    let (name, tail) = rest.split_at(cut);
+    let var = |n: &str| std::env::var(n).ok().filter(|v| !v.is_empty());
+    let userhome = match var("USERPROFILE") {
+        Some(h) => h,
+        None => match (var("HOMEDRIVE"), var("HOMEPATH")) {
+            (drive, Some(path)) => format!("{}{path}", drive.unwrap_or_default()),
+            _ => return Some(p.to_string()),
+        },
+    };
+    let userhome = if name.is_empty() {
+        userhome
+    } else {
+        let trimmed = userhome.trim_end_matches(['/', '\\']);
+        let (dir, base) = trimmed
+            .rfind(['/', '\\'])
+            .map_or(("", trimmed), |i| (&trimmed[..i], &trimmed[i + 1..]));
+        if base == name {
+            userhome
+        } else {
+            format!("{dir}\\{name}")
+        }
+    };
+    Some(format!("{userhome}{tail}"))
 }
 
 /// The home folder in the password database for `name` (this user's
@@ -245,10 +282,30 @@ fn passwd_home(name: Option<&str>) -> Option<Option<String>> {
     }
 }
 
-/// No password database to read here: the binary can't tell.
+
+/// `cd <dir> && pwd` off Unix, where no shell runs it: `dir` from `pwd`
+/// unless it is absolute, `.` parts gone and each `..` taking one back,
+/// when that is a folder.
 #[cfg(not(unix))]
-fn passwd_home(_name: Option<&str>) -> Option<Option<String>> {
-    None
+pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
+    use std::path::{Component, PathBuf};
+    let d = Path::new(dir);
+    let base = if d.is_absolute() {
+        d.to_path_buf()
+    } else {
+        pwd.join(d)
+    };
+    let mut out = PathBuf::new();
+    for c in base.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out.is_dir().then(|| out.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -279,6 +336,26 @@ mod tests {
         assert_eq!(realpath("/no/such/../thing"), "/no/thing");
     }
 
+    /// `ntpath.expanduser`: the user's own folder from USERPROFILE, a
+    /// name beside it, and both slashes.
+    #[cfg(not(unix))]
+    #[test]
+    fn expanduser_as_ntpath_reads_it() {
+        let me = std::env::var("USERPROFILE").expect("USERPROFILE is set on Windows");
+        let trimmed = me.trim_end_matches('\\');
+        let (dir, base) = trimmed.rsplit_once('\\').expect("a folder in a folder");
+        assert_eq!(expanduser("a/~b", None).as_deref(), Some("a/~b"));
+        assert_eq!(expanduser("~", None).as_deref(), Some(me.as_str()));
+        assert_eq!(expanduser("~/x", Some("/ignored")), Some(format!("{me}/x")));
+        assert_eq!(expanduser("~\\x", None), Some(format!("{me}\\x")));
+        assert_eq!(
+            expanduser("~k5-no-such-user-7171/x", None),
+            Some(format!("{dir}\\k5-no-such-user-7171/x"))
+        );
+        assert_eq!(expanduser(&format!("~{base}/x"), None), Some(format!("{me}/x")));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn expanduser_as_python_reads_it() {
         let home = Some("/home/ada/");

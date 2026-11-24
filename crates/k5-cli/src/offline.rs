@@ -31,6 +31,13 @@
 //! Everything else the prelude does before a page sets variables only.
 //! The virtual desktop's guard never stops a page: a page is an offline
 //! verb, or the token it needs is there.
+//!
+//! Off Unix (Windows) there is no shell to stay out of: the binary never
+//! hands a command to bash there ([`crate::fallthrough`]). So nothing bash
+//! reads at start counts, no program is looked for on `PATH`, and the K2
+//! home is k2-client's ([`crate::home`], the folder the daemon and the app
+//! use): [`prelude`] reads the port, the token files and the session's
+//! settings, and stops only where they can't be read.
 
 use k2_client::env_names;
 use k2_client::paths::{HOME_DIR_NAME, WORKSPACE_DOT_DIR_NAMES};
@@ -136,8 +143,9 @@ pub const STARTUP: &[&str] = &[
 /// [`shell_pwd`]), or why the page goes to the shell.
 pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     if !cfg!(unix) {
-        // Git Bash: the prelude's Windows branch; the front stays out of it.
-        return Err(Handoff::Startup("windows".into()));
+        // No shell (the module's notes): the settings alone.
+        let k2_home = shell_k2_home(env).ok_or(Handoff::Unset("HOME"))?;
+        return settings_in(env, &k2_home);
     }
     for name in STARTUP {
         if env.get(name).is_some() {
@@ -153,11 +161,15 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     path.need("cat")?;
 
     let k2_home = home_in(home);
+    project(env, home, &path, cwd)?;
+    settings_in(env, &k2_home)
+}
 
+/// The prelude's settings, read with the K2 home at `k2_home`: the port,
+/// the token and the session's two settings.
+fn settings_in(env: &Env, k2_home: &Path) -> Result<Prelude, Handoff> {
     let passport = env.first(env_names::HOOK_TOKEN).is_some();
     let hook_sock = env.first(env_names::HOOK_SOCK).is_some();
-    project(env, home, &path, cwd)?;
-
     let mut port = env.first(env_names::PORT).is_some();
     let port_file = k2_home.join("heartbeat.port");
     if !port && port_file.is_file() {
@@ -185,6 +197,21 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     })
 }
 
+/// The temp folder when `TMPDIR` is unset or empty: the shell's `/tmp`
+/// (`${TMPDIR:-/tmp}`). Off Unix, where no shell runs, the system's temp
+/// folder (`TEMP`, [`std::env::temp_dir`]), without a trailing `\`.
+pub fn default_tmpdir() -> String {
+    if cfg!(unix) {
+        return "/tmp".to_string();
+    }
+    let t = std::env::temp_dir().to_string_lossy().into_owned();
+    match t.trim_end_matches(['\\', '/']) {
+        // A drive's root keeps its slash (`C:\`).
+        r if r.ends_with(':') => t,
+        r => r.to_string(),
+    }
+}
+
 /// The shell's K2 home: `K2_HOME="${HOME}/.k2"; [ -d "$K2_HOME" ] ||
 /// K2_HOME="${HOME}/.k2so"`. The binary's home override doesn't count:
 /// the shell never reads it.
@@ -197,9 +224,27 @@ fn home_in(home: &OsStr) -> PathBuf {
     }
 }
 
-/// The shell's K2 home in `env` ([`home_in`]), when `HOME` is set.
+/// The shell's K2 home in `env` ([`home_in`]), when `HOME` is set. Off
+/// Unix, where there is no shell, the K2 home k2-client finds for `env`
+/// ([`crate::home::k2_home_with`]: the home override, else the K2 home
+/// folder in the user's home, `HOME` or else `USERPROFILE`).
 pub fn shell_k2_home(env: &Env) -> Option<PathBuf> {
+    if !cfg!(unix) {
+        return windows_k2_home(env);
+    }
     env.get("HOME").map(home_in)
+}
+
+/// [`shell_k2_home`] off Unix: k2-client's rule over `env`.
+fn windows_k2_home(env: &Env) -> Option<PathBuf> {
+    let user_home = || {
+        ["HOME", "USERPROFILE"]
+            .iter()
+            .filter_map(|n| env.get(n))
+            .map(PathBuf::from)
+            .find(|p| p.is_absolute())
+    };
+    crate::home::k2_home_with(|n| env.get(n).map(OsStr::to_os_string), user_home).ok()
 }
 
 /// `"$a/b"`: the shell's join.
@@ -735,5 +780,103 @@ mod tests {
             SearchPath(OsStr::new(&slash)).find("git"),
             Some(format!("{a}//git"))
         );
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static N: AtomicUsize = AtomicUsize::new(0);
+
+    /// A fresh folder under the system temp folder. Never the K2 home.
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "k5-offline-win-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        if d.exists() {
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn env_of(pairs: &[(&str, &OsStr)]) -> Env {
+        Env {
+            vars: pairs
+                .iter()
+                .map(|(k, v)| (OsString::from(k), v.to_os_string()))
+                .collect(),
+        }
+    }
+
+    /// With no shell, the K2 home is k2-client's: the override, else the
+    /// K2 home folder in the first absolute one of HOME and USERPROFILE
+    /// (a `/c/Users/x` from a Unix-like shell is not one).
+    #[test]
+    fn the_k2_home_is_k2_client_s() {
+        let home = |pairs: &[(&str, &str)]| shell_k2_home(&Env::of(pairs));
+        assert_eq!(
+            home(&[("USERPROFILE", r"D:\u")]),
+            Some(PathBuf::from(r"D:\u\.k2"))
+        );
+        assert_eq!(
+            home(&[("HOME", "/c/Users/x"), ("USERPROFILE", r"D:\u")]),
+            Some(PathBuf::from(r"D:\u\.k2"))
+        );
+        assert_eq!(
+            home(&[("HOME", r"E:\h"), ("USERPROFILE", r"D:\u")]),
+            Some(PathBuf::from(r"E:\h\.k2"))
+        );
+        assert_eq!(
+            home(&[("K5_HOME_OVERRIDE", r"F:\k"), ("USERPROFILE", r"D:\u")]),
+            Some(PathBuf::from(r"F:\k"))
+        );
+        // A relative override is no home; nor is no user home at all.
+        assert_eq!(
+            home(&[("K5_HOME_OVERRIDE", "rel"), ("USERPROFILE", r"D:\u")]),
+            None
+        );
+        assert_eq!(home(&[]), None);
+    }
+
+    /// The prelude reads the port and the token from that home, with no
+    /// PATH, no HOME and bash's start-up settings set: nothing of bash's
+    /// counts where no bash runs.
+    #[test]
+    fn the_prelude_reads_the_files_with_no_shell() {
+        let user = scratch("prelude");
+        let k2 = user.join(".k2");
+        std::fs::create_dir_all(&k2).unwrap();
+        let env = env_of(&[
+            ("USERPROFILE", user.as_os_str()),
+            ("BASH_ENV", OsStr::new("x")),
+        ]);
+        let p = prelude(&env, &user).expect("the prelude is quiet");
+        assert_eq!(
+            p,
+            Prelude {
+                port: false,
+                token: false,
+                passport: false,
+                hook_sock: false
+            }
+        );
+        std::fs::write(k2.join("heartbeat.port"), "43210\n").unwrap();
+        std::fs::write(k2.join("daemon.token"), "tok\n").unwrap();
+        let p = prelude(&env, &user).expect("the prelude is quiet");
+        assert!(p.port && p.token, "{p:?}");
+        // A NUL in a file it reads is the one stop.
+        std::fs::write(k2.join("heartbeat.port"), "4321\0").unwrap();
+        assert_eq!(
+            prelude(&env, &user),
+            Err(Handoff::Nul(k2.join("heartbeat.port")))
+        );
+        // No user home: nowhere to read.
+        assert_eq!(prelude(&Env::of(&[]), &user), Err(Handoff::Unset("HOME")));
+        std::fs::remove_dir_all(&user).unwrap();
     }
 }

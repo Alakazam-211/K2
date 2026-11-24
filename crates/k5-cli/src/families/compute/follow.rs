@@ -77,8 +77,7 @@ pub struct Follow {
 /// Whether the shell's `mktemp -t k2-compute-XXXXXX` would make its file.
 pub fn usable() -> bool {
     super::writes::wait::temp_usable()
-        && crate::families::update::shell_program(&crate::offline::Env::current(), "mktemp")
-            .is_some()
+        && crate::families::update::shell_has(&crate::offline::Env::current(), "mktemp")
 }
 
 /// One poll's fields, as the shell reads them back from its state file.

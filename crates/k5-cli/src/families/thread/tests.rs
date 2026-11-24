@@ -119,6 +119,8 @@ fn a_spec_s_line() {
     assert!(shell.contains(r#"m = re.match(r"^(.+?):(\d+)(?:-(\d+))?$", spec)"#));
 }
 
+/// Unix only: a file named `b:3` can't be made on Windows.
+#[cfg(unix)]
 #[test]
 fn the_attachments_json() {
     let dir = std::env::temp_dir().join(format!("k5-thread-att-{}", std::process::id()));

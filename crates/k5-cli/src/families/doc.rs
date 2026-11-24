@@ -473,7 +473,7 @@ impl Ctx {
         let base = std::env::var("TMPDIR")
             .ok()
             .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| "/tmp".to_string());
+            .unwrap_or_else(crate::offline::default_tmpdir);
         let n = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos())

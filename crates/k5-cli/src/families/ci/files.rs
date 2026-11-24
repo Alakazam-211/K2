@@ -109,6 +109,7 @@ fn open_w(path: &str) -> Result<std::fs::File, String> {
 }
 
 /// `f.write(text)`: a string only.
+#[cfg(unix)]
 pub(super) fn write_str(f: &mut std::fs::File, text: &Value, path: &str) -> Result<(), String> {
     let Value::Str(_) = text else {
         return Err(format!(

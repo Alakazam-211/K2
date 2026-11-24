@@ -766,7 +766,12 @@ fn errno_text(code: i32) -> String {
     let text = full
         .strip_suffix(&format!(" (os error {code})"))
         .unwrap_or(&full);
-    format!("[Errno {code}] {text}")
+    // Python on Windows names a socket's error by its Windows code.
+    if cfg!(windows) {
+        format!("[WinError {code}] {text}")
+    } else {
+        format!("[Errno {code}] {text}")
+    }
 }
 
 #[cfg(unix)]
@@ -781,7 +786,21 @@ fn errno_class(code: i32) -> (Class, Kind) {
     }
 }
 
-#[cfg(not(unix))]
+/// On Windows, by the Winsock codes (and the pipe's): what Python's
+/// `OSError` subclass is for each there.
+#[cfg(windows)]
+fn errno_class(code: i32) -> (Class, Kind) {
+    match code {
+        10061 => (Class::OsError("ConnectionRefusedError"), Kind::Refused),
+        10054 => (Class::ConnectionResetError, Kind::Dropped),
+        109 | 232 => (Class::BrokenPipeError, Kind::Dropped),
+        10053 => (Class::OsError("ConnectionAbortedError"), Kind::Other),
+        10060 => (Class::TimeoutError, Kind::Timeout),
+        _ => (Class::OsError("OSError"), Kind::Other),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn errno_class(_code: i32) -> (Class, Kind) {
     (Class::OsError("OSError"), Kind::Other)
 }
@@ -829,7 +848,13 @@ fn is_timeout_errno(code: i32) -> bool {
     code == libc::EAGAIN || code == libc::EWOULDBLOCK
 }
 
-#[cfg(not(unix))]
+/// On Windows a socket timeout is `WSAETIMEDOUT` (or `WSAEWOULDBLOCK`).
+#[cfg(windows)]
+fn is_timeout_errno(code: i32) -> bool {
+    code == 10060 || code == 10035
+}
+
+#[cfg(not(any(unix, windows)))]
 fn is_timeout_errno(_code: i32) -> bool {
     true
 }

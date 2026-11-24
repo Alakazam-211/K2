@@ -391,7 +391,7 @@ fn tmp_root() -> String {
     std::env::var_os("TMPDIR")
         .filter(|t| !t.is_empty())
         .map(|t| t.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "/tmp".into())
+        .unwrap_or_else(|| crate::offline::default_tmpdir().into())
 }
 
 /// The exit for a failed command under the shell's `set -e`: its code.

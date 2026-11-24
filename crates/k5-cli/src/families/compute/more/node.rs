@@ -574,8 +574,7 @@ fn add_body(node: &str, rest: &[String]) -> Option<Result<String, Words<Ask>>> {
             k2_client::env_names::NODE_ENROLL_CODE,
             |n| std::env::var_os(n),
         ) {
-            use std::os::unix::ffi::OsStrExt;
-            code_v = text_of_bytes(v.as_bytes());
+            code_v = text_of_bytes(v.as_encoded_bytes());
         }
     }
     let no_code = matches!(&code_v, Value::Str(t) if t.as_str() == Some(""));

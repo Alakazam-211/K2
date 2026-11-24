@@ -107,12 +107,30 @@ fn project_root(cwd: &Path, user_home: Option<&Path>) -> Option<PathBuf> {
         let marked = k2_client::paths::WORKSPACE_DOT_DIR_NAMES
             .iter()
             .any(|n| d.join(n).is_dir());
-        if marked && Some(d) != user_home {
+        if marked && !is_user_home(d, user_home) {
             return Some(d.to_path_buf());
         }
         dir = d.parent();
     }
     None
+}
+
+/// Whether `dir` is the user home `home`. Off Unix as Windows compares
+/// folders: letter case aside, and with or without the `\\?\` prefix
+/// (a folder the system resolved has it, `USERPROFILE` doesn't).
+fn is_user_home(dir: &Path, home: Option<&Path>) -> bool {
+    let Some(home) = home else {
+        return false;
+    };
+    if cfg!(unix) {
+        return dir == home;
+    }
+    let norm = |p: &Path| {
+        let s = p.to_string_lossy();
+        let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
+        s.trim_end_matches(['\\', '/']).to_lowercase()
+    };
+    norm(dir) == norm(home)
 }
 
 /// The settings from an environment lookup, the K2 home and the folder
@@ -162,7 +180,18 @@ pub fn settings_with(
         }
     };
     let session = env_names::first_nonempty_os_in(env_names::HOOK_SOCK, &lookup).is_some();
-    let user_home = lookup("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    // Off Unix the user home is k2-client's rule (`paths::home_dir`): the
+    // first of `HOME` and `USERPROFILE` that is an absolute path. Without
+    // it the K2 home's own folder there would count as a workspace's.
+    let user_home = if cfg!(unix) {
+        lookup("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+    } else {
+        ["HOME", "USERPROFILE"]
+            .iter()
+            .filter_map(|n| lookup(n))
+            .map(PathBuf::from)
+            .find(|p| p.is_absolute())
+    };
     let project = match text(env_names::PROJECT_PATH) {
         Some(p) => p,
         None => project_root(cwd, user_home.as_deref())
@@ -482,11 +511,19 @@ mod tests {
         dir
     }
 
+    /// The lookup of `pairs`. Off Unix the temp folder is inside the user
+    /// home, where a K2 home may be, so this process's `USERPROFILE` is
+    /// in it too unless `pairs` name one: that folder is never a project.
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let map: HashMap<String, OsString> = pairs
+        let mut map: HashMap<String, OsString> = pairs
             .iter()
             .map(|(k, v)| (k.to_string(), OsString::from(v)))
             .collect();
+        if cfg!(windows) && !map.contains_key("USERPROFILE") {
+            if let Some(p) = std::env::var_os("USERPROFILE") {
+                map.insert("USERPROFILE".into(), p);
+            }
+        }
         move |name: &str| map.get(name).cloned()
     }
 
@@ -714,6 +751,7 @@ mod tests {
     }
 
     /// The places of one test, all under `dir`.
+    #[cfg(unix)]
     fn places(dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
         (
             dir.join("db/xcode_select_link"),
@@ -805,5 +843,87 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("k5-daemon-win-{tag}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn env(pairs: &[(&str, &OsStr)]) -> impl Fn(&str) -> Option<OsString> {
+        let map: HashMap<String, OsString> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_os_string()))
+            .collect();
+        move |name| map.get(name).cloned()
+    }
+
+    /// A Windows daemon writes its port and token in the K2 home
+    /// (`%USERPROFILE%\.k2`); the binary reads both there, the port
+    /// setting first.
+    #[test]
+    fn the_port_and_token_come_from_the_k2_home() {
+        let user = scratch("files");
+        let home = user.join(".k2");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("heartbeat.port"), "43210\n").unwrap();
+        std::fs::write(home.join("heartbeat.token"), "owner-tok\n").unwrap();
+        let s = settings(env(&[("USERPROFILE", user.as_os_str())]), &home, &user);
+        assert_eq!(s.port, Some(43210));
+        assert_eq!(s.host, DEFAULT_HOST);
+        assert_eq!(s.auth, Auth::Owner("owner-tok".into()));
+        assert!(s.owner_from_disk);
+        let s = settings(
+            env(&[("USERPROFILE", user.as_os_str()), ("K5_PORT", OsStr::new("5555"))]),
+            &home,
+            &user,
+        );
+        assert_eq!(s.port, Some(5555));
+        std::fs::remove_dir_all(&user).unwrap();
+    }
+
+    /// The K2 home's own folder in the user home (USERPROFILE, HOME unset
+    /// as it is outside a Unix-like shell) is never the project: from a
+    /// folder under it with no workspace, the project is that folder.
+    #[test]
+    fn the_user_home_is_never_the_project() {
+        // `base\.k2` marks the folder above the user home, so the search
+        // ends there whatever is above it; the user home's own `.k2` (the
+        // K2 home) is passed over on the way.
+        let base = scratch("project");
+        std::fs::create_dir_all(base.join(".k2")).unwrap();
+        let user = base.join("user");
+        let home = user.join(".k2");
+        std::fs::create_dir_all(&home).unwrap();
+        let deep = user.join("Documents").join("notes");
+        std::fs::create_dir_all(&deep).unwrap();
+        let profile = |p: &Path| env(&[("USERPROFILE", p.as_os_str())]);
+        let s = settings(profile(&user), &home, &deep);
+        assert_eq!(PathBuf::from(&s.project), base);
+        // The same with the system's `\\?\` form of the folders, and
+        // another letter case.
+        let canon = std::fs::canonicalize(&deep).unwrap();
+        let upper = PathBuf::from(user.to_string_lossy().to_uppercase());
+        let s = settings(profile(&upper), &home, &canon);
+        assert_eq!(
+            PathBuf::from(&s.project),
+            std::fs::canonicalize(&base).unwrap()
+        );
+        // A workspace folder between them is the project.
+        let ws = user.join("Documents");
+        std::fs::create_dir_all(ws.join(".k2")).unwrap();
+        let s = settings(profile(&user), &home, &deep);
+        assert_eq!(PathBuf::from(&s.project), ws);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

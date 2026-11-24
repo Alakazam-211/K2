@@ -8,7 +8,9 @@
 mod common;
 
 use k5_cli::called_as::{fallthrough_env, CALLED_AS_VAR, WOULD_REFUSE_VAR};
-use k5_cli::passport::{self, Verdict, OFFLINE_ANYWHERE, OFFLINE_FIRST};
+use k5_cli::passport::{self, OFFLINE_ANYWHERE, OFFLINE_FIRST};
+#[cfg(unix)]
+use k5_cli::passport::Verdict;
 #[cfg(unix)]
 use std::ffi::OsString;
 
@@ -24,6 +26,7 @@ fn offline_block() -> String {
 
 /// The guard's block with the function it calls for `app exec` and `app
 /// shell`, ready for bash.
+#[cfg(unix)]
 fn offline_script() -> String {
     let says_help = common::block(&policy(), "_app_cmd_says_help() {", "}");
     format!("{says_help}\n{}", offline_block())
@@ -120,6 +123,7 @@ fn every_command_line_is_offline_as_the_shell_says() {
 }
 
 /// The prelude's lines that read `K5_CLI_WOULD_REFUSE`.
+#[cfg(unix)]
 fn would_refuse_block() -> String {
     common::block(
         &common::prelude(),

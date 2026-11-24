@@ -302,7 +302,16 @@ fn local(secs: i64) -> Option<(i64, String)> {
     }
 }
 
-#[cfg(not(unix))]
+/// Off Unix, the C library there: the offset and the zone's name it
+/// gives for that time.
+#[cfg(windows)]
+fn local(secs: i64) -> Option<(i64, String)> {
+    use crate::out::pylib::time::crt;
+    let tm = crt::local(secs).ok()?;
+    Some(crt::offset_and_zone(&tm))
+}
+
+#[cfg(not(any(unix, windows)))]
 fn local(_secs: i64) -> Option<(i64, String)> {
     None
 }

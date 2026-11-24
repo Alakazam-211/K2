@@ -720,9 +720,10 @@ fn local_tm(secs: i64) -> Option<String> {
     })
 }
 
+/// Off Unix, the C library there.
 #[cfg(not(unix))]
-fn local_tm(_secs: i64) -> Option<String> {
-    None
+fn local_tm(secs: i64) -> Option<String> {
+    crate::out::pylib::time::strftime_local(secs, "%Y-%m-%d %H:%M").ok()
 }
 
 /// What `_postal_print` printed so far.

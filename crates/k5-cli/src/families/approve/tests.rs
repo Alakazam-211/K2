@@ -150,9 +150,14 @@ fn the_record() {
         br#"{"id":"a","state":"approved","recordText":"R"}"#,
         dir.join("no/such").to_str().unwrap(),
     );
-    assert!(gone.stderr.ends_with(&format!(
-        "FileNotFoundError: [Errno 2] No such file or directory: '{}'\n",
-        dir.join("no/such").display()
-    )));
+    // Python's repr of the path: a Windows path's `\` doubled.
+    let shown = dir.join("no/such").display().to_string().replace('\\', "\\\\");
+    assert!(
+        gone.stderr.ends_with(&format!(
+            "FileNotFoundError: [Errno 2] No such file or directory: '{shown}'\n"
+        )),
+        "{}",
+        gone.stderr
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -360,9 +360,11 @@ fn local_text(secs: i64, fmt: &[u8]) -> Result<String, String> {
     }
 }
 
+/// Off Unix, the C library there ([`crate::out::pylib::time::strftime_local`]).
 #[cfg(not(unix))]
-fn local_text(_secs: i64, _fmt: &[u8]) -> Result<String, String> {
-    Err("OSError: no local time here".into())
+fn local_text(secs: i64, fmt: &[u8]) -> Result<String, String> {
+    let fmt = fmt.strip_suffix(b"\0").unwrap_or(fmt);
+    crate::out::pylib::time::strftime_local(secs, &String::from_utf8_lossy(fmt))
 }
 
 /// `datetime.datetime.fromtimestamp(v).strftime(fmt)`: the time rounded

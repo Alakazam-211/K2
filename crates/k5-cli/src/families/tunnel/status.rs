@@ -539,7 +539,19 @@ fn local_minutes(secs: i64) -> Result<String, String> {
     }
 }
 
-#[cfg(not(unix))]
+/// Off Unix, the C library there; the same year check.
+#[cfg(windows)]
+fn local_minutes(secs: i64) -> Result<String, String> {
+    use crate::out::pylib::time::crt;
+    let tm = crt::local(secs).map_err(crt::os_error)?;
+    let year = i64::from(tm.tm_year) + 1900;
+    if !(1..=9999).contains(&year) {
+        return Err(format!("ValueError: year {year} is out of range"));
+    }
+    crt::format(&tm, "%Y-%m-%d %H:%M")
+}
+
+#[cfg(not(any(unix, windows)))]
 fn local_minutes(_secs: i64) -> Result<String, String> {
     Err("OSError: no local time here".into())
 }

@@ -467,12 +467,18 @@ fn pairing_setup(words: &[&str]) -> Result<Ask, Stop> {
 }
 
 /// `[ -r "$path" ]`.
+#[cfg(unix)]
 fn readable(path: &str) -> bool {
     let Ok(c) = std::ffi::CString::new(path) else {
         return false;
     };
     // SAFETY: `c` is a NUL-ended path that lives for the call.
     unsafe { libc::access(c.as_ptr(), libc::R_OK) == 0 }
+}
+
+#[cfg(not(unix))]
+fn readable(path: &str) -> bool {
+    std::fs::File::open(path).is_ok()
 }
 
 /// `open(path, encoding="utf-8").read()` at `line`, or the traceback.

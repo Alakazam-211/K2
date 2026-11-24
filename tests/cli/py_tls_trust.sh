@@ -44,14 +44,16 @@ bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got $(printf %q "$2") want $(printf %q "$3"))"; fi; }
 expect_has() { if <<<"$2" grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
 
-# The two snippets, as cli/k2 defines them (eval of their assignments only).
-snip() { sed -n "/^$1=/,/^'\$/p" "$CLI_BASH_SOURCE"; }
-TLS_SRC="$(snip _K2_PY_TLS)"
-RULE_SRC="$(snip _K2_PY_PROXY_RULE)"
-[ -n "$TLS_SRC" ] || { echo "FAIL: no _K2_PY_TLS in $CLI_BASH_SOURCE" >&2; exit 1; }
+# The two snippets, as cli/k2 defines them (eval of their assignments
+# only): the rule's literal, then _K2_PY_TLS, cut from its first part.
+RULE_SRC="$(awk -v q="'" '$0 == "_K2_PY_PROXY_RULE=" q {on=1} on {print} on && $0 == q {exit}' "$CLI_BASH_SOURCE")"
+TLS_SRC="$(grep '^_K2_PY_TLS=' "$CLI_BASH_SOURCE")"
 [ -n "$RULE_SRC" ] || { echo "FAIL: no _K2_PY_PROXY_RULE in $CLI_BASH_SOURCE" >&2; exit 1; }
-eval "$TLS_SRC"
+[ -n "$TLS_SRC" ] || { echo "FAIL: no _K2_PY_TLS in $CLI_BASH_SOURCE" >&2; exit 1; }
 eval "$RULE_SRC"
+eval "$TLS_SRC"
+expect_has "_K2_PY_TLS holds the helper" "$_K2_PY_TLS" "def k2_tls_install"
+case "$_K2_PY_TLS" in *install_opener\(_k2_ur*) bad "_K2_PY_TLS holds the rule's own opener too" ;; *) ok "_K2_PY_TLS stops before the rule's own code" ;; esac
 expect_has "the rule carries the helper" "$_K2_PY_PROXY_RULE" "def k2_tls_context"
 expect_has "the rule's opener uses K2TLSHandler" "$_K2_PY_PROXY_RULE" "K2TLSHandler()))"
 export _K2_PY_TLS _K2_PY_PROXY_RULE

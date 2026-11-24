@@ -225,6 +225,15 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The traceback's last line for a [`to_string`] that failed where the
+/// shell's Python calls `json.dumps`: `ValueError: ` and the error's
+/// words, never its debug form. With `ensure_ascii` on (Python's default,
+/// and every caller's today) [`to_string`] doesn't fail: a lone surrogate
+/// goes out as `\udXXX`, as Python writes it, so this line is a guard.
+pub fn value_error(e: &Error) -> String {
+    format!("ValueError: {e}")
+}
+
 /// Reads one JSON document the way Python's `json.loads` does.
 pub fn parse(text: &str) -> Result<Value, Error> {
     let mut parser = Parser { text, pos: 0 };

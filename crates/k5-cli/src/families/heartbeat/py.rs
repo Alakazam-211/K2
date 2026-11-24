@@ -299,12 +299,18 @@ pub fn dumps_indent(v: &Value) -> R<String> {
             ..json::Options::default()
         },
     )
-    .map_err(|e| format!("ValueError: {e:?}"))
+    .map_err(|e| json::value_error(&e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lone_surrogate_goes_out_escaped_as_python_writes_it() {
+        let v = json::parse(r#"{"a": "\ud800"}"#).unwrap();
+        assert_eq!(dumps_indent(&v).unwrap(), "{\n  \"a\": \"\\ud800\"\n}");
+    }
 
     #[test]
     fn the_exceptions() {

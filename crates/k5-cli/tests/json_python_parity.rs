@@ -7,7 +7,7 @@
 //! checked against python3 too.
 
 use k5_cli::out::json::{
-    parse, reprint, to_string, Error, Options, Text, Value, MAX_DEPTH, MAX_INT_DIGITS,
+    parse, reprint, to_string, value_error, Error, Options, Text, Value, MAX_DEPTH, MAX_INT_DIGITS,
 };
 
 const FLOAT_TABLE: &str = include_str!("data/float_repr.tsv");
@@ -721,4 +721,21 @@ fn nesting_is_read_up_to_the_depth_limit() {
             at: MAX_DEPTH * "{\"a\":".len()
         })
     );
+}
+
+/// A `json.dumps` that failed is the traceback's `ValueError` line in
+/// words: a lone surrogate with `ensure_ascii` off, the one input
+/// [`to_string`] refuses, never shows the error's debug form.
+#[test]
+fn a_dumps_failure_s_line_is_the_error_s_words() {
+    let v = parse(r#""\ud800""#).unwrap();
+    let Err(e) = to_string(&v, &raw()) else {
+        panic!("a lone surrogate was written as UTF-8");
+    };
+    let line = value_error(&e);
+    assert_eq!(
+        line,
+        r"ValueError: cannot write JSON as UTF-8: lone surrogate \ud800 in a string"
+    );
+    assert!(!line.contains("LoneSurrogate {"), "{line}");
 }

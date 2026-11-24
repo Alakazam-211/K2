@@ -689,7 +689,7 @@ fn dumps(d: &Value, compact: bool, line: u32) -> Result<String, Raise> {
         indent: if compact { None } else { Some(2) },
         ..Options::default()
     };
-    json::to_string(d, &options).map_err(|e| Raise::at(line, format!("ValueError: {e:?}")))
+    json::to_string(d, &options).map_err(|e| Raise::at(line, json::value_error(&e)))
 }
 
 /// `_app_rt_report`'s Python.
@@ -1180,6 +1180,16 @@ pub fn sdk_kit_lines(body: &[u8], o: &mut Out) -> Result<Exit, Raise> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lone_surrogate_goes_out_escaped_as_python_writes_it() {
+        let v = json::parse(r#"{"a": "\ud800"}"#).unwrap();
+        let (Ok(compact), Ok(indented)) = (dumps(&v, true, 19), dumps(&v, false, 28)) else {
+            panic!("json.dumps refused a lone surrogate with ensure_ascii on");
+        };
+        assert_eq!(compact, r#"{"a":"\ud800"}"#);
+        assert_eq!(indented, "{\n  \"a\": \"\\ud800\"\n}");
+    }
 
     #[test]
     fn a_seed_hash_is_twelve_to_sixty_four_lower_hex() {

@@ -128,7 +128,7 @@ fn dumps_with(v: &Value, indent: Option<usize>, sort_keys: bool) -> p::R<String>
         sort_keys,
         ..Options::default()
     };
-    json::to_string(v, &o).map_err(|e| format!("ValueError: {e:?}"))
+    json::to_string(v, &o).map_err(|e| json::value_error(&e))
 }
 
 /// `_compute_write_statements DIR` (`_CI_OUT_PY statements`) on the
@@ -851,5 +851,23 @@ fn job_log(cp: &mut Cp<'_>, job: &str, failures: bool) {
             Err(Stop::Usage(line)) => out::stderr_line(&line),
             Err(Stop::Shift(flag)) => out::stderr_line(&out::need_value(&flag)),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_lone_surrogate_goes_out_escaped_as_python_writes_it() {
+        let v = json::parse(r#"{"b": "\ud800", "a": 1}"#).unwrap();
+        assert_eq!(
+            dumps_with(&v, None, true).unwrap(),
+            r#"{"a": 1, "b": "\ud800"}"#
+        );
+        assert_eq!(
+            dumps_with(&v, Some(1), true).unwrap(),
+            "{\n \"a\": 1,\n \"b\": \"\\ud800\"\n}"
+        );
     }
 }

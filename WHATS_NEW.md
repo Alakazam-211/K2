@@ -38,6 +38,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Sew 0.11.4: calls use less battery on weak connections.**
 ### Compute
 - **Compute jobs no longer fail at start with a misleading 'No such file or directory' when a machine reuses a work slot right after another job.** The next job's checkout no longer races the last job's cleanup of the same project. A job whose working folder isn't there now fails before it starts, with `cwd_missing` and the folder and commit named (`k2 compute run` starts a job in the folder you ran it from, so that folder must be in the commit). A program that isn't on the job's `PATH` is named with that `PATH`.
+### Mail
+- **A linked inbox no longer stays busy after reads time out:** K2 now gives up on a stalled mail connection and frees its place.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

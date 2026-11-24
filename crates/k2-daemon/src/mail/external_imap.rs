@@ -51,8 +51,6 @@ use crate::mail::oauth::{OauthProvider, ReqwestHttp};
 use crate::mail::oauth;
 use crate::mail::secrets::FileSecretStore;
 use imap::types::{Flag, Name};
-#[cfg(test)]
-use imap::{ClientBuilder, ConnectionMode};
 use crate::mail::imap_tls::{self, ImapTlsMode};
 use imap_proto::types::NameAttribute;
 use k2_core::db::schema::MailExternalInbox;
@@ -70,47 +68,68 @@ fn imap_err(what: &str, e: impl std::fmt::Display) -> String {
 }
 
 /// Connect per the row's TLS kind, through [`imap_tls`] (rustls with
-/// full certificate and name verification against the system's roots).
-/// There is no plaintext arm (the 0074 CHECK makes any other value
-/// unreachable; fail loud if the impossible happens).
-fn connect(inbox: &MailExternalInbox) -> Result<imap::Client<imap::Connection>, String> {
-    if let Some(plain) = plaintext_stub_connect(inbox) {
-        return plain;
-    }
-    let mode = match inbox.tls.as_str() {
-        TLS_IMPLICIT => ImapTlsMode::Implicit,
-        TLS_STARTTLS => ImapTlsMode::StartTls,
-        other => return Err(format!("unsupported tls kind '{other}' (schema drift?)")),
+/// full certificate and name verification against the system's roots,
+/// connect and read/write timeouts on every connection). There is no
+/// plaintext arm (the 0074 CHECK makes any other value unreachable; fail
+/// loud if the impossible happens). With a `permit`, the socket is handed
+/// to the guard so a stuck session can be shut from outside.
+fn connect(
+    inbox: &MailExternalInbox,
+    permit: Option<&crate::mail::imap_guard::Permit>,
+) -> Result<imap::Client<imap::Connection>, String> {
+    let dialed = match plaintext_stub_connect(inbox) {
+        Some(plain) => plain?,
+        None => {
+            let mode = match inbox.tls.as_str() {
+                TLS_IMPLICIT => ImapTlsMode::Implicit,
+                TLS_STARTTLS => ImapTlsMode::StartTls,
+                other => return Err(format!("unsupported tls kind '{other}' (schema drift?)")),
+            };
+            imap_tls::open(inbox.host.as_str(), inbox.port as u16, mode)
+                .map_err(|e| imap_err("connect", e))?
+        }
     };
-    imap_tls::connect(inbox.host.as_str(), inbox.port as u16, mode)
-        .map_err(|e| imap_err("connect", e))
+    if let Some(permit) = permit {
+        permit.attach(dialed.socket).map_err(|e| imap_err("connect", e))?;
+    }
+    Ok(dialed.client)
 }
 
 /// Test-only plaintext connect for the scripted loopback mock — the
 /// mock can't terminate TLS, and the point of the test is the IMAP
-/// conversation, not the handshake. Never compiled into production.
+/// conversation, not the handshake. Same dial and timeouts as production.
+/// Never compiled into production.
 #[cfg(test)]
 fn connect_plaintext_for_test(
     host: &str,
     port: u16,
 ) -> Result<imap::Client<imap::Connection>, String> {
-    ClientBuilder::new(host, port)
-        .mode(ConnectionMode::Plaintext)
-        .connect()
+    imap_tls::open_plaintext(host, port, imap_tls::Timeouts::DEFAULT)
+        .map(|d| d.client)
         .map_err(|e| imap_err("connect", e))
 }
 
 /// Test-only: a loopback stub registered in [`plaintext_ports`] is reached
-/// in plaintext. A release build has no such door.
+/// in plaintext, under [`stub_timeouts`] when the test set them. A release
+/// build has no such door.
 #[cfg(test)]
-fn plaintext_stub_connect(inbox: &MailExternalInbox) -> Option<Result<imap::Client<imap::Connection>, String>> {
+fn plaintext_stub_connect(inbox: &MailExternalInbox) -> Option<Result<imap_tls::Dialed, String>> {
     let port = inbox.port as u16;
     let registered = plaintext_ports().lock().unwrap_or_else(|p| p.into_inner()).contains(&port);
-    (inbox.host == "127.0.0.1" && registered).then(|| connect_plaintext_for_test("127.0.0.1", port))
+    if inbox.host != "127.0.0.1" || !registered {
+        return None;
+    }
+    let t = stub_timeouts()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&port)
+        .copied()
+        .unwrap_or_default();
+    Some(imap_tls::open_plaintext("127.0.0.1", port, t).map_err(|e| imap_err("connect", e)))
 }
 
 #[cfg(not(test))]
-fn plaintext_stub_connect(_inbox: &MailExternalInbox) -> Option<Result<imap::Client<imap::Connection>, String>> {
+fn plaintext_stub_connect(_inbox: &MailExternalInbox) -> Option<Result<imap_tls::Dialed, String>> {
     None
 }
 
@@ -122,6 +141,14 @@ pub(crate) fn plaintext_ports() -> &'static Mutex<std::collections::HashSet<u16>
     PORTS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
 
+/// Test-only: shorter timeouts for a stub port in [`plaintext_ports`], so
+/// a timeout test takes seconds, not minutes.
+#[cfg(test)]
+pub(crate) fn stub_timeouts() -> &'static Mutex<HashMap<u16, imap_tls::Timeouts>> {
+    static T: OnceLock<Mutex<HashMap<u16, imap_tls::Timeouts>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// A session that holds its place under the per-inbox cap
 /// ([`crate::mail::imap_guard`]) until it is dropped.
 pub type GuardedSession = crate::mail::imap_guard::Guarded<ImapSession>;
@@ -130,18 +157,28 @@ pub type GuardedSession = crate::mail::imap_guard::Guarded<ImapSession>;
 /// per-inbox guard (0.46.17): no login during a provider cool-down, and at
 /// most `MAX_SESSIONS_PER_INBOX` sessions at once (a call past that
 /// queues briefly, then answers `inbox_busy`). A refused login is recorded
-/// on the row (`needs re-link`) and fed to the guard.
+/// on the row (`needs re-link`) and fed to the guard. The connection times
+/// out ([`imap_tls::IO_TIMEOUT`]); a timed-out session fails every later
+/// command at once, so the caller's error path drops it and frees the place.
 fn login(inbox: &MailExternalInbox, password: &str) -> Result<GuardedSession, String> {
     let permit = crate::mail::imap_guard::acquire(&inbox.id)?;
-    let session = login_now(inbox, password)?;
+    let session = login_on(inbox, password, Some(&permit))?;
     Ok(crate::mail::imap_guard::Guarded::new(session, permit))
 }
 
 /// [`login`] without a place under the cap (the mail watcher's one
 /// long-lived session), still never during a cool-down.
 fn login_now(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
+    login_on(inbox, password, None)
+}
+
+fn login_on(
+    inbox: &MailExternalInbox,
+    password: &str,
+    permit: Option<&crate::mail::imap_guard::Permit>,
+) -> Result<ImapSession, String> {
     crate::mail::imap_guard::check_cooldown(&inbox.id)?;
-    match login_inner(inbox, password) {
+    match login_inner(inbox, password, permit) {
         Ok(s) => {
             crate::mail::imap_guard::note_success(&inbox.id);
             Ok(s)
@@ -159,12 +196,16 @@ fn login_now(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, S
 /// the EXACT app-password `LOGIN` path, byte-for-byte unchanged. The oauth
 /// columns live off the [`MailExternalInbox`] struct, so one raw-SQL read
 /// decides the branch.
-fn login_inner(inbox: &MailExternalInbox, password: &str) -> Result<ImapSession, String> {
+fn login_inner(
+    inbox: &MailExternalInbox,
+    password: &str,
+    permit: Option<&crate::mail::imap_guard::Permit>,
+) -> Result<ImapSession, String> {
     let auth = external::read_oauth_fields(&inbox.id)?;
     if auth.auth_kind == external::AUTH_OAUTH {
-        return oauth_login(inbox, &auth);
+        return oauth_login(inbox, &auth, permit);
     }
-    let client = connect(inbox)?;
+    let client = connect(inbox, permit)?;
     // The error path carries the SERVER's text (never the password —
     // imap's ValidateError exposes only an offending char).
     client
@@ -213,7 +254,11 @@ pub fn fetch_all_rfc822(
 /// provider here is a loud config error, never a silent password
 /// fallthrough. The token is fetched fresh EVERY login (the O1 engine
 /// reuses it when still valid) and NEVER logged.
-fn oauth_login(inbox: &MailExternalInbox, auth: &external::OauthFields) -> Result<ImapSession, String> {
+fn oauth_login(
+    inbox: &MailExternalInbox,
+    auth: &external::OauthFields,
+    permit: Option<&crate::mail::imap_guard::Permit>,
+) -> Result<ImapSession, String> {
     let provider_str = auth.provider.as_deref().unwrap_or("");
     let provider = OauthProvider::from_str(provider_str).ok_or_else(|| {
         format!(
@@ -249,7 +294,7 @@ fn oauth_login(inbox: &MailExternalInbox, auth: &external::OauthFields) -> Resul
         now,
     )?;
 
-    let client = connect(inbox)?;
+    let client = connect(inbox, permit)?;
     xoauth2_authenticate(client, &inbox.username, &access_token)
 }
 
@@ -2159,7 +2204,7 @@ mod tests {
         let mut inbox =
             crate::mail::external::tests::test_inbox("X1", "p1", "rosson@example.com");
         inbox.tls = "plaintext".to_string();
-        let err = connect(&inbox).expect_err("refused");
+        let err = connect(&inbox, None).expect_err("refused");
         assert!(err.contains("unsupported tls kind"), "{err}");
     }
 

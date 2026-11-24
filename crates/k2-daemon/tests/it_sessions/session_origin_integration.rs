@@ -44,6 +44,12 @@ fn class_of(ws: &Ws, key: &str, sid: &SessionId) -> Caller {
     caller_from_session(&sid.to_string(), &principal)
 }
 
+/// The env for tests that start [`program`]s: the temp-HOME belt refuses
+/// any program outside the system bin dirs, and these are `cat` stubs the
+/// test wrote (a known agent CLI's name is still refused, by the test-build
+/// belt).
+const STUBS: &[(&str, &str)] = &[(k2_core::terminal::agent_spawn_guard::ALLOW_REAL_ENV, "1")];
+
 /// A program that stays up in a PTY under the name `name`, outside the
 /// workspace folder.
 fn program(env: &Env, name: &str) -> String {
@@ -131,7 +137,7 @@ fn assert_agent(ws: &Ws, key: &str, sid: &SessionId, what: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_session_is_an_agent_whatever_its_launch_runs() {
-    let env = setup(&[]);
+    let env = setup(STUBS);
     let _d = k2_daemon::test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "originagent");
     let npx = program(&env, "npx");
@@ -172,7 +178,7 @@ async fn a_persons_own_shell_tab_is_a_shell() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_person_door_spawn_of_anything_but_a_plain_shell_tab_is_an_agent() {
-    let env = setup(&[]);
+    let env = setup(STUBS);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "origindoor");
     let wrapper = program(&env, "npx");

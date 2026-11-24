@@ -48,7 +48,7 @@ fn the_shell_s_lines() {
         r#"            if [ -n "$kessel_about" ] || [ "$sub" = "chief-of-staff" ]; then"#,
         r#"            if [ -n "$kessel_group" ]; then _setup_jstr "$kessel_group"; body="${body}${sep}\"focusGroup\": ${_SETUP_J}"; sep=", "; fi"#,
         r#"        skip) _setup_jstr "$row"; body="{\"row\": ${_SETUP_J}}" ;;"#,
-        r#"        hide|show|dismiss-offer) body='{}' ;;"#,
+        r#"        hide|show|dismiss-offer|kessel-welcome) body='{}' ;;"#,
         r#"        "") raw="$(_setup_send GET /cli/first-run/status "$as_json")" ;;"#,
         r#"        hide|show) raw="$(_setup_send POST "/cli/first-run/$sub" "$as_json" "$body")" ;;"#,
         r#"        dismiss-offer) raw="$(_setup_send POST /cli/first-run/offer/dismiss "$as_json" "$body")" ;;"#,

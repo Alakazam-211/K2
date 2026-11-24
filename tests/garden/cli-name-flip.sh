@@ -242,10 +242,13 @@ set -e
 
 # ── the real parts, rewritten in a copy ─────────────────────────────────
 C="$T/copy"
-mkdir -p "$C/cli" "$C/scripts" "$C/tests"
+mkdir -p "$C/cli" "$C/scripts/brand" "$C/tests" "$C/brand/k2"
 cp -R "$HERE/cli/src" "$C/cli/src"
 cp -R "$HERE/cli/text" "$C/cli/text"
 cp "$HERE/scripts/build-cli.sh" "$C/scripts/"
+# The join fills the pages' brand slots with our names: the filler and its brand file.
+cp "$HERE/scripts/brand/page_slots.py" "$C/scripts/brand/"
+cp "$HERE/brand/k2/brand.toml" "$C/brand/k2/"
 cp "$HERE/tests/check-embedded-python.sh" "$C/tests/"
 out="$(python3 "$FLIP" --root "$C")"
 case "$out" in *"the reader lost its place"*) die "the reader lost its place in a real part: $out" ;; esac; ok

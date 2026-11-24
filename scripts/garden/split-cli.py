@@ -28,13 +28,22 @@ which scripts/build-cli.sh checks file by file.
 
 --recut is for a tree that already has cli/src: cli/k2 must be the join
 of the parts (each `%include cli/text/...` line with its file in its
-place, as scripts/build-cli.sh builds it). The parts as written, include
+place and the brand slots filled with our names, as scripts/build-cli.sh
+builds it: scripts/brand/page_slots.py). The parts as written, include
 lines and all, are then cut again by the table, so the pages stay in
 cli/text, and ORDER is rewritten.
 """
+import importlib.util
 import os
 import re
 import sys
+
+# The brand slots' filler (scripts/brand/page_slots.py), loaded by path.
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location(
+    "page_slots", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "brand", "page_slots.py"))
+slots = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(slots)
 
 CLI = "cli/k2"
 SRC = "cli/src"
@@ -127,7 +136,7 @@ def main():
                 raw += f.read()
         # build-cli.sh puts each `%include cli/text/...` line's file in its
         # place (and checks the includes); compare cli/k2 to that join.
-        joined = INCLUDE.sub(lambda m: inline(m.group(1)), raw)
+        joined = slots.fill(INCLUDE.sub(lambda m: inline(m.group(1)), raw))
         if joined != text:
             sys.exit("split-cli: cli/k2 is not the join of cli/src; run scripts/build-cli.sh first. Nothing written.")
         # Cut the parts as written, `%include` lines and all, so the pages

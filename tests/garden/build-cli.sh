@@ -227,4 +227,31 @@ page PAGE ''
 run 0 "wrote cli/k2"
 [ "$(cat "$T/cli/k2")" != "$before" ] && grep -qx 'EOF' "$T/cli/k2" || { echo "FAIL: another heredoc word lets EOF be a line" >&2; exit 1; }
 pass=$((pass + 1))
+# Brand slots: a page's and an entry's {company} and {login} are filled
+# with our names (brand/k2, through scripts/brand/page_slots.py), so cli/k2
+# never holds one; a slot anywhere else in a part is refused, nothing written.
+company="$(sed -n 's/^company = "\(.*\)"$/\1/p' "$HERE/brand/k2/brand.toml")"
+login="$(sed -n 's/^login = "\(.*\)"$/\1/p' "$HERE/brand/k2/brand.toml")"
+[ -n "$company" ] && [ -n "$login" ] || { echo "FAIL: brand/k2/brand.toml names no company or login" >&2; exit 1; }
+page EOF ''
+printf 'Tell {company}; sign in with {login}.\n' > "$X/a.txt"
+printf 'head\n' > "$S/schema-head.sh"
+printf '    {\n      "name": "last",\n      "usage": "k2 last",\n      "description": "d"\n    }\n  ]\n' > "$S/schema-tail.sh"
+mkdir -p "$S/schema"
+printf '    {"name": "tunnel", "usage": "k2 tunnel", "description": "A {login} tunnel by {company}."},\n' > "$S/schema/tunnel.entries"
+printf 'a.sh\nschema-head.sh\nschema/tunnel.entries\nschema-tail.sh\nz.sh\n' > "$S/ORDER"
+run 0 "wrote cli/k2 from 5 parts"
+grep -qxF "Tell $company; sign in with $login." "$T/cli/k2" || { echo "FAIL: the page's slots: $(cat "$T/cli/k2")" >&2; exit 1; }
+grep -qF "\"description\": \"A $login tunnel by $company.\"" "$T/cli/k2" || { echo "FAIL: the entry's slots: $(cat "$T/cli/k2")" >&2; exit 1; }
+! grep -qF -e '{company}' -e '{login}' "$T/cli/k2" || { echo "FAIL: a slot is left in cli/k2" >&2; exit 1; }
+pass=$((pass + 3))
+run 0 "is current" --check
+before="$(cat "$T/cli/k2")"
+printf 'echo "{login}"\n' > "$S/z.sh"
+run 1 "the join still holds {login}: a slot is filled only in a cli/text page or a cli/src/schema entry"
+[ "$(cat "$T/cli/k2")" = "$before" ] || { echo "FAIL: a refused build changed cli/k2" >&2; exit 1; }
+pass=$((pass + 1))
+# The real cli/k2 holds no slot.
+! grep -qF -e '{company}' -e '{login}' "$HERE/cli/k2" || { echo "FAIL: cli/k2 holds a raw brand slot: $(grep -nF -e '{company}' -e '{login}' "$HERE/cli/k2" | head -3)" >&2; exit 1; }
+pass=$((pass + 1))
 echo "build-cli tests: $pass passed"

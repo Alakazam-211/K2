@@ -24,6 +24,12 @@
 # and the join puts the file's bytes in that line's place. Every file under
 # cli/text is included exactly once (see join_parts).
 #
+# A page or an entry names the company and the sign-in service by slot,
+# {company} and {login} (scripts/brand/page_slots.py). The join fills them
+# with our names (brand/k2: bash is built in the default brand only), so
+# cli/k2 never holds a slot; the k5 binary's build fills them with its own
+# brand's (crates/k5-cli/build.rs).
+#
 # Edit a part, never cli/k2: the next build would undo an edit made there.
 # cli/k2 stays committed, because the app bundle, the installers, the
 # daemon (include_str!) and the tests all read that one file.
@@ -31,6 +37,8 @@
 # For tests: --root DIR works on another tree.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The slots' filler and our brand file are this script's own, for any --root.
+SLOTS_PY="$ROOT/scripts/brand/page_slots.py"
 CHECK=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -182,14 +190,22 @@ fi
 # on, then the line, then WORD), so the file prints exactly as written:
 # nothing in it expands.
 # A schema part goes in without its entries' spec keys (strip_spec_keys).
+# Both have their slots filled with our names (page_slots.py).
 # Exit 2 for a broken include or a file nobody includes, 1 for text that
 # can't sit in its heredoc or spec keys the join can't leave out. Writes
 # the join to $1.
 join_parts() {
     command -v python3 >/dev/null || { echo "build-cli: python3 is required to join cli/src" >&2; return 2; }
-    python3 - "$ROOT" "$1" "${parts[@]}" <<'PY'
-import json, os, re, sys
-root, out, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+    python3 - "$ROOT" "$1" "$SLOTS_PY" "${parts[@]}" <<'PY'
+import importlib.util, json, os, re, sys
+root, out, slots_py, names = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location("page_slots", slots_py)
+slots = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(slots)
+ours = slots.names()
+def filled(data):
+    return slots.fill(data.decode("utf-8"), ours).encode("utf-8")
 INCLUDE = re.compile(r"%include (cli/text/[a-z0-9_-]+(?:/[a-z0-9_-]+)*\.txt)")
 OPEN = re.compile(r"\s*(?:[^\s()][^()]*\) )?cat(?: >&2)? <<'([A-Za-z_][A-Za-z_0-9]*)'(?: >&2| \| .*)?")
 SPEC_KEYS = ("impl", "parse", "call", "output", "exits", "auth")
@@ -234,6 +250,7 @@ for name in names:
                 bad_text.append("cli/src/%s: an entry's spec keys must come last, each on its own line at six spaces, the entry closed by `    },`" % name)
                 continue
             raw = stripped.encode("utf-8")
+        raw = filled(raw)
     lines = raw.split(b"\n")
     for i, raw in enumerate(lines):
         if not raw.startswith(b"%include"):
@@ -270,7 +287,7 @@ for name in names:
         if word.encode() in body[:-1].split(b"\n"):
             bad_text.append("%s: a line is the heredoc word %s alone; it would end the page early" % (rel, word))
             continue
-        lines[i] = body[:-1]
+        lines[i] = filled(body[:-1])
     pieces.append(b"\n".join(lines))
 for top, dirs, files in os.walk(root + "/cli/text"):
     dirs.sort()
@@ -282,8 +299,13 @@ for line in broken + bad_text:
     print("build-cli: " + line, file=sys.stderr)
 if broken or bad_text:
     sys.exit(2 if broken else 1)
+joined = b"".join(pieces)
+left = slots.raw_slots(joined.decode("utf-8", "replace"))
+if left:
+    print("build-cli: the join still holds %s: a slot is filled only in a cli/text page or a cli/src/schema entry" % " and ".join(left), file=sys.stderr)
+    sys.exit(1)
 with open(out, "wb") as f:
-    f.write(b"".join(pieces))
+    f.write(joined)
 PY
 }
 

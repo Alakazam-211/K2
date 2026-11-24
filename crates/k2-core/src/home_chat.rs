@@ -49,6 +49,9 @@ pub const PUSH_ENV: &str = "K2_HOME_CHAT_PUSH";
 /// The feature key `/boot-status` lists while Home chat pushes are on and
 /// Home chat runs.
 pub const PUSH_FEATURE: &str = "home-chat-push-v1";
+/// The feature key `/boot-status` lists beside [`FEATURE`]: files in Home
+/// DMs and channels (contract-home-chat-attachments-v1).
+pub const ATTACHMENTS_FEATURE: &str = "home-chat-attachments-v1";
 /// The read-hint kind of a Home conversation (`h:<conv>:<message id>`,
 /// HC-11). Never a stored read cursor kind: Sew keeps Home read states.
 pub const READ_KIND: &str = "home";

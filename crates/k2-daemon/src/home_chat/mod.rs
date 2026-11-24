@@ -14,6 +14,8 @@
 //!   (prd-home-chat-pushes-v1), from the same poller.
 //! - [`arrivals`]: DMs and channels that arrive on their own land in the
 //!   person's People group (homes-people-group-v1).
+//! - [`files`]: attachments (contract-home-chat-attachments-v1): resumable
+//!   uploads and every file's bytes, through the daemon as the person.
 //!
 //! **Who.** Only a person's own login on this server: a Connect login
 //! (`k2:connect:<uuid>`) or the owner's linked login (`k2:owner`). The bare
@@ -33,6 +35,7 @@ pub mod arrivals;
 pub mod call_push;
 pub mod chat_push;
 pub mod events_ws;
+pub mod files;
 pub mod follower;
 pub mod notify;
 pub mod people;
@@ -44,6 +47,8 @@ pub mod state;
 pub(crate) mod tests;
 #[cfg(test)]
 mod push_tests;
+#[cfg(test)]
+mod files_tests;
 
 /// A pass minter: `(external id, sid)` → a signed chat pass.
 pub type MintFn = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync;
@@ -197,6 +202,13 @@ pub fn boot_status_key() -> Option<&'static str> {
     status().0.then_some(k2_core::home_chat::FEATURE)
 }
 
+/// `/boot-status` lists `home-chat-attachments-v1` whenever it lists
+/// `home-chat-v1` (contract-home-chat-attachments-v1): files ride every
+/// Home chat this daemon serves.
+pub fn attachments_boot_status_key() -> Option<&'static str> {
+    boot_status_key().map(|_| k2_core::home_chat::ATTACHMENTS_FEATURE)
+}
+
 /// `/boot-status` lists `home-chat-push-v1` when the owner's `homeChatPush`
 /// is on and Home chat runs here (prd-home-chat-pushes-v1 §7).
 pub fn push_boot_status_key() -> Option<&'static str> {
@@ -215,7 +227,9 @@ fn refusal(status: u16, code: &str, hint: &str) -> crate::cli_response::CliRespo
 }
 
 /// Serve one `/cli/home-chat/*` request on the dispatcher's stream (`buf`
-/// is the dispatcher's read buffer; the head is already consumed).
+/// is the dispatcher's read buffer; the head was only peeked: the body
+/// reader reads it). `headers` is the request's head (an upload range's
+/// `Content-Range`, a file fetch's `Range` and validators).
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     stream: &mut tokio::net::TcpStream,
@@ -226,6 +240,7 @@ pub async fn serve(
     is_post: bool,
     bearer: Option<&str>,
     owner_token: &str,
+    headers: &str,
 ) {
     use tokio::io::AsyncReadExt;
     if !k2_core::home_chat::enabled() {
@@ -252,12 +267,31 @@ pub async fn serve(
         let token = crate::routes::http::extract_token(query).filter(|t| !t.is_empty()).or(bearer).unwrap_or("").to_string();
         return events_ws::serve(stream, c.ext, token, owner_token.to_string()).await;
     }
+    if p == files::FILE {
+        // A file's bytes, streamed (contract-home-chat-attachments-v1 §6).
+        let _ = stream.read(buf).await;
+        if is_post {
+            return answer(stream, &crate::voice::routes::refuse(&crate::voice::bff::Refusal::new(405, "method_not_allowed", "this route takes GET"))).await;
+        }
+        let caller = people::caller(query, bearer, owner_token);
+        let params = crate::routes::http::parse_params(path, query);
+        let fwd = files::forwarded_headers(headers);
+        let opened = tokio::task::spawn_blocking(move || files::open(caller, &params, &fwd)).await;
+        return match opened {
+            Ok(Ok(f)) => files::stream_out(stream, f).await,
+            Ok(Err(e)) => answer(stream, &crate::voice::routes::refuse(&e)).await,
+            Err(e) => answer(stream, &crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))).await,
+        };
+    }
     if routes::is_post_route(p) && !crate::routes::http::require_post(stream, buf, is_post).await {
         return;
     }
+    // An upload's bytes take a larger body than any other Home chat route.
+    let cap = if p == files::DATA { files::MAX_REQUEST_BYTES } else { routes::MAX_BODY };
     let body = if is_post {
-        match crate::routes::http::read_post_body_capped(stream, buf, routes::MAX_BODY).await {
+        match crate::routes::http::read_post_body_capped(stream, buf, cap).await {
             Ok(b) => b,
+            Err(_) if p == files::DATA => return answer(stream, &crate::voice::routes::refuse(&files::chunk_too_large())).await,
             Err(_) => return answer(stream, &refusal(413, "too_large", "the body is too large")).await,
         }
     } else {
@@ -265,7 +299,15 @@ pub async fn serve(
         Vec::new()
     };
     let caller = people::caller(query, bearer, owner_token);
-    let params = crate::routes::http::parse_params(path, query);
+    let mut params = crate::routes::http::parse_params(path, query);
+    if p == files::DATA {
+        // The range a native client names in its header (a browser sends
+        // `offset` instead: a Content-Range header needs a CORS preflight).
+        params.remove(files::RANGE_PARAM);
+        if let Some(r) = crate::routes::http::extract_header(crate::routes::http::request_head(headers), "content-range") {
+            params.insert(files::RANGE_PARAM.to_string(), r.trim().to_string());
+        }
+    }
     let p_owned = p.to_string();
     let r = tokio::task::spawn_blocking(move || routes::handle(&p_owned, caller, is_post, &params, &body))
         .await

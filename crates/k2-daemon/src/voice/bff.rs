@@ -297,6 +297,29 @@ pub trait SewApi: Send + Sync {
         let _ = (bearer, body, idempotency_key);
         Err(format!("{path}: this Sew client sends no keyed POST"))
     }
+    /// POST one range of an upload's bytes to its signed data path (no
+    /// Bearer: the path is signed), with `Content-Range: <content_range>`
+    /// (Home chat attachments). A fake that never uploads answers this.
+    fn post_bytes(&self, path: &str, content_range: &str, bytes: &[u8]) -> Result<SewAnswer, String> {
+        let _ = (content_range, bytes);
+        Err(format!("{path}: this Sew client sends no bytes"))
+    }
+    /// GET a signed file path's bytes (no Bearer), with `headers` (Range,
+    /// If-None-Match, …) as they are. A fake that never serves files
+    /// answers this.
+    fn fetch(&self, path: &str, headers: &[(String, String)]) -> Result<SewBytes, String> {
+        let _ = headers;
+        Err(format!("{path}: this Sew client fetches no bytes"))
+    }
+}
+
+/// One signed byte answer from Sew (a file, a thumbnail, a preview): the
+/// status, the response headers (names in lower case) and the body, read as
+/// it streams.
+pub struct SewBytes {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Box<dyn std::io::Read + Send>,
 }
 
 /// The real client: Sew's loopback client listener (`sew::ops::client_addr`).
@@ -312,6 +335,23 @@ fn http() -> Result<&'static reqwest::blocking::Client, String> {
     let c = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(15))
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    Ok(C.get_or_init(|| c))
+}
+
+/// The client for file bytes: no whole-request timeout (a large download
+/// to a slow phone streams for as long as it takes; each upload range sets
+/// its own), the same 2 s connect timeout, never a proxy.
+fn http_bytes() -> Result<&'static reqwest::blocking::Client, String> {
+    static C: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    if let Some(c) = C.get() {
+        return Ok(c);
+    }
+    let c = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(None::<Duration>)
         .no_proxy()
         .build()
         .map_err(|e| format!("http client: {e}"))?;
@@ -362,6 +402,35 @@ impl SewApi for HttpSew {
         }
         let r = req.send().map_err(|e| format!("{path}: {e}"))?;
         answer_of(path, r)
+    }
+
+    fn post_bytes(&self, path: &str, content_range: &str, bytes: &[u8]) -> Result<SewAnswer, String> {
+        let url = format!("http://{}{path}", crate::sew::ops::client_addr());
+        let r = http_bytes()?
+            .post(&url)
+            .header("content-type", "application/octet-stream")
+            .header("content-range", content_range)
+            .timeout(Duration::from_secs(120))
+            .body(bytes.to_vec())
+            .send()
+            .map_err(|e| format!("{}: {e}", path.split('?').next().unwrap_or(path)))?;
+        answer_of(path.split('?').next().unwrap_or(path), r)
+    }
+
+    fn fetch(&self, path: &str, headers: &[(String, String)]) -> Result<SewBytes, String> {
+        let url = format!("http://{}{path}", crate::sew::ops::client_addr());
+        let mut req = http_bytes()?.get(&url);
+        for (k, v) in headers {
+            req = req.header(k.as_str(), v.as_str());
+        }
+        let r = req.send().map_err(|e| format!("{}: {e}", path.split('?').next().unwrap_or(path)))?;
+        let status = r.status().as_u16();
+        let headers = r
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_ascii_lowercase(), v.to_string())))
+            .collect();
+        Ok(SewBytes { status, headers, body: Box::new(r) })
     }
 }
 

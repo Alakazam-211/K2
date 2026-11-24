@@ -26,6 +26,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/home-chat/channels/rename", VoiceChat),
     post("/cli/home-chat/dm", VoiceChat),
     get("/cli/home-chat/events", VoiceChat),
+    // contract-home-chat-attachments-v1: a file's bytes, as the person.
+    get("/cli/home-chat/file", VoiceChat),
     get("/cli/home-chat/messages", VoiceChat),
     // prd-home-chat-pushes-v1 §7: a person's own level per conversation and
     // their push choices (every human role; HC-14: one path per method).
@@ -44,5 +46,10 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/home-chat/status", VoiceChat),
     get("/cli/home-chat/summary", VoiceChat),
     post("/cli/home-chat/typing", VoiceChat),
+    // contract-home-chat-attachments-v1: the person's resumable uploads.
+    post("/cli/home-chat/uploads/abort", VoiceChat),
+    post("/cli/home-chat/uploads/create", VoiceChat),
+    post("/cli/home-chat/uploads/data", VoiceChat),
+    get("/cli/home-chat/uploads/status", VoiceChat),
     post("/cli/home-chat/view", VoiceChat),
 ];

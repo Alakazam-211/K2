@@ -38,6 +38,20 @@ pub(crate) struct FakeApi {
     net_fail_once: std::sync::atomic::AtomicBool,
     /// Each renew takes this long (to race two renews).
     renew_delay_ms: std::sync::atomic::AtomicU64,
+    /// Each person signs in to their own token (`sews_<ext tail>.x`).
+    pub(crate) per_person: std::sync::atomic::AtomicBool,
+    /// (bearer, path) → (status, body): what Sew answers one person only.
+    pub(crate) by_bearer: Mutex<HashMap<(String, String), (u16, Value)>>,
+    /// Signed byte POSTs: (path, Content-Range, length), in order.
+    pub(crate) bytes_in: Mutex<Vec<(String, String, usize)>>,
+    /// The next signed byte POSTs' answers (before the simulator).
+    pub(crate) bytes_queue: Mutex<std::collections::VecDeque<(u16, Value)>>,
+    /// Upload id → (committed, size): the simulated data route.
+    pub(crate) sim: Mutex<HashMap<String, (u64, u64)>>,
+    /// Signed GET path (no query) → (content type, etag, bytes).
+    pub(crate) files: Mutex<HashMap<String, (String, String, Vec<u8>)>>,
+    /// Signed GETs: (path, request headers).
+    pub(crate) fetches: Mutex<Vec<(String, Vec<(String, String)>)>>,
 }
 
 impl FakeApi {
@@ -49,6 +63,15 @@ impl FakeApi {
     }
     fn reply(&self, method: &str, bearer: Option<&str>, path: &str, body: &Value) -> SewAnswer {
         self.calls.lock().unwrap().push((method.into(), path.into(), bearer.map(str::to_string), body.clone()));
+        if let Some((s, b)) = bearer.and_then(|t| self.by_bearer.lock().unwrap().get(&(t.to_string(), path.to_string())).cloned()) {
+            return SewAnswer { status: s, body: b };
+        }
+        if path == super::sessions::AUTH_K2 && self.per_person.load(Ordering::SeqCst) {
+            let pass = body["pass"].as_str().unwrap_or_default();
+            let ext = pass.strip_prefix("pass:").and_then(|r| r.rsplit_once(':')).map(|(e, _)| e).unwrap_or_default();
+            let at = (chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339();
+            return SewAnswer { status: 200, body: json!({"token": Self::token_of(ext), "expires_at": at, "member": {"id": "41"}}) };
+        }
         if let Some((s, b)) = self.answers.lock().unwrap().get(path).cloned() {
             return SewAnswer { status: s, body: b };
         }
@@ -62,7 +85,54 @@ impl FakeApi {
     }
 }
 
+impl FakeApi {
+    /// The token `ext` signs in to when [`FakeApi::per_person`] is on.
+    pub(crate) fn token_of(ext: &str) -> String {
+        let tail: String = ext.chars().filter(char::is_ascii_alphanumeric).rev().take(8).collect();
+        format!("sews_{tail}.x")
+    }
+}
+
 impl SewApi for FakeApi {
+    fn post_bytes(&self, path: &str, content_range: &str, bytes: &[u8]) -> Result<SewAnswer, String> {
+        self.bytes_in.lock().unwrap().push((path.to_string(), content_range.to_string(), bytes.len()));
+        if let Some((s, b)) = self.bytes_queue.lock().unwrap().pop_front() {
+            return Ok(SewAnswer { status: s, body: b });
+        }
+        // /api/v1/uploads/{id}/data?exp=…&sig=…
+        let id = path.strip_prefix("/api/v1/uploads/").and_then(|r| r.split('/').next()).unwrap_or_default().to_string();
+        let r = super::files::parse_content_range(content_range).ok_or("bad range")?;
+        let mut sim = self.sim.lock().unwrap();
+        let Some(st) = sim.get_mut(&id) else {
+            return Ok(SewAnswer { status: 404, body: json!({"error": {"code": "not_found"}}) });
+        };
+        if r.0 != st.0 || r.2 != st.1 {
+            return Ok(SewAnswer { status: 409, body: json!({"error": {"code": "invalid_range", "details": {"committed_bytes": st.0}}}) });
+        }
+        st.0 = r.1 + 1;
+        Ok(SewAnswer { status: 200, body: json!({"upload_id": id, "committed_bytes": st.0, "size": st.1, "complete": st.0 == st.1, "expires_at": "2026-11-25T00:00:00Z"}) })
+    }
+    fn fetch(&self, path: &str, headers: &[(String, String)]) -> Result<crate::voice::bff::SewBytes, String> {
+        self.fetches.lock().unwrap().push((path.to_string(), headers.to_vec()));
+        let bare = path.split('?').next().unwrap_or(path).to_string();
+        let Some((ct, etag, bytes)) = self.files.lock().unwrap().get(&bare).cloned() else {
+            return Ok(crate::voice::bff::SewBytes { status: 404, headers: vec![], body: Box::new(std::io::empty()) });
+        };
+        let h = |n: &str| headers.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
+        let mut out = vec![("content-type".to_string(), ct), ("etag".to_string(), etag.clone()), ("accept-ranges".to_string(), "bytes".to_string())];
+        if h("if-none-match").as_deref() == Some(etag.as_str()) {
+            return Ok(crate::voice::bff::SewBytes { status: 304, headers: out, body: Box::new(std::io::empty()) });
+        }
+        if let Some(r) = h("range").and_then(|r| r.strip_prefix("bytes=").map(str::to_string)) {
+            let (a, b) = r.split_once('-').unwrap();
+            let (a, b): (usize, usize) = (a.parse().unwrap(), b.parse().unwrap());
+            out.push(("content-range".into(), format!("bytes {a}-{b}/{}", bytes.len())));
+            out.push(("content-length".into(), (b - a + 1).to_string()));
+            return Ok(crate::voice::bff::SewBytes { status: 206, headers: out, body: Box::new(std::io::Cursor::new(bytes[a..=b].to_vec())) });
+        }
+        out.push(("content-length".into(), bytes.len().to_string()));
+        Ok(crate::voice::bff::SewBytes { status: 200, headers: out, body: Box::new(std::io::Cursor::new(bytes)) })
+    }
     fn post(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String> {
         Ok(self.reply("POST", bearer, path, body))
     }
@@ -411,30 +481,32 @@ fn members_take_a_conv_or_a_home_slug() {
     assert_eq!((r.status, r.code.as_str()), (400, "usage"));
 }
 
-fn alex() -> people::Caller {
+pub(crate) fn alex() -> people::Caller {
     people::Caller { ext: ALEX.into(), login: "alex".into(), role: Role::Member }
 }
 
 /// A route as the dispatcher runs it once Home chat is on (the status gate
 /// is the dispatcher's; these tests drive the route itself).
-fn call(path: &str, body: Value) -> Result<Value, crate::voice::bff::Refusal> {
+pub(crate) fn call(path: &str, body: Value) -> Result<Value, crate::voice::bff::Refusal> {
     routes::route(path, &alex(), &HashMap::new(), body.to_string().as_bytes())
 }
 
 /// A fake Sew, skin.db made (K2's Home chat ledger lives there), and no
 /// answers kept from an earlier test.
-fn chat_box() -> (k2_core::test_env::TempHome, Arc<FakeApi>) {
+pub(crate) fn chat_box() -> (k2_core::test_env::TempHome, Arc<FakeApi>) {
     let home = k2_core::test_env::TempHome::new();
     k2_core::skin::list_principals().expect("skin.db");
     let api = Arc::new(FakeApi::default());
     set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     routes::sends::forget_for_tests();
+    super::files::forget_for_tests();
     (home, api)
 }
 
-fn done() {
+pub(crate) fn done() {
     follower::release_all();
     routes::sends::forget_for_tests();
+    super::files::forget_for_tests();
     set_deps(None);
 }
 

@@ -216,10 +216,12 @@ fn status_line(code: u16) -> &'static str {
         409 => "409 Conflict",
         410 => "410 Gone",
         413 => "413 Payload Too Large",
+        416 => "416 Range Not Satisfiable",
         422 => "422 Unprocessable Entity",
         429 => "429 Too Many Requests",
         500 => "500 Internal Server Error",
         503 => "503 Service Unavailable",
+        507 => "507 Insufficient Storage",
         _ => "502 Bad Gateway",
     }
 }

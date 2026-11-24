@@ -41,6 +41,9 @@ pub const GET_ROUTES: &[&str] = &[
     CALLS,
     "/cli/home-chat/channels",
     "/cli/home-chat/channels/members",
+    // contract-home-chat-attachments-v1: a file's bytes (streamed by the
+    // dispatcher, `super::serve`), an upload's status.
+    super::files::FILE,
     "/cli/home-chat/messages",
     "/cli/home-chat/notify",
     "/cli/home-chat/people",
@@ -50,6 +53,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/home-chat/replies",
     "/cli/home-chat/status",
     "/cli/home-chat/summary",
+    super::files::STATUS,
 ];
 
 /// POST-only rows (405 on anything else).
@@ -68,6 +72,9 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/home-chat/react",
     "/cli/home-chat/send",
     "/cli/home-chat/typing",
+    super::files::ABORT,
+    super::files::CREATE,
+    super::files::DATA,
     "/cli/home-chat/view",
 ];
 
@@ -106,7 +113,7 @@ pub fn handle(path: &str, caller: R<Caller>, is_post: bool, params: &HashMap<Str
     if is_post_route(path) && !is_post {
         return refuse(&Refusal::new(405, "method_not_allowed", "this route takes POST"));
     }
-    if path == CALLS && is_post {
+    if (path == CALLS || path == super::files::FILE) && is_post {
         return refuse(&Refusal::new(405, "method_not_allowed", "this route takes GET"));
     }
     let r = (|| {
@@ -126,7 +133,15 @@ pub fn handle(path: &str, caller: R<Caller>, is_post: bool, params: &HashMap<Str
     }
 }
 
+/// One route's answer, its attachments carrying K2's own file paths
+/// (never Sew's signed URLs: [`super::files::scrub`]).
 pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &[u8]) -> R<Value> {
+    let mut v = route_inner(path, c, p, body)?;
+    super::files::scrub(&mut v);
+    Ok(v)
+}
+
+fn route_inner(path: &str, c: &Caller, p: &HashMap<String, String>, body: &[u8]) -> R<Value> {
     match path {
         // `me`: the caller's own member id, so a client tells its own
         // messages from others' (Sew names authors by member id).
@@ -161,6 +176,12 @@ pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &
         "/cli/home-chat/notify/set" => super::notify::set(c, parse(body)?),
         "/cli/home-chat/push-prefs" => super::notify::prefs_get(c),
         "/cli/home-chat/push-prefs/set" => super::notify::prefs_set(c, parse(body)?),
+        // contract-home-chat-attachments-v1.
+        super::files::CREATE => super::files::create(c, parse(body)?),
+        super::files::DATA => super::files::data(c, p, body),
+        super::files::STATUS => super::files::status(c, p),
+        super::files::ABORT => super::files::abort(c, parse(body)?),
+        super::files::FILE => Err(usage("a file's bytes are served by GET /cli/home-chat/file on the dispatcher")),
         _ => Err(Refusal::new(404, "not_found", "no such Home chat route")),
     }
 }
@@ -243,7 +264,7 @@ fn flags() -> k2_core::tool_hook::features::HomeChatFeatures {
 fn status_route(c: &Caller) -> R<Value> {
     let (on, reason) = super::status();
     let chat = follower::get(&c.ext).map(|h| h.status());
-    Ok(json!({"ok": true, "on": on, "reason": reason, "flags": flags(), "chat": chat}))
+    Ok(json!({"ok": true, "on": on, "reason": reason, "flags": flags(), "chat": chat, "files": super::files::limits(&c.ext)}))
 }
 
 fn k5_space() -> R<String> {
@@ -556,7 +577,7 @@ fn dm(c: &Caller, b: DmBody) -> R<Value> {
 }
 
 /// A DM whose other side was disabled is read-only (HP-13).
-fn check_dm_writable(c: &Caller, conv: &str) -> R<()> {
+pub(super) fn check_dm_writable(c: &Caller, conv: &str) -> R<()> {
     if let Some(target) = skin(|conn| ledger::dm_target(conn, &c.ext, conv))? {
         people::check_target(&target)?;
     }
@@ -571,11 +592,16 @@ struct SendBody {
     nonce: String,
     #[serde(default)]
     reply_to: Option<String>,
+    /// Upload ids (`uploads/create`), in display order, at most
+    /// [`super::files::PER_MESSAGE`] (contract-home-chat-attachments-v1).
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 fn send(c: &Caller, b: SendBody) -> R<Value> {
     let conv = sew_id(&b.conv, "conv")?;
-    if b.text.trim().is_empty() {
+    let uploads = super::files::send_ids(&b.attachments)?;
+    if b.text.trim().is_empty() && uploads.is_empty() {
         return Err(usage("text is empty"));
     }
     if b.nonce.is_empty() || b.nonce.len() > 64 {
@@ -584,6 +610,9 @@ fn send(c: &Caller, b: SendBody) -> R<Value> {
     check_dm_writable(c, &conv)?;
     check_channel_writable(&conv)?;
     let mut body = json!({"body": b.text, "nonce": b.nonce});
+    if !uploads.is_empty() {
+        body["upload_ids"] = json!(uploads);
+    }
     if let Some(r) = b.reply_to.as_deref() {
         // D8: an inline reply reference, never a Sew sub-thread.
         body["reference"] = json!({"message_id": sew_id(r, "replyTo")?, "kind": "reply"});
@@ -612,7 +641,7 @@ fn send(c: &Caller, b: SendBody) -> R<Value> {
 /// kept (forgotten now, so opening the DM makes it again) or already forgot
 /// after a reset of Sew's data, the answer is 404 `conversation_gone`, not
 /// Sew's bare `not_found`.
-fn dm_gone(c: &Caller, conv: &str) -> R<Option<Refusal>> {
+pub(super) fn dm_gone(c: &Caller, conv: &str) -> R<Option<Refusal>> {
     let kept = skin(|conn| ledger::dm_target(conn, &c.ext, conv))?.is_some();
     if kept {
         skin(|conn| ledger::forget_dm_channel(conn, conv))?;
@@ -629,7 +658,7 @@ fn dm_gone(c: &Caller, conv: &str) -> R<Option<Refusal>> {
 
 /// A Home channel K2's ledger holds as archived (or on its way there) takes
 /// no post: 409 `channel_archived`, before Sew is asked.
-fn check_channel_writable(conv: &str) -> R<()> {
+pub(super) fn check_channel_writable(conv: &str) -> R<()> {
     if let Some(ch) = skin(|conn| ledger::channel_by_id(conn, conv))? {
         if ch.state == ledger::CH_ARCHIVED || ch.want_archive {
             return Err(archived());

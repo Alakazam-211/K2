@@ -125,6 +125,17 @@ pub struct PersonState {
     pub calls: HashMap<String, CallSeen>,
     /// Call records already counted as a missed call (each once).
     pub missed_counted: HashSet<String>,
+    /// Sew's largest upload (policy `files.max_bytes`, READY's policy
+    /// digest, `install_updated`); `None` before READY.
+    pub files_max_bytes: Option<u64>,
+}
+
+/// READY's (or `install_updated`'s) `files_max_bytes`, wherever it sits.
+fn files_max_of(d: &Value) -> Option<u64> {
+    d.pointer("/install/policy_digest/files_max_bytes")
+        .or_else(|| d.pointer("/policy_digest/files_max_bytes"))
+        .and_then(Value::as_u64)
+        .filter(|n| *n > 0)
 }
 
 /// A recording's transcript line (Sew S35 v2 §15.2): a message that carries
@@ -248,6 +259,7 @@ impl PersonState {
         self.me = id_of(&d["member"]["id"]).unwrap_or_default();
         self.member_seq = d["member_seq"].as_u64().unwrap_or(0);
         self.gateway_session = d["session_id"].as_str().map(str::to_string);
+        self.files_max_bytes = files_max_of(d);
         self.apply_channels(&d["channels"]);
         for rs in d["read_states"].as_array().into_iter().flatten() {
             self.apply_read_state(rs);
@@ -446,6 +458,20 @@ impl PersonState {
                     }
                 }
                 out.insert(0, json!({"type": "message_updated", "conv": cid, "message": m}));
+            }
+            "attachments_updated" => {
+                // A thumbnail landed or a file was removed: the message's
+                // whole list, to replace (contract-home-chat-attachments-v1).
+                let Some(cid) = id_of(&d["channel_id"]) else { return out };
+                out.push(json!({
+                    "type": "attachments_updated", "conv": cid, "msg": d["message_id"],
+                    "threadRoot": d["thread_root_id"], "attachments": d["attachments"],
+                }));
+            }
+            "install_updated" => {
+                if let Some(max) = files_max_of(d) {
+                    self.files_max_bytes = Some(max);
+                }
             }
             "message_deleted" => {
                 let Some(cid) = id_of(&d["channel_id"]) else { return out };

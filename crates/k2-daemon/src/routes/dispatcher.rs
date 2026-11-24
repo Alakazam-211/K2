@@ -8816,7 +8816,7 @@ async fn handle_one_request(
         // People and channels on Home (prd-home-people-channels-v1 S3): the
         // family answers itself (dark, POST guards, the person check, WS).
         p if crate::home_chat::routes::is_route(p) => {
-            crate::home_chat::serve(&mut *stream, &mut buf, p, &path, &query, is_post, bearer_token.as_deref(), state.token.as_str()).await;
+            crate::home_chat::serve(&mut *stream, &mut buf, p, &path, &query, is_post, bearer_token.as_deref(), state.token.as_str(), &headers_blob).await;
             return DispatchOutcome::Done;
         }
         // WS /cli/voice/events (prd-voice-chat-only-members-v1 §6.3): only

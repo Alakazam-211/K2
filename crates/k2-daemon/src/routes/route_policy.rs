@@ -176,6 +176,8 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/home-chat/channels/rename"),
     ("POST", "/cli/home-chat/dm"),
     ("GET", "/cli/home-chat/events"),
+    // contract-home-chat-attachments-v1: files in DMs and channels.
+    ("GET", "/cli/home-chat/file"),
     ("GET", "/cli/home-chat/messages"),
     // prd-home-chat-pushes-v1 §7: the person's own levels and push choices.
     ("GET", "/cli/home-chat/notify"),
@@ -191,6 +193,10 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/cli/home-chat/status"),
     ("GET", "/cli/home-chat/summary"),
     ("POST", "/cli/home-chat/typing"),
+    ("POST", "/cli/home-chat/uploads/abort"),
+    ("POST", "/cli/home-chat/uploads/create"),
+    ("POST", "/cli/home-chat/uploads/data"),
+    ("GET", "/cli/home-chat/uploads/status"),
     ("POST", "/cli/home-chat/view"),
     // prd-home-chat-pushes-v1 D3, §7: the phone's own push device, so a Voice
     // & Chat only phone gets Home chat pushes and DM call rings. The handler
@@ -1763,8 +1769,10 @@ mod tests {
         // phone's own 3 push device rows (prd-home-chat-pushes-v1 D3, §7),
         // plus the calls ringing for the caller (`home-chat/calls`, 0.46.17:
         // a PushKit-woken phone answers from CallKit), plus a DM's
-        // recordings (`home-chat/recordings`, 0.46.18: Sew's client list).
-        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3 + 1 + 1);
+        // recordings (`home-chat/recordings`, 0.46.18: Sew's client list),
+        // plus attachments' 5 (a file's bytes and the uploads:
+        // contract-home-chat-attachments-v1).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3 + 1 + 1 + 5);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

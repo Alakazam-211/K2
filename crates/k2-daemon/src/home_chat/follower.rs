@@ -119,9 +119,12 @@ impl Held {
         self.publish(&[json!({"type": "summary_changed"})]);
     }
 
-    /// Publish `frames` to the person's client sockets.
+    /// Publish `frames` to the person's client sockets. Attachments carry
+    /// K2's own file paths, never Sew's signed URLs ([`super::files::scrub`]).
     pub fn publish(&self, frames: &[Value]) {
         for f in frames {
+            let mut f = f.clone();
+            super::files::scrub(&mut f);
             let _ = self.events.send(f.to_string());
         }
     }

@@ -103,14 +103,17 @@ describe('shiki allowlist: the accepted grammars ship their licence texts', () =
     expect(shipped, file).toContain(`../resources/notices/${file}`)
   })
 
-  it.each(['bird2', 'hcl', 'terraform'])('%s (MPL-2.0): its Source Code Form ships too, with the sha256 its row gives', (id) => {
+  it.each(['bird2', 'hcl', 'terraform'])('%s (MPL-2.0): its upstream source and its converted form ship too, with the sha256s its row gives', (id) => {
     const row = notice.split('\n').find((l) => l.startsWith(`| \`${id}\` |`))!
-    const m = /ships as `(shiki-[a-z0-9-]+-SOURCE\.[A-Za-z.]+json)` \(sha256 `([0-9a-f]{64})`\)/.exec(row)
-    expect(m, row).not.toBeNull()
-    const [, file, sha] = m!
-    const text = readFileSync(resolve(REPO, 'resources/notices', file))
-    expect(createHash('sha256').update(text).digest('hex'), file).toBe(sha)
-    expect(shipped, file).toContain(`../resources/notices/${file}`)
+    // The upstream original, and tm-grammars' converted form the bundle is built from.
+    for (const name of [`${id}-SOURCE\\.[A-Za-z.]+json`, `${id}-CONVERTED-tm-grammars-1\\.31\\.6\\.json`]) {
+      const m = new RegExp(`ships as \`(shiki-${name})\` \\(sha256 \`([0-9a-f]{64})\`\\)`).exec(row)
+      expect(m, `${name} in ${row}`).not.toBeNull()
+      const [, file, sha] = m!
+      const text = readFileSync(resolve(REPO, 'resources/notices', file))
+      expect(createHash('sha256').update(text).digest('hex'), file).toBe(sha)
+      expect(shipped, file).toContain(`../resources/notices/${file}`)
+    }
   })
 })
 

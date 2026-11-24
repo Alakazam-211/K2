@@ -41,7 +41,7 @@ p = d.get("permission"); p = dict(p, command="k2 <tail>".replace("<tail>", p["ta
 if isinstance(p, dict) and p.get("command"):
     print("Ask with: " + p["command"], file=sys.stderr)
 elif c == "desktop_people_only" or (isinstance(p, dict) and p.get("requestable") is False):
-    print("It can\x27t be requested.", *([__import__("os").environ["_K2_NO_CARD_FEEDBACK"]] if isinstance(p, dict) and p.get("feedback") is True else []), sep="\n", file=sys.stderr)
+    print("It can\x27t be requested.", *([__import__("os").environ["_K2_NO_CARD_FEEDBACK"]] if (isinstance(p, dict) and p.get("feedback") is True) or d.get("feedback") is True else []), sep="\n", file=sys.stderr)
 '
         [ "$as_json" = "1" ] && printf '%s\n' "$body"
         exit "$(_sidecar_exit_for "$code")"

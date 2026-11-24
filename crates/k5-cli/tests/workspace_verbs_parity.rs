@@ -816,6 +816,20 @@ fn trust_answers_as_the_shell_does() {
             3,
             1,
         ),
+        // 0.46.18: while agents may report, the daemon flags the error and
+        // the feedback line closes it.
+        case(
+            "the card refusal, agents may report: the feedback line",
+            &["trust", "status"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":"action_card_person_only","message":"Ask the owner.","feedback":true}"#.into(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
         case(
             "decide with no fingerprint: risky, not at a terminal",
             &["trust", ".", "--yes"],

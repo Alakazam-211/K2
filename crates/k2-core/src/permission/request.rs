@@ -241,6 +241,20 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// The same no-card feedback flag for a refusal that carries no
+/// `permission` object (a person-only code the CLIs close with `It can't
+/// be requested.` themselves: `desktop_people_only`,
+/// `action_card_person_only`, cards off): `{"feedback": true}` while
+/// agents may report, `{}` otherwise, for the error body's top level. The
+/// one rule, [`crate::product_feedback::settings::agents_may_report`].
+pub fn feedback_fields() -> serde_json::Value {
+    if crate::product_feedback::settings::agents_may_report() {
+        serde_json::json!({ "feedback": true })
+    } else {
+        serde_json::json!({})
+    }
+}
+
 impl PermissionRefusal {
     /// A mapped wall's object from the Ask line's `tail`: `command` is this
     /// build's command name, a space and the tail.

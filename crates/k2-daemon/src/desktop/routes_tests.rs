@@ -1186,3 +1186,23 @@ fn status_and_enable_carry_the_permission_steps() {
     let (_, v) = call(&owner, "/cli/desktop/status", json!({}));
     assert!(v.get("macPermission").is_none(), "Linux: no steps: {v}");
 }
+
+/// The no-card feedback flag on `desktop_people_only` (0.46.18): the
+/// error carries `feedback: true` only while agents may report, so the
+/// CLIs print the send-feedback line under `It can't be requested.` then.
+#[test]
+fn people_only_carries_feedback_only_while_agents_may_report() {
+    use k2_core::product_feedback::settings::{save, Settings};
+    let _home = crate::test_support::TempHome::new();
+    let body = |r: crate::cli_response::CliResponse| serde_json::from_str::<Value>(&r.body).unwrap();
+    let v = body(super::people_only());
+    assert_eq!((v["error"]["code"].as_str(), v.get("feedback")), (Some(super::PEOPLE_ONLY), None), "not asked: {v}");
+    let mut s = Settings { enabled: true, ..Settings::default() };
+    s.answer(true, false, &[], "owner", 1);
+    save(&s).unwrap();
+    let v = body(super::people_only());
+    assert_eq!(v["feedback"], json!(true), "agents may report: {v}");
+    s.answer(false, false, &[], "owner", 2);
+    save(&s).unwrap();
+    assert_eq!(body(super::people_only()).get("feedback"), None, "a person said no");
+}

@@ -615,6 +615,20 @@ fn desktop_refusals_and_odd_answers() {
             3,
             1,
         ),
+        // 0.46.18: while agents may report, the daemon flags the error and
+        // the feedback line closes it.
+        case(
+            "people only, agents may report: the feedback line",
+            &["status"],
+            &[],
+            vec![Reply::Answer(
+                403,
+                r#"{"error":{"code":"desktop_people_only","hint":"a person's"},"feedback":true}"#.into(),
+            )],
+            owner_and_port,
+            3,
+            1,
+        ),
         case(
             "too many desktops: the ones to close",
             &["start"],

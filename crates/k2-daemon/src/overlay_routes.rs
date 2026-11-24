@@ -3725,7 +3725,15 @@ pub(crate) fn update_action_view(conversation_id: &str, card_id: &str, view: ser
 
 /// 403 `action_card_person_only`.
 fn action_card_person_only(hint: &str) -> CliResponse {
-    error_json("403 Forbidden", "action_card_person_only", hint)
+    // The no-card feedback flag (0.46.18), as on `desktop_people_only`.
+    let mut body = serde_json::json!({
+        "ok": false,
+        "error": { "code": "action_card_person_only", "hint": hint },
+    });
+    if let (serde_json::Value::Object(o), serde_json::Value::Object(x)) = (&mut body, k2_core::permission::request::feedback_fields()) {
+        o.extend(x);
+    }
+    CliResponse { status: "403 Forbidden", content_type: "application/json", body: body.to_string() }
 }
 
 /// Who may answer or dismiss a settings (action) card: the person, at the

@@ -4331,3 +4331,22 @@ mod attachment_only;
 // 0.46.18: a reply to one Thread message or card (thread-reply-to-v1).
 #[path = "reply_to_tests.rs"]
 mod reply_to;
+
+/// The no-card feedback flag on `action_card_person_only` (0.46.18): the
+/// error carries `feedback: true` only while agents may report.
+#[test]
+fn action_card_person_only_carries_feedback_only_while_agents_may_report() {
+    use k2_core::product_feedback::settings::{save, Settings};
+    let _home = crate::test_support::TempHome::new();
+    let body = |r: CliResponse| serde_json::from_str::<serde_json::Value>(&r.body).unwrap();
+    let v = body(action_card_person_only("only you answer it"));
+    assert_eq!((v["error"]["code"].as_str(), v.get("feedback")), (Some("action_card_person_only"), None), "not asked: {v}");
+    let mut s = Settings { enabled: true, ..Settings::default() };
+    s.answer(true, false, &[], "owner", 1);
+    save(&s).unwrap();
+    let v = body(action_card_person_only("only you answer it"));
+    assert_eq!((v["feedback"].clone(), v["error"]["hint"].clone()), (serde_json::json!(true), serde_json::json!("only you answer it")), "{v}");
+    s.enabled = false;
+    save(&s).unwrap();
+    assert_eq!(body(action_card_person_only("x")).get("feedback"), None, "sending off");
+}

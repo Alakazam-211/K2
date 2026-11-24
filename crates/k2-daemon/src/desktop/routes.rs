@@ -170,10 +170,13 @@ pub fn too_large() -> CliResponse {
 
 /// `403 desktop_people_only`.
 pub fn people_only() -> CliResponse {
-    refuse(
+    // The no-card feedback flag (0.46.18): the CLIs print the feedback line
+    // under `It can't be requested.` only while agents may report.
+    refuse_with(
         403,
         PEOPLE_ONLY,
         "Remote desktop is for people only: the owner and the logins they allow. Agents can't see or drive this computer's screen with K2 in v1.",
+        k2_core::permission::request::feedback_fields(),
     )
 }
 

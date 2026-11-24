@@ -1246,10 +1246,12 @@ fn pinned_only_card_names_the_node_and_the_change() {
     assert_eq!(vw["setting"], "Pinned jobs only", "{vw}");
     assert_eq!(vw["scope"], format!("{name}, for every workspace on this server"), "{vw}");
     assert_eq!(vw["approvers"]["floor"], "admin", "{vw}");
+    // The asked values, then one row with the node's facts.
     let values = values_of(&vw);
-    assert_eq!(values.len(), 1, "{vw}");
-    assert_eq!(values[0].0, name, "{vw}");
-    assert!(values[0].1.starts_with("linux") && values[0].1.contains("owned by this server"), "{vw}");
+    let keys: Vec<&str> = values.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, ["workspace", "node", "on", name.as_str()], "{vw}");
+    assert_eq!(values[2].1, "true", "{vw}");
+    assert_eq!(values[3].1, "linux · size not reported yet · owned by this server", "{vw}");
     // A Member is below the card's floor; nothing changed.
     let member = login("pinm", Role::Member);
     below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");

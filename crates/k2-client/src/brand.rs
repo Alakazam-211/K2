@@ -31,9 +31,8 @@ pub mod session;
 
 // From the brand file: the command's name and the product's name as
 // literals for `concat!` (`cli_name!()`, `product_name!()`, at this
-// crate's root), as consts, the command's aliases with their modes, and the
+// crate's root, lib.rs), as consts, the command's aliases with their modes, and the
 // brand's id.
-use k2_brand::product_name;
 pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 
 /// The repo releases come from (`owner/name`), as a literal: every
@@ -54,8 +53,10 @@ macro_rules! release_repo {
 /// The company that makes it.
 pub const COMPANY_NAME: &str = "Alakazam Labs";
 
-/// The product with its maker: "K2 by Alakazam Labs".
-pub const PRODUCT_LOCKUP: &str = concat!(product_name!(), " by Alakazam Labs");
+/// The product with its maker: the brand file's `names.lockup`, or
+/// "<product> by <company>" when the file leaves it out ("K2 by Alakazam
+/// Labs" in ours). A partner names its own.
+pub const PRODUCT_LOCKUP: &str = k2_brand::names::LOCKUP;
 
 /// The public website.
 pub const PUBLIC_SITE: &str = "https://k2.dev";
@@ -151,7 +152,7 @@ pub fn fill_names(template: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli_name;
+    use crate::{cli_name, product_name};
 
     /// A template takes any brand's names, the command's first; a text with
     /// no slot is as it was.
@@ -251,7 +252,37 @@ mod tests {
         assert_eq!(product_name!(), PRODUCT_NAME);
         assert_eq!(cli_name!(), CLI_NAME);
         assert_eq!(release_repo!(), RELEASE_REPO);
-        assert_eq!(PRODUCT_LOCKUP, format!("{PRODUCT_NAME} by {COMPANY_NAME}"));
+    }
+
+    /// The lockup is the brand file's own when it gives one, and the
+    /// default form, "<product> by <company>", only when it leaves it out.
+    /// Brand-free: it reads the brand file this build was made from
+    /// (K2_BRAND_DIR, else brand/k2), so it holds under any brand.
+    #[test]
+    fn brand_lockup_is_the_brand_files() {
+        let dir = option_env!("K2_BRAND_DIR").unwrap_or("brand/k2");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = if std::path::Path::new(dir).is_absolute() { std::path::PathBuf::from(dir) } else { root.join(dir) };
+        let text = std::fs::read_to_string(path.join("brand.toml")).expect("the brand file this build was made from");
+        let mut in_names = false;
+        let mut given = None;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                in_names = t == "[names]";
+            } else if in_names {
+                if let Some(v) = t.strip_prefix("lockup").map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
+                    let v = v.trim();
+                    assert!(v.len() >= 2 && v.starts_with('"') && v.ends_with('"'), "names.lockup is one quoted string: {line}");
+                    given = Some(v[1..v.len() - 1].to_string());
+                }
+            }
+        }
+        match given {
+            Some(lockup) => assert_eq!(PRODUCT_LOCKUP, lockup, "the brand file's names.lockup"),
+            None => assert_eq!(PRODUCT_LOCKUP, format!("{PRODUCT_NAME} by {}", k2_brand::names::COMPANY), "no names.lockup: the default form"),
+        }
+        assert_eq!(PRODUCT_LOCKUP, k2_brand::names::LOCKUP);
     }
 
     /// Boxes are served under k2.dev alone; k5.dev is a zone of ours for

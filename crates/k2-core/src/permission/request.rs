@@ -226,7 +226,19 @@ pub enum PermissionRefusal {
         /// where, and how to switch it back. Absent otherwise.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hint: Option<String>,
+        /// `true` while agents may report problems
+        /// (`product_feedback::settings::agents_may_report`, 0.46.18): the
+        /// CLIs then print [`CLOSING_FEEDBACK`] under `It can't be
+        /// requested.`; absent (false), they print nothing more, so an agent
+        /// a person hasn't allowed to report is never pointed at
+        /// `send-feedback`. The daemon decides it here, once, for both CLIs.
+        #[serde(default, skip_serializing_if = "is_false")]
+        feedback: bool,
     },
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl PermissionRefusal {
@@ -244,12 +256,22 @@ impl PermissionRefusal {
     }
 
     pub fn not_requestable(where_: impl Into<String>) -> Self {
-        PermissionRefusal::NotRequestable { requestable: false, where_: where_.into(), hint: None }
+        PermissionRefusal::NotRequestable {
+            requestable: false,
+            where_: where_.into(),
+            hint: None,
+            feedback: crate::product_feedback::settings::agents_may_report(),
+        }
     }
 
     /// A machine-only refusal (§5.5): `where:"at the machine"` plus the hint.
     pub fn at_the_machine(hint: impl Into<String>) -> Self {
-        PermissionRefusal::NotRequestable { requestable: false, where_: WHERE_AT_MACHINE.to_string(), hint: Some(hint.into()) }
+        PermissionRefusal::NotRequestable {
+            requestable: false,
+            where_: WHERE_AT_MACHINE.to_string(),
+            hint: Some(hint.into()),
+            feedback: crate::product_feedback::settings::agents_may_report(),
+        }
     }
 }
 
@@ -391,8 +413,41 @@ mod tests {
         assert_eq!(h(&json!({})).len(), 64);
     }
 
+    /// The no-card feedback flag (0.46.18): on a not-requestable refusal
+    /// only while agents may report (sending on, a person allowed agents);
+    /// the daemon decides it here for both CLIs.
+    #[test]
+    fn a_refusal_carries_feedback_only_while_agents_may_report() {
+        use crate::product_feedback::settings::{save, Settings};
+        let _home = crate::test_env::TempHome::new();
+        let flag = |p: PermissionRefusal| serde_json::to_value(p).unwrap().get("feedback").cloned();
+        assert_eq!(flag(PermissionRefusal::not_requestable("Settings")), None, "not asked: no flag");
+        let mut s = Settings { enabled: true, ..Settings::default() };
+        s.answer(true, false, &[], "owner", 1);
+        save(&s).unwrap();
+        assert_eq!(flag(PermissionRefusal::not_requestable("Settings")), Some(json!(true)), "agents may report CLI problems");
+        assert_eq!(flag(PermissionRefusal::at_the_machine("h")), Some(json!(true)), "a machine-only refusal too");
+        let r = PermissionRefusal::requestable("compute.use", serde_json::Map::new(), "owner", "permission request compute.use");
+        assert_eq!(flag(r), None, "a card is the path: never the flag");
+        s.answer(false, false, &[], "owner", 2);
+        save(&s).unwrap();
+        assert_eq!(flag(PermissionRefusal::not_requestable("Settings")), None, "a person said no");
+        s.answer(true, true, &[], "owner", 3);
+        s.enabled = false;
+        save(&s).unwrap();
+        assert_eq!(flag(PermissionRefusal::not_requestable("Settings")), None, "sending off");
+        // The flag reads back, and an object without it reads as false.
+        let back: PermissionRefusal = serde_json::from_value(json!({"requestable": false, "where": "x", "feedback": true})).unwrap();
+        assert!(matches!(back, PermissionRefusal::NotRequestable { feedback: true, .. }), "{back:?}");
+        let old: PermissionRefusal = serde_json::from_value(json!({"requestable": false, "where": "x"})).unwrap();
+        assert!(matches!(old, PermissionRefusal::NotRequestable { feedback: false, .. }), "{old:?}");
+    }
+
     #[test]
     fn refusal_object_wire_shapes() {
+        // A temp HOME: a not-requestable refusal reads the product feedback
+        // switches (no file: agents may not report, no `feedback`).
+        let _home = crate::test_env::TempHome::new();
         let r = PermissionRefusal::requestable(
             "compute.use",
             serde_json::Map::new(),

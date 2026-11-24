@@ -815,7 +815,9 @@ fn error_python(d: &Value, o: &mut String) -> Result<(), Raise> {
             push(o, &format!("Ask with: {}", plus_str(command, line::E_ASK)?));
         } else if get(&p, "requestable") == Some(&Value::Bool(false)) {
             push(o, "It can't be requested.");
-            push(o, crate::transport::permission::NO_CARD_FEEDBACK);
+            if get(&p, "feedback") == Some(&Value::Bool(true)) {
+                push(o, crate::transport::permission::NO_CARD_FEEDBACK);
+            }
         }
     }
     Ok(())

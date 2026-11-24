@@ -551,6 +551,9 @@ fn rows(w: &Work) -> Vec<Row> {
     };
     let permission_ask = r#"{"error":{"code":"owner_only"},"permission":{"command":"k2 permission request --scope dns.manage --why \"...\"","requestable":true}}"#;
     let permission_none = r#"{"error":"nope","permission":{"requestable":false,"hint":"Only a person can change this."}}"#;
+    // The same while the daemon says agents may report (0.46.18): the
+    // note ends with the no-card feedback line, on both sides.
+    let permission_none_feedback = r#"{"error":"nope","permission":{"requestable":false,"hint":"Only a person can change this.","feedback":true}}"#;
     vec![
         Row {
             name: "GET with a query (cli_request)",
@@ -960,6 +963,16 @@ fn rows(w: &Work) -> Vec<Row> {
             who: Who::PassportUds,
             would_refuse: false,
             replies: vec![Reply::Answer(403, permission_none.to_string())],
+            bash: r#"cli_send cli_post_json /cli/awareness/publish "$BODY""#,
+            rust: |c| c.send("/cli/awareness/publish", Call::PostJson(BODY.as_bytes())),
+            requests: 1,
+            outcome: Outcome::Body,
+        },
+        Row {
+            name: "a refusal that can't be requested, agents may report (the feedback line)",
+            who: Who::PassportUds,
+            would_refuse: false,
+            replies: vec![Reply::Answer(403, permission_none_feedback.to_string())],
             bash: r#"cli_send cli_post_json /cli/awareness/publish "$BODY""#,
             rust: |c| c.send("/cli/awareness/publish", Call::PostJson(BODY.as_bytes())),
             requests: 1,

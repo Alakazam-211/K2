@@ -552,11 +552,12 @@ fn the_front_lines() {
             "{status} {body}"
         );
     }
-    // No card: the feedback line closes it (0.46.18).
+    // No card: the feedback line closes it (0.46.18) while the daemon says
+    // agents may report...
     assert_eq!(
         shown(
             "403",
-            r#"{"error":{"code":"c"},"message":"m","permission":{"requestable":false}}"#
+            r#"{"error":{"code":"c"},"message":"m","permission":{"requestable":false,"feedback":true}}"#
         ),
         Shown::err(
             format!(
@@ -565,6 +566,14 @@ fn the_front_lines() {
             ),
             Exit::Refused
         )
+    );
+    // ...and is left out while it doesn't.
+    assert_eq!(
+        shown(
+            "403",
+            r#"{"error":{"code":"c"},"message":"m","permission":{"requestable":false}}"#
+        ),
+        Shown::err("k2 front: error: c: m\nIt can't be requested.\n".to_string(), Exit::Refused)
     );
     let long = "é".repeat(201);
     assert_eq!(

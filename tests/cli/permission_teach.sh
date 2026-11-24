@@ -218,11 +218,7 @@ run() {
     ERR="$(cat "$SANDBOX/err")"
 }
 
-# 0.46.18: with no card, the refusal's last line is how to send feedback.
-NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 last_err_line() { printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -1; }
-# The last two: "It can't be requested." and the feedback line after it.
-last_err_lines() { printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -2; }
 
 echo "== on =="
 run agent help
@@ -263,11 +259,10 @@ for form in "msg beta ping" "msg beta --inbox-silent --title Note --body body"; 
     [ "$(printf '%s\n' "$ERR" | grep -c '^Ask with:')" = 1 ] && ok || bad "$form: the closing line must print once"
     <<<"$ERR" grep -q "It can.t be requested" && bad "$form: 'It can't be requested.' beside the Ask-with line: $ERR" || ok
 done
-# A refusal no card opens still says "It can't be requested.", then (0.46.18)
-# how to send feedback about it.
+# A refusal no card opens still ends with "It can't be requested."
 run agent msg gamma ping
 [ "$RC" = 3 ] && ok || bad "msg gamma: exit $RC, want 3 ($ERR)"
-[ "$(last_err_lines)" = "It can't be requested."$'\n'"$NO_CARD_FEEDBACK" ] && ok || bad "msg gamma: last stderr lines are '$(last_err_lines)'"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "msg gamma: last stderr line is '$(last_err_line)'"
 <<<"$ERR" grep -q '^Ask with:' && bad "msg gamma: an Ask-with line on a refusal no card opens: $ERR" || ok
 
 # A command that succeeds never ends with a closing line, even when a body
@@ -291,10 +286,9 @@ run agent app install heldapp
 
 # A machine-only refusal: the plain-text hint, then "It can't be requested."
 run agent connections remove billing
-tail2="$(printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -3)"
+tail2="$(printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -2)"
 [ "$tail2" = "At z3mbpz, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)
-It can't be requested.
-$NO_CARD_FEEDBACK" ] && ok || bad "machine hint: stderr ends with '$tail2'"
+It can't be requested." ] && ok || bad "machine hint: stderr ends with '$tail2'"
 
 # cli_print_or_fail: a teaching refusal exits 3 …
 run agent workspace create "$SANDBOX/new-ws"
@@ -318,7 +312,7 @@ grep '^POST /cli/agent-access/set ' "$LOG" | grep -q '"workspace"' && bad "compu
 # ... while "Allow managing compute nodes" stays the owner's own act.
 run agent compute manage on
 [ "$RC" = 3 ] && ok || bad "compute manage on: exit $RC, want 3 ($ERR)"
-[ "$(last_err_lines)" = "It can't be requested."$'\n'"$NO_CARD_FEEDBACK" ] && ok || bad "compute manage on: last stderr lines are '$(last_err_lines)'"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "compute manage on: last stderr line is '$(last_err_line)'"
 
 # 0.46.9: a held node request (exit 2) says where the owner approves it,
 # and ends with the Ask-with line that brings it to their chat.
@@ -334,7 +328,7 @@ run agent compute node policy k2n1-m4 set max_cpus=10 --reason "bigger builds"
 # (0.46.9) writes /cli/settings/update; the owner's switch, exit 3, line once.
 run agent settings set computePreview true
 [ "$RC" = 3 ] && ok || bad "settings set: exit $RC, want 3 ($ERR)"
-[ "$(last_err_lines)" = "It can't be requested."$'\n'"$NO_CARD_FEEDBACK" ] && ok || bad "settings set: last stderr lines are '$(last_err_lines)'"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "settings set: last stderr line is '$(last_err_line)'"
 [ "$(printf '%s\n' "$ERR" | grep -c "It can't be requested.")" = 1 ] && ok || bad "settings set: the closing line must print once"
 grep -q '^POST /cli/settings/update {"computePreview":true}$' "$LOG" && ok || bad "settings set: wrong request: $(cat "$LOG")"
 
@@ -358,7 +352,7 @@ run agent ci run
 # widening its own inbox access (M0) is the owner's, exit 3, line once.
 run agent mail access grant ops@brand.test "$SANDBOX/ws" --level send
 [ "$RC" = 3 ] && ok || bad "mail access grant: exit $RC, want 3 ($ERR)"
-[ "$(last_err_lines)" = "It can't be requested."$'\n'"$NO_CARD_FEEDBACK" ] && ok || bad "mail access grant: last stderr lines are '$(last_err_lines)'"
+[ "$(last_err_line)" = "It can't be requested." ] && ok || bad "mail access grant: last stderr line is '$(last_err_line)'"
 [ "$(printf '%s\n' "$ERR" | grep -c "It can't be requested.")" = 1 ] && ok || bad "mail access grant: the closing line must print once"
 grep -q '^POST /cli/mail/access/grant ' "$LOG" && ok || bad "mail access grant: never reached the stub: $(cat "$LOG")"
 

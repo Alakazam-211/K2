@@ -610,11 +610,16 @@ fn a_refusal_s_lines() {
         "k2 firewall: error: boom: why\n"
     );
     assert_eq!(
-        lines(r#"{"error":[1,"a"],"permission":{"requestable":false}}"#),
+        lines(r#"{"error":[1,"a"],"permission":{"requestable":false,"feedback":true}}"#),
         format!(
             "k2 firewall: error: [1, 'a']\nIt can't be requested.\n{}\n",
             crate::transport::permission::NO_CARD_FEEDBACK
         )
+    );
+    // Without the daemon's feedback flag (agents may not report): no line.
+    assert_eq!(
+        lines(r#"{"error":[1,"a"],"permission":{"requestable":false}}"#),
+        "k2 firewall: error: [1, 'a']\nIt can't be requested.\n"
     );
     assert_eq!(lines("{}"), "k2 firewall: error: None\n");
     assert_eq!(

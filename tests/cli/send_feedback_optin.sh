@@ -85,7 +85,7 @@ def settings(mode):
 CANT = {"requestable": False, "where": "a person does this, in Settings"}
 REFUSALS = {
     "agents_off": (403, {"ok": False, "error": "agents_off", "message": "Agents don't report K2 problems on this server: a person hasn't allowed it.", "permission": CANT}),
-    "scope_off": (403, {"ok": False, "error": "scope_off", "message": "On this server agents report only K2 CLI problems (--scope cli, with the command you ran).", "permission": CANT}),
+    "scope_off": (403, {"ok": False, "error": "scope_off", "message": "On this server agents report only K2 CLI problems (--scope cli, with the command you ran).", "permission": dict(CANT, feedback=True)}),
     "command_required": (400, {"ok": False, "error": "command_required", "message": "A cli report names the command you ran."}),
     "bad_command": (400, {"ok": False, "error": "bad_command", "message": "command is the one line you ran, at most 1000 bytes."}),
     "bad_scope": (400, {"ok": False, "error": "bad_scope", "message": "scope is cli or platform."}),
@@ -310,15 +310,23 @@ run agent send-feedback "x" --scope cli --command "   "
 want_rc 2 "--command blank"
 no_requests "--command blank"
 
-# 0.46.18: with no card, the refusal's last line is how to send feedback.
-NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 echo "== send: the daemon's refusals =="
+# 0.46.18: the no-card feedback line follows the daemon's "feedback" flag
+# (set while agents may report). agents_off: none, so an agent a person
+# hasn't allowed is never pointed at send-feedback; scope_off (agents may
+# report CLI problems): the line closes the refusal.
+NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 for code in agents_off scope_off; do
     echo "$code" > "$REFUSE"
     run agent send-feedback "x" --scope platform
     want_rc 3 "$code"
     want_has "$code: the code on stderr" "$ERR" "\"error\": \"$code\""
-    want_eq "$code: the closing lines last" "$(printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
+    if [ "$code" = agents_off ]; then
+        want_eq "$code: the closing line last" "$(last_err_line)" "It can't be requested."
+        want_not "$code: no feedback line while agents may not report" "$ERR" "send-feedback \"<what"
+    else
+        want_eq "$code: the closing lines last" "$(printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -2)" "It can't be requested."$'\n'"$NO_CARD_FEEDBACK"
+    fi
 done
 for code in command_required bad_command bad_scope; do
     echo "$code" > "$REFUSE"

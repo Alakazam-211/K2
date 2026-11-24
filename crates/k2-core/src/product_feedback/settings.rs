@@ -158,6 +158,16 @@ impl Settings {
     }
 }
 
+/// Agents may report problems with `send-feedback` now: sending is on and a
+/// person allowed agents (at least CLI problems). The same rule as the
+/// AGENTS.md section (`teach::agents_md_section`) and the refusal's
+/// no-card feedback line (`permission::request::PermissionRefusal`'s
+/// `feedback`, 0.46.18).
+pub fn agents_may_report() -> bool {
+    let s = load();
+    s.enabled && s.agent_policy().cli
+}
+
 pub fn path() -> PathBuf {
     crate::paths::k2_home().join("product-feedback.json")
 }

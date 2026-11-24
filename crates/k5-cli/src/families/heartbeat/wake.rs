@@ -675,8 +675,10 @@ pub fn refused(route: &str, code: u16, data: Option<&Value>, raw: &[u8]) -> End 
                 }
             }
             stderr.push_str("It can't be requested.\n");
-            stderr.push_str(crate::transport::permission::NO_CARD_FEEDBACK);
-            stderr.push('\n');
+            if get_or(&p, "feedback", Value::Null) == Value::Bool(true) {
+                stderr.push_str(crate::transport::permission::NO_CARD_FEEDBACK);
+                stderr.push('\n');
+            }
             return End {
                 stderr,
                 exit: Exit::Refused,

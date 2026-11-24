@@ -300,13 +300,11 @@ wake
 is_error "a refusal with a permission card" 3 \
     "Error: k2 heartbeat wake: K2's server refused /cli/agents/list with HTTP 403: not allowed: read heartbeats" \
     "Ask with: $ASK"
-# 0.46.18: with no card, the refusal's last line is how to send feedback.
-NO_CARD_FEEDBACK='If you think this should be possible, tell the K2 team: k2 send-feedback "<what you were trying to do>"'
 plan '{"/cli/agents/list": [403, "{\"error\":{\"code\":\"people_only\",\"hint\":\"only a person can do this\"},\"permission\":{\"requestable\":false,\"hint\":\"Ask your person to run it.\"}}"], "/cli/inbox/list": [200, "[]"]}'
 wake
 is_error "a refusal that can't be requested" 3 \
     "Error: k2 heartbeat wake: K2's server refused /cli/agents/list with HTTP 403: only a person can do this" \
-    $'Ask your person to run it.\nIt can\'t be requested.\n'"$NO_CARD_FEEDBACK"
+    $'Ask your person to run it.\nIt can\'t be requested.'
 plan '{"/cli/agents/list": [403, "{\"error\":\"forbidden\"}"], "/cli/inbox/list": [200, "[]"]}'
 wake
 is_error "a refusal with no permission card" 1 \

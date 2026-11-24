@@ -652,7 +652,7 @@ def refused(route, code, data, raw):
             hint = p.get('hint')
             if isinstance(hint, str) and hint:
                 print(hint, file=sys.stderr)
-            print(\"It can't be requested.\", __import__('os').environ['_K2_NO_CARD_FEEDBACK'], sep=\"\\n\", file=sys.stderr)
+            print(\"It can't be requested.\", *([__import__('os').environ['_K2_NO_CARD_FEEDBACK']] if p.get('feedback') is True else []), sep=\"\\n\", file=sys.stderr)
             sys.exit(3)
     sys.exit(1)
 

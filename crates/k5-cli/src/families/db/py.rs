@@ -993,7 +993,9 @@ impl<'a> Py<'a> {
                     }
                 }
                 lines.push("It can't be requested.".to_string());
-                lines.push(crate::transport::permission::NO_CARD_FEEDBACK.to_string());
+                if at(p, "feedback") == Some(&Value::Bool(true)) {
+                    lines.push(crate::transport::permission::NO_CARD_FEEDBACK.to_string());
+                }
             }
             _ => {}
         }

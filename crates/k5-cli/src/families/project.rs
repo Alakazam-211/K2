@@ -988,7 +988,9 @@ fn permission_lines(p: &Value) -> Vec<String> {
             }
         }
         out.push("It can't be requested.".into());
-        out.push(crate::transport::permission::NO_CARD_FEEDBACK.into());
+        if get(pairs, "feedback") == Some(&Value::Bool(true)) {
+            out.push(crate::transport::permission::NO_CARD_FEEDBACK.into());
+        }
         return out;
     }
     Vec::new()

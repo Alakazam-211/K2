@@ -37,7 +37,7 @@ if isinstance(p, dict):
     if p.get("command"):
         print("Ask with: " + p["command"], file=sys.stderr)
     elif p.get("requestable") is False:
-        print("It can\x27t be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"], sep="\n", file=sys.stderr)
+        print("It can\x27t be requested.", *([__import__("os").environ["_K2_NO_CARD_FEEDBACK"]] if p.get("feedback") is True else []), sep="\n", file=sys.stderr)
 '
         [ "$as_json" = "1" ] && printf '%s\n' "$body"
         exit "$(_sidecar_exit_for "$code")"

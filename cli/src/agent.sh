@@ -769,7 +769,7 @@ for a in actions:
             elif p.get("requestable") is False:
                 if isinstance(p.get("hint"), str) and p["hint"]:
                     sys.stderr.write(p["hint"] + "\n")
-                sys.stderr.write("It can't be requested.\n" + __import__("os").environ["_K2_NO_CARD_FEEDBACK"] + "\n")
+                sys.stderr.write("It can't be requested.\n" + ((__import__("os").environ["_K2_NO_CARD_FEEDBACK"] + "\n") if p.get("feedback") is True else ""))
         sys.exit(3 if status in (401, 403) else 4 if status == 404 else 1)
     a["status"] = "done"
     changed = True
@@ -1422,7 +1422,7 @@ def note_permission(resp):
     elif p.get("requestable") is False:
         if isinstance(p.get("hint"), str) and p["hint"]:
             permission_lines.append(p["hint"])
-        permission_lines.extend(["It can't be requested.", __import__("os").environ["_K2_NO_CARD_FEEDBACK"]])
+        permission_lines.extend(["It can't be requested."] + ([__import__("os").environ["_K2_NO_CARD_FEEDBACK"]] if p.get("feedback") is True else []))
 
 def fail(code, hint, exit_code=1):
     sys.stderr.write(json.dumps({"error": {"code": code, "hint": hint}}) + "\n")

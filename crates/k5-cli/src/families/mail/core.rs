@@ -691,8 +691,10 @@ impl Py {
                             }
                         }
                         lines.push_str("It can't be requested.\n");
-                        lines.push_str(crate::transport::permission::NO_CARD_FEEDBACK);
-                        lines.push('\n');
+                        if matches!(attr_get(&perm, "feedback").ok().flatten(), Some(Value::Bool(true))) {
+                            lines.push_str(crate::transport::permission::NO_CARD_FEEDBACK);
+                            lines.push('\n');
+                        }
                     }
                 }
             }

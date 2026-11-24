@@ -346,7 +346,10 @@ fn not_cardable(id: &str) -> Option<CliResponse> {
             "error": { "code": code::NOT_CARDABLE, "hint": hint },
             "permission": match covered {
                 Some(by) => json!({ "action": by, "params": {}, "command": super::walls::ask_command(by, &Map::new()), "tail": super::walls::ask_tail(by, &Map::new()) }),
-                None => json!({ "requestable": false, "where": n.r#where }),
+                // The same object as every other refusal, its no-card
+                // feedback flag included (0.46.18).
+                None => serde_json::to_value(k2_core::permission::request::PermissionRefusal::not_requestable(n.r#where))
+                    .expect("PermissionRefusal serializes"),
             },
         })
         .to_string(),

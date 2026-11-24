@@ -216,7 +216,10 @@ pub fn note(text: &[u8]) -> Option<Note> {
         }
     }
     lines.push("It can't be requested.".to_string());
-    lines.push(NO_CARD_FEEDBACK.to_string());
+    // Only while the daemon says agents may report (0.46.18).
+    if get(permission, "feedback") == Some(&Value::Bool(true)) {
+        lines.push(NO_CARD_FEEDBACK.to_string());
+    }
     Some(Note { lines })
 }
 
@@ -392,9 +395,20 @@ mod tests {
         .unwrap();
         assert_eq!(n.lines(), ["Ask with: k2 permission request a.b --why ...".to_string()]);
         assert!(!n.text().contains("send-feedback"), "{}", n.text());
-        // Without one, the feedback line closes the note.
-        let n = note(br#"{"permission":{"requestable":false,"where":"Settings"}}"#).unwrap();
+        // Without one, the feedback line closes the note while the daemon
+        // says agents may report (`feedback: true`, 0.46.18)...
+        let n = note(br#"{"permission":{"requestable":false,"where":"Settings","feedback":true}}"#).unwrap();
         assert_eq!(n.lines().last().map(String::as_str), Some(NO_CARD_FEEDBACK));
+        // ...and never otherwise: absent, false or not a boolean.
+        for body in [
+            &br#"{"permission":{"requestable":false,"where":"Settings"}}"#[..],
+            br#"{"permission":{"requestable":false,"where":"Settings","feedback":false}}"#,
+            br#"{"permission":{"requestable":false,"where":"Settings","feedback":"true"}}"#,
+            br#"{"permission":{"requestable":false,"where":"Settings","feedback":1}}"#,
+        ] {
+            let n = note(body).unwrap();
+            assert_eq!(n.lines(), ["It can't be requested.".to_string()], "{}", String::from_utf8_lossy(body));
+        }
         assert_eq!(
             NO_CARD_FEEDBACK,
             format!(
@@ -408,7 +422,7 @@ mod tests {
     #[test]
     fn not_requestable_has_the_hint_then_the_line() {
         assert_eq!(
-            lines(r#"{"permission":{"requestable":false,"hint":"Only a person can."}}"#),
+            lines(r#"{"permission":{"requestable":false,"hint":"Only a person can.","feedback":true}}"#),
             Some(vec![
                 "Only a person can.".to_string(),
                 "It can't be requested.".to_string(),
@@ -416,21 +430,21 @@ mod tests {
             ])
         );
         assert_eq!(
-            lines(r#"{"permission":{"requestable":false}}"#),
+            lines(r#"{"permission":{"requestable":false,"feedback":true}}"#),
             Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
         assert_eq!(
-            lines(r#"{"permission":{"requestable":false,"hint":""}}"#),
+            lines(r#"{"permission":{"requestable":false,"hint":"","feedback":true}}"#),
             Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
         // A hint that isn't a string is left out.
         assert_eq!(
-            lines(r#"{"permission":{"requestable":false,"hint":3}}"#),
+            lines(r#"{"permission":{"requestable":false,"hint":3,"feedback":true}}"#),
             Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
         // An empty command falls to the requestable test.
         assert_eq!(
-            lines(r#"{"permission":{"command":"","requestable":false}}"#),
+            lines(r#"{"permission":{"command":"","requestable":false,"feedback":true}}"#),
             Some(vec!["It can't be requested.".to_string(), NO_CARD_FEEDBACK.to_string()])
         );
     }
@@ -478,7 +492,7 @@ mod tests {
     fn the_text_is_what_bash_prints() {
         let n = note(br#"{"permission":{"command":"k2 x\n\n"}}"#).unwrap();
         assert_eq!(n.text(), "Ask with: k2 x\n");
-        let n = note(br#"{"permission":{"requestable":false,"hint":"a\nb"}}"#).unwrap();
+        let n = note(br#"{"permission":{"requestable":false,"hint":"a\nb","feedback":true}}"#).unwrap();
         assert_eq!(n.text(), format!("a\nb\nIt can't be requested.\n{NO_CARD_FEEDBACK}\n"));
         let n = note(br#"{"permission":{"command":"a\u0000b"}}"#).unwrap();
         assert_eq!(n.text(), "Ask with: ab\n");

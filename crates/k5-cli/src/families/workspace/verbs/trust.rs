@@ -582,7 +582,13 @@ fn body(d: &Value, mode: &str, folder: &str, p: &mut Py) -> R<Exit> {
                 ));
             } else {
                 p.eprint("It can't be requested.");
-                p.eprint(crate::transport::permission::NO_CARD_FEEDBACK);
+                let feedback = matches!(
+                    match d { Value::Object(pairs) => get(pairs, "permission"), _ => None },
+                    Some(Value::Object(pp)) if get(pp, "feedback") == Some(&Value::Bool(true))
+                );
+                if feedback {
+                    p.eprint(crate::transport::permission::NO_CARD_FEEDBACK);
+                }
             }
             return Ok(Exit::Refused);
         }

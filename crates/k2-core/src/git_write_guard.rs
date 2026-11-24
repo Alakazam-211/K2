@@ -197,6 +197,50 @@ pub fn check(dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::names_program;
+    use crate::git_fixture as fx;
+
+    /// The K2-made record and the trust lookup compare one path form on
+    /// every system: marked through one spelling (a `..` detour, or the
+    /// temp dir as given: /var on macOS), found through another (the
+    /// canonical one), and never stored as a Windows verbatim `\\?\` path.
+    #[test]
+    fn made_and_trusted_compare_one_path_form() {
+        let _home = crate::test_env::TempHome::new();
+        crate::db::init_for_tests();
+        let d = fx::init("guard-forms");
+        std::fs::create_dir_all(d.join("sub")).expect("sub");
+        let detour = d.join("sub").join("..");
+        let canonical = dunce::canonicalize(&d).expect("canonical");
+
+        super::mark_k2_made(&detour);
+        let list = std::fs::read_to_string(super::made_list().expect("K2 home")).expect("the K2-made record");
+        assert_eq!(list.lines().count(), 1, "{list}");
+        assert!(!list.contains(r"\\?\"), "no verbatim path: {list}");
+        assert!(!list.contains(".."), "resolved: {list}");
+        for spelling in [&d, &detour, &canonical] {
+            let repo = crate::gitx::discover(spelling).expect("repo");
+            assert!(super::is_k2_made(&repo), "found through {}", spelling.display());
+        }
+        super::mark_k2_made(&canonical);
+        let again = std::fs::read_to_string(super::made_list().expect("K2 home")).expect("record");
+        assert_eq!(again, list, "the same repository is recorded once, in one form");
+
+        // Trust decided through one spelling holds through the others.
+        std::fs::write(d.join(".git/config"), {
+            let mut t = std::fs::read_to_string(d.join(".git/config")).expect("config");
+            t.push_str("[filter \"x\"]\n\tclean = cat\n");
+            t
+        })
+        .expect("config");
+        for spelling in [&d, &detour, &canonical] {
+            assert!(!super::is_trusted(spelling), "untrusted through {}", spelling.display());
+        }
+        crate::cli_folder_trust::gate::decide(&d.to_string_lossy(), crate::cli_folder_trust::gate::Decision::Always, "owner", None)
+            .expect("trust");
+        for spelling in [&d, &detour, &canonical] {
+            assert!(super::is_trusted(spelling), "trusted through {}", spelling.display());
+        }
+    }
 
     #[test]
     fn every_program_key_counts_in_any_case() {

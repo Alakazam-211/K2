@@ -146,6 +146,10 @@ app catalog --help|app/catalog|out|0
 app catalog -h|app/catalog|out|0
 app chat --help|app/chat|out|0
 app chat -h|app/chat|out|0
+app compat --help|app/compat|out|0
+app compat -h|app/compat|out|0
+app cron --help|app/cron|out|0
+app cron -h|app/cron|out|0
 app data --help|app/data|out|0
 app data -h|app/data|out|0
 app db --help|app/db|out|0
@@ -158,6 +162,8 @@ app expose --help|app/expose|out|0
 app expose -h|app/expose|out|0
 app guest rooms --help|app/guest/rooms|out|0
 app guest rooms -h|app/guest/rooms|out|0
+app identity --help|app/identity|out|0
+app identity -h|app/identity|out|0
 app init --help|app/init|out|0
 app init -h|app/init|out|0
 app links --help|app/links|out|0

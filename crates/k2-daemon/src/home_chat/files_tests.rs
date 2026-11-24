@@ -163,7 +163,9 @@ fn the_size_limits_refuse_with_413() {
     let r = call(files::CREATE, json!({"conv": "900", "filename": "big.mov", "size": 1001})).unwrap_err();
     assert_eq!((r.status, r.code.as_str(), r.details.clone()), (413, "too_large", Some(json!({"max": 1000}))));
     assert!(api.calls_to("/api/v1/channels/900/uploads").is_empty(), "refused before Sew");
-    let st = call("/cli/home-chat/status", json!({})).expect("status");
+    let st = routes::handle("/cli/home-chat/status", Ok(alex()), false, &HashMap::new(), b"");
+    assert!(st.status.starts_with("200"), "{}: {}", st.status, st.body);
+    let st: Value = serde_json::from_str(&st.body).expect("status json");
     assert_eq!(st["files"], json!({"maxBytes": 1000, "perMessage": 10, "chunkBytes": MIB, "maxRequestBytes": files::MAX_REQUEST_BYTES}));
 
     follower::hold(ALEX).state.lock().unwrap().files_max_bytes = None;
@@ -267,7 +269,8 @@ fn a_file_streams_with_range_etag_and_safe_headers() {
     assert_eq!(header(&f, "content-disposition"), Some("attachment; filename=\"notes.pdf\"; filename*=UTF-8''notes.pdf"));
     let head = files::head_of(&f);
     assert!(head.starts_with("HTTP/1.1 206 Partial Content\r\n") && head.contains("Connection: close\r\n"), "{head}");
-    let path = &api.fetches.lock().unwrap()[0].0;
+    // A clone: a guard held here would block the fake's next fetch.
+    let path = api.fetches.lock().unwrap()[0].0.clone();
     assert_eq!(path, "/api/v1/files/7002?exp=1&sig=s", "fetched on Sew's loopback path");
 
     let f = files::fetch(&alex(), &q(&[("id", "7002")]), &[("if-none-match".into(), "\"e1\"".into())]).expect("unchanged");

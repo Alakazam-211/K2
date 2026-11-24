@@ -243,7 +243,7 @@ fn apply_transfer(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
     let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or(serde_json::Value::Null);
     if !r.status.starts_with("200") || v["success"] != true {
         let code = v["code"].as_str().or_else(|| v.pointer("/error/code").and_then(|c| c.as_str())).unwrap_or("transfer_refused");
-        let message = v["error"].as_str().or_else(|| v.pointer("/error/hint").and_then(|c| c.as_str())).unwrap_or("K2 couldn't move it");
+        let message = v["error"].as_str().or_else(|| v.pointer("/error/hint").and_then(|c| c.as_str())).unwrap_or(concat!(k2_core::product_name!(), " couldn't move it"));
         return Applied::Refused { code: code.to_string(), message: message.to_string() };
     }
     if v["projectId"] != json!(ctx.workspace_id) {

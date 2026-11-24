@@ -2438,9 +2438,10 @@ pub fn set_expose(project_id: &str, name: &str, public: bool, by: &str) -> Resul
     let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
     if row.kind == KIND_SKIN || row.cmd == ps::CMD_APP_SENTINEL {
-        return Err(PublishError::bad(
-            "expose is for --cmd services. An App and a --skin site listen where K2 starts them, on this server only",
-        ));
+        return Err(PublishError::bad(format!(
+            "expose is for --cmd services. An App and a --skin site listen where {} starts them, on this server only",
+            k2_core::brand::PRODUCT_NAME
+        )));
     }
     crate::publish_expose::set(&row.id, public, by).map_err(PublishError::fail)?;
     let value = if public { crate::publish_expose::PUBLIC } else { crate::publish_expose::SERVER };

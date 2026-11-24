@@ -1454,8 +1454,12 @@ fn handle_expose(params: &HashMap<String, String>) -> CliResponse {
         return frame_error(
             "403 Forbidden",
             "owner_only",
-            "k2 publish expose is the owner's: a service that listens beyond this server skips its front door (:443) and any sign-in. \
-             Ask your human to run it from a terminal outside K2. To listen on this server only, use HOST and PORT (K2 sets them).",
+            &format!(
+                "{cli} publish expose is the owner's: a service that listens beyond this server skips its front door (:443) and any sign-in. \
+                 Ask your human to run it from a terminal outside {product}. To listen on this server only, use HOST and PORT ({product} sets them).",
+                cli = k2_core::brand::CLI_NAME,
+                product = k2_core::brand::PRODUCT_NAME,
+            ),
         );
     }
     let project = match need_project(params) {
@@ -1469,7 +1473,13 @@ fn handle_expose(params: &HashMap<String, String>) -> CliResponse {
     let public = match str_param(params, "expose").trim() {
         crate::publish_expose::PUBLIC => true,
         crate::publish_expose::SERVER => false,
-        _ => return frame_error("400 Bad Request", "usage", "expose is public or server (k2 publish expose <name> public|server)"),
+        _ => {
+            return frame_error(
+                "400 Bad Request",
+                "usage",
+                &format!("expose is public or server ({} publish expose <name> public|server)", k2_core::brand::CLI_NAME),
+            )
+        }
     };
     let project_id = match resolve_project_id(&project) {
         Ok(id) => id,

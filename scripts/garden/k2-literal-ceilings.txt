@@ -10,10 +10,20 @@
 # needs its reason; a skip for a path that is gone is an error. A skipped
 # file is still held line by line by the brand gate's cli rows
 # (scripts/cli-name-allowlist.txt).
+#
+# `keep <path> "<text>" <reason>`: the lines of a file that hold the text
+# keep a literal k2 on purpose (a value another program reads, a marker
+# read back, text sent to another server, a word that is not our command).
+# A keep row that holds back no line is an error. Rebrand step B7 step 1
+# moved every other line onto the brand's names.
 
 skip crates/k2-client/src/cli_copy.rs the CLI's own install names: the shim's marker, read back by our own code
 skip crates/k2-client/src/cli_install.rs the CLI's own install names: the links it makes and their notes
 skip crates/k2-core/src/app_templates/ App template files written into a repo, read by the App's developer
+skip crates/k2-core/src/contract/app.rs generated source: the doc comments contract-gen writes into the tracked app_surface.rs
+skip crates/k2-core/src/contract/gen.rs generated: the widget SDK and the zen guide pages contract-gen writes into cli/k2 (bash text, B8)
+skip crates/k2-core/src/contract/libs.rs generated: the libs page contract-gen writes into cli/k2 and cli/src (bash text, B8)
+skip crates/k2-core/src/contract/live.rs generated: the live page contract-gen writes into cli/k2 and cli/src (bash text, B8)
 skip crates/k2-core/src/feedback_brief.rs HTML briefs written to disk for the owner
 skip crates/k2-core/src/refusals/mod.rs the refusal registry; the CLI carries its own copy (_k2_refusals_json)
 skip crates/k2-core/src/refusals/rows.rs the refusal registry; the CLI carries its own copy (_k2_refusals_json)
@@ -23,13 +33,31 @@ skip crates/k2-core/src/workspace/context_layers.rs agent context files, written
 skip crates/k2-core/src/workspace/skill_regen.rs skill files written for agents (rebrand step B6)
 skip crates/k2-core/src/zen/skill.rs skill files written for agents
 
-600 apps
-371 mail
-193 compute
-160 apps (Sew)
-144 vault
-106 db
-105 zen
+keep crates/k2-core/src/jscheck/lint.rs "k2 object" not the command: the widget's JavaScript k2 object
+keep crates/k2-core/src/jscheck/lint.rs "k2 verb" not the command: the widget's JavaScript k2 object
+keep crates/k2-core/src/jscheck/lint.rs "k2 subscription" not the command: the widget's JavaScript k2 object
+keep crates/k2-core/src/jscheck/types.rs "k2 line" not the command: a line of widget JavaScript that uses the k2 object
+keep crates/k2-core/src/zen/widget_runs.rs "k2 verbs" not the command: the widget's JavaScript k2 object
+keep crates/k2-daemon/src/apps/grace.rs "k2 app key" stored: a vault secret's origin tag
+keep crates/k2-daemon/src/apps/seal.rs "k2 app seal" stored: a vault secret's origin tag
+keep crates/k2-daemon/src/apps/handover.rs "k2 app handover" stored: the origin k2-vault writes (vault.rs copy_to) and this compares
+keep crates/k2-daemon/src/sew/routes.rs "identity is k2 or standalone" wire: k2 is the Sew identity value
+keep crates/k2-daemon/src/sew/supervisor.rs "identity is k2 or standalone" wire: k2 is the Sew identity value
+keep crates/k2-daemon/src/sql/query.rs "k2 row cap" stored: a marker put into SQL and found again in Postgres's error text
+keep crates/k2-daemon/src/sql/sysops.rs "k2-root-helper protocol 15" test code: a #[cfg(test)] fake's answer
+keep crates/k2-daemon/src/federation_routes.rs "with k2 sessions" sent to another server: the answer a federation peer gets (step 2 sends a code)
+keep crates/k2-daemon/src/vault_handoff_routes.rs "To give it: k2 vault send" sent to another server: the ask a peer's agent reads (step 2 sends a code)
+keep crates/k2-daemon/src/mail/calendar_share.rs "k2 group (shared calendars)" outside: a tag in a Stalwart group's description
+keep crates/k2-daemon/src/permission/actions/postal.rs "p5 k2 link" outside: p5's own subcommand, a word of p5's
+keep crates/k2-daemon/src/handoff_setup.rs "RuntimeDirectory=k2" outside: systemd's RuntimeDirectory value, a folder name
+
+561 apps
+369 mail
+186 compute
+158 apps (Sew)
+139 vault
+103 db
+94 zen
 65 other
 60 doc
 45 organization
@@ -41,28 +69,26 @@ skip crates/k2-core/src/zen/skill.rs skill files written for agents
 27 sim
 26 setup
 23 workspace
-20 agent sidecar
+19 agent sidecar
 17 desktop
 17 firewall
 16 thread
 15 agent
 15 board
 14 domain
-13 clone
 12 heartbeat
 11 agent hire
 11 connect
-11 fed
 11 front
 11 msg/postal
+10 fed
 10 workspace trust
-9 contract (API docs)
+9 clone
 9 job
 8 llm
 6 git tools
 5 approve
 4 sources
-3 permission card checks and applies
 3 terminal
 2 feedback
 2 tickets

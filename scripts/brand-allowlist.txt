@@ -15,61 +15,38 @@
 45 K2 crates/k2-daemon/src/apps/relay_claims.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 28 K2 crates/k2-daemon/src/vault_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 24 K2 crates/k2-daemon/src/email_notify/verify.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-24 K2 src/renderer/components/Settings/sections/AgentsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 23 K2 crates/k2-daemon/src/mail/forward.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/workspace/context_layers.rs keeper: wire; the built-in packs' author value K2, which hire/template/format.rs checks
 22 K2 crates/k2-daemon/src/overlay_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 22 K2 crates/k2-root-proto/src/apps.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 21 K2 crates/k2-daemon/src/front443/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-21 K2 src/renderer/components/Settings/sections/ZenGardensAccessPage.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 20 K2 crates/k2-daemon/src/mail/forward_verify.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-20 K2 src/renderer/components/Desktop/desktop-state.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 19 K2 crates/k2-daemon/src/desktop/deskd_link.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 19 K2 crates/k2-daemon/src/inbox_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-19 K2 src/renderer/components/Settings/sections/ProjectsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 18 K2 crates/k2-core/src/llm_accounts/wallet.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 18 K2 crates/k2-daemon/src/folder_trust.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-18 K2 src/renderer/components/Settings/sections/sew-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 17 K2 crates/k2-daemon/src/mail/defaults.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-17 K2 src/renderer/lib/context-stack.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 crates/k2-core/src/app_templates/mod.rs keeper: K2's patched wry, the upstream repo that holds the patch (a fact, the same in every brand)
-4 K2 crates/k2-core/src/workspace/skill_regen.rs keeper: the K2:MIGRATED_NOTES markers the reap reads back; K2, the software every brand builds, in the licence line (licence_line) and in the K2 repository
 16 K2 crates/k2-daemon/src/apps/custom_domain_flow.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 16 K2 crates/k2-daemon/src/mail/sieve_lockdown_live.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 16 K2 crates/k2-daemon/src/voice/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 16 K2 crates/k2-root-helper/src/apps.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-16 K2 src/renderer/components/Settings/sections/EmailNotificationsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 15 K2 crates/k2-daemon/src/apps/domains.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 15 K2 crates/k2-daemon/src/apps/podman_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 15 K2 crates/k2-daemon/src/mail/doctor.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 15 K2 crates/k2-daemon/src/sql/cluster.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 15 K2 crates/k2-root-proto/src/pg_major.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-15 K2 src/renderer/lib/zen/zen-lib-loader.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 14 K2 crates/k2-core/src/cli_folder_trust/gate.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 14 K2 crates/k2-daemon/src/vault_use_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-14 K2 src/renderer/components/Settings/sections/ComputeSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-14 K2 src/renderer/components/Settings/sections/DomainsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-14 K2 src/renderer/components/Settings/sections/PermissionsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 13 K2 crates/k2-daemon/src/apps/auto_prepare.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 13 K2 crates/k2-daemon/src/apps/pg_choice.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 13 K2 crates/k2-daemon/src/sew/recording.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 13 K2 crates/k2-node/src/main_unix.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-13 K2 src/renderer/components/Settings/sections/ConnectionsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-13 K2 src/renderer/components/Settings/sections/EmailHostingSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-13 K2 src/renderer/components/Settings/sections/LocalGrokBotsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+13 K2 src/renderer/lib/context-stack.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 12 K2 crates/k2-daemon/src/apps/grace.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 12 K2 crates/k2-daemon/src/sew/voice.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-12 K2 src/renderer/lib/editor/live/live-notices.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-12 K2 src/renderer/lib/voice/voice-wire.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 crates/k2-core/src/llm_accounts/identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-daemon/src/app_user_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-daemon/src/mail/forward_sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 11 K2 crates/k2-root-helper/src/creds.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-11 K2 src/renderer/components/Help/k2Nouns.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-11 K2 src/renderer/components/Settings/sections/AppsResourcesSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-11 K2 src/renderer/components/Settings/sections/PeopleSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-11 K2 src/renderer/components/Settings/sections/RemoteDesktopSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-11 K2 src/renderer/components/Settings/sections/VaultDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 10 K2 crates/k2-core/src/contract/gen.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 10 K2 crates/k2-daemon/src/apps/rehost.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 10 K2 crates/k2-daemon/src/compute_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -78,29 +55,16 @@
 10 K2 crates/k2-daemon/src/publish_cards.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 10 K2 crates/k2-daemon/src/sew/s32.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 10 K2 crates/k2-daemon/src/voice/bff.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-10 K2 crates/k2-daemon/src/zen_access_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 10 K2 crates/k2-root-helper/src/pg_major.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 10 K2 crates/k2-vault/src/vault.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-10 K2 src/renderer/components/FileViewerPane/BoardFilePane.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-10 K2 src/renderer/components/Settings/sections/AgentSkillsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-10 K2 src/renderer/components/Settings/sections/AppUserDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-10 K2 src/renderer/components/Settings/sections/HomesSyncSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-10 K2 src/renderer/components/Settings/sections/SewSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-10 K2 src/renderer/lib/zen/zen-custom-bridge.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 9 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-core/src/db/home_switch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-core/src/deploy/validate.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-core/src/hire/template/upgrade.rs keeper: names the K2:MANAGED markers a person finds in ROLE.md
 9 K2 crates/k2-daemon/src/apps/updates_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-daemon/src/permission/actions/password_reset.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-daemon/src/sql/sysops.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+9 K2 crates/k2-daemon/src/zen_access_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-root-proto/src/templates.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-9 K2 src/renderer/components/AgentPersonaEditor/AgentPersonaEditor.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-9 K2 src/renderer/components/SessionView/SecretCard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-9 K2 src/renderer/components/Settings/sections/AdminAccessDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-9 K2 src/renderer/components/Settings/shared/AgentAccountsColumn.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-9 K2 src/renderer/lib/voice/video-labels.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 crates/k2-core/src/skills/writer.rs keeper: the <!-- K2:BEGIN --> and <!-- K2:END --> markers upsert_k2_section and onboarding's block removal read back
 8 K2 crates/k2-core/src/skin.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-core/src/workspace/harness.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-core/src/zen/schema.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -119,19 +83,13 @@
 8 K2 crates/k2-daemon/src/vault/server_refs.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 8 K2 crates/k2-node/src/pkgsys.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 8 K2 src-tauri/src/commands/linux_pkg_update.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-8 K2 src/renderer/components/ConnectionGate.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-8 K2 src/renderer/components/Settings/sections/apps-server-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-8 K2 src/renderer/components/Settings/shared/LlmLoginSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-8 K2 src/renderer/components/Settings/shared/PhonePairing.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 7 K2 crates/k2-core/src/desktop/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-core/src/suite/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-core/src/zen/bundle.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-core/src/zen/stdlib.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-core/src/zen/store.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-core/src/zen/version_carry.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-6 K2 crates/k2-daemon/src/apps/approvals.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-daemon/src/apps/catalog_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-6 K2 crates/k2-daemon/src/apps/db_connect.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-daemon/src/apps/disk_watch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-daemon/src/compute_local.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 crates/k2-daemon/src/permission/actions/switches.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -140,12 +98,6 @@
 7 K2 crates/k2-daemon/src/sql/pgmove/dual.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 src-tauri/src/commands/settings.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 src-tauri/src/commands/updater.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-7 K2 src/renderer/components/Settings/sections/AppsServerSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-7 K2 src/renderer/components/Settings/sections/VoiceRoomsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-7 K2 src/renderer/components/Settings/sections/WakeSchedulerSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-7 K2 src/renderer/components/Settings/sections/access-audit-words.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-7 K2 src/renderer/lib/product-feedback.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-7 K2 src/renderer/lib/published-subdomains.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 6 K2 crates/k2-core/src/llm_accounts/store.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-core/src/product_feedback/wire.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-core/src/refusals/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -154,10 +106,11 @@
 6 K2 crates/k2-daemon/src/app_pairing/owner_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/app_push/owner_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/apps/access.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+6 K2 crates/k2-daemon/src/apps/approvals.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+6 K2 crates/k2-daemon/src/apps/db_connect.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/apps/engine_gate.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/apps/handover_plan.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/chat_pass/mint.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-6 K2 crates/k2-daemon/src/compute_move.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/mail/jmap.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/mail/routes_send.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/sew/fetch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -168,24 +121,11 @@
 6 K2 crates/k2-daemon/src/transfer_door.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/update_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 6 K2 crates/k2-daemon/src/zen_lib_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+6 K2 crates/k2-root-proto/src/agent_scope.rs keeper: stored; the systemd Description= values and unit comments of the agent slices and scopes the root helper creates (k2-root-proto links no brand; read in systemctl status)
 6 K2 crates/k2-vault/src/handoff.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-6 K2 src/renderer/components/AgentTemplates/CreateAgentSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/RemoveWorkspaceDialog/RemoveWorkspaceDialog.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/Settings/lib/compute-account.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/Settings/sections/AppsCatalogSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/Settings/sections/CompanionSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/Settings/sections/EditorsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/Settings/sections/VaultSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/components/Settings/sections/vault-copy.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/lib/agent-templates-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/lib/editor/save-model/notices.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/lib/live-view/shared/notices.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/lib/live-view/timeline/wording.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-6 K2 src/renderer/stores/voice-core.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 5 K2 crates/k2-app-engine/src/quadlet.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 5 K2 crates/k2-core/src/contract/libs.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/push/vectors.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-4 K2 crates/k2-core/src/skills/version.rs keeper: markers read back: K2:MANAGED (parse_skill, hire/template upgrade and apply, migrations), the old yours line (read in files written before the new one, never written), and the # K2 heading the legacy-file check reads
 5 K2 crates/k2-core/src/tunnel/connector.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/workspace/onboarding.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/zen/sync.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -219,30 +159,19 @@
 5 K2 crates/k2-vault/src/boxmove.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 5 K2 src-tauri/src/linux_daemon.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 src-tauri/src/menu.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-5 K2 src/renderer/components/Settings/sections/AdminAccessPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/AgentContextDiagram.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/GeneralSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/MailReaderLogSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/SendFeedbackRows.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/StylesSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/ZenWidgetData.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/components/Settings/sections/mail-forward-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/lib/board-file/board-file-session.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/lib/connect-validate.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/lib/federation.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-5 K2 src/renderer/lib/live-view/timeline/scenarios-v1.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 4 K2 crates/k2-core/src/agent_hooks/install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-core/src/app_templates/doctor.rs keeper: K2's patched copy, the upstream repo that holds the wry patch (a fact, the same in every brand), and the WryPatch::K2 variant (code)
+4 K2 crates/k2-core/src/app_templates/mod.rs keeper: K2's patched wry, the upstream repo that holds the patch (a fact, the same in every brand)
 4 K2 crates/k2-core/src/external_agents/grokbot.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/firewall.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/heartbeats/wakeup_wait.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-core/src/hire/template/format.rs keeper: wire; a built-in template's author value K2 (template.toml), and the error lines that name that value
 4 K2 crates/k2-core/src/push/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/site_visibility.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-core/src/skills/version.rs keeper: markers read back: K2:MANAGED (parse_skill, hire/template upgrade and apply, migrations), the old yours line (read in files written before the new one, never written), and the # K2 heading the legacy-file check reads
 4 K2 crates/k2-core/src/skin_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/tunnel/identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/tunnel/render.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-core/src/wiki/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-core/src/workspace/skill_regen.rs keeper: the K2:MIGRATED_NOTES markers the reap reads back; K2, the software every brand builds, in the licence line (licence_line) and in the K2 repository
 4 K2 crates/k2-core/src/zen/card_moves.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/app_account_deletion.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/apps/box_prep.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -255,6 +184,7 @@
 4 K2 crates/k2-daemon/src/apps/supervisor.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/clone_proposal_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/compute_git.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-daemon/src/compute_move.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/compute_trust.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/desktop/virtual_desktop.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-daemon/src/docs/host.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -292,34 +222,14 @@
 4 K2 crates/k2-root-proto/src/creds.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 4 K2 crates/k2-root-proto/src/podman.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 4 K2 crates/k2-vault/src/policy.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-4 K2 src/renderer/components/AgentIdentity/AgentIdentityFields.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/FileViewerPane/textLock.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/GitTools/GitToolsNotice.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/GrokBots/GrokBotChatView.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/SendFeedback/SendFeedbackDialog.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/ApiKeyDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/AppApprovalsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/CodeEditorSettingsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/ContextCatalogSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/FanoutConfirmModal.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/FolderTrustRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/components/Settings/sections/ZenGardenSyncControls.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/lib/live-view/scene/panel.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/lib/live-view/timeline/scenarios-watch.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/lib/zen/garden-access-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/lib/zen/zen-custom-blobs.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/lib/zen/zen-lib-notice.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/lib/zen/zen-thread-files.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/stores/home-rooms-oldb.mstest.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/stores/llm-accounts.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-4 K2 src/renderer/web/page-title.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 3 K2 crates/k2-app-engine/src/seccomp.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-core/src/app_templates/store.rs keeper: K2's patched wry and K2's public repo, the upstream repo that holds the patch (a fact, the same in every brand)
+3 K2 crates/k2-core/src/app_templates/doctor.rs keeper: K2's patched copy, the upstream repo that holds the wry patch (a fact, the same in every brand), and the WryPatch::K2 variant (code)
 3 K2 crates/k2-core/src/app_updates/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/deploy/static_site.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/disk_guard.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/git_tools.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/heartbeats/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+3 K2 crates/k2-core/src/hire/template/upgrade.rs keeper: names the K2:MANAGED markers a person finds in ROLE.md
 3 K2 crates/k2-core/src/jscheck/lint.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/llm_accounts/slots.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/product_feedback/store.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -379,30 +289,6 @@
 3 K2 crates/k2-root-proto/src/sew.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 src-tauri/src/native_voice/provider.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 src-tauri/src/tray.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 src/renderer/components/AgentTemplates/SaveTemplateSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Help/HelpExplorer.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/KesselSheet/KesselSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/LiveView/ActivityBar.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/LiveView/LivePreviewEntry.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Mobile/DevicePicker.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Projects/ProjectSettings.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/CustomThemeCreator.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/AccessAuditSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/AccessDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/AppHandoverSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/DataSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/K2ConnectSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/KeybindingsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/ZenGardensSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/canonicalAgentSeeds.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Settings/sections/tunnel-status.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/components/Zen/widgets/ZenGardenHistoryModal.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/hooks/useUpdateChecker.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/lib/live-view/shared/preview-keys.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/lib/local-daemon-update.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/lib/zen/zen-view.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/lib/zen/zen-widget-routes.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-3 K2 src/renderer/stores/connect-host.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 2 K2 crates/k2-approve/src/attest.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-approve/src/describe.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-client/src/macos_keychain.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -413,11 +299,13 @@
 2 K2 crates/k2-core/src/federation/tray.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/garden_data/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/hire/converge.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-core/src/hire/template/format.rs keeper: wire; a built-in template's author value K2 (template.toml), and the error lines that name that value
 2 K2 crates/k2-core/src/product_feedback/diagnostics.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/product_feedback/screenshot.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/secret_paths.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/sim/ios/simctl.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/sim/manager.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-core/src/skills/writer.rs keeper: the <!-- K2:BEGIN --> and <!-- K2:END --> markers upsert_k2_section and onboarding's block removal read back
 2 K2 crates/k2-core/src/skin_account_deletion.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/skin_ties.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-core/src/suite/seeds_json.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -501,6 +389,7 @@
 2 K2 crates/k2-node/src/sim/cli.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-rest/src/error.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-helper/examples/unix/creds_live.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+2 K2 crates/k2-root-proto/src/agent_scope_policy.rs keeper: stored; comments inside the D-Bus policy and the daemon unit drop-in the root helper writes for agent scopes (k2-root-proto links no brand)
 2 K2 crates/k2-root-proto/src/pg_dual.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-proto/src/pg_named.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-proto/src/sew_recording.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -508,78 +397,9 @@
 2 K2 crates/k2-vault/src/vault/agent_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-vault/src/vault/oauth_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/kessel-attest/src/main.rs keeper: the repo's URL in kessel-attest's help (the repo row says why)
-1 K2 crates/k2-core/src/sim/ios_node/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/zen/garden_access/mod.rs keeper: a Rust enum variant (Actor::K2, K2 itself as a Garden access actor), not the product's name in copy
-1 K2 crates/k2-daemon/src/home_chat/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (the repo row says why)
 2 K2 src-tauri/src/commands/secrets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 src-tauri/src/webview_watchdog.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 src/renderer/App.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/AgentPane/FolderTrustHold.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/AgentsPanel/AgentsPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Desktop/DesktopToolbar.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Desktop/desktop-wire.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/FileViewerPane/BoardWebStub.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/KesselSheet/KesselOffer.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/LiveView/LiveWorkbookView.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/LiveView/WorkbookChrome.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Mobile/useSimKeyboard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Projects/ProjectDashboard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Projects/ProjectStates.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Projects/project-settings.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/SessionView/PermissionCard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/SessionView/PermissionReveal.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/ContextCatalogCreator.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/AppPhonePairing.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/CanonicalAgentButtons.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/CanonicalAgentModal.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/ComputeAdminParts.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/DataSourcesSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/MailboxForwardingPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/MultiplayerSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/NotificationsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/SewAccessParts.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/SkinAccessSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/StartPageRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/TicketsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/UserTemplatesSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/ZenWidgetDataRestore.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/app-access-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/context-catalog-copy.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/email-notify-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/multiplayer-cores-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/sew-ui.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/sections/user-access-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Settings/shared/AppFontRows.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Timer/KeepAwakeButton.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Timer/UsageButton.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/TopBar/AdminProfileButton.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/TopBar/K2MarkButton.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Voice/VideoControls.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Voice/VoicePopover.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/WhatsNewModal/WhatsNewModal.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Zen/ZenSyncPreviewBar.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Zen/widgets/ZenCustomFrame.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Zen/widgets/ZenCustomWidget.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/components/Zen/widgets/ZenWorkSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/kessel/room-writes.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/board-file/board-file-blobs.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/clone-vault.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/editor/save-model/write.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/grokbots.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/homes-sync/index.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/homes-sync/runner.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/live-view/scene/scenarios-more.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/live-view/shared/samples.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/live-view/timeline/snapshot.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/live-view/wording.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/zen/permission-sheet.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/zen/secret-sheet.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/zen/zen-custom-run.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/lib/zen/zen-links.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/stores/session-event-kinds.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/stores/update.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-2 K2 src/renderer/test-utils/setting-dropdown.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+2 K2 src/renderer/components/RemoveWorkspaceDialog/RemoveWorkspaceDialog.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 crates/k2-approve/src/lib.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-approve/src/payload.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-client/src/account_session.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -587,11 +407,13 @@
 1 K2 crates/k2-client/src/download_file.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-client/src/win_autostart.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
 1 K2 crates/k2-client/src/win_cli.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/agent_scope.rs keeper: stored; ADOPTED_DESCRIPTION, the adopted scope's systemd Description= the root helper writes (k2-root-proto's fixed text) and is_adopted reads back from systemctl show, so it matches the helper's in every brand
 1 K2 crates/k2-core/src/app_audit.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/app_grace/keys.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/app_requests.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/app_sdk/k2_server.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/app_sdk/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/app_templates/store.rs keeper: K2's patched wry and K2's public repo, the upstream repo that holds the patch (a fact, the same in every brand)
 1 K2 crates/k2-core/src/app_updates/dl_client.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/board/ops.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/board/schema.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -634,6 +456,7 @@
 1 K2 crates/k2-core/src/sew_chat/hub.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sim/android/sdk.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sim/ios_node/fake_node.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
+1 K2 crates/k2-core/src/sim/ios_node/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/skin_auth_door.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sources/lint.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/suite/unpack.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -648,10 +471,12 @@
 1 K2 crates/k2-core/src/tunnel/cp_proxy.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tunnel/relay_list.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/workspace/agent_launch.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/workspace/context_layers.rs keeper: wire; the built-in packs' author value K2, which hire/template/format.rs checks
 1 K2 crates/k2-core/src/workspace/wake_prompts.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/worktree_task.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/zen/agent_edit.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/zen/defaults.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/zen/garden_access/mod.rs keeper: a Rust enum variant (Actor::K2, K2 itself as a Garden access actor), not the product's name in copy
 1 K2 crates/k2-core/src/zen/garden_catalog.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/zen/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/zen/widget_access.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -720,6 +545,7 @@
 1 K2 crates/k2-daemon/src/heartbeat_other.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/home_avatar_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/home_chat/follower.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/home_chat/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/home_chat/sessions.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/homes_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/jobs/runner.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -824,129 +650,18 @@
 1 K2 crates/k2-vault/src/keystore/file.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-vault/src/ssh_agent.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-vault/src/vault/handoff_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+1 K2 crates/k5-cli/src/families/agent/hire/apply.rs keeper: the old 'GENERATED by K2' banner, still read (with today's '<!-- GENERATED at') to tell a generated AGENTS.md from a person's own; the daemon no longer writes it
+1 K2 crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (the repo row says why)
 1 K2 src-tauri/src/call_window.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 src-tauri/src/commands/connect_hosts.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 src-tauri/src/commands/oauth_loopback.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 src/renderer/components/AddWorkspaceDialog/AddWorkspaceDialog.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/AgentPane/AgentChatPane.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/AgentPane/AgentPane.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/AgentPane/inbox-browser.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/AgentTemplates/review-words.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/AppErrorBoundary.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Desktop/DesktopPane.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Desktop/desktop-stream.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Editor/live/AskBar.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Feedback/ProjectFeedbackTab.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Feedback/TicketComposeFiles.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Feedback/feedback-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/FileViewerPane/AnyFileDocPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/FileViewerPane/BoardFileCard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/FileViewerPane/BoardFileName.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/FileViewerPane/FileViewerPane.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/GrokBots/GrokBotTag.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Help/cli-explorer.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Home/room/HomeRemoteRooms.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Layout/AgentsShell.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/LiveView/SampleBanner.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/LiveView/scene/scene-shell.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/LiveView/shell/ChangesList.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/LiveView/timeline/timeline-shell.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/MemoryWatcher/MemoryWatcher.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Mobile/MobileBootScreen.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Presence/PersonColorPicker.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Projects/ProjectChatPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Projects/member-view.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/SessionView/ApprovalCard.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/SessionView/CardDismiss.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/SessionView/GitAccessSetupForm.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/SessionView/permissionCardView.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/Settings.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/controls/SettingControls.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/lib/account-db-daemon.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/lib/k2-account.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/searchManifest.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/ApiTokensSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/AppsBoxSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/ChatLinkCopyRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/ComingSoonBotSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/ComputeAccessParts.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/ContextCatalogDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/ContextStackEditor.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/DataSourceReview.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/EmailLinkSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/EmailNoticePrefs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/FederationOverview.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/HeartbeatsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/K2ConnectSettingsShell.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/OwnerAccountToggle.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/PermissionCardsSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/PushPreviewsRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/TimerSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/TokenUsageSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/TunnelUrlsPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/VoiceSection.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/admin-access-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/email-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/handoff-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/notify-api.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/row-save.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/update-host.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/sections/usage/UsageActivity.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/shared/AutoNextRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Settings/shared/BootStatusPublicRow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Thread/ThreadZenKit.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Thread/useComposeModel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/TopBar/AppMenuPanel.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/TopBar/ServerSwitcher.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Usage/LimitBar.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Voice/CallWindow.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Wiki/FocusGroupFilterDropdown.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Wiki/WikiWorkspacePicker.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/WorkspacePanel/AppUpdateSetting.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+1 K2 src/renderer/App.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+1 K2 src/renderer/components/ConnectionGate.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+1 K2 src/renderer/components/Settings/sections/AccessDialogs.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+1 K2 src/renderer/components/Settings/sections/SendFeedbackRows.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
+1 K2 src/renderer/components/Settings/shared/LlmLoginSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/renderer/components/Zen/widgets/ZenAgentsWidget.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Zen/widgets/ZenGardenSettings.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Zen/widgets/ZenPermissionSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Zen/widgets/ZenSecretSheet.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/components/Zen/widgets/ZenSourceAsk.tsx debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/kessel-term/folderTrustMessage.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/editor/named-themes.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/editor/save-model/kept-marks.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/git-tools.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/harness-missing.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/heartbeat-wait.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/home-room-floor.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/live-view/scene/frames.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/live-view/scene/picture-words.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/live-view/scene/scenarios.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/live-view/scene/turn.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/live-view/scene/wording.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/live-view/timeline/actors.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/login-url.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/open-external-link.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/remote-recovery.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/terminal-link-open.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/voice-chat-only.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-custom-guests.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-custom-types.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-custom-work.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-file-preview.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-gardens.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-page.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-settings.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-sync.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-theme-engine.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-theme-switch.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/lib/zen/zen-widgets-running.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/shims/tauri-app.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/shims/tauri-core.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/stores/active-agents.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/stores/file-clipboard.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/stores/send-feedback.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/stores/tabs.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/stores/video-core.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 src/renderer/stores/voice.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 1 K2 src/shared/constants.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
-1 K2 crates/k5-cli/src/families/agent/hire/apply.rs keeper: the old 'GENERATED by K2' banner, still read (with today's '<!-- GENERATED at') to tell a generated AGENTS.md from a person's own; the daemon no longer writes it
 15 K5 crates/k2-daemon/src/voice_admin.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 8 K5 crates/k2-daemon/src/voice/transcripts.rs keeper: a private Rust type for the K5 Space and its rooms, not the product name
 6 K5 crates/k2-daemon/src/voice/routes.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
@@ -956,10 +671,7 @@
 1 K5 crates/k2-daemon/src/sew/recording.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 1 K5 crates/k2-daemon/src/voice/bff.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
 1 K5 crates/k2-daemon/src/voice/occupancy.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design)
-1 K5 crates/kessel-attest/src/verify.rs keeper: the repo's new name, AlakazamLabs/K5, in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
 1 K5 crates/k5-cli/src/families/voice.rs keeper: names the K5 Space, the server's own Sew voice Space (already K5 by design), as the shell CLI's voice lines do
+1 K5 crates/kessel-attest/src/verify.rs keeper: the repo's new name, AlakazamLabs/K5, in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
 2 repo crates/kessel-attest/src/main.rs keeper: kessel-attest does not link k2-client; its help names the format docs in this repo
 1 repo crates/kessel-attest/src/verify.rs keeper: the repo's old name in RENAMED_REPOS (a statement's source is compared with it; kessel-attest does not link k2-client)
-2 K2 crates/k2-root-proto/src/agent_scope_policy.rs keeper: stored; comments inside the D-Bus policy and the daemon unit drop-in the root helper writes for agent scopes (k2-root-proto links no brand)
-6 K2 crates/k2-root-proto/src/agent_scope.rs keeper: stored; the systemd Description= values and unit comments of the agent slices and scopes the root helper creates (k2-root-proto links no brand; read in systemctl status)
-1 K2 crates/k2-core/src/agent_scope.rs keeper: stored; ADOPTED_DESCRIPTION, the adopted scope's systemd Description= the root helper writes (k2-root-proto's fixed text) and is_adopted reads back from systemctl show, so it matches the helper's in every brand

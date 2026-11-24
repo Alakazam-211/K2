@@ -17,10 +17,13 @@ letter, with no letter, digit, `_`, `.`, `/`, `$` or `-` just before the k2
 
 Not counted, so the count is the text a CLI prints for a person:
   - test files (tests.rs, *_test.rs, *_tests.rs, test_*.rs, testkit.rs,
-    anything under a tests/ folder) and a file's inline test module (the
+    anything under a tests/ folder), a file's inline test module (the
     first `#[cfg(test)]` or `#[cfg(all(test, ...))]` line followed by a
     `mod name {` with a body; `mod name;` is a declaration and is skipped
-    over, the module's file is a test file);
+    over), and the file a `#[cfg(test)] mod name;` declares, whatever its
+    name (with the folder of its own modules);
+  - a `[k2 ...]` stamp: a notice's or a log's tag, not the command (the
+    CLI-name flip's is_stamp; the brand gate does not count it either);
   - comments, doc comments and code outside strings;
   - a line whose statement writes to a log or the audit trail:
     log_debug!, log_info!, log_warn!, log_error!, eprintln!, println!,
@@ -31,6 +34,10 @@ Not counted, so the count is the text a CLI prints for a person:
     written for agents, the refusal registry the CLI carries its own copy
     of, App templates written into a repo, and so on). A skip row for a
     path that does not exist is an error.
+  - the `keep` rows: `keep <path> "<text>" <reason>`, a line of that file
+    that holds the text and must keep the literal (a value another program
+    reads, a marker read back, text sent to another server, a word that is
+    not our command). A keep row that holds back no line is an error.
 
 The ceilings file, scripts/garden/k2-literal-ceilings.txt, holds one
 `<count> <family>` row per family (the families of the hint inventory, read
@@ -56,6 +63,8 @@ LITERAL = re.compile(r"(?:^|[^A-Za-z0-9_./$-])(k2 [a-z])")
 TEST_FILE = re.compile(r"(^tests?\.rs$|_tests?\.rs$|^tests?_.*\.rs$|^testkit\.rs$)")
 TEST_CFG = re.compile(r"\s*#\[cfg\((all\()?test[,)]")
 TEST_MOD = re.compile(r"\s*(pub(\([a-z]+\))? )?mod \w+")
+TEST_DECL = re.compile(r"#\[cfg\((?:all\()?test[,)][^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([a-z]+\))?\s+)?mod\s+(\w+)\s*;")
+KEEP_ROW = re.compile(r'^keep (\S+) "([^"]+)" (\S.*)$')
 LOG = re.compile(r"log_(debug|info|warn|error)!|eprintln!|println!|tracing::|\blog::|audit\(|audit::")
 HINT = "send it as a {cli} template (hintTemplate and the like) or build it with CLI_NAME"
 
@@ -122,7 +131,8 @@ def logged(lines, i):
 
 
 def file_hits(path):
-    """[(line number, text)] of one file's counted lines."""
+    """[(line number, text)] of one file's counted lines (keep rows not yet
+    applied)."""
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     if not LITERAL.search(text):
@@ -137,19 +147,28 @@ def file_hits(path):
     seen = set()
     for i, line in enumerate(lines[:end]):
         for m in LITERAL.finditer(line):
-            if ctx[starts[i] + m.start(1)] == "string":
+            k = m.start(1)
+            if ctx[starts[i] + k] == "string" and not flip.is_stamp(line[:k], line[k + 2:]):
                 seen.add(i)
                 break
     return [(i + 1, lines[i].strip()) for i in sorted(seen) if not logged(lines, i)]
 
 
 def read_ceilings(path, root):
-    head, rows, skips = [], {}, {}
+    head, rows, skips, keeps = [], {}, {}, []
     with open(path, encoding="utf-8") as f:
         for n, raw in enumerate(f.read().split("\n"), 1):
             if raw.startswith("#") or not raw.strip():
-                if not rows and not skips:
+                if not rows and not skips and not keeps:
                     head.append(raw)
+                continue
+            if raw.startswith("keep "):
+                km = KEEP_ROW.match(raw)
+                if not km:
+                    sys.exit(f"k2-literal-gate: {path} line {n}: want 'keep <path> \"<text>\" <reason>', got '{raw}'")
+                if not os.path.isfile(os.path.join(root, km.group(1))):
+                    sys.exit(f"k2-literal-gate: {path} line {n}: keep {km.group(1)}: no such file; drop the row")
+                keeps.append((km.group(1), km.group(2), km.group(3), n))
                 continue
             if raw.startswith("skip "):
                 parts = raw.split(" ", 2)
@@ -169,19 +188,42 @@ def read_ceilings(path, root):
             if parts[1] in rows:
                 sys.exit(f"k2-literal-gate: {path} line {n}: {parts[1]} is listed twice")
             rows[parts[1]] = int(parts[0])
-    return head, rows, skips
+    return head, rows, skips, keeps
 
 
-def write_ceilings(path, head, counts, skips):
+def write_ceilings(path, head, counts, skips, keeps):
     body = [f"skip {p} {why}" for p, why in sorted(skips.items())] + [""]
+    if keeps:
+        body += [f'keep {p} "{t}" {why}' for p, t, why, _ in keeps] + [""]
     body += [f"{n} {fam}" for fam, n in sorted(counts.items(), key=lambda r: (-r[1], r[0])) if n]
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(head + body) + "\n")
 
 
-def scan(root, skips):
-    """{family: [(relative path, line number, text)]}."""
+def test_decls(root):
+    """The files (and folders) `#[cfg(test)] mod name;` declares."""
+    out = set()
+    for top in CRATES:
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, top)):
+            for name in filenames:
+                if not name.endswith(".rs"):
+                    continue
+                with open(os.path.join(dirpath, name), encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+                for m in TEST_DECL.finditer(text):
+                    base = dirpath if name in ("mod.rs", "lib.rs", "main.rs") else os.path.join(dirpath, name[:-3])
+                    for cand in (os.path.join(base, m.group(1) + ".rs"), os.path.join(base, m.group(1), "mod.rs")):
+                        out.add(os.path.relpath(cand, root).replace(os.sep, "/"))
+                    out.add(os.path.relpath(os.path.join(base, m.group(1)), root).replace(os.sep, "/") + "/")
+    return out
+
+
+def scan(root, skips, keeps=()):
+    """{family: [(relative path, line number, text)]}, and the keep rows
+    that held back no line."""
     found = collections.defaultdict(list)
+    tests = test_decls(root)
+    used = set()
     for top in CRATES:
         for dirpath, dirnames, filenames in os.walk(os.path.join(root, top)):
             dirnames[:] = sorted(d for d in dirnames if d != "tests")
@@ -192,9 +234,15 @@ def scan(root, skips):
                 rel = os.path.relpath(full, root).replace(os.sep, "/")
                 if rel in skips or any(s.endswith("/") and rel.startswith(s) for s in skips):
                     continue
+                if rel in tests or any(t.endswith("/") and rel.startswith(t) for t in tests):
+                    continue
                 for n, text in file_hits(full):
+                    held = [k for k in keeps if k[0] == rel and k[1] in text]
+                    if held:
+                        used.update(k[3] for k in held)
+                        continue
                     found[family(rel)].append((rel, n, text))
-    return found
+    return found, [k for k in keeps if k[3] not in used]
 
 
 def git(root, *args):
@@ -250,8 +298,12 @@ def main(argv):
         else:
             sys.exit(f"k2-literal-gate: unknown argument: {a}")
     ceilings = ceilings or os.path.join(root, "scripts", "garden", "k2-literal-ceilings.txt")
-    head, rows, skips = read_ceilings(ceilings, root)
-    found = scan(root, skips)
+    head, rows, skips, keeps = read_ceilings(ceilings, root)
+    found, stale = scan(root, skips, keeps)
+    for p, t, why, n in stale:
+        print(f"k2-literal-gate: FAIL {ceilings} line {n}: keep {p} \"{t}\" holds back no line; drop the row")
+    if stale:
+        return 1
 
     if mode == "list":
         for fam in sorted(found):
@@ -279,7 +331,7 @@ def main(argv):
             print("k2-literal-gate: --tighten never raises a ceiling.")
         return 1
     if mode == "tighten":
-        write_ceilings(ceilings, head, counts, skips)
+        write_ceilings(ceilings, head, counts, skips, keeps)
         lowered = [f"{fam} {rows[fam]} -> {counts.get(fam, 0)}" for fam in sorted(rows) if counts.get(fam, 0) < rows[fam]]
         for line in lowered:
             print(f"k2-literal-gate: {line}")
@@ -290,7 +342,7 @@ def main(argv):
         print(f"k2-literal-gate: {len(slack)} famil{'y is' if len(slack) == 1 else 'ies are'} below the ceiling "
               f"({', '.join(sorted(slack))}); run scripts/garden/k2-literal-gate.py --tighten to lock that in.")
     print(f"k2-literal-gate: ok ({sum(counts.values())} lines in {len(counts)} families still type 'k2 <word>' "
-          f"in text for a person; {len(skips)} paths skipped).")
+          f"in text for a person; {len(skips)} paths skipped, {len(keeps)} lines kept).")
     return 0
 
 

@@ -63,13 +63,39 @@ g init -q; g add -A; g commit -q -m seed
 # Two lines count: a string on one line, and a string's second line. Not
 # comments, a tail comment, log lines, look-alikes, test modules and files,
 # or a skipped file. A `mod name;` declaration does not end the count.
-run 0 "k2-literal-gate: ok (2 lines in 1 families still type 'k2 <word>' in text for a person; 1 paths skipped)."
+run 0 "k2-literal-gate: ok (2 lines in 1 families still type 'k2 <word>' in text for a person; 1 paths skipped, 0 lines kept)."
 run 0 "apps: crates/k2-daemon/src/apps/deploy.rs:5: fn a()" --list
 run 0 "apps: crates/k2-daemon/src/apps/deploy.rs:8: then k2 app list" --list apps
 for n in 3 4 6 9 12 15 18; do lacks "deploy.rs:$n:" --list; done
 lacks "deploy_tests.rs" --list
 lacks "it.rs" --list
 lacks "content.rs" --list
+
+# A `[k2 ...]` stamp is a tag, not the command; a file a `#[cfg(test)] mod
+# name;` declares is test code whatever its name; a keep row holds back the
+# lines of its file that hold its text, and fails when it holds back none.
+mkdir -p "$R/crates/k2-daemon/src/sql/live"
+printf '#[cfg(test)]\nmod live;\nfn s() -> String { format!("[k2 apps] {a} crashed; [k2 vault ask 1] asks") }\n' > "$R/crates/k2-daemon/src/sql/mod.rs"
+printf 'fn t() -> &str { "the k2 schema is ours" }\n' > "$R/crates/k2-daemon/src/sql/live.rs"
+printf 'fn t() -> &str { "and k2 db list" }\n' > "$R/crates/k2-daemon/src/sql/live/more.rs"
+printf 'fn m() -> &str { "k2 row cap" }\nfn n() -> &str { "run k2 db list" }\n' > "$R/crates/k2-daemon/src/sql/query.rs"
+ceilings "skip crates/k2-core/src/skills/content.rs skill files written for agents" "" "2 apps" "1 db"
+run 1 "k2-literal-gate: FAIL db has 2 lines with a literal 'k2 <word>', its ceiling is 1"
+ceilings "skip crates/k2-core/src/skills/content.rs skill files written for agents" 'keep crates/k2-daemon/src/sql/query.rs "k2 row cap" a marker found again in Postgres errors' "" "2 apps" "1 db"
+run 0 "1 paths skipped, 1 lines kept)."
+lacks "query.rs:1:" --list
+lacks "mod.rs:3:" --list
+lacks "live.rs" --list
+lacks "more.rs" --list
+run 0 "db: crates/k2-daemon/src/sql/query.rs:2: fn n()" --list db
+ceilings "skip crates/k2-core/src/skills/content.rs skill files written for agents" 'keep crates/k2-daemon/src/sql/query.rs "no such text" a stale row' "" "2 apps" "1 db"
+run 1 'keep crates/k2-daemon/src/sql/query.rs "no such text" holds back no line; drop the row'
+ceilings "skip crates/k2-core/src/skills/content.rs skill files written for agents" 'keep crates/k2-daemon/src/sql/gone.rs "k2 x" gone' "" "2 apps" "1 db"
+run 1 "keep crates/k2-daemon/src/sql/gone.rs: no such file; drop the row"
+ceilings "skip crates/k2-core/src/skills/content.rs skill files written for agents" 'keep crates/k2-daemon/src/sql/query.rs k2 row cap' "" "2 apps"
+run 1 "want 'keep <path> \"<text>\" <reason>'"
+rm -r "$R/crates/k2-daemon/src/sql"
+ceilings "skip crates/k2-core/src/skills/content.rs skill files written for agents" "" "2 apps"
 
 # A new literal 'k2 msg' fails, names the family and prints the new line:
 # against HEAD while it is not committed, against HEAD~1 once it is.

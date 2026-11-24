@@ -108,6 +108,16 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 terminal spawn` in a workspace's folder no longer ends that workspace's chat.** With `--cwd` (or the project path) pointing at a workspace, the new terminal took the workspace's own session: its pinned chat was stopped and the command ran in its place. Every spawn now starts a terminal of its own beside the chat, also when you spawn with the same `--agent` again.
 - **Messages to agents on other servers retry briefly when the other server is busy, and say clearly if they still couldn't be delivered.** `k2 msg <agent>::<host>` (live text and `--inbox-wake` / `--inbox-silent` files) asks the other server up to three times, a few seconds apart, when it doesn't answer or answers that it is busy; a refusal (such as 401 or 403) is never asked again. A send that still fails exits non-zero with one line naming the server, the step (roster or send), the attempts and the last error, and says nothing was delivered and to send again; for a file package it names every file. A message that reached this server's outbox but not the other server still says QUEUED (not delivered yet), for file packages too, and K2 delivers it from the outbox later. A retry never delivers a message twice.
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it.
+## 0.46.18 — App runtime fixes on hardened Linux servers
+
+### Apps
+- **Apps stop cleanly again on servers with AppArmor and K2's Podman.** A misspelt rule in the k2-app AppArmor profile kept the stop signal from reaching an App, and kept an App's own processes from signalling each other (a server's HUP or USR1 to its workers, `kill -9` inside the App). The profile now allows signals between an App's own processes, and still none to anything outside the App. Servers pick up the new profile from the next box prepare.
+- **`k2 app box unprep` no longer refuses because of K2's own processes.** With every App stopped it said `apps_running`, counting Podman's pause process, the App engine and the App user's D-Bus. It now counts only processes that belong to an App.
+
+### Command line
+- **Purge works on a server with no owner login.** `k2 app uninstall --purge` and `k2 hostchat purge` failed with `no_confirm_method` on a server with no owner login, no vault password and no Touch ID. There, run them from a terminal outside K2's process tree (your own SSH login): that terminal is the confirm, as it is for the server's first owner login. A server with any of those checks uses it as before, and nothing changes for requests from other machines, Connect logins or agents.
+- **`k2 desktop env` works in terminals K2 opens for an agent** (`k2 terminal spawn --agent <name>`), whatever program they run. A person's own shell tab is still refused.
+
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

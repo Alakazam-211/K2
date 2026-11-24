@@ -100,11 +100,19 @@ fn bash_lib() -> String {
     .join("\n")
 }
 
-/// The prelude's two name lines (`_K2_CLI_NAME=`, `_K2_PRODUCT_NAME=`),
-/// as the built CLI has them.
+/// The prelude's two name lines (`_K2_CLI_NAME=`, `_K2_PRODUCT_NAME=`) and
+/// the exported no-card feedback line built from them, as the built CLI
+/// has them.
 fn names(k2: &str) -> String {
-    ["_K2_CLI_NAME=", "_K2_PRODUCT_NAME="]
-        .iter()
+    [
+        "_K2_CLI_NAME=",
+        "_K2_PRODUCT_NAME=",
+        // The no-card feedback line, built from the two above and exported
+        // for the embedded Python's refusal notes (0.46.18).
+        "_K2_NO_CARD_FEEDBACK=",
+        "export _K2_NO_CARD_FEEDBACK",
+    ]
+    .iter()
         .map(|v| {
             let found: Vec<&str> = k2.lines().filter(|l| l.starts_with(v)).collect();
             assert_eq!(

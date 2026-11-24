@@ -442,6 +442,10 @@ pub const STUDY_TITLES: &[(&str, &str)] = &[
     ),
     ("folder-trust", "Who may start AI tools in a folder"),
     (
+        "isolation",
+        "Agent isolation: each agent's own cgroup, passports, the folder fence",
+    ),
+    (
         "email-notifications",
         "One-way email from senders no agent can read",
     ),

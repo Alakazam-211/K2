@@ -757,7 +757,10 @@ fn app_skin_verb_reaches_cmd_skin(body: &str, verb: &k5_cli::route::Verb) {
 }
 
 /// The router's forms (`tests/data/router_forms.tsv`) and the native
-/// bar's ceiling (`tests/data/native_bar_ceiling.tsv`), as sets of words.
+/// bar's ceiling (`tests/data/native_bar_ceiling.tsv`) with the named
+/// temporary allowance's `native_bar` rows
+/// (`tests/data/native_port_allowance.tsv`, K2's 0.46.18 ruling: those
+/// exact forms may fall through until their native port), as sets of words.
 fn router_forms_and_ceiling() -> (BTreeSet<String>, BTreeSet<String>) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| {
@@ -777,7 +780,20 @@ fn router_forms_and_ceiling() -> (BTreeSet<String>, BTreeSet<String>) {
             "form\targv\talias_of\tanchor\tentry\tjson\tsource",
             0,
         ),
-        column(&read("native_bar_ceiling.tsv"), "class\tfamily\tform", 2),
+        {
+            let mut ceiling = column(&read("native_bar_ceiling.tsv"), "class\tfamily\tform", 2);
+            let allowance = read("native_port_allowance.tsv");
+            let mut lines = allowance.lines().filter(|l| !l.starts_with('#'));
+            assert_eq!(lines.next(), Some("kind\tclass\tfamily\tform"));
+            for l in lines {
+                let cols: Vec<&str> = l.split('\t').collect();
+                assert_eq!(cols.len(), 4, "an allowance row has 4 columns: {l:?}");
+                if cols[0] == "native_bar" {
+                    ceiling.insert(cols[3].to_string());
+                }
+            }
+            ceiling
+        },
     )
 }
 

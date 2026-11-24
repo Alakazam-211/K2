@@ -129,6 +129,9 @@ pub const HOSTMAIL_UPGRADE_LOST_SECS: &[&str] =
     &["K5_HOSTMAIL_UPGRADE_LOST_SECS", "K2_HOSTMAIL_UPGRADE_LOST_SECS", "K2SO_HOSTMAIL_UPGRADE_LOST_SECS"];
 /// `1`: no warning for a plain http:// --host (`_k2_plain_http_warn`, `k2 clone`).
 pub const PLAIN_HTTP_OK: &[&str] = &["K5_PLAIN_HTTP_OK", "K2_PLAIN_HTTP_OK", "K2SO_PLAIN_HTTP_OK"];
+/// The mark the daemon sets in a session it placed in its agent's cgroup
+/// (Agent Isolation M1): the passport then goes over the session socket.
+pub const AGENT_CGROUP: &[&str] = &["K5_AGENT_CGROUP", "K2_AGENT_CGROUP", "K2SO_AGENT_CGROUP"];
 
 /// The command line's section of the registry.
 pub const CLI: &[&[&str]] = &[
@@ -165,6 +168,7 @@ pub const CLI: &[&[&str]] = &[
     HOSTMAIL_UPGRADE_POLL,
     HOSTMAIL_UPGRADE_LOST_SECS,
     PLAIN_HTTP_OK,
+    AGENT_CGROUP,
 ];
 
 /// Every entry of the registry.
@@ -218,6 +222,7 @@ pub const ALL: &[&[&str]] = &[
     HOSTMAIL_UPGRADE_POLL,
     HOSTMAIL_UPGRADE_LOST_SECS,
     PLAIN_HTTP_OK,
+    AGENT_CGROUP,
 ];
 
 /// The prefixes a name can have, newest first.

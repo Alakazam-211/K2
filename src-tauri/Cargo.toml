@@ -122,7 +122,12 @@ parking_lot = "0.12"
 # next call), the capture_stage_dsp_* fields and the native self-view sink. Since 0.46.17
 # K2 opens the self-view sink (`local:camera`) on macOS for your camera's own window
 # (native_voice/self_view.rs); the other two it doesn't call yet.
-tauri-plugin-sew-voice = { version = "=0.9.3", optional = true, features = ["video", "dfn3"] }
+# Sew 0.11.4 (0.9.4, with sew-call-client 0.9.4 and the other Sew crates 0.11.4; needs
+# kessel-audio 0.2.5, K2's in-tree crate): no API change. The call engine no longer keeps a
+# core busy while it rejoins after a lost connection or while a video layer waits behind a
+# lower one (less battery and heat on weak networks), so native_voice is unchanged.
+# K2 doesn't use tauri-plugin-sew-app (0.6.4 is a breaking change for its hosts).
+tauri-plugin-sew-voice = { version = "=0.9.4", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

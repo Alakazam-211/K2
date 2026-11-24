@@ -30,7 +30,7 @@ import {
 } from '@/lib/home-chat/uploads'
 import { ComposeAttachmentChip } from '@/components/Thread/ComposeAttach'
 import { ThreadAttachmentChips } from '@/components/Thread/ThreadZenKit'
-import { filesOfClipboard } from '@/components/Feedback/TicketComposeFiles'
+import { filesOfClipboard } from '@/lib/compose-paste'
 import { formatFileSize as formatBytes } from '@/components/Thread/ThreadFileObjects'
 
 /** A picture on a path is read whole for its chip up to this size. */

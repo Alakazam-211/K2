@@ -852,20 +852,23 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
               </>
               ) : undefined
             }
-            onPaste={filesHere ? composeFiles.onPaste : undefined}
             onDropFiles={filesHere ? composeFiles.onDropFiles : undefined}
             inputRef={inputRef}
             placeholder={dm ? `Message ${title}` : `Message #${title}`}
-            // DMs and channels send text only (attachments are later in
-            // prd-home-people-channels-v1 D19; `home-chat/send` takes no
-            // files). A pasted image says so instead of vanishing; text
-            // beside it still pastes.
-            onPaste={(e) => {
-              const pasted = composePaste(e.clipboardData)
-              if (!pasted) return
-              if (!pasted.keepText) e.preventDefault()
-              useToastStore.getState().addToast(HOME_CHAT_NO_FILES, 'warning')
-            }}
+            // Files on (Home chat attachments): the compose bar's + takes a
+            // pasted file. Where this server takes no files yet, a pasted
+            // image says so instead of vanishing; text beside it still
+            // pastes.
+            onPaste={
+              filesHere
+                ? composeFiles.onPaste
+                : (e) => {
+                    const pasted = composePaste(e.clipboardData)
+                    if (!pasted) return
+                    if (!pasted.keepText) e.preventDefault()
+                    useToastStore.getState().addToast(HOME_CHAT_NO_FILES, 'warning')
+                  }
+            }
             onKeyDown={(e) => {
               if (e.key === 'Escape' && reply) {
                 e.preventDefault()

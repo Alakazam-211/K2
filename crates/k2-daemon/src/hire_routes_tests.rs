@@ -1643,7 +1643,11 @@ fn an_opened_workspace_with_planted_files_writes_nothing_outside_and_gets_no_hel
         std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let path = ws.to_string_lossy().into_owned();
-    // Planted: a persona, an active work item pointing outside, the lock.
+    lock::write(&path, &copied).unwrap();
+    k2_core::workspace::lifecycle::open_workspace_ex(&path, false, false, false).expect("open, as a clone does");
+    let (id, handle) = workspace_at(&path);
+    // In the registered folder: a persona and an active work item pointing
+    // outside `.worktrees/`, as a clone's files would be.
     std::fs::create_dir_all(ws.join(".k2so/agent")).unwrap();
     std::fs::write(ws.join(".k2so/agent/AGENT.md"), "---\nname: scout\ntype: custom\nrole: test\n---\n\n# scout\n").unwrap();
     let active = k2_core::workspace::scheduler::agent_work_dir(&path, "scout", "active");
@@ -1653,9 +1657,6 @@ fn an_opened_workspace_with_planted_files_writes_nothing_outside_and_gets_no_hel
         format!("---\ntitle: Planted\npriority: high\nworktree_path: {}\nbranch: b\n---\n\nbody\n", outside.display()),
     )
     .unwrap();
-    lock::write(&path, &copied).unwrap();
-    k2_core::workspace::lifecycle::open_workspace_ex(&path, false, false, false).expect("open, as a clone does");
-    let (id, handle) = workspace_at(&path);
 
     let e = k2_core::workspace::agent_launch::k2_agents_build_launch(path.clone(), "scout".into(), Some("claude".into()), None, None, None)
         .expect_err("a worktree outside .worktrees is refused");

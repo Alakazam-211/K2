@@ -51,3 +51,20 @@ test-threads = "num-cpus"
 slow-timeout = { period = "60s", terminate-after = 10 }
 failure-output = "immediate-final"
 success-output = "never"
+
+# k5-cli's dashdash sweep (dashdash_sweep_parity) probes every form with a
+# `--` on both CLIs, one test: about 4,450 probes, 990 s on a 4-CPU node
+# with none hung (0.46.18), past the 10-minute cap above. It gets 30
+# minutes (6 periods of 300 s) in every profile until 0.46.19 runs its
+# probes in parallel inside the test (the plan), when this goes.
+[[profile.default.overrides]]
+filter = "package(k5-cli) & binary(dashdash_sweep_parity)"
+slow-timeout = { period = "300s", terminate-after = 6 }
+
+[[profile.ci.overrides]]
+filter = "package(k5-cli) & binary(dashdash_sweep_parity)"
+slow-timeout = { period = "300s", terminate-after = 6 }
+
+[[profile.soak.overrides]]
+filter = "package(k5-cli) & binary(dashdash_sweep_parity)"
+slow-timeout = { period = "300s", terminate-after = 6 }

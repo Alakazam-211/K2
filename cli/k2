@@ -18149,18 +18149,25 @@ cmd_app_storage() {
     local sub="${1:-}"
     shift || true
     case "$sub" in
-        status) _app_storage_get /cli/app/storage/status "$@" ;;
+        status) _app_storage_get status /cli/app/storage/status "$@" ;;
         enable) _app_storage_enable "$@" ;;
-        buckets) _app_storage_get /cli/app/storage/buckets "$@" ;;
+        buckets) _app_storage_get buckets /cli/app/storage/buckets "$@" ;;
         bucket) _app_storage_bucket "$@" ;;
         ls|list) _app_storage_ls "$@" ;;
         import) _app_storage_import "$@" ;;
-        import-status) _app_storage_get /cli/app/storage/import/status "$@" ;;
+        import-status) _app_storage_get import-status /cli/app/storage/import/status "$@" ;;
         verify) _app_storage_verify "$@" ;;
         key) _app_storage_key "$@" ;;
         ""|-h|--help|help) _app_storage_usage ;;
-        *) echo "usage: k2 app storage status|enable|buckets|bucket|ls|import|import-status|verify|key … (k2 app storage --help)" >&2; exit 2 ;;
+        *) _app_storage_bad "k2 app storage status|enable|buckets|bucket|ls|import|import-status|verify|key …" ;;
     esac
+}
+
+# A usage error, the shape compat and cron use: {"error":"usage","hint":…}
+# on stderr, exit 1, nothing sent.
+_app_storage_bad() {
+    printf '{"error":"usage","hint":%s}\n' "$(printf '%s' "$1 (k2 app storage --help)" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" >&2
+    exit 1
 }
 
 # Print a storage answer: --json as is, else a short readable form.
@@ -18233,17 +18240,17 @@ else:
 }
 
 _app_storage_get() {
-    local path="$1" app="" json_out=0
-    shift
+    local verb="$1" path="$2" app="" json_out=0
+    shift 2
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) if [ -z "$app" ]; then app="$1"; else echo "usage: k2 app storage … <app-id>" >&2; exit 2; fi; shift ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
+            *) if [ -z "$app" ]; then app="$1"; else _app_storage_bad "one App at a time: k2 app storage $verb <app-id> (got $1 too)"; fi; shift ;;
         esac
     done
-    [ -n "$app" ] || { echo "usage: k2 app storage … <app-id> [--json]" >&2; exit 2; }
+    [ -n "$app" ] || _app_storage_bad "name the App: k2 app storage $verb <app-id> [--json]"
     _compute_call GET "$path" "app=$(urlencode "$app")"
     _app_storage_print "$json_out"
 }
@@ -18254,11 +18261,11 @@ _app_storage_enable() {
         case "$1" in
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -n "$app" ] || { echo "usage: k2 app storage enable <app-id> [--json]" >&2; exit 2; }
+    [ -n "$app" ] || _app_storage_bad "name the App: k2 app storage enable <app-id> [--json]"
     _app_rt_post /cli/app/storage/enable "$(_compute_json K2_CJ_app="$app")"
     _app_grace_done "$json_out"
     _app_storage_print "$json_out"
@@ -18270,21 +18277,23 @@ _app_storage_bucket() {
     case "$op" in
         create|update|rm) ;;
         ""|-h|--help) _app_storage_usage; return 0 ;;
-        *) echo "usage: k2 app storage bucket create|update|rm <app-id> <bucket> …" >&2; exit 2 ;;
+        *) _app_storage_bad "k2 app storage bucket create|update|rm <app-id> <bucket> …" ;;
     esac
     while [ $# -gt 0 ]; do
         case "$1" in
             --public) public=true; shift ;;
             --private) public=false; shift ;;
-            --file-size-limit) limit="${2:-}"; shift 2 ;;
-            --mime) mimes+=("${2:-}"); shift 2 ;;
+            --file-size-limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
+            --file-size-limit=*) limit="${1#*=}"; shift ;;
+            --mime) _need_value "$@"; mimes+=("${2:-}"); shift 2 ;;
+            --mime=*) mimes+=("${1#*=}"); shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$bucket" ]; then bucket="$1"; else echo "usage: k2 app storage bucket $op <app-id> <bucket>" >&2; exit 2; fi; shift ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$bucket" ]; then bucket="$1"; else _app_storage_bad "unexpected '$1': k2 app storage bucket $op <app-id> <bucket>"; fi; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$bucket" ]; } && { echo "usage: k2 app storage bucket $op <app-id> <bucket> [--public|--private] [--file-size-limit 50MB] [--mime TYPE]…" >&2; exit 2; }
+    { [ -n "$app" ] && [ -n "$bucket" ]; } || _app_storage_bad "k2 app storage bucket $op <app-id> <bucket> [--public|--private] [--file-size-limit 50MB] [--mime TYPE]…"
     local mimes_j=""
     if [ "${#mimes[@]}" -gt 0 ]; then
         mimes_j="$(printf '%s\n' "${mimes[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
@@ -18298,14 +18307,15 @@ _app_storage_ls() {
     local app="" bucket="" prefix="" limit="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --limit) limit="${2:-}"; shift 2 ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
+            --limit=*) limit="${1#*=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
-            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$bucket" ]; then bucket="$1"; elif [ -z "$prefix" ]; then prefix="$1"; else echo "usage: k2 app storage ls <app-id> <bucket> [<prefix>]" >&2; exit 2; fi; shift ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$bucket" ]; then bucket="$1"; elif [ -z "$prefix" ]; then prefix="$1"; else _app_storage_bad "unexpected '$1': k2 app storage ls <app-id> <bucket> [<prefix>]"; fi; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$bucket" ]; } && { echo "usage: k2 app storage ls <app-id> <bucket> [<prefix>] [--limit N] [--json]" >&2; exit 2; }
+    { [ -n "$app" ] && [ -n "$bucket" ]; } || _app_storage_bad "k2 app storage ls <app-id> <bucket> [<prefix>] [--limit N] [--json]"
     _compute_call GET /cli/app/storage/ls "app=$(urlencode "$app")&bucket=$(urlencode "$bucket")&prefix=$(urlencode "$prefix")&limit=$(urlencode "$limit")"
     _app_storage_print "$json_out"
 }
@@ -18314,17 +18324,21 @@ _app_storage_import() {
     local app="" from="" secret="" conc="" json_out=0 buckets=()
     while [ $# -gt 0 ]; do
         case "$1" in
-            --from) from="${2:-}"; shift 2 ;;
-            --key-secret) secret="${2:-}"; shift 2 ;;
-            --bucket) buckets+=("${2:-}"); shift 2 ;;
-            --concurrency) conc="${2:-}"; shift 2 ;;
+            --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
+            --from=*) from="${1#*=}"; shift ;;
+            --key-secret) _need_value "$@"; secret="${2:-}"; shift 2 ;;
+            --key-secret=*) secret="${1#*=}"; shift ;;
+            --bucket) _need_value "$@"; buckets+=("${2:-}"); shift 2 ;;
+            --bucket=*) buckets+=("${1#*=}"); shift ;;
+            --concurrency) _need_value "$@"; conc="${2:-}"; shift 2 ;;
+            --concurrency=*) conc="${1#*=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
             *) app="$1"; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$from" ] || [ -z "$secret" ]; } && { echo "usage: k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name> [--bucket <id>]… [--concurrency N] [--json]" >&2; exit 2; }
+    { [ -n "$app" ] && [ -n "$from" ] && [ -n "$secret" ]; } || _app_storage_bad "k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name> [--bucket <id>]… [--concurrency N] [--json]"
     local buckets_j=""
     if [ "${#buckets[@]}" -gt 0 ]; then
         buckets_j="$(printf '%s\n' "${buckets[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
@@ -18339,15 +18353,17 @@ _app_storage_verify() {
     local app="" from="" secret="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --from) from="${2:-}"; shift 2 ;;
-            --key-secret) secret="${2:-}"; shift 2 ;;
+            --from) _need_value "$@"; from="${2:-}"; shift 2 ;;
+            --from=*) from="${1#*=}"; shift ;;
+            --key-secret) _need_value "$@"; secret="${2:-}"; shift 2 ;;
+            --key-secret=*) secret="${1#*=}"; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -n "$app" ] || { echo "usage: k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]" >&2; exit 2; }
+    [ -n "$app" ] || _app_storage_bad "name the App: k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]"
     _app_rt_post /cli/app/storage/verify "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_keySecret="$secret")"
     _app_grace_done "$json_out"
     _app_storage_print "$json_out"
@@ -18357,17 +18373,17 @@ _app_storage_verify() {
 _app_storage_key() {
     local sub="${1:-}" app="" yes="" json_out=0
     shift || true
-    [ "$sub" = "rotate" ] || { echo "usage: k2 app storage key rotate <app-id> --yes" >&2; exit 2; }
+    [ "$sub" = "rotate" ] || _app_storage_bad "k2 app storage key rotate <app-id> --yes"
     while [ $# -gt 0 ]; do
         case "$1" in
             --yes|-y) yes=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_storage_usage; return 0 ;;
-            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            -*) _app_storage_bad "unknown flag $1" ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -n "$app" ] || { echo "usage: k2 app storage key rotate <app-id> --yes" >&2; exit 2; }
+    [ -n "$app" ] || _app_storage_bad "name the App: k2 app storage key rotate <app-id> --yes"
     _app_rt_post /cli/app/storage/key/rotate "$(_compute_json K2_CJ_app="$app" K2_CJ_yes_b="$yes")"
     _app_grace_done "$json_out"
     _app_storage_print "$json_out"

@@ -159,6 +159,55 @@ grep -q 'clash line 2: email_taken' <<<"$OUT" || fail "lists the clash: $OUT"
 run app user import clash --file users.jsonl --json
 [ "$RC" -eq 1 ] || fail "--json with clashes exits 1, got $RC"
 
+# ── k2 app storage: usage errors (0.46.18) ───────────────────────────
+# The compat and cron shape: {"error":"usage","hint":…} on stderr, exit 1,
+# nothing sent. A value flag with no value says so (exit 2), and
+# --flag=value is the same as --flag value.
+usage_json() {
+    python3 -c 'import json,sys
+v = json.loads(sys.argv[1])
+assert v["error"] == "usage", v
+assert sys.argv[2] in v["hint"], (sys.argv[2], v["hint"])' "$ERR" "$1"
+}
+: >"$FAKE_DIR/requests.log"
+for row in "frobnicate shop|k2 app storage status|enable" "status|name the App: k2 app storage status" \
+    "buckets shop --frob|unknown flag --frob" "ls shop|k2 app storage ls <app-id> <bucket>" \
+    "import shop --from https://acme.supabase.co|k2 app storage import <app-id> --from" \
+    "bucket create shop|k2 app storage bucket create <app-id> <bucket>" "key spin shop|key rotate <app-id> --yes" \
+    "verify|name the App: k2 app storage verify"; do
+    args="${row%%|*}"; want="${row#*|}"
+    # shellcheck disable=SC2086
+    run app storage $args
+    [ "$RC" -eq 1 ] || fail "k2 app storage $args is a usage error (1), got $RC: $ERR"
+    [ -z "$OUT" ] || fail "k2 app storage $args prints nothing on stdout: $OUT"
+    usage_json "$want" || fail "k2 app storage $args: the usage JSON naming '$want': $ERR"
+done
+for row in "import shop --key-secret SUPA --from|--from" "import shop --from https://acme.supabase.co --key-secret|--key-secret" \
+    "import shop --from https://acme.supabase.co --key-secret SUPA --bucket|--bucket" \
+    "import shop --from https://acme.supabase.co --key-secret SUPA --concurrency|--concurrency" \
+    "verify shop --from|--from" "verify shop --from https://acme.supabase.co --key-secret|--key-secret" \
+    "bucket create shop logos --file-size-limit|--file-size-limit" "bucket update shop logos --mime|--mime" "ls shop logos --limit|--limit"; do
+    args="${row%%|*}"; flag="${row#*|}"
+    # shellcheck disable=SC2086
+    run app storage $args
+    [ "$RC" -eq 2 ] || fail "k2 app storage $args: a flag with no value is refused (2), got $RC: $ERR"
+    [ "$ERR" = "Error: $flag takes a value" ] || fail "k2 app storage $args says $flag takes a value: $ERR"
+done
+[ ! -s "$FAKE_DIR/requests.log" ] || fail "storage usage errors sent requests: $(cat "$FAKE_DIR/requests.log")"
+run app storage import shop --from=https://acme.supabase.co --key-secret=SUPA --bucket=logos --bucket avatars --concurrency=4
+[ "$RC" -eq 0 ] || fail "k2 app storage import with --flag=value exits 0, got $RC: $ERR"
+last_req | grep -q '^POST /cli/app/storage/import ' || fail "posts the storage import: $(last_req)"
+python3 -c 'import json,sys
+b = json.loads(sys.argv[1].split(" ", 2)[2])
+assert b == {"app": "shop", "from": "https://acme.supabase.co", "keySecret": "SUPA", "buckets": ["logos", "avatars"], "concurrency": 4}, b' "$(last_req)" \
+    || fail "the storage import body: $(last_req)"
+run app storage bucket create shop logos --public --file-size-limit=50MB --mime=image/png --mime image/jpeg
+[ "$RC" -eq 0 ] || fail "k2 app storage bucket create with --flag=value exits 0, got $RC: $ERR"
+python3 -c 'import json,sys
+b = json.loads(sys.argv[1].split(" ", 2)[2])
+assert b == {"app": "shop", "op": "create", "id": "logos", "public": True, "fileSizeLimit": "50MB", "allowedMimeTypes": ["image/png", "image/jpeg"]}, b' "$(last_req)" \
+    || fail "the bucket body: $(last_req)"
+
 study="$("$CLI" study db)"
 grep -qF 'FROM SUPABASE' <<<"$study" || fail "k2 study db has FROM SUPABASE"
 grep -qF 'k2 app user import <app> --file users.jsonl' <<<"$study" || fail "k2 study db names the user import"

@@ -146,19 +146,21 @@ let knownLinePx = 0
 // paint, so a long message draws once, folded with its pill.
 
 type FoldMeasure = (heightPx: number, linePx: number) => void
+/** The list a fold sits in (its host), or NO_HOST. */
+type ListKey = FoldHost | Record<string, never>
 interface FoldReg {
   inner: HTMLElement
   /** The list it sits in and its font: folds that share both share a
    *  line-height (one style read per batch). */
-  batchKey: object
+  batchKey: ListKey
   fontKey: string
   onMeasure: FoldMeasure
 }
-const NO_HOST = {}
+const NO_HOST: Record<string, never> = {}
 const regs = new WeakMap<Element, FoldReg>()
 let sharedObserver: ResizeObserver | null = null
 let sharedObserverCtor: unknown = null
-type LineBatch = Map<object, Map<string, number>>
+type LineBatch = Map<ListKey, Map<string, number>>
 /** Line-heights read during the current commit's layout effects. */
 let commitBatch: LineBatch | null = null
 

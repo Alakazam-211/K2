@@ -1183,7 +1183,11 @@ pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
         // Sew 0.11.3: `recording.dm_enabled` is off (its own reason, a 403).
         "dm_recording_disabled" => (
             "dm_recording_disabled",
-            "recording calls in direct messages is off on this server: the owner or an admin turns it on (k2 hostchat recording policy set dm_enabled on)",
+            concat!(
+                "recording calls in direct messages is off on this server: the owner or an admin turns it on (",
+                k2_core::cli_name!(),
+                " hostchat recording policy set dm_enabled on)"
+            ),
         ),
         "recording_unavailable" | "recorder_unavailable" | "transcriber_unavailable" | "recording_capacity" => {
             return Refusal::new(503, "recording_unavailable", "recording isn't available on this server's voice right now")

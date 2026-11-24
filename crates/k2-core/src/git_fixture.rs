@@ -20,9 +20,9 @@ pub fn git_cmd(dir: &Path) -> Command {
         .args(["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
         .env("GIT_CONFIG_GLOBAL", NULL_CONFIG)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_NAME", "K2 Test")
+        .env("GIT_AUTHOR_NAME", format!("{} Test", crate::brand::PRODUCT_NAME))
         .env("GIT_AUTHOR_EMAIL", "k2-test@example.com")
-        .env("GIT_COMMITTER_NAME", "K2 Test")
+        .env("GIT_COMMITTER_NAME", format!("{} Test", crate::brand::PRODUCT_NAME))
         .env("GIT_COMMITTER_EMAIL", "k2-test@example.com")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
@@ -62,7 +62,7 @@ pub fn init(tag: &str) -> PathBuf {
 /// `git init` at `dir` (which exists), with a local identity.
 pub fn init_at(dir: &Path) {
     git(dir, &["init", "-q", "-b", "main"]);
-    git(dir, &["config", "user.name", "K2 Test"]);
+    git(dir, &["config", "user.name", &format!("{} Test", crate::brand::PRODUCT_NAME)]);
     git(dir, &["config", "user.email", "k2-test@example.com"]);
     git(dir, &["config", "commit.gpgsign", "false"]);
     // K2's own writes run the person's git with their global and system

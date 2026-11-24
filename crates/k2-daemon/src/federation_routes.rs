@@ -1699,8 +1699,9 @@ fn tray_queued_hint(
         .map(|r| format!(": {r}"))
         .unwrap_or_default();
     v["hint"] = serde_json::json!(format!(
-        "{} for {agent}::{host} is not delivered yet{why}. K2 retries it from this server's outbox (next try in about 30 s); don't send it again.",
-        tray_parts(spec)
+        "{} for {agent}::{host} is not delivered yet{why}. {product} retries it from this server's outbox (next try in about 30 s); don't send it again.",
+        tray_parts(spec),
+        product = k2_core::brand::PRODUCT_NAME,
     ));
     CliResponse { body: v.to_string(), ..resp }
 }

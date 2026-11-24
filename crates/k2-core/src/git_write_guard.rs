@@ -140,7 +140,7 @@ pub fn mark_k2_made(workdir: &Path) {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Err(e) = crate::fs_atomic::atomic_write_str(&list, &(lines.join("\n") + "\n")) {
-        log_debug!("[git] couldn't record a K2-made repository: {e}");
+        log_debug!("[git] couldn't record a repository made by {}: {e}", crate::brand::PRODUCT_NAME);
     }
 }
 
@@ -186,10 +186,11 @@ pub fn check(dir: &Path) -> Result<(), String> {
     }
     let folder = workdir.to_string_lossy().to_string();
     Err(format!(
-        "{}: this repository's own git settings run programs ({}), and this workspace isn't trusted, so K2 won't run git here. \
+        "{}: this repository's own git settings run programs ({}), and this workspace isn't trusted, so {} won't run git here. \
          Trust the workspace first: on its trust card, or {}",
         crate::git::refusal::GIT_CONFIG_RUNS_PROGRAMS,
         keys.join(", "),
+        crate::brand::PRODUCT_NAME,
         gate::decide_hint(&folder)
     ))
 }

@@ -126,6 +126,8 @@ agent identity --help|agent/identity|out|0
 agent identity -h|agent/identity|out|0
 agent instances --help|agent/instances|out|0
 agent instances -h|agent/instances|out|0
+agent isolation --help|agent/isolation|out|0
+agent isolation -h|agent/isolation|out|0
 agent list --help|agent/list|out|0
 agent list -h|agent/list|out|0
 agent refresh --help|agent/refresh|out|0
@@ -138,6 +140,8 @@ agent set --help|agent/set|out|0
 agent set -h|agent/set|out|0
 agent template --help|agent/template|out|0
 agent template -h|agent/template|out|0
+agent whois --help|agent/whois|out|0
+agent whois -h|agent/whois|out|0
 app account-deletion --help|app/account-deletion|out|0
 app account-deletion -h|app/account-deletion|out|0
 app auth --help|app/auth|out|0

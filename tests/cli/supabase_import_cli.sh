@@ -193,6 +193,15 @@ for row in "import shop --key-secret SUPA --from|--from" "import shop --from htt
     [ "$RC" -eq 2 ] || fail "k2 app storage $args: a flag with no value is refused (2), got $RC: $ERR"
     [ "$ERR" = "Error: $flag takes a value" ] || fail "k2 app storage $args says $flag takes a value: $ERR"
 done
+# A --concurrency that isn't a whole number from 1 is refused before
+# anything is built or sent (it used to fail inside the body and post an
+# empty one).
+for n in eight 2.5 0 -3; do
+    run app storage import shop --from https://acme.supabase.co --key-secret SUPA --concurrency "$n"
+    [ "$RC" -eq 1 ] || fail "--concurrency $n is a usage error (1), got $RC: $ERR"
+    usage_json "--concurrency takes a whole number from 1" || fail "--concurrency $n: the usage JSON: $ERR"
+    case "$ERR" in *Traceback*) fail "--concurrency $n: no traceback: $ERR" ;; esac
+done
 [ ! -s "$FAKE_DIR/requests.log" ] || fail "storage usage errors sent requests: $(cat "$FAKE_DIR/requests.log")"
 run app storage import shop --from=https://acme.supabase.co --key-secret=SUPA --bucket=logos --bucket avatars --concurrency=4
 [ "$RC" -eq 0 ] || fail "k2 app storage import with --flag=value exits 0, got $RC: $ERR"

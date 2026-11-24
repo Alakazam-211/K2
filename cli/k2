@@ -18339,6 +18339,12 @@ _app_storage_import() {
         esac
     done
     { [ -n "$app" ] && [ -n "$from" ] && [ -n "$secret" ]; } || _app_storage_bad "k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name> [--bucket <id>]… [--concurrency N] [--json]"
+    # A number goes into the body as a number: anything else is refused here,
+    # before the body is built (it would fail there and send nothing useful).
+    case "$conc" in
+        "") ;;
+        *[!0-9]*|0*) _app_storage_bad "--concurrency takes a whole number from 1, like 8 (got '$conc')" ;;
+    esac
     local buckets_j=""
     if [ "${#buckets[@]}" -gt 0 ]; then
         buckets_j="$(printf '%s\n' "${buckets[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"

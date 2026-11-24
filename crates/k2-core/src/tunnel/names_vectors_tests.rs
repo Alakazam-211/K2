@@ -9,12 +9,14 @@ use sha2::{Digest, Sha256};
 const VECTORS: &[u8] = include_bytes!("testdata/names-vectors.json");
 
 /// SHA-256 of the copy, pinned so an edit here shows up as a failure.
-const VECTORS_SHA256: &str = "18be50c2406070f02cb05e28bcfd16e4859f809baf2c73b20a3c3cfa57962da5";
+const VECTORS_SHA256: &str = "711af045b5d96921d492d4326b3478205c6279ea54ce9fbb3866d32fe770fdf8";
 
-/// Where the daemon is stricter than the control plane: these cases'
-/// names are not hostnames, so the daemon never takes them (the answer is
-/// Malformed and the box keeps its last good names).
-const DAEMON_IS_STRICTER: &[&str] = &["nested-escaping", "rust-trim-not-js-trim"];
+/// Where the daemon would be stricter than the control plane: a case whose
+/// names are not hostnames, which the daemon never takes (the answer is
+/// Malformed and the box keeps its last good names). None today: the
+/// control plane refuses such labels itself (the `refused-*` cases), and
+/// the daemon's own check stays as the belt.
+const DAEMON_IS_STRICTER: &[&str] = &[];
 
 #[test]
 fn the_vectors_are_the_pinned_copy() {
@@ -55,7 +57,7 @@ fn entries_of(expect: &Value, name: &str) -> Vec<NameEntry> {
 fn every_vector_parses_as_k2_web_means_it() {
     let doc: Value = serde_json::from_slice(VECTORS).expect("the vectors are JSON");
     let cases = doc["cases"].as_array().expect("a cases list");
-    assert_eq!(cases.len(), 38, "the 38 shared cases");
+    assert_eq!(cases.len(), 55, "the 55 shared cases");
     let (mut active, mut revoked, mut absent) = (0, 0, 0);
     let mut stricter = Vec::new();
     for c in cases {
@@ -96,5 +98,5 @@ fn every_vector_parses_as_k2_web_means_it() {
         }
     }
     assert_eq!(stricter, DAEMON_IS_STRICTER, "every stricter case is in the vectors, in order");
-    assert_eq!((active, revoked, absent), (24, 7, 5), "the cases by outcome");
+    assert_eq!((active, revoked, absent), (29, 20, 6), "the cases by outcome");
 }

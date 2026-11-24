@@ -606,23 +606,19 @@ async fn server_keys_need_an_admin_and_each_change_is_audited() {
     assert_eq!(settings::load(), defaults);
     assert_eq!(settings_audit(), Vec::<(String, String)>::new(), "a fresh home has no rows");
 
-    // A person typing in a K2 terminal tab: a live non-harness PTY's passport.
-    let shell_key = "shell-pf-settings";
+    // A person typing in a K2 terminal tab: the passport of a plain shell
+    // tab a person's client opened (0.46.18: by how K2 started it).
+    let shell_key = "tab-pf-settings";
     let shell = {
         let home = k2_core::paths::k2_home();
         std::fs::create_dir_all(&home).expect("k2 home");
-        let cfg = k2_core::terminal::DaemonPtyConfig {
-            cols: 80,
-            rows: 24,
-            cwd: Some(home),
-            program: Some(k2_core::test_env::pty_idle_program("cat")),
-            ..Default::default()
-        };
-        let pty = k2_core::terminal::DaemonPtySession::spawn(cfg).expect("spawn a terminal PTY");
-        k2_daemon::v2_session_map::register(shell_key, Arc::clone(&pty));
+        let body = json!({ "agent_name": shell_key, "cwd": home.to_string_lossy(), "cols": 80, "rows": 24 });
+        let (s, v) = call(port, "POST", &q("/cli/sessions/v2/spawn", OWNER), Some(body));
+        assert_eq!(s, 200, "a person's shell tab: {v}");
+        let sid = v["sessionId"].as_str().and_then(SessionId::parse).unwrap_or_else(|| panic!("no sessionId: {v}"));
         session_token::mint_session_token(
-            &pty.session_id,
-            &pty.session_id.to_string(),
+            &sid,
+            &sid.to_string(),
             HookPrincipal { workspace_uuid: "ws-pf-settings-shell".into(), agent_address: shell_key.into() },
             CredMode::ApiKey,
             Provider::Anthropic,

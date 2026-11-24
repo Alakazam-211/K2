@@ -535,6 +535,9 @@ pub fn install_move_listener() {
     // it (the ticket routes, a Thread post, K2's own notices), goes out on
     // the overlay bus like any Thread post.
     k2_core::feedback_thread::set_post_listener(on_ticket_posted);
+    // project-chat-thread-v1: every stored project line, whichever door
+    // wrote it, goes out on the overlay bus too.
+    k2_core::project_chat_thread::set_post_listener(on_ticket_posted);
 }
 
 fn on_ticket_posted(item: &k2_core::overlay::OverlayItem, links: &[k2_core::overlay::OverlayLink]) {
@@ -727,6 +730,11 @@ pub(crate) fn skin_overlay_gate(
     if let Some(r) = crate::overlay_routes::ticket_addr::socket_gate(conversation, Some(pass), None) {
         return r;
     }
+    // project-chat-thread-v1: an App reads a project's chat on its own
+    // socket (`project.events`, the all-members rule checked per frame).
+    if k2_core::overlay::project::is_project(conversation) {
+        return Err(crate::skin_routes::skin_room_response());
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(Some(project_id)) =
@@ -833,7 +841,9 @@ pub async fn serve_overlay_events_connection(
     // ticket-thread-v1: a login watches a ticket's Thread only when it may
     // see the ticket (a Member never sees K2's own notices).
     if skin_pass.is_none() {
-        if let Some(Err(r)) = crate::overlay_routes::ticket_addr::socket_gate(&conversation, None, viewer_login.as_deref()) {
+        let gate = crate::overlay_routes::ticket_addr::socket_gate(&conversation, None, viewer_login.as_deref())
+            .or_else(|| crate::overlay_routes::project_addr::socket_gate(&conversation));
+        if let Some(Err(r)) = gate {
             let resp = format!(
                 "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
                 r.status,

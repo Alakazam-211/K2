@@ -75,7 +75,7 @@ impl InboxSet {
     /// `all:true` is every agent Thread, never a ticket's discussion
     /// (ticket-thread-v1: the phone opts in to `ticket:<id>` by naming it).
     pub fn contains(&self, conversation: &str) -> bool {
-        (self.all && !k2_core::overlay::ticket::is_ticket(conversation))
+        (self.all && !k2_core::overlay::ticket::is_ticket(conversation) && !k2_core::overlay::project::is_project(conversation))
             || self.ids.iter().any(|c| c == conversation)
             || self.resolved.values().any(|c| c == conversation)
     }

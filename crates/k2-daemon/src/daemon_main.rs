@@ -1800,6 +1800,12 @@ async fn async_main() {
     // background thread; then the daily sweep of ticket conversations whose
     // ticket is gone. Old tickets read their old rows meanwhile.
     k2_core::feedback_thread::spawn_backfill_and_sweep();
+    // project-chat-thread-v1: projects from before this build move their
+    // chat into their Thread (`project:<id>`), resumable, one background
+    // thread; then the reconcile after a rollback and the daily sweep of
+    // project conversations whose project is gone. Unmoved projects read
+    // their old rows meanwhile.
+    k2_core::project_chat_thread::spawn_backfill_and_sweep();
     // P44: adopted sessions' cell sockets accept only from here on.
     crate::ptyd_adopt::serve_adopted_cells();
 

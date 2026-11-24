@@ -286,6 +286,9 @@ pub mod ticket_attachments;
 // ticket-thread-v1 (0.46.17): one message on a ticket, from the ticket
 // route or a Thread post to `ticket:<id>`, under every ticket rule.
 pub(crate) mod ticket_comment;
+// project-chat-thread-v1: files on project lines, kept in the point of
+// contact's workspace.
+pub(crate) mod project_chat_files;
 pub mod guest_paths;
 // `viewing` frames from the overlay WS: who looks at which Thread (S4).
 pub mod thread_viewers;

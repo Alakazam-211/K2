@@ -250,7 +250,10 @@ pub fn handle_resolve_links(body: &[u8]) -> CliResponse {
         return CliResponse::bad_request("missing 'workspace'");
     }
     // ticket-thread-v1: `ticket:<id>` names the ticket's workspace.
-    let ticket_root = match crate::overlay_routes::ticket_addr::workspace_of(token, None) {
+    // project-chat-thread-v1: `project:<id>` names its point of contact's.
+    let ticket_root = match crate::overlay_routes::ticket_addr::workspace_of(token, None)
+        .or_else(|| crate::overlay_routes::project_addr::workspace_of(token))
+    {
         Some(Ok((_, root))) => Some(root),
         Some(Err(r)) => return r,
         None => None,

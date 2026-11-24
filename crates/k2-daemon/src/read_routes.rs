@@ -266,6 +266,16 @@ fn thread_id(f: &Fields) -> Result<String, CliResponse> {
     }
 }
 
+/// project-chat-thread-v1: a Thread read mark or mute on a project's chat
+/// (`project:<group id>`) is the project's read state (kind `project`, by
+/// group id), the one every project surface reads.
+fn thread_or_project(id: String) -> (&'static str, String) {
+    match k2_core::overlay::project::group_of(&id) {
+        Some(gid) => (KIND_PROJECT, gid.to_string()),
+        None => (KIND_THREAD, id),
+    }
+}
+
 /// A project chat named by `group` / `id` (a name, id or unique prefix).
 fn group_id(f: &Fields) -> Result<String, CliResponse> {
     let Some(sel) = f.str(&["group", "groupId", "id"]) else {
@@ -688,7 +698,10 @@ pub fn handle(is_post: bool, path: &str, params: &HashMap<String, String>, body:
     match path {
         UNREAD_PATH => handle_unread(&person, &fields),
         READ_PATH => match thread_id(&fields) {
-            Ok(id) => handle_ack(&person, KIND_THREAD, &id, &fields),
+            Ok(id) => {
+                let (kind, id) = thread_or_project(id);
+                handle_ack(&person, kind, &id, &fields)
+            }
             Err(r) => r,
         },
         PROJECT_READ_PATH => match group_id(&fields) {
@@ -875,10 +888,12 @@ fn handle_mute(person: &Person, f: &Fields) -> CliResponse {
         return usage(format!("kind must be 'thread' or 'project', got '{kind}'"));
     }
     let id = if kind == KIND_PROJECT { group_id(f) } else { thread_id(f) };
-    let id = match id {
-        Ok(id) => id,
+    let (kind, id) = match id {
+        Ok(id) if kind == KIND_PROJECT => (KIND_PROJECT, id),
+        Ok(id) => thread_or_project(id),
         Err(r) => return r,
     };
+    let kind = kind.to_string();
     let muted = match f.bool("muted") {
         Ok(Some(m)) => m,
         Ok(None) => return usage("missing muted (true or false)"),

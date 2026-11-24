@@ -143,6 +143,34 @@ pub fn can_read(pass: &SkinPass, group_id: &str) -> bool {
     }
 }
 
+/// May `pass` post in project `group_id`'s chat right now (`project:write`
+/// in every member room)? Fails closed.
+pub fn can_post(pass: &SkinPass, group_id: &str) -> bool {
+    match project_groups::list_members(group_id) {
+        Ok(m) => {
+            let rooms: Vec<String> = m.into_iter().map(|m| m.workspace_id).collect();
+            holds_in_every(pass, &rooms, CAP_THREAD_READ) && holds_in_every(pass, &rooms, CAP_PROJECT_WRITE)
+        }
+        Err(_) => false,
+    }
+}
+
+/// A guest's own line is read for it (any door), and its project sockets
+/// hear the cursor move. An App's own pass keeps no project read state.
+pub(crate) fn note_guest_own_post(pass: &SkinPass, group_id: &str, seq: i64) {
+    let Some(person) = person_of(pass) else { return };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if !read_state::tables_exist(&conn) {
+        return;
+    }
+    match read_state::ack(&conn, &person.key, KIND_PROJECT, group_id, Some(seq)) {
+        Ok(true) => crate::read_live::guest_moved(&person.key, group_id),
+        Ok(false) => {}
+        Err(e) => k2_core::log_debug!("[apps/project_chat] own-post read for {}: {e}", person.key),
+    }
+}
+
 /// The projects `pass` may read, in the nav order.
 pub fn visible_groups(pass: &SkinPass) -> Result<Vec<(ProjectGroup, Vec<String>)>, String> {
     let mut out = Vec::new();
@@ -158,7 +186,7 @@ pub fn visible_groups(pass: &SkinPass) -> Result<Vec<(ProjectGroup, Vec<String>)
 /// The project a selector names among the ones `pass` may read: its exact
 /// id, else its exact name (case-insensitive). `None` for an unknown and
 /// for an invisible project alike (no prefixes: never an oracle).
-fn visible_group(pass: &SkinPass, selector: &str) -> Result<Option<(ProjectGroup, Vec<String>)>, String> {
+pub(crate) fn visible_group(pass: &SkinPass, selector: &str) -> Result<Option<(ProjectGroup, Vec<String>)>, String> {
     let sel = selector.trim();
     let groups = visible_groups(pass)?;
     if let Some(i) = groups.iter().position(|(g, _)| g.id == sel) {
@@ -325,7 +353,7 @@ pub fn handle_pass(path: &str, pass: &SkinPass, params: &HashMap<String, String>
                 Ok(Some((g, _))) => {
                     // 0.46.5 (item 14): an agent line stored with its
                     // folder as `author` reads as the workspace's name.
-                    let mut r = crate::project_group_routes::messages_read(&g.id, params);
+                    let mut r = crate::project_chat_files::with_view_pass(pass, || crate::project_group_routes::messages_read(&g.id, params));
                     if r.status.starts_with("200") {
                         if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&r.body) {
                             crate::guest_paths::project_authors(&mut v);
@@ -375,10 +403,12 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
     let author = project_groups::guest_author(&pass.username);
     // The key's namespace is the guest's login (from the pass), never the body.
     let client_ns = crate::client_msg_id::guest_ns(pass);
+    let body_hash = crate::client_msg_id::body_hash(&b.body, "");
     let client = client_msg_id.as_deref().map(|id| project_groups::ClientKey {
         ns: &client_ns,
         client_msg_id: id,
         at_ms: chrono::Utc::now().timestamp_millis(),
+        body_hash: &body_hash,
     });
     let stored = match crate::project_group_routes::store_and_deliver(
         &g,
@@ -388,6 +418,7 @@ fn post(pass: &SkinPass, body: &[u8]) -> CliResponse {
         None,
         None,
         text,
+        crate::project_chat_files::Files::default(),
         client,
         Some(crate::overlay_routes::guest_stamp(pass)),
         // Send-delay fix 2: the guest's answer never waits for the inject.
@@ -507,6 +538,8 @@ pub fn frame_wire(msg: &ProjectGroupMessage) -> String {
     });
     // 0.46.5 (item 14): App sockets never carry a host path as `author`.
     crate::guest_paths::project_authors(&mut v["doc"]);
+    // project-chat-thread-v1: a frame's files are only "a file" here.
+    crate::project_chat_files::hide_files(&mut v["doc"]);
     v.to_string()
 }
 

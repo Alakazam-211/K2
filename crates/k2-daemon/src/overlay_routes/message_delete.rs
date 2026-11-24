@@ -203,7 +203,11 @@ fn after_delete(
     crate::thread_attachments::audit("thread.message.delete", &from, format!("to={} id={} seq={}", resolved.addr, d.doc.id, d.seq));
     // ticket-thread-v1: a ticket's message leaves its counts and views, and
     // its agent hears it as every ticket event, `[feedback:<id>] …`.
-    if !super::ticket_addr::after_delete(resolved, &d.doc.id, before, &from) {
+    // project-chat-thread-v1: a project line's rollback copy goes, and its
+    // point of contact hears it as every project line, `[project:<name>] …`.
+    if !super::ticket_addr::after_delete(resolved, &d.doc.id, before, &from)
+        && !super::project_addr::after_delete(resolved, &d.doc.id, before, &from)
+    {
         tell_the_agent(resolved, &from, before);
     }
 }
@@ -248,7 +252,7 @@ fn remove_uploaded_copies(project_id: &str, conversation_id: &str, before: &over
     if before.attachments.is_empty() {
         return;
     }
-    let root = crate::thread_attachments::project_root(project_id);
+    let conv_root = crate::thread_attachments::project_root(project_id);
     let others: Vec<String> = overlay::read_thread(conversation_id, 0)
         .map(|items| {
             items
@@ -260,6 +264,13 @@ fn remove_uploaded_copies(project_id: &str, conversation_id: &str, before: &over
         .unwrap_or_default();
     let thumbs = k2_core::overlay::thumbs::cache_dir();
     for a in &before.attachments {
+        // project-chat-thread-v1: a file kept in another workspace (a
+        // project chat's point of contact) is that workspace's.
+        let project_id = a.workspace.as_deref().unwrap_or(project_id);
+        let root = match a.workspace.as_deref() {
+            Some(ws) => crate::thread_attachments::project_root(ws),
+            None => conv_root.clone(),
+        };
         let real = root.as_deref().and_then(|r| k2_core::overlay::attachments::resolve_now(r, a));
         let mut idents = vec![(a.size, a.modified_at)];
         if let Some(meta) = real.as_ref().and_then(|p| std::fs::metadata(p).ok()) {

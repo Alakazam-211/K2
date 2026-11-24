@@ -223,8 +223,8 @@ pub(crate) fn messages_read(group_id: &str, params: &HashMap<String, String>) ->
         None => None,
     };
     // thread-delta-v1: `after_seq=N` → seq > N, oldest first,
-    // `has_more` when newer messages remain. Messages never change
-    // after posting, so `changed` / `removed` are always empty.
+    // `has_more` when newer messages remain. project-chat-thread-v1: a
+    // deleted line is listed in `removed` ([`messages_after_seq_body`]).
     if let Some(raw) = params.get("after_seq") {
         let after_seq = match raw.trim().parse::<i64>() {
             Ok(n) if n >= 0 => n,
@@ -276,7 +276,15 @@ pub(crate) fn messages_read(group_id: &str, params: &HashMap<String, String>) ->
             Err(e) => core_error(e),
         };
     }
-    match project_groups::list_messages(&group_id, after, limit) {
+    // project-chat-thread-v1: `include_deleted=1` (`k2 project read --all`)
+    // keeps deleted lines in the page as `deleted: true` with no body.
+    let with_deleted = matches!(opt_param(params, "include_deleted").as_deref(), Some("1" | "true"));
+    let page = if with_deleted && k2_core::project_chat_thread::in_thread(&group_id) {
+        k2_core::project_chat_thread::list_page_with(&group_id, after, limit, true)
+    } else {
+        project_groups::list_messages(&group_id, after, limit)
+    };
+    match page {
         Ok(page) => CliResponse::ok_json(
             serde_json::json!({
                 "ok": true,
@@ -357,7 +365,10 @@ pub fn chat_read_refusal(
 /// Today the view is the stored row for every caller the dispatcher lets
 /// in: a project message has no attachments, cards or redactions.
 fn messages_view(messages: &[project_groups::ProjectGroupMessage]) -> serde_json::Value {
-    serde_json::to_value(messages).unwrap_or_else(|_| serde_json::json!([]))
+    let mut v = serde_json::to_value(messages).unwrap_or_else(|_| serde_json::json!([]));
+    // project-chat-thread-v1: files as this reader may see them.
+    crate::project_chat_files::rewrite_lines(&mut v);
+    v
 }
 
 /// thread-read-v1: for a person (the dispatcher bound their login), each
@@ -381,6 +392,25 @@ pub(crate) fn messages_after_seq_body(
     after_seq: i64,
     limit: Option<i64>,
 ) -> Result<serde_json::Value, CliResponse> {
+    // project-chat-thread-v1: a moved chat reads its Thread; a deleted line
+    // is left out of `messages` and listed in `removed` (`[{id, seq}]`, the
+    // Thread delta's shape), a line changed below the cursor is in
+    // `changed`.
+    if k2_core::project_chat_thread::in_thread(group_id) {
+        return match k2_core::project_chat_thread::list_delta(group_id, after_seq, limit) {
+            Ok(d) => Ok(serde_json::json!({
+                "ok": true,
+                "groupId": group_id,
+                "after_seq": after_seq,
+                "messages": messages_view(&d.messages),
+                "has_more": d.truncated,
+                "truncated": d.truncated,
+                "changed": messages_view(&d.changed),
+                "removed": crate::overlay_routes::removed_json(&d.removed),
+            })),
+            Err(e) => Err(core_error(e)),
+        };
+    }
     match project_groups::list_messages_after_seq(group_id, after_seq, limit) {
         Ok(page) => Ok(serde_json::json!({
             "ok": true,
@@ -1438,6 +1468,11 @@ struct MsgBody {
     /// post-idempotency-v1: the client's id for this post (1–64 of
     /// `[A-Za-z0-9_-]`); a repeat answers the stored line.
     client_msg_id: Option<String>,
+    /// project-chat-thread-v1: files on the line, as a Thread post takes
+    /// them (`[{path}]` relative to the point of contact's workspace, or
+    /// absolute), snapshot into that workspace's
+    /// `.k2/downloads/projects/<group id>/`.
+    attachments: Option<serde_json::Value>,
 }
 
 /// The injected payload (§4.3): `[project:<name>] <body>`.
@@ -1503,7 +1538,11 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
     if b.group.is_empty() {
         return usage_error("missing 'group' (a project name, id, or unique prefix)");
     }
-    if b.body.trim().is_empty() {
+    let attach_raw = match &b.attachments {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(v) => v.to_string(),
+    };
+    if b.body.trim().is_empty() && attach_raw.is_empty() {
         return usage_error("msg requires non-empty <text>");
     }
     let group_id = match project_groups::resolve_group(&b.group) {
@@ -1618,13 +1657,21 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         Some(ws) => crate::client_msg_id::agent_ns(ws),
         None => crate::client_msg_id::person_ns(session_author),
     });
+    let body_hash = crate::client_msg_id::body_hash(&b.body, &attach_raw);
     let client = match (&client_ns, &client_msg_id) {
         (Some(ns), Some(id)) => Some(project_groups::ClientKey {
             ns,
             client_msg_id: id,
             at_ms: chrono::Utc::now().timestamp_millis(),
+            body_hash: &body_hash,
         }),
         _ => None,
+    };
+    // project-chat-thread-v1 (P5): files ride the line, snapshot into the
+    // point of contact's workspace.
+    let files = match crate::project_chat_files::check_and_snapshot(&group, b.attachments.as_ref(), author_workspace_id.as_deref(), &author_owned) {
+        Ok(f) => f,
+        Err(r) => return r,
     };
 
     // An agent's `k2 project msg` prints the outcome, so it waits for it;
@@ -1638,6 +1685,7 @@ pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<
         author_workspace_id.as_deref(),
         author_person.as_deref(),
         &b.body,
+        files,
         client,
         None,
         delivery,
@@ -1676,6 +1724,9 @@ pub(crate) fn msg_reply_json(msg: &project_groups::ProjectGroupMessage, group_na
     });
     if let Some(id) = &msg.client_msg_id {
         v["clientMsgId"] = serde_json::json!(id);
+    }
+    if !msg.attachments.is_empty() {
+        v["attachments"] = serde_json::json!(msg.attachments);
     }
     v
 }
@@ -1784,6 +1835,37 @@ fn queue_poc_job(lane: &str, job: PocJob, entry: crate::delivery_journal::Entry)
     });
 }
 
+/// project-chat-thread-v1: a note about the chat (a line was deleted) to
+/// the point of contact, `[project:<name>] <text>` framed as `from` (a
+/// guest's stamp for an App guest), on its delivery lane and journaled,
+/// never stored. No point of contact: nobody to tell.
+pub(crate) fn tell_poc(group: &project_groups::ProjectGroup, from: &str, text: &str, guest_stamp: Option<String>) {
+    let Ok(Some(poc)) = project_groups::get_poc(&group.id) else { return };
+    let (_, path) = workspace_name_path(&poc);
+    let Some(path) = path else { return };
+    let guest = guest_stamp.is_some();
+    let payload = if guest {
+        project_payload(&group.name, &crate::workspace_msg::quote_guest_lines(text))
+    } else {
+        project_payload(&group.name, text)
+    };
+    let from = guest_stamp.unwrap_or_else(|| if from == "owner" { crate::workspace_msg::resolve_owner_from() } else { from.to_string() });
+    let note_id = format!("note:{}", group.id);
+    #[cfg(debug_assertions)]
+    {
+        let sender = if guest { crate::workspace_msg::Sender::Guest(&from) } else { crate::workspace_msg::Sender::Named(&from) };
+        let line = crate::workspace_msg::format_sender(sender, &payload, "");
+        let mut l = last_poc_lines().lock().unwrap_or_else(|p| p.into_inner());
+        l.push((note_id.clone(), line));
+        let over = l.len().saturating_sub(64);
+        l.drain(..over);
+    }
+    let job = PocJob { message_id: note_id, path, payload, from, guest };
+    let lane = crate::overlay_routes::workspace_delivery_lane(&poc);
+    let entry = crate::delivery_journal::record(&lane, k2_core::delivery_journal::KIND_PROJECT, &job);
+    queue_poc_job(&lane, job, entry);
+}
+
 /// Boot ([`crate::delivery_journal::replay_on_boot`]): queue a journal
 /// row's project chat line again, on its lane, under the same row.
 pub(crate) fn requeue_poc_delivery(row: &k2_core::delivery_journal::JournalRow) -> Result<(), String> {
@@ -1856,12 +1938,15 @@ pub(crate) fn store_and_deliver(
     author_workspace_id: Option<&str>,
     author_person: Option<&str>,
     body: &str,
+    files: crate::project_chat_files::Files,
     client: Option<project_groups::ClientKey<'_>>,
     guest_stamp: Option<String>,
     delivery: PocDelivery,
 ) -> Result<Stored, CliResponse> {
-    // Store.
-    let msg = match project_groups::post_message_keyed(group_id, author, author_kind, body, client) {
+    // Store (project-chat-thread-v1: a Thread line of `project:<id>`, its
+    // rollback copy, the overlay socket frame through the post listener).
+    let crate::project_chat_files::Files { attachments, root: files_root } = files;
+    let msg = match project_groups::post_message_with_files(group_id, author, author_kind, body, attachments, client) {
         Ok(project_groups::PostOutcome::Posted(m)) => m,
         Ok(project_groups::PostOutcome::Duplicate { msg, mismatch }) => return Ok(Stored::Duplicate { msg, mismatch }),
         Ok(project_groups::PostOutcome::ReusedElsewhere) => return Err(crate::client_msg_id::reused()),
@@ -1896,7 +1981,7 @@ pub(crate) fn store_and_deliver(
     // muted the chat, each with that person's totals. Content-free:
     // project name + group id, NEVER the message text (§4.5).
     // Dormant/fire-and-forget inside push_routes.
-    crate::push_routes::notify_project_message_created(&group.name, group_id, msg.seq, author_person);
+    crate::push_routes::notify_project_message_created(&group.name, group_id, &msg, author_person);
 
     // §4.3 — best-effort PoC injection. PoC identity is read AT STORE
     // TIME (re-read after the insert, not from the pre-store snapshot).
@@ -1918,10 +2003,13 @@ pub(crate) fn store_and_deliver(
                 None => (false, Some("workspace_not_found".to_string()), None),
                 Some(path) => {
                     let guest = guest_stamp.is_some();
+                    // A line with files reaches the PoC with one
+                    // `Attached: <abs path>` line per file (never stored).
+                    let text = crate::project_chat_files::with_attached_lines(&msg.body, &msg.attachments, files_root.as_deref());
                     let payload = if guest {
-                        project_payload(&group.name, &crate::workspace_msg::quote_guest_lines(&msg.body))
+                        project_payload(&group.name, &crate::workspace_msg::quote_guest_lines(&text))
                     } else {
-                        project_payload(&group.name, &msg.body)
+                        project_payload(&group.name, &text)
                     };
                     // An owner post is framed with the owner's display
                     // name (the composer's server-side resolution, cf.
@@ -2990,24 +3078,31 @@ mod tests {
     fn project_group_messages_route_paging() {
         let g = create_group_via_route(&gname("paging"));
         let gid = g["id"].as_str().expect("id").to_string();
-        // 25 rows at controlled timestamps 1000..=1024.
+        // 25 rows at controlled timestamps 1000..=1024, written as an
+        // older release did (project-chat-thread-v1: the project is still
+        // on its old rows), then moved to its Thread on its first read
+        // path below (the views must answer the same).
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
+            conn.execute("UPDATE project_groups SET messages_in_thread = 0, last_msg_seq = 25 WHERE id = ?1", rusqlite::params![gid])
+                .expect("old rows");
             for i in 0..25i64 {
                 conn.execute(
-                    "INSERT INTO project_group_messages (id, group_id, author, body, created_at) \
-                     VALUES (?1, ?2, 'owner', ?3, ?4)",
+                    "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind) \
+                     VALUES (?1, ?2, 'owner', ?3, ?4, ?5, 'person')",
                     rusqlite::params![
                         uuid::Uuid::new_v4().to_string(),
                         gid,
                         format!("m-{i}"),
-                        1000 + i
+                        1000 + i,
+                        i + 1
                     ],
                 )
                 .expect("insert message");
             }
         }
+        k2_core::project_chat_thread::move_group(&gid).expect("move to the Thread");
 
         // Default: the latest 20, oldest-first, truncated.
         let page = ok_json(messages(&gid, &[]));
@@ -4086,12 +4181,10 @@ mod tests {
         assert_eq!(pushes.len(), 1, "agent post pushes exactly once: {pushes:?}");
         let e = &pushes[0];
         assert_eq!(e.title(), "K2");
-        assert_eq!(e.body(), format!("New message in {name}"));
-        assert!(
-            !e.body().contains("secret"),
-            "message text must never ride the push (§4.5): {}",
-            e.body()
-        );
+        // project-chat-thread-v1 (Q3): a preview of the line under the
+        // owner's previews switch (on by default) and the phone's choice;
+        // with the switch off it is content-free again (thread_push tests).
+        assert_eq!(e.body(), format!("{name}: progress: secret details inside"));
         // The owner read up to their own kickoff (own post advances the
         // cursor): the agent line is their one unread. The alert names that
         // line's seq, so a phone can clear it by seq (0.46.8).
@@ -4103,8 +4196,13 @@ mod tests {
         // The PoC's own post is still an agent post → pushes too
         // (the author gate is owner-vs-not, independent of the
         // PoC-injection matrix).
+        // project-chat-thread-v1: lines coalesce like Thread posts (one
+        // window per project and person): the PoC's line, inside the
+        // window, goes out when the window closes.
         let mark = crate::push_routes::test_push_capture::mark();
         ok_json(msg_as(&gid, Some(&poc_name), "acknowledged, on it"));
+        assert!(pushes_since(mark).is_empty(), "held inside the window");
+        crate::thread_push::flush_due_for_tests(std::time::Instant::now() + crate::thread_push::BACKOFF + std::time::Duration::from_secs(1));
         assert_eq!(pushes_since(mark).len(), 1, "a PoC post pushes like any agent post");
     }
 }

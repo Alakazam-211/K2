@@ -36,6 +36,9 @@ mod secret_delivery;
 mod card_meta;
 mod attachment_door;
 pub(crate) mod ticket_addr;
+// project-chat-thread-v1: `project:<id>` on the Thread routes, with the
+// project's rights.
+pub(crate) mod project_addr;
 use attachment_door::{handle_attachment_token, handle_get_attachment};
 use closed_cards::expired_or_not_pending;
 use system_notice::{post_not_taken_notice, post_system_line, refuse_system_notice_param};
@@ -202,6 +205,9 @@ fn require_skin_cap_in_resolved(
     let Some(pass) = request_skin() else {
         return Ok(());
     };
+    if let Some(r) = project_addr::pass_cap(resolved, &pass, cap) {
+        return r;
+    }
     let cap = ticket_addr::cap_for(resolved, cap);
     if !pass.has_cap_in_room(&resolved.project_id, cap) {
         return Err(crate::skin_routes::missing_cap_response(cap));
@@ -238,6 +244,9 @@ fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverl
         return Err(gb_refused());
     }
     if let Some(r) = ticket_addr::resolve_for_pass(addr, pass) {
+        return r;
+    }
+    if let Some(r) = project_addr::resolve_for_pass(addr, pass) {
         return r;
     }
     if k2_core::workspace_session_handles::split_workspace_handle(addr).is_some() {
@@ -596,6 +605,9 @@ fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     if let Some(r) = ticket_addr::resolve(addr) {
         return r;
     }
+    if let Some(r) = project_addr::resolve(addr) {
+        return r;
+    }
     // `vc:<agent>:<login>`: a Voice & Chat only login's own conversation
     // with an agent shared with it (security review H1).
     if let Some(r) = resolve_vc_addr(addr) {
@@ -766,6 +778,11 @@ fn authorize_read(
     let Some(p) = principal else {
         return Ok(());
     };
+    // project-chat-thread-v1: a project's chat is its members' (the
+    // catalog's project_id is the group, never a workspace).
+    if let Some(r) = project_addr::agent_gate(p, resolved) {
+        return r;
+    }
     if p.workspace_uuid.trim() != resolved.project_id {
         return Err(forbidden(
             "same-workspace agents can read overlay in that workspace only",
@@ -784,6 +801,9 @@ fn authorize_write(
     let Some(p) = principal else {
         return Ok(());
     };
+    if let Some(r) = project_addr::agent_gate(p, resolved) {
+        return r;
+    }
     if p.workspace_uuid.trim() != resolved.project_id {
         return Err(forbidden("cannot write overlay in another workspace"));
     }
@@ -1791,6 +1811,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
             return usage("a ticket's discussion doesn't take replyTo; post the words alone");
         }
         return ticket_addr::post(params, session_author, &resolved, client_msg_id, received_at);
+    }
+    if project_addr::is_project(&resolved) {
+        return project_addr::post(params, session_author, &resolved, client_msg_id);
     }
     if let Some(r) = refuse_if_imported(&resolved, None) {
         return r;
@@ -5265,7 +5288,7 @@ fn guest_thread_activity(params: &HashMap<String, String>, pass: &SkinPass) -> C
         Ok(r) => r,
         Err(e) => return e,
     };
-    if ticket_addr::is_ticket(&resolved) {
+    if ticket_addr::is_ticket(&resolved) || project_addr::is_project(&resolved) {
         return ticket_addr::guest_activity(&resolved);
     }
     for cap in [crate::skin_routes::THREAD_READ, crate::skin_routes::ACTIVITY_READ] {
@@ -5580,6 +5603,9 @@ pub fn dispatch_post_as(
         );
     }
     if let Some(r) = ticket_addr::refuse_card_route(path, &params) {
+        return r;
+    }
+    if let Some(r) = project_addr::refuse_card_route(path, &params) {
         return r;
     }
     let login = (!stamped && request_skin().is_none()).then(|| session_author.to_string());

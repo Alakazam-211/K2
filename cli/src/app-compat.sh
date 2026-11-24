@@ -94,7 +94,13 @@ cmd_app_compat() {
 cmd_app_identity() {
     local sub="${1:-}" verb=""
     case "$sub" in
-        issuer) shift; verb="${1:-}"; case "$verb" in add|rm) shift ;; *) _app_compat_bad "k2 app identity issuer add|rm <app-id> … (k2 app identity --help)" ;; esac ;;
+        issuer)
+            shift; verb="${1:-}"
+            case "$verb" in
+                add|rm) shift ;;
+                -h|--help|help) _app_identity_usage; return 0 ;;
+                *) _app_compat_bad "k2 app identity issuer add|rm <app-id> … (k2 app identity --help)" ;;
+            esac ;;
         issuers|unlink) shift ;;
         ""|-h|--help|help) _app_identity_usage; return 0 ;;
         *) _app_compat_bad "k2 app identity issuer add|rm, issuers, unlink (k2 app identity --help)" ;;

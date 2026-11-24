@@ -217,6 +217,20 @@ b = json.loads(sys.argv[1].split(" ", 2)[2])
 assert b == {"app": "shop", "op": "create", "id": "logos", "public": True, "fileSizeLimit": "50MB", "allowedMimeTypes": ["image/png", "image/jpeg"]}, b' "$(last_req)" \
     || fail "the bucket body: $(last_req)"
 
+# ── k2 app identity issuer --help prints the identity help ───────────
+: >"$FAKE_DIR/requests.log"
+for h in --help -h help; do
+    run app identity issuer "$h"
+    [ "$RC" -eq 0 ] || fail "k2 app identity issuer $h exits 0, got $RC: $ERR"
+    grep -qF 'third-party tokens an App trusts' <<<"$OUT" || fail "k2 app identity issuer $h prints the identity help: $OUT"
+    grep -qF 'identity issuer add <app-id> --key <name>' <<<"$OUT" || fail "k2 app identity issuer $h names issuer add: $OUT"
+    [ -z "$ERR" ] || fail "k2 app identity issuer $h: nothing on stderr: $ERR"
+done
+run app identity issuer frob shop
+[ "$RC" -eq 1 ] || fail "k2 app identity issuer <not add|rm> stays a usage error (1), got $RC"
+usage_json "k2 app identity issuer add|rm" || fail "the issuer usage JSON: $ERR"
+[ ! -s "$FAKE_DIR/requests.log" ] || fail "identity help sent requests: $(cat "$FAKE_DIR/requests.log")"
+
 study="$("$CLI" study db)"
 grep -qF 'FROM SUPABASE' <<<"$study" || fail "k2 study db has FROM SUPABASE"
 grep -qF 'k2 app user import <app> --file users.jsonl' <<<"$study" || fail "k2 study db names the user import"

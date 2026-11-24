@@ -80,7 +80,17 @@ const CLUSTER_USAGE: &str = concat!(
     cli_name!(),
     " db cluster restart <name> | ",
     cli_name!(),
-    " db cluster archive <name> on|off"
+    " db cluster archive <name> on|off | ",
+    cli_name!(),
+    " db cluster basebackup|backups <name> | ",
+    cli_name!(),
+    " db cluster restore <name> --to <time> --as <new> | ",
+    cli_name!(),
+    " db cluster restore-drill <name> [--to <time>] | ",
+    cli_name!(),
+    " db cluster drop-drill <name> | ",
+    cli_name!(),
+    " db cluster switch <db> --to <cluster> [--yes]"
 );
 const CREATE_CLUSTER_USAGE: &str = concat!(
     cli_name!(),
@@ -279,6 +289,9 @@ pub fn cluster(a: &mut Words) -> Result<Form, Form> {
             }
             Ok(cp(Ask::Named(k)))
         }
+        // Point-in-time restore (prd-app-supabase-compat-v1 lane E): the
+        // shell's until they are native here.
+        "basebackup" | "backups" | "restore" | "restore-drill" | "drop-drill" | "switch" => Ok(Form::Shell),
         _ => Err(usage(CLUSTER_USAGE)),
     }
 }

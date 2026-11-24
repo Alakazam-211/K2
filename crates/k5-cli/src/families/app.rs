@@ -869,6 +869,10 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             };
             return super::skin::run_app_taken(args, taken);
         }
+        // `app user meta` and `app user import` (prd-app-supabase-compat-v1
+        // lanes A and B) are `cmd_app`'s own arms, never `cmd_skin`'s: the
+        // shell's until they are native here.
+        Some("user" | "users") if matches!(kept.get(1), Some(&("meta" | "import"))) => return None,
         Some(v) if SKIN_VERBS.contains(&v) => return super::skin::run_app(args),
         _ => {}
     }

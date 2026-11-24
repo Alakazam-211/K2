@@ -300,6 +300,9 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
         "run" => run::parse(&mut a)?,
         "versions-access" => cp::versions_access(&mut a)?,
         "cluster" => cp::cluster(&mut a)?,
+        // `db import supabase` (prd-app-supabase-compat-v1 lane B): the
+        // shell's until it is native here.
+        "import" => Form::Shell,
         "upgrade" => cp::upgrade(&mut a)?,
         "create" => {
             let mut k = Ask::new(Verb::Create);

@@ -76,7 +76,9 @@ is set must never be skipped. The table checks both sides of it.
 
 ## Platforms and MSRV
 
-Rust 1.80 or later. Pure Rust on `std`, no `unsafe` (`#![forbid(unsafe_code)]`).
+Rust 1.85 or later to build the library (its TLS dependency, rustls, needs
+Cargo's edition 2024 through `zeroize`); the tests need 1.88 (their
+certificate maker, `rcgen`, pulls in `time`). Pure Rust on `std`, no `unsafe` (`#![forbid(unsafe_code)]`).
 Tested on Linux (x86-64) and macOS. It uses only `std::net`, so it builds
 anywhere `std` does.
 

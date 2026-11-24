@@ -4,6 +4,12 @@
 
 The first release.
 
+- MSRV: Rust 1.85 for the library, on both feature sets (rustls's
+  `zeroize` needs Cargo's edition 2024; checked with
+  `cargo +1.85 check --locked --lib`). The tests need 1.88, for the
+  dev-dependency `rcgen` and its `time`; `time` is not in the library's
+  dependency tree.
+
 - `proxy_for`: the proxy curl would use for a URL's scheme and host,
   from the environment (`http_proxy`, `https_proxy`, `all_proxy`,
   `no_proxy` and their upper-case forms), or a `ConfigError` for a

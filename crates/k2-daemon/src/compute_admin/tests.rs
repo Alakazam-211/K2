@@ -1518,3 +1518,100 @@ fn an_older_busy_node_gets_the_build_after_twelve_hours() {
     test_seams::set_server_version(None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ── relays: a node's hint and its template cross together (B7 guard 3) ──
+//
+// A node's answer reaches the CLI through this server. A refusal hint may
+// carry `hintTemplate`, whose `{cli}` and `{product}` slots the CLI fills
+// with its own names. If a relay passed `hint` and dropped the template,
+// the CLI would print the node side's names. So a relay passes both or
+// neither, the template as sent, and a hint the server words itself goes
+// with no template. Nodes send no hint today; these pin the rule for the
+// day one does, with canned `admin_result` frames as they come off the
+// wire (the command id is filled in when the command goes out).
+
+const NODE_HINT: &str = "run zz compute node health n1 on Globex Desk";
+const NODE_TEMPLATE: &str = "run {cli} compute node health n1 on {product}";
+const FRAME_BOTH: &str = r#"{"t":"admin_result","cmd_id":"CMD_ID","state":"done","exit":0,"digest":"sha256:x","result":{"job_user":"k2job","hint":"run zz compute node health n1 on Globex Desk","hintTemplate":"run {cli} compute node health n1 on {product}"}}"#;
+const FRAME_HINT_ONLY: &str = r#"{"t":"admin_result","cmd_id":"CMD_ID","state":"done","exit":0,"digest":"sha256:x","result":{"job_user":"k2job","hint":"run zz compute node health n1 on Globex Desk"}}"#;
+const FRAME_REFUSED: &str = r#"{"t":"admin_result","cmd_id":"CMD_ID","state":"refused","code":"bad_args","message":"the job user is missing","digest":"sha256:x","result":{"hint":"run zz compute node health n1 on Globex Desk","hintTemplate":"run {cli} compute node health n1 on {product}"}}"#;
+
+/// One canned node frame, parsed the way the node socket parses it.
+fn node_frame(raw: &str, cmd_id: &str) -> wire::AdminResult {
+    match serde_json::from_str::<Frame>(&raw.replace("CMD_ID", cmd_id)).expect("a node's admin_result frame") {
+        Frame::AdminResult(r) => r,
+        other => panic!("not an admin_result: {}", other.kind()),
+    }
+}
+
+/// A fake node that answers ONE admin command with the canned frame `raw`.
+/// Returns the verb it answered, or nothing if none came in 2 s.
+fn answer_with(node: String, raw: &'static str) -> std::thread::JoinHandle<Option<String>> {
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Some(c) = admin_cmds(test_seams::take_sent(&node)).into_iter().next() {
+                let body = crypto::unb64(&c.body_b64).unwrap();
+                let cmd: wire::Command = serde_json::from_slice(&body).unwrap();
+                assert!(super::wait_deliver(&node_frame(raw, &cmd.cmd_id)), "a route waits for {}", cmd.verb);
+                return Some(cmd.verb);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        None
+    })
+}
+
+/// The answer a route waits for (`k2 compute node wall`): the node's
+/// `result` crosses as sent, so its hint and template cross together, and
+/// a node's refusal becomes this server's own hint with no template.
+#[test]
+fn a_waited_node_answer_keeps_its_hint_and_template_together() {
+    let f = fx("relay", true);
+
+    let responder = answer_with(f.node.clone(), FRAME_BOTH);
+    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
+    assert_eq!(responder.join().unwrap().as_deref(), Some("wall.enable"));
+    assert_eq!(r["result"], node_frame(FRAME_BOTH, "x").result, "the node's result crosses as sent: {r}");
+    assert_eq!((r["result"]["hint"].as_str(), r["result"]["hintTemplate"].as_str()), (Some(NODE_HINT), Some(NODE_TEMPLATE)), "{r}");
+
+    let responder = answer_with(f.node.clone(), FRAME_HINT_ONLY);
+    let r = call(NODE_WALL, &agent(&f), json!({"node": f.node_name})).unwrap();
+    assert_eq!(responder.join().unwrap().as_deref(), Some("wall.enable"));
+    assert_eq!(r["result"]["hint"].as_str(), Some(NODE_HINT), "{r}");
+    assert!(r["result"].get("hintTemplate").is_none(), "a hint without a template gains none: {r}");
+
+    let responder = answer_with(f.node.clone(), FRAME_REFUSED);
+    let e = handle(NODE_WALL, &agent(&f), json!({"node": f.node_name}).to_string().as_bytes(), &HashMap::new(), None).expect_err("the node refused");
+    assert_eq!(responder.join().unwrap().as_deref(), Some("wall.enable"));
+    let body: Value = serde_json::from_str(&crate::compute_routes::refusal_response(&e).body).unwrap();
+    assert_eq!(body["error"]["code"], "node_refused", "{body}");
+    let want = format!("{} refused wall.enable: the job user is missing", f.node_name);
+    assert_eq!(body["error"]["hint"].as_str(), Some(want.as_str()), "{body}");
+    assert!(!body.to_string().contains("hintTemplate"), "a hint the server words goes with no template: {body}");
+}
+
+/// A held request's answer, stored and listed (`k2 compute node admin
+/// requests`): the node's `result` is kept as sent, both or neither.
+#[test]
+fn a_stored_node_answer_keeps_its_hint_and_template_together() {
+    let f = fx("relay-row", true);
+    for raw in [FRAME_BOTH, FRAME_HINT_ONLY] {
+        let id = propose_restart(&f);
+        let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
+        assert_eq!(r["sent"], true, "{r}");
+        let cmds = admin_cmds(test_seams::take_sent(&f.node));
+        assert_eq!(cmds.len(), 1);
+        let o = node_open(&f, &cmds[0]).expect("the node accepts it");
+        on_admin_result(&f.node, node_frame(raw, &o.cmd.cmd_id));
+
+        let list = get(REQUESTS, &Who::Owner, &[("state", "all")]).unwrap();
+        let row = list["requests"].as_array().expect("a list").iter().find(|x| x["id"] == id.as_str()).cloned().expect("the request is listed");
+        assert_eq!(row["state"], "done", "{row}");
+        let got = &row["result"]["result"];
+        assert_eq!(*got, node_frame(raw, "x").result, "the node's result is kept as sent: {row}");
+        assert_eq!(got["hint"].as_str(), Some(NODE_HINT), "{row}");
+        let want = if raw == FRAME_BOTH { Some(NODE_TEMPLATE) } else { None };
+        assert_eq!(got.get("hintTemplate").map(|t| t.as_str().expect("a string")), want, "{row}");
+    }
+}

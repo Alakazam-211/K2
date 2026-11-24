@@ -783,8 +783,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const now = store.getState().call
       if (gen === callGen && now) store.setState({ call: { ...now, recordingPerms: perms } })
       // The plugin decides Record and Stop from these facts, passed through
-      // as read.
-      if (native && perms.rights) await native.setRecordingRights(perms.rights)
+      // as read. Once Sew sends its own (`source: "sew"`; Sew 0.11.3 always
+      // does), `set_recording_rights` is only for older servers: not sent.
+      const sewDecides = store.getState().call?.recordingControls?.fromSew === true
+      if (native && perms.rights && !sewDecides) await native.setRecordingRights(perms.rights)
     } catch (err) {
       console.warn('[voice] reading the recording controls failed:', err)
     }
@@ -856,9 +858,13 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
             ? 'This call is already being recorded.'
             : code === 'recording_disabled'
               ? "Recording is off on this server."
-              : what === 'start'
-                ? `${PRODUCT_NAME} couldn't start recording this call.`
-                : `${PRODUCT_NAME} couldn't stop the recording.`,
+              : code === 'dm_recording_disabled'
+                ? 'Recording calls in direct messages is off on this server. The owner or an admin can turn it on.'
+                : code === 'recording_unavailable'
+                  ? 'Recording isn’t available on this server right now. Try again in a moment.'
+                  : what === 'start'
+                    ? `${PRODUCT_NAME} couldn't start recording this call.`
+                    : `${PRODUCT_NAME} couldn't stop the recording.`,
         'error',
       )
     }

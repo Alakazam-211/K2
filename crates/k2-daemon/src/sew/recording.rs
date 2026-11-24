@@ -84,6 +84,9 @@ pub const RECORDINGS_HEADROOM: u64 = 2 * sup::GIB;
 /// own rooms before Sew drops them (Rosson 2026-11-10: in K2's rooms people
 /// are told and can't stay in unrecorded; declining means not joining).
 /// Sew's `[recording] consent_prompt_timeout_ms`; Sew's default is 120000.
+/// Sew 0.11.3: the timer drops a person only where declining means not
+/// joining (K2's rooms, `require_consent`); DMs have no such setting, so
+/// there a person who doesn't answer stays in the call, unrecorded.
 pub const CONSENT_TIMEOUT_MS: u64 = 60_000;
 
 /// Where Sew keeps recordings (its blob store) and where the model goes.
@@ -116,7 +119,10 @@ pub struct State {
     /// ([`CONSENT_TIMEOUT_MS`]); `None` until it took.
     pub consent_timeout_ms: Option<u64>,
     /// Why the last attempt to set it failed (the enable still succeeds:
-    /// Sew's own default, 120 s, still drops a silent person).
+    /// Sew's own default, 120 s, still drops a silent person where
+    /// declining means not joining: K2's rooms. Sew 0.11.3: the timer only
+    /// drops anyone there; in a DM a person who doesn't answer stays in the
+    /// call, unrecorded. Settable with `sew config set` since Sew 0.11.3).
     pub consent_timeout_error: Option<String>,
     pub last_error: Option<String>,
     pub updated_at: i64,

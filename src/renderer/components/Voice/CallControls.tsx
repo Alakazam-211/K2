@@ -36,7 +36,7 @@ import {
 } from '@/components/icons/K2Icons'
 import { micBlockedText, MIC_DENIED_LINE } from '@/lib/voice/voice-wire'
 import { policyBlockText } from '@/lib/voice/video-labels'
-import { recordingButtons } from '@/lib/voice/recording-controls'
+import { recordingButtons, recordUnavailableText } from '@/lib/voice/recording-controls'
 import type { VoiceCall } from '@/stores/voice-core'
 
 /** Record's and Stop's names and tooltips, in every place they show. */
@@ -395,7 +395,9 @@ export default function CallControls({ variant, call, actions, video, noiseRemov
       ) : rec.canRecord && actions.startRecording ? (
         <CallButton
           variant={variant}
-          label={RECORD_LABEL}
+          // Sew's hint (record_unavailable): Record shows, a press would be
+          // refused for now; the label says why.
+          label={rec.recordUnavailable ? `${RECORD_LABEL}: ${recordUnavailableText(rec.recordUnavailable)}` : RECORD_LABEL}
           dead={busy}
           testId={`call-${variant}-record`}
           optional={variant === 'topbar'}

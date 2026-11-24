@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { NativeConsentPrompt, NativeRecording } from './native-voice-engine'
-import { AGENT_READERS_LINE, formatRecordingClock, recordingBadgeTitle, recordingButtons, recordingNoticeText } from './recording-controls'
+import {
+  AGENT_READERS_LINE,
+  NO_AGENT_READERS_LINE,
+  RECORDED_AFTER_OK_LINE,
+  formatRecordingClock,
+  recordUnavailableText,
+  recordingBadgeTitle,
+  recordingButtons,
+  recordingNoticeText,
+} from './recording-controls'
 
 const rec = (over: Partial<NativeRecording> = {}): NativeRecording => ({
   recordingId: '42',
@@ -93,6 +102,43 @@ describe("K2's own recording notice", () => {
     expect(recordingNoticeText({ roomName: 'S', prompt: prompt({ agentReaders: true }), agentReaders: false, ask: 'join' }).lines).toContain(AGENT_READERS_LINE)
   })
 
+  it('tells the truth about agents either way (PRD §6), and says nothing while K2 does not know yet', () => {
+    const lines = (agentReaders: boolean | null, sew = false) =>
+      recordingNoticeText({ roomName: 'S', prompt: prompt({ agentReaders: sew }), agentReaders, ask: 'in_call' }).lines
+    expect(lines(false)).toContain(NO_AGENT_READERS_LINE)
+    expect(lines(false)).not.toContain(AGENT_READERS_LINE)
+    expect(lines(true)).toContain(AGENT_READERS_LINE)
+    expect(lines(true)).not.toContain(NO_AGENT_READERS_LINE)
+    // No room list yet: neither line, never a guess.
+    expect(lines(null).filter((l) => /agent/i.test(l))).toEqual([])
+    // Sew's own word wins, whatever K2's switch says.
+    expect(lines(null, true)).toContain(AGENT_READERS_LINE)
+    expect(lines(false, true)).not.toContain(NO_AGENT_READERS_LINE)
+  })
+
+  it("Sew's hint beside Record (record_unavailable) passes through and reads in plain words", () => {
+    const b = recordingButtons({ perms: null, recording: null, controls: { canRecord: true, canStop: false, fromSew: true, recordUnavailable: 'recording_capacity' } })
+    expect(b).toEqual({ canRecord: true, canStop: false, fromSew: true, recordUnavailable: 'recording_capacity' })
+    expect(recordUnavailableText('recording_capacity')).toBe('This server is recording as many calls as it can right now')
+    expect(recordUnavailableText('recorder_unavailable')).toBe('The recorder isn’t answering right now')
+    expect(recordUnavailableText(undefined)).toBeNull()
+  })
+
+  it("the badge's tooltip says who hasn't answered yet, from each person's consent in Sew's CallRecording", () => {
+    const consents = [
+      { memberId: '1', consent: 'granted', recorded: true },
+      { memberId: '2', consent: 'pending', recorded: false },
+    ]
+    expect(recordingBadgeTitle(rec({ consents }), 'Alice')).toBe('Alice started recording\nWaiting for 1 person to answer: not recorded until they press OK')
+    const two = [...consents, { memberId: '3', consent: 'pending', recorded: false }]
+    expect(recordingBadgeTitle(rec({ consents: two, audioKeepDays: 30 }), 'Alice')).toBe(
+      'Alice started recording\nAudio kept 30 days\nWaiting for 2 people to answer: not recorded until they press OK',
+    )
+    // Everyone answered, or Sew didn't say: no line.
+    expect(recordingBadgeTitle(rec({ consents: [consents[0]] }), 'Alice')).toBe('Alice started recording')
+    expect(recordingBadgeTitle(rec({ consents: [] }), 'Alice')).toBe('Alice started recording')
+  })
+
   it('the badge names what started it', () => {
     expect(recordingBadgeTitle(rec({ trigger: 'required' }), null)).toMatch(/every call with more than one person/)
     expect(recordingBadgeTitle(rec(), 'Alice')).toBe('Alice started recording')
@@ -125,17 +171,32 @@ describe("K2's own recording notice", () => {
 })
 
 describe("a DM call's recording notice (prd-home-call-recording-v1 §2, HR-8)", () => {
-  it('says this DM, OK and Leave, and the PRD wording, line by line', () => {
+  it('says this DM, OK and Leave, and the PRD wording, line by line (declining means not joining: the org rule on)', () => {
     const t = recordingNoticeText({ roomName: 'Alex', prompt: prompt({ startedByName: 'Alex' }), agentReaders: false, ask: 'in_call', dm: true })
     expect(t.title).toBe('This call is being recorded')
     expect(t.lines).toEqual([
       'Alex started recording this call.',
       'Everyone’s voice is recorded and transcribed. The transcript is kept in this DM.',
       'The audio is kept for 30 days.',
+      NO_AGENT_READERS_LINE,
       'Staying in the call means being recorded.',
     ])
     expect([t.ok, t.leave]).toEqual(['OK', 'Leave call'])
     expect([t.title, ...t.lines].join(' ')).not.toMatch(/room/i)
+  })
+
+  it("Sew 0.11.3's DM default (join_unrecorded): nobody is dropped, so it never says staying means being recorded", () => {
+    for (const ask of ['in_call', 'join'] as const) {
+      const t = recordingNoticeText({ roomName: 'Alex', prompt: prompt({ startedByName: 'Alex', declineMode: 'join_unrecorded' }), agentReaders: null, ask, dm: true })
+      expect(t.lines).toEqual([
+        'Alex started recording this call.',
+        'Everyone who presses OK is recorded and transcribed. The transcript is kept in this DM.',
+        'The audio is kept for 30 days.',
+        NO_AGENT_READERS_LINE,
+        RECORDED_AFTER_OK_LINE,
+      ])
+      expect(t.lines.join(' ')).not.toMatch(/means being recorded/)
+    }
   })
 
   it("joining a DM call that already records: the same notice, Don't join", () => {

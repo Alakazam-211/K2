@@ -96,6 +96,31 @@ export interface NativeRecording {
    *  deleted once the transcript is final). Absent when the plugin doesn't
    *  say (an older one): unknown, never 0. */
   audioKeepDays?: number | null
+  /** Each person's answer (`participants`: Sew's CallRecording): who is
+   *  recorded now and who hasn't answered yet. Empty when the plugin sends
+   *  none. Nobody is recorded before their own `granted`. */
+  consents?: NativeRecordingConsent[]
+}
+
+/** One person in a recording (Sew's `RecordingParticipant`). */
+export interface NativeRecordingConsent {
+  memberId: string
+  /** `pending`, `granted`, `declined` or `withdrawn`. */
+  consent: string
+  /** The recorder captures them now. */
+  recorded: boolean
+}
+
+/** The recording's `participants`, skipping any entry that isn't one. */
+export function parseRecordingConsents(v: unknown): NativeRecordingConsent[] {
+  if (!Array.isArray(v)) return []
+  const out: NativeRecordingConsent[] = []
+  for (const raw of v) {
+    const p = record(raw)
+    if (!p || typeof p.member_id !== 'string' || typeof p.consent !== 'string') continue
+    out.push({ memberId: p.member_id, consent: p.consent, recorded: p.recorded === true })
+  }
+  return out
 }
 
 /** No names here: the media token and call keys carry none (the rooms list does). */
@@ -144,16 +169,35 @@ export interface NativeEvents {
   onError(code: string, detail: unknown): void
   onRecording(recording: NativeRecording | null): void
   /** Plugin 0.6.1 (Sew 0.9.2): may this person press Record / Stop now. */
-  onRecordingControls?(controls: { canRecord: boolean; canStop: boolean }): void
+  onRecordingControls?(controls: NativeRecordingControls): void
 }
 
 /** Plugin 0.6.1's event (Sew's contract: `recording.controls.rights`). */
 export const RECORDING_CONTROLS_EVENT = 'recording_controls'
 
-export function parseRecordingControls(v: unknown): { canRecord: boolean; canStop: boolean } {
+/** The `recording_controls` event. Since plugin 0.7.0 a Sew that computes
+ *  each person's Record and Stop (Sew 0.11.3 always does: `my_controls`)
+ *  says so with `source: "sew"`, and `set_recording_rights` is then only for
+ *  older servers. `record_unavailable` (`recording_capacity`,
+ *  `recorder_unavailable`) is Sew's hint while Record shows: a press would
+ *  be refused for now. Each optional key is written only when Sew says it. */
+export interface NativeRecordingControls {
+  canRecord: boolean
+  canStop: boolean
+  /** Sew decided (`source: "sew"`), not the plugin from K2's rights. */
+  fromSew?: true
+  recordUnavailable?: string
+}
+
+export function parseRecordingControls(v: unknown): NativeRecordingControls {
   const r = record(v)
   if (!r || typeof r.can_record !== 'boolean' || typeof r.can_stop !== 'boolean') throw badShape('recording_controls', v)
-  return { canRecord: r.can_record, canStop: r.can_stop }
+  return {
+    canRecord: r.can_record,
+    canStop: r.can_stop,
+    ...(r.source === 'sew' ? { fromSew: true as const } : {}),
+    ...(typeof r.record_unavailable === 'string' && r.record_unavailable ? { recordUnavailable: r.record_unavailable } : {}),
+  }
 }
 
 /** A command's rejection: the plugin's `{code, detail}`. */
@@ -237,6 +281,7 @@ export function parseRecording(v: unknown): NativeRecording | null {
     ...(typeof r.can_stop === 'boolean' ? { canStop: r.can_stop } : {}),
     ...(startedAtOf(r.started_at) !== null ? { startedAt: startedAtOf(r.started_at) } : {}),
     ...(keepDaysOf(r.audio_keep_days) !== null ? { audioKeepDays: keepDaysOf(r.audio_keep_days) } : {}),
+    ...(Array.isArray(r.participants) ? { consents: parseRecordingConsents(r.participants) } : {}),
   }
 }
 

@@ -7,9 +7,12 @@
 // server may read the transcript. One acknowledgement, "OK" (the person's
 // grant, with the notice version they saw), and the way out ("Leave call", or
 // "Don't join" before joining). It has no default and can't be dismissed: no
-// Escape, no backdrop click, no close button. No answer is never a yes; Sew
-// drops a person who doesn't answer within a minute, and a calm line counts
-// that minute down.
+// Escape, no backdrop click, no close button. No answer is never a yes. In
+// K2's rooms (declining means not joining) Sew drops a person who doesn't
+// answer within a minute, and a calm line counts that minute down. Sew
+// 0.11.3: where declining doesn't mean not joining (`join_unrecorded`, every
+// DM call), nobody is dropped: a person who doesn't answer stays in the call
+// unrecorded, so there is no countdown and the notice says so.
 //
 // The look: a centred modal sheet over everything, a live Browser page too.
 // Frost in Glass, a raised panel with cut corners in Terminal. Focus starts
@@ -26,8 +29,17 @@ import { floatMaterial } from '@/components/ui/float-material'
 import type { VoiceCall } from '@/stores/voice-core'
 import { RecordingDot } from './RecordingBadge'
 
-/** How long Sew waits for an answer before it drops the person (ms). */
+/** How long Sew waits for an answer before it drops the person (ms), where
+ *  declining means not joining: K2 sets Sew's
+ *  `recording.consent_prompt_timeout_ms` to this when recording is enabled
+ *  (Sew's own default is 120 s). */
 export const RECORDING_NOTICE_WAIT_MS = 60_000
+
+/** Does Sew drop a person who doesn't answer this notice? Only where
+ *  declining means not joining (`decline_mode: not_join`). */
+export function noticeDropsSilence(declineMode: string): boolean {
+  return declineMode !== 'join_unrecorded'
+}
 
 /** The countdown's line: "You’ll leave the call in 0:45 if you don’t
  *  answer". Joining a room names it ("You won’t join Standup…"); `room`
@@ -39,8 +51,9 @@ export function noticeCountdownLine(ask: 'join' | 'in_call', leftMs: number, roo
 
 export interface RecordingNoticeProps {
   call: VoiceCall
-  /** Any agent on this server may read the rooms' transcripts. */
-  agentReaders: boolean
+  /** Any agent on this server may read the rooms' transcripts; null while
+   *  K2 doesn't know yet (no room list). */
+  agentReaders: boolean | null
   onAnswer: (answer: 'ok' | 'leave') => void
 }
 
@@ -127,9 +140,11 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
               </p>
             ))}
           </div>
-          <p data-testid="recording-notice-countdown" role="timer" aria-live="off" className="type-hint tabular-nums text-[var(--color-text-muted)]">
-            {noticeCountdownLine(n.ask, left, dm ? null : call.roomName)}
-          </p>
+          {noticeDropsSilence(n.prompt.declineMode) ? (
+            <p data-testid="recording-notice-countdown" role="timer" aria-live="off" className="type-hint tabular-nums text-[var(--color-text-muted)]">
+              {noticeCountdownLine(n.ask, left, dm ? null : call.roomName)}
+            </p>
+          ) : null}
           <div className="grid grid-cols-2 gap-2">
             <Button variant="danger-quiet" size="md" className="min-h-8" data-testid="recording-notice-leave" onClick={() => onAnswer('leave')}>
               {text.leave}

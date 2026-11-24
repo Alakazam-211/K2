@@ -1139,6 +1139,53 @@ fn replies_read_a_recording_cards_lines_as_the_person() {
     done();
 }
 
+/// 0.46.18 (Sew 0.11.3): a DM's recordings come from Sew's client list,
+/// `GET /api/v1/channels/{id}/recordings`, on the person's own held
+/// session (Sew has no mgmt list for DMs). Newest first as Sew pages them;
+/// a recording of another conversation is dropped; `before` and `limit`
+/// pass through as Sew ids and 1-100; Sew's refusal (not a member) stays a
+/// refusal. A GET row on the Voice & Chat only allowlist (either person in
+/// a DM reads it); never an agent's.
+#[test]
+fn recordings_list_a_dms_recordings_as_the_member() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let (_home, api) = chat_box();
+    assert!(routes::GET_ROUTES.contains(&routes::RECORDINGS) && !routes::is_post_route(routes::RECORDINGS));
+    assert_eq!(routes::RECORDINGS, "/cli/home-chat/recordings");
+    let q = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+    api.answer(
+        "/api/v1/channels/900/recordings?limit=50",
+        200,
+        json!({"items": [
+            {"id": "77", "channel_id": "900", "state": "ready", "started_by": "41", "message_id": "2001", "audio_keep_days": 30},
+            {"id": "76", "channel_id": 900, "state": "stopped", "started_by": "42", "message_id": "1990", "audio_keep_days": 30},
+            {"id": "75", "channel_id": "901", "state": "ready", "started_by": "43", "message_id": "1800"},
+        ], "has_more": true}),
+    );
+    let v = routes::route(routes::RECORDINGS, &alex(), &q(&[("conv", "900")]), b"").expect("recordings");
+    let ids: Vec<&str> = v["page"]["items"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["77", "76"], "only this DM's recordings, newest first");
+    assert_eq!(v["page"]["has_more"], true);
+    assert_eq!(v["conv"], "900");
+    let sent = api.calls_to("/api/v1/channels/900/recordings?limit=50");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0.as_deref(), Some("sews_first.x"), "on the person's own held session");
+    api.answer("/api/v1/channels/900/recordings?limit=10&before=76", 200, json!({"items": [], "has_more": false}));
+    routes::route(routes::RECORDINGS, &alex(), &q(&[("conv", "900"), ("limit", "10"), ("before", "76")]), b"").expect("the next page");
+    assert_eq!(api.calls_to("/api/v1/channels/900/recordings?limit=10&before=76").len(), 1);
+    api.answer("/api/v1/channels/902/recordings?limit=50", 403, json!({"ok": false, "error": {"code": "forbidden", "hint": "not a member"}}));
+    let r = routes::route(routes::RECORDINGS, &alex(), &q(&[("conv", "902")]), b"").unwrap_err();
+    assert_eq!(r.status, 403, "Sew's refusal stays a refusal: {r:?}");
+    for bad in [&[][..], &[("conv", "../900")], &[("conv", "900"), ("limit", "0")], &[("conv", "900"), ("limit", "101")], &[("conv", "900"), ("before", "../76")]] {
+        let r = routes::route(routes::RECORDINGS, &alex(), &q(bad), b"").unwrap_err();
+        assert_eq!((r.status, r.code.as_str()), (400, "usage"), "{bad:?}");
+    }
+    let r = people::caller_of(Who::Agent { project_id: "p".into(), session_id: "s".into() }, "x", "o").unwrap_err();
+    assert_eq!(r.code, "agents_use_k2_chat", "no agent lists a DM's recordings");
+    assert!(crate::routes::route_policy::VOICE_CHAT_ALLOWLIST.contains(&("GET", "/cli/home-chat/recordings")));
+    done();
+}
+
 // ── GET /cli/home-chat/calls (0.46.17, a PushKit-woken phone) ─────────────
 
 /// A ring for this person on DM 900 (Sew's `call_ring`).

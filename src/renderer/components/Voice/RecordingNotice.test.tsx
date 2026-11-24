@@ -109,6 +109,20 @@ describe('RecordingNotice', () => {
     expect(screen.getByTestId('recording-notice-countdown').textContent).toMatch(/^You won’t join the call if you don’t answer in [01]:\d\d$/)
   })
 
+  it("Sew 0.11.3's DM call (join_unrecorded): no countdown, since nobody is dropped; it says you're recorded only after OK", () => {
+    for (const ask of ['in_call', 'join'] as const) {
+      const c = call({ roomId: 'dm:conv-1', roomName: 'Alice' })
+      c.recordingNotice = { ...c.recordingNotice!, ask, prompt: { ...c.recordingNotice!.prompt, declineMode: 'join_unrecorded' } }
+      const { unmount } = render(<RecordingNotice call={c} agentReaders={null} onAnswer={vi.fn()} />)
+      expect(screen.queryByTestId('recording-notice-countdown')).toBeNull()
+      const text = screen.getByRole('alertdialog').textContent ?? ''
+      expect(text).toContain('You’re recorded only after you press OK.')
+      expect(text).toContain('No agent can read the transcript.')
+      expect(text).not.toMatch(/means being recorded|leave the call in/)
+      unmount()
+    }
+  })
+
   it('the badge shows the whole time a recording is on: the dot, then the words in the normal ink with the clock', () => {
     const at = Date.now() - 192_000
     const rec = { ...call().recording!, startedAt: at }

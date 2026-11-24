@@ -612,6 +612,70 @@ fn a_dm_record_goes_to_sew_on_the_held_session_with_the_keep_days() {
     crate::home_chat::set_deps(None);
 }
 
+/// Sew 0.11.3: with `recording.dm_enabled` off, Record in a DM is
+/// `403 dm_recording_disabled` (as a reason or as the code): K2 names it
+/// and says who turns it on, never the room words (`cannot_record`).
+#[test]
+fn a_dm_record_with_dm_recording_off_says_so() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _home = k2_core::test_env::TempHome::new();
+    let api = Arc::new(FakeApi::default());
+    crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    sam_in_dm_900();
+    let path = "/api/v1/channels/900/recording/start";
+    let c = ctx(false, Arc::new(LoginSew::default()));
+    for body in [
+        json!({"ok": false, "error": {"code": "policy_denied", "hint": "", "details": {"reason": "dm_recording_disabled"}}}),
+        json!({"ok": false, "error": {"code": "dm_recording_disabled", "hint": ""}}),
+    ] {
+        api.answer(path, 403, body.clone());
+        let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
+        assert_eq!((r.status, r.code.as_str()), (403, "dm_recording_disabled"), "{body}");
+        assert!(r.hint.contains("policy set dm_enabled on"), "{}", r.hint);
+        assert_eq!(r.details.unwrap()["sew"], body["error"], "Sew's own error kept");
+    }
+    follower::release_all();
+    crate::home_chat::set_deps(None);
+}
+
+/// Sew 0.11.3: a DM call's join into a call being recorded, without an
+/// answer to the current notice, is Sew's `409 conflict` with
+/// `details.reason = recording_consent_required`. K2 answers
+/// `409 recording_consent_required` with Sew's details unchanged (the
+/// prompt, the recording, `auto`), which the desktop's provider maps to
+/// `ConsentRequired` and the call client holds the join for the person's
+/// answer. The answer's `recording_notice` rides back to Sew in `join` as
+/// sent; a join that answered goes through and passes Sew's answer through
+/// unchanged for a call client that takes it.
+#[test]
+fn a_dm_join_into_a_recorded_call_is_consent_required_with_sews_details() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _l = super::super::lane::test_lock();
+    let _home = k2_core::test_env::TempHome::new();
+    let api = Arc::new(FakeApi::default());
+    crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    sam_in_dm_900();
+    let c = ctx(false, Arc::new(LoginSew::default()));
+    let details = json!({
+        "reason": "recording_consent_required", "auto": false,
+        "recording": {"id": "77", "channel_id": "900", "state": "recording", "started_by": "42"},
+        "consent_prompt": {"recording_id": "77", "notice_version": 3141, "decline_mode": "join_unrecorded", "audio_keep_days": 30},
+    });
+    api.answer("/api/v1/channels/900/call/join", 409, json!({"ok": false, "error": {"code": "conflict", "hint": "answer the recording notice", "details": details}}));
+    let r = join(&sam(), &json!({"dm": "900", "callAnswer": true}), &c).unwrap_err();
+    assert_eq!(code(&r), (409, "recording_consent_required"));
+    assert_eq!(r.details.clone().expect("details"), details, "Sew's details unchanged, as from_sew_error reads them");
+
+    let notice = json!({"recording_id": "77", "consent": true, "notice_version": 3141});
+    api.answer("/api/v1/channels/900/call/join", 200, call_join_answer());
+    let v = join(&sam(), &json!({"dm": "900", "callAnswer": true, "join": {"recording_notice": notice}}), &c).expect("answered");
+    let sent = api.calls_to("/api/v1/channels/900/call/join");
+    assert_eq!(sent.last().unwrap().1["recording_notice"], notice, "the answer rides to Sew as sent");
+    assert_eq!(v["join"], call_join_answer(), "Sew's call/join answer unchanged");
+    follower::release_all();
+    crate::home_chat::set_deps(None);
+}
+
 /// HR-4 + HR-5: the controls read for a DM reads the DM channel's
 /// `my_perms` on the held session; the answer says `dm: true` with the
 /// seen `recording.dm_enabled`, and never K2's agent line (HR-8). A Voice &

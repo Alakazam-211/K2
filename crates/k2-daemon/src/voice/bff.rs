@@ -1168,7 +1168,15 @@ pub enum RecordingAct {
 /// A Sew refusal of a Record or Stop, in K2's words. Sew's own error stays
 /// under `details.sew` (its `reason` is what a client branches on).
 pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
-    let reason = a.body.pointer("/error/details/reason").and_then(Value::as_str).unwrap_or("");
+    // Sew's reason, else its code (Sew 0.11.3 may name a refusal either way,
+    // as sew-call-client's `from_sew_error` reads it).
+    let reason = a
+        .body
+        .pointer("/error/details/reason")
+        .and_then(Value::as_str)
+        .filter(|r| !r.is_empty())
+        .or_else(|| a.body.pointer("/error/code").and_then(Value::as_str))
+        .unwrap_or("");
     let sew = a.body.get("error").cloned().unwrap_or(Value::Null);
     let status = if a.status >= 400 { a.status } else { 502 };
     let (code, hint): (&str, &str) = match reason {
@@ -1177,6 +1185,11 @@ pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
         "recording_not_active" => ("recording_not_active", "that recording isn't running any more"),
         "not_in_voice" => ("not_in_voice", "you aren't in that room's call: Record and Stop are pressed from inside the call"),
         "recording_disabled" => ("recording_disabled", "recording is off on this server (k2 hostchat recording enable)"),
+        // Sew 0.11.3: `recording.dm_enabled` is off (its own reason, a 403).
+        "dm_recording_disabled" => (
+            "dm_recording_disabled",
+            "recording calls in direct messages is off on this server: the owner or an admin turns it on (k2 hostchat recording policy set dm_enabled on)",
+        ),
         "recording_unavailable" | "recorder_unavailable" | "transcriber_unavailable" | "recording_capacity" => {
             return Refusal::new(503, "recording_unavailable", "recording isn't available on this server's voice right now")
                 .details(json!({ "sew": sew }))

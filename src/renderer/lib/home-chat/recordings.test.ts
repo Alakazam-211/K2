@@ -9,7 +9,7 @@ vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: cli.get }))
 
 import type { ServerScope } from '@/kessel/server-scope'
 import { parseHomeChatMessage, parseHomeChatPage } from './api'
-import { canShowTranscript, fetchHomeChatTranscript, parseRecordingSummary, parseTranscriptLine, recordingCardLine, transcriptRootOf } from './recordings'
+import { canShowTranscript, fetchDmRecordings, fetchHomeChatTranscript, parseRecordingSummary, parseTranscriptLine, recordingCardLine, transcriptRootOf } from './recordings'
 
 const summary = (over: Record<string, unknown> = {}) =>
   parseRecordingSummary({
@@ -126,5 +126,33 @@ describe('transcript lines (HR-10)', () => {
     const lines = await fetchHomeChatTranscript({} as ServerScope, '900', '50')
     expect(cli.get).toHaveBeenCalledWith({}, 'home-chat/replies', { conv: '900', id: '50' })
     expect(lines.map((l) => l.id)).toEqual(['51', '53'])
+  })
+})
+
+describe("a DM's recordings (Sew 0.11.3's client list, as the member)", () => {
+  it('reads GET /cli/home-chat/recordings: newest first, each with its card, and the next page only while Sew says more', async () => {
+    cli.get.mockResolvedValueOnce({
+      ok: true,
+      conv: '900',
+      page: {
+        items: [
+          { id: '77', channel_id: '900', state: 'ready', started_by: '7', started_at: '2026-11-17T14:41:00.000Z', stopped_at: '2026-11-17T14:53:04.000Z', message_id: '50', audio_keep_days: 30 },
+          { id: '76', channel_id: '900', state: 'recording', started_by: 8, message_id: 40, audio_keep_days: 0 },
+          { channel_id: '900', state: 'ready' },
+        ],
+        has_more: true,
+      },
+    })
+    const p = await fetchDmRecordings({} as ServerScope, '900')
+    expect(cli.get).toHaveBeenLastCalledWith({}, 'home-chat/recordings', { conv: '900' })
+    expect(p.items).toEqual([
+      { recordingId: '77', cardId: '50', state: 'ready', startedBy: '7', startedAt: Date.parse('2026-11-17T14:41:00.000Z'), stoppedAt: Date.parse('2026-11-17T14:53:04.000Z'), audioKeepDays: 30 },
+      { recordingId: '76', cardId: '40', state: 'recording', startedBy: '8', startedAt: null, stoppedAt: null, audioKeepDays: 0 },
+    ])
+    expect(p.before).toBe('76')
+    cli.get.mockResolvedValueOnce({ ok: true, conv: '900', page: { items: [], has_more: false } })
+    const next = await fetchDmRecordings({} as ServerScope, '900', '76')
+    expect(cli.get).toHaveBeenLastCalledWith({}, 'home-chat/recordings', { conv: '900', before: '76' })
+    expect(next).toEqual({ items: [], before: null })
   })
 })

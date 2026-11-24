@@ -262,6 +262,55 @@ export async function fetchHomeChatTranscript(scope: ServerScope, conv: string, 
   return lines.sort((a, b) => (a.id.length !== b.id.length ? a.id.length - b.id.length : a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
+// ── A DM's recordings (Sew 0.11.3's client list) ───────────────────────
+
+/** One recording in a DM's list (Sew's `Recording`, as the member sees it). */
+export interface DmRecordingRow {
+  recordingId: string
+  /** The recording card in the DM (its transcript is the card's replies). */
+  cardId: string | null
+  /** Sew's `state` (`recording`, `stopped`, `ready`, `failed`, …). */
+  state: string
+  startedBy: string | null
+  /** Epoch ms, when Sew says. */
+  startedAt: number | null
+  stoppedAt: number | null
+  audioKeepDays: number | null
+}
+
+export interface DmRecordingsPage {
+  items: DmRecordingRow[]
+  /** The id to pass as `before` for older ones, or null at the end. */
+  before: string | null
+}
+
+/** `GET /cli/home-chat/recordings?conv=[&before=]`: a DM's recordings,
+ *  newest first, as the person (Sew's client list; Sew 0.11.3 has no mgmt
+ *  list for DMs). A row Sew sends without an id is skipped. */
+export async function fetchDmRecordings(scope: ServerScope, conv: string, before?: string): Promise<DmRecordingsPage> {
+  const v = await daemonCliGet<{ page?: unknown }>(scope, 'home-chat/recordings', before ? { conv, before } : { conv })
+  const page = (v?.page ?? {}) as { items?: unknown; has_more?: unknown }
+  const raw = Array.isArray(page.items) ? page.items : []
+  const items: DmRecordingRow[] = []
+  for (const x of raw) {
+    const o = x as Record<string, unknown> | null
+    const recordingId = idOf(o?.id)
+    if (!o || !recordingId) continue
+    const keep = o.audio_keep_days
+    items.push({
+      recordingId,
+      cardId: idOf(o.message_id),
+      state: typeof o.state === 'string' ? o.state : 'unknown',
+      startedBy: idOf(o.started_by),
+      startedAt: startedAtOf(o.started_at),
+      stoppedAt: startedAtOf(o.stopped_at),
+      audioKeepDays: typeof keep === 'number' && Number.isInteger(keep) && keep >= 0 ? keep : null,
+    })
+  }
+  const last = items.length > 0 ? items[items.length - 1].recordingId : null
+  return { items, before: page.has_more === true ? last : null }
+}
+
 // ── The DM call strip ──────────────────────────────────────────────────
 
 /** The call's recording as the DM strip shows it (§2): Record or Stop only

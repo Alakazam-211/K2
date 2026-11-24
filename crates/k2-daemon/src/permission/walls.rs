@@ -175,6 +175,11 @@ const HOME_APP_WHERE: &str =
 const RECORDING_DM_OTHERS: &[&str] =
     &["/changes/recording.enabled", "/changes/recording.require_consent_to_join", "/changes/recording.required", "/changes/recording.audio_max_days"];
 
+/// The recording policies other than `recording.enabled`: a body that sets
+/// any of them beside it is not the `sew.recording-enable` card's.
+const RECORDING_ENABLED_OTHERS: &[&str] =
+    &["/changes/recording.dm_enabled", "/changes/recording.require_consent_to_join", "/changes/recording.required", "/changes/recording.audio_max_days"];
+
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
 /// the `to=off` twins (asked only, no wall), plus Garden access's three
@@ -634,6 +639,15 @@ pub(crate) const ROWS: &[Row] = &[
     // 0.46.11 K-a: an agent's `k2 hostchat recording enable` (Manage Sew
     // or not past the switch): an Owner or Admin installs the recorder.
     row(ask("sew.recording-enable", Floor::Admin), code(403, "person_only"), "/cli/sew/recording/enable", POST),
+    // 0.46.18 (HR-12, Sew 0.11.3): an agent's `k2 hostchat recording policy
+    // set enabled on`, only when `changes` is that one key: the same card
+    // (an Owner or Admin, with a confirm), which installs the recorder when
+    // it isn't yet and turns the org policy on.
+    Row {
+        body_eq: &[("/changes/recording.enabled", "true")],
+        body_lacks: RECORDING_ENABLED_OTHERS,
+        ..row(ask("sew.recording-enable", Floor::Admin), code(403, "person_only"), crate::sew::recording_settings::POLICY, POST)
+    },
     // 0.46.17: an agent's `k2 voice settings --start-level <level>` (its own
     // code; `--require-recording` stays the owner's, never a card).
     Row {
@@ -1724,6 +1738,8 @@ mod tests {
             (403, "POST", "/cli/sew/app-spaces/governance", vec![], Some(json!({"app":"jobs","spaceId":"5101","governance":"app"})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.space-governance"),
             // 0.46.11 K-a: an agent's recorder install.
             (403, "POST", "/cli/sew/recording/enable", vec![], None, json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.recording-enable"),
+            // 0.46.18: an agent's `policy set enabled on` asks on the same card.
+            (403, "POST", "/cli/sew/recording/policy", vec![], Some(json!({"changes":{"recording.enabled":true}})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "sew.recording-enable"),
             // 0.46.17: an agent's start level, and recording in direct messages on and off.
             (403, "POST", "/cli/voice/recording/settings", vec![], Some(json!({"startLevel":"member"})), json!({"ok":false,"code":"recording_level_needs_owner","hint":"x","error":{"code":"recording_level_needs_owner","hint":"x"}}), "voice.recording-start-level"),
             (403, "POST", "/cli/sew/recording/policy", vec![], Some(json!({"changes":{"recording.dm_enabled":true}})), json!({"ok":false,"error":{"code":"person_only","hint":"x"}}), "voice.recording-dm"),
@@ -2439,6 +2455,34 @@ mod tests {
             assert_ne!(at(b).0, Some("voice.recording-dm"), "{other} beside dm_enabled is no card");
         }
         assert_ne!(at(json!({"changes": {"recording.enabled": true}})).0, Some("voice.recording-dm"));
+    }
+
+    /// 0.46.18 (HR-12): an agent's `policy set enabled on`, alone, is the
+    /// `sew.recording-enable` card (an Owner or Admin, with a confirm);
+    /// turning it off, or any other key beside it, is no card's.
+    #[test]
+    fn the_enable_card_is_only_recording_enabled_on_alone() {
+        let params = HashMap::new();
+        let resp = json!({"ok": false, "error": {"code": "person_only", "hint": "x"}});
+        let at = |body: Value| -> Option<&'static str> {
+            let req = Refused { status: 403, method: "POST", path: "/cli/sew/recording/policy", params: &params, body: Some(&body), response: &resp, workspace_id: "" };
+            match find_row(&req) {
+                Some(Row { target: Target::Ask { action, .. }, .. }) => Some(*action),
+                _ => None,
+            }
+        };
+        assert_eq!(at(json!({"changes": {"recording.enabled": true}})), Some("sew.recording-enable"));
+        assert_eq!(at(json!({"changes": {"recording.enabled": false}})), None, "off is the person's own path");
+        for (other, v) in [
+            ("recording.dm_enabled", json!(true)),
+            ("recording.require_consent_to_join", json!(false)),
+            ("recording.required", json!("multi_person")),
+            ("recording.audio_max_days", json!(30)),
+        ] {
+            let mut b = json!({"changes": {"recording.enabled": true}});
+            b["changes"][other] = v;
+            assert_eq!(at(b), None, "{other} beside enabled is no card");
+        }
     }
 
     /// The E lanes register each action's spec with its own floor and

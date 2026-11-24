@@ -155,7 +155,12 @@ export function useCallNoiseRemoval(): boolean | null {
 
 /** K2's recording notice, in every window, video or not. */
 function NoticeLayer({ call }: { call: VoiceCall }): React.JSX.Element | null {
-  const agentReaders = useVoice((s) => s.rooms[call.hostKey]?.list?.agentReaders === true)
+  // null while this server's room list hasn't come: the notice then says
+  // nothing about agents in a room rather than guess.
+  const agentReaders = useVoice((s) => {
+    const list = s.rooms[call.hostKey]?.list
+    return list ? list.agentReaders === true : null
+  })
   if (!call.recordingNotice) return null
   return createPortal(
     <RecordingNotice call={call} agentReaders={agentReaders} onAnswer={(a) => void voice.answerRecordingNotice(a)} />,

@@ -201,3 +201,49 @@ fn the_logins_told_are_those_whose_right_changed() {
     assert_eq!(level_words("moderator"), "moderators and above");
     assert_eq!(level_words("member"), "every member");
 }
+
+/// HR-12, with Sew 0.11.3's answer: Sew has no person-only step anywhere in
+/// recording, so K2's person-present vault confirm is the gate on the two
+/// switches that really turn recording on, `recording.enabled` and
+/// `recording.dm_enabled`. Without a fresh confirm the owner token and an
+/// Admin are refused `owner_confirm_required`, a Member `owner_only`, an
+/// agent or a K2 terminal `person_only`; a confirm minted for another
+/// action is refused too, and nothing is stored. With the person's confirm
+/// it takes, once: the same confirm again is refused.
+#[test]
+fn the_two_on_switches_are_refused_without_a_persons_confirm() {
+    let _db = k2_core::db::scoped_for_test();
+    let e = env();
+    hook::note_features_for_tests(&["app_recording", "voice_record_cap", "recording_required", "mgmt_recording_reads"]).expect("flags");
+    let install = crate::sew::routes::confirm_secret_id();
+    let send = |who: Who, body: Value| code_of(&crate::sew::routes::handle(DM_ROUTE, who, body.to_string().as_bytes(), &HashMap::new()));
+    let want = |key: &str| -> Option<Value> {
+        hook::recording_policies().expect("policies").into_iter().find(|r| r.key == key).and_then(|r| r.want)
+    };
+    let forbidden = |code: &str| ("403 Forbidden".to_string(), code.to_string());
+    for key in [wire::POLICY_ENABLED, wire::POLICY_DM_ENABLED] {
+        let on = json!({ "changes": { key: true } });
+        for who in [Who::Agent { project_id: "w".into(), session_id: "s".into() }, Who::Shell { project_id: "w".into(), session_id: "s".into() }] {
+            assert_eq!(send(who.clone(), on.clone()), forbidden("person_only"), "{key} {who:?}");
+        }
+        assert_eq!(send(Who::Login { username: "mem".into(), role: Role::Member }, on.clone()), forbidden("owner_only"), "{key}: a Member");
+        assert_eq!(send(Who::Login { username: "adm".into(), role: Role::Admin }, on.clone()), forbidden("owner_confirm_required"), "{key}: an Admin, no confirm");
+        assert_eq!(send(Who::Owner, on.clone()), forbidden("owner_confirm_required"), "{key}: the owner token, no confirm");
+        let other = e.vault.confirm.mint(crate::sew::recording_settings::CONFIRM_SPACE, Some(&install), "owner", "local-auth");
+        let mut forged = on.clone();
+        forged["confirmToken"] = json!(other);
+        assert_eq!(send(Who::Owner, forged), forbidden("owner_confirm_required"), "{key}: another action's confirm");
+        assert_eq!(want(key), None, "{key}: nothing stored");
+
+        let tok = e.vault.confirm.mint(crate::sew::recording_settings::CONFIRM_POLICY, Some(&install), "owner", "local-auth");
+        let mut confirmed = on.clone();
+        confirmed["confirmToken"] = json!(tok);
+        let (status, _) = send(Who::Owner, confirmed.clone());
+        assert_eq!(status, "200 OK", "{key}: with the person's confirm");
+        assert_eq!(want(key), Some(json!(true)), "{key}");
+        let mut off = confirmed.clone();
+        off["changes"][key] = json!(false);
+        assert_eq!(send(Who::Owner, off), forbidden("owner_confirm_required"), "{key}: a confirm works once");
+        assert_eq!(want(key), Some(json!(true)), "{key}: unchanged by the spent confirm");
+    }
+}

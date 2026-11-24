@@ -38,6 +38,19 @@ export interface RecordingRights {
 export interface RecordingButtons {
   canRecord: boolean
   canStop: boolean
+  /** Sew decided them (`source: "sew"`): K2 need not send its rights. */
+  fromSew?: true
+  /** Sew's hint while Record shows (`recording_capacity`,
+   *  `recorder_unavailable`): a press would be refused for now. */
+  recordUnavailable?: string
+}
+
+/** Record's tooltip while Sew says a press would be refused for now. */
+export function recordUnavailableText(code: string | undefined): string | null {
+  if (!code) return null
+  if (code === 'recording_capacity') return 'This server is recording as many calls as it can right now'
+  if (code === 'recorder_unavailable') return 'The recorder isn’t answering right now'
+  return 'Recording isn’t available right now'
 }
 
 /**
@@ -61,6 +74,15 @@ export function recordingButtons(opts: {
 
 /** K2's own line when an agent on this server may read its rooms' transcripts. */
 export const AGENT_READERS_LINE = 'Agents on this server may read the transcript.'
+/** The notice says the other side too (PRD §6: it tells the truth about
+ *  agents either way): no agent reads a DM recording in this release, and
+ *  in a room none does while no agent holds "Read call transcripts" and
+ *  Sew names no agent reader. */
+export const NO_AGENT_READERS_LINE = 'No agent can read the transcript.'
+/** The last line where a person who doesn't answer stays in the call
+ *  unrecorded (Sew's `decline_mode: join_unrecorded`; Sew 0.11.3: every DM
+ *  call, since DMs have no "declining means not joining"). */
+export const RECORDED_AFTER_OK_LINE = 'You’re recorded only after you press OK.'
 
 export interface RecordingNoticeText {
   title: string
@@ -73,12 +95,20 @@ export interface RecordingNoticeText {
  *  who reads it, and that staying means being recorded. A DM call
  *  (prd-home-call-recording-v1 §2, HR-8) says "this DM", and never K2's
  *  agent line: "Read call transcripts" reaches only the K5 rooms (Sew's own
- *  `agentReaders` still shows). */
+ *  `agentReaders` still shows). Either way it says whether an agent can read
+ *  the transcript, and says nothing only while K2 doesn't know yet (a room
+ *  before the server's room list came).
+ *
+ *  Sew 0.11.3: where declining doesn't mean not joining (the prompt's
+ *  `decline_mode: join_unrecorded`, every DM), a person who doesn't answer
+ *  stays in the call unrecorded, so the notice never says staying means
+ *  being recorded there. */
 export function recordingNoticeText(opts: {
   roomName: string
   prompt: NativeConsentPrompt
-  /** Any agent on this server holds "Read call transcripts". */
-  agentReaders: boolean
+  /** Any agent on this server holds "Read call transcripts"; null while
+   *  K2 doesn't know (no room list yet). */
+  agentReaders: boolean | null
   /** Before joining (a held join) or in the call. */
   ask: 'join' | 'in_call'
   /** A DM call (its room is `dm:<conv>`). */
@@ -86,6 +116,7 @@ export function recordingNoticeText(opts: {
 }): RecordingNoticeText {
   const { prompt, roomName } = opts
   const dm = opts.dm === true
+  const afterOk = prompt.declineMode === 'join_unrecorded'
   const lines: string[] = []
   // Joining a room names the room, as the title does; in the call, or in a
   // DM, it's "this call".
@@ -93,18 +124,17 @@ export function recordingNoticeText(opts: {
   else if (dm) lines.push(prompt.required ? "This server records every call with more than one person." : 'This call is being recorded.')
   else if (prompt.required) lines.push('This room records every call with more than one person.')
   else lines.push('This room records its calls.')
-  lines.push(
-    dm
-      ? 'Everyone’s voice is recorded and transcribed. The transcript is kept in this DM.'
-      : 'Everyone’s voice is recorded and transcribed. The transcript is kept in this room’s chat.',
-  )
+  const kept = dm ? 'The transcript is kept in this DM.' : 'The transcript is kept in this room’s chat.'
+  lines.push(afterOk ? `Everyone who presses OK is recorded and transcribed. ${kept}` : `Everyone’s voice is recorded and transcribed. ${kept}`)
   // The keep days come from this recording's prompt. When the prompt
   // doesn't say, the notice says nothing about the audio rather than guess.
   if (prompt.audioKeepDays === 0) lines.push('The audio is deleted once the transcript is final.')
   else if (prompt.audioKeepDays !== null) lines.push(`The audio is kept for ${prompt.audioKeepDays} ${prompt.audioKeepDays === 1 ? 'day' : 'days'}.`)
   if (prompt.appReaders.length > 0) lines.push(`${prompt.appReaders.join(', ')} can read the transcript.`)
-  if ((opts.agentReaders && !dm) || prompt.agentReaders) lines.push(AGENT_READERS_LINE)
-  lines.push(opts.ask === 'join' ? 'Joining means being recorded.' : 'Staying in the call means being recorded.')
+  if ((opts.agentReaders === true && !dm) || prompt.agentReaders) lines.push(AGENT_READERS_LINE)
+  else if (dm || opts.agentReaders === false) lines.push(NO_AGENT_READERS_LINE)
+  if (afterOk) lines.push(RECORDED_AFTER_OK_LINE)
+  else lines.push(opts.ask === 'join' ? 'Joining means being recorded.' : 'Staying in the call means being recorded.')
   return {
     title: opts.ask === 'join' && !dm ? `${roomName} is being recorded` : 'This call is being recorded',
     lines,
@@ -135,14 +165,24 @@ export function recordingClockTime(at: number): string {
  *  audio is kept, a second line under it ("Audio kept 30 days"); when it
  *  doesn't, nothing, never a guess. Lines are joined with "\n". */
 export function recordingBadgeTitle(
-  r: Pick<NativeRecording, 'trigger' | 'audioKeepDays'>,
+  r: Pick<NativeRecording, 'trigger' | 'audioKeepDays' | 'consents'>,
   startedByName: string | null,
   dm = false,
   startedAt: number | null = null,
 ): string {
   const audio = recordingAudioLine(r.audioKeepDays)
   const who = recordingStarterLine(r, startedByName, dm, startedAt)
-  return audio ? `${who}\n${audio}` : who
+  const waiting = recordingWaitingLine(r.consents)
+  return [who, audio, waiting].filter((l): l is string => !!l).join('\n')
+}
+
+/** The tooltip's consent line, from each person's answer in Sew's
+ *  CallRecording: how many haven't answered the notice yet (they aren't
+ *  recorded until they do), or null when everyone has (or Sew didn't say). */
+export function recordingWaitingLine(consents: NativeRecording['consents']): string | null {
+  const pending = (consents ?? []).filter((c) => c.consent === 'pending').length
+  if (pending === 0) return null
+  return pending === 1 ? 'Waiting for 1 person to answer: not recorded until they press OK' : `Waiting for ${pending} people to answer: not recorded until they press OK`
 }
 
 /** The tooltip's audio line, or null when the days aren't known. */

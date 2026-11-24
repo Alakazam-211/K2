@@ -404,12 +404,18 @@ pub(crate) static RECORDING_ENABLE: ActionSpec = ActionSpec {
     },
     undo: Undo::None,
     settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat recording enable (a terminal outside K2)") },
-    walls: &[Wall {
-        matches: WallMatch::Code { status: 403, code: "person_only" },
-        route_prefix: RECORDING_ROUTE,
-        method: WallMethod::Post,
-        params: &[],
-    }],
+    // 0.46.18 (HR-12): also an agent's `k2 hostchat recording policy set
+    // enabled on`, alone (`walls::ROWS` matches only that body). Sew has no
+    // person-only step of its own, so this card's confirm is the gate.
+    walls: &[
+        Wall { matches: WallMatch::Code { status: 403, code: "person_only" }, route_prefix: RECORDING_ROUTE, method: WallMethod::Post, params: &[] },
+        Wall {
+            matches: WallMatch::Code { status: 403, code: "person_only" },
+            route_prefix: crate::sew::recording_settings::POLICY,
+            method: WallMethod::Post,
+            params: &[],
+        },
+    ],
     coverage: WallCoverage::Code,
     form: None,
     machine_hints: &[],

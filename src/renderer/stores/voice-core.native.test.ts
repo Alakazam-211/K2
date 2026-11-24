@@ -851,6 +851,24 @@ describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
     expect(s.ctl.store.getState().call?.recordingControls).toEqual({ canRecord: true, canStop: false })
   })
 
+  it("once Sew decides Record and Stop (source sew, Sew 0.11.3), K2 stops sending its rights: set_recording_rights is for older servers", async () => {
+    const rights = { room: 'room-1', my_perms: '8388608', dm: false, recording_enabled: true, record_capped: false, agent: false }
+    const s = setup()
+    s.api.recordingControls.mockImplementation(async () => ({ recordCalls: true, manageChannels: false, rights }))
+    s.plugin.state = { state: 'connected', participants: [], call_id: 'r_x' }
+    await s.ctl.join(SEW, room1)
+    await settle()
+    const sentRights = () => s.calls.filter(([x]) => x === `${P}set_recording_rights`).length
+    const before = sentRights()
+    s.fire('recording_controls', { can_record: true, can_stop: false, source: 'sew' })
+    expect(s.ctl.store.getState().call?.recordingControls).toEqual({ canRecord: true, canStop: false, fromSew: true })
+    // A new recording reads the controls again; the rights stay unsent.
+    s.fire('recording', { recording_id: '91', my_consent: 'granted', recorder_present: true, participants: [] })
+    await settle()
+    expect(s.api.recordingControls.mock.calls.length).toBeGreaterThan(1)
+    expect(sentRights()).toBe(before)
+  })
+
   it("a window without the app's engine says where to join (the server refused a recorded room)", async () => {
     const sew = { code: 'conflict', hint: 'answer the recording notice', details: { reason: 'recording_consent_required' } }
     const s = setup({ plugin: { joinError: { code: 'conflict', detail: { hint: 'answer the recording notice', details: { sew } } } } })

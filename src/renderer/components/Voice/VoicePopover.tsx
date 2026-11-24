@@ -29,7 +29,7 @@ import { video } from '@/stores/video'
 import { CameraPicker, ScreenPicker, VideoCallButtons, VideoNoticeLine, useVideoCallButtonIds } from './VideoControls'
 import { CALL_PANEL_BUTTON, CALL_PANEL_ICON, CallPanelButton, RECORD_LABEL, STOP_RECORDING_LABEL, noiseRemovalLabel } from './CallControls'
 import { VOICE_POPOVER_WIDTH, callPanelFolds, type CallPanelButtonId } from './call-panel-fit'
-import { recordingButtons } from '@/lib/voice/recording-controls'
+import { recordingButtons, recordUnavailableText } from '@/lib/voice/recording-controls'
 import { HeadphonesIcon, MicIcon, MicOffIcon, NoiseWaveIcon, PhoneOffIcon, RecordIcon, StopRecordIcon } from '@/components/icons/K2Icons'
 import { PRODUCT_NAME } from '@/lib/brand'
 
@@ -193,7 +193,7 @@ function CallPanel({ call }: { call: VoiceCall }): React.JSX.Element {
             <StopRecordIcon size={CALL_PANEL_ICON} />
           </CallPanelButton>
         ) : engineKind === 'native' && rec.canRecord ? (
-          <CallPanelButton testId="voice-record" label={RECORD_LABEL} disabled={busy} onPress={() => void voice.startRecording()}>
+          <CallPanelButton testId="voice-record" label={RECORD_LABEL} title={recordUnavailableText(rec.recordUnavailable) ?? undefined} disabled={busy} onPress={() => void voice.startRecording()}>
             <RecordIcon size={CALL_PANEL_ICON} />
           </CallPanelButton>
         ) : null}

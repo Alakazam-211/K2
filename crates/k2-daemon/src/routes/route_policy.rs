@@ -185,6 +185,7 @@ pub const VOICE_CHAT_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/cli/home-chat/push-prefs/set"),
     ("POST", "/cli/home-chat/react"),
     ("GET", "/cli/home-chat/reactors"),
+    ("GET", "/cli/home-chat/recordings"),
     ("GET", "/cli/home-chat/replies"),
     ("POST", "/cli/home-chat/send"),
     ("GET", "/cli/home-chat/status"),
@@ -1761,8 +1762,9 @@ mod tests {
         // pushes' 4 (notify, notify/set, push-prefs, push-prefs/set) and the
         // phone's own 3 push device rows (prd-home-chat-pushes-v1 D3, §7),
         // plus the calls ringing for the caller (`home-chat/calls`, 0.46.17:
-        // a PushKit-woken phone answers from CallKit).
-        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3 + 1);
+        // a PushKit-woken phone answers from CallKit), plus a DM's
+        // recordings (`home-chat/recordings`, 0.46.18: Sew's client list).
+        assert_eq!(list.len(), 14 + 3 + 8 + 21 + 4 + 1 + 4 + 3 + 1 + 1);
         for p in VOICE_CHAT_PUBLIC {
             let r = lookup(p).unwrap_or_else(|| panic!("{p} is not a row"));
             assert!(

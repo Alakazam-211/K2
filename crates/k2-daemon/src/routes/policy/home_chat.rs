@@ -36,6 +36,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/home-chat/push-prefs/set", VoiceChat),
     post("/cli/home-chat/react", VoiceChat),
     get("/cli/home-chat/reactors", VoiceChat),
+    // 0.46.18: a DM's recordings, as the member (Sew 0.11.3's client list).
+    get("/cli/home-chat/recordings", VoiceChat),
     // prd-home-call-recording-v1 §5: a recording card's transcript lines.
     get("/cli/home-chat/replies", VoiceChat),
     post("/cli/home-chat/send", VoiceChat),

@@ -14,6 +14,7 @@ import {
   parseNoiseRemoval,
   parseParticipants,
   parseRecording,
+  parseRecordingConsents,
   parseRecordingControls,
   parseSpeaking,
   type NativeEvents,
@@ -87,6 +88,8 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
       required: false,
       startedBy: null,
       prompt: null,
+      // Sew's CallRecording participants (each person's answer): none yet.
+      consents: [],
     })
     expect(parseRecording(contract.recording.granted)).toMatchObject({ recordingId: '77', myConsent: 'granted', recorderPresent: true, startedBy: '7' })
     // Plugin 0.6.1 writes can_record / can_stop only when true.
@@ -190,6 +193,7 @@ describe("Sew's 0.7.2 additions", () => {
       required: false,
       startedBy: '1001',
       prompt: { noticeVersion: 3141, startedByName: 'Alice', audioKeepDays: 30, required: false, appReaders: [], agentReaders: false, declineMode: 'join_unrecorded' },
+      consents: [],
     })
     expect(parseRecording(sew.recording.granted)?.myConsent).toBe('granted')
     expect(parseRecording(sew.recording.withdrawn)?.myConsent).toBe('withdrawn')
@@ -321,16 +325,32 @@ describe('rejections', () => {
     await expect(new NativeVoiceEngine(refused.bridge).setRecordingRights(rights)).rejects.toMatchObject({ code: 'not_in_call' })
   })
 
-  it("reads plugin 0.7.0's Record and Stop from Sew (source sew, record_unavailable) as the same two answers", () => {
+  it("reads plugin 0.7.0's Record and Stop from Sew (source sew, record_unavailable): who decided, and Sew's hint", () => {
     const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
     const fromSew = sew.recording.controls.from_sew
     expect(fromSew.event).toBe(`${EVENT_PREFIX}${RECORDING_CONTROLS_EVENT}`)
-    expect(parseRecordingControls(fromSew.neither)).toEqual({ canRecord: false, canStop: false })
-    expect(parseRecordingControls(fromSew.may_record)).toEqual({ canRecord: true, canStop: false })
-    expect(parseRecordingControls(fromSew.may_stop)).toEqual({ canRecord: false, canStop: true })
+    expect(parseRecordingControls(fromSew.neither)).toEqual({ canRecord: false, canStop: false, fromSew: true })
+    expect(parseRecordingControls(fromSew.may_record)).toEqual({ canRecord: true, canStop: false, fromSew: true })
+    expect(parseRecordingControls(fromSew.may_stop)).toEqual({ canRecord: false, canStop: true, fromSew: true })
     // Sew's hint never changes can_record: Record shows, a press may be refused.
-    expect(parseRecordingControls(fromSew.hinted)).toEqual({ canRecord: true, canStop: false })
+    expect(parseRecordingControls(fromSew.hinted)).toEqual({ canRecord: true, canStop: false, fromSew: true, recordUnavailable: 'recording_capacity' })
+    // The plugin's own answer (from K2's rights, an older server): no source.
+    const rights = sew.recording.controls.rights
+    expect(parseRecordingControls(rights.may_record)).toEqual({ canRecord: true, canStop: false })
     expect(() => parseRecordingControls({ source: 'sew' })).toThrow(/recording_controls/)
+  })
+
+  it("reads each person's answer from Sew's CallRecording participants", () => {
+    const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+    expect(parseRecording(sew.recording.controls.rights.granted)?.consents).toEqual([
+      { memberId: '48831765147549699', consent: 'granted', recorded: true },
+      { memberId: '48831765147549700', consent: 'pending', recorded: false },
+    ])
+    // An entry that isn't one is skipped, never guessed.
+    expect(parseRecordingConsents([{ member_id: '1', consent: 'granted', recorded: true }, { consent: 'pending' }, null, 'x'])).toEqual([
+      { memberId: '1', consent: 'granted', recorded: true },
+    ])
+    expect(parseRecordingConsents(undefined)).toEqual([])
   })
 
   it('a join answer with no call id fails loudly', async () => {

@@ -31,6 +31,11 @@ pub const EVENTS: &str = "/cli/home-chat/events";
 /// socket) can answer from CallKit. GET only: a POST answers 405.
 pub const CALLS: &str = "/cli/home-chat/calls";
 
+/// `GET /cli/home-chat/recordings?conv=` (0.46.18): a DM's (or a
+/// channel's) recordings, newest first, through Sew's client API as the
+/// member (Sew 0.11.3 has no mgmt list for DMs: they belong to no Space).
+pub const RECORDINGS: &str = "/cli/home-chat/recordings";
+
 /// GET rows.
 pub const GET_ROUTES: &[&str] = &[
     CALLS,
@@ -41,6 +46,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/home-chat/people",
     "/cli/home-chat/push-prefs",
     "/cli/home-chat/reactors",
+    RECORDINGS,
     "/cli/home-chat/replies",
     "/cli/home-chat/status",
     "/cli/home-chat/summary",
@@ -135,6 +141,7 @@ pub(super) fn route(path: &str, c: &Caller, p: &HashMap<String, String>, body: &
         "/cli/home-chat/messages" => messages(c, p),
         "/cli/home-chat/reactors" => reactors(c, p),
         "/cli/home-chat/replies" => replies(c, p),
+        RECORDINGS => recordings(c, p),
         "/cli/home-chat/channels/members" => members(c, p),
         "/cli/home-chat/dm" => dm(c, parse(body)?),
         "/cli/home-chat/send" => send(c, parse(body)?),
@@ -427,6 +434,44 @@ fn replies(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
         items.retain(keep);
     }
     Ok(json!({"ok": true, "conv": conv, "id": id, "page": page}))
+}
+
+/// `GET /cli/home-chat/recordings?conv=[&before=][&limit=]`: the
+/// conversation's recordings, newest first (Sew's `Page<Recording>`:
+/// `items`, `has_more`), through the person's own held session, so Sew
+/// answers only a member (in a DM, the two people). This is Sew 0.11.3's
+/// client list, `GET /api/v1/channels/{id}/recordings`; Sew's mgmt has no
+/// list for DMs (fetch by id only), so K2 builds none. A recording of
+/// another conversation is dropped. No transcript text rides here: the
+/// lines are the card's replies (`/cli/home-chat/replies`).
+fn recordings(c: &Caller, p: &HashMap<String, String>) -> R<Value> {
+    let conv = sew_id(param(p, "conv").ok_or_else(|| usage("name the conversation: conv"))?, "conv")?;
+    let limit: u32 = match param(p, "limit") {
+        Some(l) => l.parse().ok().filter(|n| (1..=100).contains(n)).ok_or_else(|| usage("limit is 1-100"))?,
+        None => 50,
+    };
+    let mut path = format!("/api/v1/channels/{conv}/recordings?limit={limit}");
+    if let Some(b) = param(p, "before") {
+        path.push_str(&format!("&before={}", sew_id(b, "before")?));
+    }
+    let a = as_person(c, "GET", &path, None)?;
+    if a.status == 404 {
+        if let Some(gone) = dm_gone(c, &conv)? {
+            return Err(gone);
+        }
+    }
+    let mut page = ok_or_refuse(a)?;
+    let keep = |r: &Value| match &r["channel_id"] {
+        Value::String(s) => *s == conv,
+        Value::Number(n) => n.to_string() == conv,
+        _ => false,
+    };
+    if let Some(items) = page.get_mut("items").and_then(Value::as_array_mut) {
+        items.retain(keep);
+    } else if let Some(items) = page.as_array_mut() {
+        items.retain(keep);
+    }
+    Ok(json!({"ok": true, "conv": conv, "page": page}))
 }
 
 /// The ledger row of a Home channel by its Sew id.

@@ -243,6 +243,10 @@ fn the_recording_card_is_registered_admin_floor_with_the_routes_confirm() {
     assert_eq!(ConfirmAction::SewRecordingEnable.as_str(), crate::sew::recording::CONFIRM_ENABLE, "the same confirm the CLI takes");
     assert_eq!(r.spec.walls[0].route_prefix, crate::sew::recording::ENABLE_ROUTE);
     assert!(matches!(r.spec.walls[0].matches, WallMatch::Code { status: 403, code: "person_only" }));
+    // 0.46.18 (HR-12): an agent's `policy set enabled on` asks here too.
+    assert_eq!(r.spec.walls.len(), 2);
+    assert_eq!(r.spec.walls[1].route_prefix, crate::sew::recording_settings::POLICY);
+    assert!(matches!(r.spec.walls[1].matches, WallMatch::Code { status: 403, code: "person_only" }));
     assert!(r.spec.words.consequences.contains("only for people who consent"), "{}", r.spec.words.consequences);
     assert!(r.spec.words.consequences.contains("never deletes recordings"));
     let row = crate::routes::route_policy::lookup(RECORDING_ROUTE).and_then(|x| x.post).expect("a POST row");

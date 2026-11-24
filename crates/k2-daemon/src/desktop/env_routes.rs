@@ -121,6 +121,14 @@ fn spawn_name(session_id: &str) -> Option<String> {
 /// (`tab-*`), a terminal spawned with no agent named (`terminal-<8 hex>`),
 /// a remote-session shell, a `/v1` host session, or a bare id other than
 /// the workspace's own (its canonical slot).
+///
+/// This is a deny-list of name shapes, so it fails open for a session kind
+/// nobody listed (review C1, review-app-runtime-fixes-0.46.18). The test
+/// `every_session_name_prefix_k2_generates_is_classified` scans the spawn
+/// code for generated prefixes and fails on one it doesn't know.
+// TODO(session-origin): when sessions carry their origin (the Agent vs
+// Shell classification by origin, in flight), decide from the spawn's own
+// flag ("spawned for agent X") instead of the name's shape, and drop this.
 pub(crate) fn names_an_agent(name: &str, project_id: &str) -> bool {
     use k2_core::workspace_session_handles as h;
     let unnamed_terminal = name.strip_prefix("terminal-").is_some_and(|r| r.len() == 8 && r.bytes().all(|b| b.is_ascii_hexdigit()));

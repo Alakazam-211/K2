@@ -349,6 +349,114 @@ fn shell(ws: &str, session: &str) -> Who {
     Who::Shell { project_id: ws.into(), session_id: session.into() }
 }
 
+/// Every session-name prefix K2 generates, with a name of that shape and
+/// whether it names an agent. A new kind of session goes here on purpose.
+const GENERATED_PREFIXES: &[(&str, &str, bool)] = &[
+    // A person's tab, and a sidecar's (`k2 sidecar new`, a harness: those
+    // pass as Who::Agent, never through the name).
+    ("tab-", "tab-7d1f", false),
+    // `k2 terminal spawn-background` with no --agent.
+    ("terminal-", "terminal-0a1b2c3d", false),
+    // `k2 remote-session shell`.
+    ("remote-shell-", "remote-shell-g1-ab12cd34", false),
+    // `/v1` host sessions (`api-<principal>-<uuid>`).
+    ("api-", "api-key-1-5e0c1a9b-2f3d-4e5f-8a7b-6c5d4e3f2a1b", false),
+];
+
+/// The daemon's and k2-core's source (no test files or in-file test
+/// modules: they name made-up sessions), and whether the file spawns
+/// sessions (builds a spawn request or registers one).
+fn spawn_sources() -> Vec<(String, String, bool)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let markers = ["SpawnWorkspaceSessionRequest {", "v2_session_map::register(", "\"agent_name\":"];
+    let mut out = Vec::new();
+    let mut dirs = vec![root.join("src"), root.join("../k2-core/src")];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())) {
+            let p = e.unwrap().path();
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            if p.is_dir() {
+                if name != "tests" {
+                    dirs.push(p);
+                }
+                continue;
+            }
+            if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "tests.rs" {
+                continue;
+            }
+            let mut src = std::fs::read_to_string(&p).unwrap();
+            // Cut an in-file test module (it names made-up sessions).
+            if let Some(i) = src.find("#[cfg(test)]\nmod ").or_else(|| src.find("#[cfg(test)]\npub(crate) mod ")) {
+                src.truncate(i);
+            }
+            let spawns = markers.iter().any(|m| src.contains(m));
+            out.push((p.display().to_string(), src, spawns));
+        }
+    }
+    out
+}
+
+/// The literal head of a `format!("…{` that starts at `at` (whitespace,
+/// then the string), when it has a generated name's shape: `word-…-`.
+fn name_head(at: &str) -> Option<String> {
+    let lit = at.trim_start().strip_prefix('"')?;
+    let head = &lit[..lit.find(['{', '"'])?];
+    let shape = head.ends_with('-')
+        && head.starts_with(|c: char| c.is_ascii_lowercase())
+        && head.trim_end_matches('-').split('-').all(|w| !w.is_empty() && w.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+    shape.then(|| head.to_string())
+}
+
+/// Generated session-name prefixes in one file: in a file that spawns
+/// sessions, every `format!("word-…{`; anywhere, one assigned to a session
+/// name (`agent_name`, `session_key`, `map_key` `=` or `:` `format!(…)`).
+fn generated_prefixes(src: &str, spawns: bool) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find("format!(") {
+        let before = rest[..i].trim_end();
+        rest = &rest[i + "format!(".len()..];
+        let assigned = ["agent_name", "session_key", "map_key"]
+            .iter()
+            .any(|k| before.strip_suffix(['=', ':']).is_some_and(|b| b.trim_end().ends_with(k)));
+        if spawns || assigned {
+            found.extend(name_head(rest));
+        }
+    }
+    found
+}
+
+/// Review C1: "names an agent" is a deny-list of name shapes, so it fails
+/// open. Every prefix the spawn code generates must be classified in
+/// [`GENERATED_PREFIXES`] (a new session kind fails here until it is), and
+/// each classified non-agent shape is refused.
+#[test]
+fn every_session_name_prefix_k2_generates_is_classified() {
+    let sources = spawn_sources();
+    assert!(sources.iter().filter(|s| s.2).count() > 5, "the scan found the spawn code");
+    let mut seen = std::collections::BTreeSet::new();
+    for (path, src, spawns) in &sources {
+        for p in generated_prefixes(src, *spawns) {
+            assert!(
+                GENERATED_PREFIXES.iter().any(|(k, _, _)| p.starts_with(k)),
+                "{path} generates session names starting {p:?}: classify it in GENERATED_PREFIXES (an agent's or not) and in names_an_agent"
+            );
+            seen.insert(p);
+        }
+    }
+    // The scan still finds the kinds we know (it would go quiet if the
+    // spawn code moved).
+    for want in ["tab-", "terminal-", "remote-shell-", "api-"] {
+        assert!(seen.iter().any(|p| p.starts_with(want)), "{want} not found by the scan: {seen:?}");
+    }
+    for &(prefix, example, agent) in GENERATED_PREFIXES {
+        assert!(example.starts_with(prefix));
+        assert_eq!(names_an_agent(example, "w1"), agent, "{example}");
+        let p = crate::session_token::HookPrincipal { workspace_uuid: "w1".into(), agent_address: example.to_string() };
+        assert_eq!(passport_agent("w1", Some(&p), Some(example)).is_some(), agent, "{example}");
+    }
+}
+
 /// The rule, pure: the passport's own workspace and agent, and the name its
 /// session was spawned under, never the program it runs.
 #[test]

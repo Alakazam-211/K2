@@ -10,10 +10,12 @@
 //! environment: it is the body of nothing but the request's header, and
 //! the keychain tools get only the service and the account.
 //!
+//! HTTPS to another computer goes through the person's proxy as `_k2_curl`
+//! sends it ([`remote::routed`], curl's rule).
+//!
 //! Handed to the shell ([`run`] returns `None`), all before stdin is
 //! read and before anything is sent: a HOST URL the binary doesn't send
-//! itself ([`remote::base`]), HTTPS to another computer with a proxy set
-//! in the environment (curl would use it), and a `connect-tokens.json` or
+//! itself ([`remote::base`]), and a `connect-tokens.json` or
 //! `connect-hosts.json` the shell's Python would stop on (not JSON, not
 //! UTF-8, a tokens file that is not an object, a host name or label that
 //! is not a string).
@@ -36,24 +38,6 @@ use std::time::Duration;
 pub const LOGOUT: &str = "/cli/auth/logout";
 /// `--max-time 20`.
 pub const MAX_TIME: Duration = Duration::from_secs(20);
-/// `_k2_curl` would send to `url` through the person's proxy: an
-/// `https://` URL that is not this machine's ([`direct_url`]) whose host
-/// the person's proxy settings route through a proxy, or settings the
-/// binary doesn't read ([`remote::routed`], curl's rule). The callers
-/// send direct, so these are the shell's.
-pub fn proxied(url: &str) -> bool {
-    if direct_url(url) {
-        return false;
-    }
-    let origin = match url.split_once("://") {
-        Some((scheme, rest)) => {
-            format!("{scheme}://{}", rest.split(['/', '?']).next().unwrap_or(""))
-        }
-        None => url.to_string(),
-    };
-    !matches!(remote::routed(&origin), Some(b) if b.via.is_none())
-}
-
 /// What the words ask for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Form {
@@ -137,23 +121,6 @@ pub fn parse(words: &[&str]) -> Form {
 /// resolved (`x.localhost` is not), the transport's shared rule.
 pub fn loopback(url: &str) -> bool {
     crate::prelude::plain_http::url_is_literal_loopback(url)
-}
-
-/// `_k2_direct_url URL` (`cli/src/cli-tools-policy.sh`), as the shell's
-/// string cuts read it.
-pub fn direct_url(url: &str) -> bool {
-    if !(url.starts_with("https://") || url.starts_with("HTTPS://")) {
-        return true;
-    }
-    let mut h = url.split_once("://").map_or(url, |(_, r)| r);
-    h = h.split('/').next().unwrap_or("");
-    h = h.split('?').next().unwrap_or("");
-    h = h.rsplit('@').next().unwrap_or("");
-    if h == "[::1]" || h.starts_with("[::1]:") {
-        return true;
-    }
-    // One trailing dot off, case ignored, 127 only as four numbers.
-    crate::transport::proxy::loopback(h.split(':').next().unwrap_or(""))
 }
 
 /// The homes and labels `_remote_forget_token`'s Python writes: the K2
@@ -516,10 +483,7 @@ pub fn run(words: &[&str], home: &Path, hand: (bool, bool)) -> Option<Exit> {
             from_stdin,
         } => (host, base, from_stdin),
     };
-    let target = remote::base(&base)?;
-    if proxied(&base) {
-        return None;
-    }
+    let target = remote::routed(&base)?;
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
     if !files_readable(
         &token_homes(home, user_home.as_deref()),
@@ -654,23 +618,6 @@ mod tests {
             parse(&["--host", "http://127.0.0.1:9/"]),
             Form::Send { base, .. } if base == "http://127.0.0.1:9"
         ));
-    }
-
-    #[test]
-    fn direct_urls_as_the_shell_cuts_them() {
-        for (url, want) in [
-            ("http://box.example", true),
-            ("https://box.example", false),
-            ("https://LOCALHOST.:9/x", true),
-            ("https://a.localhost", true),
-            ("https://u@127.0.0.9", true),
-            ("https://[::1]:8", true),
-            ("https://[::2]", false),
-            ("https://127.evil.example", false),
-            ("https://127.0.0.1.example/x", false),
-        ] {
-            assert_eq!(direct_url(url), want, "{url}");
-        }
     }
 
     #[test]

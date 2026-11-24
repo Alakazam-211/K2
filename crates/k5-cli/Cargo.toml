@@ -30,6 +30,11 @@ path = "src/main.rs"
 blake3 = "1"
 flate2 = "1.1.9"
 k2-client = { path = "../k2-client" }
+# The person's proxy as curl picks it from the environment, and the tunnel
+# through it (HTTP CONNECT, an https:// proxy, SOCKS4/4a/5/5h): our own
+# crate, MIT OR Apache-2.0, std and rustls only (no provider: the
+# transport hands it the ring config every https:// call uses).
+curl-proxy-env = { path = "../curl-proxy-env" }
 # The update keys `daemon install` verifies with: the daemon's own list,
 # compiled from this build's brand file. Verify-only and light (minisign-verify,
 # base64, serde_json); all already in Cargo.lock.

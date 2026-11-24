@@ -190,12 +190,14 @@ pub fn place(base: &str) -> Option<(Place, String)> {
             port,
             netloc,
             tls: false,
+            via: None,
         },
         Target::Tls { host, port, .. } => Place {
             host,
             port,
             netloc,
             tls: true,
+            via: None,
         },
         #[cfg(unix)]
         Target::Unix(_) => return None,
@@ -978,10 +980,17 @@ pub fn run(words: &[&str], s: &Settings, would_refuse: bool) -> Option<Exit> {
         None => None,
     };
     let (base, notes) = logout::resolve(env, &s.home.join("settings.json"));
-    let (place, prefix) = place(&base)?;
+    let (mut place, prefix) = place(&base)?;
     let direct = k2_client::proxy_rule::direct(&format!("{base}{SUBDOMAINS}"));
-    if !direct && crate::families::remote::logout::proxied(&base) {
-        return None;
+    if !direct {
+        // The account calls are the shell's Python urllib: its proxy rule.
+        match logout::python_proxy(&place.host, &place.netloc, place.tls) {
+            Ok(via) => place.via = via,
+            Err(line) => {
+                out::stderr_line(&line);
+                return Some(Exit::Error);
+            }
+        }
     }
     let parsed = parse(words);
     if let Parsed::Words(w) = &parsed {
@@ -1317,6 +1326,7 @@ mod tests {
                 port,
                 netloc: format!("127.0.0.1:{port}"),
                 tls: false,
+                via: None,
             },
             prefix: "/base".into(),
             ua: "k2-cli/9.9.9".into(),

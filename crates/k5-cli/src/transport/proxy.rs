@@ -10,64 +10,54 @@
 //! ([`super::wire::Target::Tcp`] or [`super::wire::Target::Unix`]) has
 //! no place to hold a proxy at all.
 //!
-//! What curl does, and this does too:
+//! curl's rule lives in the `curl-proxy-env` crate (`crates/curl-proxy-env`,
+//! checked against curl 8.5.0 run beside it): which variable names the
+//! proxy, `no_proxy`, the proxy URL (`http://`, `https://`, `socks4://`,
+//! `socks4a://`, `socks5://`, `socks5h://`, IPv6 hosts, a percent-decoded
+//! user part), and the tunnel through it. [`decide`] asks it for a host;
+//! [`through`] opens the tunnel and words a failure in curl's exit codes
+//! ([`Failure`]), as `_k2_curl` sees them:
 //!
-//! - `no_proxy`, else `NO_PROXY`: a lone `*` turns every proxy off; a
-//!   name token matches the host exactly or at a dot boundary, ignoring
-//!   case, a leading or trailing dot on the token and a trailing dot on
-//!   the host; for an IPv4 host, a token is an address or a CIDR range.
-//! - The proxy: `https_proxy`, else `HTTPS_PROXY`, for an https target;
-//!   `http_proxy` only (never `HTTP_PROXY`) for an http one; then
-//!   `all_proxy`, else `ALL_PROXY`. An empty value counts as unset.
-//! - The proxy URL: `http://` or no scheme, `[user[:password]@]host[:port]`,
-//!   port 1080 when none is given; the user and password are
-//!   percent-decoded and sent as `Proxy-Authorization: Basic`, in the
-//!   CONNECT head only.
-//! - `CONNECT <host>:<port> HTTP/1.1`, then `Host`, `Proxy-Authorization`,
-//!   `User-Agent` and `Proxy-Connection: Keep-Alive`, in that order. No
-//!   other header of the request goes to the proxy (curl's default
-//!   `CURLHEADER_SEPARATE`): the token rides inside the tunnel only.
-//! - A 2xx opens the tunnel. Anything else, or a proxy that closes or
-//!   answers with something that is not HTTP, is curl's 56; nothing of the
-//!   request was sent. A proxy that refuses the connection is curl's 7
-//!   (tried again as any refused connect is), one whose name doesn't
-//!   resolve curl's 5, one that doesn't answer in time curl's 28.
-//! - A refused CONNECT (a 407, say) is final: one CONNECT,
-//!   never tried again, curl 8.5's exit 56. A newer curl (8.23) exits 7
-//!   there, which the shell's `_k2_curl` tries 4 times: the named
-//!   difference curl-version-proxy-exit (`scripts/cli-parity.sh`).
+//! - a proxy setting curl refuses (another scheme, a URL it can't read)
+//!   is carried to the connect and fails there, with curl's code (7 or
+//!   5) and nothing sent: never a direct request in its place;
+//! - a refused CONNECT is curl 8.5's 56 ([`Failure::Tunnel`]), one try:
+//!   the named difference curl-version-proxy-exit
+//!   (`scripts/cli-parity.sh`) covers newer curl's 7;
+//! - a SOCKS handshake that fails is curl's 97, a proxy that refuses the
+//!   connection 7 (tried again as any refused connect is), one whose name
+//!   doesn't resolve 5, one that doesn't answer in time 28;
+//! - an `https://` proxy's certificate is checked with the roots every
+//!   `https://` call uses ([`super::tls`]): 60 when it fails, 35 for any
+//!   other handshake failure.
 //!
-//! A proxy URL's user and password (`http://user:pass@proxy:port`) are
-//! allowed: no refusal and no warning. They are the
-//! person's own credential for their proxy, sent only to it, in the
-//! CONNECT head; the token rides inside the tunnel, never to the proxy.
+//! A proxy URL's user and password are the person's own credential for
+//! their proxy: sent only to it, in its handshake (the CONNECT head, or
+//! SOCKS5's user and password), never printed. The token rides inside
+//! the tunnel only.
 //!
-//! What the binary leaves to the shell ([`Route::Shell`]), where curl
-//! versions differ or the binary has no client: an `https://`, `socks*`
-//! or other scheme's proxy, an IPv6 proxy, a scheme-less proxy curl would
-//! guess another scheme for (`ftp.`, `dict.`, `ldap.`, `imap.`, `smtp.`,
-//! `pop3.`), a proxy URL with a byte or a part the binary doesn't read
-//! (a query, a second `@`, a bad escape, a control byte), a scheme-less
-//! proxy with a user part, a `no_proxy` with blank-separated tokens (curl
-//! 8.5 reads on past a blank, 8.11 stops there), a variable that is not
-//! UTF-8, and a target name with a capital letter or a trailing dot.
+//! The Python rule ([`python`], [`Proxy`], [`Route`], [`tunnel_head`]) is
+//! another reader of the same variables: the shell's embedded Python
+//! reads them as urllib does.
 
 use super::wire::{curl, Failure};
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, TcpStream};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-/// curl's default proxy port.
-pub const DEFAULT_PORT: u16 = 1080;
-/// curl 5: the proxy's name doesn't resolve.
-pub const COULDNT_RESOLVE_PROXY: i32 = 5;
+/// curl 5: the proxy's name doesn't resolve, or its URL can't be read.
+pub const COULDNT_RESOLVE_PROXY: i32 = curl_proxy_env::exit::COULDNT_RESOLVE_PROXY;
+/// curl 97: the SOCKS handshake failed.
+pub const PROXY_HANDSHAKE: i32 = curl_proxy_env::exit::PROXY;
 /// The most of a CONNECT answer's head read (curl's limit is 100 KiB).
 const MAX_HEAD: usize = 100 * 1024;
 
-/// The proxy's user and password, percent-decoded. Printed and logged as
-/// `<redacted>` only; the one place they are written out is the CONNECT
-/// head's `Proxy-Authorization` line ([`connect_head`]).
+/// The proxy's user and password as the shell's Python reads them,
+/// percent-decoded. Printed and logged as `<redacted>` only; the one place
+/// they are written out is the CONNECT head's `Proxy-Authorization` line
+/// ([`python::connect_head`]).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Credentials {
     user: Vec<u8>,
@@ -96,7 +86,7 @@ impl fmt::Display for Credentials {
     }
 }
 
-/// An `http://` proxy.
+/// An `http://` proxy, as the shell's Python reads one ([`python`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proxy {
     pub host: String,
@@ -104,33 +94,31 @@ pub struct Proxy {
     pub auth: Option<Credentials>,
 }
 
-/// How a request to a host goes.
+/// How a request a Python block sends goes ([`python::decide`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
     /// No proxy.
     Direct,
     /// Through this proxy's CONNECT tunnel.
     Via(Proxy),
-    /// A setting the binary doesn't read as every curl does: the shell
-    /// answers the command.
+    /// A setting the binary doesn't read as the shell's Python does: the
+    /// caller sends nothing and names it.
     Shell,
 }
+
+/// The proxy curl would use for a request ([`decide`]), or the setting
+/// curl refuses, which fails the request at its connect
+/// ([`through`]).
+pub type Via = Result<curl_proxy_env::ProxyUrl, curl_proxy_env::ConfigError>;
 
 /// A variable that is set but is not UTF-8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotText;
 
-/// One variable's value: `Ok(None)` unset or empty.
-pub type Lookup = Result<Option<String>, NotText>;
-
-/// The process environment, as curl reads it (empty is unset). Only
-/// [`super::remote`] calls it: the daemon's paths never read a proxy.
-pub(in crate::transport) fn from_process_env(name: &str) -> Lookup {
-    match std::env::var_os(name) {
-        None => Ok(None),
-        Some(v) if v.is_empty() => Ok(None),
-        Some(v) => v.into_string().map(Some).map_err(|_| NotText),
-    }
+/// The process environment, as curl reads it. Only [`super::remote`]
+/// calls it: the daemon's paths never read a proxy.
+pub(in crate::transport) fn from_process_env(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
 }
 
 /// The shell's `_k2_direct_url` for `https://<host>`, step for step:
@@ -169,280 +157,64 @@ pub fn url_host(url: &str) -> &str {
     h.split(':').next().unwrap_or("")
 }
 
-/// The route for a request to `host` (a plain name or an IPv4 address,
-/// as [`super::remote::base`] reads it), `https` or not.
-pub fn decide(host: &str, https: bool, env: impl Fn(&str) -> Lookup) -> Route {
-    // Loopback and plain http never use a proxy (`_k2_direct_url`).
+/// The proxy for a request to `host` (as [`super::remote::base`] reads
+/// it), `https` or not: none for plain http and for this computer
+/// (`_k2_direct_url`, [`loopback`]); else curl's rule
+/// ([`curl_proxy_env::proxy_for`]) over `env`.
+pub fn decide(host: &str, https: bool, env: impl Fn(&str) -> Option<OsString>) -> Option<Via> {
     if !https || loopback(host) {
-        return Route::Direct;
+        return None;
     }
-    let raw = match proxy_setting(https, &env) {
-        Ok(Some(raw)) => raw,
-        Ok(None) => return Route::Direct,
-        Err(NotText) => return Route::Shell,
+    curl_proxy_env::proxy_for("https", host, env).transpose()
+}
+
+/// The tunnel through `via` to `host:port` (the TCP connect, TLS to an
+/// `https://` proxy, its handshake), before `limit`, as curl counts the
+/// tunnel in its connect time. A failure is curl's code for it, and
+/// nothing of the request went out.
+pub fn through(
+    via: &Via,
+    host: &str,
+    port: u16,
+    user_agent: &str,
+    limit: Instant,
+) -> Result<curl_proxy_env::ProxyStream, Failure> {
+    let p = match via {
+        Ok(p) => p,
+        Err(e) => return Err(failure(curl_proxy_env::Error::Config(e.clone()))),
     };
-    match no_proxy_setting(&env) {
-        Err(NotText) => return Route::Shell,
-        Ok(Some(list)) => match no_proxy(host, &list) {
-            NoProxy::Skip => return Route::Direct,
-            NoProxy::Shell => return Route::Shell,
-            NoProxy::Use => {}
-        },
-        Ok(None) => {}
+    let mut opts = curl_proxy_env::Options::new()
+        .user_agent(user_agent)
+        .deadline(limit);
+    if p.scheme() == curl_proxy_env::Scheme::Https {
+        opts = opts.proxy_tls(super::tls::shared()?);
     }
-    if host.ends_with('.') || host.bytes().any(|b| b.is_ascii_uppercase()) {
-        return Route::Shell;
-    }
-    match parse_proxy(&raw) {
-        Some(p) => Route::Via(p),
-        None => Route::Shell,
-    }
+    curl_proxy_env::connect(Some(p), host, port, &opts).map_err(failure)
 }
 
-fn first(names: &[&str], env: &impl Fn(&str) -> Lookup) -> Lookup {
-    for n in names {
-        if let Some(v) = env(n)? {
-            return Ok(Some(v));
-        }
-    }
-    Ok(None)
-}
-
-/// curl's `detect_proxy`: the scheme's own variable, then `all_proxy`
-/// and `ALL_PROXY`. `HTTP_PROXY` is never read.
-pub fn proxy_setting(https: bool, env: &impl Fn(&str) -> Lookup) -> Lookup {
-    let own: &[&str] = if https {
-        &["https_proxy", "HTTPS_PROXY"]
-    } else {
-        &["http_proxy"]
-    };
-    match first(own, env)? {
-        Some(v) => Ok(Some(v)),
-        None => first(&["all_proxy", "ALL_PROXY"], env),
-    }
-}
-
-/// `no_proxy`, else `NO_PROXY`.
-pub fn no_proxy_setting(env: &impl Fn(&str) -> Lookup) -> Lookup {
-    first(&["no_proxy", "NO_PROXY"], env)
-}
-
-/// What `no_proxy` says for a host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoProxy {
-    /// The host is listed (or `*`): no proxy.
-    Skip,
-    /// Not listed.
-    Use,
-    /// Blank-separated tokens: curl versions read them differently.
-    Shell,
-}
-
-/// curl 8.5's `Curl_check_noproxy` for a plain name or an IPv4 address.
-pub fn no_proxy(host: &str, list: &str) -> NoProxy {
-    if list == "*" {
-        return NoProxy::Skip;
-    }
-    if list.bytes().any(|b| b == b' ' || b == b'\t') {
-        return NoProxy::Shell;
-    }
-    let ip: Option<Ipv4Addr> = host.parse().ok();
-    let name = if ip.is_none() {
-        host.strip_suffix('.').unwrap_or(host)
-    } else {
-        host
-    };
-    for token in list.split(',').filter(|t| !t.is_empty()) {
-        let hit = match ip {
-            Some(ip) => cidr4(ip, token),
-            None => name_match(name, token),
-        };
-        if hit {
-            return NoProxy::Skip;
-        }
-    }
-    NoProxy::Use
-}
-
-fn name_match(name: &str, token: &str) -> bool {
-    let token = token.strip_suffix('.').unwrap_or(token);
-    let token = token.strip_prefix('.').unwrap_or(token);
-    let (n, t) = (name.as_bytes(), token.as_bytes());
-    if t.len() == n.len() {
-        return n.eq_ignore_ascii_case(t);
-    }
-    // `token` is empty here only when the token was `.` or `..`, and an
-    // empty tail never matches (curl: the byte before it is the name's
-    // last, never a dot, as the name's trailing dot is gone).
-    t.len() < n.len()
-        && !t.is_empty()
-        && n[n.len() - t.len() - 1] == b'.'
-        && n[n.len() - t.len()..].eq_ignore_ascii_case(t)
-}
-
-/// curl's `Curl_cidr4_match`: `token` is an address, or `address/bits`
-/// with `bits` read as C's `atoi` (0 or 32: the exact address; above 32:
-/// no match).
-fn cidr4(ip: Ipv4Addr, token: &str) -> bool {
-    let (net, bits) = match token.split_once('/') {
-        Some((net, bits)) => (net, atoi(bits)),
-        None => (token, 0),
-    };
-    let Ok(net) = net.parse::<Ipv4Addr>() else {
-        return false;
-    };
-    if !(0..=32).contains(&bits) {
-        return false;
-    }
-    let (a, n) = (u32::from(ip), u32::from(net));
-    if bits == 0 || bits == 32 {
-        return a == n;
-    }
-    let mask = u32::MAX << (32 - bits);
-    (a ^ n) & mask == 0
-}
-
-/// C's `atoi`: leading blanks, a sign, then digits; anything else stops
-/// it. Out of range reads as -1 (never a match).
-fn atoi(s: &str) -> i64 {
-    let s = s.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
-    let (neg, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let end = digits
-        .bytes()
-        .position(|b| !b.is_ascii_digit())
-        .unwrap_or(digits.len());
-    let digits = &digits[..end];
-    if digits.is_empty() {
-        return 0;
-    }
-    match digits.parse::<i64>() {
-        Ok(v) if v <= i64::from(i32::MAX) => {
-            if neg {
-                -v
+/// The crate's error as the transport's [`Failure`], by curl's code: a
+/// refused connect stays [`Failure::Connect`] (so it is tried again as
+/// `_k2_curl` tries curl's 7), a timeout [`Failure::ConnectTimedOut`], a
+/// failed CONNECT [`Failure::Tunnel`]; every other code is
+/// [`Failure::Broken`] with nothing sent ([`super::tls::before_request`]).
+fn failure(e: curl_proxy_env::Error) -> Failure {
+    use curl_proxy_env::Error as E;
+    match e {
+        E::Connect(io) => Failure::Connect(io),
+        E::TimedOut => Failure::ConnectTimedOut,
+        E::TunnelRefused(_) | E::HttpProxy(_) => Failure::Tunnel(e.to_string()),
+        other => {
+            let code = other.curl_exit_code();
+            if code == curl::COULDNT_CONNECT {
+                Failure::Connect(io::Error::other(other.to_string()))
             } else {
-                v
+                Failure::Broken {
+                    curl: code,
+                    why: other.to_string(),
+                }
             }
         }
-        _ => -1,
     }
-}
-
-/// The schemes curl guesses for a scheme-less URL by its first label.
-const GUESSED: [&str; 6] = ["ftp.", "dict.", "ldap.", "imap.", "smtp.", "pop3."];
-
-/// A proxy URL the binary reads as curl does; `None`: the shell's.
-pub fn parse_proxy(raw: &str) -> Option<Proxy> {
-    if raw.bytes().any(|b| b <= b' ' || b == 0x7f) {
-        return None;
-    }
-    let (schemed, rest) = match raw.find("://") {
-        Some(i) => {
-            if !raw[..i].eq_ignore_ascii_case("http") {
-                return None;
-            }
-            (true, &raw[i + 3..])
-        }
-        None => (false, raw),
-    };
-    // The authority ends at the path; a query or a fragment is the
-    // shell's.
-    let end = rest.find('/').unwrap_or(rest.len());
-    let (authority, _path) = rest.split_at(end);
-    if authority.contains(['?', '#']) {
-        return None;
-    }
-    let (userinfo, hostport) = match authority.split_once('@') {
-        Some((u, h)) => {
-            if h.contains('@') || !schemed {
-                return None;
-            }
-            (Some(u), h)
-        }
-        None => (None, authority),
-    };
-    let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => {
-            if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            (h, p.parse::<u16>().ok().filter(|p| *p != 0)?)
-        }
-        None => (hostport, DEFAULT_PORT),
-    };
-    let plain = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_');
-    if host.is_empty() || !host.bytes().all(plain) {
-        return None;
-    }
-    if !schemed {
-        let lower = host.to_ascii_lowercase();
-        if GUESSED.iter().any(|g| lower.starts_with(g)) {
-            return None;
-        }
-    }
-    let auth = match userinfo {
-        None => None,
-        Some(u) => {
-            let (user, pass) = u.split_once(':').unwrap_or((u, ""));
-            Some(Credentials {
-                user: decode(user)?,
-                pass: decode(pass)?,
-            })
-        }
-    };
-    Some(Proxy {
-        host: host.to_string(),
-        port,
-        auth,
-    })
-}
-
-/// A user or password part, percent-decoded. `None`: a byte the binary
-/// doesn't take there, a broken escape, or a control byte once decoded.
-fn decode(part: &str) -> Option<Vec<u8>> {
-    let ok = |b: u8| {
-        b.is_ascii_alphanumeric()
-            || matches!(
-                b,
-                b'-' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b'='
-                    | b':'
-            )
-    };
-    let b = part.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' {
-            let hex = part.get(i + 1..i + 3)?;
-            let v = u8::from_str_radix(hex, 16).ok()?;
-            if !hex.bytes().all(|c| c.is_ascii_hexdigit()) || v < 0x20 || v == 0x7f {
-                return None;
-            }
-            out.push(v);
-            i += 3;
-        } else if ok(b[i]) {
-            out.push(b[i]);
-            i += 1;
-        } else {
-            return None;
-        }
-    }
-    Some(out)
 }
 
 /// Standard base64 with padding (also the TLS tests' PEM writer).
@@ -464,19 +236,6 @@ pub(crate) fn base64(data: &[u8]) -> String {
     out
 }
 
-/// The CONNECT request's head, as curl writes it.
-pub fn connect_head(p: &Proxy, host: &str, port: u16, user_agent: &str) -> Vec<u8> {
-    let authority = format!("{host}:{port}");
-    let mut h = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");
-    if let Some(c) = &p.auth {
-        h.push_str(&format!("Proxy-Authorization: {}\r\n", c.basic()));
-    }
-    h.push_str(&format!(
-        "User-Agent: {user_agent}\r\nProxy-Connection: Keep-Alive\r\n\r\n"
-    ));
-    h.into_bytes()
-}
-
 fn remaining(limit: Instant) -> Option<Duration> {
     limit
         .checked_duration_since(Instant::now())
@@ -487,42 +246,11 @@ fn tunnel_failed(why: impl Into<String>) -> Failure {
     Failure::Tunnel(why.into())
 }
 
-/// The tunnel through `p` to `host:port`: the proxy's TCP connect, the
-/// CONNECT head, and its answer's head read byte by byte (nothing of the
-/// target's TLS is read). Before `limit`, as curl counts the tunnel in
-/// its connect time.
-pub fn tunnel(
-    p: &Proxy,
-    host: &str,
-    port: u16,
-    user_agent: &str,
-    limit: Instant,
-    connect: impl FnOnce(&str, u16, Instant) -> Result<TcpStream, Failure>,
-) -> Result<TcpStream, Failure> {
-    tunnel_answered(p, host, port, user_agent, limit, connect).map_err(|(f, _)| f)
-}
-
-/// [`tunnel`], and when it fails, the bytes of the proxy's answer read
-/// before it did (none for a connect that failed), for a caller that
-/// words the failure as another client would (clone's engine, as
-/// Python's `http.client` does).
-pub fn tunnel_answered(
-    p: &Proxy,
-    host: &str,
-    port: u16,
-    user_agent: &str,
-    limit: Instant,
-    connect: impl FnOnce(&str, u16, Instant) -> Result<TcpStream, Failure>,
-) -> Result<TcpStream, (Failure, Vec<u8>)> {
-    let head = connect_head(p, host, port, user_agent);
-    tunnel_head(p, &head, |code| (200..300).contains(&code), limit, connect)
-}
-
-/// The one CONNECT exchange every client shares: the proxy's TCP
+/// The CONNECT exchange of the Python rule's clients: the proxy's TCP
 /// connect, `head` (the whole CONNECT request, as that client writes
 /// it), and the answer's head read byte by byte (nothing of the target's
-/// TLS is read). `opens` says which status opens the tunnel: curl takes
-/// any 2xx ([`tunnel_answered`]), Python's `http.client` only 200. When
+/// TLS is read). `opens` says which status opens the tunnel (Python's
+/// `http.client`: only 200). When
 /// it fails, the bytes of the proxy's answer read before it did (none
 /// for a connect that failed). Before `limit`.
 pub fn tunnel_head(

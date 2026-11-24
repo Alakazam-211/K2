@@ -54,10 +54,10 @@
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`):
 //!
-//! - a host the binary doesn't send a token to itself ([`remote::base`],
+//! - a host the binary doesn't send a token to itself ([`remote::routed`],
 //!   [`remote::sends_here`]: a path after the host, a user part, IPv6;
-//!   HTTPS where curl would use a proxy; plain http to anything but a
-//!   literal loopback address);
+//!   plain http to anything but a literal loopback address). HTTPS goes
+//!   through the person's proxy as curl's would ([`remote::routed`]);
 //! - a word that is not UTF-8, and a command line with `-h` or `--help`:
 //!   the shell prints the read help for it and reads nothing (since
 //!   0.46.17), and the front sends it to that page or to the shell
@@ -246,8 +246,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let target = if host.is_empty() {
         None
     } else {
-        let b = remote::base(&host)?;
-        if !remote::sends_here(&host, &b, |n| std::env::var_os(n)) {
+        let b = remote::routed(&host)?;
+        if !remote::sends_here(&b) {
             return None;
         }
         Some((b, host))

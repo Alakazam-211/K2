@@ -1384,13 +1384,16 @@ fn read_chunked(r: &mut impl BufRead) -> Body {
 }
 
 /// Where [`open_url`] goes: a full URL's host and port, its netloc as
-/// written (urllib's `Host` header) and whether it is `https://`.
+/// written (urllib's `Host` header), whether it is `https://`, and the
+/// person's proxy for it as the shell's Python reads it
+/// ([`super::remote::python_route`]; https only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
     pub host: String,
     pub port: u16,
     pub netloc: String,
     pub tls: bool,
+    pub via: Option<super::proxy::Proxy>,
 }
 
 /// The bytes http.client writes for a Python block whose `Request` names
@@ -1463,7 +1466,8 @@ fn tls_raised(f: &super::wire::Failure) -> Raised {
 pub fn open_url(place: &Place, req: &Request) -> Outcome {
     let tls = place.tls.then_some(place.host.as_str());
     let bytes = encode_plain(&place.netloc, req);
-    let mut reader = match start(&place.host, place.port, tls, None, &bytes, req.timeout) {
+    let via = place.via.as_ref().filter(|_| place.tls);
+    let mut reader = match start(&place.host, place.port, tls, via, &bytes, req.timeout) {
         Ok(r) => r,
         Err(r) => return Outcome::Raised(r),
     };

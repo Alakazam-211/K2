@@ -17,11 +17,12 @@
 //! to another machine: https only ([`plain_http_refusal`]).
 
 use super::client::{Auth, Client};
-use super::proxy::{self, Lookup, Proxy, Route};
+use super::proxy::{self, Route};
 use crate::out::json::{self, Value};
 use crate::out::py;
 use k2_client::env_names;
 use k2_client::hosts::ZONE_SUFFIX;
+use std::ffi::OsString;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -36,8 +37,9 @@ pub struct Base {
     /// curl's `Host` header for the URL: the host, and `:<port>` when the
     /// URL names a port that is not the scheme's.
     pub host_header: String,
-    /// The person's proxy for it ([`routed`]); none from [`base`].
-    pub via: Option<Proxy>,
+    /// The person's proxy for it ([`routed`]), or the setting curl
+    /// refuses (the request fails at its connect); none from [`base`].
+    pub via: Option<proxy::Via>,
 }
 
 /// `BASE_URL` for `host` as `_apply_remote_host` sets it, read as curl
@@ -83,25 +85,22 @@ pub fn base(host: &str) -> Option<Base> {
 
 /// [`base`], with the person's proxy for it, read from the process
 /// environment as curl reads it ([`proxy::decide`]). `None`: the shell's
-/// (a URL [`base`] doesn't read, or a proxy setting the binary doesn't).
+/// (a URL [`base`] doesn't read). A proxy setting curl refuses is
+/// carried in `via` and fails the request at its connect, as curl does.
 pub fn routed(host: &str) -> Option<Base> {
     routed_with(host, process_env)
 }
 
 /// The process environment, as curl reads it: the one place this module
 /// reads it so ([`routed`]).
-fn process_env(name: &str) -> Lookup {
+fn process_env(name: &str) -> Option<OsString> {
     proxy::from_process_env(name)
 }
 
 /// [`routed`] with the variables from `env` (the tests' tables).
-pub fn routed_with(host: &str, env: impl Fn(&str) -> Lookup) -> Option<Base> {
+pub fn routed_with(host: &str, env: impl Fn(&str) -> Option<OsString>) -> Option<Base> {
     let mut b = base(host)?;
-    match proxy::decide(&b.host, b.tls, env) {
-        Route::Direct => {}
-        Route::Via(p) => b.via = Some(p),
-        Route::Shell => return None,
-    }
+    b.via = proxy::decide(&b.host, b.tls, env);
     Some(b)
 }
 
@@ -207,8 +206,8 @@ pub fn daemon_base(host: &str, port: &str) -> String {
 /// isn't this computer (`_k2_direct_url`). [`routed`] reads it as it reads
 /// a remote host's URL; the credential and the cell socket stay the
 /// daemon's, and a refused connect follows no port file
-/// (`_k2_follow_port_move` is for a loopback `HOST` only). A URL or a
-/// proxy setting [`routed`] doesn't read: nothing goes over TCP
+/// (`_k2_follow_port_move` is for a loopback `HOST` only). A URL
+/// [`routed`] doesn't read: nothing goes over TCP
 /// ([`Client::unsendable`]), never a plain or direct request in its
 /// place. Any other host: unchanged.
 pub fn daemon_https(client: &mut Client) {
@@ -234,9 +233,6 @@ pub fn daemon_https(client: &mut Client) {
     }
 }
 
-/// The environment curl reads a proxy for an `https://` URL from.
-pub const HTTPS_PROXY_ENV: [&str; 4] = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"];
-
 /// `BASE_URL` as `_apply_remote_host` sets it for `host`: the URL as
 /// given less one trailing `/`, or `https://<host>`.
 pub fn base_url(host: &str) -> String {
@@ -247,24 +243,28 @@ pub fn base_url(host: &str) -> String {
     }
 }
 
-/// Whether the binary sends a token to `host` (its [`base`]) itself, as
-/// the shell's curl would: HTTPS, where curl would use no proxy (a
-/// loopback host, or none of [`HTTPS_PROXY_ENV`] set in `env`); plain
-/// http only to a literal loopback address (`127.x.x.x`), never a name
-/// that would have to be looked up. Anything else is the shell's (it
-/// sends there by its own rules).
-pub fn sends_here(host: &str, b: &Base, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
-    if !b.tls {
-        return b
-            .host
+/// Whether the binary sends a token to `b` (from [`routed`]) itself, as
+/// the shell's curl would: HTTPS, direct or through the person's proxy
+/// (`b.via`); plain http only to a literal loopback address
+/// (`127.x.x.x`), never a name that would have to be looked up. Anything
+/// else is the shell's (it sends there by its own rules).
+pub fn sends_here(b: &Base) -> bool {
+    b.tls
+        || b.host
             .parse::<std::net::Ipv4Addr>()
-            .is_ok_and(|ip| ip.is_loopback());
-    }
-    let url = format!("{}/", base_url(host));
-    k2_client::proxy_rule::direct(&url)
-        || !HTTPS_PROXY_ENV
-            .iter()
-            .any(|n| env(n).is_some_and(|v| !v.is_empty()))
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The client sends to `b` (and through its proxy), keeping its own
+/// credential: `daemon restart --host`'s repoint. The K2 home's port
+/// file is this machine's daemon, not the host's.
+pub fn point(client: &mut Client, b: &Base) {
+    client.host = b.host.clone();
+    client.port = b.port;
+    client.tls = b.tls;
+    client.via = b.via.clone();
+    client.host_header = Some(b.host_header.clone());
+    client.port_file = None;
 }
 
 /// `_apply_remote_host`'s swap, once the token is known.
@@ -526,25 +526,58 @@ mod tests {
 
     #[test]
     fn where_the_binary_sends_a_token_itself() {
-        let none = |_: &str| -> Option<std::ffi::OsString> { None };
-        let proxied = |n: &str| -> Option<std::ffi::OsString> {
-            (n == "HTTPS_PROXY").then(|| "http://proxy:3128".into())
+        let none = |_: &str| -> Option<OsString> { None };
+        let proxied = |n: &str| -> Option<OsString> {
+            (n == "HTTPS_PROXY").then(|| "socks5h://proxy:1080".into())
         };
-        let here = |h: &str, env: &dyn Fn(&str) -> Option<std::ffi::OsString>| {
-            sends_here(h, &base(h).expect("a host the binary reads"), env)
+        let here = |h: &str, env: &dyn Fn(&str) -> Option<OsString>| {
+            let b = routed_with(h, env).expect("a host the binary reads");
+            (sends_here(&b), b.via.is_some())
         };
-        assert!(here("box.example", &none));
-        assert!(here("https://box.example:8443/", &none));
-        assert!(!here("box.example", &proxied));
-        assert!(here("https://localhost:9", &proxied));
-        assert!(here("https://127.0.0.1:9", &proxied));
-        assert!(here("http://127.0.0.1:9", &proxied));
-        assert!(here("http://127.3.4.5", &none));
-        assert!(!here("http://localhost:9", &none));
-        assert!(!here("http://box.example", &none));
-        assert!(!here("http://10.0.0.1:80", &none));
+        assert_eq!(here("box.example", &none), (true, false));
+        assert_eq!(here("https://box.example:8443/", &none), (true, false));
+        assert_eq!(here("box.example", &proxied), (true, true));
+        assert_eq!(here("https://localhost:9", &proxied), (true, false));
+        assert_eq!(here("https://127.0.0.1:9", &proxied), (true, false));
+        assert_eq!(here("http://127.0.0.1:9", &proxied), (true, false));
+        assert_eq!(here("http://127.3.4.5", &none), (true, false));
+        assert_eq!(here("http://localhost:9", &none), (false, false));
+        assert_eq!(here("http://box.example", &proxied), (false, false));
+        assert_eq!(here("http://10.0.0.1:80", &none), (false, false));
         assert_eq!(base_url("box"), "https://box");
         assert_eq!(base_url("http://x:1/"), "http://x:1");
+    }
+
+    /// Every form of the person's proxy setting is the binary's now: a
+    /// proxy curl reads rides in `via`, one curl refuses rides there too
+    /// and fails at the connect, and none ever goes direct.
+    #[test]
+    fn every_proxy_setting_is_routed() {
+        let env = |v: &'static str| move |n: &str| (n == "https_proxy").then(|| OsString::from(v));
+        for (setting, want) in [
+            ("http://p.example:3128", Some("http://p.example:3128")),
+            ("https://p.example", Some("https://p.example:443")),
+            ("socks4://p.example", Some("socks4://p.example:1080")),
+            ("socks4a://p.example:9", Some("socks4a://p.example:9")),
+            ("socks5://u:pw@p.example", Some("socks5://p.example:1080")),
+            ("socks5h://[::1]:9", Some("socks5h://[::1]:9")),
+            ("http://[fd00::1]:3128", Some("http://[fd00::1]:3128")),
+            ("u@p.example:3", Some("http://p.example:3")),
+            ("http://p.example:3?q", Some("http://p.example:3")),
+            ("ftp://p.example", None),
+            ("ftp.example:3128", None),
+            ("http://p.example:99999", None),
+        ] {
+            let b = routed_with("box.example", env(setting)).expect("routed");
+            let via = b.via.expect("a proxy is set: never direct");
+            assert_eq!(
+                via.as_ref().ok().map(ToString::to_string).as_deref(),
+                want,
+                "{setting}"
+            );
+        }
+        let b = routed_with("Box.example.", env("http://p.example:1")).unwrap();
+        assert!(matches!(b.via, Some(Ok(_))), "{b:?}");
     }
 
     #[test]

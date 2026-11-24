@@ -14,12 +14,16 @@
 //! The token goes in that one header only: no child runs, so it is in no
 //! argv, environment or log line.
 //!
+//! HTTPS to another computer goes through the person's proxy as the
+//! shell's Python urllib reads it ([`python_proxy`]); a setting that
+//! Python reads and the binary doesn't (another scheme: Python sends a
+//! plain CONNECT to that host) sends nothing, and the lines and exit are
+//! the same (the request is best-effort, its answer never read).
+//!
 //! Handed to the shell ([`run`] returns `None`), before anything is
 //! printed or sent: a base URL the binary doesn't send itself (an IPv6
-//! address, a port it can't read), HTTPS to another computer with a
-//! proxy set in the environment (Python's urllib would use it), and a
-//! settings or account file the shell's Python reads otherwise (not
-//! UTF-8, nested too deep).
+//! address, a port it can't read), and a settings or account file the
+//! shell's Python reads otherwise (not UTF-8, nested too deep).
 //!
 //! Where it differs: the request's head is the binary's own (curl's
 //! shape) where the shell's Python sends urllib's; the account server's
@@ -29,6 +33,7 @@ use super::{field_text, load};
 use crate::exit::Exit;
 use crate::out::json::Value;
 use crate::out::{self, py};
+use crate::transport::proxy::{Proxy, Route};
 use crate::transport::wire::{self, Body, Method, Request, Target};
 use k2_client::cli_name;
 use k2_client::hosts::ZONE_SUFFIX;
@@ -169,8 +174,8 @@ pub fn target(base: &str) -> Option<(Target, String, String)> {
         None => host.to_string(),
     };
     let t = if tls {
-        // No proxy yet: the transport's proxy path (remote::routed) came
-        // after this verb went native; following it is the lane's.
+        // The proxy rides beside the target ([`python_proxy`]): this is
+        // the shell's Python, not curl.
         Target::Tls {
             host: host.to_string(),
             port: port_n,
@@ -215,12 +220,13 @@ pub fn run(words: &[&str], home: &Path) -> Option<Exit> {
     let account = home.join(super::ACCOUNT_FILE);
     let token = access_token(&account);
     let to = if words.is_empty() && !token.is_empty() {
-        let t = target(&base)?;
+        let (t, host, path) = target(&base)?;
         let direct = k2_client::proxy_rule::direct(&format!("{base}{LOGOUT}"));
-        if !direct && super::super::remote::logout::proxied(&base) {
-            return None;
-        }
-        Some(t)
+        let via = match &t {
+            Target::Tls { host: h, .. } if !direct => python_proxy(h, &host, true),
+            _ => Ok(None),
+        };
+        Some((t, via, host, path))
     } else {
         None
     };
@@ -231,8 +237,8 @@ pub fn run(words: &[&str], home: &Path) -> Option<Exit> {
         out::stderr_line(&format!("Usage: {} connect logout", cli_name!()));
         return Some(Exit::Usage);
     }
-    if let Some((t, host, path)) = to {
-        send(&t, host, path, &token);
+    if let Some((t, Ok(via), host, path)) = to {
+        send(&t, via.as_ref(), host, path, &token);
     }
     if account.is_file() {
         let _ = std::fs::remove_file(&account);
@@ -243,12 +249,45 @@ pub fn run(words: &[&str], home: &Path) -> Option<Exit> {
     })
 }
 
-/// The best-effort POST: nothing it meets is shown.
-fn send(t: &Target, host: String, path: String, token: &str) {
+/// The person's proxy for an `https://` account server that is not this
+/// computer, as the shell's Python urllib reads it
+/// ([`crate::transport::remote::python_route`]; `netloc` is the URL's
+/// `host[:port]`). `Err`: a setting the binary doesn't read as Python
+/// does, and the line that says so (only the scheme: the URL may hold
+/// the proxy's password).
+pub fn python_proxy(host: &str, netloc: &str, tls: bool) -> Result<Option<Proxy>, String> {
+    use crate::transport::{proxy::python, remote};
+    match remote::python_route(host, netloc, tls) {
+        Route::Direct => Ok(None),
+        Route::Via(p) => Ok(Some(p)),
+        Route::Shell => Err(
+            python::unsupported_line(&remote::python_proxy_env()).unwrap_or_else(|| {
+                "Error: a proxy setting that is not UTF-8 is not supported".to_string()
+            }),
+        ),
+    }
+}
+
+/// The best-effort POST: nothing it meets is shown. Through `via` (the
+/// shell's Python's CONNECT, then TLS inside it) when there is one.
+fn send(t: &Target, via: Option<&Proxy>, host: String, path: String, token: &str) {
     let deadline = Instant::now() + TIMEOUT;
-    let Ok(mut conn) = wire::connect(t, TIMEOUT, deadline) else {
-        return;
+    let conn = match (t, via) {
+        (Target::Tls { host: h, port, .. }, Some(p)) => {
+            let Ok(tcp) = crate::transport::urllib::tunnel(p, h, *port, TIMEOUT) else {
+                return;
+            };
+            match crate::transport::tls::connect(tcp, h, deadline) {
+                Ok(s) => wire::Conn::Tls(Box::new(s)),
+                Err(_) => return,
+            }
+        }
+        _ => match wire::connect(t, TIMEOUT, deadline) {
+            Ok(c) => c,
+            Err(_) => return,
+        },
     };
+    let mut conn = conn;
     let req = Request {
         method: Method::Post,
         target: path,

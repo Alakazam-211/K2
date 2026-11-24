@@ -553,6 +553,7 @@ fn open_url_reads_a_plain_answer_and_names_a_failed_handshake() {
         port,
         netloc: format!("127.0.0.1:{port}"),
         tls,
+        via: None,
     };
     let req = Request::new(Method::Get, "/x", Duration::from_secs(5));
     assert_eq!(

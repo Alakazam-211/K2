@@ -33,10 +33,10 @@
 //! the stream does in plain HTTP.
 
 use super::wire::{curl, Failure};
+use curl_proxy_env::ProxyStream;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io;
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -48,8 +48,9 @@ pub const PEER_FAILED_VERIFICATION: i32 = 60;
 /// curl 77: no root certificates could be read.
 pub const SSL_CACERT_BADFILE: i32 = 77;
 
-/// An open TLS connection over TCP.
-pub type Stream = StreamOwned<ClientConnection, TcpStream>;
+/// An open TLS connection over TCP, or through the person's proxy
+/// (inside TLS to an `https://` proxy, then).
+pub type Stream = StreamOwned<ClientConnection, ProxyStream>;
 
 /// The config for these roots: ring, TLS 1.2 and 1.3, ALPN `http/1.1`,
 /// no client certificate.
@@ -109,8 +110,9 @@ pub fn roots_with(
     Ok(roots)
 }
 
-/// The config every `https://` call uses, read once per process.
-fn shared() -> Result<Arc<ClientConfig>, Failure> {
+/// The config every `https://` call uses, read once per process (an
+/// `https://` proxy's certificate is checked with it too).
+pub(crate) fn shared() -> Result<Arc<ClientConfig>, Failure> {
     static SHARED: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
     SHARED
         .get_or_init(|| native_roots().and_then(config))
@@ -123,17 +125,18 @@ fn shared() -> Result<Arc<ClientConfig>, Failure> {
 
 /// The handshake on `tcp` for `host`, with the OS's roots, before
 /// `limit`.
-pub fn connect(tcp: TcpStream, host: &str, limit: Instant) -> Result<Stream, Failure> {
+pub fn connect(tcp: impl Into<ProxyStream>, host: &str, limit: Instant) -> Result<Stream, Failure> {
     connect_with(shared()?, tcp, host, limit)
 }
 
 /// [`connect`] with a given config (the tests' own roots).
 pub fn connect_with(
     cfg: Arc<ClientConfig>,
-    mut tcp: TcpStream,
+    tcp: impl Into<ProxyStream>,
     host: &str,
     limit: Instant,
 ) -> Result<Stream, Failure> {
+    let mut tcp = tcp.into();
     let name = ServerName::try_from(host.to_string()).map_err(|e| Failure::Broken {
         curl: SSL_CONNECT_ERROR,
         why: format!("{host} isn't a name a certificate can be checked against ({e})"),
@@ -158,7 +161,7 @@ pub fn connect_with(
     Ok(StreamOwned::new(conn, tcp))
 }
 
-fn set_timeouts(tcp: &TcpStream, d: Duration) -> io::Result<()> {
+fn set_timeouts(tcp: &ProxyStream, d: Duration) -> io::Result<()> {
     tcp.set_read_timeout(Some(d))?;
     tcp.set_write_timeout(Some(d))
 }
@@ -259,14 +262,16 @@ pub fn read(s: &mut Stream, buf: &mut [u8]) -> io::Result<usize> {
     }
 }
 
-/// True for curl's codes that this module gives a failed handshake: no
-/// byte of the request went out.
+/// True for curl's codes that this module gives a failed handshake, and
+/// the proxy's that come before any request (a name that doesn't resolve,
+/// a SOCKS handshake that failed): no byte of the request went out.
 pub fn before_request(code: i32) -> bool {
     matches!(
         code,
         SSL_CONNECT_ERROR | PEER_FAILED_VERIFICATION | SSL_CACERT_BADFILE
     ) || code == curl::COULDNT_RESOLVE_HOST
         || code == super::proxy::COULDNT_RESOLVE_PROXY
+        || code == super::proxy::PROXY_HANDSHAKE
 }
 
 #[cfg(test)]
@@ -276,7 +281,7 @@ mod tests {
     use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
 
     /// A CA named `ca`, and a server certificate for `localhost` and
     /// 127.0.0.1 signed by it. Two CAs with one name would make the other

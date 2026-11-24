@@ -775,12 +775,14 @@ pub struct Client {
     /// ([`super::tls`]).
     pub tls: bool,
     /// The person's proxy for a remote `https://` base
-    /// ([`super::proxy`]). Only [`super::remote::apply`] sets it; it is
-    /// used only with [`Client::tls`], and a new client has none.
-    pub(in crate::transport) via: Option<super::proxy::Proxy>,
-    /// `K2_HOST=https://<name>` with a name or a proxy setting the binary
-    /// doesn't read as curl does ([`super::remote::daemon_https`]): the
-    /// URL the shell would send to. Nothing goes over TCP then.
+    /// ([`super::proxy`]), or the setting curl refuses (the connect fails
+    /// with curl's code). Only [`super::remote::apply`] and
+    /// [`super::remote::point`] set it; it is used only with
+    /// [`Client::tls`], and a new client has none.
+    pub(in crate::transport) via: Option<super::proxy::Via>,
+    /// `K2_HOST=https://<name>` with a name the binary doesn't read as
+    /// curl does ([`super::remote::daemon_https`]): the URL the shell
+    /// would send to. Nothing goes over TCP then.
     pub(in crate::transport) unsendable: Option<String>,
     /// The `Host` header curl writes for the `BASE_URL`, when it is not
     /// `<HOST>:<PORT>` (a remote URL with the scheme's own port leaves the

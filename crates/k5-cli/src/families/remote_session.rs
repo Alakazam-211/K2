@@ -43,7 +43,7 @@
 //! and acts on nothing), `HOOK_SOCK` set with a `CODEX_` variable
 //! exported, a port that is set but is no port curl takes, a `python3` the
 //! binary can't tell, a `--host` the binary doesn't send a token to
-//! itself ([`remote::base`], [`remote::sends_here`]), `--host` or a grant
+//! itself ([`remote::routed`], [`remote::sends_here`]), `--host` or a grant
 //! token with a session passport (the shell's heal and closing lines
 //! then read a passport the calls don't send), and a `read --lines` that
 //! is not a plain word (the shell puts it in the URL as it is).
@@ -409,8 +409,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     let base = if target.host.is_empty() || !acts {
         None
     } else {
-        let b = remote::base(&target.host)?;
-        if !remote::sends_here(&target.host, &b, |n| std::env::var_os(n)) {
+        let b = remote::routed(&target.host)?;
+        if !remote::sends_here(&b) {
             return None;
         }
         Some(b)

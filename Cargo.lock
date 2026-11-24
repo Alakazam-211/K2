@@ -6346,6 +6346,7 @@ name = "k5-cli"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "curl-proxy-env",
  "flate2",
  "k2-brand",
  "k2-client",

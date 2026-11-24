@@ -2,193 +2,18 @@ use super::*;
 use std::collections::HashMap;
 use std::net::TcpListener;
 
-/// The variables set, whether the target is https, and the proxy
-/// setting curl uses.
-type EnvRow = (
-    &'static [(&'static str, &'static str)],
-    bool,
-    Option<&'static str>,
-);
-
-/// A proxy URL as read: host, port, and whether it has a user part.
-type Parsed = (String, u16, bool);
-
-fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Lookup {
-    let m: HashMap<String, String> = pairs
+fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    let m: HashMap<String, OsString> = pairs
         .iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(k, v)| (k.to_string(), OsString::from(v)))
         .collect();
-    move |n: &str| Ok(m.get(n).cloned())
+    move |n: &str| m.get(n).cloned()
 }
 
-fn via(host: &str, port: u16) -> Route {
-    Route::Via(Proxy {
-        host: host.into(),
-        port,
-        auth: None,
-    })
-}
-
-/// curl's `detect_proxy` order, and an empty value counts as unset.
-#[test]
-fn which_variable_names_the_proxy() {
-    let rows: &[EnvRow] = &[
-        (
-            &[
-                ("https_proxy", "a"),
-                ("HTTPS_PROXY", "b"),
-                ("all_proxy", "c"),
-            ],
-            true,
-            Some("a"),
-        ),
-        (&[("HTTPS_PROXY", "b"), ("all_proxy", "c")], true, Some("b")),
-        (
-            &[("https_proxy", ""), ("HTTPS_PROXY", "b")],
-            true,
-            Some("b"),
-        ),
-        (&[("all_proxy", "c"), ("ALL_PROXY", "d")], true, Some("c")),
-        (&[("all_proxy", ""), ("ALL_PROXY", "d")], true, Some("d")),
-        (&[("http_proxy", "e"), ("HTTP_PROXY", "f")], true, None),
-        (
-            &[("http_proxy", "e"), ("https_proxy", "a")],
-            false,
-            Some("e"),
-        ),
-        // HTTP_PROXY is never read (curl: the CGI `Proxy:` header).
-        (&[("HTTP_PROXY", "f")], false, None),
-        (&[("HTTP_PROXY", "f"), ("ALL_PROXY", "d")], false, Some("d")),
-        (&[("https_proxy", "a")], false, None),
-        (&[], true, None),
-    ];
-    for (vars, https, want) in rows {
-        let got = proxy_setting(*https, &env(vars)).unwrap();
-        assert_eq!(got.as_deref(), *want, "{vars:?} https={https}");
-    }
-    let e = env(&[("no_proxy", ""), ("NO_PROXY", "x")]);
-    assert_eq!(no_proxy_setting(&e).unwrap().as_deref(), Some("x"));
-    let e = env(&[("no_proxy", "y"), ("NO_PROXY", "x")]);
-    assert_eq!(no_proxy_setting(&e).unwrap().as_deref(), Some("y"));
-}
-
-/// curl 8.5's `Curl_check_noproxy`, row by row.
-#[test]
-fn no_proxy_matches_as_curl_does() {
-    use NoProxy::*;
-    let rows = [
-        ("box.example", "*", Skip),
-        ("box.example", "box.example", Skip),
-        ("box.example", "BOX.Example", Skip),
-        ("box.example", ".box.example", Skip),
-        ("box.example", "box.example.", Skip),
-        ("box.example.", "box.example", Skip),
-        ("a.box.example", "box.example", Skip),
-        ("a.box.example", ".box.example", Skip),
-        ("nobox.example", "box.example", Use),
-        ("box.example", "a.box.example", Use),
-        ("box.example", "other.example,box.example", Skip),
-        ("box.example", ",,other.example,,", Use),
-        ("box.example", "example", Skip),
-        ("box.example", ".", Use),
-        ("box.example", "*.example", Use),
-        ("box.example", "*,x", Use),
-        ("box.example", "other.example box.example", Shell),
-        ("box.example", "box.example\tother", Shell),
-        ("10.1.2.3", "10.1.2.3", Skip),
-        ("10.1.2.3", "10.1.2.4", Use),
-        ("10.1.2.3", "10.0.0.0/8", Skip),
-        ("10.1.2.3", "10.1.0.0/16", Skip),
-        ("10.1.2.3", "10.2.0.0/16", Use),
-        ("10.1.2.3", "10.1.2.0/24x", Skip),
-        ("10.1.2.3", "10.1.2.3/32", Skip),
-        ("10.1.2.3", "10.1.2.0/0", Use),
-        ("10.1.2.3", "10.1.2.0/33", Use),
-        ("10.1.2.3", "10.1.2.0/-1", Use),
-        ("10.1.2.3", "0.0.0.0/1", Skip),
-        ("10.1.2.3", "box.example", Use),
-        ("10.1.2.3", "2.3", Use),
-    ];
-    for (host, list, want) in rows {
-        assert_eq!(no_proxy(host, list), want, "{host} in {list:?}");
-    }
-}
-
-#[test]
-fn proxy_urls_the_binary_reads_and_the_ones_it_leaves() {
-    let p = |h: &str, port| Some((h.to_string(), port, false));
-    let rows: &[(&str, Option<Parsed>)] = &[
-        ("http://proxy.example:3128", p("proxy.example", 3128)),
-        ("HTTP://proxy.example:3128/", p("proxy.example", 3128)),
-        ("http://proxy.example", p("proxy.example", 1080)),
-        ("proxy.example", p("proxy.example", 1080)),
-        ("proxy.example:8080", p("proxy.example", 8080)),
-        ("10.0.0.9:3128", p("10.0.0.9", 3128)),
-        (
-            "http://proxy.example:3128/any/path",
-            p("proxy.example", 3128),
-        ),
-        (
-            "http://u:p@proxy.example:3128",
-            Some(("proxy.example".into(), 3128, true)),
-        ),
-        ("https://proxy.example:3128", None),
-        ("socks5://proxy.example:1080", None),
-        ("socks5h://proxy.example", None),
-        ("ftp://proxy.example", None),
-        ("http://[::1]:3128", None),
-        ("[::1]:3128", None),
-        ("ftp.example:3128", None),
-        ("dict.example", None),
-        ("LDAP.example", None),
-        ("imap.example", None),
-        ("smtp.example", None),
-        ("pop3.example", None),
-        ("u:p@proxy.example:3128", None),
-        ("http://a@b@proxy.example", None),
-        ("http://proxy.example:", None),
-        ("http://proxy.example:0", None),
-        ("http://proxy.example:99999", None),
-        ("http://proxy.example:31x8", None),
-        ("http://proxy.example?x", None),
-        ("http://proxy.example#x", None),
-        ("http://pro xy.example", None),
-        ("http://proxy%2eexample", None),
-        ("http://u:p%zz@proxy.example", None),
-        ("http://u:p%0a@proxy.example", None),
-        // The path starts at the `/`: the host would be `u`, with `p`
-        // for a port.
-        ("http://u:p/x@proxy.example", None),
-        ("http://", None),
-        ("", None),
-    ];
-    for (raw, want) in rows {
-        let got = parse_proxy(raw).map(|p| (p.host, p.port, p.auth.is_some()));
-        assert_eq!(&got, want, "{raw:?}");
-    }
-}
-
-#[test]
-fn credentials_are_percent_decoded_and_never_printed() {
-    let p = parse_proxy("http://ac%40me:p%3As%2Fs%20w@proxy.example:3128").unwrap();
-    let c = p.auth.clone().unwrap();
-    assert_eq!(c.user, b"ac@me");
-    assert_eq!(c.pass, b"p:s/s w");
-    // base64("ac@me:p:s/s w")
-    assert_eq!(c.basic(), "Basic YWNAbWU6cDpzL3Mgdw==");
-    assert_eq!(format!("{c:?}"), "Credentials(<redacted>)");
-    assert_eq!(format!("{c}"), "<redacted>");
-    let shown = format!("{p:?} {:?}", Route::Via(p.clone()));
-    for secret in ["ac@me", "ac%40me", "p:s", "YWNA", "s w"] {
-        assert!(!shown.contains(secret), "{secret} in {shown}");
-    }
-    // A user with no password: an empty one, as curl sends it.
-    let p = parse_proxy("http://only@proxy.example").unwrap();
-    assert_eq!(
-        p.auth.unwrap().basic(),
-        format!("Basic {}", base64(b"only:"))
-    );
+/// The proxy [`decide`] picked, as `scheme://host:port`, or the exit code
+/// curl gives for a setting it refuses.
+fn shown(v: Option<Via>) -> Option<Result<String, i32>> {
+    v.map(|v| v.map(|p| p.to_string()).map_err(|e| e.curl_exit_code()))
 }
 
 #[test]
@@ -203,22 +28,6 @@ fn base64_is_the_standard_alphabet_with_padding() {
     ] {
         assert_eq!(base64(raw), want);
     }
-}
-
-#[test]
-fn the_connect_head_is_curls() {
-    let p = parse_proxy("http://u:pw@proxy.example:3128").unwrap();
-    let head = connect_head(&p, "box.example", 443, "k5/1.2.3");
-    assert_eq!(
-        String::from_utf8(head).unwrap(),
-        "CONNECT box.example:443 HTTP/1.1\r\nHost: box.example:443\r\nProxy-Authorization: Basic dTpwdw==\r\nUser-Agent: k5/1.2.3\r\nProxy-Connection: Keep-Alive\r\n\r\n"
-    );
-    let p = parse_proxy("proxy.example").unwrap();
-    let head = connect_head(&p, "10.0.0.5", 8443, "k5/1");
-    assert_eq!(
-        String::from_utf8(head).unwrap(),
-        "CONNECT 10.0.0.5:8443 HTTP/1.1\r\nHost: 10.0.0.5:8443\r\nUser-Agent: k5/1\r\nProxy-Connection: Keep-Alive\r\n\r\n"
-    );
 }
 
 /// The shell's `_k2_direct_url` for `https://<host>`.
@@ -328,6 +137,11 @@ fn the_shells_direct_url_answers_the_table() {
     }
 }
 
+/// The route for a host: this computer and plain http never use a
+/// proxy; otherwise curl's rule (`curl-proxy-env`, its own tables and its
+/// curl oracle hold the detail), every scheme and form read by the
+/// binary, and a setting curl refuses carried to the connect (never
+/// direct).
 #[test]
 fn the_route_for_a_host() {
     let all = [
@@ -338,67 +152,72 @@ fn the_route_for_a_host() {
         ("all_proxy", "http://p.example:5"),
         ("ALL_PROXY", "http://p.example:6"),
     ];
-    // Loopback and plain http never use a proxy, whatever is set.
     for (host, https) in [
         ("127.0.0.1", true),
         ("localhost", true),
         ("box.example", false),
         ("10.0.0.5", false),
     ] {
-        assert_eq!(decide(host, https, env(&all)), Route::Direct, "{host}");
+        assert_eq!(decide(host, https, env(&all)), None, "{host}");
     }
-    assert_eq!(decide("box.example", true, env(&all)), via("p.example", 3));
-    assert_eq!(decide("box.example", true, env(&[])), Route::Direct);
+    let ok = |s: &str| Some(Ok(s.to_string()));
+    assert_eq!(
+        shown(decide("box.example", true, env(&all))),
+        ok("http://p.example:3")
+    );
+    assert_eq!(decide("box.example", true, env(&[])), None);
     assert_eq!(
         decide("box.example", true, env(&[("HTTP_PROXY", "p.example")])),
-        Route::Direct
+        None
     );
     let named = [
         ("https_proxy", "p.example:3128"),
         ("no_proxy", "box.example"),
     ];
-    assert_eq!(decide("box.example", true, env(&named)), Route::Direct);
-    assert_eq!(decide("a.box.example", true, env(&named)), Route::Direct);
+    assert_eq!(decide("box.example", true, env(&named)), None);
+    assert_eq!(decide("a.box.example", true, env(&named)), None);
     assert_eq!(
-        decide("other.example", true, env(&named)),
-        via("p.example", 3128)
+        shown(decide("other.example", true, env(&named))),
+        ok("http://p.example:3128")
     );
     let star = [("https_proxy", "p.example"), ("NO_PROXY", "*")];
-    assert_eq!(decide("box.example", true, env(&star)), Route::Direct);
-    let blanks = [
-        ("https_proxy", "p.example"),
-        ("no_proxy", "a.example b.example"),
-    ];
-    assert_eq!(decide("box.example", true, env(&blanks)), Route::Shell);
-    // No proxy at all: a no_proxy with blanks doesn't matter.
-    let blanks = [("no_proxy", "a.example b.example")];
-    assert_eq!(decide("box.example", true, env(&blanks)), Route::Direct);
-    for odd in ["https://p.example", "socks5://p.example", "[::1]:3128"] {
+    assert_eq!(decide("box.example", true, env(&star)), None);
+    for (setting, want) in [
+        ("https://p.example", ok("https://p.example:443")),
+        ("socks5://p.example", ok("socks5://p.example:1080")),
+        ("socks5h://u:pw@p.example:9", ok("socks5h://p.example:9")),
+        ("socks4a://p.example", ok("socks4a://p.example:1080")),
+        ("[::1]:3128", ok("http://[::1]:3128")),
+        ("u@p.example:3", ok("http://p.example:3")),
+        ("ftp://p.example", Some(Err(7))),
+        ("http://p.example:99999", Some(Err(5))),
+    ] {
         assert_eq!(
-            decide("box.example", true, env(&[("https_proxy", odd)])),
-            Route::Shell,
-            "{odd}"
+            shown(decide(
+                "box.example",
+                true,
+                env(&[("https_proxy", setting)])
+            )),
+            want,
+            "{setting}"
         );
     }
+    // A target with a capital letter or a trailing dot, a no_proxy with
+    // blanks: the binary's too.
     let p = [("https_proxy", "p.example")];
-    assert_eq!(decide("Box.example", true, env(&p)), Route::Shell);
-    assert_eq!(decide("box.example.", true, env(&p)), Route::Shell);
-    let not_text = |n: &str| -> Lookup {
-        if n == "https_proxy" {
-            Err(NotText)
-        } else {
-            Ok(None)
-        }
-    };
-    assert_eq!(decide("box.example", true, not_text), Route::Shell);
-    let not_text = |n: &str| -> Lookup {
-        match n {
-            "https_proxy" => Ok(Some("p.example".into())),
-            "no_proxy" => Err(NotText),
-            _ => Ok(None),
-        }
-    };
-    assert_eq!(decide("box.example", true, not_text), Route::Shell);
+    assert_eq!(
+        shown(decide("Box.example", true, env(&p))),
+        ok("http://p.example:1080")
+    );
+    assert_eq!(
+        shown(decide("box.example.", true, env(&p))),
+        ok("http://p.example:1080")
+    );
+    let blanks = [
+        ("https_proxy", "p.example"),
+        ("no_proxy", "a.example box.example"),
+    ];
+    assert_eq!(decide("box.example", true, env(&blanks)), None);
 }
 
 /// A proxy for one connection: records what came before the head's end,
@@ -438,15 +257,15 @@ fn soon() -> Instant {
     Instant::now() + Duration::from_secs(10)
 }
 
+fn via(url: &str) -> Via {
+    curl_proxy_env::ProxyUrl::parse(url.as_bytes())
+}
+
 #[test]
 fn a_2xx_opens_the_tunnel_and_nothing_of_the_answer_is_left_behind() {
     let (port, h) = fake_proxy(b"HTTP/1.1 200 Connection established\r\n\r\n");
-    let p = Proxy {
-        host: "127.0.0.1".into(),
-        port,
-        auth: parse_proxy("http://u:pw@x.example").unwrap().auth,
-    };
-    let mut s = tunnel(&p, "box.example", 443, "k5/t", soon(), plain_tcp).unwrap();
+    let v = via(&format!("http://u:pw@127.0.0.1:{port}"));
+    let mut s = through(&v, "box.example", 443, "k5/t", soon()).unwrap();
     s.write_all(b"hello").unwrap();
     let mut back = [0u8; 5];
     s.read_exact(&mut back).unwrap();
@@ -465,14 +284,11 @@ fn anything_but_a_2xx_is_curl_56_with_nothing_sent() {
         b"HTTP/1.1 403 Forbidden\r\n\r\n",
         b"HTTP/1.0 502 Bad Gateway\r\n\r\n",
         b"SSH-2.0-nope\r\n\r\n",
+        b"",
     ] {
         let (port, h) = fake_proxy(answer);
-        let p = Proxy {
-            host: "127.0.0.1".into(),
-            port,
-            auth: None,
-        };
-        let Err(f) = tunnel(&p, "box.example", 443, "k5/t", soon(), plain_tcp) else {
+        let v = via(&format!("http://127.0.0.1:{port}"));
+        let Err(f) = through(&v, "box.example", 443, "k5/t", soon()) else {
             panic!("a tunnel through {answer:?}");
         };
         assert!(matches!(f, Failure::Tunnel(_)), "{f:?}");
@@ -480,45 +296,70 @@ fn anything_but_a_2xx_is_curl_56_with_nothing_sent() {
         assert!(!f.sent());
         h.join().unwrap();
     }
-    // Closed with no answer.
-    let (port, h) = fake_proxy(b"");
-    let p = Proxy {
-        host: "127.0.0.1".into(),
-        port,
-        auth: None,
-    };
-    let Err(f) = tunnel(&p, "box.example", 443, "k5/t", soon(), plain_tcp) else {
-        panic!("a tunnel through a proxy that closed");
-    };
-    assert_eq!(f.curl_code(), curl::RECV_ERROR, "{f:?}");
-    h.join().unwrap();
 }
 
+/// curl's codes for a proxy that fails, as `_k2_curl` reads them, and
+/// nothing of the request sent: a refused connect is 7 (and tried again
+/// as any is), a name that doesn't resolve 5, a SOCKS handshake that
+/// fails 97, a setting curl refuses its 7 or 5 with no connection made.
 #[test]
-fn a_proxy_that_is_down_is_curl_7_and_a_name_that_doesnt_resolve_curl_5() {
+fn a_proxy_that_fails_is_curl_s_code() {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
     drop(l);
-    let p = Proxy {
-        host: "127.0.0.1".into(),
-        port,
-        auth: None,
-    };
-    let Err(f) = tunnel(&p, "box.example", 443, "k5/t", soon(), plain_tcp) else {
-        panic!("a tunnel through a closed port");
-    };
-    assert_eq!(f.curl_code(), curl::COULDNT_CONNECT, "{f:?}");
-    let unresolved = |_: &str, _: u16, _: Instant| -> Result<TcpStream, Failure> {
-        Err(Failure::Broken {
-            curl: curl::COULDNT_RESOLVE_HOST,
-            why: "no such name".into(),
-        })
-    };
-    let Err(f) = tunnel(&p, "box.example", 443, "k5/t", soon(), unresolved) else {
+    for url in [
+        format!("http://127.0.0.1:{port}"),
+        format!("socks5h://127.0.0.1:{port}"),
+        format!("socks4a://127.0.0.1:{port}"),
+    ] {
+        let Err(f) = through(&via(&url), "box.example", 443, "k5/t", soon()) else {
+            panic!("a tunnel through a closed port: {url}");
+        };
+        assert!(matches!(f, Failure::Connect(_)), "{url}: {f:?}");
+        assert!(!f.sent());
+    }
+    let Err(f) = through(
+        &via("http://proxy.example.invalid:3128"),
+        "box.example",
+        443,
+        "k5/t",
+        soon(),
+    ) else {
         panic!("a tunnel through a proxy with no address");
     };
     assert_eq!(f.curl_code(), COULDNT_RESOLVE_PROXY, "{f:?}");
     assert!(!f.sent());
+    // A proxy that takes the SOCKS5 greeting and closes.
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let closer = std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let mut greeting = [0u8; 3];
+        s.read_exact(&mut greeting).unwrap();
+        greeting
+    });
+    let Err(f) = through(
+        &via(&format!("socks5h://127.0.0.1:{port}")),
+        "box.example",
+        443,
+        "k5/t",
+        soon(),
+    ) else {
+        panic!("a SOCKS5 handshake with an HTTP stub");
+    };
+    assert_eq!(f.curl_code(), PROXY_HANDSHAKE, "{f:?}");
+    assert!(!f.sent());
+    assert_eq!(closer.join().unwrap(), [5, 1, 0]);
+    for (url, code) in [
+        ("ftp://p.example", curl::COULDNT_CONNECT),
+        ("http://p.example:0", COULDNT_RESOLVE_PROXY),
+    ] {
+        let Err(f) = through(&via(url), "box.example", 443, "k5/t", soon()) else {
+            panic!("{url} sent");
+        };
+        assert_eq!(f.curl_code(), code, "{url}: {f:?}");
+        assert!(!f.sent());
+    }
 }
 
 #[test]
@@ -530,13 +371,9 @@ fn a_proxy_that_never_answers_is_a_connect_timeout() {
         std::thread::sleep(Duration::from_millis(800));
         drop(s);
     });
-    let p = Proxy {
-        host: "127.0.0.1".into(),
-        port,
-        auth: None,
-    };
     let limit = Instant::now() + Duration::from_millis(300);
-    let Err(f) = tunnel(&p, "box.example", 443, "k5/t", limit, plain_tcp) else {
+    let v = via(&format!("http://127.0.0.1:{port}"));
+    let Err(f) = through(&v, "box.example", 443, "k5/t", limit) else {
         panic!("a tunnel through a silent proxy");
     };
     assert!(matches!(f, Failure::ConnectTimedOut), "{f:?}");

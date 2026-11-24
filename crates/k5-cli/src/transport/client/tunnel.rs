@@ -182,9 +182,10 @@ mod tests {
         let Target::Tls { via: Some(t), .. } = target else {
             panic!("no proxy on a remote https base: {target:?}");
         };
+        let p = t.proxy.as_ref().expect("a proxy curl reads");
         assert_eq!(
-            (t.proxy.host.as_str(), t.proxy.port),
-            ("proxy.example", 3128)
+            (p.host().to_string(), p.port()),
+            ("proxy.example".to_string(), 3128)
         );
         assert_eq!(t.user_agent, r.user_agent);
         for n in PROXY_VARS {

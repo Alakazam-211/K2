@@ -198,24 +198,19 @@ fn restart_words(rest: &[&str]) -> Option<Life> {
         }
         i += 1;
     }
-    if !r.host.is_empty() && (remote_base(&r.host).is_none() || proxied(&r.host)) {
+    if !r.host.is_empty() && remote_base(&r.host).is_none() {
         return None;
     }
     Some(Life::Restart(r))
 }
 
-/// `_k2_curl` would send to `host` through the person's proxy
-/// ([`crate::families::remote::logout::proxied`]): the shell's.
-fn proxied(host: &str) -> bool {
-    crate::families::remote::logout::proxied(host)
-}
-
-/// `--host`'s server, when it is a URL the binary sends to itself.
+/// `--host`'s server, when it is a URL the binary sends to itself, with
+/// the person's proxy for it as `_k2_curl` reads it ([`remote::routed`]).
 fn remote_base(host: &str) -> Option<remote::Base> {
     if !(host.starts_with("http://") || host.starts_with("https://")) {
         return None;
     }
-    remote::base(host)
+    remote::routed(host)
 }
 
 /// `_daemon_os`.
@@ -828,11 +823,7 @@ fn restart_remote(s: &Settings, client: &mut Client, r: &Restart, mut token: Str
         // `parse` handed these to the shell.
         return Exit::Error;
     };
-    client.host = server.host.clone();
-    client.port = server.port;
-    client.tls = server.tls;
-    client.host_header = Some(server.host_header.clone());
-    client.port_file = None;
+    remote::point(client, &server);
     let path = if r.sessions {
         "/cli/daemon/restart?end_agents=1"
     } else {

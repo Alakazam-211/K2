@@ -203,11 +203,12 @@ pub enum Target {
     Unix(PathBuf),
 }
 
-/// The proxy a [`Target::Tls`] goes through, and the `User-Agent` its
-/// CONNECT head names.
+/// The proxy a [`Target::Tls`] goes through (or the setting curl
+/// refuses, which fails the connect), and the `User-Agent` its CONNECT
+/// head names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tunnel {
-    pub proxy: super::proxy::Proxy,
+    pub proxy: super::proxy::Via,
     pub user_agent: String,
 }
 
@@ -423,8 +424,8 @@ pub fn connect(target: &Target, connect: Duration, deadline: Instant) -> Result<
         Target::Tcp { host, port } => tcp(host, *port, limit).map(Conn::Tcp),
         Target::Tls { host, port, via } => {
             let s = match via {
-                None => tcp(host, *port, limit)?,
-                Some(t) => super::proxy::tunnel(&t.proxy, host, *port, &t.user_agent, limit, tcp)?,
+                None => tcp(host, *port, limit)?.into(),
+                Some(t) => super::proxy::through(&t.proxy, host, *port, &t.user_agent, limit)?,
             };
             super::tls::connect(s, host, limit).map(|t| Conn::Tls(Box::new(t)))
         }

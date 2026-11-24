@@ -3304,80 +3304,8 @@ mod tests {
                 VIA_HEADER
             ]
         );
-        // The cell socket and the vault socket: Unix only (no Unix
-        // sockets elsewhere, `uds_target`).
-        #[cfg(unix)]
-        {
-            // The cell socket: after the passport.
-            let mut pass = Client::new(
-                "127.0.0.1",
-                9,
-                "/p",
-                Auth::Passport {
-                    passport: Passport::new("s.t").unwrap(),
-                    sock: Some(PathBuf::from("/tmp/cell.sock")),
-                },
-            );
-            pass.conversation = conv.clone();
-            for kind in [Kind::Request, Kind::SendJsonPost] {
-                let (_, r) = pass
-                    .build(kind, Channel::Uds, "/cli/x", &[], b"{}")
-                    .unwrap();
-                let n = names(&r);
-                assert_eq!(
-                    &n[..5],
-                    [
-                        "Authorization",
-                        CONVERSATION_HEADER,
-                        THREAD_HEADER,
-                        VERSION_HEADER,
-                        VIA_HEADER
-                    ],
-                    "{kind:?}"
-                );
-            }
-            // The vault socket: GET first; POST (stdin) after the hand-over ones.
-            pass.vault_sock = Some((PathBuf::from("/tmp/vault.sock"), true));
-            let (_, r) = pass
-                .build(
-                    Kind::VaultSockGet,
-                    Channel::Uds,
-                    "/cli/vault/status",
-                    &[],
-                    &[],
-                )
-                .unwrap();
-            assert_eq!(
-                names(&r),
-                [
-                    CONVERSATION_HEADER,
-                    THREAD_HEADER,
-                    VERSION_HEADER,
-                    VIA_HEADER,
-                    TTY_HEADER
-                ]
-            );
-            let (_, r) = pass
-                .build(
-                    Kind::VaultSockPost,
-                    Channel::Uds,
-                    "/cli/vault/reveal",
-                    &[],
-                    b"{}",
-                )
-                .unwrap();
-            assert_eq!(
-                names(&r),
-                [
-                    VERSION_HEADER,
-                    VIA_HEADER,
-                    CONVERSATION_HEADER,
-                    THREAD_HEADER,
-                    TTY_HEADER,
-                    "Content-Type"
-                ]
-            );
-        }
+        // The cell socket and the vault socket: socket.rs's
+        // codex_headers_on_the_cell_and_vault_sockets (Unix only).
         // The Connect control plane is not the daemon: none.
         let (_, r) = owner
             .build(

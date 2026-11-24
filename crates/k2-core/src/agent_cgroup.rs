@@ -532,7 +532,10 @@ pub fn wrap(
         let ws = iso.workspace.as_deref().ok_or("the folder fence needs the agent's workspace folder")?;
         let home = crate::paths::home_dir().ok_or("no home folder")?;
         let k2_home = crate::paths::k2_home();
+        // Resolved once: the fence view, TMPDIR and the socket block's rule
+        // all name the same folder.
         let tmp = tmp_dir(&iso.ws)?;
+        let tmp = std::fs::canonicalize(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let env: std::collections::BTreeMap<String, String> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let view = default_view(&ViewInputs { home: &home, k2_home: &k2_home, workspace: ws, tmp_dir: &tmp, env: &env, own_secrets: iso.secrets_dir.as_deref() })?;
         spec.fence = Some(view);

@@ -1380,6 +1380,33 @@ try:
     s.connect(("127.0.0.1", port)); row("tcp", "ok")
 except OSError as e:
     row("tcp", f"err {e.errno}")
+# K1: only stream and seq-packet Unix sockets; raw is a datagram socket to the kernel.
+for name, ty in [("unix_raw", socket.SOCK_RAW), ("unix_stream", socket.SOCK_STREAM), ("unix_seqpacket", socket.SOCK_SEQPACKET)]:
+    try:
+        x = socket.socket(socket.AF_UNIX, ty); row(name, "ok")
+        if ty == socket.SOCK_RAW:
+            try:
+                x.sendto(b"<14>k2iso: a sockblock row", "/dev/log"); row("raw_sendto_devlog", "ok")
+            except OSError as e:
+                row("raw_sendto_devlog", f"err {e.errno}")
+        x.close()
+    except OSError as e:
+        row(name, f"err {e.errno}")
+# K4: a handled Ctrl-C during a blocking connect to an address that doesn't answer.
+import signal, struct, subprocess, time
+hits = []
+signal.signal(signal.SIGINT, lambda *a: hits.append(time.monotonic()))
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, struct.pack("ll", 4, 0))
+subprocess.Popen(["sh", "-c", f"sleep 1; kill -INT {os.getpid()}"])
+t0 = time.monotonic()
+try:
+    s.connect(("10.255.255.1", 9)); res = "ok"
+except OSError as e:
+    res = f"err {e.errno}"
+t1 = time.monotonic()
+time.sleep(0.3)
+row("k4_sigint", (f"handler_after={hits[0] - t0:.2f}s" if hits else "handler_never") + f" connect_returned_after={t1 - t0:.2f}s connect={res}")
 "#;
 
 /// The shell side of the block's rows in a fenced session (rows 4, P2, P7
@@ -1499,6 +1526,9 @@ fn sockblock_enforced_rows_4_p2_p7_and_section_7() {
     assert_eq!(r["dgram"], "err 1", "Unix datagram sockets can't be made (row 5)");
     assert_eq!(r["uring"], "err 38", "io_uring_setup: ENOSYS (row 2)");
     assert_eq!(r["s2_listener"], "err 1", "its own notification listener: refused (row 1)");
+    assert_eq!(r["unix_raw"], "err 1", "a raw Unix socket (a datagram one to the kernel) can't be made (K1)");
+    assert_eq!((r["unix_stream"].as_str(), r["unix_seqpacket"].as_str()), ("ok", "ok"), "stream and seq-packet Unix sockets can");
+    println!("row K4 (a handled Ctrl-C at 1 s during a blocking connect bounded at 4 s; under the block it waits for the connect): {}", r["k4_sigint"]);
     for row in ["ptrace_supervisor", "vm_read_supervisor", "environ_supervisor", "mem_supervisor", "fds_supervisor"] {
         assert!(r[row].starts_with("err "), "{row}: the supervisor is non-dumpable (row 8): {}", r[row]);
     }
@@ -1567,6 +1597,11 @@ fn sockblock_record_logs_and_off_is_the_bite() {
     assert_eq!(rc_of(&r["user_bus"]), "0", "the bite: the user bus is reachable without the block");
     assert_eq!(r["s2_listener"], "ok", "the bite: its own listener goes in without the block");
     assert_eq!(r["dgram"], "ok");
+    assert_eq!(r["unix_raw"], "ok", "the bite (K1): a raw Unix socket can be made without the block");
+    if Path::new("/dev/log").exists() {
+        assert_eq!(r["raw_sendto_devlog"], "ok", "the bite (K1): and it sends to the log socket");
+    }
+    println!("row K4 without the block: {}", r["k4_sigint"]);
 }
 
 /// Inventory, record only (review section 5): what common tools try to

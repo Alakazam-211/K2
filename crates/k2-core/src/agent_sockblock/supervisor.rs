@@ -15,9 +15,9 @@
 //! (`pidfd_getfd`), its family from the socket (`SO_DOMAIN`), its address
 //! copied out once (clamped to `sockaddr_storage`), the notification
 //! re-checked, the rule applied, and `connect()` done here on that copy;
-//! the result goes back (`EINPROGRESS` included). A blocking non-Unix
-//! connect is done by its receiver while another receiver stays free, past
-//! that by a small capped pool of threads. Every error refuses
+//! the result goes back (`EINPROGRESS` included). A blocking connect is
+//! done by its receiver while another receiver stays free, past that by a
+//! small capped pool of threads (queued past its cap). Every error refuses
 //! (record mode: lets the call run). A panic aborts: the session ends.
 
 use std::collections::{HashSet, VecDeque};
@@ -34,8 +34,8 @@ use super::{parse_unix, plain_absolute, shown, BlockSpec, Mode, Record, UnixName
 
 /// Threads receiving notifications (several may receive from one listener).
 pub const RECEIVERS: usize = 4;
-/// Blocking non-Unix connects in flight at once beyond the receivers' own;
-/// past it a connect is refused (`EAGAIN`).
+/// Pool threads for blocking connects beyond the receivers' own; past it a
+/// connect waits in the pool's queue.
 pub const POOL_CAP: usize = 32;
 /// After a hang-up the program gets this long to exit before it is killed.
 pub const HUP_GRACE: Duration = Duration::from_secs(5);
@@ -273,33 +273,29 @@ impl Pool {
         Pool(Arc::new(PoolInner { st: Mutex::new(PoolState { q: VecDeque::new(), idle: 0, total: 0 }), cv: Condvar::new(), cap }))
     }
 
-    /// Run `job` on a pool thread; `Err(job)` when the pool is full.
+    /// Run `job` on a pool thread. Past the cap it waits in the queue for
+    /// the next free thread (its caller is in a blocking call anyway; code
+    /// review K3); `Err(job)` only when no thread can be started at all.
     pub fn submit(&self, job: Job) -> Result<(), Job> {
         let mut s = self.0.st.lock().unwrap_or_else(|e| e.into_inner());
-        if s.idle > s.q.len() {
-            s.q.push_back(job);
+        s.q.push_back(job);
+        if s.idle >= s.q.len() {
             drop(s);
             self.0.cv.notify_one();
             return Ok(());
         }
         if s.total >= self.0.cap {
-            return Err(job);
+            return Ok(());
         }
         s.total += 1;
-        drop(s);
-        let first = Arc::new(Mutex::new(Some(job)));
-        let (inner, slot) = (Arc::clone(&self.0), Arc::clone(&first));
-        let spawned = std::thread::Builder::new().name("k2-sockblock".into()).stack_size(256 << 10).spawn(move || {
-            let job = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
-            if let Some(j) = job {
-                j();
+        let inner = Arc::clone(&self.0);
+        // Started with the lock held: the thread takes the queue's front once
+        // this returns.
+        if std::thread::Builder::new().name("k2-sockblock".into()).stack_size(256 << 10).spawn(move || worker(inner)).is_err() {
+            s.total -= 1;
+            if s.total == 0 {
+                return s.q.pop_back().map_or(Ok(()), Err);
             }
-            worker(inner)
-        });
-        if spawned.is_err() {
-            self.0.st.lock().unwrap_or_else(|e| e.into_inner()).total -= 1;
-            let job = first.lock().unwrap_or_else(|e| e.into_inner()).take();
-            return job.map_or(Ok(()), Err);
         }
         Ok(())
     }
@@ -391,7 +387,8 @@ impl Sup {
     fn handle(self: &Arc<Self>, n: Notif) {
         let nrs = self.arch.nrs();
         if self.arch.foreign(&n.data) {
-            // Once per process: a 32-bit program notifies on every call.
+            // Only if the filter ever sends one (it refuses them in enforce
+            // and lets them run in record): once per process.
             let first = {
                 let mut s = self.foreign_seen.lock().unwrap_or_else(|e| e.into_inner());
                 s.len() < 4096 && s.insert(n.pid)
@@ -408,7 +405,7 @@ impl Sup {
         } else if nr == nrs.seccomp {
             ("seccomp", "a seccomp notification listener of its own", EPERM)
         } else if nr == nrs.socket || nr == nrs.socketpair {
-            (if nr == nrs.socket { "socket" } else { "socketpair" }, "a Unix datagram socket", EPERM)
+            (if nr == nrs.socket { "socket" } else { "socketpair" }, "a Unix socket other than stream or seq-packet (datagram or raw)", EPERM)
         } else {
             ("other", "a call the filter doesn't name", ENOSYS)
         };
@@ -448,7 +445,7 @@ impl Sup {
             if self.mode == Mode::Record {
                 self.rec(n.pid, "connect", &family, None, "allow", "allowed", "not a Unix socket");
             }
-            return self.connect_other(n, sfd, bytes, family);
+            return self.connect_as_asked(n, sfd, bytes, None, &family);
         }
         let name = parse_unix(&bytes);
         match &name {
@@ -459,8 +456,8 @@ impl Sup {
                     if self.mode == Mode::Record {
                         self.rec(n.pid, "connect", "unix", shown(&name), "allow", "allowed", why);
                     }
-                    let e = sys::connect_bytes(sfd.as_raw_fd(), &via_fd(&target));
-                    self.reply(id, e);
+                    let addr = via_fd(&target);
+                    self.connect_as_asked(n, sfd, addr, Some(target), "unix");
                 }
                 Check::Refused(why) => self.refuse(&n, "connect", "unix", shown(&name), &why, libc::ECONNREFUSED, true),
             },
@@ -496,15 +493,18 @@ impl Sup {
         sys::pidfd_getfd(&pidfd, fd)
     }
 
-    fn connect_other(self: &Arc<Self>, n: Notif, sfd: OwnedFd, bytes: Vec<u8>, family: String) {
+    /// Connect the caller's socket to `addr` (a copy). Non-blocking: here,
+    /// at once. Blocking (any family, a full Unix queue included; code
+    /// review K3): this receiver connects while another stays free to
+    /// receive, past that a pool thread does (queued past its cap). `keep`
+    /// is held until the connect is done (the handle `addr` names).
+    fn connect_as_asked(self: &Arc<Self>, n: Notif, sfd: OwnedFd, addr: Vec<u8>, keep: Option<OwnedFd>, family: &str) {
         if !sys::is_blocking(sfd.as_raw_fd()) {
-            return self.reply(n.id, sys::connect_bytes(sfd.as_raw_fd(), &bytes));
+            return self.reply(n.id, sys::connect_bytes(sfd.as_raw_fd(), &addr));
         }
-        // A receiver connects itself while one other stays free to receive;
-        // past that the pool takes it.
         use std::sync::atomic::Ordering::SeqCst;
         if self.blocking_inline.fetch_add(1, SeqCst) < RECEIVERS - 1 {
-            let e = sys::connect_bytes(sfd.as_raw_fd(), &bytes);
+            let e = sys::connect_bytes(sfd.as_raw_fd(), &addr);
             self.blocking_inline.fetch_sub(1, SeqCst);
             return self.reply(n.id, e);
         }
@@ -512,12 +512,12 @@ impl Sup {
         let me = Arc::clone(self);
         let id = n.id;
         let job: Job = Box::new(move || {
-            let e = sys::connect_bytes(sfd.as_raw_fd(), &bytes);
+            let e = sys::connect_bytes(sfd.as_raw_fd(), &addr);
+            drop(keep);
             me.reply(id, e);
         });
         if self.pool.submit(job).is_err() {
-            let why = format!("{POOL_CAP} blocking connects already in flight");
-            self.refuse(&n, "connect", &family, None, &why, libc::EAGAIN, true);
+            self.refuse(&n, "connect", family, None, "no thread could be started for a blocking connect", libc::EAGAIN, true);
         }
     }
 }
@@ -633,6 +633,7 @@ pub fn run(prep: Prepared, cmd: std::process::Command) -> i32 {
         "t": now(), "event": "start", "mode": prep.mode.as_str(), "pid": child,
         "hook": prep.rules.hook.as_ref().map(|h| String::from_utf8_lossy(&h.path).into_owned()),
         "tmp": prep.rules.tmp.as_ref().map(|t| String::from_utf8_lossy(&t.prefix).into_owned()),
+        "notCovered": "32-bit and x32 programs: their calls run without the block in record mode (enforce refuses them)",
     });
     if prep.mode == Mode::Record {
         prep.log.line(&start);

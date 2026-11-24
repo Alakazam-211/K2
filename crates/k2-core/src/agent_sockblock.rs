@@ -133,8 +133,11 @@ pub fn spec_for(ws_dir: &Path, tmp_dir: &Path, hook_sock: Option<&str>) -> Optio
     })
 }
 
-/// Whether this kernel has what the block needs (seccomp user
-/// notification with the wait-killable flag: 5.19+), or why not.
+/// Whether this box has what the block needs (seccomp user notification
+/// with the wait-killable flag: 5.19+; Yama's ptrace scope 0 or 1, so the
+/// supervisor can take a session's sockets), or why not. Not met: record
+/// mode runs fenced sessions without the block, enforce refuses to start
+/// them; /boot-status says which.
 pub fn support() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -149,12 +152,28 @@ pub fn support() -> Result<(), String> {
         if !sys::action_avail(filter::RET_USER_NOTIF) {
             return Err("this kernel has no seccomp user notification".into());
         }
+        if let Some(why) = yama_refusal(yama_scope()) {
+            return Err(why);
+        }
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]
     {
         Err("the Unix-socket block is Linux only".into())
     }
+}
+
+/// `kernel.yama.ptrace_scope`, when Yama is there.
+pub fn yama_scope() -> Option<u32> {
+    std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope").ok()?.trim().parse().ok()
+}
+
+/// Why a Yama scope stops the block (2: only an admin may trace; 3: no
+/// one), else `None` (0, 1, or no Yama).
+pub fn yama_refusal(scope: Option<u32>) -> Option<String> {
+    scope.filter(|s| *s >= 2).map(|s| {
+        format!("kernel.yama.ptrace_scope is {s}: the block's supervisor can't take a session's sockets (it needs 0 or 1)")
+    })
 }
 
 /// `(major, minor)` from a kernel release string (`6.8.0-149-generic`).
@@ -166,12 +185,27 @@ pub fn kernel_version(rel: &str) -> Option<(u32, u32)> {
 /// For `/boot-status` `agentIsolation.sockblock`.
 pub fn status_json() -> serde_json::Value {
     let raw = std::env::var(ENV_SWITCH).ok();
-    let m = mode_from(raw.as_deref());
+    status_for(mode_from(raw.as_deref()), raw.as_deref(), support(), yama_scope())
+}
+
+/// [`status_json`] from its inputs (tests).
+pub fn status_for(m: Option<Mode>, raw: Option<&str>, sup: Result<(), String>, yama: Option<u32>) -> serde_json::Value {
+    let running = m.is_some() && sup.is_ok();
+    let state = match (m, &sup) {
+        (None, _) => "off".to_string(),
+        (Some(Mode::Record), Ok(())) => "record: every Unix-socket decision is logged to ~/.k2/agents/<workspace>/sockblock.log; nothing is refused yet".to_string(),
+        (Some(Mode::Enforce), Ok(())) => "enforce: fenced sessions reach only their own hook socket and sockets in their temp folder".to_string(),
+        (Some(Mode::Record), Err(e)) => format!("not running on this box ({e}): fenced sessions run without it"),
+        (Some(Mode::Enforce), Err(e)) => format!("not running on this box ({e}): fenced sessions don't start (enforce)"),
+    };
     serde_json::json!({
         "mode": m.map(Mode::as_str).unwrap_or("off"),
+        "running": running,
+        "state": state,
         "appliesTo": "fenced sessions, their job runs and published services",
-        "switch": format!("{ENV_SWITCH}={}", raw.as_deref().filter(|v| !v.is_empty()).unwrap_or("unset (record)")),
-        "kernel": match support() { Ok(()) => serde_json::Value::from("ok"), Err(e) => serde_json::Value::from(e) },
+        "switch": format!("{ENV_SWITCH}={}", raw.filter(|v| !v.is_empty()).unwrap_or("unset (record)")),
+        "kernel": match sup { Ok(()) => serde_json::Value::from("ok"), Err(e) => serde_json::Value::from(e) },
+        "yamaPtraceScope": yama,
     })
 }
 

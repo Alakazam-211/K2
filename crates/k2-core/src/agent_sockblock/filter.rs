@@ -3,13 +3,18 @@
 //! 1. not the native architecture (or an x32 number on x86-64): refused;
 //! 2. `io_uring_setup`: `ENOSYS`;
 //! 3. `seccomp()` with the new-listener flag: refused (`EPERM`);
-//! 4. `socket()` / `socketpair()` with `AF_UNIX` and the datagram type
-//!    (type flags masked off): refused (`EPERM`);
+//! 4. `socket()` / `socketpair()` with `AF_UNIX` and any type but stream
+//!    or seq-packet (type flags masked off): refused (`EPERM`). Datagram,
+//!    and raw too: the kernel makes a raw Unix socket a datagram one
+//!    (code review K1);
 //! 5. `connect()`: user notification (the supervisor decides);
 //! 6. everything else: allowed.
 //!
-//! In record mode rules 1–4 notify instead of refusing: the supervisor logs
-//! what enforce would refuse and lets the call run.
+//! In record mode rules 2–4 notify instead of refusing: the supervisor logs
+//! what enforce would refuse and lets the call run. Rule 1's calls run
+//! without the block in record mode (a 32-bit program would otherwise
+//! notify on every call; code review K2): the supervisor says once, at
+//! start, that they aren't covered.
 //!
 //! [`run`] is a small interpreter for the instructions this module emits,
 //! so the tests check decisions, not only the instruction list.
@@ -64,6 +69,8 @@ pub const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 
 pub const AF_UNIX: u32 = 1;
 pub const SOCK_DGRAM: u32 = 2;
+pub const SOCK_STREAM: u32 = 1;
+pub const SOCK_SEQPACKET: u32 = 5;
 /// `SOCK_TYPE_MASK`: the type without `SOCK_NONBLOCK` / `SOCK_CLOEXEC`.
 pub const SOCK_TYPE_MASK: u32 = 0xf;
 
@@ -181,6 +188,10 @@ pub fn program(arch: Arch, mode: Mode) -> Vec<SockFilter> {
         Mode::Enforce => RET_ERRNO | (errno & RET_DATA),
         Mode::Record => RET_USER_NOTIF,
     };
+    let foreign = match mode {
+        Mode::Enforce => RET_ERRNO | ENOSYS,
+        Mode::Record => RET_ALLOW,
+    };
     let mut p = vec![
         Ins::Ld(OFF_ARCH),
         Ins::J(JMP_JEQ_K, arch.audit(), To::Next, To::L("foreign")),
@@ -201,7 +212,8 @@ pub fn program(arch: Arch, mode: Mode) -> Vec<SockFilter> {
         Ins::J(JMP_JEQ_K, AF_UNIX, To::Next, To::L("allow")),
         Ins::Ld(arg_lo(1)),
         Ins::And(SOCK_TYPE_MASK),
-        Ins::J(JMP_JEQ_K, SOCK_DGRAM, To::L("dgram"), To::L("allow")),
+        Ins::J(JMP_JEQ_K, SOCK_STREAM, To::L("allow"), To::Next),
+        Ins::J(JMP_JEQ_K, SOCK_SEQPACKET, To::L("allow"), To::L("unixtype")),
         Ins::Mark("seccomp"),
         Ins::Ld(arg_lo(1)),
         Ins::J(JMP_JSET_K, FILTER_FLAG_NEW_LISTENER, To::L("listener"), To::L("allow")),
@@ -211,12 +223,12 @@ pub fn program(arch: Arch, mode: Mode) -> Vec<SockFilter> {
         Ins::Ret(RET_USER_NOTIF),
         Ins::Mark("uring"),
         Ins::Ret(refuse(ENOSYS)),
-        Ins::Mark("dgram"),
+        Ins::Mark("unixtype"),
         Ins::Ret(refuse(EPERM)),
         Ins::Mark("listener"),
         Ins::Ret(refuse(EPERM)),
         Ins::Mark("foreign"),
-        Ins::Ret(refuse(ENOSYS)),
+        Ins::Ret(foreign),
     ]);
     assemble(&p)
 }

@@ -128,6 +128,9 @@ if mode == "status":
         print("  box: %s" % v["boxKind"])
     if v.get("openAgents"):
         print("  %s" % v["openAgents"])
+    sb = v.get("sockblock")
+    if isinstance(sb, dict) and sb.get("state"):
+        print("  Unix-socket block: %s" % sb["state"])
     for o in v.get("oldLayout") or []:
         print("  old layout: %s (%s)" % (o.get("agent"), o.get("why")))
 elif mode == "on":

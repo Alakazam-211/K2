@@ -540,6 +540,9 @@ fn status(host: &dyn Host, who: &Who) -> CliResponse {
             // The A2 ruling: which kind of box, and what isn't held.
             "boxKind": crate::agent_isolation_delegation::box_kind(layout.as_ref()),
             "openAgents": crate::agent_isolation_delegation::open_agents(layout.as_ref()),
+            // The Unix-socket block: its mode, and whether this box runs it
+            // (below 5.19 or Yama scope 2-3 it doesn't; review rulings 2, 7).
+            "sockblock": k2_core::agent_sockblock::status_json(),
             "layout": layout,
             "layoutError": layout_error,
         }),

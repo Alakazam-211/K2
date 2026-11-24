@@ -39,6 +39,11 @@ fn the_filter_decides_each_call_as_the_review_lists() {
             assert_eq!(s(1, 2), (EPERM_RET, RET_USER_NOTIF), "{arch:?} {nr} unix dgram");
             assert_eq!(s(1, 2 | 0o4000 | 0o2000000), (EPERM_RET, RET_USER_NOTIF), "{arch:?} {nr} unix dgram, nonblock+cloexec");
             assert_eq!(s(1, 1), (RET_ALLOW, RET_ALLOW), "{arch:?} {nr} unix stream");
+            // K1: every other Unix type (raw is datagram to the kernel).
+            for ty in [0u64, 3, 4, 6, 7, 10, 15, 3 | 0o2000000] {
+                assert_eq!(s(1, ty), (EPERM_RET, RET_USER_NOTIF), "{arch:?} {nr} unix type {ty}");
+            }
+            assert_eq!(s(1, 5 | 0o4000 | 0o2000000), (RET_ALLOW, RET_ALLOW), "{arch:?} {nr} unix seqpacket, flags");
             assert_eq!(s(1, 5), (RET_ALLOW, RET_ALLOW), "{arch:?} {nr} unix seqpacket");
             assert_eq!(s(1, 1 | 0o4000), (RET_ALLOW, RET_ALLOW), "{arch:?} {nr} unix stream nonblock");
             assert_eq!(s(2, 2), (RET_ALLOW, RET_ALLOW), "{arch:?} {nr} inet dgram");
@@ -60,15 +65,18 @@ fn the_filter_decides_each_call_as_the_review_lists() {
             }
             let mut d = call(arch, n.connect, [0; 6]);
             d.arch = other;
-            assert_eq!(both(&d), (ENOSYS_RET, RET_USER_NOTIF), "{arch:?} from arch {other:#x}");
+            // K2: record lets them run from the filter (no notification per call).
+            assert_eq!(both(&d), (ENOSYS_RET, RET_ALLOW), "{arch:?} from arch {other:#x}");
             d.nr = 1;
-            assert_eq!(both(&d), (ENOSYS_RET, RET_USER_NOTIF), "{arch:?} write from arch {other:#x}");
+            assert_eq!(both(&d), (ENOSYS_RET, RET_ALLOW), "{arch:?} write from arch {other:#x}");
         }
     }
     // x32 numbers on x86-64, including a connect through them.
     let e = filter::program(Arch::X86_64, Mode::Enforce);
+    let r = filter::program(Arch::X86_64, Mode::Record);
     for nr in [0x4000_0000u32 | 42, 0x4000_0000 | 41, 0x4000_0000, 0xffff_ffff] {
         assert_eq!(filter::run(&e, &call(Arch::X86_64, nr, [0; 6])), ENOSYS_RET, "x32 {nr:#x}");
+        assert_eq!(filter::run(&r, &call(Arch::X86_64, nr, [0; 6])), RET_ALLOW, "x32 {nr:#x} in record");
     }
     assert!(Arch::X86_64.foreign(&call(Arch::X86_64, 0x4000_002a, [0; 6])));
     assert!(!Arch::X86_64.foreign(&call(Arch::X86_64, 42, [0; 6])));
@@ -114,6 +122,7 @@ fn the_kernel_numbers_and_layouts_match() {
     assert_eq!(sys::IOCTL_NOTIF_ID_VALID, 0x4008_2102);
     assert_eq!(filter::AF_UNIX as i32, libc::AF_UNIX);
     assert_eq!(filter::SOCK_DGRAM as i32, libc::SOCK_DGRAM);
+    assert_eq!((filter::SOCK_STREAM as i32, filter::SOCK_SEQPACKET as i32), (libc::SOCK_STREAM, libc::SOCK_SEQPACKET));
 }
 
 fn sun(path: &[u8]) -> Vec<u8> {
@@ -359,4 +368,65 @@ mod paths {
         assert_eq!(got("missing", beneath), Err(libc::ENOENT));
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+/// Rulings 2 and 7: a box without what the block needs says so in
+/// /boot-status; Yama scope 2 or 3 stops the block, 0 and 1 don't.
+#[test]
+fn the_status_says_when_the_block_is_not_running() {
+    assert_eq!(yama_refusal(None), None);
+    assert_eq!(yama_refusal(Some(0)), None);
+    assert_eq!(yama_refusal(Some(1)), None);
+    for s in [2, 3] {
+        assert!(yama_refusal(Some(s)).unwrap().contains(&format!("ptrace_scope is {s}")));
+    }
+    let on = status_for(Some(Mode::Record), None, Ok(()), Some(1));
+    assert_eq!((on["running"].as_bool(), on["mode"].as_str(), on["kernel"].as_str()), (Some(true), Some("record"), Some("ok")), "{on}");
+    assert!(on["state"].as_str().unwrap().contains("nothing is refused yet"), "{on}");
+    let why = yama_refusal(Some(2)).unwrap();
+    let rec = status_for(Some(Mode::Record), None, Err(why.clone()), Some(2));
+    assert_eq!(rec["running"].as_bool(), Some(false));
+    assert!(rec["state"].as_str().unwrap().starts_with("not running on this box") && rec["state"].as_str().unwrap().contains("run without it"), "{rec}");
+    assert_eq!(rec["yamaPtraceScope"].as_u64(), Some(2));
+    let enf = status_for(Some(Mode::Enforce), Some("enforce"), Err("kernel 5.15: the Unix-socket block needs 5.19 or later".into()), None);
+    assert!(enf["state"].as_str().unwrap().contains("don't start"), "{enf}");
+    assert_eq!(enf["switch"], "K2_AGENT_SOCKBLOCK=enforce");
+    let off = status_for(None, Some("off"), Ok(()), None);
+    assert_eq!((off["running"].as_bool(), off["state"].as_str()), (Some(false), Some("off")));
+}
+
+/// K3: past its cap the pool queues (a blocking connect waits), it never
+/// turns a job away while a thread exists, and every job runs.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_pool_queues_past_its_cap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    let pool = super::supervisor::Pool::new(2);
+    let gate = Arc::new(Barrier::new(3));
+    let (busy, done) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let peak = Arc::new(AtomicUsize::new(0));
+    for i in 0..10 {
+        let (gate, busy, done, peak) = (gate.clone(), busy.clone(), done.clone(), peak.clone());
+        let job: Box<dyn FnOnce() + Send> = Box::new(move || {
+            let now = busy.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            if i < 2 {
+                // The first two hold both threads until the test lets go.
+                gate.wait();
+            }
+            busy.fetch_sub(1, Ordering::SeqCst);
+            done.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(pool.submit(job).is_ok(), "job {i} was turned away");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(done.load(Ordering::SeqCst), 0, "the queued jobs wait while both threads are held");
+    gate.wait();
+    let t = std::time::Instant::now();
+    while done.load(Ordering::SeqCst) < 10 {
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "only {} of 10 ran", done.load(Ordering::SeqCst));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(peak.load(Ordering::SeqCst) <= 2, "never more than the cap at once: {}", peak.load(Ordering::SeqCst));
 }

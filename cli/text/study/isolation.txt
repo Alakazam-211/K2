@@ -68,6 +68,12 @@ THE FOLDER FENCE (per agent, off by default, the owner's switch; experimental)
   that can't be fenced doesn't start (it says why); never silently
   unfenced. An agent can't turn its own fence off.
 
+  A fenced session's first program runs under a supervisor that, for now,
+  only records each Unix-socket connect (in ~/.k2/agents/<workspace>/
+  sockblock.log, which the owner reads; nothing is refused yet). Anything
+  the session leaves running in the background ends when its first program
+  ends.
+
   Not yet a boundary: Unix sockets (systemd's buses, your tmux or screen,
   an ssh-agent, a container socket) and, on kernels before 6.12, signals
   to other processes aren't blocked. Through those sockets a fenced agent

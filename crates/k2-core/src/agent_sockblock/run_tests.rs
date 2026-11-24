@@ -184,6 +184,8 @@ fn a_session_under_the_block_enforced() {
     assert_eq!(get("dgram"), "err 1", "Unix datagram sockets can't be made (row 5)");
     assert_eq!(get("dgram_pair"), "err 1", "nor a datagram socketpair");
     assert_eq!(get("stream_pair"), "ok", "a stream socketpair is fine");
+    assert_eq!(get("raw"), "err 1", "a raw Unix socket (a datagram one to the kernel) can't be made (K1)");
+    assert_eq!(get("seqpacket"), "ok", "a seq-packet Unix socket is fine");
     assert_eq!(get("uring"), "err 38", "io_uring_setup: ENOSYS (row 2)");
     assert_eq!(get("listener"), "err 1", "its own notification listener: refused (row 1)");
     assert_eq!(get("plain_filter"), "ok", "a filter without a listener is still allowed");
@@ -217,6 +219,7 @@ fn a_session_under_the_block_recorded() {
     assert_eq!(get("link"), "ok other");
     assert_eq!(get("abstract"), "ok abs");
     assert_eq!(get("dgram"), "ok");
+    assert_eq!(get("raw"), "ok", "record lets a raw Unix socket be made (and logs it)");
     // Record lets the call run; the kernel itself refuses a second listener
     // in a filter chain that has one (EBUSY).
     assert_eq!(get("listener"), "err 16", "a listener of its own under ours: the kernel refuses it");
@@ -385,6 +388,10 @@ fn role_client() {
         out("dgram_pair", if r == 0 { "ok".to_string() } else { format!("err {}", errno()) });
         let r = libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sv.as_mut_ptr());
         out("stream_pair", if r == 0 { "ok".to_string() } else { format!("err {}", errno()) });
+        let s = libc::socket(libc::AF_UNIX, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 0);
+        out("raw", if s >= 0 { libc::close(s); "ok".to_string() } else { format!("err {}", errno()) });
+        let s = libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0);
+        out("seqpacket", if s >= 0 { libc::close(s); "ok".to_string() } else { format!("err {}", errno()) });
         let mut params = [0u8; 120];
         let r = libc::syscall(libc::SYS_io_uring_setup, 1u32, params.as_mut_ptr());
         out("uring", if r >= 0 { libc::close(r as i32); "ok".to_string() } else { format!("err {}", errno()) });
@@ -573,8 +580,11 @@ fn role_bench() {
 
 /// Section 4's rows: 10k local TCP connects and 10k hook-socket connects,
 /// one connector and 8 in parallel, with and without the block (enforce);
-/// a tight write loop. Prints the median and p99 added; the bar is 50 µs
-/// at the median and no stall over 1 ms at p99.
+/// a tight write loop. Prints the median and p99 added, and each side's
+/// worst connect; the bar is 50 µs at the median and no stall over 1 ms at
+/// p99. `K2_SB_BENCH=off` runs only the side without the block (to see
+/// whether a stall is the test's own: a full listen queue costs a TCP retry
+/// of about a second).
 #[test]
 #[ignore = "the cost bench: cargo nextest run -p k2-core --run-ignored only -E 'test(cost_bench)' --no-capture"]
 fn cost_bench() {
@@ -582,15 +592,25 @@ fn cost_bench() {
     let w = world("b");
     // The hook stand-in answers nothing here: connects only.
     let (s0, base, t0) = run(&w, None, "agent_sockblock::run_tests::role_bench");
+    assert_eq!(s0, 0, "the bench without the block failed:\n{t0}");
+    if std::env::var("K2_SB_BENCH").as_deref() == Ok("off") {
+        println!("{:<12} {:>12} {:>12} {:>12}", "row", "median off", "p99 off", "max off");
+        for row in ["tcp1", "tcp8", "hook1", "hook8", "write_loop"] {
+            let a: Vec<i64> = base[row].split_whitespace().map(|x| x.parse().unwrap()).collect();
+            println!("{row:<12} {:>10}ns {:>10}ns {:>10}ns", a[0], a[1], a[2]);
+        }
+        let _ = std::fs::remove_dir_all(&w.root);
+        return;
+    }
     let (s1, with, t1) = run(&w, Some(Mode::Enforce), "agent_sockblock::run_tests::role_bench");
-    assert!(s0 == 0 && s1 == 0, "bench runs failed:\n{t0}\n{t1}");
-    println!("{:<12} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12}", "row", "median off", "median on", "added", "p99 off", "p99 on", "max on");
+    assert_eq!(s1, 0, "the bench with the block failed:\n{t1}");
+    println!("{:<12} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12}", "row", "median off", "median on", "added", "p99 off", "p99 on", "max off", "max on");
     for row in ["tcp1", "tcp8", "hook1", "hook8", "write_loop"] {
         let n = |m: &HashMap<String, String>| -> Vec<i64> { m[row].split_whitespace().map(|x| x.parse().unwrap()).collect() };
         let (a, b) = (n(&base), n(&with));
         let added = b[0] - a[0];
         let bar = if row == "write_loop" { String::new() } else { format!("  bar: added {} 50µs, p99 {} 1ms", if added <= 50_000 { "<=" } else { "OVER" }, if b[1] <= 1_000_000 { "<=" } else { "OVER" }) };
-        println!("{row:<12} {:>10}ns {:>10}ns {:>10}ns {:>10}ns {:>10}ns {:>10}ns{bar}", a[0], b[0], added, a[1], b[1], b[2]);
+        println!("{row:<12} {:>10}ns {:>10}ns {:>10}ns {:>10}ns {:>10}ns {:>10}ns {:>10}ns{bar}", a[0], b[0], added, a[1], b[1], a[2], b[2]);
     }
     let _ = std::fs::remove_dir_all(&w.root);
 }

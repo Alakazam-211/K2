@@ -1904,15 +1904,16 @@ pub fn refresh_shipped_static_packs(project_path: &str) -> bool {
         let abs = abs_layer_path(project_path, &layer.path);
         let why = match fs::read(&abs) {
             Ok(bytes) if bytes == body.as_bytes() => continue,
-            Ok(bytes) if past.contains(&sha256_hex(&bytes).as_str()) => "an earlier K2 text",
+            Ok(bytes) if past.contains(&sha256_hex(&bytes).as_str()) => concat!("an earlier ", product_name!(), " text"),
             Ok(_) => {
                 let key = format!("{project_path}\n{}", layer.path);
                 let mut logged = EDITED_PACK_LOGGED.lock().unwrap_or_else(|e| e.into_inner());
                 if !logged.contains(&key) {
                     logged.push(key);
                     crate::log_debug!(
-                        "[context] {project_path}: {} was edited, so K2 kept it and did not write its newer text",
-                        layer.path
+                        "[context] {project_path}: {} was edited, so {} kept it and did not write its newer text",
+                        layer.path,
+                        crate::brand::PRODUCT_NAME
                     );
                 }
                 continue;
@@ -1930,8 +1931,9 @@ pub fn refresh_shipped_static_packs(project_path: &str) -> bool {
             Ok(()) => {
                 wrote = true;
                 crate::log_debug!(
-                    "[context] {project_path}: {} was {why}; wrote K2's current text",
-                    layer.path
+                    "[context] {project_path}: {} was {why}; wrote {}'s current text",
+                    layer.path,
+                    crate::brand::PRODUCT_NAME
                 );
             }
             Err(e) => {

@@ -1854,7 +1854,10 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
         for (tag, value) in [("nb-text", "\"false\""), ("nb-int", "0")] {
             refused(
                 tag,
-                &good_with("name = \"ab\"\n", &format!("name = \"ab\"\nno_bash = {value}\n")),
+                &good_with(
+                    "name = \"ab\"\n",
+                    &format!("name = \"ab\"\nno_bash = {value}\n"),
+                ),
                 "cli.no_bash must be true or false",
             );
         }

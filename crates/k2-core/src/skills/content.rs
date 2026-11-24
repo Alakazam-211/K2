@@ -27,7 +27,7 @@ use std::path::PathBuf;
 
 use crate::skills::version::ensure_skill_up_to_date;
 use crate::workspace::agent_identity::{
-    agent_dir, agents_dir, parse_frontmatter, workspace_agent_path,
+    agent_dir, agents_dir, parse_frontmatter, persona_md_in, workspace_agent_path,
 };
 use crate::workspace::scheduler::agent_work_dir;
 use crate::workspace::wake_prompts::strip_frontmatter;
@@ -1140,8 +1140,9 @@ fn compose_agent_wake_context_as_written(
         return Err(format!("Agent '{}' does not exist", agent_name));
     }
 
-    // Read agent identity
-    let agent_md_path = dir.join("AGENT.md");
+    // Read agent identity: ROLE.md, else the older AGENT.md (the same
+    // lookup AGENTS.md uses).
+    let agent_md_path = persona_md_in(&dir);
     let agent_md = fs::read_to_string(&agent_md_path).unwrap_or_default();
     let fm = parse_frontmatter(&agent_md);
     let role = fm.get("role").cloned().unwrap_or("AI Agent".to_string());
@@ -2673,6 +2674,141 @@ mod tests {
             "the team line must name `k2 skills create`:\n{wake}"
         );
         assert_no_deprecated_verbs(&wake, "compose_agent_wake_context");
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// A scratch workspace for the wake-context persona tests.
+    fn wake_persona_workspace(tag: &str) -> PathBuf {
+        let proj = std::env::temp_dir().join(format!(
+            "k2-wake-persona-{tag}-{}-{}",
+            std::process::id(),
+            Uuid::new_v4(),
+        ));
+        fs::create_dir_all(&proj).unwrap();
+        proj
+    }
+
+    fn wake_persona(role: &str, body: &str) -> String {
+        format!("---\ntype: manager\nrole: {role}\n---\n\n{body}\n")
+    }
+
+    fn profile_line(path: &std::path::Path) -> String {
+        format!("**Full profile:** `{}`", path.to_string_lossy())
+    }
+
+    /// The wake context reads the persona the way AGENTS.md does
+    /// (`persona_md_in`): a workspace with only ROLE.md gets its real
+    /// role and profile, not the "AI Agent" default.
+    #[test]
+    fn wake_context_reads_role_md_only_workspace() {
+        let proj = wake_persona_workspace("role-only");
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        let role_md = primary.join("ROLE.md");
+        let persona = wake_persona("Release captain", "Ships the release notes.");
+        fs::write(&role_md, persona).unwrap();
+
+        let wake = compose_agent_wake_context(path, "k2", None).unwrap();
+        assert!(
+            wake.contains("## Identity\n**Role:** Release captain\n\n"),
+            "the role comes from ROLE.md:\n{wake}"
+        );
+        assert!(
+            wake.contains(&profile_line(&role_md)),
+            "the profile line names ROLE.md:\n{wake}"
+        );
+        assert!(
+            wake.contains("Ships the release notes."),
+            "the ROLE.md body is in the wake context:\n{wake}"
+        );
+        assert!(
+            !wake.contains("**Role:** AI Agent"),
+            "no default role when ROLE.md has one:\n{wake}"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    #[test]
+    fn wake_context_still_reads_agent_md_only_workspace() {
+        let proj = wake_persona_workspace("agent-only");
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        let agent_md = primary.join("AGENT.md");
+        let persona = wake_persona("Night planner", "Plans the night shift.");
+        fs::write(&agent_md, persona).unwrap();
+
+        let wake = compose_agent_wake_context(path, "k2", None).unwrap();
+        assert!(
+            wake.contains("## Identity\n**Role:** Night planner\n\n"),
+            "the role comes from AGENT.md:\n{wake}"
+        );
+        assert!(
+            wake.contains(&profile_line(&agent_md)),
+            "the profile line names AGENT.md:\n{wake}"
+        );
+        assert!(
+            wake.contains("Plans the night shift."),
+            "the AGENT.md body is in the wake context:\n{wake}"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// With both files, ROLE.md wins, as it does for AGENTS.md.
+    #[test]
+    fn wake_context_prefers_role_md_over_agent_md() {
+        let proj = wake_persona_workspace("both");
+        let path = proj.to_str().unwrap();
+        let primary = workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        let role_md = primary.join("ROLE.md");
+        let persona = wake_persona("Release captain", "Ships the release notes.");
+        fs::write(&role_md, persona).unwrap();
+        let old = wake_persona("Old role", "Old profile body.");
+        fs::write(primary.join("AGENT.md"), old).unwrap();
+        assert_eq!(persona_md_in(&primary), role_md, "AGENTS.md reads ROLE.md");
+
+        let wake = compose_agent_wake_context(path, "k2", None).unwrap();
+        assert!(
+            wake.contains("## Identity\n**Role:** Release captain\n\n"),
+            "ROLE.md's role wins:\n{wake}"
+        );
+        assert!(
+            wake.contains(&profile_line(&role_md)),
+            "the profile line names ROLE.md:\n{wake}"
+        );
+        assert!(
+            wake.contains("Ships the release notes."),
+            "the ROLE.md body is in the wake context:\n{wake}"
+        );
+        assert!(
+            !wake.contains("Old role"),
+            "AGENT.md's role is not read:\n{wake}"
+        );
+        assert!(
+            !wake.contains("Old profile body."),
+            "AGENT.md's body is not read:\n{wake}"
+        );
+        fs::remove_dir_all(&proj).ok();
+    }
+
+    /// No persona file: the default role stays and no profile body is added.
+    #[test]
+    fn wake_context_keeps_default_role_without_persona() {
+        let proj = wake_persona_workspace("none");
+        let path = proj.to_str().unwrap();
+        let dir = agents_dir(path).join("scout");
+        fs::create_dir_all(&dir).unwrap();
+
+        let wake = compose_agent_wake_context(path, "scout", None).unwrap();
+        let head = "# K2 Agent: scout\n\n## Identity\n**Role:** AI Agent\n\n";
+        assert!(wake.starts_with(head), "the default role stays:\n{wake}");
+        let next = format!("{}\n\n## Work Queue", profile_line(&dir.join("ROLE.md")));
+        assert!(
+            wake.contains(&next),
+            "no profile body follows the profile line:\n{wake}"
+        );
         fs::remove_dir_all(&proj).ok();
     }
 

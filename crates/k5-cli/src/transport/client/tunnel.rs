@@ -183,10 +183,7 @@ mod tests {
             panic!("no proxy on a remote https base: {target:?}");
         };
         let p = t.proxy.as_ref().expect("a proxy curl reads");
-        assert_eq!(
-            (p.host().to_string(), p.port()),
-            ("proxy.example".to_string(), 3128)
-        );
+        assert_eq!(p.to_string(), "http://proxy.example:3128");
         assert_eq!(t.user_agent, r.user_agent);
         for n in PROXY_VARS {
             std::env::remove_var(n);

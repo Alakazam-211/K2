@@ -114,7 +114,8 @@ fn ws_handle(project_id: &str) -> String {
 }
 
 /// Classify a validated passport by the session it belongs to (SC36):
-/// `api-*` → wrong credential; a harness program → agent; else shell.
+/// `api-*` → wrong credential; a person's own shell tab (by how K2 started
+/// it, [`crate::session_origin`]) → shell; else agent.
 pub fn caller_from_hook(v: &ValidatedHook) -> Caller {
     caller_from_session(&v.session_id, &v.principal)
 }
@@ -135,15 +136,18 @@ pub fn caller_from_session(
             if k2_core::workspace_session_handles::is_api_agent_name(&key) {
                 return Caller::WrongCredential;
             }
-            if k2_core::workspace_session_handles::is_harness_command(s.program.as_deref()) {
-                Caller::Agent(AgentCaller {
+            // 0.46.18: by how K2 started the session, never by the program
+            // it runs (an agent's launch block can say `bash`). Only a
+            // person's own shell tab is a shell; no recorded origin is an
+            // agent (fail closed).
+            match crate::session_origin::of(&s.session_id) {
+                Some(crate::session_origin::SessionOrigin::PersonShellTab) => Caller::Shell { project_id },
+                Some(crate::session_origin::SessionOrigin::Agent) | None => Caller::Agent(AgentCaller {
                     project_id,
                     map_key: Some(key),
                     args: s.args.clone(),
                     sandboxed: matches!(s.sandbox, k2_core::terminal::SandboxSpec::Microvm),
-                })
-            } else {
-                Caller::Shell { project_id }
+                }),
             }
         }
         None => {

@@ -614,6 +614,10 @@ fn spawn_agent_session_v2_with_inner(
     if let Some(s) = &hb_started_on {
         ptyd_meta.insert("hb_started_on".into(), s.to_json());
     }
+    ptyd_meta.insert(
+        crate::session_origin::META_KEY.into(),
+        crate::session_origin::SessionOrigin::Agent.as_str().into(),
+    );
     {
         let args_for_id = cfg.durable_args.clone().unwrap_or_else(|| cfg.args.clone());
         cfg.ptyd_meta = Some(crate::ptyd_adopt::spawn_meta(
@@ -628,6 +632,11 @@ fn spawn_agent_session_v2_with_inner(
     }
     let (home_program, home_env) = (cfg.program.clone(), cfg.env.clone());
     let session = DaemonPtySession::spawn(cfg).map_err(|e| format!("v2 spawn failed: {e}"))?;
+    // 0.46.18: every session this helper starts is K2's, for an agent
+    // (pinned chat, heartbeat, wake, sidecar, hire, `k2 terminal spawn`,
+    // remote-session shell), whatever its command (`bash`, `npx`, a
+    // wrapper): never a person's own shell tab.
+    crate::session_origin::record(session.session_id, crate::session_origin::SessionOrigin::Agent);
     crate::session_model::note_spawn_home(&session.session_id, home_program.as_deref(), &home_env);
     if let Some(s) = hb_started_on {
         crate::hb_stale::note_started_on(&session.session_id, s);

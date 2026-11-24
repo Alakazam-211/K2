@@ -351,6 +351,12 @@ fn adopt_one(owner: &std::sync::Arc<k2_core::terminal::ptyd::client::Owner>, inf
     if let Some(c) = conversation.as_deref() {
         adopt::hold_conversation(c, &sid);
     }
+    // 0.46.18: how K2 started it, from the meta (an older daemon's meta
+    // has none: `session_origin::legacy_adopted`). Before it is registered.
+    crate::session_origin::record(
+        session_id,
+        crate::session_origin::from_meta(meta, &key, session.program.as_deref(), &session.args),
+    );
     // P34: register under the original key and SessionId.
     crate::v2_session_map::register(key.clone(), std::sync::Arc::clone(&session));
     // P37: the row the previous daemon carried (a turn that was running

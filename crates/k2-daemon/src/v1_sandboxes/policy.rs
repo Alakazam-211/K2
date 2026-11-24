@@ -217,6 +217,7 @@ pub(crate) fn resolve_spawn(
         owner_env: HashMap::new(),
         env_refs_are_data: true,
         audit_via: Some(format!("v1:{}", sanitize_id(&principal.display_id()))),
+        opened_by_person: false,
     })
 }
 
@@ -901,6 +902,7 @@ pub(crate) fn resolve_workspace_mirror_with_argv(
         owner_env: HashMap::new(),
         env_refs_are_data: true,
         audit_via: Some(format!("v1:{}", sanitize_id(&principal.display_id()))),
+        opened_by_person: false,
     })
 }
 

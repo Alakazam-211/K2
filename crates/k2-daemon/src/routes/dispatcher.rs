@@ -3343,7 +3343,7 @@ async fn handle_one_request(
                     .map(|user| format!("{user}'s K2 tab"))
             };
             let result = crate::folder_trust::with_person(person, || {
-                crate::v2_spawn::handle_v2_spawn_as(&body_bytes, owner_set_env)
+                crate::v2_spawn::handle_v2_spawn_person(&body_bytes, owner_set_env)
             });
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;

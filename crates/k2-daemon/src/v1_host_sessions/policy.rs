@@ -552,6 +552,7 @@ pub(crate) fn resolve_host_spawn(
         // a reference (R8 review fix 2).
         env_refs_are_data: true,
         audit_via: Some(format!("v1:{}", sanitize_id(&principal.display_id()))),
+        opened_by_person: false,
     };
     (spawn, plan, model_decision)
 }

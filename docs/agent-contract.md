@@ -75,6 +75,10 @@ token or an Owner/Admin session).
   dead session.
 - Interactive TUI or plain readline loop are both fine; see §3 for how prompt
   delivery differs.
+- A session K2 starts for your agent is an agent's session, whatever your
+  launch command runs (`bash`, `npx`, a wrapper script): K2 tells it from a
+  person's own shell tab by how K2 started it, never by the program
+  (0.46.18).
 
 ## 2. Environment: what K2 stages for you
 

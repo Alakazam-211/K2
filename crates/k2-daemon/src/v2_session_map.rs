@@ -349,6 +349,9 @@ pub fn unregister(agent_name: &str) -> Option<Arc<DaemonPtySession>> {
         if !session.is_detached() {
             crate::session_token::revoke_if_minted(&session.session_id);
         }
+        // How K2 started it (0.46.18): a detached session's next daemon
+        // reads it back from the k2-ptyd meta.
+        crate::session_origin::forget(&session.session_id);
         // DA2: the activity row goes with the session (RL5 compat `stop`
         // for a client that last heard `start`).
         crate::activity_store::unregister(&terminal_id);

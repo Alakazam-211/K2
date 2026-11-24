@@ -230,6 +230,15 @@ pub struct SpawnRequest {
     /// label too. `#[serde(skip)]`; set by the `/v1` doors only.
     #[serde(skip)]
     pub audit_via: Option<String>,
+    /// 0.46.18: a person's K2 client asked for this spawn (the
+    /// `/cli/sessions/v2/spawn` route with the owner token or a Connect
+    /// login, [`handle_v2_spawn_person`]). Only such a spawn can be a
+    /// person's own shell tab ([`crate::session_origin`]); every in-daemon
+    /// caller of this door (`k2 terminal spawn --sandbox`, `/v1`) leaves it
+    /// false, so its session is an agent's. `#[serde(skip)]`: never off the
+    /// wire.
+    #[serde(skip)]
+    pub opened_by_person: bool,
 }
 
 /// Default session cwd when the client omits one.
@@ -695,6 +704,17 @@ pub fn handle_v2_spawn(body: &[u8]) -> HandlerResult {
 /// prd-env-to-vault-v1). A Member login may spawn, but a reference in its
 /// env never resolves as the owner's choice.
 pub fn handle_v2_spawn_as(body: &[u8], owner_set_env: bool) -> HandlerResult {
+    spawn_from_body(body, owner_set_env, false)
+}
+
+/// The `/cli/sessions/v2/spawn` route: [`handle_v2_spawn_as`] for a
+/// person's K2 client (the owner token or a Connect login), so a plain
+/// shell tab it opens is that person's shell tab ([`crate::session_origin`]).
+pub fn handle_v2_spawn_person(body: &[u8], owner_set_env: bool) -> HandlerResult {
+    spawn_from_body(body, owner_set_env, true)
+}
+
+fn spawn_from_body(body: &[u8], owner_set_env: bool, opened_by_person: bool) -> HandlerResult {
     let mut req: SpawnRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(e) => {
@@ -710,6 +730,7 @@ pub fn handle_v2_spawn_as(body: &[u8], owner_set_env: bool) -> HandlerResult {
     if owner_set_env {
         req.owner_env = req.env.clone().unwrap_or_default();
     }
+    req.opened_by_person = opened_by_person;
     spawn_session(req)
 }
 
@@ -1514,6 +1535,17 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
         return HandlerResult { status: "409 Conflict", body: r.to_json().to_string() };
     }
     crate::folder_trust::note_spawn(&req.agent_name, cfg.program.as_deref(), &cfg.args, &gate_env);
+    // 0.46.18: how K2 started this session, decided here from the door and
+    // the plain-shell rule the trust gate just used (never from a launch
+    // block). Rides the k2-ptyd meta so an adopted session keeps it.
+    let origin = crate::session_origin::for_spawn(
+        req.opened_by_person,
+        &req.agent_name,
+        cfg.program.as_deref(),
+        &cfg.args,
+        &gate_env,
+    );
+    ptyd_meta.insert(crate::session_origin::META_KEY.into(), origin.as_str().into());
     // An exempt shell named bare (`zsh`) starts as the login shell's
     // absolute path, never through the child's PATH (review round 3).
     if !k2_core::cli_folder_trust::needs_gate(cfg.program.as_deref(), &cfg.args, &gate_env) {
@@ -1715,6 +1747,7 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
             };
         }
     };
+    crate::session_origin::record(session.session_id, origin);
     crate::session_model::note_spawn_home(&session.session_id, home_program.as_deref(), &home_env);
     if let Some(g) = llm_login {
         g.spawned(session.child_pid());
@@ -2292,6 +2325,7 @@ pub fn handle_v2_refresh(body: &[u8]) -> HandlerResult {
         owner_env: HashMap::new(),
         env_refs_are_data: false,
         audit_via: None,
+        opened_by_person: false,
     })
 }
 

@@ -337,6 +337,8 @@ pub mod cell_egress;
 // spawn path (linux + sandbox-microvm + K2_SANDBOX); inert otherwise.
 pub mod cell_uid_pool;
 pub mod session_token;
+// 0.46.18: how K2 started a session (a person's shell tab or an agent's).
+pub mod session_origin;
 /// Voice & Chat only shares (`/cli/shared*`, prd-voice-chat-only-members-v1).
 pub mod shared_routes;
 // Wave 0: caller-asserted workspace must never be identity (mail/DNS grants).

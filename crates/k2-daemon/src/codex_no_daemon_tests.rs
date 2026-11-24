@@ -396,6 +396,7 @@ async fn host_session_codex_execs_with_no_daemon() {
         owner_env: Default::default(),
         env_refs_are_data: false,
         audit_via: None,
+        opened_by_person: false,
     });
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let call = wait_call(&stub, 1);

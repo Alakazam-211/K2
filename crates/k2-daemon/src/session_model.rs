@@ -88,9 +88,10 @@ fn claude_home(session_id: &SessionId, map_key: Option<&str>) -> PathBuf {
 
 /// Who may switch an agent's model: a person with no passport (the owner
 /// token, a Connect login past the route's Admin floor). Every passport is
-/// refused, a shell tab's too: an agent whose harness is a plain shell
-/// (bash) holds one that classifies as [`Caller::Shell`], and must not
-/// switch another agent's model (0.46.13 rollback test). App guests no.
+/// refused, a person's shell tab's too (0.46.13 rollback test: an agent
+/// whose harness is a plain shell must not switch another agent's model;
+/// since 0.46.18 that agent classes as [`Caller::Agent`] by how K2 started
+/// its session). App guests no.
 pub(crate) fn gate(caller: &Caller) -> Result<(), SidecarError> {
     match caller {
         Caller::Owner | Caller::Login { .. } => Ok(()),
@@ -425,8 +426,9 @@ mod tests {
     }
 
     /// The passport of a live session whose harness is bash (an agent on a
-    /// plain shell harness, or a K2 shell tab: the daemon can't tell them
-    /// apart) can't switch another session's model, nor read its menu.
+    /// plain shell harness) can't switch another session's model, nor read
+    /// its menu. Since 0.46.18 it classes as an agent: no spawn door
+    /// recorded it as a person's shell tab (`session_origin`).
     #[cfg(unix)]
     #[test]
     fn a_bash_harness_agents_passport_is_refused() {
@@ -466,7 +468,7 @@ mod tests {
         let menu = handle_options(&caller, &HashMap::from([("session_id".to_string(), other.clone())]));
         crate::v2_session_map::unregister(&key);
         session.kill();
-        assert_eq!(caller, Caller::Shell { project_id: "w-bash".into() }, "a bash session's passport classes as a shell");
+        assert!(matches!(caller, Caller::Agent(_)), "a bash session K2 didn't open as a person's tab is an agent: {caller:?}");
         let e = switched.expect_err("a passport never switches a model");
         assert_eq!((e.code, e.status), ("model_switch_needs_person", 403));
         assert_eq!(menu.expect_err("nor reads the menu").code, "model_switch_needs_person");

@@ -234,8 +234,8 @@ fn certificate_words(c: &rustls::CertificateError) -> String {
         C::InvalidPurpose | C::InvalidPurposeContext { .. } => {
             "the server's certificate isn't one for a server"
         }
-        C::BadSignature
-        | C::UnsupportedSignatureAlgorithmContext { .. }
+        C::BadSignature => "the signature on the server's certificate is wrong",
+        C::UnsupportedSignatureAlgorithmContext { .. }
         | C::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => {
             "the server's certificate has a signature this computer can't check"
         }
@@ -273,13 +273,14 @@ pub fn before_request(code: i32) -> bool {
 mod tests {
     use super::*;
     use crate::transport::wire::{self, Body, Conn, Method, Request};
-    use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+    use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    /// A CA, and a server certificate for `localhost` and 127.0.0.1
-    /// signed by it.
+    /// A CA named `ca`, and a server certificate for `localhost` and
+    /// 127.0.0.1 signed by it. Two CAs with one name would make the other
+    /// one's certificate a bad signature, not an unknown issuer.
     struct Pki {
         ca: CertificateDer<'static>,
         leaf: CertificateDer<'static>,
@@ -287,7 +288,12 @@ mod tests {
     }
 
     fn pki() -> Pki {
+        pki_named("Acme test CA")
+    }
+
+    fn pki_named(ca: &str) -> Pki {
         let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.distinguished_name.push(DnType::CommonName, ca);
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
@@ -398,7 +404,7 @@ mod tests {
     #[test]
     fn a_certificate_from_another_ca_is_curl_60_and_nothing_was_sent() {
         let pki = pki();
-        let other = self::pki();
+        let other = pki_named("Globex test CA");
         let (port, h) = server(&pki, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let Err(f) = connect_with(config(roots(&other.ca)).unwrap(), tcp, "localhost", limit())
@@ -482,7 +488,10 @@ mod tests {
                 },
                 "the server's certificate has expired",
             ),
-            (C::NotValidForName, "the certificate is for a different name"),
+            (
+                C::NotValidForName,
+                "the certificate is for a different name",
+            ),
             (
                 C::NotValidForNameContext {
                     expected: ServerName::try_from("acme.example").unwrap(),
@@ -497,11 +506,17 @@ mod tests {
             (C::Revoked, "the server's certificate was revoked"),
             (
                 C::BadSignature,
-                "the server's certificate has a signature this computer can't check",
+                "the signature on the server's certificate is wrong",
             ),
-            (C::InvalidPurpose, "the server's certificate isn't one for a server"),
+            (
+                C::InvalidPurpose,
+                "the server's certificate isn't one for a server",
+            ),
             (C::BadEncoding, "the server's certificate couldn't be read"),
-            (C::UnknownRevocationStatus, "the server's certificate failed the check"),
+            (
+                C::UnknownRevocationStatus,
+                "the server's certificate failed the check",
+            ),
         ];
         for (c, want) in cases {
             let e = rustls::Error::InvalidCertificate(c.clone());
@@ -533,8 +548,14 @@ mod tests {
                 rustls::Error::PeerMisbehaved(PeerMisbehaved::IncorrectBinder),
                 "the server broke the TLS rules during the handshake",
             ),
-            (rustls::Error::NoCertificatesPresented, "the server sent no certificate"),
-            (rustls::Error::General("x".into()), "the secure connection couldn't be set up"),
+            (
+                rustls::Error::NoCertificatesPresented,
+                "the server sent no certificate",
+            ),
+            (
+                rustls::Error::General("x".into()),
+                "the secure connection couldn't be set up",
+            ),
         ];
         for (e, want) in cases {
             let f = handshake_failure(&io::Error::new(io::ErrorKind::InvalidData, e));
@@ -548,7 +569,12 @@ mod tests {
             "the server hung up before the secure connection was set up"
         );
         let reset = handshake_failure(&io::Error::from(io::ErrorKind::ConnectionReset));
-        assert!(reset.to_string().starts_with("the secure connection failed: "), "{reset}");
+        assert!(
+            reset
+                .to_string()
+                .starts_with("the secure connection failed: "),
+            "{reset}"
+        );
         assert_plain(&reset.to_string());
     }
 

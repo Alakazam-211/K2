@@ -226,6 +226,9 @@ mod tests {
         let r = tls_failed(&f);
         assert_eq!(r.reason, "[SSL] the server's certificate has expired");
         assert_eq!(r.class, urllib::Class::UrlError);
-        assert_eq!(tls_failed(&Failure::ConnectTimedOut).reason, "[SSL] the connection timed out");
+        assert_eq!(
+            tls_failed(&Failure::ConnectTimedOut).reason,
+            "[SSL] the connection timed out"
+        );
     }
 }

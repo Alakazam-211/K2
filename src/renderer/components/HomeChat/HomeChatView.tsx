@@ -140,6 +140,7 @@ import { HomeChatErrorState } from './HomeChatStates'
 import { useKeepNewestInView } from './useKeepNewestInView'
 import { useCallTileListInset } from '@/components/Voice/useCallTileListInset'
 import { formerPersonName } from '@/lib/home-chat/known-names'
+import { PRODUCT_NAME } from '@/lib/brand'
 
 const PAGE = 50
 const DELTA = 100
@@ -833,7 +834,7 @@ export default function HomeChatView({ target }: { target: HomeChatTarget }): JS
                       attach: {
                         onPick: composeFiles.pick,
                         enabled: filesOn && !busy,
-                        why: filesOn ? null : 'This server’s K2 doesn’t take files in Home chat yet (it needs 0.46.18).',
+                        why: filesOn ? null : `This server’s ${PRODUCT_NAME} doesn’t take files in Home chat yet (it needs 0.46.18).`,
                       },
                       canStash: !stash.saving && (draftApi.current?.get() ?? '').trim().length > 0,
                       chord: stash.chord,

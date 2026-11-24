@@ -19,10 +19,11 @@
 //! | [`CHANNEL_MEMBER_ADD_REMOVE`], [`CHANNEL_MEMBERS_CAN_LEAVE`], [`HTTP_TYPING`], [`READ_STATE_UNREAD_COUNT`], [`MEMBER_CHANNELS_LEVEL_ONLY`], [`AGENTS_DM_WITH_BOX_PEOPLE`], [`CALL_CANCEL`] | Sew 0.10.0 (people and channels on Home, HOME1; DM call cancel): read together as [`HomeChatFeatures`] (`tool_hook::sew_home_chat_features()`). Before 0.10.0 each Home path takes its fallback |
 //! | [`FEED_HEAD`], [`PERSON_CHANNEL_NOTIFY`], [`FEED_ALL_MESSAGES`] | Home chat pushes: read together as [`HomePushFeatures`] (`tool_hook::sew_home_push_features()`). Sew 0.10.6 has the first two; 0.11.0 adds the third |
 //!
-//! The pin, Sew 0.11.4, adds no flag K2 knows of (Sew's release note: no
-//! API change, contracts unchanged; release.json schema_max still 1100101),
-//! so K2 reads 0.11.3's fifty-one ([`SEW_0_11_3_REPORTED`]) as the pin's
-//! until 0.11.4's own `sew version --json` list is recorded.
+//! The pin, Sew 0.11.4, reports exactly 0.11.3's fifty-one flags
+//! ([`SEW_0_11_3_REPORTED`]): its published x86_64 release binary's `sew
+//! version --json` (binary sha256 fb635e69…1bc8, git 6cd5e23f, run on a
+//! compute node) lists the same set, and the same schema (max 1100101, min
+//! 30001, 83 migrations).
 //! Sew 0.11.3 reports fifty-one flags ([`SEW_0_11_3_REPORTED`]),
 //! exactly 0.11.1's: neither 0.11.2 nor 0.11.3 adds or removes one. Its
 //! schema is max 1100101, min 30001, 83 migrations (none since 0.11.0).
@@ -233,8 +234,8 @@ pub const SEW_0_11_1_REPORTED: [&str; 51] = [
     "voice_invites", "voice_media_path", "voice_record_cap", "voice_started_feed", "voice_video_cap",
 ];
 
-/// Sew 0.11.3's flags (and the pin's, Sew 0.11.4, which adds no flag K2
-/// knows of), exactly as 0.11.3's published x86_64 release
+/// Sew 0.11.3's flags (and the pin's, Sew 0.11.4, whose release binary
+/// reports the same fifty-one), exactly as 0.11.3's published x86_64 release
 /// binary reports them (`sew version --json` from Sew, binary sha256
 /// 5e3b768d…6485, git 1c95fa34; fifty-one), sorted. The same set as
 /// 0.11.1's; its schema is max 1100101, min 30001, 83 migrations.
@@ -827,7 +828,7 @@ mod tests {
         assert!(home.call_cancel && home.http_typing && home.member_channels_level_only, "{home:?}");
     }
 
-    /// Sew 0.11.3 (and the pin, 0.11.4, which adds no flag K2 knows of),
+    /// Sew 0.11.3 (and the pin, 0.11.4, which reports the same fifty-one),
     /// as 0.11.3's published release binary reports its
     /// flags ([`SEW_0_11_3_REPORTED`]): fifty-one, exactly 0.11.1's (no flag
     /// added or removed in 0.11.2 or 0.11.3). Every Home chat push gate opens.

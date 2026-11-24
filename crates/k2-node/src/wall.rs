@@ -626,6 +626,16 @@ enum Run {
 fn job_command(spec: &ExecSpec) -> Result<Run, String> {
     use std::os::unix::process::CommandExt;
     let Some(program) = spec.argv.first().cloned() else { return Err("k2-node job-exec: empty argv".into()) };
+    // 0.46.18 (jobs 9f22e22f, e1f2a581): a working folder or a program
+    // that isn't there says which, before the spawn, whose ENOENT names
+    // only the program ("run bash: No such file or directory", even for
+    // /bin/bash). Recorded like a failed spawn (127).
+    if let Err(why) = crate::preflight::spawn_ready(&program, &spec.cwd, crate::preflight::path_of(&spec.env)) {
+        if let Some(rc) = &spec.rc_file {
+            let _ = write_rc(rc, &k2_node_proto::frames::ExitInfo { code: Some(127), signal: None });
+        }
+        return Err(format!("k2-node job-exec: {why}"));
+    }
     let mut cmd = std::process::Command::new(&program);
     cmd.args(&spec.argv[1..]).env_clear().current_dir(&spec.cwd);
     for (k, v) in &spec.env {
@@ -687,9 +697,13 @@ fn run_recorded(mut cmd: std::process::Command, program: &str, rc: &Path) -> Shi
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            // Like a failed exec: 127, and recorded as such.
+            // Like a failed exec: 127, and recorded as such. An ENOENT says
+            // what is missing now (the folder can go between the check and
+            // the spawn), never only the program.
             let _ = write_rc(rc, &k2_node_proto::frames::ExitInfo { code: Some(127), signal: None });
-            return ShimEnd::Failed(format!("k2-node job-exec: run {program}: {e}"));
+            let cwd = cmd.get_current_dir().map(Path::to_path_buf).unwrap_or_default();
+            let path = cmd.get_envs().filter(|(k, _)| *k == "PATH").find_map(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()));
+            return ShimEnd::Failed(format!("k2-node job-exec: {}", crate::preflight::spawn_error(program, &cwd, path.as_deref(), &e)));
         }
     };
     drop(cmd);
@@ -1754,6 +1768,33 @@ mod tests {
         // Any other read error is still a plain failure.
         let ShimEnd::Failed(e) = job_exec(&d) else { panic!("a folder isn't a spec") };
         assert!(e.contains("read"), "{e}");
+    }
+
+    /// 0.46.18 (jobs 9f22e22f, e1f2a581): a missing working folder is
+    /// named as such, never as "run bash: No such file or directory", and
+    /// nothing runs; a program that isn't on the job's PATH says which PATH.
+    #[test]
+    fn job_exec_names_a_missing_working_folder_or_program() {
+        let d = crate::util::temp_dir("exec-cwd");
+        let gone = d.join("src");
+        for argv0 in ["/bin/sh", "sh"] {
+            let s = ExecSpec {
+                argv: vec![argv0.into(), "-c".into(), "exit 0".into()],
+                env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+                cwd: gone.clone(),
+                stdin_env: false,
+                rc_file: Some(d.join(EXEC_RC)),
+            };
+            let p = write_exec_spec(&d, &s).unwrap();
+            let ShimEnd::Failed(e) = job_exec(&p) else { panic!("nothing runs without its working folder") };
+            assert_eq!(e, format!("k2-node job-exec: working directory {} is missing", gone.display()), "{argv0}");
+            assert_eq!(read_rc(&d.join(EXEC_RC)), Some(k2_node_proto::frames::ExitInfo { code: Some(127), signal: None }), "recorded like a failed spawn");
+            let _ = std::fs::remove_file(d.join(EXEC_RC));
+        }
+        let s = ExecSpec { argv: vec!["k2-no-such-tool".into()], env: vec![("PATH".into(), "/nowhere".into())], cwd: d.clone(), stdin_env: false, rc_file: None };
+        let p = write_exec_spec(&d, &s).unwrap();
+        let ShimEnd::Failed(e) = job_exec(&p) else { panic!("nothing to run") };
+        assert_eq!(e, "k2-node job-exec: program k2-no-such-tool not found on PATH=/nowhere");
     }
 
     /// The rc file proves an exit only when it says exactly one of a code

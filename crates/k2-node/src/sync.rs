@@ -50,6 +50,33 @@ pub fn git_env(git_home: &Path, path: &str) -> Vec<(String, String)> {
     ]
 }
 
+/// One lock per mirror (by path) for the git calls that change its list
+/// of worktrees or its packs: a job's `worktree add`, an ended job's
+/// `worktree remove` + `prune`, a repack (0.46.18). Jobs of one project
+/// share the mirror, and the next one (in the warm slot the last one just
+/// gave back) syncs while the last one's folder is being stripped; git
+/// itself doesn't lock a worktree add against a prune (a prune between the
+/// add's `worktrees/<id>` folder and its `locked` file takes the folder).
+pub fn mirror_lock(mirror: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    type Locks = std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>>;
+    static LOCKS: std::sync::OnceLock<Locks> = std::sync::OnceLock::new();
+    let mut m = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    m.entry(mirror.to_path_buf()).or_default().clone()
+}
+
+/// `dir` is a worktree's checkout: a folder with git's `.git` file in it.
+fn checkout_there(dir: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => return Err(format!("git worktree add: {} is not a folder after the checkout", dir.display())),
+        Err(e) => return Err(format!("git worktree add: {} isn't there after the checkout ({e})", dir.display())),
+    }
+    if !dir.join(".git").is_file() {
+        return Err(format!("git worktree add: {} has no .git after the checkout", dir.display()));
+    }
+    Ok(())
+}
+
 pub struct Git {
     pub program: String,
     pub env: Vec<(String, String)>,
@@ -359,15 +386,24 @@ impl Git {
             return Ok(None);
         }
         let m = mirror.display().to_string();
+        let lock = mirror_lock(mirror);
+        let _held = lock.lock().await;
         check("git repack", self.git(&["--git-dir", &m, "repack", "-a", "-d", "-k", "-q", "--no-write-bitmap-index"], None, FETCH_LIMIT).await?)?;
         Ok(Some((before, pack_count(mirror))))
     }
 
+    /// A detached worktree of `mirror` at `sha` in `dir`. Under the
+    /// mirror's lock ([`mirror_lock`]), so another job's cleanup (`git
+    /// worktree remove` + `prune`, [`Self::worktree_remove`]) never runs in
+    /// the middle of it; and `Err` unless `dir` is a checkout when it's
+    /// done (a job never starts in a folder that isn't there).
     pub async fn worktree_add(&self, mirror: &Path, dir: &Path, sha: &str) -> Result<(), String> {
         let m = mirror.display().to_string();
         let d = dir.display().to_string();
+        let lock = mirror_lock(mirror);
+        let _held = lock.lock().await;
         check("git worktree add", self.git(&["--git-dir", &m, "worktree", "add", "-q", "--detach", &d, sha], None, LOCAL_LIMIT).await?)?;
-        Ok(())
+        checkout_there(dir)
     }
 
     pub async fn tree_of(&self, mirror: &Path, sha: &str) -> Result<String, String> {
@@ -377,9 +413,15 @@ impl Git {
         Ok(out.stdout.trim().to_string())
     }
 
+    /// An ended job's worktree goes, and the mirror's records of worktrees
+    /// that are gone. Under the mirror's lock: the next job of the same
+    /// project (the one that takes the warm slot this job just gave back)
+    /// may be adding its own worktree right now ([`Self::worktree_add`]).
     pub async fn worktree_remove(&self, mirror: &Path, dir: &Path) {
         let m = mirror.display().to_string();
         let d = dir.display().to_string();
+        let lock = mirror_lock(mirror);
+        let _held = lock.lock().await;
         let _ = self.git(&["--git-dir", &m, "worktree", "remove", "--force", &d], None, LOCAL_LIMIT).await;
         let _ = std::fs::remove_dir_all(dir);
         let _ = self.git(&["--git-dir", &m, "worktree", "prune"], None, LOCAL_LIMIT).await;
@@ -533,6 +575,37 @@ pub mod tests {
         assert_eq!(tree, sh_git(&repo, &["rev-parse", &format!("{first}^{{tree}}")]));
         g.worktree_remove(&mirror, &wt).await;
         assert!(!wt.exists());
+    }
+
+    /// 0.46.18: one job's worktree goes (remove + prune) while the next
+    /// job of the project adds its own, many times over: every new
+    /// checkout is there and whole afterwards, and the mirror keeps
+    /// exactly the live one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_worktree_add_and_another_jobs_remove_never_cross() {
+        let (repo, _first, second) = repo_with_commits("sync-race");
+        let home = crate::util::temp_dir("sync-race-home");
+        let g = std::sync::Arc::new(git(&home));
+        let mirror = home.join("m.git");
+        g.ensure_mirror(&mirror).await.unwrap();
+        sh_git(&repo, &["update-ref", "refs/k2-compute/job1", &second]);
+        let bundle = home.join("b.bundle");
+        sh_git(&repo, &["bundle", "create", bundle.to_str().unwrap(), "refs/k2-compute/job1"]);
+        g.fetch_bundle(&mirror, &bundle).await.unwrap();
+        let wt = |i: usize| home.join(format!("jobs/j{i}-g1/src"));
+        g.worktree_add(&mirror, &wt(0), &second).await.unwrap();
+        for i in 1..40 {
+            let (g1, g2, m1, m2, old, new, sha) = (g.clone(), g.clone(), mirror.clone(), mirror.clone(), wt(i - 1), wt(i), second.clone());
+            let (_, added) = tokio::join!(tokio::spawn(async move { g1.worktree_remove(&m1, &old).await }), tokio::spawn(async move { g2.worktree_add(&m2, &new, &sha).await }));
+            added.unwrap().unwrap_or_else(|e| panic!("job {i}'s checkout: {e}"));
+            assert!(!wt(i - 1).exists(), "job {}'s worktree went", i - 1);
+            assert_eq!(std::fs::read_to_string(wt(i).join("a.txt")).unwrap(), "two\n", "job {i}'s checkout is whole");
+            let m = mirror.to_str().unwrap();
+            let list = sh_git(&mirror, &["--git-dir", m, "worktree", "list", "--porcelain"]);
+            let trees: Vec<&str> = list.lines().filter_map(|l| l.strip_prefix("worktree ")).filter(|p| !p.ends_with("m.git")).collect();
+            assert_eq!(trees.len(), 1, "only the live worktree is recorded: {list}");
+        }
+        assert!(g.worktree_add(&mirror, &wt(0), &"0".repeat(40)).await.is_err(), "a failed checkout is an error");
     }
 
     /// 0.46.12: a bundle's tags land in the mirror (a job's checkout sees

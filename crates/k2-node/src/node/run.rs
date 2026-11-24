@@ -476,6 +476,23 @@ fn human_secs(s: u64) -> String {
 /// Linux wall, before a job: the dirs it writes get the node's group
 /// (`k2job` runs with it). A warm target the node filled before the wall
 /// is shared once (marker); the code checkout every time (it's fresh).
+/// A job's working folder isn't there when it is about to start (0.46.18).
+pub const CWD_MISSING: &str = "cwd_missing";
+
+/// What a [`CWD_MISSING`] job's log and detail say: the folder it asked
+/// for (`k2 compute run` sends the folder it ran from, relative to the
+/// repo) and the commit it isn't in; else the folder the node made.
+pub(crate) fn cwd_missing_detail(rel: Option<&str>, commit: Option<&str>, why: &str) -> String {
+    match (rel, commit) {
+        (Some(rel), Some(sha)) => format!(
+            "the job's working folder {rel} isn't in its checkout at {}: a job starts in the folder k2 compute run ran from (relative to the repo root), so that folder must be in the commit (one with only untracked or ignored files isn't); run it from a folder the commit has ({why})",
+            &sha[..sha.len().min(8)]
+        ),
+        (Some(rel), None) => format!("the job's working folder {rel} doesn't exist: a job with no source starts in its own empty folder ({why})"),
+        (None, _) => format!("{why} after the checkout; nothing ran"),
+    }
+}
+
 fn prepare_for_job_user(target: &Path, caches: &[&Path], src: Option<&Path>) -> Result<(), String> {
     crate::wall::group_dir(target)?;
     let mark = target.join(crate::wall::SHARED_MARK);
@@ -898,6 +915,15 @@ impl Node {
                 }
             }
         }
+        // 0.46.18 (jobs 9f22e22f, e1f2a581): the job starts only in a folder
+        // that is there. A missing one fails it now, with its own reason,
+        // not at the spawn as "run bash: No such file or directory".
+        if let Err(why) = crate::preflight::cwd_ready(&cwd) {
+            let detail = cwd_missing_detail(a.plan.cwd.as_deref(), a.plan.src.as_ref().map(|s| s.commit.as_str()), &why);
+            sys(&mut journal, &detail);
+            self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some(CWD_MISSING), Some(&detail), src_ran, None, Some(journal), lease, None).await;
+            return;
+        }
         // Protocol 7 (§4.3): what this node is, first in the log.
         if t.speaks_host() {
             let line = self.host.lock().unwrap().line();
@@ -1295,7 +1321,11 @@ impl Node {
         let proxy_port = egress.as_ref().map(|r| r.port());
         // GPU jobs (0.46.11): only a walled unit gets a GPU (root leases the
         // device); never a GPU job run anywhere else without one.
-        let started = if a.plan.gpu.is_some() && !unit_mode {
+        // 0.46.18: its folder once more, right before the start (it was
+        // checked after the checkout; the toolchains may have taken a while).
+        let started = if let Err(why) = crate::preflight::cwd_ready(&cwd) {
+            Err(format!("{why}: it was there after the checkout and went before the job could start; nothing ran"))
+        } else if a.plan.gpu.is_some() && !unit_mode {
             Err(format!("{}: this node can't give a job a GPU here (GPU jobs need the Linux job wall)", k2_node_proto::gpu::codes::GPU_UNAVAILABLE))
         } else if unit_mode {
             let mut rw = vec![target.clone(), sccache.clone(), cargo_home.clone()];

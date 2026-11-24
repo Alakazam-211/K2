@@ -659,6 +659,95 @@ async fn sync_by_bundle_runs_in_a_worktree_at_the_commit_in_a_warm_slot_next_tim
     assert_eq!((src.slot, src.warmth.as_deref()), (None, Some("private")));
 }
 
+/// 0.46.18 (jobs 9f22e22f on k2n16, e1f2a581 on k2n21): a job that takes
+/// the warm slot the last job of its project just gave back starts while
+/// that job's folder is still being stripped (its worktree removed and the
+/// shared mirror pruned). Many times over, back to back: each one starts
+/// in its own checkout and runs, never "run bash: No such file or
+/// directory".
+#[tokio::test(flavor = "multi_thread")]
+async fn back_to_back_jobs_in_one_warm_slot_each_start_in_their_checkout() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-slot-reuse", "", |_| {}).await;
+    let (repo, _first, second) = temp_repo();
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let src = Src { project_key: "pk-reuse".into(), remote_url: None, commit: second.clone(), dirty: None, slots: 1 };
+    let argv = ["/bin/sh", "-c", "test -f a.txt && pwd"];
+    // The first job brings the history (one bundle); every later one finds
+    // it in the mirror.
+    let mut p = plan("r0", &argv);
+    p.src = Some(src.clone());
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = c.until(|f| matches!(f, Frame::Need(_))).await;
+    assert!(matches!(fr.last(), Some(Frame::Need(_))));
+    let bundle = bundle_for(&repo, "r0", &second, &n.dir.join("r0.bundle"));
+    send_blob(&c, "r0", TransferKind::Bundle, &bundle, 1 << 16);
+    let mut seen = Vec::new();
+    const JOBS: usize = 25;
+    let mut warm = 0;
+    for i in 0..JOBS {
+        let job = format!("r{i}");
+        // Its end, then at once the next job: before this one's folder is
+        // stripped.
+        let fr = c.until(|f| matches!(f, Frame::State(s) if s.job_id == job && s.state.is_terminal())).await;
+        if i + 1 < JOBS {
+            let mut p = plan(&format!("r{}", i + 1), &argv);
+            p.src = Some(src.clone());
+            c.send(Frame::Assign(assign(p, 1)));
+        }
+        seen.extend(fr);
+        let s = states_of(&seen, &job);
+        let end = s.last().unwrap();
+        let logs = logs_of(&seen, &job);
+        assert_eq!(
+            (end.state, end.exit.as_ref().and_then(|e| e.code)),
+            (JobState::Done, Some(0)),
+            "{job}: {:?} {:?}\nstdout: {}\nstderr: {}\nsys: {}",
+            end.reason,
+            end.detail,
+            text(&logs, LogStream::Out),
+            text(&logs, LogStream::Err),
+            text(&logs, LogStream::Sys)
+        );
+        assert_eq!(text(&logs, LogStream::Out).trim(), n.layout.job_dir(&job, 1).join("src").display().to_string());
+        if s.iter().rev().find_map(|s| s.src.clone()).is_some_and(|r| r.slot == Some(1) && r.warmth.as_deref() == Some("warm")) {
+            warm += 1;
+        }
+    }
+    assert!(warm >= JOBS / 2, "most of them took the warm slot the last one gave back ({warm} of {JOBS})");
+}
+
+/// 0.46.18: a job whose working folder isn't in its checkout (k2 compute
+/// run starts it in the folder it ran from, relative to the repo) fails
+/// before anything starts, and says which folder and which commit, never
+/// "run bash: No such file or directory".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_working_folder_missing_from_the_checkout_fails_with_its_own_reason() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-cwd-missing", "", |_| {}).await;
+    let (repo, _first, second) = temp_repo();
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let mut p = plan("cw1", &["/bin/bash", "-c", "echo ran"]);
+    p.src = Some(Src { project_key: "pk-cwd".into(), remote_url: None, commit: second.clone(), dirty: None, slots: 1 });
+    p.cwd = Some("web/node_modules".into());
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = c.until(|f| matches!(f, Frame::Need(_))).await;
+    assert!(matches!(fr.last(), Some(Frame::Need(_))));
+    let bundle = bundle_for(&repo, "cw1", &second, &n.dir.join("cw1.bundle"));
+    send_blob(&c, "cw1", TransferKind::Bundle, &bundle, 1 << 16);
+    let fr = run_to_receipt(&mut c, "cw1").await;
+    let end = states_of(&fr, "cw1").into_iter().last().unwrap();
+    assert_eq!((end.state, end.reason.as_deref()), (JobState::Failed, Some("cwd_missing")), "{end:?}");
+    let detail = end.detail.clone().unwrap_or_default();
+    assert!(detail.contains("web/node_modules") && detail.contains(&second[..8]) && detail.contains("isn't in its checkout"), "{detail}");
+    let logs = logs_of(&fr, "cw1");
+    assert_eq!(text(&logs, LogStream::Out), "", "nothing ran");
+    assert!(text(&logs, LogStream::Sys).contains("web/node_modules"), "the log says it too");
+    assert!(!detail.contains("No such file or directory"), "{detail}");
+}
+
 /// `--with` (protocol 6): sibling repos laid out as in the workspace, each
 /// at its own commit from its own mirror; the job starts in the main repo,
 /// so `../base` reaches the sibling. A layout that escapes never syncs.

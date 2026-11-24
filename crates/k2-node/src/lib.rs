@@ -31,6 +31,7 @@ pub mod node;
 pub mod packages;
 pub mod pkgsys;
 pub mod paths;
+pub mod preflight;
 pub mod queue_file;
 pub mod queue_store;
 pub mod request;

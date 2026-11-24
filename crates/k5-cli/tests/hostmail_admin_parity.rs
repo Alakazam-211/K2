@@ -110,6 +110,14 @@ fn hostmail_admin_verbs_take_the_words_as_the_shell_does() {
             &["config", "--address-cap", "-1"],
         ),
         usage_case(
+            "config, an address cap neither a number nor none",
+            &["config", "--workspace", "alpha", "--address-cap", "None"],
+        ),
+        usage_case(
+            "config, an address cap with no value",
+            &["config", "--address-cap"],
+        ),
+        usage_case(
             "config, bytes and gb",
             &["config", "--quota-bytes", "1", "--quota-gb", "1"],
         ),
@@ -242,6 +250,17 @@ fn hostmail_admin_verbs_answer_as_the_shell_does() {
             "config set, a workspace's always-bcc",
             &["config", "--workspace", "alpha", "--always-bcc", "a@x, b@x", "--quota-bytes", "10", "--json"],
             r#"{"ok":true,"hint":"set"}"#,
+        ),
+        // 0.46.18: `none` clears a workspace's cap (sent as "none", never int()).
+        ok_case(
+            "config set, a workspace's address cap cleared",
+            &["config", "--workspace", "alpha", "--address-cap", "none"],
+            r#"{"ok":true,"hint":"mail config updated. Addresses: unlimited (this agent manages email hosting)."}"#,
+        ),
+        ok_case(
+            "config set, a workspace's address cap",
+            &["config", "--workspace", "alpha", "--address-cap", "12", "--json"],
+            r#"{"ok":true,"hint":"mail config updated. Addresses: up to 12 (set by the owner for this workspace)."}"#,
         ),
         ok_case(
             "config, new forwards a day",

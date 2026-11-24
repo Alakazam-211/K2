@@ -33,6 +33,7 @@ FLAGS
 CAP
   Addresses are capped per workspace (default 5; 0 = unlimited; your human
   adjusts it with `k2 hostmail config --workspace <ws> --address-cap <n>`).
+  An agent that manages email hosting has no cap unless the owner sets one.
   The cap counts ACTIVE addresses —
   `k2 mail delete <addr>` frees its slot immediately.
 

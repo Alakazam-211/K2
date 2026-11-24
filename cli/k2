@@ -70589,7 +70589,8 @@ NOT FILES-TO-AGENTS
 
 CAPS
   Addresses are capped per workspace (ACTIVE ones count; delete frees
-  a slot). Prefer plus-addressing over minting per service.
+  a slot). An agent that manages email hosting has no cap unless the
+  owner sets one. Prefer plus-addressing over minting per service.
   Linked Gmail draft is always on; send from linked mail still needs
   send level AND Sending=on.
 
@@ -88192,7 +88193,7 @@ elif verb == "config_set":
                       ("M_WORKSPACE", "workspace")):
         v = env(envk)
         if v != "":
-            body[key] = int(v) if key in ("relayPort", "addressCap", "quotaBytes", "quotaMessages") else v
+            body[key] = int(v) if key in ("relayPort", "addressCap", "quotaBytes", "quotaMessages") and v != "none" else v
     if env("M_QUOTA_GB") != "":
         body["quotaBytes"] = int(env("M_QUOTA_GB")) * (1 << 30)
     if env("M_ALWAYS_BCC_SET") == "true":
@@ -91186,7 +91187,7 @@ cmd_mail_config() {
                 [ $# -ge 2 ] || { _mail_err "usage" "--agent-send requires a value (off | approval | on)"; exit 2; }
                 agent_send="$2"; any_set=true; shift 2 ;;
             --address-cap)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address-cap requires a number (0 = unlimited)"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--address-cap requires a number (0 = unlimited) or none"; exit 2; }
                 address_cap="$2"; any_set=true; shift 2 ;;
             --quota-bytes)
                 [ $# -ge 2 ] || { _mail_err "usage" "--quota-bytes requires a number (0 = unlimited)"; exit 2; }
@@ -91231,8 +91232,8 @@ cmd_mail_config() {
         _mail_err "usage" "--relay-port must be a port number (1-65535)"
         exit 2
     fi
-    if [ -n "$address_cap" ] && ! _mail_is_uint "$address_cap"; then
-        _mail_err "usage" "--address-cap must be a non-negative number (0 = unlimited)"
+    if [ -n "$address_cap" ] && [ "$address_cap" != "none" ] && ! _mail_is_uint "$address_cap"; then
+        _mail_err "usage" "--address-cap must be a non-negative number (0 = unlimited) or none (no cap set: unlimited for an agent that manages email hosting, else the server default)"
         exit 2
     fi
     if [ -n "$quota_bytes" ] && [ -n "$quota_gb" ]; then
@@ -99380,6 +99381,7 @@ FLAGS
 CAP
   Addresses are capped per workspace (default 5; 0 = unlimited; your human
   adjusts it with `k2 hostmail config --workspace <ws> --address-cap <n>`).
+  An agent that manages email hosting has no cap unless the owner sets one.
   The cap counts ACTIVE addresses —
   `k2 mail delete <addr>` frees its slot immediately.
 
@@ -99877,7 +99879,8 @@ mail_manage (IT) agents may set --address-cap / --quota-bytes /
 --quota-gb / --quota-messages / --agent-send / --always-bcc with
 --workspace for any workspace — except --agent-send / --always-bcc on
 their OWN workspace (exit 3 owner_only: an agent can't loosen mail rules
-on its own sends). With no setting flags it prints the
+on its own sends), and --address-cap on their own (the owner's: such an
+agent has no cap unless the owner sets one). With no setting flags it prints the
 current config; with flags it applies them. 0 = unlimited. New mints
 default unlimited; mail-manage sets a cap per inbox. Existing boxes
 need `k2 hostmail quota set` (mint constants do not retrofit).
@@ -99887,7 +99890,7 @@ USAGE
   k2 hostmail config [--send-mode direct|relay|receive-only] [--domain <d>]
                  [--relay-host <h> --relay-port <p> --relay-user <u>
                   --relay-pass-stdin]
-                 [--agent-send off|approval|on] [--address-cap <n>]
+                 [--agent-send off|approval|on] [--address-cap <n>|none]
                  [--quota-bytes N|--quota-gb N] [--quota-messages N]
                  [--workspace <ws>]
   k2 hostmail config --workspace <ws> --always-bcc <addr>[,<addr>]
@@ -99919,6 +99922,12 @@ FLAGS
                          reads mail from outside.
   --address-cap <n>      Addresses per workspace (0 = unlimited; default 5).
                          Pair with --workspace; the global default is owner.
+                         A workspace whose agent manages email hosting has
+                         no cap unless one is set for it here. none clears
+                         the workspace's cap (back to unlimited for such an
+                         agent, the default for any other). Each one shows
+                         under workspaceAddressCaps[].text, e.g. "Addresses:
+                         unlimited (this agent manages email hosting)".
   --quota-bytes <n>      Mailbox disk quota for NEW mints (0 = unlimited,
                          and that is the default). Pair with --workspace.
                          Existing boxes need `k2 hostmail quota set`.

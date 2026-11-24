@@ -282,7 +282,8 @@ NOT FILES-TO-AGENTS
 
 CAPS
   Addresses are capped per workspace (ACTIVE ones count; delete frees
-  a slot). Prefer plus-addressing over minting per service.
+  a slot). An agent that manages email hosting has no cap unless the
+  owner sets one. Prefer plus-addressing over minting per service.
   Linked Gmail draft is always on; send from linked mail still needs
   send level AND Sending=on.
 

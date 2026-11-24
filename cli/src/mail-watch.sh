@@ -800,7 +800,7 @@ cmd_mail_config() {
                 [ $# -ge 2 ] || { _mail_err "usage" "--agent-send requires a value (off | approval | on)"; exit 2; }
                 agent_send="$2"; any_set=true; shift 2 ;;
             --address-cap)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address-cap requires a number (0 = unlimited)"; exit 2; }
+                [ $# -ge 2 ] || { _mail_err "usage" "--address-cap requires a number (0 = unlimited) or none"; exit 2; }
                 address_cap="$2"; any_set=true; shift 2 ;;
             --quota-bytes)
                 [ $# -ge 2 ] || { _mail_err "usage" "--quota-bytes requires a number (0 = unlimited)"; exit 2; }
@@ -845,8 +845,8 @@ cmd_mail_config() {
         _mail_err "usage" "--relay-port must be a port number (1-65535)"
         exit 2
     fi
-    if [ -n "$address_cap" ] && ! _mail_is_uint "$address_cap"; then
-        _mail_err "usage" "--address-cap must be a non-negative number (0 = unlimited)"
+    if [ -n "$address_cap" ] && [ "$address_cap" != "none" ] && ! _mail_is_uint "$address_cap"; then
+        _mail_err "usage" "--address-cap must be a non-negative number (0 = unlimited) or none (no cap set: unlimited for an agent that manages email hosting, else the server default)"
         exit 2
     fi
     if [ -n "$quota_bytes" ] && [ -n "$quota_gb" ]; then

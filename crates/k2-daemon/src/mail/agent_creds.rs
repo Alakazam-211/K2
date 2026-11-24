@@ -246,6 +246,36 @@ pub fn policy_gate(caller: &MailCaller, target_path: &str) -> Result<(), CliResp
     }
 }
 
+/// 0.46.18: who may set or clear a workspace's address cap. An agent that
+/// manages email hosting has no default cap; a cap on its OWN workspace is
+/// the owner's (it can't lift the limit the owner set on it), so it asks
+/// with the `mail.address-cap` card. Other workspaces' caps stay its to set.
+pub fn address_cap_gate(caller: &MailCaller, target_path: &str) -> Result<(), CliResponse> {
+    match caller {
+        MailCaller::Owner => Ok(()),
+        MailCaller::Agent { .. } => Err(refuse_needs_mail_manage("change mail config")),
+        MailCaller::ItAgent { workspace_uuid } => {
+            let own = crate::workspace_msg::resolve_workspace(workspace_uuid);
+            if own.as_deref() == Some(target_path) {
+                Err(err_json(
+                    "403 Forbidden",
+                    "owner_only",
+                    format!(
+                        "This agent manages email hosting, so it has no address cap unless the \
+                         owner sets one, and that cap is the owner's to change. Ask your human \
+                         (the owner runs {} hostmail config --workspace <workspace> \
+                         --address-cap <n|none> from a terminal outside a {} agent session).",
+                        k2_core::brand::CLI_NAME,
+                        k2_core::brand::PRODUCT_NAME
+                    ),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 /// The note a mint gets in place of the password when it is withheld.
 pub const MINT_WITHHELD_HINT: &str =
     "password withheld: agents send mail with `k2 mail send` and read it with `k2 mail \

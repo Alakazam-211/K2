@@ -157,7 +157,41 @@ pub fn handle_address_create(body: &[u8]) -> CliResponse {
         b.client_id.as_deref(),
     ) {
         Ok(v) => ok_json(finish_mint_response(v, &caller, b.person)),
+        Err(AddrError::CapReached(hint)) => cap_reached_response(&path, &hint),
         Err(e) => addr_error_response(e),
+    }
+}
+
+/// 409 `cap_reached`, naming the workspace (0.46.18): the hint's
+/// `--workspace <workspace>` is filled in, and the body carries the
+/// workspace and its cap, so a permission card's Ask line can name them
+/// (`mail.address-cap`).
+fn cap_reached_response(path: &str, hint: &str) -> CliResponse {
+    let handle = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT COALESCE(handle, name) FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| r.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| path.to_string())
+    };
+    let info = k2_core::workspace::settings::mail_address_cap_info_for_path(path);
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "cap_reached",
+                "hint": hint.replace("--workspace <workspace>", &format!("--workspace {handle}")),
+                "workspace": handle,
+                "cap": info.cap,
+                "capSource": info.source.as_wire(),
+            },
+        })
+        .to_string(),
     }
 }
 
@@ -491,6 +525,25 @@ mod tests {
     }
 
     // ── create ──
+
+    /// 0.46.18: the cap refusal names the workspace (filled into the hint
+    /// and on the body, for the mail.address-cap card's Ask line) and its
+    /// cap.
+    #[test]
+    fn cap_reached_names_the_workspace_and_its_cap() {
+        let (name, path) = unique("capnamed");
+        let pid = insert_project(&name, &path, 3);
+        let resp = cap_reached_response(&path, "address cap reached (3/3). Raise it with --workspace <workspace> --address-cap <n>.");
+        assert_eq!(resp.status, "409 Conflict");
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "cap_reached");
+        assert_eq!(v["error"]["workspace"], name.as_str());
+        assert_eq!(v["error"]["cap"], 3);
+        assert_eq!(v["error"]["capSource"], "set");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains(&format!("--workspace {name} --address-cap <n>")), "{hint}");
+        cleanup_project(&pid);
+    }
 
     #[test]
     fn create_validates_body_workspace_and_reports_not_ready_without_server() {

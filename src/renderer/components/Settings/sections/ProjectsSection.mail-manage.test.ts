@@ -31,4 +31,24 @@ describe('Hosted mail manage toggle', () => {
     expect(toggle).not.toContain("daemonCliGet(primaryScope(), 'mail-manage'")
     expect(toggle).not.toContain('Currently allowed anyway')
   })
+
+  // 0.46.18: the workspace's address cap shows under the switch, in the
+  // daemon's own words ("Addresses: unlimited (this agent manages email
+  // hosting)"), read again when the switch flips; never fetchProjects.
+  it('shows the address cap line under the switch, from the daemon', () => {
+    const group = src.slice(
+      src.indexOf('<SettingsGroup title="Hosted mail" card>'),
+      src.indexOf('</SettingsGroup>', src.indexOf('<SettingsGroup title="Hosted mail" card>')),
+    )
+    expect(group).toContain('<MailManageToggle project={project} />')
+    expect(group).toContain('<MailAddressCapLine project={project} />')
+    const start = src.indexOf('function MailAddressCapLine')
+    expect(start).toBeGreaterThan(0)
+    const line = src.slice(start, src.indexOf('function MailAgentSendControl', start))
+    expect(line).toContain("primaryScope(), 'mail/config', { workspace: project.path }")
+    expect(line).toContain('d.workspace?.addressCap?.text')
+    expect(line).toContain('d.supported === true')
+    expect(line).toContain('[project.path, manages]')
+    expect(line).not.toContain('fetchProjects')
+  })
 })

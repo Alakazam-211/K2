@@ -315,7 +315,7 @@ const CONFIG_VALUES: &[(&str, &str, &str, bool, Option<&str>)] = &[
     (
         "--address-cap",
         "M_ADDRESS_CAP",
-        "--address-cap requires a number (0 = unlimited)",
+        "--address-cap requires a number (0 = unlimited) or none",
         true,
         None,
     ),
@@ -447,9 +447,9 @@ fn config(words: &[&str]) -> Result<Plan, Plan> {
         return Err(usage("--relay-port must be a port number (1-65535)"));
     }
     let cap = get(&vals, "M_ADDRESS_CAP");
-    if !cap.is_empty() && !is_uint(&cap) {
+    if !cap.is_empty() && cap != "none" && !is_uint(&cap) {
         return Err(usage(
-            "--address-cap must be a non-negative number (0 = unlimited)",
+            "--address-cap must be a non-negative number (0 = unlimited) or none (no cap set: unlimited for an agent that manages email hosting, else the server default)",
         ));
     }
     let (qb, qg, qm) = (
@@ -1299,7 +1299,8 @@ fn config_set_py(py_: &mut Py) -> R<()> {
             let val = if matches!(
                 key,
                 "relayPort" | "addressCap" | "quotaBytes" | "quotaMessages"
-            ) {
+            ) && v != "none"
+            {
                 Value::Int(pyx::int(&sv(&v), line::CONFIG_SET_INT)?)
             } else {
                 sv(&v)

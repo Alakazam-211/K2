@@ -846,7 +846,9 @@ struct ConfigSetBody {
     delete_relay_config: Option<String>,
     workspace: Option<String>,
     agent_send: Option<String>,
-    address_cap: Option<i64>,
+    /// A number (`0` = unlimited) or `"none"` (0.46.18: clear the cap set
+    /// for the workspace).
+    address_cap: Option<serde_json::Value>,
     quota_bytes: Option<i64>,
     quota_messages: Option<i64>,
     /// The owner's per-workspace "always BCC" policy: a comma-separated
@@ -928,8 +930,24 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         );
     }
     let wants_workspace = b.workspace.is_some();
+    let address_cap: Option<config::AddressCapWrite> = match b.address_cap.as_ref() {
+        None => None,
+        Some(v) => match config::AddressCapWrite::from_json(v) {
+            Some(w) => Some(w),
+            None => {
+                return err_json(
+                    "400 Bad Request",
+                    "usage",
+                    format!(
+                        "'addressCap' must be a non-negative integer (0 = unlimited) or 'none' \
+                         (clear the cap set for the workspace), got {v}"
+                    ),
+                )
+            }
+        },
+    };
     if (b.agent_send.is_some()
-        || b.address_cap.is_some()
+        || address_cap.is_some()
         || b.quota_bytes.is_some()
         || b.quota_messages.is_some())
         && !wants_workspace
@@ -958,7 +976,7 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         );
     }
     let wants_gating = b.agent_send.is_some()
-        || b.address_cap.is_some()
+        || address_cap.is_some()
         || b.quota_bytes.is_some()
         || b.quota_messages.is_some();
     let any_action = b.relay.is_some()
@@ -1016,6 +1034,17 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
                 }
             }
         }
+        // 0.46.18: an agent that manages email hosting has no default
+        // address cap; a cap on its own workspace is the owner's, so it
+        // can't set or clear its own (it asks with the mail.address-cap
+        // card). Other workspaces' caps stay its to set.
+        if address_cap.is_some() {
+            if let Some(ref path) = workspace_path {
+                if let Err(resp) = crate::mail::agent_creds::address_cap_gate(&caller, path) {
+                    return resp;
+                }
+            }
+        }
         // Email Notifications (security review L4): never loosened by an
         // agent on a workspace whose App sends email.
         if let (Some(v), Some(path)) = (b.agent_send.as_deref(), workspace_path.as_deref()) {
@@ -1041,7 +1070,7 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
     // owner had no way to turn agent-send on for a linked inbox: the
     // send hint pointed at controls that refused here.
     let only_workspace_policy = (always_bcc.is_some() || b.agent_send.is_some())
-        && b.address_cap.is_none()
+        && address_cap.is_none()
         && b.quota_bytes.is_none()
         && b.quota_messages.is_none()
         && b.relay.is_none()
@@ -1112,7 +1141,7 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         match config::set_workspace_gating(
             path,
             b.agent_send.as_deref(),
-            b.address_cap,
+            address_cap,
             b.quota_bytes,
             b.quota_messages,
         ) {
@@ -1142,9 +1171,18 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
         }
     }
 
-    CliResponse::ok_json(
-        serde_json::json!({ "ok": true, "applied": applied }).to_string(),
-    )
+    // 0.46.18: an address cap change says what the workspace now has
+    // (`k2 hostmail config` prints the hint).
+    let hint = applied
+        .get("workspace")
+        .and_then(|w| w.get("addresses"))
+        .and_then(serde_json::Value::as_str)
+        .map(|a| format!("mail config updated. {a}."));
+    let mut out = serde_json::json!({ "ok": true, "applied": applied });
+    if let Some(h) = hint {
+        out["hint"] = serde_json::json!(h);
+    }
+    CliResponse::ok_json(out.to_string())
 }
 
 /// GET `/cli/mail/doctor[?domain=<d>]` — S6: the LATEST persisted run.
@@ -2136,6 +2174,91 @@ mod tests {
         for id in [&it_id, &other_id, &plain_id] {
             conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id])
                 .expect("cleanup project");
+        }
+    }
+
+    /// 0.46.18: the address cap. An agent that manages email hosting has
+    /// none by default, so a cap on its OWN workspace is the owner's: the
+    /// agent can't set or clear it (`owner_only`, the mail.address-cap
+    /// card's wall). It still sets other workspaces' caps; an agent
+    /// without the switch never. The owner sets a number or clears it with
+    /// `none`, and the answer says what the workspace now has.
+    #[test]
+    fn address_cap_is_the_owners_on_a_managers_own_workspace() {
+        let _mail = crate::mail::mail_server_test_lock();
+        let _home = crate::test_support::TempHome::new();
+        let mk = |tag: &str, mm: i64| {
+            let id = uuid::Uuid::new_v4().to_string();
+            let path = format!("/tmp/mail-cap-{tag}-{}-{}", std::process::id(), &id[..12]);
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, mail_manage_enabled) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, format!("cap-{tag}-{}", &id[..12]), path, mm],
+            )
+            .expect("insert project");
+            (id, path)
+        };
+        let (it_id, it_path) = mk("it", 1);
+        let (other_id, other_path) = mk("other", 0);
+        let (plain_id, _) = mk("plain", 0);
+        let body = |v: serde_json::Value| serde_json::to_vec(&v).unwrap();
+        let as_agent = |id: &str, b: serde_json::Value| {
+            let p = crate::session_token::HookPrincipal { workspace_uuid: id.to_string(), agent_address: "agent".to_string() };
+            crate::caller_workspace::with_request_principal(Some(p), || handle_config_set(&body(b)))
+        };
+        let json_of = |r: &CliResponse| serde_json::from_str::<serde_json::Value>(&r.body).unwrap();
+        let info = |p: &str| {
+            let i = k2_core::workspace::settings::mail_address_cap_info_for_path(p);
+            (i.cap, i.source.as_wire())
+        };
+        assert_eq!(info(&it_path), (0, "manages_email_hosting"));
+
+        // Not a number or none: a usage error, before anything else.
+        let r = handle_config_set(&body(serde_json::json!({ "workspace": it_path, "addressCap": "lots" })));
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert!(r.body.contains("'none'"), "{}", r.body);
+
+        // The manager, its own workspace: refused both ways.
+        for cap in [serde_json::json!(50), serde_json::json!("none")] {
+            let r = as_agent(&it_id, serde_json::json!({ "workspace": it_path, "addressCap": cap }));
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            let v = json_of(&r);
+            assert_eq!(v["error"]["code"], "owner_only", "{v}");
+            assert!(v["error"]["hint"].as_str().unwrap().contains("that cap is the owner's"), "{v}");
+        }
+        assert_eq!(info(&it_path), (0, "manages_email_hosting"), "nothing landed");
+
+        // Without the switch: refused for any workspace.
+        let r = as_agent(&plain_id, serde_json::json!({ "workspace": other_path, "addressCap": 9 }));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(json_of(&r)["error"]["code"], "agent_send_path_only", "{}", r.body);
+
+        if mail_supported() {
+            // The manager sets another workspace's cap.
+            let r = as_agent(&it_id, serde_json::json!({ "workspace": other_path, "addressCap": 9 }));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(info(&other_path), (9, "set"));
+
+            // The owner caps the manager, and clears it.
+            let r = handle_config_set(&body(serde_json::json!({ "workspace": it_path, "addressCap": 12 })));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(json_of(&r)["hint"], "mail config updated. Addresses: up to 12 (set by the owner for this workspace).");
+            assert_eq!(info(&it_path), (12, "set"));
+            let r = handle_config_set(&body(serde_json::json!({ "workspace": it_path, "addressCap": "none" })));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(json_of(&r)["hint"], "mail config updated. Addresses: unlimited (this agent manages email hosting).");
+            assert_eq!(info(&it_path), (0, "manages_email_hosting"));
+        } else {
+            // Off Linux the cap is hosted-only: the D3 gate.
+            let r = handle_config_set(&body(serde_json::json!({ "workspace": it_path, "addressCap": 12 })));
+            assert_eq!(r.status, "409 Conflict", "{}", r.body);
+        }
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for id in [&it_id, &other_id, &plain_id] {
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]).expect("cleanup project");
         }
     }
 

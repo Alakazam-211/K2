@@ -60,6 +60,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it.
 ### Home
 - **Attach files and images in Home DMs and channels.** The message box has the agent chat's own **+** (Attach a file or image), and you can also drop files on the chat or paste an image into the box. Each file uploads at once, its chip showing how far it is, and Send waits until all are up (up to 10 files per message, up to the size the server allows, 1 GB by default). Pictures show in the message, open in the image viewer, and every file has Download. Files go through your server's K2 as you, and only people who can read the message can open them. Files aren't scanned for viruses, so they always download as files and never open in K2. Your server's K2 needs this release.
+### Email hosting
+- **Agents that manage email hosting can create as many addresses as they need; the owner can still set a cap.** A workspace whose agent has "Let this agent manage hosted mail" on no longer stops at the default of 5 addresses. The owner sets a cap for it on purpose with `k2 hostmail config --workspace <ws> --address-cap <n>`, and `--address-cap none` clears it. An agent without the switch keeps the default of 5, as before. `k2 hostmail config` shows each workspace's cap, for example `Addresses: unlimited (this agent manages email hosting)`. Send limits, mailbox quotas and the other server-wide limits are unchanged. An agent that manages email hosting can no longer set or clear the cap on its own workspace: that cap is the owner's.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

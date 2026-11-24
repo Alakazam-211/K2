@@ -1897,6 +1897,7 @@ function ProjectDetail({
                 </SettingsGroup>
                 <SettingsGroup title="Hosted mail" card>
                   <MailManageToggle project={project} />
+                  <MailAddressCapLine project={project} />
                 </SettingsGroup>
                 <SettingsGroup title="Apps" card>
                   <div className="px-4 pt-3 empty:hidden"><AskedChip row="projects.agents-can-manage-skin" /></div>
@@ -5052,6 +5053,46 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
 // refused server-side). Same switch as `k2 mail sending <ws> <mode>`.
 // Not on the projects row, so no fetchProjects() here.
 type MailAgentSendMode = 'off' | 'approval' | 'on'
+
+// How many hosted addresses this workspace's agent may create (0.46.18):
+// the daemon's own line from GET /cli/mail/config?workspace=
+// (`workspace.addressCap.text`), e.g. "Addresses: unlimited (this agent
+// manages email hosting)". Read only; the owner sets a cap with
+// `k2 hostmail config --workspace <ws> --address-cap <n>|none`. Hidden
+// where hosted mail can't run. Read again when "manage hosted mail" flips.
+function MailAddressCapLine({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element | null {
+  const [text, setText] = useState<string | null>(null)
+  const manages = project.mailManageEnabled ?? 0
+
+  useEffect(() => {
+    let cancelled = false
+    daemonCliGet<{
+      supported?: boolean
+      workspace?: { addressCap?: { text?: string } }
+    }>(primaryScope(), 'mail/config', { workspace: project.path })
+      .then((d) => {
+        if (cancelled) return
+        setText(d.supported === true ? (d.workspace?.addressCap?.text ?? null) : null)
+      })
+      .catch(() => {
+        if (!cancelled) setText(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project.path, manages])
+
+  if (!text) return null
+  return (
+    <div data-testid="mail-address-cap" className="px-4 pb-3 type-hint text-[var(--color-text-secondary)]">
+      {text}
+    </div>
+  )
+}
 
 function MailAgentSendControl({
   project,

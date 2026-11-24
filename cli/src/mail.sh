@@ -1582,7 +1582,7 @@ elif verb == "config_set":
                       ("M_WORKSPACE", "workspace")):
         v = env(envk)
         if v != "":
-            body[key] = int(v) if key in ("relayPort", "addressCap", "quotaBytes", "quotaMessages") else v
+            body[key] = int(v) if key in ("relayPort", "addressCap", "quotaBytes", "quotaMessages") and v != "none" else v
     if env("M_QUOTA_GB") != "":
         body["quotaBytes"] = int(env("M_QUOTA_GB")) * (1 << 30)
     if env("M_ALWAYS_BCC_SET") == "true":

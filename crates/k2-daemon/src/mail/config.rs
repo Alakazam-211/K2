@@ -192,7 +192,7 @@ fn domains_using_relay(conn: &rusqlite::Connection, relay_id: &str) -> Vec<(Stri
 pub fn config_json() -> serde_json::Value {
     let settings = k2_core::app_settings::load();
 
-    let (overrides, domains_json, relays_json) = {
+    let (overrides, domains_json, relays_json, cap_paths) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
 
@@ -241,6 +241,19 @@ pub fn config_json() -> serde_json::Value {
             }
         }
 
+        // 0.46.18: every workspace whose address cap isn't the plain server
+        // default: a cap the owner set, or unlimited because its agent
+        // manages email hosting.
+        let mut cap_paths: Vec<(String, String)> = Vec::new();
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT path, COALESCE(handle, name) FROM projects \
+             WHERE mail_address_cap IS NOT NULL OR mail_manage_enabled = 1 ORDER BY path",
+        ) {
+            if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+                cap_paths.extend(rows.flatten());
+            }
+        }
+
         let domains_json: Vec<serde_json::Value> = domains::load_all_domains(&conn)
             .iter()
             .map(|d| {
@@ -264,8 +277,18 @@ pub fn config_json() -> serde_json::Value {
             })
             .collect();
 
-        (overrides, domains_json, relays_json)
+        (overrides, domains_json, relays_json, cap_paths)
     };
+    // Read outside the lock above (the resolver takes it itself).
+    let address_caps: Vec<serde_json::Value> = cap_paths
+        .iter()
+        .map(|(path, name)| {
+            let mut v = address_cap_json(path);
+            v["project"] = serde_json::json!(path);
+            v["workspace"] = serde_json::json!(name);
+            v
+        })
+        .collect();
 
     let doctor = super::doctor::latest_run_json(None).ok().flatten().map(|run| {
         serde_json::json!({ "grade": run["grade"], "ranAt": run["ranAt"] })
@@ -278,7 +301,11 @@ pub fn config_json() -> serde_json::Value {
             "default": settings.mail_agent_send,
             "modes": SEND_GATE_MODES,
         },
-        "addressCap": { "default": settings.mail_address_cap },
+        "addressCap": {
+            "default": settings.mail_address_cap,
+            "managesEmailHosting": "unlimited unless the owner sets a cap for the workspace",
+        },
+        "workspaceAddressCaps": address_caps,
         "quota": {
             "bytes": { "default": settings.mail_quota_bytes },
             "messages": { "default": settings.mail_quota_messages },
@@ -320,6 +347,7 @@ pub fn workspace_agent_send_json(workspace_path: &str) -> serde_json::Value {
             "default": k2_core::app_settings::load().mail_agent_send,
             "modes": SEND_GATE_MODES,
         },
+        "addressCap": address_cap_json(workspace_path),
     })
 }
 
@@ -811,7 +839,7 @@ pub fn set_send_mode(
 pub fn set_workspace_gating(
     workspace_path: &str,
     agent_send: Option<&str>,
-    address_cap: Option<i64>,
+    address_cap: Option<AddressCapWrite>,
     quota_bytes: Option<i64>,
     quota_messages: Option<i64>,
 ) -> Result<serde_json::Value, CfgError> {
@@ -836,15 +864,20 @@ pub fn set_workspace_gating(
         .map_err(CfgError::Usage)?;
     }
     if let Some(cap) = address_cap {
-        if cap < 0 {
-            return Err(CfgError::Usage(format!(
-                "addressCap must be a non-negative integer (0 = unlimited), got {cap}"
-            )));
-        }
+        let value = match cap {
+            AddressCapWrite::Set(n) if n < 0 => {
+                return Err(CfgError::Usage(format!(
+                    "addressCap must be a non-negative integer (0 = unlimited) or 'none' \
+                     (no cap set), got {n}"
+                )));
+            }
+            AddressCapWrite::Set(n) => n.to_string(),
+            AddressCapWrite::Clear => "none".to_string(),
+        };
         k2_core::workspace::settings::update_project_setting(
             workspace_path,
             "mail_address_cap",
-            &cap.to_string(),
+            &value,
         )
         .map_err(CfgError::Usage)?;
     }
@@ -874,13 +907,63 @@ pub fn set_workspace_gating(
         )
         .map_err(CfgError::Usage)?;
     }
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         "project": workspace_path,
         "agentSend": agent_send,
-        "addressCap": address_cap,
+        "addressCap": address_cap.map(AddressCapWrite::to_json),
         "quotaBytes": quota_bytes,
         "quotaMessages": quota_messages,
-    }))
+    });
+    if address_cap.is_some() {
+        out["addresses"] = serde_json::json!(
+            k2_core::workspace::settings::mail_address_cap_info_for_path(workspace_path).words()
+        );
+    }
+    Ok(out)
+}
+
+/// An `addressCap` write (0.46.18): a number (`0` = unlimited) the owner
+/// sets on purpose, or `none` to clear it (back to unlimited for an agent
+/// that manages email hosting, the server default for any other).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressCapWrite {
+    Set(i64),
+    Clear,
+}
+
+impl AddressCapWrite {
+    /// The wire value: a number or `"none"`. Anything else is `None`
+    /// (the caller's usage error).
+    pub fn from_json(v: &serde_json::Value) -> Option<Self> {
+        match v {
+            serde_json::Value::Number(n) => n.as_i64().map(AddressCapWrite::Set),
+            serde_json::Value::String(s) if k2_core::workspace::settings::mail_cap_clears(s) => {
+                Some(AddressCapWrite::Clear)
+            }
+            serde_json::Value::String(s) => s.trim().parse::<i64>().ok().map(AddressCapWrite::Set),
+            _ => None,
+        }
+    }
+
+    pub fn to_json(self) -> serde_json::Value {
+        match self {
+            AddressCapWrite::Set(n) => serde_json::json!(n),
+            AddressCapWrite::Clear => serde_json::json!("none"),
+        }
+    }
+}
+
+/// One workspace's address cap as `k2 hostmail config` shows it.
+pub fn address_cap_json(workspace_path: &str) -> serde_json::Value {
+    let info = k2_core::workspace::settings::mail_address_cap_info_for_path(workspace_path);
+    serde_json::json!({
+        "effective": info.cap,
+        "unlimited": info.cap == 0,
+        "source": info.source.as_wire(),
+        "managesEmailHosting": k2_core::workspace::settings::mail_manage_allowed_for_path(workspace_path),
+        "default": k2_core::app_settings::load().mail_address_cap,
+        "text": info.words(),
+    })
 }
 
 /// The owner's per-workspace "always BCC" policy (0131). Every address
@@ -1456,6 +1539,9 @@ pub(crate) mod tests {
         assert!(matches!(err, CfgError::Usage(_)), "{err:?}");
         let err = set_workspace_gating("/any", None, None, None, None).expect_err("refuse");
         assert!(matches!(&err, CfgError::Usage(h) if h.contains("agentSend")), "{err:?}");
+        let err = set_workspace_gating("/any", None, Some(AddressCapWrite::Set(-1)), None, None)
+            .expect_err("refuse");
+        assert!(matches!(&err, CfgError::Usage(h) if h.contains("'none'")), "{err:?}");
 
         // Globals: bad values refuse loudly (validated BEFORE any
         // write, so no temp home needed for the refusals) …
@@ -1478,6 +1564,75 @@ pub(crate) mod tests {
             assert_eq!(after.mail_address_cap, 9);
             assert_eq!(after.mail_quota_bytes, 0, "0 = unlimited");
             assert_eq!(after.mail_quota_messages, 0);
+        });
+    }
+
+    /// 0.46.18: the wire spellings of an `addressCap` write.
+    #[test]
+    fn address_cap_write_reads_a_number_or_none() {
+        use serde_json::json;
+        assert_eq!(AddressCapWrite::from_json(&json!(7)), Some(AddressCapWrite::Set(7)));
+        assert_eq!(AddressCapWrite::from_json(&json!(0)), Some(AddressCapWrite::Set(0)));
+        assert_eq!(AddressCapWrite::from_json(&json!("none")), Some(AddressCapWrite::Clear));
+        assert_eq!(AddressCapWrite::from_json(&json!("None")), Some(AddressCapWrite::Clear));
+        assert_eq!(AddressCapWrite::from_json(&json!("12")), Some(AddressCapWrite::Set(12)));
+        for bad in [json!("lots"), json!(1.5), json!(null), json!(true), json!([1])] {
+            assert_eq!(AddressCapWrite::from_json(&bad), None, "{bad}");
+        }
+        assert_eq!(AddressCapWrite::Clear.to_json(), json!("none"));
+        assert_eq!(AddressCapWrite::Set(3).to_json(), json!(3));
+    }
+
+    /// 0.46.18: `k2 hostmail config` shows each workspace that manages
+    /// email hosting as unlimited, and an owner's cap as set; `none`
+    /// clears the cap and the workspace reads unlimited again.
+    #[test]
+    fn config_shows_unlimited_for_a_manager_and_the_owners_cap() {
+        crate::test_support::with_temp_home(|| {
+            let id = uuid::Uuid::new_v4().to_string();
+            let path = format!("/tmp/cfg-cap-manager-{id}");
+            let name = format!("cfg-cap-manager-{id}");
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, mail_manage_enabled) VALUES (?1, ?2, ?3, 1)",
+                    rusqlite::params![id, name, path],
+                )
+                .expect("insert manager workspace");
+            }
+            let row = |v: &serde_json::Value| -> serde_json::Value {
+                v["workspaceAddressCaps"]
+                    .as_array()
+                    .expect("list")
+                    .iter()
+                    .find(|r| r["project"] == path.as_str())
+                    .cloned()
+                    .expect("the manager is listed")
+            };
+            let r = row(&config_json());
+            assert_eq!(r["text"], "Addresses: unlimited (this agent manages email hosting)", "{r}");
+            assert_eq!(r["unlimited"], true);
+            assert_eq!(r["source"], "manages_email_hosting");
+            assert_eq!(r["workspace"], name.as_str());
+            assert_eq!(workspace_agent_send_json(&path)["addressCap"]["text"], r["text"]);
+
+            let v = set_workspace_gating(&path, None, Some(AddressCapWrite::Set(8)), None, None)
+                .expect("owner cap");
+            assert_eq!(v["addressCap"], 8);
+            assert_eq!(v["addresses"], "Addresses: up to 8 (set by the owner for this workspace)");
+            let r = row(&config_json());
+            assert_eq!((r["effective"].clone(), r["source"].clone()), (serde_json::json!(8), serde_json::json!("set")));
+
+            let v = set_workspace_gating(&path, None, Some(AddressCapWrite::Clear), None, None)
+                .expect("clear");
+            assert_eq!(v["addressCap"], "none");
+            assert_eq!(v["addresses"], "Addresses: unlimited (this agent manages email hosting)");
+            assert_eq!(row(&config_json())["unlimited"], true);
+
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]).expect("cleanup");
         });
     }
 

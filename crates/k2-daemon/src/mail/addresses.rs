@@ -1751,6 +1751,74 @@ pub(crate) mod tests {
         cleanup_domain(&domain);
     }
 
+    /// 0.46.18 (Rosson): an agent that manages email hosting end to end
+    /// mints past the default cap of 5; one without the switch stops at 5;
+    /// a cap the owner sets applies to the manager too, and clearing it
+    /// (`none`) lifts it again. The cap is read the route's way
+    /// (`mail_address_cap_for_path`), from real workspace rows.
+    #[test]
+    fn a_manager_mints_past_five_and_only_an_owner_cap_stops_it() {
+        let _mail = crate::mail::mail_server_test_lock();
+        crate::test_support::with_temp_home(|| {
+            let domain = unique("mgrcap") + ".example";
+            cleanup_domain(&domain);
+            seed_domain(&domain, "verified", Some("stw-1"));
+            let engine = FakeAddrEngine::ok();
+            let vault = FakeVault::default();
+            let workspace = |label: &str, manages: bool| -> (String, String) {
+                let id = uuid::Uuid::new_v4().to_string();
+                let path = format!("/tmp/{}", unique(label));
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, mail_manage_enabled) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![id, unique(label), path, i64::from(manages)],
+                )
+                .expect("insert workspace");
+                (id, path)
+            };
+            let cap = |path: &str| k2_core::workspace::settings::mail_address_cap_for_path(path);
+            let (mgr_id, mgr_path) = workspace("manager", true);
+            let (plain_id, plain_path) = workspace("plain", false);
+
+            // The manager: 8 addresses, past the default 5.
+            for i in 0..8 {
+                let v = mint_address(&engine, &vault, &mgr_id, cap(&mgr_path), &format!("m{i}"), Some(&domain), None)
+                    .expect("a manager has no default cap");
+                assert_eq!(v["cap"]["cap"], 0, "unlimited");
+            }
+
+            // Without the switch: the default 5, as before.
+            for i in 0..5 {
+                mint_address(&engine, &vault, &plain_id, cap(&plain_path), &format!("p{i}"), Some(&domain), None)
+                    .expect("under the default cap");
+            }
+            match mint_address(&engine, &vault, &plain_id, cap(&plain_path), "p5", Some(&domain), None) {
+                Err(AddrError::CapReached(hint)) => assert!(hint.starts_with("address cap reached (5/5)"), "{hint}"),
+                other => panic!("a non-manager stops at 5, got {other:?}"),
+            }
+
+            // The owner caps the manager at 8: the ninth is refused.
+            k2_core::workspace::settings::update_project_setting(&mgr_path, "mail_address_cap", "8").expect("owner cap");
+            match mint_address(&engine, &vault, &mgr_id, cap(&mgr_path), "m8", Some(&domain), None) {
+                Err(AddrError::CapReached(hint)) => assert!(hint.starts_with("address cap reached (8/8)"), "{hint}"),
+                other => panic!("an owner's cap applies to a manager, got {other:?}"),
+            }
+            // Cleared: unlimited again.
+            k2_core::workspace::settings::update_project_setting(&mgr_path, "mail_address_cap", "none").expect("clear");
+            mint_address(&engine, &vault, &mgr_id, cap(&mgr_path), "m8", Some(&domain), None).expect("unlimited again");
+
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for id in [&mgr_id, &plain_id] {
+                conn.execute("DELETE FROM mail_addresses WHERE owner_project_id = ?1", rusqlite::params![id]).expect("cleanup");
+                conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id]).expect("cleanup");
+            }
+            drop(conn);
+            cleanup_domain(&domain);
+        });
+    }
+
     #[test]
     fn idempotent_client_id_returns_existing_active_and_refreshes_after_retire() {
         // Reaches the singleton mail_server row: hold the mail lock.

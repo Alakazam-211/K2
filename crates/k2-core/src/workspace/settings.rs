@@ -188,6 +188,11 @@ pub const DB_AGENT_ACCESS_MODES: [&str; 3] = ["off", "read", "write"];
 pub const DEFAULT_DB_ACTIVE_CAP: u32 = 25;
 
 /// A `db_active_cap` write that goes back to the default (stores NULL).
+/// `none`: the owner's per-workspace address cap is cleared (0.46.18).
+pub fn mail_cap_clears(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("none")
+}
+
 fn db_cap_clears(value: &str) -> bool {
     let v = value.trim();
     v.is_empty() || v.eq_ignore_ascii_case("default") || v.eq_ignore_ascii_case("null")
@@ -315,10 +320,13 @@ pub fn update_project_setting(
         ));
     }
     // K2 Mail (D6): the cap must parse as a non-negative integer
-    // (0 = unlimited) so the minting check never reads garbage.
-    if field == "mail_address_cap" && value.parse::<u32>().is_err() {
+    // (0 = unlimited) so the minting check never reads garbage, or be
+    // `none` (0.46.18): clear the owner's cap, back to what the workspace
+    // inherits (unlimited for an agent that manages email hosting, else
+    // the server default).
+    if field == "mail_address_cap" && !mail_cap_clears(value) && value.parse::<u32>().is_err() {
         return Err(format!(
-            "mail_address_cap must be a non-negative integer (0 = unlimited), got {value:?}"
+            "mail_address_cap must be a non-negative integer (0 = unlimited) or 'none' (no cap set), got {value:?}"
         ));
     }
     // Mailbox quota: non-negative i64 (0 = unlimited). Negative /
@@ -412,6 +420,13 @@ pub fn update_project_setting(
             )
             .map_err(|e| format!("DB update failed: {}", e))?
         }
+    } else if field == "mail_address_cap" && mail_cap_clears(value) {
+        // `none` = no cap set here: SQL NULL (inherit).
+        conn.execute(
+            "UPDATE projects SET mail_address_cap = NULL WHERE path = ?1",
+            rusqlite::params![project_path],
+        )
+        .map_err(|e| format!("DB update failed: {}", e))?
     } else if field == "mobile_tab_enabled" && value == "auto" {
         // Auto (the default) is SQL NULL, not a stored word.
         conn.execute(
@@ -1084,27 +1099,93 @@ pub fn mobile_tab_shown(setting: Option<bool>, server_can_run_phone: bool) -> bo
 }
 
 /// The EFFECTIVE address cap for `project_path` (D6): number of
-/// addresses an agent may mint, `0` = unlimited.
-///
-/// Per-workspace override wins when present and non-negative; otherwise
-/// the global `AppSettings.mail_address_cap` default (5). A negative or
-/// unreadable stored value falls back to the global default (never to
-/// unlimited).
+/// addresses an agent may mint, `0` = unlimited. See
+/// [`mail_address_cap_info_for_path`].
 pub fn mail_address_cap_for_path(project_path: &str) -> u32 {
-    let per_workspace: Option<i64> = {
+    mail_address_cap_info_for_path(project_path).cap
+}
+
+/// Where a workspace's address cap comes from (0.46.18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MailAddressCapSource {
+    /// The owner set it for this workspace on purpose
+    /// (`k2 hostmail config --workspace <ws> --address-cap <n>`).
+    Set,
+    /// No cap set, and the workspace's agent manages email hosting
+    /// (`projects.mail_manage_enabled`): unlimited.
+    ManagesEmailHosting,
+    /// No cap set: the server default (`AppSettings.mail_address_cap`).
+    Default,
+}
+
+impl MailAddressCapSource {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            MailAddressCapSource::Set => "set",
+            MailAddressCapSource::ManagesEmailHosting => "manages_email_hosting",
+            MailAddressCapSource::Default => "default",
+        }
+    }
+}
+
+/// A workspace's effective address cap and where it comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MailAddressCap {
+    /// `0` = unlimited.
+    pub cap: u32,
+    pub source: MailAddressCapSource,
+}
+
+impl MailAddressCap {
+    /// The line `k2 hostmail config` and Settings show:
+    /// `Addresses: unlimited (this agent manages email hosting)`.
+    pub fn words(&self) -> String {
+        let n = if self.cap == 0 { "unlimited".to_string() } else { format!("up to {}", self.cap) };
+        let why = match self.source {
+            MailAddressCapSource::Set => "set by the owner for this workspace",
+            MailAddressCapSource::ManagesEmailHosting => "this agent manages email hosting",
+            MailAddressCapSource::Default => "the server default",
+        };
+        format!("Addresses: {n} ({why})")
+    }
+}
+
+/// The EFFECTIVE address cap for `project_path` and its source (D6;
+/// 0.46.18, Rosson: an agent that manages email hosting end to end has no
+/// imposed inbox count):
+///
+/// 1. A per-workspace cap the owner set on purpose wins (`0` = unlimited).
+/// 2. Otherwise, a workspace whose agent manages email hosting
+///    (`mail_manage_enabled`) is unlimited.
+/// 3. Otherwise the global `AppSettings.mail_address_cap` default (5).
+///
+/// A negative or unreadable stored value counts as no cap set for an
+/// agent that manages email hosting, and falls back to the global default
+/// (never to unlimited) for any other.
+pub fn mail_address_cap_info_for_path(project_path: &str) -> MailAddressCap {
+    let (per_workspace, manages): (Option<i64>, bool) = {
         let db = crate::db::shared();
         let conn = db.lock();
         conn.query_row(
-            "SELECT mail_address_cap FROM projects WHERE path = ?1",
+            "SELECT mail_address_cap, mail_manage_enabled FROM projects WHERE path = ?1",
             rusqlite::params![project_path],
-            |row| row.get::<_, Option<i64>>(0),
+            |row| {
+                let cap = row.get::<_, Option<i64>>(0).ok().flatten();
+                let manages = row.get::<_, Option<i64>>(1).ok().flatten() == Some(1);
+                Ok((cap, manages))
+            },
         )
-        .ok()
-        .flatten()
+        .unwrap_or((None, false))
     };
     match per_workspace {
-        Some(v) if v >= 0 => v as u32,
-        _ => crate::app_settings::load().mail_address_cap,
+        Some(v) if (0..=i64::from(u32::MAX)).contains(&v) => {
+            MailAddressCap { cap: v as u32, source: MailAddressCapSource::Set }
+        }
+        _ if manages => MailAddressCap { cap: 0, source: MailAddressCapSource::ManagesEmailHosting },
+        _ => MailAddressCap {
+            cap: crate::app_settings::load().mail_address_cap,
+            source: MailAddressCapSource::Default,
+        },
     }
 }
 
@@ -3091,6 +3172,65 @@ mod tests {
             .expect("corrupt cap directly");
         }
         assert_eq!(mail_address_cap_for_path(&path), 9, "negative → global default");
+    }
+
+    /// 0.46.18 (Rosson): a workspace whose agent manages email hosting has
+    /// no default address cap. A cap the owner sets on purpose still
+    /// applies to it, and `none` clears that cap: unlimited again. An agent
+    /// without the switch keeps the server default.
+    #[test]
+    fn mail_address_cap_is_unlimited_for_an_email_hosting_manager() {
+        let _g = HOME_TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let path = unique_path("mail-cap-manager");
+        let _pid = insert_project(&path);
+        let info = |p: &str| {
+            let i = mail_address_cap_info_for_path(p);
+            (i.cap, i.source)
+        };
+
+        assert_eq!(info(&path), (5, MailAddressCapSource::Default));
+        assert_eq!(mail_address_cap_info_for_path(&path).words(), "Addresses: up to 5 (the server default)");
+
+        set_mail_manage_enabled(&path, true).expect("manage on");
+        assert_eq!(info(&path), (0, MailAddressCapSource::ManagesEmailHosting));
+        assert_eq!(mail_address_cap_for_path(&path), 0, "0 = unlimited");
+        assert_eq!(
+            mail_address_cap_info_for_path(&path).words(),
+            "Addresses: unlimited (this agent manages email hosting)"
+        );
+
+        // The owner's explicit cap applies to a manager too.
+        update_project_setting(&path, "mail_address_cap", "7").expect("owner cap 7");
+        assert_eq!(info(&path), (7, MailAddressCapSource::Set));
+        assert_eq!(
+            mail_address_cap_info_for_path(&path).words(),
+            "Addresses: up to 7 (set by the owner for this workspace)"
+        );
+        update_project_setting(&path, "mail_address_cap", "0").expect("owner cap 0");
+        assert_eq!(info(&path), (0, MailAddressCapSource::Set));
+
+        // `none` clears it: unlimited again.
+        update_project_setting(&path, "mail_address_cap", "none").expect("clear");
+        assert_eq!(info(&path), (0, MailAddressCapSource::ManagesEmailHosting));
+        update_project_setting(&path, "mail_address_cap", " NONE ").expect("clear, any case");
+        assert_eq!(info(&path), (0, MailAddressCapSource::ManagesEmailHosting));
+
+        // A corrupt stored cap on a manager is no cap set.
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE projects SET mail_address_cap = -3 WHERE path = ?1", rusqlite::params![path])
+                .expect("corrupt cap directly");
+        }
+        assert_eq!(info(&path), (0, MailAddressCapSource::ManagesEmailHosting));
+
+        // Without the switch: the server default again, never unlimited.
+        set_mail_manage_enabled(&path, false).expect("manage off");
+        assert_eq!(info(&path), (5, MailAddressCapSource::Default));
+        update_project_setting(&path, "mail_address_cap", "none").expect("clear");
+        assert_eq!(info(&path), (5, MailAddressCapSource::Default));
     }
 
     /// Mailbox quota: default 1 GB / 10k, per-workspace override wins,

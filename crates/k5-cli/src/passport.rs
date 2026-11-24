@@ -213,7 +213,7 @@ pub fn app_cmd_says_help(words: &[OsString]) -> bool {
 pub fn facts(args: &[OsString], lookup: impl Fn(&str) -> Option<OsString>) -> Facts {
     let passport = env_names::first_nonempty_os_in(env_names::HOOK_TOKEN, &lookup).is_some();
     let no_owner_fallback = env_names::first_nonempty_os_in(env_names::NO_OWNER_FALLBACK, &lookup)
-        .is_some_and(|(_, v)| v == "1");
+        .is_some_and(|(_, v)| crate::prelude::no_owner_on(&v));
     let marker = SESSION_MARKERS
         .iter()
         .find_map(|names| env_names::first_nonempty_os_in(names, &lookup).map(|(n, _)| n));

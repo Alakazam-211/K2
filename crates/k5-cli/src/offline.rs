@@ -177,7 +177,7 @@ fn settings_in(env: &Env, k2_home: &Path) -> Result<Prelude, Handoff> {
     }
     let no_owner = env
         .first(env_names::NO_OWNER_FALLBACK)
-        .is_some_and(|v| v == "1");
+        .is_some_and(crate::prelude::no_owner_on);
     let mut token = passport;
     if !no_owner {
         let mut disk = false;

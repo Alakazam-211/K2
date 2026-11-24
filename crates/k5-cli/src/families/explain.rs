@@ -88,7 +88,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
 fn guarded(args: &[OsString], p: &Prelude, env: &Env) -> bool {
     let no_owner = env
         .first(env_names::NO_OWNER_FALLBACK)
-        .is_some_and(|v| v == "1");
+        .is_some_and(crate::prelude::no_owner_on);
     let help = args.iter().skip(1).any(|w| w == "-h" || w == "--help");
     no_owner && !p.token && !help
 }
@@ -103,7 +103,7 @@ fn kit_call(args: &[OsString], p: &Prelude, env: &Env) -> Option<Vec<String>> {
         .collect::<Option<_>>()?;
     let no_owner = env
         .first(env_names::NO_OWNER_FALLBACK)
-        .is_some_and(|v| v == "1");
+        .is_some_and(crate::prelude::no_owner_on);
     if no_owner && !p.token {
         return None;
     }

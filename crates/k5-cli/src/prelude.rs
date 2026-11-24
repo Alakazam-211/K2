@@ -57,6 +57,19 @@ pub const VIRTUAL_DESKTOP: [&str; 2] = [
     ),
 ];
 
+/// Whether a `NO_OWNER_FALLBACK` value (the first of its names that is set
+/// and not empty, as `_envn` picks it) turns the virtual desktop's guard
+/// on: the prelude's `[ "$(_envn NO_OWNER_FALLBACK)" = "1" ]`, where
+/// `$( )` drops the newlines at the end, so `1` followed by newlines is on
+/// too. Nothing else is: no other space is trimmed.
+pub fn no_owner_on(v: &std::ffi::OsStr) -> bool {
+    let mut b = v.as_encoded_bytes();
+    while let [rest @ .., b'\n'] = b {
+        b = rest;
+    }
+    b == b"1"
+}
+
 /// The connection gate: exit 1.
 pub const CANNOT_CONNECT: [&str; 3] = [
     concat!("Error: Cannot connect to ", k2_client::product_name!(), "."),
@@ -398,6 +411,33 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard's setting as the prelude reads it, newlines at the end
+    /// dropped by `$( )`; every reader of it in the binary shares this.
+    #[test]
+    fn the_guard_s_setting_is_one_after_the_newlines_go() {
+        use std::ffi::OsStr;
+        for (v, on) in [
+            ("1", true),
+            ("1\n", true),
+            ("1\n\n", true),
+            ("0", false),
+            ("", false),
+            ("\n", false),
+            ("\n1", false),
+            (" 1", false),
+            ("1 ", false),
+            ("1\r", false),
+            ("yes", false),
+        ] {
+            assert_eq!(no_owner_on(OsStr::new(v)), on, "{v:?}");
+        }
+        // Unset: no value to read, so off.
+        let unset = crate::offline::Env::of(&[]);
+        assert!(!unset
+            .first(k2_client::env_names::NO_OWNER_FALLBACK)
+            .is_some_and(no_owner_on));
+    }
 
     fn source(file: &str) -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

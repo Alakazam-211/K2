@@ -157,7 +157,8 @@ pub fn settings_with(
     let host = text(env_names::HOST).unwrap_or_else(|| DEFAULT_HOST.to_string());
     let secrets_dir = env_names::first_nonempty_os_in(env_names::SECRETS_DIR, &lookup)
         .map(|(_, v)| PathBuf::from(v));
-    let no_owner_fallback = text(env_names::NO_OWNER_FALLBACK).is_some_and(|v| v == "1");
+    let no_owner_fallback = text(env_names::NO_OWNER_FALLBACK)
+        .is_some_and(|v| crate::prelude::no_owner_on(std::ffi::OsStr::new(&v)));
     let mut owner_from_disk = false;
     let auth = match text(env_names::HOOK_TOKEN).and_then(Passport::new) {
         Some(passport) => {

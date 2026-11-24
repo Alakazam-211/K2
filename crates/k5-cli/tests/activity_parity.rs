@@ -833,3 +833,71 @@ fn activity_hands_these_to_the_shell() {
         rig.check(&c);
     }
 }
+
+/// The owner-fallback setting as the prelude reads it: `$(_envn
+/// NO_OWNER_FALLBACK)` against `1`, the newlines at the end of the value
+/// dropped by `$( )`. `1` followed by a newline refuses on both CLIs, as
+/// `1` does; `0`, unset and empty leave the owner token in use.
+#[test]
+fn activity_reads_the_owner_fallback_setting_as_the_prelude_does() {
+    let rig = Rig::new(VERB, "nofbread");
+    let v = vec![
+        case(
+            "the setting 1 and a newline",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "1\n")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        case(
+            "the setting 1 and two newlines, under K5_",
+            &[],
+            &[("K5_NO_OWNER_FALLBACK", "1\n\n")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        case(
+            "the setting 1",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "1")],
+            vec![],
+            owner_and_port,
+            3,
+            0,
+        ),
+        case(
+            "the setting 0",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "0")],
+            vec![ok(FEED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the setting empty",
+            &[],
+            &[("K2_NO_OWNER_FALLBACK", "")],
+            vec![ok(FEED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "the setting unset",
+            &[],
+            &[],
+            vec![ok(FEED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+    ];
+    for c in v {
+        rig.check(&c);
+    }
+}

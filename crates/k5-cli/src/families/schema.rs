@@ -75,7 +75,7 @@ pub fn text(version: &str) -> String {
 fn guarded(args: &[OsString], p: &Prelude, env: &Env) -> bool {
     let no_owner = env
         .first(env_names::NO_OWNER_FALLBACK)
-        .is_some_and(|v| v == "1");
+        .is_some_and(crate::prelude::no_owner_on);
     let offline = args.first().is_some_and(|w| w == "--schema")
         || args.iter().any(|w| w == "-h" || w == "--help");
     no_owner && !p.token && !offline

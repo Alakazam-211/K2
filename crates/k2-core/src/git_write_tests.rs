@@ -125,10 +125,12 @@ fn child_commit_without_identity() {
 }
 
 /// No hook ever runs through K2's writes (a repo's own `core.hooksPath`
-/// included), and a repo-local signing setting doesn't prompt.
+/// included), and a repo-local signing setting doesn't prompt. A repo-local
+/// `core.hooksPath` names a program, so the workspace is trusted first.
 #[cfg(unix)]
 #[test]
 fn writes_run_no_hooks() {
+    let _home = trust_env();
     let d = fx::init("write-hooks");
     write(&d, "a.txt", "a\n");
     fx::commit_all(&d, "base");
@@ -150,6 +152,8 @@ fn writes_run_no_hooks() {
         std::fs::remove_file(e.expect("entry").path()).expect("clear");
     }
 
+    assert!(stage_file(s(&d), "a.txt").expect_err("untrusted").starts_with("git_config_runs_programs: "));
+    crate::cli_folder_trust::gate::decide(s(&d), crate::cli_folder_trust::gate::Decision::Always, "owner", None).expect("trust");
     write(&d, "a.txt", "k2\n");
     write(&d, "b.txt", "b\n");
     stage_file(s(&d), "a.txt").expect("stage");
@@ -339,6 +343,7 @@ fn trust_env() -> crate::test_env::TempHome {
 #[cfg(unix)]
 fn assert_needs_trust(e: &str, keys: &[&str], secret: &str) {
     assert!(e.starts_with("git_config_runs_programs: "), "the typed code: {e}");
+    assert_eq!(refusal::code_of(e), Some(refusal::GIT_CONFIG_RUNS_PROGRAMS));
     for k in keys {
         assert!(e.to_ascii_lowercase().contains(k), "names {k}: {e}");
     }
@@ -436,6 +441,36 @@ fn a_merge_driver_needs_trust_before_merge() {
     assert!(!d.join(".git/MERGE_HEAD").exists());
     let e = delete_branch(s(&d), "side").expect_err("delete is a write too");
     assert!(e.starts_with("git_config_runs_programs: "), "{e}");
+}
+
+/// A merge already in progress (made before the filter was set) can be
+/// neither resolved nor aborted through K2 untrusted.
+#[cfg(unix)]
+#[test]
+fn resolve_and_abort_are_refused_too() {
+    let _home = trust_env();
+    let d = fx::init("guard-resolve");
+    write(&d, "a.txt", "base\n");
+    fx::commit_all(&d, "base");
+    fx::git(&d, &["checkout", "-q", "-b", "side"]);
+    write(&d, "a.txt", "side\n");
+    fx::commit_all(&d, "side");
+    fx::git(&d, &["checkout", "-q", "main"]);
+    write(&d, "a.txt", "main\n");
+    fx::commit_all(&d, "main");
+    let out = fx::git_cmd(&d).args(["merge", "-q", "side"]).output().expect("run git merge");
+    assert!(!out.status.success(), "the fixture merge conflicts");
+    assert!(d.join(".git/MERGE_HEAD").exists());
+    write(&d, ".gitattributes", "*.txt filter=x\n");
+    let marks = fx::tmp("guard-resolve-marks");
+    let prog = marker_prog(&marks, "filter");
+    fx::git(&d, &["config", "filter.x.smudge", &prog]);
+    let e = resolve_conflict(s(&d), "a.txt", "theirs").expect_err("resolve is refused");
+    assert_needs_trust(&e, &["filter.x.smudge"], &prog);
+    let e = abort_merge(s(&d)).expect_err("abort is refused");
+    assert_needs_trust(&e, &["filter.x.smudge"], &prog);
+    assert!(d.join(".git/MERGE_HEAD").exists(), "the merge is still there");
+    assert!(ran(&marks).is_empty());
 }
 
 #[cfg(unix)]

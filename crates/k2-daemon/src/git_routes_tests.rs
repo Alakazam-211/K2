@@ -671,6 +671,43 @@ fn prune_worktrees_route_only_prunes_that_workspaces_rows() {
 /// `git_not_installed` and the plain message with its install hint (the
 /// writes themselves are proven to refuse before running anything in
 /// k2-core's write tests); a discard's error gets the same status.
+/// A repository whose own config names a program, in a workspace nobody
+/// trusted: stage, stage-all, commit, merge and discard answer 409
+/// `git_config_runs_programs` naming the key, never its value.
+#[cfg(unix)]
+#[test]
+fn repo_programs_need_trust_on_the_wire() {
+    let _home = k2_core::test_env::TempHome::new();
+    k2_core::db::init_for_tests();
+    let d = repo("guard-wire");
+    // A side branch that diverged, so the merge is a real one.
+    git(&d, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(d.join("b.txt"), "b\n").expect("b");
+    git(&d, &["add", "-A"]);
+    git(&d, &["commit", "-q", "-m", "side"]);
+    git(&d, &["checkout", "-q", "main"]);
+    std::fs::write(d.join("c.txt"), "c\n").expect("c");
+    git(&d, &["add", "-A"]);
+    git(&d, &["commit", "-q", "-m", "main"]);
+    git(&d, &["config", "filter.x.smudge", "/bin/echo secret-value"]);
+    let ws = s(&d);
+    let merge = post("/cli/git/merge-branch", serde_json::json!({ "path": ws, "branch": "side" }));
+    std::fs::write(d.join("a.txt"), "one\nTWO\n").expect("edit");
+    for (route, r) in [
+        ("/cli/git/merge-branch", merge),
+        ("/cli/git/stage", post("/cli/git/stage", serde_json::json!({ "path": ws, "filePath": "a.txt" }))),
+        ("/cli/git/stage-all", post("/cli/git/stage-all", serde_json::json!({ "path": ws }))),
+        ("/cli/git/commit", post("/cli/git/commit", serde_json::json!({ "path": ws, "message": "m" }))),
+        ("/cli/git/discard", post("/cli/git/discard", serde_json::json!({ "path": ws, "files": ["a.txt"] }))),
+    ] {
+        assert_eq!(r.status, "409 Conflict", "{route}: {}", r.body);
+        let j = json(&r);
+        assert_eq!(j["code"], "git_config_runs_programs", "{route}: {}", r.body);
+        assert!(r.body.contains("filter.x.smudge") && !r.body.contains("secret-value"), "{route}: {}", r.body);
+    }
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "one\nTWO\n", "nothing was discarded");
+}
+
 #[test]
 fn git_not_installed_reaches_the_wire_as_409_with_its_code() {
     let e = format!("{}: {}", git::refusal::GIT_NOT_INSTALLED, k2_core::git_safe::not_installed_hint());

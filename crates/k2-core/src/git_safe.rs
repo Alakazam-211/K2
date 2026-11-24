@@ -208,11 +208,19 @@ impl WriteOutput {
 const LOCK_RETRIES: u32 = 5;
 const LOCK_DELAY: Duration = Duration::from_millis(50);
 
-/// Run one K2 write (`git <args>` in `dir`) after [`require_git`]. While
+/// Run one K2 write (`git <args>` in `dir`) after [`require_git`] and
+/// [`crate::git_write_guard::check`]. While
 /// another process holds the index lock it retries a few times; then the
 /// last answer stands (`index.lock` named in it).
 pub fn run_write(dir: &Path, args: &[&str]) -> Result<WriteOutput, String> {
     require_git()?;
+    // A repository's own programs (filters, merge drivers…) run only in a
+    // workspace a person trusted or K2 made (`git_config_runs_programs`).
+    // `init`, `config` and `symbolic-ref` (K2's own `git init`, before the
+    // repository exists) run none of them.
+    if !matches!(args.first(), Some(&("init" | "config" | "symbolic-ref"))) {
+        crate::git_write_guard::check(dir)?;
+    }
     let mut last = None;
     for attempt in 0..LOCK_RETRIES {
         let out = write_command(dir).args(args).output().map_err(|e| format!("couldn't run git {}: {e}", args.join(" ")))?;

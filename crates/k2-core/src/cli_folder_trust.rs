@@ -238,7 +238,7 @@ pub fn current_home() -> Option<PathBuf> {
 
 /// Tests (k2-core cfg(test) or daemon test-util) must not merge throwaway
 /// workspace paths into the developer's real `~/.claude.json`.
-fn skip_unisolated_home(home: &Path) -> bool {
+pub(crate) fn skip_unisolated_home(home: &Path) -> bool {
     #[cfg(any(test, feature = "test-util"))]
     {
         let tmp = std::env::temp_dir();

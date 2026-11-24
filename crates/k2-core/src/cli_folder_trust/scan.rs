@@ -1332,7 +1332,7 @@ fn dotenv_pairs(text: &str) -> Vec<(String, String)> {
 
 /// `(section[.subsection].key, value)` pairs of a git config file, keys
 /// lowercased except the subsection (git's own rule).
-fn git_config_entries(text: &str) -> Vec<(String, String)> {
+pub(crate) fn git_config_entries(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut section = String::new();
     for raw in text.lines() {

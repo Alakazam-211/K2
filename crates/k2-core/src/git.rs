@@ -404,14 +404,20 @@ pub mod refusal {
     /// runs on this machine. The hint says how to install it. Reads never
     /// need git.
     pub const GIT_NOT_INSTALLED: &str = "git_not_installed";
+    /// A write in a workspace nobody trusted (and K2 didn't make) whose
+    /// repository's own git settings name a program git would run
+    /// (`crate::git_write_guard`). The message names the keys and how to
+    /// trust the workspace; nothing runs.
+    pub const GIT_CONFIG_RUNS_PROGRAMS: &str = "git_config_runs_programs";
 
-    const ALL: [&str; 6] = [
+    const ALL: [&str; 7] = [
         NOT_A_REPO,
         NOT_A_WORKTREE_OF_PROJECT,
         MAIN_HAS_UNCOMMITTED_CHANGES,
         NO_MERGE_IN_PROGRESS,
         NOT_IN_CONFLICT,
         GIT_NOT_INSTALLED,
+        GIT_CONFIG_RUNS_PROGRAMS,
     ];
 
     /// The refusal code an error from this module starts with, if any.
@@ -820,6 +826,7 @@ pub fn init_repo(path: &str) -> Result<(), String> {
     }
     crate::git_safe::run_write_ok(dir, &format!("git init {path}"), &["init", "-q"])?;
     crate::git_safe::run_write_ok(dir, &format!("git init {path}"), &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")])?;
+    crate::git_write_guard::mark_k2_made(dir);
     Ok(())
 }
 

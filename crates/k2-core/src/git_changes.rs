@@ -49,6 +49,9 @@ pub mod codes {
     /// Discard needs the person's git to restore or unstage, and none runs
     /// here (`crate::git::refusal::GIT_NOT_INSTALLED`).
     pub const GIT_NOT_INSTALLED: &str = "git_not_installed";
+    /// The repository's own git settings run programs and the workspace
+    /// isn't trusted (`crate::git::refusal::GIT_CONFIG_RUNS_PROGRAMS`).
+    pub const GIT_CONFIG_RUNS_PROGRAMS: &str = "git_config_runs_programs";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1008,6 +1011,10 @@ pub fn discard(
         crate::git_safe::require_git().map_err(|e| {
             let hint = e.strip_prefix(&format!("{}: ", crate::git::refusal::GIT_NOT_INSTALLED)).unwrap_or(&e).to_string();
             ChangesError::new(codes::GIT_NOT_INSTALLED, hint)
+        })?;
+        crate::git_write_guard::check(&workdir).map_err(|e| {
+            let hint = e.strip_prefix(&format!("{}: ", crate::git::refusal::GIT_CONFIG_RUNS_PROGRAMS)).unwrap_or(&e).to_string();
+            ChangesError::new(codes::GIT_CONFIG_RUNS_PROGRAMS, hint)
         })?;
     }
 

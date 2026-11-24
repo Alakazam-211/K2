@@ -334,6 +334,9 @@ pub mod git_notes;
 pub mod git_safe;
 /// The one door for gitoxide (gix): every K2 git read opens repos here.
 pub mod gitx;
+/// A repository's own programs (filters, merge drivers…) never run
+/// through K2's git writes in a workspace nobody trusted (0.46.18).
+pub mod git_write_guard;
 /// Test repositories made by the real git CLI (oracle fixtures).
 #[cfg(any(test, feature = "test-util"))]
 pub mod git_fixture;

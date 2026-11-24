@@ -1116,6 +1116,7 @@ pub(crate) fn init_and_first_commit(path: &str, branch_name: &str, unattended: b
         }
         return Err(format!("Failed to create initial commit: {}", stderr));
     }
+    crate::git_write_guard::mark_k2_made(std::path::Path::new(path));
     Ok(())
 }
 

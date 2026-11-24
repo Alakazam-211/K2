@@ -458,6 +458,9 @@ pub use k2_client::release_sums;
 // membership + PoC rules, the per-group chat stream, and canonical
 // shared dashboards.
 pub mod project_groups;
+// Project chats on the Thread store (project-chat-thread-v1): the one write
+// path, the read views, the backfill of old rows, the daily orphan sweep.
+pub mod project_chat_thread;
 pub mod projects_ops;
 /// Daemon-owned published services (`published_services` / migration 0104).
 pub mod published_services;

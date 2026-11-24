@@ -286,7 +286,8 @@ pub fn ensure_person(conn: &Connection, person: &str) -> Result<bool, ReadError>
         )?;
         conn.execute(
             "INSERT OR IGNORE INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at) \
-             SELECT ?1, 'project', id, last_msg_seq, ?2 FROM project_groups",
+             SELECT ?1, 'project', g.id, MAX(g.last_msg_seq, COALESCE(c.last_thread_seq, 0)), ?2 FROM project_groups g \
+             LEFT JOIN overlay_conversations c ON c.kind = 'project' AND c.group_id = g.id",
             params![person, now],
         )?;
         Ok(())
@@ -323,7 +324,9 @@ pub fn ensure_people(conn: &Connection, people: &People) -> Result<usize, ReadEr
 pub fn head(conn: &Connection, kind: &str, id: &str) -> Result<Option<i64>, ReadError> {
     let sql = match kind {
         KIND_THREAD => "SELECT last_thread_seq FROM overlay_conversations WHERE conversation_id = ?1",
-        KIND_PROJECT => "SELECT last_msg_seq FROM project_groups WHERE id = ?1",
+        // project-chat-thread-v1: the chat's Thread head (never below the
+        // old `last_msg_seq`: an unmoved project, the rollback copy).
+        KIND_PROJECT => crate::project_chat_thread::head_sql(),
         other => return Err(ReadError::Usage(format!("kind must be 'thread' or 'project', got '{other}'"))),
     };
     conn.query_row(sql, params![id], |r| r.get(0)).optional().map_err(store_err)
@@ -391,7 +394,8 @@ pub fn project_exists(conn: &Connection, project_id: &str) -> Result<bool, ReadE
 /// pinned Chat, each sidecar's, and the Threads of earlier chats that no
 /// address reaches any more (a re-pinned Chat keeps its old conversation,
 /// and an agent row's badge sums them all, [`thread_sums_by_project`]).
-/// A ticket's discussion (kind `ticket`) is not one of them.
+/// A ticket's discussion (kind `ticket`) and a project's chat (kind
+/// `project`) are not among them.
 /// Forward only, one savepoint (all or none). Waiting cards stay waiting:
 /// reading never answers a card. Returns the conversations that moved, each
 /// with its new cursor. `NotFound` for a workspace this server doesn't have.
@@ -406,7 +410,7 @@ pub fn ack_project_threads(conn: &Connection, person: &str, project_id: &str) ->
             "SELECT c.conversation_id, c.last_thread_seq, COALESCE(r.last_read_seq, 0) \
              FROM overlay_conversations c LEFT JOIN read_cursors r \
              ON r.person = ?1 AND r.kind = 'thread' AND r.conv_id = c.conversation_id \
-             WHERE c.project_id = ?2 AND c.kind <> 'ticket' ORDER BY c.conversation_id",
+             WHERE c.project_id = ?2 AND c.kind = 'thread' ORDER BY c.conversation_id",
         )
         .map_err(store_err)?;
     let behind: Vec<(String, i64)> = stmt
@@ -553,9 +557,16 @@ fn thread_unread(person: &Person, conv: &str, after: i64, head: i64, now: i64) -
     Ok(thread_unreads(person, &[(conv, after, head)], now)?[0])
 }
 
-fn project_unread(conn: &Connection, person: &Person, group: &str, after: i64, head: i64) -> Result<i64, ReadError> {
+/// Unread lines of project `group` for `person` past `after`: from its
+/// Thread `project:<id>` once moved (project-chat-thread-v1: the line's
+/// author stamp says whose it is, as on every Thread), else from its old
+/// rows.
+fn project_unread(conn: &Connection, person: &Person, group: &str, after: i64, head: i64, now: i64) -> Result<i64, ReadError> {
     if head <= after {
         return Ok(0);
+    }
+    if crate::project_chat_thread::group_moved(conn, group).map_err(ReadError::Store)? == Some(true) {
+        return thread_unread(person, &overlay::project::conversation_id(group), after, head, now);
     }
     let mut stmt = conn
         .prepare(
@@ -599,7 +610,7 @@ pub fn item(conn: &Connection, person: &Person, kind: &str, id: &str, now: i64) 
             thread_waiting(person, id, now)?,
             thread_project_id(conn, id)?,
         ),
-        _ => (project_unread(conn, person, id, cur.last_read_seq, head)?, 0, None),
+        _ => (project_unread(conn, person, id, cur.last_read_seq, head, now)?, 0, None),
     };
     let muted = cur.muted_at(now);
     Ok(ReadItem {
@@ -649,14 +660,15 @@ pub fn summary_seen(conn: &Connection, person: &Person, now: i64) -> Result<Summ
     // Threads: one catalog pass. A conversation with no catalog row (a
     // removed workspace's, a collected `gb:` one) is not counted, and a
     // ticket's discussion (kind `ticket`, ticket-thread-v1) never is: the
-    // Tickets badge counts tickets (waiting ones), not their messages.
+    // Tickets badge counts tickets (waiting ones), not their messages. A
+    // project's chat (kind `project`) is counted below, from its project.
     let mut stmt = conn
         .prepare(
             "SELECT c.conversation_id, c.project_id, c.last_thread_seq, COALESCE(r.last_read_seq, 0), \
              COALESCE(r.muted, 0), r.muted_until \
              FROM overlay_conversations c LEFT JOIN read_cursors r \
              ON r.person = ?1 AND r.kind = 'thread' AND r.conv_id = c.conversation_id \
-             WHERE c.kind <> 'ticket'",
+             WHERE c.kind = 'thread'",
         )
         .map_err(store_err)?;
     type Row = (String, String, i64, Cursor);
@@ -707,10 +719,11 @@ pub fn summary_seen(conn: &Connection, person: &Person, now: i64) -> Result<Summ
     // Project chats.
     let mut stmt = conn
         .prepare(
-            "SELECT g.id, g.last_msg_seq, COALESCE(r.last_read_seq, 0), COALESCE(r.muted, 0), r.muted_until \
-             FROM project_groups g LEFT JOIN read_cursors r \
-             ON r.person = ?1 AND r.kind = 'project' AND r.conv_id = g.id \
-             WHERE g.last_msg_seq > COALESCE(r.last_read_seq, 0) OR COALESCE(r.muted, 0) = 1",
+            "SELECT g.id, MAX(g.last_msg_seq, COALESCE(c.last_thread_seq, 0)), COALESCE(r.last_read_seq, 0), \
+             COALESCE(r.muted, 0), r.muted_until \
+             FROM project_groups g LEFT JOIN overlay_conversations c ON c.kind = 'project' AND c.group_id = g.id \
+             LEFT JOIN read_cursors r ON r.person = ?1 AND r.kind = 'project' AND r.conv_id = g.id \
+             WHERE MAX(g.last_msg_seq, COALESCE(c.last_thread_seq, 0)) > COALESCE(r.last_read_seq, 0) OR COALESCE(r.muted, 0) = 1",
         )
         .map_err(store_err)?;
     let rows: Vec<(String, i64, Cursor)> = stmt
@@ -726,7 +739,7 @@ pub fn summary_seen(conn: &Connection, person: &Person, now: i64) -> Result<Summ
         .map_err(store_err)?;
     for (group, head, cur) in rows {
         let muted = cur.muted_at(now);
-        let unread = project_unread(conn, person, &group, cur.last_read_seq, head)?;
+        let unread = project_unread(conn, person, &group, cur.last_read_seq, head, now)?;
         if unread == 0 && !muted {
             continue;
         }
@@ -1392,9 +1405,18 @@ mod tests {
         let h = g.handle();
         let gid = crate::project_groups::create_group(&format!("rs-trim-{}", uuid::Uuid::new_v4())).expect("group").id;
         let conn = h.lock();
-        for i in 0..5 {
-            crate::project_groups::post_message_as(&gid, "scout", "agent", &format!("l{i}")).expect("post");
+        // A project still on its old rows (before project-chat-thread-v1's
+        // move): its unread is read from them.
+        conn.execute("UPDATE project_groups SET messages_in_thread = 0 WHERE id = ?1", params![gid]).expect("unmoved");
+        for i in 1..=5i64 {
+            conn.execute(
+                "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind) \
+                 VALUES (?1, ?2, 'scout', ?3, ?4, ?4, 'agent')",
+                params![uuid::Uuid::new_v4().to_string(), gid, format!("l{i}"), i],
+            )
+            .expect("old row");
         }
+        conn.execute("UPDATE project_groups SET last_msg_seq = 5 WHERE id = ?1", params![gid]).expect("old head");
         ack(&conn, "owner", KIND_PROJECT, &gid, Some(3)).expect("ack");
         // Trim lines 1..=4, including the one the cursor names.
         conn.execute("DELETE FROM project_group_messages WHERE group_id = ?1 AND seq <= 4", params![gid]).expect("trim");

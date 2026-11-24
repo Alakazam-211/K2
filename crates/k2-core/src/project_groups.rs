@@ -116,6 +116,11 @@ pub struct ProjectGroupMessage {
     /// posted without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_msg_id: Option<String>,
+    /// project-chat-thread-v1: the line's files (Thread attachments, as a
+    /// Thread item carries them). Left off the wire when there are none,
+    /// so a text line reads exactly as before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::overlay::ThreadAttachment>,
 }
 
 /// `project_group_messages.author_kind` of a person's post.
@@ -252,6 +257,7 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroupMessage> 
         seq: row.get(5)?,
         author_kind: row.get(6)?,
         client_msg_id: row.get(7)?,
+        attachments: Vec::new(),
     })
 }
 
@@ -285,7 +291,7 @@ pub fn create_group(name: &str) -> Result<ProjectGroup, String> {
     }
     conn.execute(
         "INSERT INTO project_groups (id, name, poc_workspace_id, pinned, sort_order, \
-         created_at, updated_at) VALUES (?1, ?2, NULL, 0, 0, ?3, ?3)",
+         created_at, updated_at, messages_in_thread) VALUES (?1, ?2, NULL, 0, 0, ?3, ?3, 1)",
         params![id, name, now],
     )
     .map_err(|e| {
@@ -681,8 +687,13 @@ pub fn delete_group(id: &str) -> Result<(), String> {
     }
     // Its read cursors and mutes go with it (thread-read-v1; no FK).
     crate::read_state::delete_conversation(&conn, crate::read_state::KIND_PROJECT, id)?;
+    let conv = crate::overlay::project::conversation_id(id);
+    crate::read_state::delete_conversation(&conn, crate::read_state::KIND_THREAD, &conv)?;
     // Who may read a project rests on its members, in this database.
     crate::skin::access_live::hint();
+    // project-chat-thread-v1: the DELETE's trigger took the chat's catalog
+    // row; its stored lines go now (the daily sweep retries a failure).
+    crate::project_chat_thread::purge_group(id);
     Ok(())
 }
 
@@ -1040,6 +1051,9 @@ pub struct ClientKey<'a> {
     pub client_msg_id: &'a str,
     /// Unix ms, the sweep's clock.
     pub at_ms: i64,
+    /// What was sent, hashed (`client_msg_id::body_hash` in the daemon): a
+    /// repeat whose hash differs answers `mismatch` (the first write wins).
+    pub body_hash: &'a str,
 }
 
 /// What [`post_message_keyed`] did.
@@ -1077,9 +1091,7 @@ pub fn client_keys_ready(conn: &rusqlite::Connection) -> bool {
     .unwrap_or(false)
 }
 
-/// [`post_message_as`] with an optional client key. The check and the
-/// insert run under the one DB lock, the key row inside the post's own
-/// savepoint, and the key is the table's primary key: the first write wins.
+/// [`post_message_as`] with an optional client key (text only).
 pub fn post_message_keyed(
     group_id: &str,
     author: &str,
@@ -1087,106 +1099,50 @@ pub fn post_message_keyed(
     body: &str,
     client: Option<ClientKey<'_>>,
 ) -> Result<PostOutcome, String> {
+    post_message_with_files(group_id, author, author_kind, body, Vec::new(), client)
+}
+
+/// project-chat-thread-v1: store one line in the project's Thread
+/// conversation `project:<id>` ([`crate::project_chat_thread::post_line`]:
+/// a project not moved yet moves first; the body is redacted; the
+/// rollback copy is written). `attachments` must come from the Thread's
+/// snapshot (the daemon's checks); a line may be files alone. With
+/// `client`, a key already kept for this project stores nothing
+/// ([`PostOutcome::Duplicate`]), one kept for another chat is
+/// [`PostOutcome::ReusedElsewhere`].
+pub fn post_message_with_files(
+    group_id: &str,
+    author: &str,
+    author_kind: &str,
+    body: &str,
+    attachments: Vec<crate::overlay::ThreadAttachment>,
+    client: Option<ClientKey<'_>>,
+) -> Result<PostOutcome, String> {
     if author_kind != AUTHOR_KIND_PERSON && author_kind != AUTHOR_KIND_AGENT && author_kind != AUTHOR_KIND_GUEST {
         return Err(format!(
             "usage: author kind must be '{AUTHOR_KIND_PERSON}', '{AUTHOR_KIND_AGENT}' or '{AUTHOR_KIND_GUEST}'"
         ));
     }
-    let author = author.trim();
-    let body_t = body.trim();
-    if author.is_empty() {
+    if author.trim().is_empty() {
         return Err("usage: author must not be empty".to_string());
     }
-    if body_t.is_empty() {
+    if body.trim().is_empty() && attachments.is_empty() {
         return Err("usage: message body must not be empty".to_string());
     }
-    let now = now_secs();
-    let id = uuid::Uuid::new_v4().to_string();
-    let db = crate::db::shared();
-    let conn = db.lock();
-    // Check the parent explicitly so callers get a clean not-found
-    // instead of an FK constraint error.
-    let group_exists: bool = conn
-        .query_row(
-            "SELECT COUNT(*) > 0 FROM project_groups WHERE id = ?1",
-            params![group_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(false);
-    if !group_exists {
-        return Err(format!("no project group with id {group_id}"));
-    }
-    if let Some(c) = client {
-        let hit: Option<(String, String)> = conn
-            .query_row(
-                "SELECT group_id, message_id FROM project_group_client_ids WHERE ns = ?1 AND client_msg_id = ?2",
-                params![c.ns, c.client_msg_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| format!("client key read failed: {e}"))?;
-        if let Some((hit_group, message_id)) = hit {
-            if hit_group != group_id {
-                return Ok(PostOutcome::ReusedElsewhere);
-            }
-            let msg = conn
-                .query_row(
-                    "SELECT id, group_id, author, body, created_at, seq, author_kind, client_msg_id \
-                     FROM project_group_messages WHERE id = ?1",
-                    params![message_id],
-                    row_to_message,
-                )
-                .map_err(|e| format!("client key message read failed: {e}"))?;
-            let mismatch = msg.body != body_t;
-            return Ok(PostOutcome::Duplicate { msg, mismatch });
-        }
-    }
-    conn.execute_batch("SAVEPOINT pg_post").map_err(|e| format!("message insert failed: {e}"))?;
-    let inserted = (|| -> Result<i64, String> {
-        conn.execute(
-            "UPDATE project_groups SET last_msg_seq = last_msg_seq + 1 WHERE id = ?1",
-            params![group_id],
-        )
-        .map_err(|e| format!("message seq failed: {e}"))?;
-        let seq: i64 = conn
-            .query_row("SELECT last_msg_seq FROM project_groups WHERE id = ?1", params![group_id], |r| r.get(0))
-            .map_err(|e| format!("message seq failed: {e}"))?;
-        conn.execute(
-            "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind, client_msg_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![id, group_id, author, body_t, now, seq, author_kind, client.map(|c| c.client_msg_id)],
-        )
-        .map_err(|e| format!("message insert failed: {e}"))?;
-        if let Some(c) = client {
-            conn.execute(
-                "INSERT INTO project_group_client_ids (ns, client_msg_id, group_id, message_id, created_ms) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![c.ns, c.client_msg_id, group_id, id, c.at_ms],
-            )
-            .map_err(|e| format!("client key insert failed: {e}"))?;
-        }
-        Ok(seq)
-    })();
-    let seq = match inserted {
-        Ok(seq) => {
-            conn.execute_batch("RELEASE pg_post").map_err(|e| format!("message insert failed: {e}"))?;
-            seq
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK TO pg_post; RELEASE pg_post");
-            return Err(e);
-        }
+    use crate::project_chat_thread::{self as pct, LineClient, LineOutcome, NewLine};
+    let line = NewLine {
+        group_id,
+        author,
+        author_kind,
+        body,
+        attachments,
+        client: client.map(|c| LineClient { ns: c.ns, client_msg_id: c.client_msg_id, at_ms: c.at_ms, body_hash: c.body_hash }),
     };
-    Ok(PostOutcome::Posted(ProjectGroupMessage {
-        id,
-        group_id: group_id.to_string(),
-        author: author.to_string(),
-        body: body_t.to_string(),
-        created_at: now,
-        seq,
-        author_kind: author_kind.to_string(),
-        client_msg_id: client.map(|c| c.client_msg_id.to_string()),
-    }))
+    Ok(match pct::post_line(&line)? {
+        LineOutcome::Posted(item) => PostOutcome::Posted(pct::message_of(group_id, &item)),
+        LineOutcome::Duplicate { item, mismatch } => PostOutcome::Duplicate { msg: pct::message_of(group_id, &item), mismatch },
+        LineOutcome::ReusedElsewhere => PostOutcome::ReusedElsewhere,
+    })
 }
 
 /// With `after`, reads are capped at 500 rows per page.
@@ -1210,6 +1166,9 @@ pub fn list_messages(
     after: Option<i64>,
     limit: Option<i64>,
 ) -> Result<MessagePage, String> {
+    if crate::project_chat_thread::in_thread(group_id) {
+        return crate::project_chat_thread::list_page(group_id, after, limit);
+    }
     if let Some(l) = limit {
         if l < 1 {
             return Err("usage: limit must be >= 1".to_string());
@@ -1266,6 +1225,10 @@ pub fn list_messages(
 /// delete, card or reaction exists); only deleting the whole group removes
 /// them, so a delta is complete with the new rows alone.
 pub fn list_messages_after_seq(group_id: &str, after_seq: i64, limit: Option<i64>) -> Result<MessagePage, String> {
+    if crate::project_chat_thread::in_thread(group_id) {
+        let d = crate::project_chat_thread::list_delta(group_id, after_seq, limit)?;
+        return Ok(MessagePage { messages: d.messages, truncated: d.truncated });
+    }
     if let Some(l) = limit {
         if l < 1 {
             return Err("usage: limit must be >= 1".to_string());
@@ -1299,6 +1262,9 @@ pub fn list_messages_after_seq(group_id: &str, after_seq: i64, limit: Option<i64
 pub fn list_messages_before_seq(group_id: &str, before_seq: i64, limit: Option<i64>) -> Result<MessagePage, String> {
     if before_seq < 1 {
         return Err("usage: before_seq must be >= 1".to_string());
+    }
+    if crate::project_chat_thread::in_thread(group_id) {
+        return crate::project_chat_thread::list_before(group_id, before_seq, limit);
     }
     if let Some(l) = limit {
         if l < 1 {
@@ -1937,25 +1903,31 @@ mod tests {
         assert!(post_message("nope", "owner", "x").is_err(), "unknown group fails loudly");
 
         // Controlled timestamps for the paging math: a dedicated group
-        // with 30 direct-inserted rows at created_at 1000..=1029.
+        // with 30 direct-inserted rows at created_at 1000..=1029, still on
+        // its old rows (project-chat-thread-v1: read once from them, then
+        // again from its Thread after the move; the views answer the same).
         let paged = create_group(&gname("chat-paged")).expect("create paged");
         {
             let db = crate::db::shared();
             let conn = db.lock();
+            conn.execute("UPDATE project_groups SET messages_in_thread = 0, last_msg_seq = 30 WHERE id = ?1", params![paged.id])
+                .expect("unmoved");
             for i in 0..30i64 {
                 conn.execute(
-                    "INSERT INTO project_group_messages (id, group_id, author, body, created_at) \
-                     VALUES (?1, ?2, 'scout', ?3, ?4)",
+                    "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq) \
+                     VALUES (?1, ?2, 'scout', ?3, ?4, ?5)",
                     params![
                         uuid::Uuid::new_v4().to_string(),
                         paged.id,
                         format!("msg-{i}"),
-                        1000 + i
+                        1000 + i,
+                        i + 1
                     ],
                 )
                 .expect("insert message");
             }
         }
+        let check = |label: &str| {
 
         // No `after`: the LATEST 20 (default), oldest-first, truncated
         // because 10 older rows exist.
@@ -1998,7 +1970,13 @@ mod tests {
         assert!(!page.truncated);
 
         // Bad limit fails loudly.
-        assert!(list_messages(&paged.id, None, Some(0)).is_err());
+        assert!(list_messages(&paged.id, None, Some(0)).is_err(), "{label}");
+        };
+        check("old rows");
+        assert!(!crate::project_chat_thread::in_thread(&paged.id));
+        assert_eq!(crate::project_chat_thread::move_group(&paged.id).expect("move"), 30);
+        assert!(crate::project_chat_thread::in_thread(&paged.id));
+        check("moved to the Thread");
 
         // Same-second posts keep insertion order (rowid tiebreak).
         let m2 = post_message(&g.id, "scout", "second").expect("post 2");
@@ -2524,7 +2502,11 @@ mod tests {
     }
 
     fn key<'a>(ns: &'a str, id: &'a str, at_ms: i64) -> ClientKey<'a> {
-        ClientKey { ns, client_msg_id: id, at_ms }
+        key_h(ns, id, at_ms, "")
+    }
+
+    fn key_h<'a>(ns: &'a str, id: &'a str, at_ms: i64, body_hash: &'a str) -> ClientKey<'a> {
+        ClientKey { ns, client_msg_id: id, at_ms, body_hash }
     }
 
     fn lines(gid: &str) -> Vec<ProjectGroupMessage> {
@@ -2543,14 +2525,14 @@ mod tests {
         let ns = format!("p:{}", uuid::Uuid::new_v4());
         let id = "cm-1_A";
         let now = chrono::Utc::now().timestamp_millis();
-        let first = match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, " hi team ", Some(key(&ns, id, now))).expect("post") {
+        let first = match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, " hi team ", Some(key_h(&ns, id, now, "hi team"))).expect("post") {
             PostOutcome::Posted(m) => m,
             o => panic!("first post must store: {o:?}"),
         };
         assert_eq!(first.client_msg_id.as_deref(), Some(id));
         assert_eq!(serde_json::to_value(&first).expect("json")["clientMsgId"], id, "wire name is clientMsgId");
 
-        match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, "hi team", Some(key(&ns, id, now))).expect("repeat") {
+        match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, "hi team", Some(key_h(&ns, id, now, "hi team"))).expect("repeat") {
             PostOutcome::Duplicate { msg, mismatch } => {
                 assert_eq!(msg.id, first.id);
                 assert_eq!(msg.seq, first.seq);
@@ -2558,7 +2540,7 @@ mod tests {
             }
             o => panic!("repeat must be a duplicate: {o:?}"),
         }
-        match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, "something else", Some(key(&ns, id, now))).expect("differs") {
+        match post_message_keyed(&g.id, "owner", AUTHOR_KIND_PERSON, "something else", Some(key_h(&ns, id, now, "something else"))).expect("differs") {
             PostOutcome::Duplicate { msg, mismatch } => {
                 assert_eq!(msg.body, "hi team", "the first write wins");
                 assert!(mismatch);
@@ -2626,12 +2608,19 @@ mod tests {
         let base = 1_000_000 + (uuid::Uuid::new_v4().as_u128() % 1_000_000) as i64;
         post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "old", Some(key(&ns, "old", base))).expect("old");
         post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "young", Some(key(&ns, "young", base + 2 * hour))).expect("young");
-        sweep_client_keys(base + 23 * hour - CLIENT_KEY_TTL_MS).expect("sweep at 23 h");
+        // project-chat-thread-v1: a line's key is kept twice in its
+        // rollback window (the Thread's, the old table's): the daemon's
+        // sweep drops both, so this does too.
+        let sweep = |before: i64| -> usize {
+            crate::overlay::sweep_client_msg_ids(before).expect("thread key sweep");
+            sweep_client_keys(before).expect("sweep")
+        };
+        sweep(base + 23 * hour - CLIENT_KEY_TTL_MS);
         assert!(matches!(
             post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "old", Some(key(&ns, "old", base))).expect("repeat"),
             PostOutcome::Duplicate { .. }
         ), "kept at 23 h");
-        let n = sweep_client_keys(base + 25 * hour - CLIENT_KEY_TTL_MS).expect("sweep at 25 h");
+        let n = sweep(base + 25 * hour - CLIENT_KEY_TTL_MS);
         assert!(n >= 1, "the old key is swept, got {n}");
         assert!(matches!(
             post_message_keyed(&g.id, "guest", AUTHOR_KIND_GUEST, "old", Some(key(&ns, "old", base))).expect("after sweep"),

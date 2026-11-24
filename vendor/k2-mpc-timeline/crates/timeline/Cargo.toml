@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-timeline"
-version = "0.1.2"
+version = "0.1.3"
 description = "Reads OTIO, FCPXML and PRPROJ timelines into one neutral model: a type pack for the multiplayer kit."
 edition.workspace = true
 rust-version.workspace = true

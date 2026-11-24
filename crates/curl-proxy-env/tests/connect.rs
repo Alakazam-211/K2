@@ -123,13 +123,12 @@ fn socks5_without_and_with_a_password() {
     let p = proxy(&format!("socks5://127.0.0.1:{}", stub.port()));
     ping(connect(Some(&p), "127.0.0.5", 8443, &opts()).unwrap());
     assert_eq!(one(&stub), [5, 1, 0, 5, 1, 0, 1, 127, 0, 0, 5, 0x20, 0xfb]);
+    // A name that doesn't resolve here fails the handshake after the
+    // greeting, as curl's does: 97, and no request went out.
     let e = connect(Some(&p), "box.example.invalid", 443, &opts()).unwrap_err();
-    assert_eq!(e.curl_exit_code(), 6, "{e:?}");
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(
-        stub.take().is_empty(),
-        "a name that doesn't resolve reaches no proxy"
-    );
+    assert!(matches!(e, Error::Socks(_)), "{e:?}");
+    assert_eq!(e.curl_exit_code(), 97);
+    assert_eq!(one(&stub), [5, 1, 0]);
 
     let stub = Stub::start(Mode::Socks5(Some((b"acme".to_vec(), b"pw".to_vec())), 0));
     let p = proxy(&format!("socks5h://acme:pw@127.0.0.1:{}", stub.port()));
@@ -170,6 +169,17 @@ fn socks4_and_socks4a() {
     let mut want = vec![4, 1, 1, 0xbb, 0, 0, 0, 1, 0];
     want.extend_from_slice(b"box.example.invalid\0");
     assert_eq!(shown(&one(&stub)), shown(&want));
+    // SOCKS4a sends an address as written, for the proxy to read.
+    ping(connect(Some(&p), "127.0.0.5", 443, &opts()).unwrap());
+    let mut want = vec![4, 1, 1, 0xbb, 0, 0, 0, 1, 0];
+    want.extend_from_slice(b"127.0.0.5\0");
+    assert_eq!(shown(&one(&stub)), shown(&want));
+    // SOCKS4 for a name that doesn't resolve: the proxy is connected,
+    // nothing sent, 97.
+    let p = proxy(&format!("socks4://127.0.0.1:{}", stub.port()));
+    let e = connect(Some(&p), "box.example.invalid", 443, &opts()).unwrap_err();
+    assert_eq!(e.curl_exit_code(), 97, "{e:?}");
+    assert_eq!(one(&stub), b"");
     let stub = Stub::start(Mode::Socks4(91));
     let p = proxy(&format!("socks4a://127.0.0.1:{}", stub.port()));
     let e = connect(Some(&p), "box.example.invalid", 443, &opts()).unwrap_err();

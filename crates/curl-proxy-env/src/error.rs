@@ -11,8 +11,7 @@ pub mod exit {
     pub const NOT_BUILT_IN: i32 = 4;
     /// 5: the proxy's name doesn't resolve, or its URL can't be read.
     pub const COULDNT_RESOLVE_PROXY: i32 = 5;
-    /// 6: the target's name doesn't resolve (a proxy that takes an
-    /// address: SOCKS4 and SOCKS5).
+    /// 6: the target's name doesn't resolve (no proxy).
     pub const COULDNT_RESOLVE_HOST: i32 = 6;
     /// 7: nothing accepted the connection, or the proxy's scheme is not
     /// one curl proxies through.
@@ -43,6 +42,11 @@ pub enum ConfigError {
     /// port that is not a number from 1 to 65535, an IPv6 address that
     /// doesn't parse. What was wrong, in a few words. curl exits 5.
     BadSyntax(&'static str),
+    /// A user or password that holds a control byte once
+    /// percent-decoded (`%0a`, `%00`). curl 8.5 drops such a proxy and
+    /// connects direct; this crate refuses instead, as a proxy that is
+    /// set must never be skipped. Reported as exit 5.
+    ControlInCredentials,
 }
 
 impl ConfigError {
@@ -50,7 +54,9 @@ impl ConfigError {
     pub fn curl_exit_code(&self) -> i32 {
         match self {
             ConfigError::UnsupportedScheme(_) => exit::COULDNT_CONNECT,
-            ConfigError::BadSyntax(_) => exit::COULDNT_RESOLVE_PROXY,
+            ConfigError::BadSyntax(_) | ConfigError::ControlInCredentials => {
+                exit::COULDNT_RESOLVE_PROXY
+            }
         }
     }
 }
@@ -60,6 +66,9 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::UnsupportedScheme(s) => write!(f, "unsupported proxy scheme {s:?}"),
             ConfigError::BadSyntax(why) => write!(f, "unsupported proxy syntax: {why}"),
+            ConfigError::ControlInCredentials => {
+                f.write_str("a control byte in the proxy's user or password")
+            }
         }
     }
 }
@@ -75,8 +84,9 @@ pub enum Error {
     Config(ConfigError),
     /// The proxy's name doesn't resolve.
     ResolveProxy(io::Error),
-    /// The target's name doesn't resolve (SOCKS4 and SOCKS5 resolve it
-    /// here, not at the proxy).
+    /// The target's name doesn't resolve, with no proxy (through SOCKS4
+    /// or SOCKS5 that is the handshake's failure, [`Error::Socks`], as in
+    /// curl).
     ResolveHost(io::Error),
     /// Nothing accepted the TCP connection.
     Connect(io::Error),

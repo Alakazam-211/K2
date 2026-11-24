@@ -32,17 +32,36 @@ pub struct Pki {
 
 impl Pki {
     pub fn new() -> Pki {
-        use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
+        use rcgen::{
+            BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+            KeyUsagePurpose,
+        };
+        // Names of their own: a leaf whose subject is its issuer's reads
+        // as self-signed to OpenSSL, and curl refuses it.
         let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "Acme throwaway test CA");
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+            KeyUsagePurpose::DigitalSignature,
+        ];
         let ca_key = KeyPair::generate().unwrap();
         let ca = ca_params.self_signed(&ca_key).unwrap();
-        let leaf_params = CertificateParams::new(vec![
+        let mut leaf_params = CertificateParams::new(vec![
             "localhost".to_string(),
             "127.0.0.1".to_string(),
             "::1".to_string(),
         ])
         .unwrap();
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "localhost");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        leaf_params.use_authority_key_identifier_extension = true;
         let leaf_key = KeyPair::generate().unwrap();
         let leaf = leaf_params.signed_by(&leaf_key, &ca, &ca_key).unwrap();
         Pki {

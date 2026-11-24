@@ -88,7 +88,12 @@ mod tests {
     /// The order of the variables, and an empty value counts as unset.
     #[test]
     fn which_variable_names_the_proxy() {
-        let rows: &[(&[(&str, &str)], &str, Option<&str>)] = &[
+        type Row = (
+            &'static [(&'static str, &'static str)],
+            &'static str,
+            Option<&'static str>,
+        );
+        let rows: &[Row] = &[
             (
                 &[
                     ("https_proxy", "a"),

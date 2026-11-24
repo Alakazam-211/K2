@@ -48,7 +48,7 @@ impl Scheme {
         Some(match name {
             "http" => Scheme::Http,
             "https" => Scheme::Https,
-            "socks4" => Scheme::Socks4,
+            "socks4" | "socks" => Scheme::Socks4,
             "socks4a" => Scheme::Socks4a,
             "socks5" => Scheme::Socks5,
             "socks5h" => Scheme::Socks5h,
@@ -198,13 +198,17 @@ impl ProxyUrl {
     ///   that protocol, so unsupported too;
     /// - the authority ends at the first `/`, `?` or `#`; what follows is
     ///   not used;
-    /// - the user part runs to the last `@`; the user ends at its first
-    ///   `:`, and both are percent-decoded (a `%` not followed by two hex
-    ///   digits is kept as it is);
-    /// - the host is a name of letters, digits, `-`, `.` and `_`, four
-    ///   numbers, or an IPv6 address in brackets;
-    /// - the port is digits, 1 to 65535; none (or an empty one) is the
-    ///   scheme's default ([`Scheme::default_port`]).
+    /// - the user part runs to the `@`; a second `@` is
+    ///   [`ConfigError::BadSyntax`]. The user ends at its first `:`, and
+    ///   both are percent-decoded (a `%` not followed by two hex digits
+    ///   is kept as it is); a control byte once decoded is
+    ///   [`ConfigError::ControlInCredentials`] (curl 8.5 drops such a
+    ///   proxy and goes direct; this crate refuses);
+    /// - the host, percent-decoded, is a name of letters, digits, `-`,
+    ///   `.` and `_`, four numbers, or an IPv6 address in brackets;
+    /// - the port is digits, 0 to 65535 (0 connects nowhere); none, or an
+    ///   empty one, is the scheme's default ([`Scheme::default_port`]);
+    /// - `socks://` is SOCKS4, as in curl.
     pub fn parse(raw: &[u8]) -> Result<ProxyUrl, ConfigError> {
         if raw.iter().any(|&b| b <= b' ' || b == 0x7f) {
             return Err(ConfigError::BadSyntax("a blank or control byte"));
@@ -218,10 +222,13 @@ impl ProxyUrl {
             .position(|b| matches!(b, b'/' | b'?' | b'#'))
             .unwrap_or(rest.len());
         let authority = &rest[..end];
-        let (userinfo, hostport) = match authority.iter().rposition(|&b| b == b'@') {
+        let (userinfo, hostport) = match authority.iter().position(|&b| b == b'@') {
             Some(i) => (Some(&authority[..i]), &authority[i + 1..]),
             None => (None, authority),
         };
+        if hostport.contains(&b'@') {
+            return Err(ConfigError::BadSyntax("a second @"));
+        }
         // The whole URL is read before its scheme is judged.
         let (host_text, port) = split_port(hostport)?;
         let host = read_host(host_text)?;
@@ -236,13 +243,20 @@ impl ProxyUrl {
             },
         };
         let port = port.unwrap_or(scheme.default_port());
-        let credentials = userinfo.map(|u| {
-            let (user, password) = match u.iter().position(|&b| b == b':') {
-                Some(i) => (&u[..i], &u[i + 1..]),
-                None => (u, &b""[..]),
-            };
-            Credentials::new(percent_decode(user), percent_decode(password))
-        });
+        let credentials = match userinfo {
+            None => None,
+            Some(u) => {
+                let (user, password) = match u.iter().position(|&b| b == b':') {
+                    Some(i) => (&u[..i], &u[i + 1..]),
+                    None => (u, &b""[..]),
+                };
+                let (user, password) = (percent_decode(user), percent_decode(password));
+                if user.iter().chain(&password).any(|&b| b < b' ' || b == 0x7f) {
+                    return Err(ConfigError::ControlInCredentials);
+                }
+                Some(Credentials::new(user, password))
+            }
+        };
         Ok(ProxyUrl {
             scheme,
             host,
@@ -330,8 +344,8 @@ fn split_port(hp: &[u8]) -> Result<(&[u8], Option<u16>), ConfigError> {
                 digits.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0'))
             };
             match u16::try_from(n) {
-                Ok(p) if p != 0 => Some(p),
-                _ => return Err(ConfigError::BadSyntax("a port out of range")),
+                Ok(p) => Some(p),
+                Err(_) => return Err(ConfigError::BadSyntax("a port out of range")),
             }
         }
     };
@@ -350,6 +364,8 @@ fn read_host(h: &[u8]) -> Result<Host, ConfigError> {
             .map(Host::V6)
             .map_err(|_| ConfigError::BadSyntax("an IPv6 address that doesn't parse"));
     }
+    // A name may be percent-encoded (`127%2e0.0.1` is 127.0.0.1).
+    let h = &percent_decode(h)[..];
     let plain = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_');
     if !h.iter().all(plain) {
         return Err(ConfigError::BadSyntax("a byte a host name can't hold"));

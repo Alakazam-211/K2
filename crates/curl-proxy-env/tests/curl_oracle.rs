@@ -9,11 +9,16 @@
 //! machine); run it with
 //! `cargo test -p curl-proxy-env --test curl_oracle -- --ignored`.
 //!
-//! The one difference allowed, and named in each row it touches: a curl
-//! built with GSS-API also offers SOCKS5 method 1 (GSS-API) in its
-//! greeting. The crate never does; the stubs never pick it. The method is
-//! taken out of curl's greeting before the bytes are compared, and the
-//! row says so.
+//! The differences allowed, each named in the rows it touches:
+//!
+//! - a curl built with GSS-API also offers SOCKS5 method 1 (GSS-API) in
+//!   its greeting. The crate never does; the stubs never pick it. The
+//!   method is taken out of curl's greeting before the bytes are
+//!   compared, and the row says so;
+//! - a proxy URL whose user or password holds a control byte once
+//!   decoded: curl 8.5 drops the proxy and connects direct; the crate
+//!   refuses (exit 5) and connects nowhere. Those rows ([`Row::fail_closed`])
+//!   check that curl still goes direct and the crate still refuses.
 
 #![cfg(all(unix, feature = "rustls"))]
 
@@ -36,6 +41,8 @@ struct Row {
     env: &'static [(&'static str, &'static str)],
     url: &'static str,
     trust: bool,
+    /// curl goes direct here and the crate refuses (exit 5).
+    fail_closed: bool,
 }
 
 const fn row(
@@ -48,6 +55,21 @@ const fn row(
         env,
         url,
         trust: true,
+        fail_closed: false,
+    }
+}
+
+const fn fail_closed(
+    name: &'static str,
+    env: &'static [(&'static str, &'static str)],
+    url: &'static str,
+) -> Row {
+    Row {
+        name,
+        env,
+        url,
+        trust: true,
+        fail_closed: true,
     }
 }
 
@@ -107,6 +129,9 @@ const ROWS: &[Row] = &[
     row("no_proxy ::1", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "::1")], T_V6),
     row("no_proxy [::1]", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "[::1]")], T_V6),
     row("no_proxy ::/127", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "::/127")], T_V6),
+    row("no_proxy ::1/128", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "::1/128")], T_V6),
+    row("no_proxy ::/64", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "::/64")], T_V6),
+    row("no_proxy ::1/0", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "::1/0")], T_V6),
     row("no_proxy other v6", &[("https_proxy", "http://127.0.0.1:{A}"), ("no_proxy", "::2")], T_V6),
     // The target, through the proxy.
     row("target v6", &[("https_proxy", "http://127.0.0.1:{A}")], T_V6),
@@ -126,8 +151,10 @@ const ROWS: &[Row] = &[
     row("empty password", &[("https_proxy", "http://u:@127.0.0.1:{A}")], T),
     row("two @", &[("https_proxy", "http://a@b@127.0.0.1:{A}")], T),
     row("bad escape", &[("https_proxy", "http://u:p%zz@127.0.0.1:{A}")], T),
-    row("escaped newline", &[("https_proxy", "http://u:p%0a@127.0.0.1:{A}")], T),
-    row("escaped NUL", &[("https_proxy", "http://u%00:p@127.0.0.1:{A}")], T),
+    fail_closed("escaped newline", &[("https_proxy", "http://u:p%0a@127.0.0.1:{A}")], T),
+    fail_closed("escaped NUL", &[("https_proxy", "http://u%00:p@127.0.0.1:{A}")], T),
+    fail_closed("escaped DEL", &[("https_proxy", "http://u%7f:p@127.0.0.1:{A}")], T),
+    row("escaped tab in the host", &[("https_proxy", "http://127.0%09.0.1:{A}")], T),
     row("no scheme, user", &[("https_proxy", "user@127.0.0.1:{A}")], T),
     row("a proxy name", &[("https_proxy", "http://localhost:{A}")], T),
     row("tab", &[("https_proxy", "http://127.0.0.1:{A}\\x09")], T),
@@ -176,7 +203,7 @@ const ROWS: &[Row] = &[
     row("https proxy", &[("https_proxy", "https://127.0.0.1:{TLS}")], T),
     row("https proxy, password", &[("https_proxy", "https://u:p@127.0.0.1:{TLS}")], T),
     row("https proxy by name", &[("https_proxy", "https://localhost:{TLS}")], T),
-    Row { name: "https proxy, CA not trusted", env: &[("https_proxy", "https://127.0.0.1:{TLS}")], url: T, trust: false },
+    Row { name: "https proxy, CA not trusted", env: &[("https_proxy", "https://127.0.0.1:{TLS}")], url: T, trust: false, fail_closed: false },
     row("https proxy, default port", &[("https_proxy", "https://127.0.0.1")], T),
 ];
 
@@ -266,7 +293,7 @@ impl Stubs {
             let conns = conns
                 .into_iter()
                 .map(|mut c| {
-                    if n.starts_with("S5") && c.len() >= 2 && c[0] == 5 {
+                    if (n.starts_with("S5") || *n == "1080") && c.len() >= 2 && c[0] == 5 {
                         let k = usize::from(c[1]);
                         if c.len() >= 2 + k && c[2..2 + k].contains(&1) {
                             gss = true;
@@ -390,7 +417,16 @@ fn the_crate_does_what_curl_does() {
         let ours = Seen { code, contacted };
         // An http:// target goes as a proxy request, not a tunnel: only
         // which proxy is compared.
-        let same = if r.url.starts_with("http://") {
+        let same = if r.fail_closed {
+            curl == Seen {
+                code: 6,
+                contacted: vec![],
+            } && ours
+                == Seen {
+                    code: 5,
+                    contacted: vec![],
+                }
+        } else if r.url.starts_with("http://") {
             let names = |s: &Seen| {
                 s.contacted
                     .iter()

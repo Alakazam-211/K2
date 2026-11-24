@@ -47,7 +47,9 @@ impl NoProxy {
     /// - an address matches a token that is the same address, or a CIDR
     ///   range `address/bits` that holds it (`bits` read as C's `atoi`
     ///   reads a number; 0, or the address's full length, means the exact
-    ///   address; more than that, nothing). Names never match an address.
+    ///   address; more than that, nothing). An IPv6 address matches only
+    ///   the same address, written without brackets: curl 8.5 matched no
+    ///   IPv6 range. Names never match an address.
     pub fn matches(&self, host: &str) -> bool {
         if self.all {
             return true;
@@ -99,18 +101,14 @@ fn cidr4(ip: Ipv4Addr, token: &[u8]) -> bool {
     masked_eq(&ip.octets(), &net.octets(), bits.unwrap_or(0))
 }
 
+/// An IPv6 token: the same address, written without brackets. curl
+/// 8.5 matched no IPv6 range in the black-box table (`::/127` left `::1`
+/// proxied), so a token with a `/` matches nothing.
 fn cidr6(ip: Ipv6Addr, token: &[u8]) -> bool {
     let Some((net, bits)) = split_cidr(token) else {
         return false;
     };
-    let net = net
-        .strip_prefix('[')
-        .and_then(|n| n.strip_suffix(']'))
-        .unwrap_or(net);
-    let Ok(net) = net.parse::<Ipv6Addr>() else {
-        return false;
-    };
-    masked_eq(&ip.octets(), &net.octets(), bits.unwrap_or(0))
+    bits.is_none() && net.parse::<Ipv6Addr>().is_ok_and(|net| net == ip)
 }
 
 /// The first `bits` bits of `a` and `b` are the same; 0 or all of them:
@@ -206,11 +204,10 @@ mod tests {
             ("10.1.2.3", b"box.example", false),
             ("10.1.2.3", b"2.3", false),
             ("[2001:db8::5]", b"2001:db8::5", true),
-            ("2001:db8::5", b"[2001:db8::5]", true),
-            ("[2001:db8::5]", b"2001:db8::/32", true),
-            ("[2001:db8::5]", b"2001:db9::/32", false),
-            ("[2001:db8::5]", b"2001:db8::/129", false),
-            ("[2001:db8::5]", b"2001:db8::4/127", true),
+            ("2001:db8::5", b"[2001:db8::5]", false),
+            ("[2001:db8::5]", b"2001:db8::/32", false),
+            ("[2001:db8::5]", b"2001:db8::5/128", false),
+            ("[2001:db8::5]", b"2001:db8::4/127", false),
             ("[2001:db8::5]", b"db8::5", false),
         ];
         for (host, list, want) in rows {

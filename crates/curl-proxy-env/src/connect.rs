@@ -72,13 +72,16 @@ impl Options {
 ///   `Proxy-Connection: Keep-Alive`; any 2xx opens the tunnel;
 /// - `https://`: the same, inside TLS to the proxy, whose certificate is
 ///   checked for the proxy's name ([`Options::proxy_tls`]);
-/// - `socks5://`: the target's name resolved here and its first address
-///   sent; `socks5h://`: the name sent for the proxy to resolve (an
-///   address as an address). Methods offered: no authentication, and
-///   user and password (RFC 1929) when the URL has a user part;
-/// - `socks4://`: the target's first IPv4 address, resolved here;
-///   `socks4a://`: the name, for the proxy to resolve. The URL's user is
-///   the user id; a password is not used.
+/// - `socks5://`: the target's name resolved here, after the greeting,
+///   and its first address sent; `socks5h://`: the name sent for the
+///   proxy to resolve (an address as an address). Methods offered: no
+///   authentication, and user and password (RFC 1929) when the URL has
+///   a user part. A name that doesn't resolve fails the handshake
+///   ([`Error::Socks`], curl's 97), as in curl;
+/// - `socks4://`: the target's first IPv4 address, resolved here once the
+///   proxy is connected; `socks4a://`: the host as written (an address
+///   too), for the proxy to resolve. The URL's user is the user id; a
+///   password is not used.
 ///
 /// The proxy's credentials go to the proxy alone, in its handshake;
 /// nothing of the caller's request is sent until the tunnel is open. A
@@ -106,17 +109,6 @@ pub fn connect(
     if p.scheme() == Scheme::Https {
         return Err(Error::TlsNotConfigured);
     }
-    // SOCKS4 and SOCKS5 take an address: the target's name is resolved
-    // before the proxy is reached.
-    let target = match p.scheme() {
-        Scheme::Socks4 => Host::V4(first_v4(&target, port)?),
-        Scheme::Socks5 => resolved(&target, port)?,
-        // A name too long for SOCKS5's one length byte is resolved here.
-        Scheme::Socks5h if matches!(&target, Host::Name(n) if n.len() > 255) => {
-            resolved(&target, port)?
-        }
-        _ => target,
-    };
     let addrs = addresses(p.host(), p.port()).map_err(Error::ResolveProxy)?;
     let s = tcp(&addrs, deadline)?;
     let ua = opts.user_agent.as_deref();
@@ -164,33 +156,32 @@ fn addresses(h: &Host, port: u16) -> io::Result<Vec<SocketAddr>> {
     Ok(addrs)
 }
 
-/// The target's first address, as a host (a name resolved here).
+/// The target's first address, as a host: a name is resolved here, with
+/// the proxy already connected (as curl does: a name that doesn't
+/// resolve is the SOCKS handshake's failure, curl's 97).
 fn resolved(target: &Host, port: u16) -> Result<Host, Error> {
-    let a = addresses(target, port).map_err(Error::ResolveHost)?[0];
+    let a = addresses(target, port)
+        .map_err(|e| Error::Socks(format!("could not resolve the host: {e}")))?[0];
     Ok(match a.ip() {
         IpAddr::V4(v4) => Host::V4(v4),
         IpAddr::V6(v6) => Host::V6(v6),
     })
 }
 
-/// The target's first IPv4 address (SOCKS4 has no other kind).
+/// The target's first IPv4 address (SOCKS4 has no other kind), resolved
+/// as [`resolved`] does.
 fn first_v4(target: &Host, port: u16) -> Result<Ipv4Addr, Error> {
     if let Host::V6(_) = target {
         return Err(Error::Socks("SOCKS4 can't reach an IPv6 address".into()));
     }
     addresses(target, port)
-        .map_err(Error::ResolveHost)?
+        .map_err(|e| Error::Socks(format!("could not resolve the host: {e}")))?
         .into_iter()
         .find_map(|a| match a.ip() {
             IpAddr::V4(v4) => Some(v4),
             IpAddr::V6(_) => None,
         })
-        .ok_or_else(|| {
-            Error::ResolveHost(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{target} has no IPv4 address"),
-            ))
-        })
+        .ok_or_else(|| Error::Socks(format!("{target} has no IPv4 address")))
 }
 
 fn remaining(deadline: Instant) -> Option<Duration> {
@@ -425,8 +416,15 @@ fn socks5(
             )))
         }
     }
+    // `socks5://` sends an address: the name is resolved now, after the
+    // greeting, as curl does; so is a name too long for one length byte.
+    let target = match (p.scheme(), target) {
+        (Scheme::Socks5, Host::Name(_)) => resolved(target, port)?,
+        (_, Host::Name(n)) if n.len() > 255 => resolved(target, port)?,
+        (_, t) => t.clone(),
+    };
     let mut req = vec![5, 1, 0];
-    match target {
+    match &target {
         Host::V4(a) => {
             req.push(1);
             req.extend_from_slice(&a.octets());
@@ -436,7 +434,6 @@ fn socks5(
             req.extend_from_slice(&a.octets());
         }
         Host::Name(n) => {
-            // `connect` resolves a name longer than 255 bytes itself.
             req.push(3);
             req.push(n.len() as u8);
             req.extend_from_slice(n.as_bytes());
@@ -495,15 +492,18 @@ fn socks4(
     if user.contains(&0) {
         return Err(Error::Socks("a user id with a NUL byte".into()));
     }
-    let (ip, name) = match target {
-        Host::V4(a) => (*a, None),
-        Host::V6(_) => return Err(Error::Socks("SOCKS4 can't reach an IPv6 address".into())),
-        Host::Name(n) => {
+    // SOCKS4a sends the host as written for the proxy to resolve, an
+    // address too (as curl does); SOCKS4 an IPv4 address resolved here.
+    let (ip, name) = match (p.scheme(), target) {
+        (_, Host::V6(_)) => return Err(Error::Socks("SOCKS4 can't reach an IPv6 address".into())),
+        (Scheme::Socks4a, t) => {
+            let n = t.to_string();
             if n.as_bytes().contains(&0) {
                 return Err(Error::Socks("a host name with a NUL byte".into()));
             }
             (Ipv4Addr::new(0, 0, 0, 1), Some(n))
         }
+        (_, t) => (first_v4(t, port)?, None),
     };
     let mut req = vec![4, 1];
     req.extend_from_slice(&port.to_be_bytes());

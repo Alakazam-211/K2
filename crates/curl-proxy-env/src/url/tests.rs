@@ -72,6 +72,10 @@ fn proxy_urls() {
             ok(Scheme::Socks4, "proxy.example", 1080),
         ),
         (
+            b"socks://proxy.example",
+            ok(Scheme::Socks4, "proxy.example", 1080),
+        ),
+        (
             b"socks4a://proxy.example:9",
             ok(Scheme::Socks4a, "proxy.example", 9),
         ),
@@ -98,7 +102,10 @@ fn proxy_urls() {
         (b"smtp.example", unsupported("smtp")),
         (b"pop3.example", unsupported("pop3")),
         (b"http://ftp.example", ok(Scheme::Http, "ftp.example", 1080)),
-        (b"http://proxy.example:0", bad("a port out of range")),
+        (
+            b"http://proxy.example:0",
+            ok(Scheme::Http, "proxy.example", 0),
+        ),
         (b"http://proxy.example:99999", bad("a port out of range")),
         (b"http://proxy.example:65536", bad("a port out of range")),
         (
@@ -109,7 +116,25 @@ fn proxy_urls() {
         (b"http://proxy.example:9\t", bad("a blank or control byte")),
         (
             b"http://proxy%2eexample",
+            ok(Scheme::Http, "proxy.example", 1080),
+        ),
+        (b"http://127%2e0.0.1:9", ok(Scheme::Http, "127.0.0.1", 9)),
+        (
+            b"http://pro%20xy.example",
             bad("a byte a host name can't hold"),
+        ),
+        (b"http://a@b@proxy.example", bad("a second @")),
+        (
+            b"http://u:p%0a@proxy.example",
+            Err(ConfigError::ControlInCredentials),
+        ),
+        (
+            b"socks5://u%00:p@proxy.example",
+            Err(ConfigError::ControlInCredentials),
+        ),
+        (
+            b"http://u%7f@proxy.example",
+            Err(ConfigError::ControlInCredentials),
         ),
         (
             b"http://pr\xc3\xb6xy.example",
@@ -160,12 +185,10 @@ fn user_parts_are_percent_decoded() {
             b"p:s/s w",
         ),
         (b"http://u:a:b@proxy.example", b"u", b"a:b"),
-        (b"http://a@b@proxy.example", b"a@b", b""),
         (b"http://u:p%zz@proxy.example", b"u", b"p%zz"),
         (b"http://u:p%4@proxy.example", b"u", b"p%4"),
-        (b"http://u:p%0a@proxy.example", b"u", b"p\n"),
         (b"user@127.0.0.1:9", b"user", b""),
-        (b"socks5://u%00:p@proxy.example", b"u\0", b"p"),
+        (b"http://u%41:p%2@proxy.example", b"uA", b"p%2"),
     ];
     for (raw, user, pass) in rows {
         let p = ProxyUrl::parse(raw).unwrap();

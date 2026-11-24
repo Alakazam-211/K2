@@ -26,7 +26,9 @@
 //! of the brand needs, each value the brand's own, the default brand's
 //! (`brand/k2`), or made from the brand's names. Most have no reader in
 //! the code yet; code that still spells a value moves to these as it is
-//! tended.
+//! tended. A brand that isn't ours ([`IS_OURS`] false: not k2 or k5 in
+//! this repo's own `brand/<id>`) sets its own value for every field that
+//! names us or reaches us; the build refuses one that doesn't.
 //!
 //! The text forms are macros as well as consts, so a `const` sentence can
 //! be built with `concat!` and still be one `&'static str`. Inside this
@@ -109,6 +111,13 @@ mod tests {
         assert_eq!(LOGIN_NAME, names::LOGIN);
         assert!(!PRODUCT_NAME.is_empty());
         assert!(!BRAND_ID.is_empty());
+    }
+
+    /// A build from this repo's own brand/<id> is ours exactly when the id
+    /// is one of ours (under K2_BRAND_DIR=brand/xy it is not).
+    #[test]
+    fn is_ours_is_the_brand_ids() {
+        assert_eq!(IS_OURS, brand_file::ours::OUR_IDS.contains(&BRAND_ID));
     }
 
     /// The compiled install tokens are the generator's: the PATH markers

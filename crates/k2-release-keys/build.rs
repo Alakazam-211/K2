@@ -3,8 +3,10 @@
 //!
 //! The brand folder is `K2_BRAND_DIR` when it is set (a relative path is
 //! read from the workspace root), else `brand/k2`, as for crates/k2-brand.
-//! For k2 and k5 it sets `cfg(k2_own_update_keys)` and `lib.rs` compiles
-//! the ceremony's `UPDATER_KEYS` as it is. For any other brand it writes
+//! For our brands (k2 and k5 in this repo's own `brand/<id>`: the rule in
+//! crates/k2-brand/src/ours.rs) it sets `cfg(k2_own_update_keys)` and
+//! `lib.rs` compiles the ceremony's `UPDATER_KEYS` as it is. For any other
+//! brand (a copy of brand/k2 in another folder too) it writes
 //! `$OUT_DIR/brand_update_keys.rs` from the brand file. A brand file this
 //! build can't use, or another brand carrying K2's keys, stops the build
 //! with a line that names the file and why.
@@ -24,6 +26,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=K2_BRAND_DIR");
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=src/brand_keys.rs");
+    println!("cargo:rerun-if-changed=../k2-brand/src/ours.rs");
     println!("cargo::rustc-check-cfg=cfg(k2_own_update_keys)");
     let manifest =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
@@ -58,7 +61,8 @@ fn main() {
         brand_keys::brand_keys(&text).unwrap_or_else(|e| stop(format!("brand file {shown}: {e}")));
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"))
         .join("brand_update_keys.rs");
-    match brand_keys::choose(&id, keys, &own, &retired) {
+    let ours = brand_keys::ours::is_ours(&id, &dir, root);
+    match brand_keys::choose(&id, ours, keys, &own, &retired) {
         Ok(brand_keys::Choice::Own) => {
             println!("cargo::rustc-cfg=k2_own_update_keys");
             if let Err(e) = fs::write(

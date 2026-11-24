@@ -33,11 +33,15 @@
 //       BRAND_DESKTOP_ID, BRAND_GUI_BINARY, BRAND_UPDATE_PUBKEYS), for a
 //       packaging script to eval.
 //   node scripts/brand-values.mjs update-keys
-//       the ship check for [update]: k2 and k5 must carry exactly K2's own
+//       the ship check for [update]: our brands must carry exactly K2's own
 //       update keys (the ceremony's, in crates/k2-release-keys); any other
 //       brand must carry none of them (nor the retired U1), by key id or by
 //       key. Exits 1 and says why when not. tauri and shell refuse the same
 //       way. crates/k2-release-keys/build.rs refuses it at build time too.
+//
+// Ours is k2 or k5 read from this repo's own brand/<id> (isOurs: the rule
+// of crates/k2-brand/src/ours.rs). A copy of brand/k2 in another folder is
+// not ours.
 //
 // Two names, never made from each other (Rosson's rule): the product's
 // ([names] product, for prose and screens) and the command's ([cli] name,
@@ -47,14 +51,17 @@
 // k2-brand resolves them (crates/k2-brand/src/brand_file.rs parse_fields):
 // names.company, links.site and links.support_email are the file's own, else
 // the default brand file's (brand/k2); names.lockup is the file's own, else
-// "<product> by <company>".
+// "<product> by <company>". A brand that isn't ours must set those three,
+// and not to the default brand's value, nor package.update_feed (when it
+// has [package]), the way k2-brand refuses them (SETS_ITS_OWN), with the
+// same words.
 //
 // The reader takes the brand file's own small shape (top-level keys,
 // [tables], strings, integers, true and false, a list of inline tables)
 // and refuses anything else, naming the file and the field, the way
 // k2-brand does.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -68,8 +75,20 @@ const MODES = new Set(['silent', 'notice', 'tombstone'])
 const PACKAGE_KEYS = ['bundle_id', 'update_feed', 'desktop_id', 'gui_binary']
 /** The keys one [update] key holds. */
 const UPDATE_KEY_KEYS = ['role', 'key_id', 'pubkey']
-/** The brands that ship K2's own update keys (the update-key ceremony's). */
+/** The ids of our brands, which ship K2's own update keys (the update-key
+ *  ceremony's) when read from this repo's own brand/<id>
+ *  (crates/k2-brand/src/ours.rs OUR_IDS). */
 export const OWN_KEY_BRANDS = ['k2', 'k5']
+
+/** The brand `id`, read from the folder `dir`, is ours: `id` is one of
+ *  OWN_KEY_BRANDS and `dir` is this repo's own brand/<id>, the two compared
+ *  once made canonical (crates/k2-brand/src/ours.rs is_ours). `root` is the
+ *  repo's root. */
+export function isOurs(id, dir, root = ROOT) {
+  const mine = join(root, 'brand', id)
+  if (!OWN_KEY_BRANDS.includes(id) || !existsSync(dir) || !existsSync(mine)) return false
+  return realpathSync(dir) === realpathSync(mine)
+}
 /** Where the ceremony writes K2's own keys, and the retired key U1. */
 export const RELEASE_KEYS_RS = join(ROOT, 'crates/k2-release-keys/src/lib.rs')
 
@@ -263,11 +282,26 @@ export function readBrand(dir) {
     }
     update = { keys }
   }
-  const company = inherit(file, own(file, doc, 'names', 'company', checkName), base, 'company', 'names.company')
+  const ours = isOurs(id, dir)
+  /** A field of SETS_ITS_OWN: a brand that isn't ours sets it, and not to
+   *  the default brand's value. */
+  const itsOwn = (field, value, theirs) => {
+    if (!base || ours) return
+    if (value === null || value === undefined) fail(file, `${field} is missing: a brand that isn't ours sets its own (the default brand's would show ours)`)
+    if (value === theirs) fail(file, `${field} is the default brand's own value ${JSON.stringify(value)}: a brand that isn't ours sets its own`)
+  }
+  const ownCompany = own(file, doc, 'names', 'company', checkName)
+  itsOwn('names.company', ownCompany, base?.company)
+  const company = inherit(file, ownCompany, base, 'company', 'names.company')
   const lockup = own(file, doc, 'names', 'lockup', checkName) ?? `${product} by ${company}`
-  const site = inherit(file, own(file, doc, 'links', 'site', checkHttps), base, 'site', 'links.site')
-  const supportEmail = inherit(file, own(file, doc, 'links', 'support_email', checkEmail), base, 'supportEmail', 'links.support_email')
-  return { file, id, product, cli, aliases, company, lockup, site, supportEmail, pkg, update }
+  const ownSite = own(file, doc, 'links', 'site', checkHttps)
+  itsOwn('links.site', ownSite, base?.site)
+  const site = inherit(file, ownSite, base, 'site', 'links.site')
+  const ownSupport = own(file, doc, 'links', 'support_email', checkEmail)
+  itsOwn('links.support_email', ownSupport, base?.supportEmail)
+  const supportEmail = inherit(file, ownSupport, base, 'supportEmail', 'links.support_email')
+  if (pkg) itsOwn('package.update_feed', pkg.update_feed, base?.pkg?.update_feed)
+  return { file, id, ours, product, cli, aliases, company, lockup, site, supportEmail, pkg, update }
 }
 
 /** minisign's key id of a public key line ("Ed", 8 id bytes, 32 key bytes):
@@ -304,12 +338,13 @@ export function ownUpdateKeys(file = RELEASE_KEYS_RS) {
 }
 
 /** What is wrong with a brand's update keys, as lines (empty: nothing).
- *  k2 and k5 must carry exactly K2's own keys; any other brand must carry
- *  none of them, nor the retired one, by key id or by key. */
+ *  Our brands (brand.ours: isOurs) must carry exactly K2's own keys; any
+ *  other brand must carry none of them, nor the retired one, by key id or
+ *  by key. */
 export function updateKeyProblems(brand, own = ownUpdateKeys()) {
   if (!brand.update) return [`${shown(brand.file)}: [update] is missing; a build needs its own update keys`]
   const mine = brand.update.keys
-  if (OWN_KEY_BRANDS.includes(brand.id)) {
+  if (brand.ours) {
     const want = own.keys.map((k) => `${k.role} ${k.key_id} ${k.pubkey}`).join('\n')
     const have = mine.map((k) => `${k.role} ${k.key_id} ${k.pubkey}`).join('\n')
     return want === have ? [] : [`${shown(brand.file)}: brand ${brand.id} must carry exactly the ceremony's update keys (crates/k2-release-keys UPDATER_KEYS), in order`]

@@ -20,9 +20,10 @@
 //!   and K2 doesn't use that path).
 //!
 //! **Per brand** (`brand/<id>/brand.toml` `[update]`, src/brand_keys.rs):
-//! `build.rs` reads the brand file (`K2_BRAND_DIR`, else `brand/k2`). The
-//! k2 and k5 brands must list exactly the keys below, and the build compiles
-//! this list as it is. Any other brand is built with its own keys, and its
+//! `build.rs` reads the brand file (`K2_BRAND_DIR`, else `brand/k2`). Our
+//! brands (k2 and k5 in this repo's own `brand/<id>`) must list exactly the
+//! keys below, and the build compiles this list as it is. Any other brand
+//! (a copy of brand/k2 elsewhere too) is built with its own keys, and its
 //! build stops if it carries one of these, or U1.
 //!
 //! `scripts/updater-key-ceremony.sh pubkeys <U2> <U3>` writes all four. Until

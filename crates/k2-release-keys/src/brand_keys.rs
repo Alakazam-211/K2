@@ -2,19 +2,25 @@
 //! table (`brand/<id>/brand.toml`). `build.rs` uses this module (`#[path]`),
 //! and so do this crate's tests.
 //!
-//! - Brands `k2` and `k5` ship K2's own keys: the list the update-key
-//!   ceremony writes between the `UPDATER_KEYS` markers in `lib.rs`. Their
-//!   `[update]` must equal that list exactly (role, key id, key, in order);
-//!   the build then compiles the ceremony's list as it is.
+//! - Our brands (`k2` and `k5` in this repo's own `brand/<id>`: the one
+//!   rule, crates/k2-brand/src/ours.rs) ship K2's own keys: the list the
+//!   update-key ceremony writes between the `UPDATER_KEYS` markers in
+//!   `lib.rs`. Their `[update]` must equal that list exactly (role, key id,
+//!   key, in order); the build then compiles the ceremony's list as it is.
 //! - Any other brand ships its own keys, compiled from its `[update]`. It
 //!   may not carry one of K2's keys, nor the retired U1, by key id or by key.
+//!   A copy of brand/k2 in another folder is another brand.
 //!
 //! Every refusal names the file and the field.
 
 use base64::Engine as _;
 
-/// The brands that ship K2's own update keys.
-pub const OWN_KEY_BRANDS: &[&str] = &["k2", "k5"];
+/// Which brand is ours: crates/k2-brand's rule, the same file.
+#[path = "../../k2-brand/src/ours.rs"]
+pub mod ours;
+
+/// The ids of the brands that ship K2's own update keys (when ours).
+pub const OWN_KEY_BRANDS: &[&str] = ours::OUR_IDS;
 
 /// One update key, as the brand file or the ceremony's list spells it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,9 +179,16 @@ pub fn brand_keys(text: &str) -> Result<(String, Vec<Key>), String> {
     Ok((id, keys))
 }
 
-/// What this brand's build compiles in, or why it may not be built.
-pub fn choose(id: &str, keys: Vec<Key>, own: &[Key], retired: &Key) -> Result<Choice, String> {
-    if OWN_KEY_BRANDS.contains(&id) {
+/// What this brand's build compiles in, or why it may not be built. `ours`
+/// is [`ours::is_ours`] for the brand's id and folder.
+pub fn choose(
+    id: &str,
+    ours: bool,
+    keys: Vec<Key>,
+    own: &[Key],
+    retired: &Key,
+) -> Result<Choice, String> {
+    if ours {
         if keys.as_slice() == own {
             return Ok(Choice::Own);
         }
@@ -285,7 +298,11 @@ pub(crate) mod tests {
         for b in ["brand/k2/brand.toml", "brand/k5/brand.toml"] {
             let (id, mine) = brand_keys(&repo(b)).unwrap_or_else(|e| panic!("{b}: {e}"));
             assert_eq!(mine, keys, "{b}");
-            assert_eq!(choose(&id, mine, &keys, &retired), Ok(Choice::Own), "{b}");
+            assert_eq!(
+                choose(&id, true, mine, &keys, &retired),
+                Ok(Choice::Own),
+                "{b}"
+            );
         }
     }
 
@@ -294,7 +311,7 @@ pub(crate) mod tests {
         let (keys, retired) = own();
         let (id, mine) = brand_keys(&repo("brand/xy/brand.toml")).expect("brand/xy");
         assert_eq!(id, "xy");
-        let Ok(Choice::Brand(got)) = choose(&id, mine.clone(), &keys, &retired) else {
+        let Ok(Choice::Brand(got)) = choose(&id, false, mine.clone(), &keys, &retired) else {
             panic!("brand/xy must build with its own keys");
         };
         assert_eq!(got, mine);
@@ -311,7 +328,7 @@ pub(crate) mod tests {
         let (keys, retired) = own();
         for ours in keys.iter().chain(std::iter::once(&retired)) {
             let (id, mine) = brand_keys(&xy_with(ours)).expect("still a well-formed brand file");
-            let e = choose(&id, mine, &keys, &retired).expect_err("our key in brand xy");
+            let e = choose(&id, false, mine, &keys, &retired).expect_err("our key in brand xy");
             assert!(
                 e.contains(&format!(
                     "carries the ceremony's update key {}",
@@ -326,7 +343,7 @@ pub(crate) mod tests {
     fn a_k2_brand_with_another_key_is_refused() {
         let (keys, retired) = own();
         let (_, xy) = brand_keys(&repo("brand/xy/brand.toml")).expect("brand/xy");
-        let e = choose("k2", xy, &keys, &retired).expect_err("k2 with xy's key");
+        let e = choose("k2", true, xy, &keys, &retired).expect_err("k2 with xy's key");
         assert!(
             e.contains("brand k2 must carry exactly the ceremony's update keys"),
             "{e}"
@@ -334,8 +351,47 @@ pub(crate) mod tests {
         let mut fewer = keys.clone();
         fewer.pop();
         assert!(
-            choose("k5", fewer, &keys, &retired).is_err(),
+            choose("k5", true, fewer, &keys, &retired).is_err(),
             "k5 without the backup key"
+        );
+    }
+
+    /// Ours is k2 or k5 in this repo's own brand/<id>: a copy of brand/k2
+    /// in a folder named k2 outside the repo's brand/ is not ours, so it
+    /// may not ship our keys.
+    #[test]
+    fn a_copy_of_brand_k2_elsewhere_is_not_ours_and_may_not_ship_our_keys() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(ours::is_ours("k2", &root.join("brand/k2"), &root));
+        assert!(ours::is_ours("k5", &root.join("brand/k5"), &root));
+        assert!(!ours::is_ours("xy", &root.join("brand/xy"), &root));
+        let dir = std::env::temp_dir()
+            .join(format!("k2-release-keys-test-{}", std::process::id()))
+            .join("brand")
+            .join("k2");
+        std::fs::create_dir_all(&dir).expect("make a folder named k2");
+        let text = repo("brand/k2/brand.toml");
+        std::fs::write(dir.join("brand.toml"), &text).expect("write the copy");
+        let (id, mine) = brand_keys(&text).expect("the copy's keys");
+        assert_eq!(id, "k2");
+        let copy_ours = ours::is_ours(&id, &dir, &root);
+        let _ = std::fs::remove_dir_all(
+            dir.parent()
+                .and_then(Path::parent)
+                .expect("the test folder"),
+        );
+        assert!(
+            !copy_ours,
+            "a folder named k2 outside the repo's brand/ is not ours"
+        );
+        let (keys, retired) = own();
+        let e = choose(&id, copy_ours, mine, &keys, &retired).expect_err("our keys in a copy");
+        assert!(
+            e.contains(&format!(
+                "brand k2 carries the ceremony's update key {}",
+                keys[0].key_id
+            )),
+            "{e}"
         );
     }
 

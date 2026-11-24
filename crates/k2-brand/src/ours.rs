@@ -4,11 +4,14 @@
 //! this repo's own `brand/<id>` (the two paths compared once made
 //! canonical). A copy of `brand/k2` in another folder is not ours, and
 //! neither is any other id. A brand that isn't ours sets its own values
-//! for the fields that name us or reach us (`brand_file.rs`).
+//! for the fields that name us or reach us (`brand_file.rs`), and never
+//! ships our update keys (crates/k2-release-keys `brand_keys.rs`).
 //!
 //! No dependencies: crates/k2-brand's build script and tests use this
-//! file through `brand_file.rs`. scripts/brand/lint.py (`is_ours`) keeps
-//! the same rule.
+//! file through `brand_file.rs` (and the build writes the answer as
+//! `k2_brand::IS_OURS`); crates/k2-release-keys uses it through `#[path]`
+//! in `brand_keys.rs`. scripts/brand/lint.py (`is_ours`) and
+//! scripts/brand-values.mjs (`isOurs`) keep the same rule.
 
 use std::path::Path;
 

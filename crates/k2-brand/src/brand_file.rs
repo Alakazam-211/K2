@@ -144,6 +144,9 @@ pub struct Brand {
     pub product: String,
     pub cli_name: String,
     pub aliases: Vec<Alias>,
+    /// The brand is ours ([`ours::is_ours`]); the build writes it as
+    /// `IS_OURS`.
+    pub ours: bool,
     /// `package.update_feed`, when set: the desktop app's update manifest
     /// (scripts/brand-values.mjs reads `[package]`; this reader checks it
     /// only for its shape and that a brand not ours has its own).
@@ -480,6 +483,7 @@ fn parse(
         product,
         cli_name,
         aliases,
+        ours,
         update_feed,
         update_keys,
         fields,
@@ -1322,6 +1326,11 @@ pub const LOGIN_NAME: &str = login_name!();
 /// The brand's id: its folder under `brand/`.
 pub const BRAND_ID: &str = {id:?};
 
+/// The brand is ours: k2 or k5, built from this repo's own `brand/<id>`
+/// (crates/k2-brand/src/ours.rs). A brand that isn't ours set its own
+/// value for every field that names us or reaches us.
+pub const IS_OURS: bool = {ours};
+
 /// Other names the command answers to.
 pub const CLI_ALIASES: &[&str] = &[{names}];
 
@@ -1354,6 +1363,7 @@ pub const RETIRED: &[RetiredName] = &[{retired}];
         cli = b.cli_name,
         login = b.fields.login,
         id = b.id,
+        ours = b.ours,
         names = names.join(", "),
         modes = modes.join(", "),
         begin = begin,
@@ -1554,6 +1564,11 @@ pub const LOGIN_NAME: &str = login_name!();
 
 /// The brand's id: its folder under `brand/`.
 pub const BRAND_ID: &str = "ab";
+
+/// The brand is ours: k2 or k5, built from this repo's own `brand/<id>`
+/// (crates/k2-brand/src/ours.rs). A brand that isn't ours set its own
+/// value for every field that names us or reaches us.
+pub const IS_OURS: bool = false;
 
 /// Other names the command answers to.
 pub const CLI_ALIASES: &[&str] = &["abc", "ab1", "ab2"];
@@ -2520,10 +2535,7 @@ call_name = "Hub Calls"
     fn a_brand_not_ours_sets_each_field_that_names_us() {
         let t = TempBrand::new("not-ours-whole", Some(GOOD));
         let b = load(&t.file(), &default_file()).expect("GOOD sets every field it must");
-        assert!(
-            !ours::is_ours(&b.id, &t.dir, &repo("")),
-            "a brand in the temp dir is not ours"
-        );
+        assert!(!b.ours, "a brand in the temp dir is not ours");
         for (i, field) in SETS_ITS_OWN.iter().enumerate() {
             refused(
                 &format!("not-ours-missing-{i}"),
@@ -2685,16 +2697,18 @@ call_name = "Hub Calls"
     fn ours_load_as_ours_and_brand_xy_as_its_own() {
         let file = default_file();
         let k2 = load(&file, &file).expect("brand/k2 loads");
-        assert!(ours::is_ours(&k2.id, &repo("brand/k2"), &repo("")));
+        assert!(k2.ours);
+        assert!(render_names(&k2).contains("pub const IS_OURS: bool = true;\n"));
         let k5 = load(&repo("brand/k5/brand.toml"), &file).expect("brand/k5 loads");
-        assert!(ours::is_ours(&k5.id, &repo("brand/k5"), &repo("")));
+        assert!(k5.ours);
         assert_eq!(
             k5.fields.company,
             default_fields().company,
             "brand/k5 keeps our names"
         );
         let xy = load(&repo("brand/xy/brand.toml"), &file).expect("brand/xy loads");
-        assert!(!ours::is_ours(&xy.id, &repo("brand/xy"), &repo("")));
+        assert!(!xy.ours);
+        assert!(render_names(&xy).contains("pub const IS_OURS: bool = false;\n"));
         let base = default_fields();
         for (what, mine, ours) in [
             ("names.company", &xy.fields.company, &base.company),

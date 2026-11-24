@@ -1,5 +1,8 @@
-// Settings → Workspaces / Agents → <workspace> → Postal (Beta)
-// (prd-postal-in-k2-v1 §5.5, vs-live P34). Postal lets an agent have
+// Settings → Workspaces / Agents → <workspace> → Friends (Beta)
+// (prd-postal-in-k2-v1 §5.5, vs-live P34). People read this surface as
+// Friends; the service under it keeps its name, Postal (the owner's call,
+// 0.46.18), and the explainer at the top says so with the brand's product
+// name (never a spelled-out one). Postal lets an agent have
 // friends: agents on other machines, at addresses like
 // `alice::initech.postal.bot`, behind the server's Postal switch (off by
 // default; Settings → General → Server). The daemon talks to the Postal
@@ -10,10 +13,10 @@
 //     claim one;
 //   - Friends: accepted friends, each with Remove and Block (each asks
 //     first); a changed key says what it means and offers Trust new key;
-//   - Invitations: incoming (Accept opens K2's code form when the request
+//   - Friend requests (`invitations` in ids): incoming (Accept opens K2's code form when the request
 //     carries a pairing code, marked on the row; Reject), outgoing (Waiting,
 //     or Not sent yet before the network has it), the asker's note, and an
-//     Invite form once the agent has an address;
+//     Add a friend form once the agent has an address;
 //   - Blocked (only when there is one): Unblock lifts the block (the daemon's
 //     remove), so the peer can send friend requests again;
 //   - History;
@@ -31,6 +34,7 @@ import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { Button, Input } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
+import { productName } from '@/lib/brand'
 import { ConfirmSheet } from './AccessDialogs'
 import { PostalPairCodeForm } from './PostalPairCodeForm'
 import { CardNotice, EmptyRow, InlineError, PeerRow, POSTAL_HINT, POSTAL_MEASURE, handleStatusText, type PostalNotice } from './PostalRows'
@@ -58,10 +62,20 @@ export const POSTAL_ROUTING_LINE =
   'Mail from a friend lands in this agent’s terminal and wakes it. Long messages, files, and mail that comes while it’s busy go to its inbox instead, with a note in its terminal.'
 export const POSTAL_ROUTING_HINT = `To change it for this agent or for one friend, the agent runs ${CLI_NAME} postal route.`
 
+/** The tab's name as people read it (ids, routes and kinds stay `postal`). */
+export const FRIENDS_TAB_LABEL = 'Friends'
+
+/** The one-line explainer at the top of the Friends tab. The product's name
+ *  comes from the brand (what the window's server reported, else the
+ *  default), so a partner's build names its own product. */
+export function friendsExplainer(product: string = productName()): string {
+  return `Friends are agents on other servers your agent can talk to. This is the Postal service, included with ${product}.`
+}
+
 export const POSTAL_MANIFEST: SettingEntry[] = [
-  { id: 'projects.postal', section: 'projects', label: 'Postal address', description: "This agent's Postal address, so agents on other machines can be its friends", keywords: ['postal', 'postal.bot', 'address', 'handle', 'claim', 'friends', 'other machines', 'p5'], beta: true },
-  { id: 'projects.postal-friends', section: 'projects', label: 'Postal friends', description: "Agents on other machines this agent can write to; remove or block one", keywords: ['postal', 'friends', 'remove', 'block', 'peer'], beta: true },
-  { id: 'projects.postal-invitations', section: 'projects', label: 'Postal invitations', description: 'Friend requests in and out: accept, reject, or invite an agent on another machine', keywords: ['postal', 'invite', 'invitation', 'request', 'accept', 'reject', 'pending'], beta: true },
+  { id: 'projects.postal', section: 'projects', label: 'Friend address', description: "This agent's address, so agents on other servers can add it as a friend", keywords: ['postal', 'postal.bot', 'address', 'handle', 'claim', 'friends', 'other machines', 'other servers', 'p5'], beta: true },
+  { id: 'projects.postal-friends', section: 'projects', label: 'Friends', description: 'Agents on other servers this agent can talk to; remove or block a friend', keywords: ['postal', 'friends', 'remove', 'block', 'peer'], beta: true },
+  { id: 'projects.postal-invitations', section: 'projects', label: 'Friend requests', description: 'Friend requests in and out: accept, reject, or add a friend on another server', keywords: ['postal', 'friends', 'add a friend', 'invite', 'invitation', 'request', 'accept', 'reject', 'pending'], beta: true },
 ]
 
 type Load<T> = { kind: 'loading' } | { kind: 'ready'; value: T } | { kind: 'error'; message: string }
@@ -216,13 +230,13 @@ export function PostalTab({
   let addressBody: React.ReactNode
   if (status.kind === 'loading') {
     addressBody = (
-      <SettingsLoadState kind="loading" title="Reading this agent’s Postal address…" testId="postal-status-loading" />
+      <SettingsLoadState kind="loading" title="Reading this agent’s address…" testId="postal-status-loading" />
     )
   } else if (status.kind === 'error') {
     addressBody = (
       <SettingsLoadState
         kind="error"
-        title="Couldn’t read Postal for this agent"
+        title="Couldn’t read this agent’s address"
         detail={status.message}
         action={<Button onClick={reload}>Try again</Button>}
         testId="postal-status-error"
@@ -247,7 +261,7 @@ export function PostalTab({
       return
     }
     const ok = await run('invite', 'invitations', () => invitePostalFriend(scope, workspace, to, inviteWhy.trim()), (r) =>
-      r?.sent === true ? `Invitation sent to ${to}.` : `Invitation to ${to} goes out once this server connects to the Postal network.`,
+      r?.sent === true ? `Friend request sent to ${to}.` : `Friend request to ${to} goes out once this server connects to the Postal network.`,
     )
     if (ok && mounted.current) {
       setInviteTo('')
@@ -279,26 +293,31 @@ export function PostalTab({
       />
     ) : undefined
 
-  const loadState = (what: 'friends' | 'invitations'): React.ReactNode =>
-    friends.kind === 'loading' ? (
-      <SettingsLoadState kind="loading" title={`Reading ${what}…`} testId={`postal-${what}-loading`} />
+  const loadState = (what: 'friends' | 'invitations'): React.ReactNode => {
+    const words = what === 'friends' ? 'friends' : 'friend requests'
+    return friends.kind === 'loading' ? (
+      <SettingsLoadState kind="loading" title={`Reading ${words}…`} testId={`postal-${what}-loading`} />
     ) : friends.kind === 'error' ? (
       <SettingsLoadState
         kind="error"
-        title={`Couldn’t read this agent’s ${what}`}
+        title={`Couldn’t read this agent’s ${words}`}
         detail={friends.message}
         action={<Button onClick={reload}>Try again</Button>}
         testId={`postal-${what}-error`}
       />
     ) : undefined
+  }
 
   const confirmWords = confirm ? CONFIRM_WORDS[confirm.kind] : null
 
   return (
     <div className="space-y-6" data-testid="postal-tab">
+      <p className={`type-hint text-[var(--color-text-secondary)] leading-relaxed ${POSTAL_MEASURE}`} data-testid="friends-explainer">
+        {friendsExplainer()}
+      </p>
       <SettingsGroup
-        title="Postal address"
-        hint={<span className={`block ${POSTAL_MEASURE}`}>Postal lets this agent have friends: agents on other machines it can write to and hear from.</span>}
+        title="Address"
+        hint={<span className={`block ${POSTAL_MEASURE}`}>Other agents use this address to send this agent a friend request.</span>}
         card
         settingId="projects.postal"
         state={addressBody}
@@ -320,7 +339,7 @@ export function PostalTab({
         {status.kind === 'ready' && !handle && canManage ? (
           <SettingRow
             stack
-            label="Claim a Postal address"
+            label="Claim an address"
             hint={<span className={`block ${POSTAL_MEASURE}`}>The full address, like alice::initech.postal.bot. Other agents use it to ask to be friends.</span>}
             settingId="projects.postal-claim"
             below={<InlineError message={errors.claim ?? null} testId="postal-claim-error" />}
@@ -338,7 +357,7 @@ export function PostalTab({
                 value={claimAddress}
                 onChange={(e) => setClaimAddress(e.target.value)}
                 placeholder="handle::label.postal.bot"
-                aria-label="Postal address to claim"
+                aria-label="Address to claim"
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
@@ -352,7 +371,7 @@ export function PostalTab({
         {status.kind === 'ready' && !handle && !canManage ? (
           <EmptyRow
             testId="postal-no-address"
-            title="No Postal address yet"
+            title="No address yet"
             hint="The owner or an admin of this server can claim one."
           />
         ) : null}
@@ -371,7 +390,7 @@ export function PostalTab({
           <EmptyRow
             testId="postal-friends-empty"
             title="No friends yet"
-            hint="Invite an agent on another machine below, or accept a request when one comes in."
+            hint="Add a friend below, or accept a friend request when one comes in."
           />
         ) : (
           groups.friends.map((f) => {
@@ -408,10 +427,10 @@ export function PostalTab({
       </SettingsGroup>
 
       <SettingsGroup
-        title="Invitations"
+        title="Friend requests"
         hint={
           <span className={`block ${POSTAL_MEASURE}`}>
-            Requests never wake this agent. A request with a code check is accepted by typing the code shown on the other side’s screen.
+            Friend requests never wake this agent. A request with a code check is accepted by typing the code shown on the other side’s screen.
           </span>
         }
         card
@@ -419,7 +438,7 @@ export function PostalTab({
         state={loadState('invitations')}
       >
         {groups.incoming.length === 0 && groups.outgoing.length === 0 ? (
-          <EmptyRow testId="postal-invitations-empty" title="No invitations waiting" />
+          <EmptyRow testId="postal-invitations-empty" title="No friend requests waiting" />
         ) : null}
         {groups.incoming.map((f) => {
           // The open code form takes the row's full width under its lines;
@@ -456,12 +475,12 @@ export function PostalTab({
           <PeerRow key={f.id} friend={f} />
         ))}
         {canManage && !handle ? (
-          <EmptyRow testId="postal-invite-needs-address" title="Invite a friend" hint="Claim a Postal address for this agent first." />
+          <EmptyRow testId="postal-invite-needs-address" title="Add a friend" hint="Claim an address for this agent first." />
         ) : null}
         {canManage && handle ? (
           <SettingRow
             stack
-            label="Invite a friend"
+            label="Add a friend"
             hint={<span className={`block ${POSTAL_MEASURE}`}>The other agent’s full address, and a note for its person if you like.</span>}
             settingId="projects.postal-invite"
             below={<InlineError message={errors.invite ?? null} testId="postal-invite-error" />}
@@ -479,7 +498,7 @@ export function PostalTab({
                 value={inviteTo}
                 onChange={(e) => setInviteTo(e.target.value)}
                 placeholder="handle::label.postal.bot"
-                aria-label="Address to invite"
+                aria-label="Address of the friend to add"
                 spellCheck={false}
                 autoCapitalize="off"
                 autoCorrect="off"
@@ -489,11 +508,11 @@ export function PostalTab({
                 value={inviteWhy}
                 onChange={(e) => setInviteWhy(e.target.value)}
                 placeholder="Note (optional)"
-                aria-label="Note with the invitation"
+                aria-label="Note with the friend request"
                 maxLength={500}
               />
               <Button type="submit" variant="accent" disabled={busy !== null || inviteTo.trim() === ''}>
-                {busy === 'invite' ? 'Inviting…' : 'Invite'}
+                {busy === 'invite' ? 'Sending…' : 'Send request'}
               </Button>
             </form>
           </SettingRow>

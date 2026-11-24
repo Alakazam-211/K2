@@ -60,7 +60,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       {
         noun: 'postal',
-        blurb: 'Friends for an agent here among agents on other machines (handle::label.postal.bot); every step is a card your person answers.',
+        blurb: 'Friends: agents on other servers this agent can talk to, through the Postal service (handle::label.postal.bot). Every step is a card your person answers.',
         example: `${CLI_NAME} postal status`,
         beta: true,
       },

@@ -7,6 +7,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Desktop app
 - **A slow or unreachable other server no longer makes the app look offline; while this server is busy, the app stays usable and shows a small reconnecting note.**
+- **The Postal tab is now called Friends: agents on other servers your agent can talk to.** The tab and its server switch say Friends, Add a friend and Friend requests, and a line at the top says it is the Postal service. Addresses still end in `.postal.bot`, and the `k2 postal` commands are unchanged.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

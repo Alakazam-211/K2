@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-// The workspace Postal tab (Beta) and the server's Postal switch
+// The workspace Friends tab (Beta; the Postal service, ids stay `postal`)
+// and the server's switch for it
 // (prd-postal-in-k2-v1 §5.5, vs-live P34):
 //   - the tab shows only while the server lists `postal` in /boot-status
 //     features, and never for a Voice & Chat only login;
 //   - it shows the address card (with a claim form when there is no
-//     address), Friends, Invitations and Routing;
+//     address), Friends, Friend requests and Routing, under one explainer
+//     line that names the brand's product (never a spelled-out name);
 //   - Accept posts postal/decide {workspace, id, decision: 'accept'}; on a
 //     request with a pairing code it opens K2's code form, which shows this
 //     server's code and sends the one typed from the other side;
@@ -87,7 +89,9 @@ vi.mock('@/stores/connect-host', async () => {
 })
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { PostalTab, POSTAL_ROUTING_LINE } from './PostalTab'
+import { FRIENDS_TAB_LABEL, PostalTab, POSTAL_MANIFEST, POSTAL_ROUTING_LINE, friendsExplainer } from './PostalTab'
+import { POSTAL_SERVER_MANIFEST } from './PostalServerSwitch'
+import { PRODUCT_NAME, noteReportedBrand, resetReportedBrandForTests } from '@/lib/brand'
 import { PostalServerSwitch } from './PostalServerSwitch'
 import { postalRouteText } from './postal-api'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
@@ -144,13 +148,13 @@ describe('PostalTab', () => {
     await waitFor(() => expect(screen.queryByTestId('postal-tab')).toBeNull())
   })
 
-  it('shows the address card with a claim form, the note, Friends, Invitations and Routing', async () => {
+  it('shows the address card with a claim form, the note, Friends, Friend requests and Routing', async () => {
     render(<PostalTab project={project} scope={scope} />)
     expect(await screen.findByTestId('postal-claim-form')).toBeTruthy()
-    expect(screen.getByText('Claim a Postal address')).toBeTruthy()
+    expect(screen.getByText('Claim an address')).toBeTruthy()
     expect(screen.getByTestId('postal-plane-note').textContent).toBe('The Postal network connection comes in a later release.')
     expect(screen.getByText('Friends')).toBeTruthy()
-    expect(screen.getByText('Invitations')).toBeTruthy()
+    expect(screen.getByText('Friend requests')).toBeTruthy()
     expect(screen.getByText('Routing')).toBeTruthy()
     expect(screen.getByTestId('postal-routing').textContent).toBe(POSTAL_ROUTING_LINE)
     expect(cli.gets.find((g) => g.route === 'postal/status')?.params).toEqual({ workspace: '/ws/ada' })
@@ -159,7 +163,7 @@ describe('PostalTab', () => {
 
   it('claims the typed address', async () => {
     render(<PostalTab project={project} scope={scope} />)
-    const field = await screen.findByLabelText('Postal address to claim')
+    const field = await screen.findByLabelText('Address to claim')
     fireEvent.change(field, { target: { value: 'ada::initech.postal.bot' } })
     await act(async () => {
       fireEvent.submit(screen.getByTestId('postal-claim-form'))
@@ -357,26 +361,27 @@ describe('PostalTab', () => {
     expect(document.body.textContent).not.toContain('(it is revoked)')
   })
 
-  it('before the agent has an address, Invite shows only the one-line reason', async () => {
+  it('before the agent has an address, Add a friend shows only the one-line reason', async () => {
     render(<PostalTab project={project} scope={scope} />)
     const why = await screen.findByTestId('postal-invite-needs-address')
-    expect(why.textContent).toContain('Claim a Postal address for this agent first.')
+    expect(why.textContent).toContain('Add a friend')
+    expect(why.textContent).toContain('Claim an address for this agent first.')
     expect(screen.queryByTestId('postal-invite-form')).toBeNull()
-    expect(screen.queryByLabelText('Address to invite')).toBeNull()
+    expect(screen.queryByLabelText('Address of the friend to add')).toBeNull()
   })
 
-  it('Invitations has its own loading and error words', async () => {
+  it('Friend requests has its own loading and error words', async () => {
     cli.getFail = new DaemonHttpError('the Postal store is busy', 503, 'postal_unreachable')
     render(<PostalTab project={project} scope={scope} />)
     const err = await screen.findByTestId('postal-invitations-error')
-    expect(err.textContent).toContain('Couldn’t read this agent’s invitations')
+    expect(err.textContent).toContain('Couldn’t read this agent’s friend requests')
     expect(screen.getByTestId('postal-friends-error').textContent).toContain('Couldn’t read this agent’s friends')
   })
 
   async function invite(to: string): Promise<void> {
     cli.status = statusBody({ id: 'h1', address: 'ada::initech.postal.bot', status: 'claimed', createdAt: '2026-11-17T00:00:00Z' })
     render(<PostalTab project={project} scope={scope} />)
-    const field = await screen.findByLabelText('Address to invite')
+    const field = await screen.findByLabelText('Address of the friend to add')
     fireEvent.change(field, { target: { value: to } })
     await act(async () => {
       fireEvent.submit(screen.getByTestId('postal-invite-form'))
@@ -388,7 +393,7 @@ describe('PostalTab', () => {
     await invite('bee::hive.postal.bot')
     expect(cli.posts).toContainEqual({ route: 'postal/invite', body: { workspace: '/ws/ada', to: 'bee::hive.postal.bot' } })
     const notice = screen.getByTestId('postal-notice')
-    expect(notice.textContent).toBe('Invitation sent to bee::hive.postal.bot.')
+    expect(notice.textContent).toBe('Friend request sent to bee::hive.postal.bot.')
     expect(notice.closest('[data-settings-id="projects.postal-invitations"]')).toBeTruthy()
   })
 
@@ -396,7 +401,7 @@ describe('PostalTab', () => {
     cli.inviteResult = { ok: true, sent: false, network: 'not_yet' }
     await invite('bee::hive.postal.bot')
     expect(screen.getByTestId('postal-notice').textContent).toBe(
-      'Invitation to bee::hive.postal.bot goes out once this server connects to the Postal network.',
+      'Friend request to bee::hive.postal.bot goes out once this server connects to the Postal network.',
     )
   })
 
@@ -406,6 +411,37 @@ describe('PostalTab', () => {
     const card = await screen.findByTestId('postal-status-error')
     expect(card.textContent).toContain('Postal is off on this server')
     expect(card.textContent).not.toMatch(/at \w+ \(/)
+  })
+})
+
+describe('Friends: the name people read and the explainer', () => {
+  afterEach(() => resetReportedBrandForTests())
+
+  it('the explainer names the brand product, the default one before a server says', async () => {
+    resetReportedBrandForTests()
+    expect(friendsExplainer()).toBe(
+      `Friends are agents on other servers your agent can talk to. This is the Postal service, included with ${PRODUCT_NAME}.`,
+    )
+    render(<PostalTab project={project} scope={scope} />)
+    expect((await screen.findByTestId('friends-explainer')).textContent).toBe(friendsExplainer(PRODUCT_NAME))
+  })
+
+  it("the explainer names the product the server reported, so a partner's build names its own", async () => {
+    noteReportedBrand({ productName: 'Acme Desk' })
+    render(<PostalTab project={project} scope={scope} />)
+    const line = (await screen.findByTestId('friends-explainer')).textContent ?? ''
+    expect(line).toBe('Friends are agents on other servers your agent can talk to. This is the Postal service, included with Acme Desk.')
+    expect(line).not.toContain(`with ${PRODUCT_NAME}.`)
+  })
+
+  it('the tab, search labels and server switch say Friends; ids stay postal', () => {
+    expect(FRIENDS_TAB_LABEL).toBe('Friends')
+    expect(POSTAL_MANIFEST.map((e) => [e.id, e.label])).toEqual([
+      ['projects.postal', 'Friend address'],
+      ['projects.postal-friends', 'Friends'],
+      ['projects.postal-invitations', 'Friend requests'],
+    ])
+    expect(POSTAL_SERVER_MANIFEST.map((e) => [e.id, e.label])).toEqual([['general.postal', 'Friends']])
   })
 })
 
@@ -532,7 +568,8 @@ describe('PostalServerSwitch', () => {
     render(<PostalServerSwitch scope={scope} />)
     const group = await screen.findByTestId('postal-server-switch')
     const text = group.textContent ?? ''
-    expect(text).toContain('On: each workspace gets a Postal tab')
+    expect(text).toContain('On: each workspace gets a Friends tab')
+    expect(within(group).getByText('Friends')).toBeTruthy()
     expect(text).toContain(
       'This server connects to the Postal network to send and receive friend requests and your agents’ messages. Messages wait on the network until this server collects them, and anything sent while it isn’t connected waits until it is.',
     )

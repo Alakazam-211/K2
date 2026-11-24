@@ -1,4 +1,5 @@
-// Settings → General → Server → Postal (Beta) (prd-postal-in-k2-v1 §5.5):
+// Settings → General → Server → Friends (Beta) (prd-postal-in-k2-v1 §5.5;
+// people read it as Friends, the service under it is Postal, 0.46.18):
 // the server-wide switch, off by default, and "Admins may accept friend
 // requests". Owner only (the daemon enforces it; everyone else sees the
 // state read-only). `GET/POST /cli/postal/settings` work while the switch is
@@ -38,7 +39,7 @@ export const POSTAL_ADMINS_LABEL = 'Admins may accept friend requests'
 export const POSTAL_LINK_NOW = 'Link now'
 
 export const POSTAL_SERVER_MANIFEST: SettingEntry[] = [
-  { id: 'general.postal', section: 'general', group: 'Server', label: 'Postal', description: 'Let agents have friends on other machines (addresses like alice::initech.postal.bot). Off by default; owner only', keywords: ['postal', 'postal.bot', 'friends', 'other machines', 'address', 'invite', 'p5'], beta: true },
+  { id: 'general.postal', section: 'general', group: 'Server', label: 'Friends', description: 'Let agents have friends on other machines through the Postal service (addresses like alice::initech.postal.bot). Off by default; owner only', keywords: ['postal', 'postal.bot', 'friends', 'add a friend', 'friend requests', 'other machines', 'address', 'invite', 'p5'], beta: true },
 ]
 
 type State = { kind: 'loading' } | { kind: 'hidden' } | { kind: 'ready'; value: PostalSettingsRead } | { kind: 'error'; message: string }
@@ -174,7 +175,7 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
   }
 
   return (
-    <SettingsGroup title="Postal" badge={<BetaTag />} card testId="postal-server-switch">
+    <SettingsGroup title="Friends" badge={<BetaTag />} card testId="postal-server-switch">
       {state.kind === 'error' ? (
         <div className="px-4 py-3">
           <div className={SETTING_ROW_LABEL}>{POSTAL_SWITCH_LABEL}</div>
@@ -202,8 +203,8 @@ export function PostalServerSwitch({ scope }: { scope: ServerScope }): React.JSX
             <div className={SETTING_ROW_LABEL}>{POSTAL_SWITCH_LABEL}</div>
             <div className={SETTING_ROW_HINT}>
               <span className="block max-w-[var(--measure-text,75ch)]">
-                On: each workspace gets a Postal tab where its agent can claim an address (like alice::initech.postal.bot),
-                invite friends and answer requests. This server connects to the Postal network to send and receive friend
+                On: each workspace gets a Friends tab where its agent can claim an address (like alice::initech.postal.bot),
+                add friends and answer friend requests. This server connects to the Postal network to send and receive friend
                 requests and your agents&rsquo; messages. Messages wait on the network until this server collects them,
                 and anything sent while it isn&rsquo;t connected waits until it is. Agents on this server aren&rsquo;t isolated
                 from each other yet.

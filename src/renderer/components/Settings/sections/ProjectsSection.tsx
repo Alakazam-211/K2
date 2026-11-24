@@ -88,7 +88,7 @@ import { AgentsVirtualDesktopToggle } from './AgentsVirtualDesktopToggle'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { modelSuggestionsForAgent } from '@/lib/model-choices'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
-import { PostalTab } from './PostalTab'
+import { FRIENDS_TAB_LABEL, PostalTab } from './PostalTab'
 import { usePostalTabShown } from './postal-api'
 import {
   WORKSPACE_SETTINGS_TABS,
@@ -1659,7 +1659,7 @@ function ProjectDetail({
     permissions: 'Permissions',
     context: 'Context',
     connections: 'Connections',
-    postal: 'Postal',
+    postal: FRIENDS_TAB_LABEL,
     skills: 'Skills',
     schedule: 'Heartbeats',
     mail: 'Mail',

@@ -34,6 +34,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Agents can reply to a specific Thread message or card; click the reply line or a #number to jump to it.** An agent posts `k2 thread <addr> --reply-to '#13664' "…"` to point you at a card or message: the reply shows its `↩ #N` line and the start of what it answers, and clicking that line scrolls to it (loading older messages if needed) and highlights it briefly. A `#N` in a message that names a message or card on that Thread is a link too; any other `#N` stays plain text. A number that isn't on the Thread is refused, and nothing is posted.
 ### Threads
 - K2's informational notices in a Thread no longer count as unread; ones that need you still do.
+### Voice
+- **Sew 0.11.4: calls use less battery on weak connections.**
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

@@ -50,7 +50,7 @@ printf 'fn clean() {}\n' > "$T/src-tauri/src/main.rs"
 
 # Two K2 lines and one K5 line at their rows pass. Comments, the test module,
 # test files, look-alike names and the brand modules are not counted.
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
 run 0 "K2 crates/a/src/old.rs:3: fn a()" --list
 run 0 "K2 crates/a/src/old.rs:4: fn b()" --list
 run 0 "K5 crates/a/src/old.rs:5: fn c()" --list K5
@@ -106,7 +106,7 @@ run 1 "src/renderer/lib/f.ts:1 spells out company and has no company row"
 rm "$T/src/renderer/lib/f.ts"
 cp "$T/a.txt" "$T/a.before"
 printf '1 company crates/a/src/feedback.rs keeper: a licence line that names the real company\n' >> "$T/a.txt"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 1 company lines in 3 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 1 company, 0 login lines in 3 rows still spell a name out)."
 printf 'fn g() -> &str { "K2 by Alakazam Labs" }\n' >> "$T/crates/a/src/feedback.rs"
 run 1 "crates/a/src/feedback.rs has 2 company lines, its row allows 1"
 cp "$T/a.before" "$T/a.txt"
@@ -115,16 +115,43 @@ printf 'fn t() { assert_eq!(x, "Alakazam Labs"); }\n' > "$T/crates/a/src/feedbac
 printf "it('names us', () => expect(n).toBe('Alakazam Labs'))\n" > "$T/src/renderer/lib/f.test.ts"
 printf "// Alakazam Labs in a comment\nexport const COMPANY_NAME = 'Alakazam Labs'\n" >> "$T/src/renderer/lib/brand.ts"
 printf '// Alakazam Labs in a comment\n#[cfg(test)]\nmod tests {\n    fn t() { let c = "Alakazam Labs"; }\n}\n' > "$T/crates/a/src/quiet.rs"
-run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company lines in 2 rows still spell a name out)."
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
 lacks "company " --list company
 rm "$T/crates/a/src/feedback_tests.rs" "$T/src/renderer/lib/f.test.ts" "$T/crates/a/src/quiet.rs"
 printf "export const PRODUCT_NAME = 'K2'\n" > "$T/src/renderer/lib/brand.ts"
+
+# The CLI's printed text (the cli/text pages, the schema entries, the
+# captured help pages) names the company and the sign-in service by slot:
+# a literal one fails, for company and login only (its K2 is not counted).
+# The slots, the captured pages' escapes and an escaped backslash before
+# `p Connect` pass.
+mkdir -p "$T/cli/text/study" "$T/cli/src/schema" "$T/crates/k5-cli/src"
+printf 'Tell Alakazam Labs about K2 itself.\n' > "$T/cli/text/study/feedback.txt"
+run 1 "cli/text/study/feedback.txt:1 spells out company and has no company row: use COMPANY_NAME or PRODUCT_LOCKUP (k2_core::brand, @/lib/brand); in a page or a schema entry the {company} slot"
+printf 'Tell {company} about K2 itself.\n' > "$T/cli/text/study/feedback.txt"
+printf '    {"name": "tunnel", "usage": "k2 tunnel", "description": "A K2 Connect tunnel."},\n' > "$T/cli/src/schema/tunnel.entries"
+run 1 "cli/src/schema/tunnel.entries:1 spells out login and has no login row: use the {login} slot"
+printf '    {"name": "tunnel", "usage": "k2 tunnel", "description": "A {login} tunnel."},\n' > "$T/cli/src/schema/tunnel.entries"
+printf 'P\t0\t0\tover \\p Connect, at K2\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 1 "crates/k5-cli/src/help_captured.txt:1 spells out login and has no login row"
+printf 'P\t0\t0\tTell Alakazam Labs\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 1 "crates/k5-cli/src/help_captured.txt:1 spells out company and has no company row"
+printf 'P\t0\t0\tTell \\o, over \\l, a \\\\p Connect\t\n' > "$T/crates/k5-cli/src/help_captured.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
+printf 'Sign in with K2 Connect.\n' >> "$T/cli/text/study/feedback.txt"
+cp "$T/a.txt" "$T/a.before"
+printf '1 login cli/text/study/feedback.txt keeper: a page that must name our service\n' >> "$T/a.txt"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 1 login lines in 3 rows still spell a name out)."
+run 0 "login cli/text/study/feedback.txt:2: Sign in with K2 Connect." --list login
+cp "$T/a.before" "$T/a.txt"
+rm -r "$T/cli" "$T/crates/k5-cli"
+run 0 "brand-gate: ok (2 K2, 1 K5, 0 repo, 0 company, 0 login lines in 2 rows still spell a name out)."
 
 # A row needs a reason that says keeper or debt.
 printf '2 K2 crates/a/src/old.rs because\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n' > "$T/a.txt"
 run 1 "the reason must start 'keeper: ' or 'debt: '"
 printf '2 K9 crates/a/src/old.rs debt: x\n' > "$T/a.txt"
-run 1 "want '<lines> <K2|K5|repo|company> <path> <keeper|debt>: <reason>'"
+run 1 "want '<lines> <K2|K5|repo|company|login> <path> <keeper|debt>: <reason>'"
 
 # --tighten lowers a row to today's count, drops one at zero, keeps reasons.
 printf '# head\n\n5 K2 crates/a/src/old.rs debt: copy\n1 K5 crates/a/src/old.rs keeper: the K5 Space\n3 repo crates/a/src/gone.rs debt: gone\n' > "$T/a.txt"

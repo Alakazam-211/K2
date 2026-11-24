@@ -28,14 +28,17 @@ as text, line by line. Five judges, each on its own:
          name before its version (`xy 0.46.17`).
      A hit fails unless it is a `debt` row for judge c.
   d  no slot is left unfilled: no line holds `{cli}` or `{product}` (rebrand
-     B7, trap 2). A template is filled by the CLI that prints it, or by the
-     server where it is made; a slot that reaches a person or an agent is
-     a command nobody can type. No allow list, no debt: one hit fails.
+     B7, trap 2), nor a page's `{company}` or `{login}` (the build fills
+     those: crates/k5-cli/build.rs). A template is filled by the CLI that
+     prints it, or by the server where it is made; a slot that reaches a
+     person or an agent is a command nobody can type, or a name nobody
+     reads. No allow list, no debt: one hit fails.
   e  no other brand's sign-in name: the account people sign in with is the
      brand's own (`names.login`: K2 Connect in ours, Globex Account in xy),
      so another brand's login name (every brand file's `names.login` but
-     this one's) is printed nowhere. A hit fails unless it is a `debt` row
-     for judge e.
+     this one's) is printed nowhere. The pages and the --schema entries
+     name it by the {login} slot, so no row is left: a hit fails unless
+     it is a `debt` row for judge e.
 
 Debt rows are lines found before the judges existed, each to be fixed and
 then dropped. A debt row that matches nothing any more fails (stale): the
@@ -147,8 +150,9 @@ def corpus_files(corpus):
     return out
 
 
-# The slots a template carries (k2_core::brand::CLI_SLOT, PRODUCT_SLOT).
-SLOTS = ("{cli}", "{product}")
+# The slots a template carries (k2_core::brand::CLI_SLOT, PRODUCT_SLOT), and
+# the brand slots of the CLI's pages (crates/k5-cli/src/brand_text.rs).
+SLOTS = ("{cli}", "{product}", "{company}", "{login}")
 COMMAND_LEAD = re.compile(r"(^\s*|(Usage:|usage:|\brun|\bRun|\btry|\bTry|\$)\s+)[`'\"]?$")
 FLAG_AFTER = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
 

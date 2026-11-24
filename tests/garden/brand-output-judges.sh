@@ -2,7 +2,8 @@
 # Tests for scripts/brand/output-judges.py on small corpora: a planted
 # `k2 msg` fails judges a and b, a name out of its place fails judge c, a
 # keep pattern and a debt row let a line through, a stale debt row fails,
-# an unfilled {cli} or {product} slot fails judge d with no way to allow it.
+# an unfilled {cli}, {product}, {company} or {login} slot fails judge d with
+# no way to allow it.
 # Text files only: no CLI, no daemon, no cargo.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -62,7 +63,8 @@ done
 # Judge d: an unfilled slot fails, alone, wherever it stands, and no keep
 # pattern or debt row lets it through. A word that only starts like a slot
 # ({clients}) is not one.
-for line in 'Run {cli} app list' 'from a terminal outside {product}' '"hint": "{cli} x"' 'a {cli}{product} b'; do
+for line in 'Run {cli} app list' 'from a terminal outside {product}' '"hint": "{cli} x"' 'a {cli}{product} b' \
+    'Tell {company} about it.' 'a tunnel through {login}' '"description": "{login} Pro"'; do
     run d "$line"
     [ "$rc" = 1 ] && [ "$(hits d)" = 1 ] && [ "$(hits a)" = 0 ] && [ "$(hits b)" = 0 ] && [ "$(hits c)" = 0 ] || die "judge d on $line: $err"; ok
     case "$err" in *"FAILED (d)"*"the slot {"*) ;; *"the slot {"*"FAILED (d)"*) ;; *) die "judge d's line on $line: $err" ;; esac; ok
@@ -71,7 +73,7 @@ printf 'keep\t\\{cli\\}\ta keep pattern is not read by judge d\ndebt\tb\tRun {cl
 c="$T/corpus-d2"; rm -rf "$c"; mkdir -p "$c"; printf 'Run {cli} now\n' > "$c/form.out"
 rc=0; python3 "$J" --brand "$HERE/brand/xy" --keep "$T/keep-d" "$c" >/dev/null 2>"$T/err" || rc=$?
 [ "$rc" = 1 ] && grep -q 'judge d (a slot not filled): 1 hit(s)' "$T/err" || die "judge d took a keep or debt row: $(cat "$T/err")"; ok
-run d-text 'Run xy app list {id}, {clients} and {products} for {cli_path}.'
+run d-text 'Run xy app list {id}, {clients} and {products} for {cli_path}, {companyId} and {login_url}.'
 [ "$rc" = 0 ] || die "not a slot: $err"; ok
 
 # Judge e: another brand's sign-in name (ours, K2 Connect) fails under xy;

@@ -40,7 +40,21 @@ Kinds in scripts/brand-allowlist.txt, the product's names:
         PRODUCT_LOCKUP (k2_core::brand, @/lib/brand), both the brand
         file's. Zero rows when the kind came in: a new one is either copy
         that should use the module, or a `keeper:` row that says who must
-        read our real name (a licence or an attribution in code).
+        read our real name (a licence or an attribution in code). Also in
+        the CLI's printed text (below), where it is the {company} slot.
+  login  the sign-in service's name, K2 Connect, in the CLI's printed text
+        only (below), where it is the {login} slot. Code is not counted for
+        it (LOGIN_NAME and login_name!() name it there).
+
+The CLI's printed text, for company and login only: every cli/text page,
+every cli/src/schema/*.entries file and crates/k5-cli/src/help_captured.txt,
+every line. The pages and entries name the company and the sign-in service
+by slot, {company} and {login}, which each build fills with its brand's
+names (crates/k5-cli/build.rs; scripts/build-cli.sh fills bash's with ours,
+scripts/brand/page_slots.py); the captured help pages by the escapes \\o and
+\\l (crates/k5-cli/src/text.rs). So a literal name there is one a partner's
+build would print as ours. The captured pages' old spelling of the
+sign-in name, `\\p Connect` (the product's escape and a word), counts too.
 
 Kinds in scripts/cli-name-allowlist.txt, the command's name (`k2` and `k5`,
 the word scripts/garden/cli-name-flip.py matches, either digit):
@@ -161,13 +175,18 @@ BRAND_KINDS = {
     "K5": re.compile(r"(?<![A-Za-z0-9_])(?<![Xx]-)K5(?![A-Za-z0-9_])"),
     "repo": re.compile(r"Alakazam-211/K2(?![A-Za-z0-9_])"),
     "company": re.compile(r"Alakazam\s+Labs\b"),
+    "login": re.compile(r"(?:(?<![A-Za-z0-9_])K2|(?<!\\)\\p)\s+Connect\b"),
 }
+# The kinds code is counted for; the CLI's printed text is counted for TEXT_KINDS.
+CODE_KINDS = ("K2", "K5", "repo", "company")
+TEXT_KINDS = ("company", "login")
 CLI_KINDS = ("cli", "value", "glued")
 HINT = {
     "K2": "use k2_core::brand or @/lib/brand",
     "K5": "use k2_core::brand or @/lib/brand",
     "repo": "use k2_core::brand or @/lib/brand",
-    "company": "use COMPANY_NAME or PRODUCT_LOCKUP (k2_core::brand, @/lib/brand)",
+    "company": "use COMPANY_NAME or PRODUCT_LOCKUP (k2_core::brand, @/lib/brand); in a page or a schema entry the {company} slot, in a captured help page \\o",
+    "login": "use the {login} slot (a page or a schema entry), or \\l in a captured help page",
     "cli": "use CLI_NAME or cli_name!() (k2_core::brand, @/lib/brand)",
     "value": "use CLI_NAME, or add a keeper: row that says its class and who reads the value",
     "glued": "keep the name apart from the token, or add a keeper: row that says who reads this name",
@@ -806,8 +825,8 @@ def counted_lines(path, area, known):
             continue
         code.append(i)
         text = RUST_TAIL.sub("", line) if area["rust"] else line
-        for kind, rx in BRAND_KINDS.items():
-            if rx.search(text):
+        for kind in CODE_KINDS:
+            if BRAND_KINDS[kind].search(text):
                 out.setdefault(kind, []).append((i + 1, s))
     if area["rust"]:
         rust_cli_kinds(lines[:end], set(code), known, out)
@@ -835,11 +854,39 @@ def bash_values(root, known, found):
         found[("value", rel)] = [(n, lines[n - 1].strip()) for n in hits]
 
 
+def text_places(root):
+    """The CLI's printed text, relative paths in order: the cli/text pages,
+    the schema entries and the captured help pages."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(os.path.join(root, "cli", "text")):
+        dirnames.sort()
+        out += [os.path.join(dirpath, n) for n in sorted(filenames) if n.endswith(".txt")]
+    schema = os.path.join(root, "cli", "src", "schema")
+    if os.path.isdir(schema):
+        out += [os.path.join(schema, n) for n in sorted(os.listdir(schema)) if n.endswith(".entries")]
+    captured = os.path.join(root, "crates", "k5-cli", "src", "help_captured.txt")
+    if os.path.isfile(captured):
+        out.append(captured)
+    return [os.path.relpath(p, root).replace(os.sep, "/") for p in out]
+
+
+def text_names(root, found):
+    """Add the company and login lines of the CLI's printed text to `found`."""
+    for rel in text_places(root):
+        with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
+            lines = f.read().split("\n")
+        for kind in TEXT_KINDS:
+            hits = [(i + 1, line.strip()) for i, line in enumerate(lines) if BRAND_KINDS[kind].search(line)]
+            if hits:
+                found[(kind, rel)] = hits
+
+
 def scan(root):
     """{(kind, relative path): [(line number, text)]}."""
     known = flip.verbs(root)
     found = {}
     bash_values(root, known, found)
+    text_names(root, found)
     for area in AREAS:
         for top in area["dirs"]:
             for dirpath, dirnames, filenames in os.walk(os.path.join(root, top)):

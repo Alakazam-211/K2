@@ -1153,14 +1153,14 @@ impl RepoDirs {
 pub fn repo_dirs(path: &str) -> Option<RepoDirs> {
     let repo = crate::gitx::discover(path).ok()?;
     let workdir = repo.workdir()?.to_path_buf();
-    let gitdir = repo.git_dir().to_path_buf();
+    // Canonical, as libgit2 gave them: a main checkout and its linked
+    // worktree then name the shared git dir the same way, so a ref move
+    // reported in that spelling reaches both (on macOS /var is /private/var).
+    let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let gitdir = canon(repo.git_dir());
     // The shared git dir (a linked worktree's main `.git`; the git dir
-    // itself for a main checkout), canonical.
-    let commondir = if repo.common_dir() == repo.git_dir() {
-        gitdir.clone()
-    } else {
-        dunce::canonicalize(repo.common_dir()).unwrap_or_else(|_| repo.common_dir().to_path_buf())
-    };
+    // itself for a main checkout).
+    let commondir = canon(repo.common_dir());
     let alias = dunce::canonicalize(&path)
         .ok()
         .map(|c| (trim_slash(&c.to_string_lossy()), trim_slash(path)))

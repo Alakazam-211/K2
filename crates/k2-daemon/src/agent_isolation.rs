@@ -1150,6 +1150,7 @@ mod tests {
         ("apps/admission.rs", "sysctl reads for App admission (K2's own program)"),
         ("apps/box_prep.rs", "box preparation by the owner: systemctl and K2's own tools"),
         ("apps/db_connect_real_pg.rs", "an #[ignore] real-Postgres harness (node, psql), not daemon code"),
+        ("apps/compat/storage_real_pg.rs", "test-only real-PG drill, not an agent command (#[cfg(test)] in apps/compat, psql and K2's own Postgres tools)"),
         ("apps/podman_install.rs", "package queries for the owner's Podman install (dpkg-query, rpm, pacman)"),
         ("apps/process_exception.rs", "systemctl for the owner's process-engine exception"),
         ("v1_sandboxes/policy.rs", "cp of sandbox policy files (K2's own program); sandbox commands run in microVM cells (unbound, M2)"),

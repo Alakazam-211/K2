@@ -127,19 +127,17 @@ mod tests {
             let Outcome::Failed(line, exit) = outcome("0.46.16", ok(200, body)) else {
                 panic!("{body}")
             };
+            let want = format!("{PRODUCT_NAME}'s server didn't say its version at /boot-status");
             assert_eq!(
                 (line.as_str(), exit),
-                (
-                    "K2's server didn't say its version at /boot-status",
-                    Exit::Error
-                ),
+                (want.as_str(), Exit::Error),
                 "{body}"
             );
         }
         assert_eq!(
             outcome("0.46.16", ok(503, r#"{"version":"0.46.16"}"#)),
             Outcome::Failed(
-                "K2's server answered /boot-status with 503".into(),
+                format!("{PRODUCT_NAME}'s server answered /boot-status with 503"),
                 Exit::Error
             )
         );
@@ -156,7 +154,9 @@ mod tests {
         };
         assert_eq!(exit, Exit::DaemonUnreachable);
         assert!(
-            line.starts_with("can't reach K2's server for /boot-status: "),
+            line.starts_with(&format!(
+                "can't reach {PRODUCT_NAME}'s server for /boot-status: "
+            )),
             "{line}"
         );
         let other = Error::Empty {
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(
             outcome("0.46.16", Err(other)),
             Outcome::Failed(
-                "K2's server gave an empty answer to /boot-status".into(),
+                format!("{PRODUCT_NAME}'s server gave an empty answer to /boot-status"),
                 Exit::Error
             )
         );

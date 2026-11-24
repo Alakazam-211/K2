@@ -2096,7 +2096,7 @@ call_name = "Hub Calls"
             refused(
                 &format!("machine-{i}"),
                 &format!("{GOOD}[machine]\n{key} = {other}\n"),
-                &want,
+                want,
             );
         }
         // The default's own values pass.

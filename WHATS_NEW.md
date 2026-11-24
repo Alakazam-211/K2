@@ -43,6 +43,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Command line
 - **`k2 terminal spawn --command` runs a full command line (with arguments, pipes and quotes); before, only a single program name worked.**
 - **`k2 terminal spawn` in a workspace's folder no longer ends that workspace's chat.** With `--cwd` (or the project path) pointing at a workspace, the new terminal took the workspace's own session: its pinned chat was stopped and the command ran in its place. Every spawn now starts a terminal of its own beside the chat, also when you spawn with the same `--agent` again.
+### Threads
+- **K2 no longer reports a message as not taken, or types it twice, when the agent was busy and read it mid-turn.**
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

@@ -85,6 +85,10 @@ struct Entry {
     /// The session's last screen output (ms, noted at most once a second):
     /// a last-active time, never evidence for the row (DA29).
     output_at: Option<i64>,
+    /// The title observer's latest word, kept even when the row ignores
+    /// it (a row with hooks or a transcript, DA28): the Thread take check
+    /// reads it ([`title_says_busy`]).
+    title: Option<TitleSignal>,
 }
 
 #[derive(Default)]
@@ -397,7 +401,7 @@ pub fn register(facts: SessionFacts) {
         },
         now,
     );
-    store().lock().rows.insert(facts.session_id, Entry { row, pinned_project, output_at: None });
+    store().lock().rows.insert(facts.session_id, Entry { row, pinned_project, output_at: None, title: None });
 }
 
 /// DA2: the session went away. Removes the row and, when an older client
@@ -626,7 +630,23 @@ pub fn apply_title(session_id: &str, signal: TitleSignal) {
     // A title change means the agent is doing something: a parked
     // transcript follower reads again (S3).
     crate::activity_transcript::wake(session_id);
+    if let Some(entry) = store().lock().rows.get_mut(session_id) {
+        entry.title = Some(signal);
+    }
     apply(session_id, Evidence::Title(signal));
+}
+
+/// The session's own terminal title says its agent is busy right now (a
+/// spinner, or a permission prompt), whatever the row's evidence. The
+/// title comes from the PTY, so it still speaks when a pane's hooks stop
+/// reaching K2 (the row keeps its idle lead then). Read by the Thread take
+/// check (0.46.18), never by the row.
+pub fn title_says_busy(session_id: &str) -> bool {
+    store()
+        .lock()
+        .rows
+        .get(session_id)
+        .is_some_and(|e| matches!(e.title, Some(TitleSignal::Working | TitleSignal::Permission)))
 }
 
 /// DA26 / A15: a client keystroke on its way to the PTY (grid WS input,
@@ -971,6 +991,38 @@ mod tests {
         assert_eq!(row["counts"]["tools"], 1, "the background job's Task call counts: {row}");
         assert_eq!(row["evidenceAt"], t0 + 2_500, "evidence follows the background job: {row}");
         unregister(sid);
+    }
+
+    /// 0.46.18: a hooked row ignores the title (DA28), so its lead reads
+    /// idle while a turn runs when its hooks stop reaching K2. The take
+    /// check still sees the title's spinner.
+    #[test]
+    fn the_title_says_busy_even_when_a_hooked_row_ignores_it() {
+        let _g = LOCK.lock();
+        k2_core::test_isolation::assert_no_prod_env();
+        let _db = k2_core::db::init_for_tests();
+        let sid = "55555555-5555-4555-8555-555555555555";
+        register(SessionFacts {
+            session_id: sid.into(),
+            agent_name: "tab-title".into(),
+            cwd: None,
+            // Not a transcript harness: no follower looks under any HOME.
+            program: Some("titletest".into()),
+        });
+        assert!(!title_says_busy(sid), "no title yet");
+        let t0 = now_ms() + 60_000;
+        apply_at(sid, Evidence::Hook(&hook(sid, r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p"}"#)), t0);
+        apply_at(sid, Evidence::Hook(&hook(sid, r#"{"hook_event_name":"Stop","prompt_id":"p"}"#)), t0 + 100);
+        assert_eq!(row_json(sid).expect("row")["lead"]["state"], "idle");
+        apply_title(sid, TitleSignal::Working);
+        assert_eq!(row_json(sid).expect("row")["lead"]["state"], "idle", "a hooked row ignores the title");
+        assert!(title_says_busy(sid), "the title's spinner still says busy");
+        apply_title(sid, TitleSignal::Permission);
+        assert!(title_says_busy(sid), "a permission prompt is busy too");
+        apply_title(sid, TitleSignal::Idle);
+        assert!(!title_says_busy(sid));
+        unregister(sid);
+        assert!(!title_says_busy(sid), "a gone session is not busy");
     }
 
     #[test]

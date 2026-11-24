@@ -279,3 +279,33 @@ fn a_retry_that_fails_tells_the_thread() {
         "the Thread is told: {bodies:?}"
     );
 }
+
+/// 0.46.18: the retry knows its first delivery (through the journal too)
+/// and checks before it types: a line the agent read in after the take
+/// check gave up on it is never typed a second time, and no notice goes
+/// to the Thread.
+#[test]
+fn a_retry_whose_first_line_was_read_in_is_not_typed_again() {
+    let (_, handle, conv) = seed("jrnlnodup");
+    let resolved = resolve_addr(&handle).unwrap_or_else(|e| panic!("resolve: {}", e.body));
+    let session = uuid::Uuid::new_v4().to_string();
+    let since = now();
+    let job = ThreadDeliveryJob::new(&resolved, format!("[thread:{handle}] ship it"), "owner", "compose", "", None)
+        .into_retry()
+        .after_first(&session, since);
+    let back: ThreadDeliveryJob = serde_json::from_str(&serde_json::to_string(&job).expect("JSON")).expect("read back");
+    assert_eq!(back.first, Some(FirstDelivery { session: session.clone(), since }), "the journal keeps the first delivery");
+    assert!(back.for_resend().first.is_none(), "Send again is a fresh first delivery");
+
+    let mut job = back;
+    job.sink = DeliverySink::Live;
+    assert_eq!(job.retry_blocked(), None, "nothing read in yet, and an unknown session is not busy");
+    // The agent read the first one in (a queued command, mid-turn).
+    crate::delivery_take::note_stamp(&session, &handle, since + 2_000);
+    assert_eq!(job.retry_blocked(), Some("read_in_since"));
+    let out = job.run();
+    assert!(!out.success, "nothing typed");
+    assert!(recorded_deliveries(&handle).is_empty(), "never typed a second time");
+    let bodies = thread_bodies(&conv);
+    assert!(!bodies.iter().any(|b| b.contains("didn't take")), "no notice: {bodies:?}");
+}

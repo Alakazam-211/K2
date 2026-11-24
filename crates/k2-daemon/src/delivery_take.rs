@@ -13,7 +13,11 @@
 //!   binds on).
 //! - **The clock runs only while the agent is idle.** While its lead is
 //!   working (or waiting on a person), a line sits in Claude's queue and is
-//!   read in at the next step or turn end; that is slow, not lost. The
+//!   read in at the next step or turn end; that is slow, not lost. Busy is
+//!   the activity row's lead OR the session's own terminal title (a
+//!   spinner, [`crate::activity_store::title_says_busy`]): the title comes
+//!   from the PTY itself, so it still says busy when the pane's hooks
+//!   stopped reaching K2. The
 //!   window ([`take_window`], 20 s by default, `K2_THREAD_TAKE_CHECK_SECS`,
 //!   0 = off) counts from the later of the delivery and the last time the
 //!   lead was seen busy. A lead busy for longer than [`BUSY_CAP_MS`] stops
@@ -22,6 +26,16 @@
 //!   looks for its text on the agent's screen (an input box, a queued
 //!   message list). Text on screen = not retried. Only an idle agent with
 //!   no stamp and no text on screen is not taken.
+//! - **Busy after the line went in = read in (0.46.18).** An agent seen
+//!   busy at any look after the delivery took the line into a turn: as a
+//!   new prompt, or queued and read mid-turn (Claude surfaces typed input
+//!   inside the running turn, not as a new prompt). With no stamp it is
+//!   [`Step::ReadMidTurn`]: never typed again, never a notice. Only an
+//!   agent idle from the delivery to the end of the window can be not
+//!   taken.
+//! - **The retry checks first** ([`retype_blocked`]): a stamp since the
+//!   first delivery, a busy agent, or the text on screen, and the line is
+//!   not typed a second time.
 //! - **Not taken:** the caller's `on_not_taken` runs once
 //!   (`overlay_routes`: type it in once more, then, if the retry is not
 //!   taken either, a notice in the Thread for the sender).
@@ -127,15 +141,18 @@ fn stamp_seen(session: &str, addr: &str, since: i64, same_thread: &dyn Fn(&str) 
 /// `since`? `read_at` is the transcript reader's last read (`None`: no
 /// file attached).
 /// - No file attached: no.
-/// - Hooks work (Claude): the prompt hook carries the stamp, and the
-///   transcript (read while a turn runs) carries a queued command; yes
-///   once the transcript has spoken.
-/// - No hooks (Codex): the transcript is the only witness, so only if it
-///   was read after the line went in and within [`FRESH_READ_MS`].
+/// - The file must have been read after the line went in and within
+///   [`FRESH_READ_MS`], hooks or not (0.46.18): a pane's hooks can stop
+///   reaching K2 (its "had a hook" stays), and an idle hooked row's
+///   reader was parked, so a missing stamp meant nothing. A watched line
+///   keeps the reader reading
+///   ([`crate::activity_transcript::note_delivery`]).
+/// - Hooks work (Claude): also only once the transcript has spoken.
+/// - No hooks (Codex): a read file with no records yet still witnesses.
 pub(crate) fn reading_fresh(had_hook: bool, had_transcript: bool, read_at: Option<i64>, since: i64, now: i64) -> bool {
     let Some(read_at) = read_at else { return false };
-    if had_hook {
-        return had_transcript;
+    if had_hook && !had_transcript {
+        return false;
     }
     read_at >= since && now - read_at <= FRESH_READ_MS
 }
@@ -143,7 +160,8 @@ pub(crate) fn reading_fresh(had_hook: bool, had_transcript: bool, read_at: Optio
 /// The agent's row, as the check reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RowView {
-    /// Its lead is working, or waiting on a person.
+    /// Its lead is working or waiting on a person, or its terminal title
+    /// says so (a spinner, a permission prompt).
     pub busy: bool,
     /// K2 is reading its turns right now ([`reading_fresh`]). Without
     /// that a missing stamp means nothing.
@@ -160,6 +178,10 @@ pub(crate) enum Step {
     /// The window passed with the agent idle, and the text is on its
     /// screen: it may be sitting in the input. Not retried.
     OnScreen,
+    /// The window passed with no stamp, but the agent was busy after the
+    /// line went in: it took the line into a turn (a queued message read
+    /// mid-turn). Delivered: not retried, no notice.
+    ReadMidTurn,
     /// The window passed with the agent idle, no stamp, nothing on screen.
     NotTaken,
     /// K2 can't tell; stop watching and do nothing.
@@ -167,14 +189,16 @@ pub(crate) enum Step {
 }
 
 /// One look. `waited_ms` = since the delivery; `quiet_ms` = since the
-/// later of the delivery and the lead last seen busy. `on_screen` is
-/// asked only when everything else says not taken.
+/// later of the delivery and the agent last seen busy; `saw_busy`: it
+/// was seen busy at a look after the delivery. `on_screen` is asked only
+/// when everything else says not taken.
 pub(crate) fn decide(
     stamp: bool,
     row: Option<RowView>,
     waited_ms: i64,
     quiet_ms: i64,
     window_ms: i64,
+    saw_busy: bool,
     on_screen: impl FnOnce() -> bool,
 ) -> Step {
     if stamp {
@@ -188,6 +212,11 @@ pub(crate) fn decide(
     }
     if quiet_ms < window_ms {
         return Step::Wait;
+    }
+    // Busy since the line went in: it went into a turn (a new prompt, or
+    // queued and read mid-turn). Never typed again.
+    if saw_busy {
+        return Step::ReadMidTurn;
     }
     // The window is over with no stamp. Typed again only if K2 is reading
     // the agent's turns right now; otherwise it can't tell.
@@ -243,14 +272,17 @@ pub(crate) trait Probe {
     fn same_thread(&self, addr: &str, other: &str) -> bool;
 }
 
-/// The live probe: the activity store's row, the session's grid.
+/// The live probe: the activity store's row and title, the session's grid.
 struct LiveProbe;
 
 impl Probe for LiveProbe {
     fn row(&self, session: &str, since: i64, now: i64) -> Option<RowView> {
         let read_at = crate::activity_transcript::transcript_read_at(session);
+        let title_busy = crate::activity_store::title_says_busy(session);
         crate::activity_store::with_row(session, |row| RowView {
-            busy: row.lead.state != k2_core::activity::LeadState::Idle,
+            // The row's lead, or the PTY's own title: a pane whose hooks no
+            // longer reach K2 keeps a lead that reads idle mid-turn.
+            busy: title_busy || row.lead.state != k2_core::activity::LeadState::Idle,
             // Only a session whose transcript K2 is reading now: that is
             // where both a new prompt and a mid-turn queued command show
             // up. Hooks alone would miss a queued command, and a reader
@@ -287,8 +319,10 @@ pub(crate) struct Watch {
     pub snippet: String,
     /// Whether this was already the retry (for the log).
     pub retry: bool,
-    /// The later of `since` and the lead last seen busy.
+    /// The later of `since` and the agent last seen busy.
     quiet_since: i64,
+    /// Seen busy at a look after the delivery ([`Step::ReadMidTurn`]).
+    saw_busy: bool,
     on_not_taken: Option<Box<dyn FnOnce() + Send + 'static>>,
 }
 
@@ -308,6 +342,7 @@ impl Watch {
             snippet: screen_snippet(payload),
             retry,
             quiet_since: since,
+            saw_busy: false,
             on_not_taken: Some(Box::new(on_not_taken)),
         }
     }
@@ -370,8 +405,9 @@ pub(crate) fn tick(ws: &mut Vec<Watch>, now: i64, window_ms: i64, probe: &dyn Pr
         let row = probe.row(&w.session, w.since, now);
         if row.is_some_and(|r| r.busy) {
             w.quiet_since = now;
+            w.saw_busy = true;
         }
-        let step = decide(stamp, row, now - w.since, now - w.quiet_since, window_ms, || {
+        let step = decide(stamp, row, now - w.since, now - w.quiet_since, window_ms, w.saw_busy, || {
             probe.screen_shows(&w.session, &w.snippet)
         });
         let (addr, session, after) = (&w.addr, &w.session, now - w.since);
@@ -383,6 +419,12 @@ pub(crate) fn tick(ws: &mut Vec<Watch>, now: i64, window_ms: i64, probe: &dyn Pr
             Step::OnScreen => {
                 k2_core::log_debug!(
                     "[thread-delivery] not read in, but its text is on the agent's screen; not typed again addr={addr} session={session} after_ms={after}"
+                );
+            }
+            Step::ReadMidTurn => {
+                k2_core::log_debug!(
+                    "[thread-delivery] taken into a busy turn (no stamp seen); not typed again addr={addr} session={session} after_ms={after} retry={}",
+                    w.retry
                 );
             }
             Step::GiveUp(why) => {
@@ -401,6 +443,42 @@ pub(crate) fn tick(ws: &mut Vec<Watch>, now: i64, window_ms: i64, probe: &dyn Pr
         false
     });
     fired
+}
+
+// ── Before a retry ────────────────────────────────────────────────────
+
+/// Why a retry must not type its line again, or `None` when it may
+/// (0.46.18: a retry never duplicates a line that already landed). Asked
+/// when the retry's turn on the lane comes, which can be a while after
+/// the first delivery was called not taken:
+/// - a stamp for the line since the first delivery began (read in late);
+/// - the agent busy now (the first one may be in its queue, to be read
+///   mid-turn);
+/// - its text on the agent's screen (an input box, a queued message).
+pub(crate) fn retype_blocked_with(
+    probe: &dyn Probe,
+    session: &str,
+    addr: &str,
+    first_since: i64,
+    payload: &str,
+    now: i64,
+) -> Option<&'static str> {
+    let same = |other: &str| probe.same_thread(addr, other);
+    if stamp_seen(session, addr, first_since, &same) {
+        return Some("read_in_since");
+    }
+    if probe.row(session, first_since, now).is_some_and(|r| r.busy) {
+        return Some("agent_busy");
+    }
+    if probe.screen_shows(session, &screen_snippet(payload)) {
+        return Some("on_screen");
+    }
+    None
+}
+
+/// [`retype_blocked_with`] on the live session.
+pub(crate) fn retype_blocked(session: &str, addr: &str, first_since: i64, payload: &str) -> Option<&'static str> {
+    retype_blocked_with(&LiveProbe, session, addr, first_since, payload, now_ms())
 }
 
 #[cfg(test)]
@@ -439,33 +517,44 @@ mod tests {
 
     #[test]
     fn decide_reads_a_stamp_as_taken_first() {
-        assert_eq!(decide(true, None, 0, 0, W, || panic!("no screen read")), Step::Taken);
-        assert_eq!(decide(true, Some(BUSY), 0, 0, W, || panic!("no screen read")), Step::Taken);
+        assert_eq!(decide(true, None, 0, 0, W, false, || panic!("no screen read")), Step::Taken);
+        assert_eq!(decide(true, Some(BUSY), 0, 0, W, false, || panic!("no screen read")), Step::Taken);
     }
 
     #[test]
     fn decide_waits_while_the_agent_is_busy_then_gives_up() {
-        assert_eq!(decide(false, Some(BUSY), 60_000, 0, W, || panic!("no screen read")), Step::Wait);
-        assert_eq!(decide(false, Some(BUSY), BUSY_CAP_MS, 0, W, || panic!("no screen read")), Step::GiveUp("busy_too_long"));
+        assert_eq!(decide(false, Some(BUSY), 60_000, 0, W, false, || panic!("no screen read")), Step::Wait);
+        assert_eq!(decide(false, Some(BUSY), BUSY_CAP_MS, 0, W, false, || panic!("no screen read")), Step::GiveUp("busy_too_long"));
     }
 
     #[test]
     fn decide_waits_out_the_window_while_idle() {
-        assert_eq!(decide(false, Some(IDLE), 5_000, 5_000, W, || panic!("no screen read")), Step::Wait);
-        assert_eq!(decide(false, Some(IDLE), W, W, W, || false), Step::NotTaken);
+        assert_eq!(decide(false, Some(IDLE), 5_000, 5_000, W, false, || panic!("no screen read")), Step::Wait);
+        assert_eq!(decide(false, Some(IDLE), W, W, W, false, || false), Step::NotTaken);
+    }
+
+    /// 0.46.18: busy at a look after the delivery, then idle for the
+    /// window with no stamp: it went into a turn. Delivered, not retried.
+    #[test]
+    fn decide_reads_busy_since_the_delivery_as_read_mid_turn() {
+        assert_eq!(decide(false, Some(IDLE), 60_000, W, W, true, || panic!("no screen read")), Step::ReadMidTurn);
+        let blind = RowView { busy: false, can_tell: false };
+        assert_eq!(decide(false, Some(blind), 60_000, W, W, true, || panic!("no screen read")), Step::ReadMidTurn);
+        assert_eq!(decide(false, Some(IDLE), 60_000, W - 1, W, true, || panic!("no screen read")), Step::Wait, "the window still runs from the last busy look");
+        assert_eq!(decide(false, Some(BUSY), 60_000, 0, W, true, || panic!("no screen read")), Step::Wait);
     }
 
     #[test]
     fn decide_never_calls_text_on_screen_not_taken() {
-        assert_eq!(decide(false, Some(IDLE), W, W, W, || true), Step::OnScreen);
+        assert_eq!(decide(false, Some(IDLE), W, W, W, false, || true), Step::OnScreen);
     }
 
     #[test]
     fn decide_gives_up_when_it_cannot_tell() {
         let blind = RowView { busy: false, can_tell: false };
-        assert_eq!(decide(false, Some(blind), 5_000, 5_000, W, || panic!("no screen read")), Step::Wait, "the reader may still catch up");
-        assert_eq!(decide(false, Some(blind), W, W, W, || panic!("no screen read")), Step::GiveUp("no_turn_evidence"));
-        assert_eq!(decide(false, None, W, W, W, || false), Step::GiveUp("session_gone"));
+        assert_eq!(decide(false, Some(blind), 5_000, 5_000, W, false, || panic!("no screen read")), Step::Wait, "the reader may still catch up");
+        assert_eq!(decide(false, Some(blind), W, W, W, false, || panic!("no screen read")), Step::GiveUp("no_turn_evidence"));
+        assert_eq!(decide(false, None, W, W, W, false, || false), Step::GiveUp("session_gone"));
     }
 
     #[test]
@@ -473,9 +562,15 @@ mod tests {
         // No file attached: never, hooks or not.
         assert!(!reading_fresh(true, true, None, 1_000, 2_000));
         assert!(!reading_fresh(false, true, None, 1_000, 2_000));
-        // Hooks (Claude): as before, once the transcript has spoken.
-        assert!(reading_fresh(true, true, Some(0), 1_000, 30_000));
-        assert!(!reading_fresh(true, false, Some(0), 1_000, 30_000));
+        // Hooks (Claude): once the transcript has spoken, and (0.46.18)
+        // only when it was read after the line went in, and lately.
+        assert!(reading_fresh(true, true, Some(20_500), 1_000, 21_000));
+        assert!(!reading_fresh(true, false, Some(20_500), 1_000, 21_000));
+        assert!(
+            !reading_fresh(true, true, Some(0), 1_000, 30_000),
+            "a hooked row whose reader was parked since before the line tells nothing"
+        );
+        assert!(!reading_fresh(true, true, Some(2_000), 1_000, 2_000 + FRESH_READ_MS + 1), "parked since");
         // No hooks (Codex): read after the line went in, and lately.
         assert!(reading_fresh(false, true, Some(20_500), 1_000, 21_000));
         assert!(reading_fresh(false, false, Some(20_500), 1_000, 21_000), "a read file with no records yet still witnesses");
@@ -609,6 +704,119 @@ mod tests {
         run_fired(tick(&mut ws, W + 500, W, &probe));
         assert_eq!(n.load(Ordering::SeqCst), 1, "not taken: fired exactly once");
         assert!(ws.is_empty());
+    }
+
+    /// The report (0.46.18): the agent was busy in a running turn (tools,
+    /// a background builder) when the line went in. Claude queued it and
+    /// read it in mid-turn, and K2 saw no stamp. Delivered: no retry, and
+    /// for the retry's own watch, no notice.
+    #[test]
+    fn a_line_queued_into_a_busy_turn_is_delivered_with_no_retry_and_no_notice() {
+        for retry in [false, true] {
+            let s = sid("queued");
+            let mut probe = Fake::default();
+            // Busy at the delivery: the line sits in Claude's queue.
+            probe.rows.insert(s.clone(), BUSY);
+            probe.screen.insert(s.clone(), vec!["> ".to_string(), "  [from owner] [thread:sales] build it".to_string()]);
+            let n = Arc::new(AtomicUsize::new(0));
+            let mut ws = vec![Watch::new(&s, "sales", 0, "[thread:sales] build it", retry, counting(&n))];
+            for t in (0..=8_000).step_by(500) {
+                run_fired(tick(&mut ws, t, W, &probe));
+            }
+            assert_eq!(ws.len(), 1, "retry={retry}: still watching while the turn runs");
+            // The next tool result reads it in mid-turn (no stamp reaches K2);
+            // the queue is empty, the turn ends.
+            probe.screen.insert(s.clone(), vec!["> ".to_string()]);
+            probe.rows.insert(s.clone(), IDLE);
+            for t in (8_500..=8_000 + W + 5_000).step_by(500) {
+                run_fired(tick(&mut ws, t, W, &probe));
+            }
+            assert!(ws.is_empty(), "retry={retry}: the watch is settled");
+            assert_eq!(n.load(Ordering::SeqCst), 0, "retry={retry}: never typed again, no notice");
+        }
+    }
+
+    /// Busy only after the line went in (it became a prompt and started
+    /// the turn, with the stamp lost): taken, never retyped.
+    #[test]
+    fn a_line_that_started_a_turn_is_not_typed_again() {
+        let s = sid("started");
+        let mut probe = Fake::default();
+        probe.rows.insert(s.clone(), IDLE);
+        let n = Arc::new(AtomicUsize::new(0));
+        let mut ws = vec![Watch::new(&s, "sales", 0, "[thread:sales] can we ship", false, counting(&n))];
+        run_fired(tick(&mut ws, 500, W, &probe));
+        // Its title spins: the turn runs for half a minute.
+        probe.rows.insert(s.clone(), BUSY);
+        for t in (1_000..=30_000).step_by(500) {
+            run_fired(tick(&mut ws, t, W, &probe));
+        }
+        probe.rows.insert(s.clone(), IDLE);
+        for t in (30_500..=30_000 + W + 1_000).step_by(500) {
+            run_fired(tick(&mut ws, t, W, &probe));
+        }
+        assert!(ws.is_empty());
+        assert_eq!(n.load(Ordering::SeqCst), 0, "busy after the delivery: read in, not lost");
+    }
+
+    /// The other side: an idle agent that never reads the line in still
+    /// gets the retry, and the retry not taken still gets the notice.
+    #[test]
+    fn an_idle_agent_that_ignores_the_line_still_gets_the_retry_then_the_notice() {
+        for retry in [false, true] {
+            let s = sid("ignored");
+            let mut probe = Fake::default();
+            probe.rows.insert(s.clone(), IDLE);
+            probe.screen.insert(s.clone(), vec!["Background agents".to_string(), "  1 running".to_string()]);
+            let n = Arc::new(AtomicUsize::new(0));
+            let mut ws = vec![Watch::new(&s, "sales", 0, "[thread:sales] are you there", retry, counting(&n))];
+            for t in (0..=W + 1_000).step_by(500) {
+                run_fired(tick(&mut ws, t, W, &probe));
+            }
+            assert!(ws.is_empty(), "retry={retry}");
+            assert_eq!(n.load(Ordering::SeqCst), 1, "retry={retry}: idle all along, nothing read in: fired once");
+        }
+    }
+
+    /// 0.46.18: the retry checks before it types. A line read in late, an
+    /// agent busy now (the first may be in its queue) or its text on
+    /// screen: never typed a second time. Only an idle agent with none of
+    /// those is typed into again.
+    #[test]
+    fn a_retry_never_duplicates_a_line_that_already_landed() {
+        let payload = "[thread:sales] deploy it now";
+        // Idle, no stamp, nothing on screen: the retry may type.
+        let s = sid("retry-free");
+        let mut probe = Fake::default();
+        probe.rows.insert(s.clone(), IDLE);
+        probe.screen.insert(s.clone(), vec!["> ".to_string()]);
+        assert_eq!(retype_blocked_with(&probe, &s, "sales", 1_000, payload, 30_000), None);
+
+        // Read in after the take check gave up on it.
+        let s = sid("retry-late");
+        let mut probe = Fake::default();
+        probe.rows.insert(s.clone(), IDLE);
+        note_stamp(&s, "sales", 25_000);
+        assert_eq!(retype_blocked_with(&probe, &s, "sales", 1_000, payload, 30_000), Some("read_in_since"));
+        // A stamp from before the first delivery is not this line.
+        let s = sid("retry-old");
+        let mut probe = Fake::default();
+        probe.rows.insert(s.clone(), IDLE);
+        note_stamp(&s, "sales", 500 - STAMP_SLACK_MS - 1);
+        assert_eq!(retype_blocked_with(&probe, &s, "sales", 1_000, payload, 30_000), None);
+
+        // Busy now: the first one may be queued in the running turn.
+        let s = sid("retry-busy");
+        let mut probe = Fake::default();
+        probe.rows.insert(s.clone(), BUSY);
+        assert_eq!(retype_blocked_with(&probe, &s, "sales", 1_000, payload, 30_000), Some("agent_busy"));
+
+        // Still in the input or the queued list.
+        let s = sid("retry-queued");
+        let mut probe = Fake::default();
+        probe.rows.insert(s.clone(), IDLE);
+        probe.screen.insert(s.clone(), vec!["  [from owner] [thread:sales] deploy".to_string(), " it now".to_string()]);
+        assert_eq!(retype_blocked_with(&probe, &s, "sales", 1_000, payload, 30_000), Some("on_screen"));
     }
 
     #[test]

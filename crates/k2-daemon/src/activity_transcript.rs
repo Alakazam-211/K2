@@ -28,7 +28,9 @@
 //! client keystroke, screen output or a line K2 typed in wakes it
 //! ([`wake`], [`note_delivery`]), or a hook makes the row busy. A Claude
 //! row with working hooks is parked whenever it is idle: the hook says
-//! when a turn starts.
+//! when a turn starts. Except while a line K2 typed in is watched
+//! ([`note_delivery`]): then any session is read every second, so the
+//! Thread take check has a witness even when the hooks went quiet.
 //!
 //! **A new conversation in the same pane.** A hook-less harness (Codex)
 //! tells K2 nothing on `/new`. While a delivered line is being watched
@@ -135,7 +137,8 @@ struct Follower {
     last_read_at: i64,
     /// When the followed file began (ms), for the newer-file check.
     followed_born: i64,
-    /// Look for a newer transcript until then ([`note_delivery`]).
+    /// A delivered line is watched until then ([`note_delivery`]): read
+    /// the transcript (any harness) and, hook-less, look for a newer one.
     rollout_watch_until: i64,
     next_rollout_check_at: i64,
 }
@@ -449,12 +452,19 @@ fn poll_one(sid: &str, slot: &Slot, now: i64) {
 }
 
 /// The cadence this session is read at right now, or `None` (parked).
+///
+/// 0.46.18: while a delivered Thread line is watched ([`note_delivery`]),
+/// every session is read, hooks or not. An idle Claude row with hooks
+/// was parked, so when its hooks stopped reaching K2 the take check saw
+/// neither the prompt nor the queued command that read the line in.
 fn cadence(f: &Follower, view: &crate::activity_store::FollowView, now: i64) -> Option<i64> {
     if view.hot {
         Some(HOT_POLL_MS)
     } else if !view.display_idle {
         Some(WARM_POLL_MS)
     } else if !view.had_hook && now < f.idle_follow_until {
+        Some(WARM_POLL_MS)
+    } else if now < f.rollout_watch_until {
         Some(WARM_POLL_MS)
     } else {
         None

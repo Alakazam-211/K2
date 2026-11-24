@@ -54,6 +54,7 @@ impl ThreadDeliveryJob {
         let mut job = self.clone();
         job.retry = false;
         job.turn = None;
+        job.first = None;
         job
     }
 }

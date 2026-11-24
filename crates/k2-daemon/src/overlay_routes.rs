@@ -4701,6 +4701,19 @@ struct ThreadDeliveryJob {
     /// or quoted in a notice.
     #[serde(default)]
     source_id: Option<String>,
+    /// The retry only (0.46.18): the session the first delivery reached
+    /// and when it began (ms). Before typing the line again the retry
+    /// checks that the first one didn't land after all
+    /// ([`crate::delivery_take::retype_blocked`]).
+    #[serde(default)]
+    first: Option<FirstDelivery>,
+}
+
+/// Where and when a retry's first delivery went in.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct FirstDelivery {
+    session: String,
+    since: i64,
 }
 
 impl ThreadDeliveryJob {
@@ -4729,6 +4742,7 @@ impl ThreadDeliveryJob {
             sink: delivery_sink(),
             retry: false,
             target: None,
+            first: None,
         }
     }
 
@@ -4747,6 +4761,24 @@ impl ThreadDeliveryJob {
         self
     }
 
+    /// The retry's first delivery: `session` it reached, begun at `since`.
+    fn after_first(mut self, session: &str, since: i64) -> Self {
+        self.first = Some(FirstDelivery { session: session.to_string(), since });
+        self
+    }
+
+    /// 0.46.18: a retry types its line only if the first one provably
+    /// didn't land: no stamp since it began, the agent not busy (the
+    /// first may be queued in its running turn), its text not on screen.
+    /// `Some(why)` = not typed again.
+    fn retry_blocked(&self) -> Option<&'static str> {
+        if !self.retry || self.sink != DeliverySink::Live {
+            return None;
+        }
+        let first = self.first.as_ref()?;
+        crate::delivery_take::retype_blocked(&first.session, &self.addr, first.since, &self.payload)
+    }
+
     /// An app guest's delivery: `from` is its [`workspace_msg::guest_label`].
     fn from_guest(mut self) -> Self {
         self.guest = true;
@@ -4756,6 +4788,12 @@ impl ThreadDeliveryJob {
     fn run(self) -> ThreadDelivery {
         if self.source_deleted() {
             k2_core::log_debug!("[thread-delivery] the person deleted this post before it was typed in; not sent addr={}", self.addr);
+            return ThreadDelivery::default();
+        }
+        if let Some(why) = self.retry_blocked() {
+            // Delivered after all, or still waiting in the agent's turn:
+            // never typed a second time, and no notice.
+            k2_core::log_debug!("[thread-delivery] not typed again ({why}): the first one landed addr={}", self.addr);
             return ThreadDelivery::default();
         }
         let since = chrono::Utc::now().timestamp_millis();
@@ -4790,12 +4828,13 @@ impl ThreadDeliveryJob {
             return;
         }
         let next = self.clone();
+        let first_session = session.to_string();
         let on_not_taken: Box<dyn FnOnce() + Send + 'static> = if self.retry {
             Box::new(move || post_not_taken_notice(&next, NotTaken::NeverReadIn))
         } else {
             Box::new(move || {
                 k2_core::log_debug!("[thread-delivery] typing it in once more addr={}", next.addr);
-                deliver_thread_later(next.into_retry());
+                deliver_thread_later(next.into_retry().after_first(&first_session, since));
             })
         };
         crate::delivery_take::watch(crate::delivery_take::Watch::new(

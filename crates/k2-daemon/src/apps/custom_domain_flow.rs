@@ -52,8 +52,8 @@ use k2_core::domains::{
     self, AppDomain, CheckRecord, PATH_DIRECT, STATE_EXTERNAL, STATE_FAILING, STATE_ISSUING, STATE_LIVE, STATE_VERIFYING,
     STATE_WAITING_DNS,
 };
-use k2_core::{cli_name, log_debug, product_name};
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, log_debug, login_name, product_name};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 
 /// A served name keeps serving this long after its re-checks start failing.
 pub const FAILING_AFTER_SECS: i64 = 7 * 24 * 3600;
@@ -204,11 +204,11 @@ pub(crate) fn set_test_nat(v: Option<Option<bool>>) {
 /// The Path B pointer for a box behind a router (PRD §7), when Path B is
 /// open to it.
 pub const NAT_WORDING: &str = concat!("This server is on a home or office connection. Pointing your domain here would send \
-visitors to your network directly and show its address, so ", product_name!(), " uses K2 Connect: your domain points at K2's relays \
+visitors to your network directly and show its address, so ", product_name!(), " uses ", login_name!(), ": your domain points at K2's relays \
 (set the records below) and your address stays hidden.");
 /// What a Mac or Windows computer offers (PRD §7, vs-live PB-A16): Path B
 /// only (front443 is Linux-only).
-pub const DESKTOP_WORDING: &str = concat!("On this computer your own domain goes through K2 Connect: it points at ", product_name!(), "'s \
+pub const DESKTOP_WORDING: &str = concat!("On this computer your own domain goes through ", login_name!(), ": it points at ", product_name!(), "'s \
 relays (set the records below). Nothing listens on this computer's port 443.");
 
 /// Path B's facts for [`advice_for`] (PB-4).
@@ -271,7 +271,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
             "path": "b",
             "pathA": false,
             "records": "none",
-            "message": format!("Your own domain on this computer goes through K2 Connect (Path B). {why}"),
+            "message": format!("Your own domain on this computer goes through {LOGIN_NAME} (Path B). {why}"),
             "pathB": pb,
         });
     }
@@ -287,7 +287,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
             "records": "advanced",
             "message": format!(
                 "This server is on a home or office connection. Pointing your domain here sends visitors to your network \
-                 directly and shows its address. K2 Connect keeps it hidden (Path B): {why}"
+                 directly and shows its address. {LOGIN_NAME} keeps it hidden (Path B): {why}"
             ),
             "advanced": "Advanced: I've forwarded port 443 to this server: use the records below.",
             "pathB": pb,
@@ -306,7 +306,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
                 "behindNat": nat,
                 "records": "shown",
                 "message": format!(
-                    "{lead} Through K2 Connect (Pro) your domain points at K2's relays instead: no sudo, nothing on port \
+                    "{lead} Through {LOGIN_NAME} (Pro) your domain points at K2's relays instead: no sudo, nothing on port \
                      443 (set the records below). Path A (the owner runs {CLI_NAME} front enable) also works."
                 ),
                 "pathB": pb,
@@ -684,7 +684,7 @@ pub fn apply(d: &AppDomain, o: &Outcome, at: i64) -> Next {
             &conn,
             host,
             &d.state,
-            Some(&format!("this server's own DNS check failed (K2 Connect still routes it; it decides): {reason}")),
+            Some(&format!("this server's own DNS check failed ({LOGIN_NAME} still routes it; it decides): {reason}")),
         );
         return Next::Nothing;
     }
@@ -788,9 +788,9 @@ pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(
         let step = super::relay_claims::with_api(|api| super::relay_claims::step(&d, api));
         let words = match step {
             super::relay_claims::Step::Verified => None,
-            super::relay_claims::Step::Waiting(w) => Some(format!("through K2 Connect: {w}")),
+            super::relay_claims::Step::Waiting(w) => Some(format!("through {LOGIN_NAME}: {w}")),
             super::relay_claims::Step::Refused { words, .. } => Some(words),
-            super::relay_claims::Step::Unreachable(w) => Some(format!("K2 Connect didn't answer ({w}); {PRODUCT_NAME} tries again")),
+            super::relay_claims::Step::Unreachable(w) => Some(format!("{LOGIN_NAME} didn't answer ({w}); {PRODUCT_NAME} tries again")),
         };
         if let Some(w) = words {
             o.ok = false;
@@ -966,11 +966,11 @@ pub fn tick(lk: &dyn Lookup, issue: &dyn Fn(&str)) -> usize {
     if rows.iter().any(AppDomain::holds_relay_claim) && relay_sync_due(at) {
         match super::relay_claims::with_api(super::relay_claims::sync) {
             Ok(released) if !released.is_empty() => {
-                log_debug!("[apps/custom-domain] K2 Connect released {}: no longer served", released.join(", "));
+                log_debug!("[apps/custom-domain] {LOGIN_NAME} released {}: no longer served", released.join(", "));
                 crate::front443::rebuild_now();
             }
             Ok(_) => {}
-            Err(e) => log_debug!("[apps/custom-domain] K2 Connect's list of this server's names: {e}"),
+            Err(e) => log_debug!("[apps/custom-domain] {LOGIN_NAME}'s list of this server's names: {e}"),
         }
     }
     for d in rows.into_iter().filter(|d| d.apex_attached).take(MAX_NAMES) {

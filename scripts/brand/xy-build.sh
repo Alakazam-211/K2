@@ -14,8 +14,8 @@
 #    (scripts/brand/collect-outputs.sh), read by the three output judges
 #    (scripts/brand/output-judges.py).
 # 4. A bite: the same corpus with `Run k2 msg k2 hi` planted fails judges a
-#    and b, with `XY` planted fails judge c, and with an unfilled `{cli}`
-#    slot planted fails judge d.
+#    and b, with `XY` planted fails judge c, with an unfilled `{cli}` slot
+#    planted fails judge d, and with our sign-in name planted fails judge e.
 #
 # The target folder (K2's ruling): the xy build gets a folder of its own,
 # made for this run under the node's temp directory ($TMPDIR), never the
@@ -83,7 +83,7 @@ step "the output judges"
 python3 scripts/brand/output-judges.py --brand brand/xy "$W/corpus"
 
 step "the bite: planted names fail the judges"
-for plant in 'Run k2 msg k2 hi' 'XY keeps your agents' 'Run {cli} app list'; do
+for plant in 'Run k2 msg k2 hi' 'XY keeps your agents' 'Run {cli} app list' 'Sign in with K2 Connect'; do
     rm -rf "$W/bite"
     cp -R "$W/corpus" "$W/bite"
     # sed reads all of sort's output: head would close the pipe early, and
@@ -95,6 +95,7 @@ for plant in 'Run k2 msg k2 hi' 'XY keeps your agents' 'Run {cli} app list'; do
     case "$plant" in
         'Run k2'*) want="FAILED (a, b)" ;;
         'Run {cli}'*) want="FAILED (d)" ;;
+        'Sign in'*) want="FAILED (e)" ;;
         *) want="FAILED (c)" ;;
     esac
     if [ "$rc" != 1 ] || ! grep -qF "$want" "$W/bite.err"; then

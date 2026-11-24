@@ -46,7 +46,7 @@ use serde_json::{json, Value};
 use super::{off_response, refusal, refusal_with};
 use crate::cli_response::CliResponse;
 use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::{cli_name, login_name};
 
 pub const START: &str = "/cli/skin/pair/start";
 pub const STATUS: &str = "/cli/skin/pair/status";
@@ -194,7 +194,7 @@ fn start(pass: &SkinPass, body: &[u8], ctx: &Ctx) -> Result<Value, CliResponse> 
         return Err(refusal(
             "409 Conflict",
             "no_public_host",
-            "this App has no public k2.dev host to pair on (it needs K2 Connect and its own label)",
+            concat!("this App has no public k2.dev host to pair on (it needs ", login_name!(), " and its own label)"),
         ));
     }
     if let Err(why) = super::front_rewrites(app) {

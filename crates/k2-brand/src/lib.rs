@@ -105,6 +105,8 @@ mod tests {
     fn macros_and_consts_agree() {
         assert_eq!(cli_name!(), CLI_NAME);
         assert_eq!(product_name!(), PRODUCT_NAME);
+        assert_eq!(login_name!(), LOGIN_NAME);
+        assert_eq!(LOGIN_NAME, names::LOGIN);
         assert!(!PRODUCT_NAME.is_empty());
         assert!(!BRAND_ID.is_empty());
     }

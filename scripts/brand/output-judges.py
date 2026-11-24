@@ -6,7 +6,7 @@
 
 CORPUS is a folder of what the brand's build printed (one file per command
 line, as scripts/brand/collect-outputs.sh writes them). Every file is read
-as text, line by line. Four judges, each on its own:
+as text, line by line. Five judges, each on its own:
 
   a  the CLI name rule (scripts/garden/cli-name-flip.py's, the rewrite's
      own): no line uses another name as the command. "Another name" is
@@ -31,6 +31,11 @@ as text, line by line. Four judges, each on its own:
      B7, trap 2). A template is filled by the CLI that prints it, or by the
      server where it is made; a slot that reaches a person or an agent is
      a command nobody can type. No allow list, no debt: one hit fails.
+  e  no other brand's sign-in name: the account people sign in with is the
+     brand's own (`names.login`: K2 Connect in ours, Globex Account in xy),
+     so another brand's login name (every brand file's `names.login` but
+     this one's) is printed nowhere. A hit fails unless it is a `debt` row
+     for judge e.
 
 Debt rows are lines found before the judges existed, each to be fixed and
 then dropped. A debt row that matches nothing any more fails (stale): the
@@ -74,6 +79,7 @@ def read_brand(folder):
         "product": doc["names"]["product"],
         "name": cli["name"],
         "aliases": [a["name"] for a in cli.get("aliases", [])],
+        "login": doc["names"].get("login", ""),
     }
 
 
@@ -91,6 +97,19 @@ def other_names(brand, root):
     names.update(brand["aliases"])
     names.discard(brand["name"])
     return sorted(names)
+
+
+def other_logins(brand, root):
+    """The sign-in names of every other brand file under brand/."""
+    out = set()
+    top = os.path.join(root, "brand")
+    for d in sorted(os.listdir(top)):
+        if os.path.isfile(os.path.join(top, d, "brand.toml")):
+            login = read_brand(os.path.join(top, d))["login"]
+            if login:
+                out.add(login)
+    out.discard(brand["login"])
+    return sorted(out)
 
 
 def word_re(name):
@@ -111,7 +130,7 @@ def read_keep(path):
             cols = line.split("\t")
             if cols[0] == "keep" and len(cols) == 3 and cols[2].strip():
                 keeps.append(re.compile(cols[1]))
-            elif cols[0] == "debt" and len(cols) == 3 and cols[1] in ("b", "c"):
+            elif cols[0] == "debt" and len(cols) == 3 and cols[1] in ("b", "c", "e"):
                 debts[(cols[1], cols[2])] = n
             else:
                 sys.exit(f"output-judges: {path}:{n}: not a keep or debt row: {line!r}")
@@ -144,7 +163,8 @@ def judge(brand, corpus, keep_path, flip):
     product = re.compile(r"(?<![\w])" + re.escape(brand["product"]) + r"(?![\w])")
     keeps, debts = read_keep(keep_path)
     seen = set()
-    hits = {"a": [], "b": [], "c": [], "d": []}
+    hits = {"a": [], "b": [], "c": [], "d": [], "e": []}
+    logins = [re.compile(r"(?<![\w])" + re.escape(n) + r"(?![\w])") for n in other_logins(brand, HERE)]
     files = corpus_files(corpus)
     if not files:
         sys.exit(f"output-judges: {corpus} holds no files")
@@ -173,6 +193,13 @@ def judge(brand, corpus, keep_path, flip):
             left = [slot for slot in SLOTS if slot in line]
             if left:
                 hits["d"].append(f"{at}: the slot {' and '.join(left)} is not filled: {line.strip()}")
+            # e: another brand's sign-in name.
+            if any(rx.search(line) for rx in logins):
+                key = ("e", line)
+                if key in debts:
+                    seen.add(key)
+                else:
+                    hits["e"].append((rel, line, f"{at}: another brand's sign-in name: {line.strip()}"))
             # c: the names in their places.
             why = None
             for m in variants.finditer(line):
@@ -222,14 +249,14 @@ def main(argv):
     hits, stale, debts = judge(brand, corpus, keep, load_flip())
     if write:
         rows = []
-        for j in ("b", "c"):
+        for j in ("b", "c", "e"):
             for _, line, _ in hits[j]:
                 if (j, line) not in rows:
                     rows.append((j, line))
         for j, line in rows:
             print(f"debt\t{j}\t{line}")
     failed = []
-    for j, title in (("a", "another name read as the command"), ("b", "a bare other name"), ("c", "a name out of its place"), ("d", "a slot not filled")):
+    for j, title in (("a", "another name read as the command"), ("b", "a bare other name"), ("c", "a name out of its place"), ("d", "a slot not filled"), ("e", "another brand's sign-in name")):
         found = [h if isinstance(h, str) else h[2] for h in hits[j]]
         print(f"judge {j} ({title}): {len(found)} hit(s)", file=sys.stderr)
         for h in found[:50]:
@@ -243,7 +270,7 @@ def main(argv):
     if failed:
         print(f"output-judges: {brand['id']}: FAILED ({', '.join(failed)})", file=sys.stderr)
         return 1
-    print(f"output-judges: {brand['id']}: the four judges pass on {len(corpus_files(corpus))} files")
+    print(f"output-judges: {brand['id']}: the five judges pass on {len(corpus_files(corpus))} files")
     return 0
 
 

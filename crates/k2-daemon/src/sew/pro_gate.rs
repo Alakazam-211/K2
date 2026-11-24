@@ -31,7 +31,7 @@ use k2_root_proto::sew::{SEW_MEDIA_TCP_PORT, SEW_MEDIA_UDP_PORT, SEW_TURN_TLS_PO
 
 use super::supervisor::{no, Env, R};
 use super::voice::{self, TIER_DIRECT, TIER_PASSTHROUGH};
-use k2_core::product_name;
+use k2_core::{login_name, product_name};
 
 /// The refusal when this box can't host voice rooms below Pro.
 pub const HOST_NOT_PRO: &str = "host_not_pro";
@@ -59,8 +59,8 @@ fn not_pro_reason(view: &k2_core::tunnel::subdomains::TierView) -> String {
             "voice rooms need a Pro plan; this box's plan is {} (https://k2.dev/dashboard)",
             r.tier.as_deref().unwrap_or("not reported")
         ),
-        None => concat!("voice rooms need a Pro plan, and ", product_name!(), " doesn't know this box's plan yet (no K2 Connect subdomain, or no answer \
-                 from K2 Connect in the last hour); it checks again every minute")
+        None => concat!("voice rooms need a Pro plan, and ", product_name!(), " doesn't know this box's plan yet (no ", login_name!(), " subdomain, or no answer \
+                 from ", login_name!(), " in the last hour); it checks again every minute")
             .into(),
     }
 }

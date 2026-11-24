@@ -12,8 +12,8 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::root_helper::RootHelperState;
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::product_name;
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
+use k2_core::{login_name, product_name};
 
 /// What `systemctl show` says about one unit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -331,9 +331,9 @@ pub struct CpError {
 impl std::fmt::Display for CpError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.status == 0 {
-            write!(f, "K2 Connect is unreachable: {}", self.detail)
+            write!(f, "{LOGIN_NAME} is unreachable: {}", self.detail)
         } else {
-            write!(f, "K2 Connect answered {} {}: {}", self.status, self.code, self.detail)
+            write!(f, "{LOGIN_NAME} answered {} {}: {}", self.status, self.code, self.detail)
         }
     }
 }
@@ -568,18 +568,18 @@ impl SewOps for RealOps {
         }
         let token = cfg.token.trim().to_string();
         if token.is_empty() {
-            return Err(CpError { status: 0, code: "no_tunnel_token".into(), detail: "K2 Connect is not set up on this box".into() });
+            return Err(CpError { status: 0, code: "no_tunnel_token".into(), detail: concat!(login_name!(), " is not set up on this box").into() });
         }
         cp_http(method, path, &token, body)
     }
     fn nested_label(&self, label: &str, target: Option<&str>) -> Result<(), String> {
         if k2_core::airgap::enabled() {
-            return Err("air-gapped: no K2 Connect nested labels".into());
+            return Err(concat!("air-gapped: no ", login_name!(), " nested labels").into());
         }
         let cfg = k2_core::tunnel::config::load()?;
         let token = cfg.token.trim();
         if token.is_empty() {
-            return Err("K2 Connect is not set up on this box".into());
+            return Err(concat!(login_name!(), " is not set up on this box").into());
         }
         let owner = {
             let db = k2_core::db::shared();

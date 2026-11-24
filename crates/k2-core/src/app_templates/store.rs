@@ -16,7 +16,7 @@
 //! - **One HTTP client** (`src-tauri/src/k2_http.rs`): Tauri's HTTP plugin
 //!   builds a new client per request, so every call pays a new handshake.
 
-use crate::{cli_name, product_name};
+use crate::{cli_name, login_name, product_name};
 
 /// The Tauri release the template asks for.
 pub const TAURI_FLOOR: (u32, u32, u32) = (2, 12, 5);
@@ -255,7 +255,7 @@ pub const K2_HTTP_RS: &str = concat!(r#"//! One HTTP client for this app's Rust 
 //!   src-tauri/src/lib.rs:  mod k2_http;
 //!   src-tauri/Cargo.toml:  reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 //!
-//! The settings suit an App behind K2 Connect: HTTP/1.1 only (the tunnel
+//! The settings suit an App behind "#, login_name!(), r#": HTTP/1.1 only (the tunnel
 //! offers no HTTP/2), an idle connection closes after 50 s (K2 closes it at
 //! 60 s), and up to 6 idle connections per host for calls in parallel.
 //! From your page, use the webview's own fetch() for your App's host: it

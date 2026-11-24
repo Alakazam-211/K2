@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 
 use super::supervisor::{no, Env, R};
 use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::{cli_name, login_name};
 
 pub const RECORD: &str = "meet";
 pub const MEET_LABEL: &str = k2_core::skin::MEET_NESTED_LABEL;
@@ -71,7 +71,7 @@ pub fn bind(env: &Env, app_id: &str) -> R<Value> {
     let label = env
         .ops
         .box_label()
-        .ok_or_else(|| no("no_label", 409, concat!("the meet label needs K2 Connect on this box (", cli_name!(), " connect status)")))?;
+        .ok_or_else(|| no("no_label", 409, concat!("the meet label needs ", login_name!(), " on this box (", cli_name!(), " connect status)")))?;
     if let Some((other, _)) = env.ops.record_load(RECORD).as_ref().and_then(parse) {
         if other != app_id {
             return Err(no(

@@ -27,6 +27,7 @@ use std::time::Duration;
 
 use super::config;
 use super::subdomains::control_plane_base;
+use crate::brand::LOGIN_NAME;
 
 /// Per-request timeout. Matches the CLI's old `curl --max-time 30`.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -97,7 +98,7 @@ fn label_segment_ok(seg: &str) -> bool {
 pub fn check_allowed(method: &str, endpoint: &str, body: Option<&str>) -> Result<(), String> {
     let refuse = || {
         Err(format!(
-            "not an allowed K2 Connect request: {method} {endpoint} (allowed: GET/POST \
+            "not an allowed {LOGIN_NAME} request: {method} {endpoint} (allowed: GET/POST \
              /subdomains, PUT/DELETE /subdomains/<label>)"
         ))
     };

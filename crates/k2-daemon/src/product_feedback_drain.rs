@@ -57,6 +57,7 @@ use k2_core::product_feedback::wire::{self, BoxToken, Health, Outcome, Screensho
 use k2_core::product_feedback::{self as pf, now_ms};
 
 use crate::session_events::{emit, SessionEvent};
+use k2_core::brand::LOGIN_NAME;
 
 const BACKOFF_BASE_SECS: u64 = 30;
 const BACKOFF_CAP_SECS: u64 = 2 * 60 * 60;
@@ -183,7 +184,7 @@ impl Hold {
                 concat!("Sending feedback to ", product_name!(), " is turned off on this server (Settings → General → Send feedback).").into()
             }
             Hold::NeedsConnect => format!(
-                "This server isn't paired with K2 Connect, so it can't prove which server it is and can't send feedback. Copy your text and email {}.",
+                "This server isn't paired with {LOGIN_NAME}, so it can't prove which server it is and can't send feedback. Copy your text and email {}.",
                 pf::CONTACT_ADDRESS
             ),
         }

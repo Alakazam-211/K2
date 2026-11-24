@@ -7,7 +7,7 @@ use k2_node::node::{Node, NodeOptions, NODE_VERSION};
 use k2_node::paths::{default_home, Layout, DEFAULT_CONFIG_DIR};
 use k2_node_proto::frames::Control;
 use k2_node_proto::pairing::EnrollString;
-use k2_brand::PRODUCT_NAME;
+use k2_brand::{PRODUCT_NAME, login_name};
 use k2_brand::product_name;
 
 const USAGE: &str = concat!(r#"k2-node — K2 compute node runtime
@@ -90,7 +90,7 @@ More than one "#, product_name!(), r#" server (0.46.3; the machine owner, at thi
 
 Remote admin (prd-k2-node-admin-v1; root, at this machine):
   sudo k2-node admin level off|policy|full      raise or lower remote admin (raising: here, or the owner's
-                                                 own "#, product_name!(), r#" on this machine, also over K2 Connect; never an agent)
+                                                 own "#, product_name!(), r#" on this machine, also over "#, login_name!(), r#"; never an agent)
   sudo k2-node admin pin                         pin the enrolled controller's key for the executor
   sudo k2-node admin init [--level L] [--auto-update follow|off]   (installer)
   sudo k2-node admin audit [--tail N] [--json]   check + print the root audit chain

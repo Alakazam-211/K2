@@ -19,7 +19,7 @@
 //! string values are emitted with basic TOML escaping.
 
 use super::config::{RelayEndpoint, TunnelConfig};
-use crate::product_name;
+use crate::{login_name, product_name};
 
 /// Render the frpc TOML for `cfg`. `local_port` is resolved by the
 /// caller (the connector fills in the live daemon port when the config
@@ -69,7 +69,7 @@ pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, cus
     let mut out = String::new();
     out.push_str("# K2SO tunnel connector — auto-generated frpc config.\n");
     out.push_str("# Exposes the local K2SO daemon at https://<subdomain>.k2.dev\n");
-    out.push_str("# via the hosted K2 Connect frps backbone. DO NOT EDIT BY HAND —\n");
+    out.push_str(concat!("# via the hosted ", login_name!(), " frps backbone. DO NOT EDIT BY HAND —\n"));
     out.push_str("# regenerated on every `k2so tunnel start`. Contains a bearer\n");
     out.push_str("# token; treat as a secret (file is written 0600).\n\n");
 
@@ -82,7 +82,7 @@ pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, cus
     // these as `login.metas` to the server-plugin, which validates
     // `metas["token"]` and (when present) `metas["device_id"]` for lease
     // identity / multi-device accounting.
-    out.push_str("# Login metadata forwarded to the K2 Connect control plane.\n");
+    out.push_str(concat!("# Login metadata forwarded to the ", login_name!(), " control plane.\n"));
     out.push_str("# The bearer token authorizes the tunnel and selects the user.\n");
     out.push_str("[metadatas]\n");
     out.push_str(&format!("token = {}\n", toml_str(&cfg.token)));

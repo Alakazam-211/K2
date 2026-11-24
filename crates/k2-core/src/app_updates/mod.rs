@@ -25,7 +25,7 @@ pub mod store;
 use std::cmp::Ordering;
 
 use base64::Engine as _;
-use crate::{cli_name, product_name};
+use crate::{cli_name, login_name, product_name};
 
 /// Refusal codes (snake_case; the CLI prints them, `k2 explain` lists them).
 pub mod codes {
@@ -204,7 +204,7 @@ fn dns_part(p: &str) -> bool {
 pub fn dl_id(box_sub: &str, app_id: &str) -> Result<String, String> {
     let (b, a) = (box_sub.trim().to_ascii_lowercase(), app_id.trim().to_ascii_lowercase());
     if b.is_empty() {
-        return Err(concat!("this box has no K2 Connect name yet, so its Apps have no download id (", cli_name!(), " connect login first)").into());
+        return Err(concat!("this box has no ", login_name!(), " name yet, so its Apps have no download id (", cli_name!(), " connect login first)").into());
     }
     if !dns_part(&b) {
         return Err(format!("the box name '{b}' can't be part of a download id ([a-z0-9-], no leading, trailing or double -)"));

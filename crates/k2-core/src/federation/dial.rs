@@ -6,10 +6,11 @@
 //! F6: LAN v1 is HTTP; HTTPS to RFC1918 is a teaching error.
 //! F7: air-gap may dial RFC1918 / Tailscale / explicit `http://`; refuse
 //! `*.k2.dev` / Connect. No SYN on a refused URL.
+use crate::login_name;
 
 /// Teaching copy when air-gap would hit the Connect zone.
 pub const AIRGAP_CONNECT_REFUSE: &str =
-    "Air-gap is on (K2_AIRGAP=1). This daemon will not dial *.k2.dev or K2 Connect.";
+    concat!("Air-gap is on (K2_AIRGAP=1). This daemon will not dial *.k2.dev or ", login_name!(), ".");
 
 /// Teaching copy for HTTPS to a private LAN address (F6).
 pub const LAN_HTTPS_REFUSE: &str =

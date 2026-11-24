@@ -30,7 +30,7 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 use k2_core::{cli_name, product_name};
 
 /// The computer's own user check for the vault's first-setup steps.
@@ -3012,7 +3012,7 @@ fn require_person(c: &VaultCaller, not_person: Option<&'static str>) -> Result<(
         "person_required",
         403,
         format!(
-            "only a person can do this ({why}). Run it from your own SSH login or a terminal outside {PRODUCT_NAME}, or sign in to K2 Connect. Agents: don't run it; tell your owner."
+            "only a person can do this ({why}). Run it from your own SSH login or a terminal outside {PRODUCT_NAME}, or sign in to {LOGIN_NAME}. Agents: don't run it; tell your owner."
         ),
     ))
 }

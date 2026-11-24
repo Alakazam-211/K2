@@ -57,8 +57,8 @@ use k2_root_proto::sew::{
 
 use super::ops::CpError;
 use super::supervisor::{self as sup, no, Env, Fail, R};
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::{cli_name, product_name};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, login_name, product_name};
 
 /// Renew the TURN cert inside this window before `notAfter`.
 pub const RENEW_WINDOW_SECS: i64 = 30 * 86_400;
@@ -290,7 +290,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     }
     match env.ops.box_label() {
         Some(l) => c.push(check("label", "ok", format!("{l}.k2.dev; TURN host {}", turn_host(&l)), "")),
-        None => c.push(check("label", "fail", "no K2 Connect label", "voice needs K2 Connect for the TURN host and certificate")),
+        None => c.push(check("label", "fail", concat!("no ", login_name!(), " label"), concat!("voice needs ", login_name!(), " for the TURN host and certificate"))),
     }
     // 0.46.8 (V5): voice through the tunnel needs no public port or node IP.
     if env.ops.tunnel_preview() {
@@ -364,11 +364,11 @@ pub(super) fn cp_fail(step: &str, e: &CpError) -> Fail {
     };
     let hint = match code {
         "turn_ip_unverified" => format!(
-            "{step}: K2 Connect could not verify this box's IP ({}). It learns it at the next tunnel login: {PRODUCT_NAME} retries on its own; \
+            "{step}: {LOGIN_NAME} could not verify this box's IP ({}). It learns it at the next tunnel login: {PRODUCT_NAME} retries on its own; \
              or run the install again in a minute",
             e.detail
         ),
-        "not_pro" => format!("{step}: voice through the tunnel needs K2 Connect Pro ({e})"),
+        "not_pro" => format!("{step}: voice through the tunnel needs {LOGIN_NAME} Pro ({e})"),
         _ => format!("{step}: {e}"),
     };
     let mut f = no(code, status, hint);
@@ -612,7 +612,7 @@ pub(super) fn point_voice_label(env: &Env, label: &str, url: &str, had: bool, wa
     if url == default_voice_url(label) {
         match env.ops.nested_label(VOICE_LABEL, Some(&format!("127.0.0.1:{SEW_MEDIA_LOOPBACK_PORT}"))) {
             Ok(()) => label_ok = true,
-            Err(e) => warnings.push(format!("the nested voice label could not be pointed at sew-media ({e}): K2 Connect Pro is needed for voice.{label}.k2.dev")),
+            Err(e) => warnings.push(format!("the nested voice label could not be pointed at sew-media ({e}): {LOGIN_NAME} Pro is needed for voice.{label}.k2.dev")),
         }
     } else if had && env.ops.nested_label(VOICE_LABEL, None).is_ok() {
         label_ok = false;
@@ -621,7 +621,7 @@ pub(super) fn point_voice_label(env: &Env, label: &str, url: &str, had: bool, wa
 }
 
 fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
-    let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, "voice needs K2 Connect (the TURN host is turn-<label>.k2.dev)"))?;
+    let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, concat!("voice needs ", login_name!(), " (the TURN host is turn-<label>.k2.dev)")))?;
     let mut st = load(env);
     let url = match &req.public_url {
         Some(u) => check_voice_url(env, u)?,
@@ -974,7 +974,7 @@ pub fn renew(env: &Env, force: bool) -> R<Value> {
     }
     sup::helper_check(env)?;
     let _l = sup::begin(env)?;
-    let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, "no K2 Connect label"))?;
+    let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, concat!("no ", login_name!(), " label")))?;
     let mut st = load(env);
     let manual = (st.node_ip_source.as_deref() == Some("manual")).then(|| st.node_ip.clone()).flatten();
     let res = (|| -> R<Value> {

@@ -18,7 +18,7 @@ use serde_json::{json, Value as J};
 
 use k2_core::domains::{self, AppDomain};
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::{cli_name, product_name};
+use k2_core::{cli_name, login_name, product_name};
 
 /// `app:<id>` names no App or published service here (or, for an agent,
 /// none in its workspace: the same answer, so no existence leak).
@@ -191,7 +191,7 @@ pub fn state_words(d: &AppDomain) -> String {
         return format!("not served yet: its apex {} is no longer attached ({CLI_NAME} domain add {})", d.apex, d.apex);
     }
     let words = match d.state.as_str() {
-        domains::STATE_LIVE if d.via_relay() => "live: this box serves it through K2 Connect (Path B)".to_string(),
+        domains::STATE_LIVE if d.via_relay() => concat!("live: this box serves it through ", login_name!(), " (Path B)").to_string(),
         domains::STATE_LIVE => "live: this box serves it".to_string(),
         domains::STATE_EXTERNAL => {
             return concat!("served by your own web server (not by ", product_name!(), "'s front); one of the App's origins").to_string()
@@ -199,7 +199,7 @@ pub fn state_words(d: &AppDomain) -> String {
         domains::STATE_ISSUING => "not served yet: proven, getting its certificate".to_string(),
         domains::STATE_VERIFYING => "not served yet: checking the DNS records".to_string(),
         domains::STATE_FAILING if d.relay_state.as_deref() == Some(domains::RELAY_RELEASED) => {
-            "not served (failing): K2 Connect stopped routing it".to_string()
+            concat!("not served (failing): ", login_name!(), " stopped routing it").to_string()
         }
         domains::STATE_FAILING => "not served (failing): the DNS records stopped pointing here".to_string(),
         _ => "not served yet: waiting for the DNS records".to_string(),

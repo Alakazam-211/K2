@@ -30,6 +30,7 @@ use sha2::{Digest, Sha256};
 
 use super::dial;
 use super::peers::{FederationPeer, PeerStore, PeerTrust};
+use crate::login_name;
 
 /// Default capabilities granted to a freshly-confirmed peer when the owner
 /// does not specify an explicit set: receive cross-server messages
@@ -197,10 +198,10 @@ fn empty_pair_err() -> String {
          http://192.168.1.50:38471) — air-gap will not dial <subdomain>.k2.dev"
             .to_string()
     } else {
-        "can't federate: peer has no K2 Connect tunnel subdomain \
+        concat!("can't federate: peer has no ", login_name!(), " tunnel subdomain \
          (fail-closed — unroutable without <subdomain>.k2.dev). \
          Each side needs an address under Settings → Network → Tunnel \
-         (or k2.dev/dashboard) before Pair — or pass --url / baseUrl for LAN"
+         (or k2.dev/dashboard) before Pair — or pass --url / baseUrl for LAN")
             .to_string()
     }
 }

@@ -10,6 +10,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::inbox::sanitize_sidecar_filename;
+use crate::brand::LOGIN_NAME;
 
 /// Inner `SignalKind::Custom.kind` for a tray package.
 pub const TRAY_SIGNAL_KIND: &str = "inbox-tray";
@@ -77,7 +78,7 @@ pub fn decode_spec(spec: &TraySpec) -> Result<DecodedTray, String> {
     if size > TRAY_MAX_BYTES {
         return Err(format!(
             "federated tray package is {size} bytes (v1 cap {TRAY_MAX_BYTES}). \
-             Cover .md + small attachments only. For larger files use K2 Connect \
+             Cover .md + small attachments only. For larger files use {LOGIN_NAME} \
              upload/chunk, or split the package."
         ));
     }
@@ -122,7 +123,7 @@ pub fn encode_spec(
     if size > TRAY_MAX_BYTES {
         return Err(format!(
             "federated tray package is {size} bytes (v1 cap {TRAY_MAX_BYTES}). \
-             Cover .md + small attachments only. For larger files use K2 Connect \
+             Cover .md + small attachments only. For larger files use {LOGIN_NAME} \
              upload/chunk, or split the package."
         ));
     }

@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
 use k2_core::brand::CLI_NAME;
-use k2_core::{cli_name, product_name};
+use k2_core::{cli_name, login_name, product_name};
 
 pub const STATUS: &str = "/cli/migrate/secrets/status";
 pub const BEGIN: &str = "/cli/migrate/secrets/begin";
@@ -274,7 +274,7 @@ fn gate(
             Err(err(
                 "person_required",
                 403,
-                concat!("only the box owner, as a person, approves this: from your own terminal or SSH login (not a ", product_name!(), " terminal), or a K2 Connect owner login, with the vault confirm. Agents: don't run it; tell your owner."),
+                concat!("only the box owner, as a person, approves this: from your own terminal or SSH login (not a ", product_name!(), " terminal), or a ", login_name!(), " owner login, with the vault confirm. Agents: don't run it; tell your owner."),
             )
             .into())
         }

@@ -35,7 +35,7 @@ use crate::apps::grace::{target, Target};
 use crate::apps::routes::{actor, json_body, need_credential, no, respond, s, Refusal, Who, R};
 use crate::cli_response::CliResponse;
 use k2_core::brand::PRODUCT_NAME;
-use k2_core::{cli_name, product_name};
+use k2_core::{cli_name, login_name, product_name};
 
 pub const STATUS: &str = "/cli/app/pairing";
 pub const SET: &str = "/cli/app/pairing/set";
@@ -158,7 +158,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             "no_public_host",
             409,
-            concat!("this App has no public k2.dev host to pair on (it needs K2 Connect and its own label: ", cli_name!(), " app domain add, or a tunnelled deploy)"),
+            concat!("this App has no public k2.dev host to pair on (it needs ", login_name!(), " and its own label: ", cli_name!(), " app domain add, or a tunnelled deploy)"),
         ));
     }
     if let Some(h) = input.hosts.as_ref().and_then(|hs| hs.iter().find(|h| !all.contains(h))) {

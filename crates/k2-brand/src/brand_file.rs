@@ -1143,6 +1143,15 @@ macro_rules! cli_name {{
     }};
 }}
 
+/// The name of the account people sign in with (`names.login`), as a
+/// literal, for `concat!` in a `const`.
+#[macro_export]
+macro_rules! login_name {{
+    () => {{
+        {login:?}
+    }};
+}}
+
 /// A helper program's file name, `<command>-<part>`, as a literal, for
 /// `concat!` in a `const`: `helper_name!(\"agent\")`.
 #[macro_export]
@@ -1157,6 +1166,9 @@ pub const PRODUCT_NAME: &str = product_name!();
 
 /// The command people and agents type.
 pub const CLI_NAME: &str = cli_name!();
+
+/// The account people sign in with, as people read it.
+pub const LOGIN_NAME: &str = login_name!();
 
 /// The brand's id: its folder under `brand/`.
 pub const BRAND_ID: &str = {id:?};
@@ -1191,6 +1203,7 @@ pub const RETIRED: &[RetiredName] = &[{retired}];
 ",
         product = b.product,
         cli = b.cli_name,
+        login = b.fields.login,
         id = b.id,
         names = names.join(", "),
         modes = modes.join(", "),
@@ -1301,6 +1314,15 @@ macro_rules! cli_name {
     };
 }
 
+/// The name of the account people sign in with (`names.login`), as a
+/// literal, for `concat!` in a `const`.
+#[macro_export]
+macro_rules! login_name {
+    () => {
+        "K2 Connect"
+    };
+}
+
 /// A helper program's file name, `<command>-<part>`, as a literal, for
 /// `concat!` in a `const`: `helper_name!("agent")`.
 #[macro_export]
@@ -1315,6 +1337,9 @@ pub const PRODUCT_NAME: &str = product_name!();
 
 /// The command people and agents type.
 pub const CLI_NAME: &str = cli_name!();
+
+/// The account people sign in with, as people read it.
+pub const LOGIN_NAME: &str = login_name!();
 
 /// The brand's id: its folder under `brand/`.
 pub const BRAND_ID: &str = "ab";

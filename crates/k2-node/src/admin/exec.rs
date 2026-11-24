@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 use super::config::{self, AdminConfig, AdminFile};
 use super::store::{Audit, AuditEntry, NonceStore};
-use k2_brand::PRODUCT_NAME;
+use k2_brand::{PRODUCT_NAME, login_name};
 use k2_brand::product_name;
 
 /// Where the executor reads and writes. Fixed by the root-owned service
@@ -962,7 +962,7 @@ impl Executor {
         let to = Level::parse(&str_arg(args, "level")?).ok_or_else(|| AdminRefusal::new(code::BAD_ARGS, "level must be off|policy|full"))?;
         let cfg = self.config()?;
         if to >= cfg.level {
-            return Err(AdminRefusal::new(code::HUMAN_REQUIRED, concat!("the level can only be lowered remotely; the machine's owner raises it there (sudo k2-node admin level …, or Settings → Compute in that machine's ", product_name!(), ", also over K2 Connect)")));
+            return Err(AdminRefusal::new(code::HUMAN_REQUIRED, concat!("the level can only be lowered remotely; the machine's owner raises it there (sudo k2-node admin level …, or Settings → Compute in that machine's ", product_name!(), ", also over ", login_name!(), ")")));
         }
         let mut f: AdminFile = cfg.file.clone();
         f.remote_admin = to.as_str().into();

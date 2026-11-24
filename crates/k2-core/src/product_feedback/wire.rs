@@ -33,6 +33,8 @@ use serde_json::{json, Value as J};
 use super::diagnostics::Section;
 use super::screenshot::Meta;
 use super::store::Row;
+use crate::brand::LOGIN_NAME;
+use crate::login_name;
 
 pub const SUBMISSIONS_PATH: &str = "/v1/submissions";
 pub const ASSERT_PATH: &str = "/api/identity/assert";
@@ -359,7 +361,7 @@ impl TokenError {
         let (code, detail, after) = match self {
             TokenError::NotReady(d) => (E_RELAY_NOT_READY, d.clone(), None),
             TokenError::Refused(d) => (E_RELAY_REFUSED, d.clone(), None),
-            TokenError::RateLimited(a) => (E_RATE_LIMITED, "the K2 Connect relay asked to wait".to_string(), *a),
+            TokenError::RateLimited(a) => (E_RATE_LIMITED, concat!("the ", login_name!(), " relay asked to wait").to_string(), *a),
             TokenError::Unreachable(d) => (E_RELAY_NOT_READY, d.clone(), None),
         };
         Outcome::Retry { code: code.into(), detail, after_secs: after, reauth: false }
@@ -402,13 +404,13 @@ pub fn classify_token(status: u16, body: &str, retry_after_header: Option<&str>,
             Ok(BoxToken { token, expires_at_ms })
         }
         404 | 405 | 501 => Err(TokenError::NotReady(format!(
-            "K2 Connect can't vouch for this server yet (the relay answered {status})"
+            "{LOGIN_NAME} can't vouch for this server yet (the relay answered {status})"
         ))),
         401 | 403 => Err(TokenError::Refused(
             json_code(body).unwrap_or_else(|| format!("the relay refused this server ({status})")),
         )),
         429 => Err(TokenError::RateLimited(retry_after(body, retry_after_header))),
-        _ => Err(TokenError::Unreachable(format!("the K2 Connect relay answered {status}"))),
+        _ => Err(TokenError::Unreachable(format!("the {LOGIN_NAME} relay answered {status}"))),
     }
 }
 
@@ -431,9 +433,9 @@ pub fn fetch_token(connect_base: &str, tunnel_token: &str, label: &str, aud: &st
             classify_token(status, &text, ra.as_deref(), now_ms)
         }
         Err(e) => Err(TokenError::Unreachable(if e.is_timeout() {
-            "the K2 Connect relay did not answer in time".into()
+            concat!("the ", login_name!(), " relay did not answer in time").into()
         } else {
-            "can't reach the K2 Connect relay".into()
+            concat!("can't reach the ", login_name!(), " relay").into()
         })),
     }
 }

@@ -36,7 +36,7 @@ use super::frpc_proc::{self, FrpcProc};
 use super::render::render_frpc_toml_for_relay;
 use super::watchdog::DisconnectTracker;
 use crate::brand::{CLI_NAME, PRODUCT_NAME};
-use crate::product_name;
+use crate::{login_name, product_name};
 
 /// Where to find the `frpc` binary.
 #[derive(Debug, Clone)]
@@ -126,7 +126,7 @@ pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
                 }
             }
             Err(
-                concat!("frpc not installed: the K2 Connect tunnel requires the `frpc` \
+                concat!("frpc not installed: the ", login_name!(), " tunnel requires the `frpc` \
                  client binary (fatedier/frp v0.61+). Desktop installs of ", product_name!(), " ship \
                  it next to the app and stage it under ~/.k2/bin — reinstall or \
                  update ", product_name!(), " if this is missing. Otherwise install via your package \

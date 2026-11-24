@@ -44,8 +44,9 @@ pub mod bg_proc;
 pub mod brand;
 /// The brand's name macros, from the brand file (`k2-brand`), at this
 /// crate's root as before (`k2_core::cli_name!`, `k2_core::product_name!`),
-/// and `helper_name!` for a helper program's file name.
-pub use k2_brand::{cli_name, helper_name, product_name};
+/// `login_name!` for the sign-in account's name, and `helper_name!` for a
+/// helper program's file name.
+pub use k2_brand::{cli_name, helper_name, login_name, product_name};
 pub mod browser_notes;
 /// The retired `k2so` CLI alias check, on every OS (Windows Install CLI too).
 pub mod cli_alias;

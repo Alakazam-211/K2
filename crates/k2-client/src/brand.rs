@@ -34,7 +34,7 @@ pub mod session;
 // crate's root), as consts, the command's aliases with their modes, and the
 // brand's id.
 use k2_brand::product_name;
-pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, PRODUCT_NAME};
+pub use k2_brand::{AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 
 /// The repo releases come from (`owner/name`), as a literal: every
 /// release URL is built from this. The repo is moving from Alakazam-211/K2

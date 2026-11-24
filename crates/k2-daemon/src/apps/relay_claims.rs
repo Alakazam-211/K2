@@ -52,8 +52,8 @@ use std::time::Duration;
 use serde_json::{json, Value as J};
 
 use k2_core::domains::{AppDomain, RELAY_CLAIMED, RELAY_RELEASED, RELAY_VERIFIED};
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::{cli_name, product_name};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, login_name, product_name};
 
 /// The control plane's answer for one name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +125,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
     let d = detail.map(|d| format!(": {d}")).unwrap_or_default();
     match code {
         "pro_required" => format!(
-            "K2 Connect says this server's plan isn't Pro: your own domain through K2's relays needs Pro. The owner upgrades at {UPGRADE_URL}"
+            "{LOGIN_NAME} says this server's plan isn't Pro: your own domain through K2's relays needs Pro. The owner upgrades at {UPGRADE_URL}"
         ),
         "cap_reached" => {
             let n = v.get("count").and_then(J::as_u64);
@@ -150,46 +150,46 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
             ),
         },
         "verify_token_not_accepted" => {
-            concat!("K2 Connect refused this request because it carried a proof token, which it now picks itself: this is a ", product_name!(), " bug. Update ", product_name!(), " on this server (the owner runs ", cli_name!(), " update) and report it").to_string()
+            concat!(login_name!(), " refused this request because it carried a proof token, which it now picks itself: this is a ", product_name!(), " bug. Update ", product_name!(), " on this server (the owner runs ", cli_name!(), " update) and report it").to_string()
         }
         "bad_request" => {
-            format!("K2 Connect couldn't read {PRODUCT_NAME}'s request{d}: this is a {PRODUCT_NAME} bug. Update {PRODUCT_NAME} on this server (the owner runs {CLI_NAME} update) and report it")
+            format!("{LOGIN_NAME} couldn't read {PRODUCT_NAME}'s request{d}: this is a {PRODUCT_NAME} bug. Update {PRODUCT_NAME} on this server (the owner runs {CLI_NAME} update) and report it")
         }
         "capability_missing" => {
-            concat!("K2 Connect says this ", product_name!(), " can't serve custom names yet: update ", product_name!(), " on this server (the owner runs ", cli_name!(), " update), then try again").to_string()
+            concat!(login_name!(), " says this ", product_name!(), " can't serve custom names yet: update ", product_name!(), " on this server (the owner runs ", cli_name!(), " update), then try again").to_string()
         }
         "invalid_token" => {
-            concat!("K2 Connect refused this server's tunnel token: the owner re-pairs this server (", cli_name!(), " tunnel status shows how)").to_string()
+            concat!(login_name!(), " refused this server's tunnel token: the owner re-pairs this server (", cli_name!(), " tunnel status shows how)").to_string()
         }
         "nested_label" => {
             "this server's tunnel token is for a nested label, which has no tunnel of its own: the owner re-pairs it under the server's main name".to_string()
         }
         "hostname_invalid" => format!(
-            "K2 Connect says {hostname} isn't a valid domain name{d}. Check the spelling: {CLI_NAME} app domain rm, then add it again"
+            "{LOGIN_NAME} says {hostname} isn't a valid domain name{d}. Check the spelling: {CLI_NAME} app domain rm, then add it again"
         ),
         "hostname_not_allowed" => format!(
-            "K2 Connect won't route {hostname}{d}. Its k2.dev zones, public suffixes and its deny list can't be claimed; use another name"
+            "{LOGIN_NAME} won't route {hostname}{d}. Its k2.dev zones, public suffixes and its deny list can't be claimed; use another name"
         ),
         "not_claimed" => format!(
-            "K2 Connect has no claim on {hostname} from this server (it dropped an old one, or this server's name changed hands); {PRODUCT_NAME} claims it again at the next check, and the TXT value may change"
+            "{LOGIN_NAME} has no claim on {hostname} from this server (it dropped an old one, or this server's name changed hands); {PRODUCT_NAME} claims it again at the next check, and the TXT value may change"
         ),
         "verification_failed" => format!(
-            "K2 Connect can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; {PRODUCT_NAME} tries again"
+            "{LOGIN_NAME} can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; {PRODUCT_NAME} tries again"
         ),
         "txt_missing" | "not_verified" | "pending" => format!(
-            "K2 Connect can't see the TXT record yet (_k2-domain.{hostname}). It checks through public DNS, which can take a few minutes"
+            "{LOGIN_NAME} can't see the TXT record yet (_k2-domain.{hostname}). It checks through public DNS, which can take a few minutes"
         ),
         "rate_limited" => {
             let limit = v.get("limit").and_then(J::as_u64).unwrap_or(5);
-            format!("K2 Connect takes {limit} new names an hour per account and this account is over that now: {PRODUCT_NAME} tries again later")
+            format!("{LOGIN_NAME} takes {limit} new names an hour per account and this account is over that now: {PRODUCT_NAME} tries again later")
         }
-        "conflict" => format!("another change to {hostname} reached K2 Connect at the same moment: {PRODUCT_NAME} tries again"),
-        "supabase_error" => concat!("K2 Connect's database didn't answer: ", product_name!(), " tries again").to_string(),
-        "dns_unavailable" => concat!("K2 Connect couldn't look up the TXT record right now: ", product_name!(), " tries again").to_string(),
+        "conflict" => format!("another change to {hostname} reached {LOGIN_NAME} at the same moment: {PRODUCT_NAME} tries again"),
+        "supabase_error" => concat!(login_name!(), "'s database didn't answer: ", product_name!(), " tries again").to_string(),
+        "dns_unavailable" => concat!(login_name!(), " couldn't look up the TXT record right now: ", product_name!(), " tries again").to_string(),
         "custom_hostnames_disabled" => {
-            concat!("K2 Connect hasn't turned on custom names yet: Path B starts working once K2's relays do; ", product_name!(), " tries again").to_string()
+            concat!(login_name!(), " hasn't turned on custom names yet: Path B starts working once K2's relays do; ", product_name!(), " tries again").to_string()
         }
-        other => format!("K2 Connect won't route {hostname} ({other}){d}"),
+        other => format!("{LOGIN_NAME} won't route {hostname} ({other}){d}"),
     }
 }
 
@@ -201,7 +201,7 @@ fn valid_token(t: &str) -> bool {
 /// Parse one answer object.
 fn answer(v: &J, hostname: &str) -> Result<ClaimAnswer, CpError> {
     let status = v.get("status").and_then(J::as_str).map(str::to_ascii_lowercase).ok_or_else(|| {
-        CpError::Unreachable(format!("K2 Connect's answer for {hostname} has no status"))
+        CpError::Unreachable(format!("{LOGIN_NAME}'s answer for {hostname} has no status"))
     })?;
     let host = v.get("hostname").and_then(J::as_str).unwrap_or(hostname).to_ascii_lowercase();
     let verify_token = v.get("verifyToken").and_then(J::as_str).map(str::to_string);
@@ -211,7 +211,7 @@ fn answer(v: &J, hostname: &str) -> Result<ClaimAnswer, CpError> {
         let name_ok = v.get("txtName").and_then(J::as_str).is_none_or(|n| n.eq_ignore_ascii_case(&k2_core::domains::verify_txt_name(&host)));
         let value_ok = v.get("txtValue").and_then(J::as_str).is_none_or(|x| x == k2_core::domains::verify_txt_value(t));
         if !valid_token(t) || !name_ok || !value_ok {
-            return Err(CpError::Unreachable(format!("K2 Connect's TXT record for {host} isn't one {PRODUCT_NAME} can use")));
+            return Err(CpError::Unreachable(format!("{LOGIN_NAME}'s TXT record for {host} isn't one {PRODUCT_NAME} can use")));
         }
     }
     Ok(ClaimAnswer {
@@ -243,10 +243,10 @@ pub fn parse_reply(status: u16, body: &str, hostname: &str) -> Result<J, CpError
     }
     if status == 404 {
         return Err(CpError::Unreachable(
-            "K2 Connect's custom-name service isn't open yet (HTTP 404): Path B starts working once K2's relays turn it on".into(),
+            concat!(login_name!(), "'s custom-name service isn't open yet (HTTP 404): Path B starts working once K2's relays turn it on").into(),
         ));
     }
-    Err(CpError::Unreachable(format!("K2 Connect answered HTTP {status}")))
+    Err(CpError::Unreachable(format!("{LOGIN_NAME} answered HTTP {status}")))
 }
 
 /// Production: blocking HTTPS to the control plane with the tunnel token.
@@ -270,9 +270,9 @@ impl LiveApi {
         if let Some(body) = body {
             b = b.header("Content-Type", "application/json").body(body.to_string());
         }
-        let r = b.send().map_err(|e| CpError::Unreachable(format!("K2 Connect unreachable: {e}")))?;
+        let r = b.send().map_err(|e| CpError::Unreachable(format!("{LOGIN_NAME} unreachable: {e}")))?;
         let status = r.status().as_u16();
-        let text = r.text().map_err(|e| CpError::Unreachable(format!("read K2 Connect's answer: {e}")))?;
+        let text = r.text().map_err(|e| CpError::Unreachable(format!("read {LOGIN_NAME}'s answer: {e}")))?;
         parse_reply(status, &text, hostname)
     }
 }
@@ -383,14 +383,14 @@ pub fn ready() -> Result<(), String> {
         return v;
     }
     if k2_core::airgap::enabled() {
-        return Err("air-gap is on: no K2 Connect, so no Path B".into());
+        return Err(concat!("air-gap is on: no ", login_name!(), ", so no Path B").into());
     }
-    let cfg = k2_core::tunnel::config::load_without_token().map_err(|e| format!("K2 Connect isn't set up here ({e})"))?;
+    let cfg = k2_core::tunnel::config::load_without_token().map_err(|e| format!("{LOGIN_NAME} isn't set up here ({e})"))?;
     if cfg.subdomain.trim().is_empty() {
-        return Err(concat!("this server isn't on K2 Connect yet (no <name>.k2.dev): pair it first (", cli_name!(), " connect login)").into());
+        return Err(concat!("this server isn't on ", login_name!(), " yet (no <name>.k2.dev): pair it first (", cli_name!(), " connect login)").into());
     }
     if !k2_core::tunnel::e2e_enabled(&cfg) {
-        return Err("this server's K2 Connect tunnel has end-to-end TLS off: Path B needs it on (K2_E2E)".into());
+        return Err(concat!("this server's ", login_name!(), " tunnel has end-to-end TLS off: Path B needs it on (K2_E2E)").into());
     }
     Ok(())
 }
@@ -426,7 +426,7 @@ pub fn not_pro_words() -> String {
     } else {
         ""
     };
-    format!("Your own domain through K2's relays (Path B) needs K2 Connect Pro: upgrade at {UPGRADE_URL}.{path_a}")
+    format!("Your own domain through K2's relays (Path B) needs {LOGIN_NAME} Pro: upgrade at {UPGRADE_URL}.{path_a}")
 }
 
 /// What one claim step decided.
@@ -492,7 +492,7 @@ pub fn precheck(d: &AppDomain) -> Result<(), (String, String)> {
 pub fn txt_pending_words(d: &AppDomain) -> String {
     let why = d.relay_error.as_deref().map(|e| format!(" ({e})")).unwrap_or_default();
     format!(
-        "No TXT record to set yet: K2 Connect gives the value once it accepts the claim{why}. {PRODUCT_NAME} tries again every 10 minutes; \
+        "No TXT record to set yet: {LOGIN_NAME} gives the value once it accepts the claim{why}. {PRODUCT_NAME} tries again every 10 minutes; \
          {CLI_NAME} app domain check {} {} tries now. The CNAME or ALIAS can be set already.",
         d.app, d.hostname
     )
@@ -513,7 +513,7 @@ pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
     match api.claim(host, k2_core::front443::load().http) {
         Ok(a) => {
             let Some(token) = a.verify_token.as_deref() else {
-                let w = format!("K2 Connect's answer for {host} carries no TXT value; {PRODUCT_NAME} tries again");
+                let w = format!("{LOGIN_NAME}'s answer for {host} carries no TXT value; {PRODUCT_NAME} tries again");
                 record(host, d.relay_state.as_deref(), Some(&w));
                 return Err(w);
             };
@@ -530,7 +530,7 @@ pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
             Err(w)
         }
         Err(CpError::Unreachable(w)) => {
-            let w = format!("K2 Connect didn't answer ({w}); {PRODUCT_NAME} tries again");
+            let w = format!("{LOGIN_NAME} didn't answer ({w}); {PRODUCT_NAME} tries again");
             record(host, d.relay_state.as_deref(), Some(&w));
             Err(w)
         }
@@ -554,7 +554,7 @@ pub fn step(d: &AppDomain, api: &dyn RelayApi) -> Step {
             Step::Verified
         }
         Ok(a) if a.status == "released" => {
-            let w = a.last_error.unwrap_or_else(|| "K2 Connect released it".into());
+            let w = a.last_error.unwrap_or_else(|| concat!(login_name!(), " released it").into());
             record(host, Some(RELAY_RELEASED), Some(&w));
             Step::Refused { code: "released".into(), words: w }
         }
@@ -657,12 +657,12 @@ pub fn sync_at(api: &dyn RelayApi, now: i64) -> Result<Vec<String>, String> {
         let confirmed = matches!(api.verify(probe), Err(CpError::Refused { ref code, .. }) if code == "not_claimed");
         if !confirmed {
             k2_core::log_debug!(
-                "[apps/relay-claims] K2 Connect's list came back empty while this server holds {} name(s), and a verify of {probe} didn't confirm it: holding, nothing changes",
+                "[apps/relay-claims] {LOGIN_NAME}'s list came back empty while this server holds {} name(s), and a verify of {probe} didn't confirm it: holding, nothing changes",
                 held.len()
             );
             return Ok(Vec::new());
         }
-        k2_core::log_debug!("[apps/relay-claims] K2 Connect's list came back empty and it has no claim on {probe}: counting this list");
+        k2_core::log_debug!("[apps/relay-claims] {LOGIN_NAME}'s list came back empty and it has no claim on {probe}: counting this list");
     }
     let mut runs = missing_runs().lock().unwrap_or_else(|p| p.into_inner());
     runs.retain(|h, _| held.iter().any(|d| d.hostname == *h));
@@ -675,14 +675,14 @@ pub fn sync_at(api: &dyn RelayApi, now: i64) -> Result<Vec<String>, String> {
             run.lists += 1;
             if run.lists < MISSING_LISTS_TO_RELEASE || now - run.first_at < MISSING_MIN_SPAN_SECS {
                 k2_core::log_debug!(
-                    "[apps/relay-claims] {}: missing from K2 Connect's list {} time(s) in a row; still served",
+                    "[apps/relay-claims] {}: missing from {LOGIN_NAME}'s list {} time(s) in a row; still served",
                     d.hostname,
                     run.lists
                 );
                 continue;
             }
             runs.remove(&d.hostname);
-            let w = "K2 Connect released it: it no longer lists this name for this server";
+            let w = concat!(login_name!(), " released it: it no longer lists this name for this server");
             record(&d.hostname, Some(RELAY_RELEASED), Some(w));
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -695,7 +695,7 @@ pub fn sync_at(api: &dyn RelayApi, now: i64) -> Result<Vec<String>, String> {
         match a.status.as_str() {
             "released" => {
                 let w = format!(
-                    "K2 Connect released it: {}",
+                    "{LOGIN_NAME} released it: {}",
                     a.last_error.as_deref().unwrap_or("its own re-check failed for 7 days")
                 );
                 record(&d.hostname, Some(RELAY_RELEASED), Some(&w));

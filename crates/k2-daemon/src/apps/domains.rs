@@ -44,8 +44,8 @@ use serde_json::{json, Value as J};
 
 use super::labels;
 use super::routes::{actor, app_for, b, db_err, json_body, need_build, need_credential, no, s, Refusal, Who, R};
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::{cli_name, product_name};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, login_name, product_name};
 
 pub const ROUTES: &[&str] = &[
     "/cli/app/domains",
@@ -153,7 +153,7 @@ fn next_step(d: &k2_core::domains::AppDomain, shown: &str) -> String {
         concat!(" This box's :443 front is off: path (a) needs it (the owner runs ", cli_name!(), " front enable).").to_string()
     };
     if connect && d.state == STATE_ISSUING {
-        return concat!("Proven, and K2 Connect routes it here; ", product_name!(), " is getting its certificate through the relay (TLS-ALPN-01). \
+        return concat!("Proven, and ", login_name!(), " routes it here; ", product_name!(), " is getting its certificate through the relay (TLS-ALPN-01). \
                 The tunnel restarts once to carry the name (a few seconds' blip).")
             .to_string();
     }
@@ -296,7 +296,7 @@ fn plant_for(caller_ws: Option<&str>, d: &k2_core::domains::AppDomain, binding: 
     }
     // Path B before a claim succeeded: K2 Connect hasn't given the value.
     if !d.holds_relay_claim() && super::custom_domain_flow::shown_path(d, &super::custom_domain_flow::setup_advice()) == k2_core::domains::PATH_CONNECT {
-        return json!({ "planted": false, "why": "K2 Connect hasn't given the TXT value yet" });
+        return json!({ "planted": false, "why": concat!(login_name!(), " hasn't given the TXT value yet") });
     }
     let may = match caller_ws.and_then(super::routes::ws_by_id) {
         Some(ws) => k2_core::workspace::settings::dns_manage_allowed_for_path(&ws.path),
@@ -321,7 +321,7 @@ fn claim_if_path_b(app: &AppRow, d: &k2_core::domains::AppDomain) -> R<k2_core::
         return Ok(d.clone());
     }
     if let Err(e) = super::relay_claims::with_api(|api| super::relay_claims::ensure_claim(d, api)) {
-        k2_core::log_debug!("[apps/domains] {}: no claim at K2 Connect yet: {e}", d.hostname);
+        k2_core::log_debug!("[apps/domains] {}: no claim at {LOGIN_NAME} yet: {e}", d.hostname);
     }
     app_domain_of(app, &d.hostname)
 }
@@ -409,10 +409,10 @@ fn custom_rm(who: &Who, app: &AppRow, v: &J) -> R<J> {
     // control plane that doesn't answer never blocks the removal: it frees
     // the name after its own re-check fails.
     let relay_note = match super::relay_claims::with_api(|api| super::relay_claims::release(&d, api)) {
-        Ok(true) => Some("released at K2 Connect; the tunnel restarts once to drop it (a few seconds' blip)".to_string()),
+        Ok(true) => Some(concat!("released at ", login_name!(), "; the tunnel restarts once to drop it (a few seconds' blip)").to_string()),
         Ok(false) => None,
         Err(e) => Some(format!(
-            "K2 Connect didn't confirm the release ({e}); it frees the name once its own re-check fails"
+            "{LOGIN_NAME} didn't confirm the release ({e}); it frees the name once its own re-check fails"
         )),
     };
     let binding = {
@@ -778,7 +778,7 @@ pub(crate) fn release(app: &AppRow, d: &AttachedSubdomain) -> Result<String, Str
     }
     let c = k2_core::tunnel::config::load().map_err(|e| format!("the tunnel config: {e}"))?;
     if c.token.trim().is_empty() {
-        return Err("this server has no K2 Connect tunnel token".into());
+        return Err(concat!("this server has no ", login_name!(), " tunnel token").into());
     }
     k2_core::tunnel::subdomains::delete_subdomain(&c.token, &d.label)?;
     Ok("removed".into())

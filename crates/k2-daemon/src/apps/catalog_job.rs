@@ -57,7 +57,7 @@ use serde_json::{json, Value as J};
 use super::routes::{actor, no, Refusal, Who, R};
 use crate::sew::fetch::{FetchError, ReleaseFile};
 use crate::sew::ops::MgmtError;
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 use k2_core::cli_name;
 
 /// `POST /mgmt/v1/meet/init {app_id}` (Sew 0.3.0+): the hidden Meetings
@@ -239,7 +239,7 @@ pub(crate) fn pro_refusal(msg: &str) -> Refusal {
     };
     let hint = if code == sc::PRO_REQUIRED {
         format!(
-            "An address like {} needs K2 Connect Pro on this server: see {}",
+            "An address like {} needs {LOGIN_NAME} Pro on this server: see {}",
             k2_core::hosts::box_host("chat.<your server>"),
             k2_core::hosts::DASHBOARD_URL
         )

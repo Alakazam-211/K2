@@ -52,8 +52,8 @@ use crate::cli_response::CliResponse;
 use crate::label_owner;
 use crate::session_token::HookPrincipal;
 use crate::splice_guard;
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::cli_name;
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, login_name};
 
 /// Agent creates + deletes allowed per workspace per rolling hour.
 pub const AGENT_WRITES_PER_HOUR: usize = 20;
@@ -174,7 +174,7 @@ fn agent_gate(
             };
             (label, target)
         }
-        _ => return Err(err("400 Bad Request", "not_allowed", "not an allowed K2 Connect request")),
+        _ => return Err(err("400 Bad Request", "not_allowed", concat!("not an allowed ", login_name!(), " request"))),
     };
 
     if !primary.is_empty() && label == primary {
@@ -403,7 +403,7 @@ pub fn handle(body: &[u8], principal: Option<&HookPrincipal>) -> CliResponse {
             "503 Service Unavailable",
             "token_unreadable",
             format!(
-                "the K2 Connect tunnel token is in the {PRODUCT_NAME} vault, which could not be read \
+                "the {LOGIN_NAME} tunnel token is in the {PRODUCT_NAME} vault, which could not be read \
                  right now ({e}); nothing was sent — try again once the vault is readable"
             ),
         ),

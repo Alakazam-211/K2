@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::cli_response::CliResponse;
-use k2_core::{cli_name, product_name};
+use k2_core::{cli_name, login_name, product_name};
+use k2_core::brand::LOGIN_NAME;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@ fn deliver_federated_files(
     if total > k2_core::federation::TRAY_MAX_BYTES {
         return CliResponse::bad_request(format!(
             "federated tray package is {total} bytes (v1 cap {}). \
-             Cover .md + small attachments only. For larger files use K2 Connect \
+             Cover .md + small attachments only. For larger files use {LOGIN_NAME} \
              upload/chunk, or split the package.",
             k2_core::federation::TRAY_MAX_BYTES
         ));
@@ -772,7 +773,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "connections",
         summary: "Cross-workspace links: local peers for msg/read/inbox + roster",
-        definition: concat!("Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `", cli_name!(), " connections list`, and agent-initiated `", cli_name!(), " msg` / `", cli_name!(), " msg --inbox-wake|--inbox-silent` / `", cli_name!(), " read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `", cli_name!(), " connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner turns on \"Agents can add connections\" (Settings → Network → Tunnel → Policies) or the agent's own \"Let this agent add connections\" (Settings → Workspaces / Agents → <workspace> → Connections). `list` is always allowed.\n\n`", cli_name!(), " connections list` also shows this workspace's own live sessions first.\n\nNOT the same as: skill profiles (`", cli_name!(), " skills`) or K2 Connect tunnel state (`", cli_name!(), " tunnel`)."),
+        definition: concat!("Cross-workspace links. When workspace A \"connects\" to workspace B, both sides see each other in `", cli_name!(), " connections list`, and agent-initiated `", cli_name!(), " msg` / `", cli_name!(), " msg --inbox-wake|--inbox-silent` / `", cli_name!(), " read` to that peer is allowed. Without a connection (and outside same-workspace), those verbs return exit 3 with code `not_connected`.\n\nManage via: `", cli_name!(), " connections list` / `add <name|path>` / `remove <name>`. `list --json` is supported. Connections are symmetric and persisted per-workspace.\n\nAgent create/remove is OFF by default: gated agents get exit 3 with code `agents_create_connections_disabled` until the owner turns on \"Agents can add connections\" (Settings → Network → Tunnel → Policies) or the agent's own \"Let this agent add connections\" (Settings → Workspaces / Agents → <workspace> → Connections). `list` is always allowed.\n\n`", cli_name!(), " connections list` also shows this workspace's own live sessions first.\n\nNOT the same as: skill profiles (`", cli_name!(), " skills`) or ", login_name!(), " tunnel state (`", cli_name!(), " tunnel`)."),
     },
     GlossaryEntry {
         term: "feedback",

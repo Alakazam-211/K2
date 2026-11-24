@@ -33,7 +33,7 @@ hits() { printf '%s\n' "$err" | sed -n "s/^judge $1 ([^)]*): \([0-9]*\) hit(s)$/
 
 run clean 'Run xy msg <addr> to send.' 'Globex Desk keeps your agents.' 'xy 0.46.17' 'Type `xy` alone.' 'See ~/.k2/inbox.'
 [ "$rc" = 0 ] || die "a clean corpus: rc $rc: $err"; ok
-case "$out" in *"the four judges pass on 1 files"*) ok ;; *) die "clean: $out" ;; esac
+case "$out" in *"the five judges pass on 1 files"*) ok ;; *) die "clean: $out" ;; esac
 
 run planted 'Run xy msg <addr>.' 'Run k2 msg k2 hi'
 [ "$rc" = 1 ] || die "a planted k2 msg passed: $err"; ok
@@ -73,6 +73,18 @@ rc=0; python3 "$J" --brand "$HERE/brand/xy" --keep "$T/keep-d" "$c" >/dev/null 2
 [ "$rc" = 1 ] && grep -q 'judge d (a slot not filled): 1 hit(s)' "$T/err" || die "judge d took a keep or debt row: $(cat "$T/err")"; ok
 run d-text 'Run xy app list {id}, {clients} and {products} for {cli_path}.'
 [ "$rc" = 0 ] || die "not a slot: $err"; ok
+
+# Judge e: another brand's sign-in name (ours, K2 Connect) fails under xy;
+# xy's own (Globex Account) passes, and a debt row for e lets a line through.
+run e 'Sign in with K2 Connect first.'
+[ "$rc" = 1 ] && [ "$(hits e)" = 1 ] && [ "$(hits a)" = 0 ] && [ "$(hits c)" = 0 ] || die "judge e on K2 Connect: $err"; ok
+case "$err" in *"FAILED (e)"*) ok ;; *) die "judge e's line: $err" ;; esac
+run e-own 'Sign in with Globex Account first.' 'K2 Connectors are not a name.'
+[ "$rc" = 0 ] || die "xy's own sign-in name: $err"; ok
+printf 'debt\te\tSign in with K2 Connect first.\n' > "$T/keep-e"
+c="$T/corpus-e2"; rm -rf "$c"; mkdir -p "$c"; printf 'Sign in with K2 Connect first.\n' > "$c/form.out"
+rc=0; python3 "$J" --brand "$HERE/brand/xy" --keep "$T/keep-e" "$c" >/dev/null 2>"$T/err" || rc=$?
+[ "$rc" = 0 ] || die "a debt row for judge e: $(cat "$T/err")"; ok
 
 # A debt row lets its line through; a debt row that matches nothing fails.
 printf 'debt\tb\twhere k2 keeps it\n' >> "$keep"

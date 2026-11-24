@@ -21,6 +21,7 @@
 
 use crate::cli_response::CliResponse;
 use k2_core::{connect_users, product_name};
+use k2_core::brand::LOGIN_NAME;
 
 /// `GET /cli/users` → `{"users":[{username,createdAt,disabled,role,wasViewer}, ...]}`.
 /// Redacted views only — never the password hash. `role` is the #629
@@ -984,7 +985,7 @@ pub fn account_page_html() -> String {
 <body>
   <div class="card">
     <h1 id="heading">Log in to manage your account for <code>{sub}</code></h1>
-    <p class="sub" id="loginSub">Enter your K2 Connect credentials.</p>
+    <p class="sub" id="loginSub">Enter your {LOGIN_NAME} credentials.</p>
 
     <form id="loginForm">
       <label for="u">Username</label>

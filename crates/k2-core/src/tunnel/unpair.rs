@@ -45,7 +45,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::config::{self, TunnelConfig};
-use crate::brand::PRODUCT_NAME;
+use crate::brand::{LOGIN_NAME, PRODUCT_NAME};
+use crate::login_name;
 
 /// Path of the tombstone note a release leaves behind:
 /// `~/.k2/unpaired.json`. Honors `$HOME` so tests can redirect it.
@@ -458,13 +459,13 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     let note: Option<String> = match mode {
         ReleaseMode::ForgetLocal => {
             local_only = true;
-            Some("forgotten on this device only; nothing was sent to K2 Connect".to_string())
+            Some(concat!("forgotten on this device only; nothing was sent to ", login_name!()).to_string())
         }
         ReleaseMode::Release if !holder => {
             local_only = true;
             Some(
-                "this device's tunnel was not connected, so it is not the holder of the \
-                 name; it was forgotten on this device and nothing was sent to K2 Connect"
+                concat!("this device's tunnel was not connected, so it is not the holder of the \
+                 name; it was forgotten on this device and nothing was sent to ", login_name!())
                     .to_string(),
             )
         }
@@ -479,14 +480,14 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
                         "[tunnel/unpair] upstream release report failed — queued for boot-time replay: {e}"
                     );
                     queued = true;
-                    Some(format!("K2 Connect was unreachable ({e}); the release is queued"))
+                    Some(format!("{LOGIN_NAME} was unreachable ({e}); the release is queued"))
                 }
                 Err(ReportError::Terminal(e)) => {
                     crate::log_debug!(
                         "[tunnel/unpair] upstream release report refused — not queued: {e}"
                     );
                     Some(format!(
-                        "K2 Connect did not record the release ({e}); released on this device"
+                        "{LOGIN_NAME} did not record the release ({e}); released on this device"
                     ))
                 }
             }
@@ -589,7 +590,7 @@ pub fn replay_pending() -> Result<ReplayOutcome, String> {
                 save(&t)?;
                 return Ok(ReplayOutcome::Reported);
             }
-            Err(ReportError::Terminal(e)) => Some(format!("K2 Connect refused it: {e}")),
+            Err(ReportError::Terminal(e)) => Some(format!("{LOGIN_NAME} refused it: {e}")),
             Err(ReportError::Transient(e)) => return Err(e),
         }
     };

@@ -49,6 +49,7 @@ use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, db_err, json_body, need_build, no, s, Refusal, Who, R};
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::login_name;
 
 pub const ROUTES: &[&str] = &["/cli/app/label/return", "/cli/app/label/take"];
 
@@ -348,7 +349,7 @@ pub(super) fn point(project_id: &str, label: &str, port: u16) -> Result<(), Stri
 pub(super) fn point_with(project_id: &str, label: &str, port: u16, transfer: bool) -> Result<(), String> {
     let cfg = k2_core::tunnel::config::load().map_err(|e| format!("the tunnel config: {e}"))?;
     if cfg.token.trim().is_empty() {
-        return Err("this server has no K2 Connect tunnel token".into());
+        return Err(concat!("this server has no ", login_name!(), " tunnel token").into());
     }
     crate::publish_runtime::attach_hostname(project_id, label, port, &cfg.token, &cfg.subdomain, transfer)
 }

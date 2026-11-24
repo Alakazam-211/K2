@@ -55,11 +55,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use k2_core::{cli_name, log_debug, product_name};
+use k2_core::{cli_name, log_debug, login_name, product_name};
 use k2_root_proto::version::{FRONT80_MIN_PROTOCOL, FRONT_MIN_PROTOCOL};
 
 use routes::{Backend, Kind, RouteTable};
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 
 /// sew-media's passthrough TURN listener (Sew's default).
 pub const TURN_BACKEND: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 5349);
@@ -560,7 +560,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             return Err((
                 409,
                 "front_off",
-                concat!("the :80 front comes with ", product_name!(), "'s :443 front, which is off here: the owner runs ", cli_name!(), " front enable first. Names through K2 Connect need nothing here: K2's relays redirect them").into(),
+                concat!("the :80 front comes with ", product_name!(), "'s :443 front, which is off here: the owner runs ", cli_name!(), " front enable first. Names through ", login_name!(), " need nothing here: K2's relays redirect them").into(),
             ));
         }
     }
@@ -571,7 +571,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             // control plane's words for a retried claim were.
             Err(e) => {
                 let why = e.trim_end_matches(": K2 tries again").trim_end_matches("; K2 tries again");
-                return Err((409, "relay_switch_failed", format!("K2 Connect didn't take the change, so nothing changed ({why}). Run this again in a minute.")));
+                return Err((409, "relay_switch_failed", format!("{LOGIN_NAME} didn't take the change, so nothing changed ({why}). Run this again in a minute.")));
             }
         }
     } else {
@@ -935,7 +935,7 @@ pub fn foreign_443_message(units: &[String]) -> String {
          certificates), then run {CLI_NAME} front enable and {CLI_NAME} front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
          for every name {PRODUCT_NAME} doesn't serve): its sites keep working and {PRODUCT_NAME} serves your App names; (2) keep it and have it \
          proxy the App's name to the App yourself, and add the name with {CLI_NAME} app domain add <app-id> <name> \
-         --external so the App takes it as its origin; or (3) on K2 Connect Pro, point the name at K2's relays \
+         --external so the App takes it as its origin; or (3) on {LOGIN_NAME} Pro, point the name at K2's relays \
          (Path B, {CLI_NAME} app domain --help): nothing on :443, no sudo. {PRODUCT_NAME} never takes :443 from another server."
     )
 }

@@ -30,7 +30,7 @@ use k2_core::site_visibility as sv;
 use k2_core::terminal::login_path;
 use k2_core::tunnel::config as tunnel_config;
 use k2_core::tunnel::subdomains;
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME, PRODUCT_NAME};
 
 const LOG_CAP: u64 = 2 * 1024 * 1024;
 #[cfg(unix)]
@@ -1018,7 +1018,7 @@ pub(crate) fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String)
     // 0.45.7: a vault that can't be read right now is not "no token".
     if let Some(e) = cfg.token_read_error.as_deref() {
         return Err(PublishError::fail(format!(
-            "token_unreadable: the K2 Connect tunnel token is in the {PRODUCT_NAME} vault, which could not be \
+            "token_unreadable: the {LOGIN_NAME} tunnel token is in the {PRODUCT_NAME} vault, which could not be \
              read right now ({e}); nothing was published — try again once the vault is readable"
         )));
     }

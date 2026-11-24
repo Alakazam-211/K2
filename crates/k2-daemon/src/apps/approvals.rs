@@ -37,7 +37,7 @@ use super::egress_routes::codes;
 use crate::cli_response::CliResponse;
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
-use k2_core::{cli_name, product_name};
+use k2_core::{cli_name, login_name, product_name};
 
 pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
@@ -556,7 +556,7 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             codes::VAULT_CONFIRM_REQUIRED,
             403,
-            "an admin approves with their own K2 Connect password: confirm again with it",
+            concat!("an admin approves with their own ", login_name!(), " password: confirm again with it"),
         ));
     }
     apply_as(&r, &actor(who), &via)

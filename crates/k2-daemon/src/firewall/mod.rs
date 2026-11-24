@@ -40,7 +40,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use k2_core::firewall::{merge, FirewallConfig, PortEntry, Proto, UpstreamAck, VIEW_VERSION};
-use k2_core::{cli_name, product_name};
+use k2_core::{cli_name, login_name, product_name};
 
 /// Everything the view is computed from (gathered by [`gather`]; tests
 /// build it by hand).
@@ -337,7 +337,7 @@ fn status_text_in(s: &Value, zone_suffix: &str) -> String {
         out.push('\n');
     }
     if v["box"]["behindNat"] == true {
-        out.push_str("note           this box is behind a home or office router: custom domains use K2 Connect (0.46.7)\n");
+        out.push_str(concat!("note           this box is behind a home or office router: custom domains use ", login_name!(), " (0.46.7)\n"));
     }
     out.push_str("public ports\n");
     for r in v["public"].as_array().into_iter().flatten() {

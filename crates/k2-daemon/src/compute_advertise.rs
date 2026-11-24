@@ -14,6 +14,7 @@
 use std::time::{Duration, Instant};
 
 use k2_core::compute::{self as compute, advertise};
+use k2_core::brand::LOGIN_NAME;
 
 #[derive(Default)]
 struct LoopState {
@@ -86,7 +87,7 @@ fn handle(
     let idle = Duration::from_secs(advertise::ENROLLED_POLL_SECS);
     let answer = match posted {
         Ok(advertise::Posted::Unsupported) => {
-            k2_core::log_debug!("[compute] K2 Connect has no /compute/advertise yet; checking again in a few hours");
+            k2_core::log_debug!("[compute] {LOGIN_NAME} has no /compute/advertise yet; checking again in a few hours");
             st.unsupported_until = Some(Instant::now() + Duration::from_secs(advertise::UNSUPPORTED_BACKOFF_SECS));
             return idle;
         }

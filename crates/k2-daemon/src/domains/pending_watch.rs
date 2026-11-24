@@ -40,6 +40,7 @@ use k2_core::domains::{
 use k2_core::log_debug;
 
 use crate::dns::proxy::{proxy_request, DnsHttpResponse};
+use k2_core::brand::LOGIN_NAME;
 
 /// First check after boot (off the boot path).
 pub const FIRST_CHECK_AFTER_SECS: u64 = 60;
@@ -600,7 +601,7 @@ fn run_loop() -> ! {
             }
             Ok(Tick::NoTunnel) => {
                 if quiet != Some("no-tunnel") {
-                    log_debug!("[domains/pending-watch] no K2 Connect tunnel token — not checking k2.dev");
+                    log_debug!("[domains/pending-watch] no {LOGIN_NAME} tunnel token — not checking k2.dev");
                     quiet = Some("no-tunnel");
                 }
             }

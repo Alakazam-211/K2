@@ -40,7 +40,7 @@ use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use k2_core::log_debug;
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, LOGIN_NAME};
 
 /// The live E2E listener: its port, the subdomain its certificate names,
 /// and the tasks that serve it (accept loop + cert renewer).
@@ -433,7 +433,7 @@ async fn spawn_listener_with(
         .map_err(|e| format!("publish HTTPS port: {e}"))?;
 
     log_debug!(
-        "[daemon/e2e] K2 Connect E2E TLS listener up on 127.0.0.1:{} \
+        "[daemon/e2e] {LOGIN_NAME} E2E TLS listener up on 127.0.0.1:{} \
          (subdomain {}.k2.dev; decrypted → HTTP :{})",
         https_port,
         subdomain,

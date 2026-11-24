@@ -73,6 +73,7 @@ use super::peers::{
     PeerStore, PeerTrust,
 };
 use crate::cli_name;
+use crate::brand::LOGIN_NAME;
 
 /// Notice wire version. v2 binds the notice to its receiver
 /// (`to_fingerprint`); the receiver accepts only v2.
@@ -420,7 +421,7 @@ fn check_new_address(
     let new = &n.new_address;
     if !new.subdomain.trim().is_empty() && !valid_connect_subdomain(&new.subdomain) {
         return Err(NoticeError::BadAddress(format!(
-            "subdomain {:?} is not a K2 Connect name",
+            "subdomain {:?} is not a {LOGIN_NAME} name",
             new.subdomain
         )));
     }

@@ -52,8 +52,8 @@ use k2_root_proto::sew::{sew_takes_trusted_cidrs, MEDIA_BIND_ANY, MEDIA_BIND_LOO
 
 use super::supervisor::{self as sup, no, Env, Fail, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
-use k2_core::brand::CLI_NAME;
-use k2_core::{cli_name, product_name};
+use k2_core::brand::{CLI_NAME, LOGIN_NAME};
+use k2_core::{cli_name, login_name, product_name};
 
 /// Sew's FEATURES flag for the relay-only passthrough tier (Sew 0.7.0).
 pub const FEATURE_TURN_RELAY_ONLY: &str = "turn_relay_only";
@@ -83,7 +83,7 @@ pub fn label(env: &Env) -> R<String> {
         no(
             "no_confirmed_label",
             409,
-            concat!("the control plane has not confirmed this box's K2 Connect label yet (the tunnel needs to reach it once): \
+            concat!("the control plane has not confirmed this box's ", login_name!(), " label yet (the tunnel needs to reach it once): \
              ", cli_name!(), " tunnel status, then try again"),
         )
     })
@@ -391,18 +391,18 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     }
     match env.ops.confirmed_label() {
         Some(l) => c.push(check("tunnel_label", "ok", format!("TURN host {}", host(&l)), "")),
-        None => c.push(check("tunnel_label", "fail", "no confirmed K2 Connect label".into(), concat!("the tunnel must reach the control plane once (", cli_name!(), " tunnel status)"))),
+        None => c.push(check("tunnel_label", "fail", concat!("no confirmed ", login_name!(), " label").into(), concat!("the tunnel must reach the control plane once (", cli_name!(), " tunnel status)"))),
     }
     // The cached plan (never the network here); unknown is only a note: the
     // cert broker's `403 tier_required` is the firm answer.
     let plan = env.ops.plan_tier();
     match plan.reading() {
-        _ if plan.is_pro() => c.push(check("pro", "ok", "K2 Connect Pro".into(), "")),
+        _ if plan.is_pro() => c.push(check("pro", "ok", concat!(login_name!(), " Pro").into(), "")),
         Some(r) => c.push(check(
             "pro",
             "fail",
-            format!("K2 Connect {}", r.tier.as_deref().unwrap_or("plan not reported")),
-            "voice through the tunnel needs K2 Connect Pro (nested names)",
+            format!("{LOGIN_NAME} {}", r.tier.as_deref().unwrap_or("plan not reported")),
+            concat!("voice through the tunnel needs ", login_name!(), " Pro (nested names)"),
         )),
         None => c.push(check("pro", "info", concat!(product_name!(), " doesn't know this box's plan yet").into(), "the TURN certificate is refused below Pro")),
     }
@@ -414,7 +414,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     if env.ops.frpc_installed() {
         c.push(check("frpc", "ok", "frpc found (the voice lane runs a second one)".into(), ""));
     } else {
-        c.push(check("frpc", "fail", "frpc not installed".into(), "install frp's frpc (K2 Connect needs it anyway)"));
+        c.push(check("frpc", "fail", "frpc not installed".into(), concat!("install frp's frpc (", login_name!(), " needs it anyway)")));
     }
     let media_up = env.ops.unit(UNIT_MEDIA).is_active();
     if media_up || !env.ops.port_taken("127.0.0.1", k2_root_proto::sew::SEW_TURN_TLS_PORT, false) {
@@ -556,7 +556,7 @@ pub fn move_out(env: &Env, st: VoiceState) -> R<Value> {
         let hs = env.ops.helper_state();
         return Err(no("helper_outdated", 409, crate::root_helper::helper_needed("Leaving the voice tunnel", k2_root_proto::version::SEW_TUNNEL_MIN_PROTOCOL, &hs)));
     }
-    let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, "no K2 Connect label"))?;
+    let label = env.ops.box_label().ok_or_else(|| no("no_connect_label", 409, concat!("no ", login_name!(), " label")))?;
     let _l = sup::begin(env)?;
     let mut st = st;
     let (chain, key_pem, dns) = voice::issue_direct(env, &label, &mut st)?;

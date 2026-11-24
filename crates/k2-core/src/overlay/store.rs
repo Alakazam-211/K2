@@ -2115,7 +2115,7 @@ pub struct UnreadScan {
 
 /// The facts of `id` from `doc_meta`, or (no row, a row this build
 /// can't read, or a row an older build wrote for one of K2's own lines,
-/// which doesn't say whether it is an info notice:
+/// which doesn't say whether it is a quiet notice:
 /// [`DocMeta::notice_unknown`]) from the doc itself. `Ok(None)` when
 /// there is no such doc.
 fn meta_or_doc(

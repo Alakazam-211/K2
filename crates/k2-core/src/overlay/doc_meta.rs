@@ -4,7 +4,7 @@
 //! person's cursor: who wrote it, whether it is history (imported or
 //! collected), whether it is an action card, whether it is a card still
 //! waiting and until when, a permission card's approver floor, and on
-//! K2's own lines whether it is an info notice (0.46.18). The
+//! K2's own lines whether it is a quiet notice (0.46.18). The
 //! store writes these in a small `doc_meta` row (`doc id → encoded
 //! DocMeta`) in the SAME redb transaction as every body write, so a count
 //! reads a few short strings instead of parsing whole documents.
@@ -37,12 +37,13 @@ pub struct DocMeta {
     /// for any other doc.
     pub permission_floor: Option<String>,
     /// K2's own line (thread-system-notice-v1, 0.46.18): `Some(true)` for
-    /// an info notice ([`super::doc::NOTICE_INFO`]: never unread, nothing
-    /// for a person to do), `Some(false)` for any other K2 line (action,
-    /// delivery, a later kind, or no `systemNotice` at all: they count).
+    /// a quiet notice ([`is_quiet_notice`]: an info notice, never unread,
+    /// nothing for a person to do), `Some(false)` for any other K2 line
+    /// (action, delivery, a later kind, a VIP mail notice, or no
+    /// `systemNotice` at all: they count).
     /// `None` on every doc that is not K2's, and on a K2 line whose row an
     /// older build wrote ([`DocMeta::notice_unknown`]: read from the doc).
-    pub info_notice: Option<bool>,
+    pub quiet_notice: Option<bool>,
 }
 
 /// Encoding version. A row in another version reads as missing (the doc
@@ -66,15 +67,15 @@ impl DocMeta {
             waiting_card: super::store::is_waiting_card(doc),
             expires_at,
             permission_floor: permission_floor(doc).map(str::to_string),
-            info_notice: (doc.by_system() || doc.system_notice.is_some()).then(|| is_info_notice(doc)),
+            quiet_notice: (doc.by_system() || doc.system_notice.is_some()).then(|| is_quiet_notice(doc)),
         }
     }
 
     /// A row an older build wrote for one of K2's own lines: it doesn't say
-    /// whether the line is an info notice, so the reader takes the facts
+    /// whether the line is a quiet notice, so the reader takes the facts
     /// from the doc itself (only K2's lines; every other row stands).
     pub fn notice_unknown(&self) -> bool {
-        self.info_notice.is_none()
+        self.quiet_notice.is_none()
             && self.author.as_ref().is_some_and(|(kind, _)| kind == super::doc::AUTHOR_SYSTEM)
     }
 
@@ -89,8 +90,8 @@ impl DocMeta {
     }
 
     /// `1\t{flags}\t{expires}\t{floor}\t{kind}\t{login}`; the login is
-    /// last so it may hold any character. Flags `i` / `n` (0.46.18) are an
-    /// info notice / another K2 line; a build before them reads a row
+    /// last so it may hold any character. Flags `i` / `n` (0.46.18) are a
+    /// quiet notice / another K2 line; a build before them reads a row
     /// with either as unreadable and parses that doc, so a downgrade
     /// never miscounts.
     pub fn encode(&self) -> String {
@@ -107,7 +108,7 @@ impl DocMeta {
         if self.author.is_some() {
             flags.push('u');
         }
-        match self.info_notice {
+        match self.quiet_notice {
             Some(true) => flags.push('i'),
             Some(false) => flags.push('n'),
             None => {}
@@ -132,7 +133,7 @@ impl DocMeta {
         if flags.chars().any(|c| !matches!(c, 'h' | 'a' | 'w' | 'u' | 'i' | 'n')) {
             return None;
         }
-        let info_notice = match (flags.contains('i'), flags.contains('n')) {
+        let quiet_notice = match (flags.contains('i'), flags.contains('n')) {
             (true, true) => return None,
             (true, false) => Some(true),
             (false, true) => Some(false),
@@ -150,16 +151,26 @@ impl DocMeta {
             waiting_card: flags.contains('w'),
             expires_at,
             permission_floor: (!floor.is_empty()).then(|| floor.to_string()),
-            info_notice,
+            quiet_notice,
         })
     }
 }
 
-/// K2's info notice (thread-system-notice-v1 kind [`super::doc::NOTICE_INFO`],
-/// exactly): never unread (0.46.18). Action and delivery notices, a later
-/// kind and a K2 line without `systemNotice` all count.
-pub fn is_info_notice(doc: &OverlayDoc) -> bool {
-    doc.system_notice.as_ref().is_some_and(|n| n.kind == super::doc::NOTICE_INFO)
+/// Info notices that still count as unread (0.46.18): a VIP mail notice
+/// ([`super::doc::NOTICE_CODE_MAIL_VIP`]) is the person's important mail,
+/// the reason they turned VIP on. Its kind stays `info` on the wire (how a
+/// client draws it); only the count differs.
+pub const COUNTED_INFO_CODES: &[&str] = &[super::doc::NOTICE_CODE_MAIL_VIP];
+
+/// K2's quiet notice: never unread (0.46.18). An info notice
+/// (thread-system-notice-v1 kind [`super::doc::NOTICE_INFO`], exactly)
+/// whose code is not in [`COUNTED_INFO_CODES`]. Action and delivery
+/// notices, a later kind, a counted info code and a K2 line without
+/// `systemNotice` all count.
+pub fn is_quiet_notice(doc: &OverlayDoc) -> bool {
+    doc.system_notice
+        .as_ref()
+        .is_some_and(|n| n.kind == super::doc::NOTICE_INFO && !COUNTED_INFO_CODES.contains(&n.code.as_str()))
 }
 
 /// A permission card's floor (`choice.action.view.approvers.floor`), or
@@ -197,10 +208,10 @@ mod tests {
                 waiting_card: true,
                 expires_at: Some(-5),
                 permission_floor: Some("admin".into()),
-                info_notice: Some(true),
+                quiet_notice: Some(true),
             },
-            DocMeta { author: Some(("system".into(), "k2".into())), info_notice: Some(false), ..Default::default() },
-            DocMeta { author: Some(("system".into(), "k2".into())), info_notice: None, ..Default::default() },
+            DocMeta { author: Some(("system".into(), "k2".into())), quiet_notice: Some(false), ..Default::default() },
+            DocMeta { author: Some(("system".into(), "k2".into())), quiet_notice: None, ..Default::default() },
             DocMeta { author: Some((String::new(), String::new())), expires_at: Some(1_900_000_000), ..Default::default() },
         ];
         for m in cases {
@@ -218,7 +229,7 @@ mod tests {
         assert_eq!(DocMeta::decode(""), None);
     }
 
-    /// 0.46.18: K2's lines say whether they are info notices; nobody
+    /// 0.46.18: K2's lines say whether they are quiet notices; nobody
     /// else's row changes (an older build still reads it).
     #[test]
     fn k2_lines_record_their_notice_kind_and_other_rows_stay_as_they_were() {
@@ -228,17 +239,37 @@ mod tests {
             d.system_notice = n;
             DocMeta::of(&d)
         };
-        assert_eq!(sys(Some(SystemNotice::info("job.added"))).info_notice, Some(true));
-        assert_eq!(sys(Some(SystemNotice::action("clone.proposed"))).info_notice, Some(false));
-        assert_eq!(sys(Some(SystemNotice::delivery("delivery.not_taken.retry_failed"))).info_notice, Some(false));
-        assert_eq!(sys(Some(SystemNotice::new("later", "x"))).info_notice, Some(false), "a later kind counts");
-        assert_eq!(sys(None).info_notice, Some(false), "a K2 line without systemNotice counts");
+        assert_eq!(sys(Some(SystemNotice::info("job.added"))).quiet_notice, Some(true));
+        assert_eq!(sys(Some(SystemNotice::action("clone.proposed"))).quiet_notice, Some(false));
+        assert_eq!(sys(Some(SystemNotice::delivery("delivery.not_taken.retry_failed"))).quiet_notice, Some(false));
+        assert_eq!(sys(Some(SystemNotice::new("later", "x"))).quiet_notice, Some(false), "a later kind counts");
+        assert_eq!(sys(None).quiet_notice, Some(false), "a K2 line without systemNotice counts");
+        // A VIP mail notice is info on the wire and still counts; a
+        // changed-files card is quiet.
+        let vip = super::super::doc::ThreadNotice {
+            source: "mail".into(),
+            inbox: "a@x".into(),
+            from_name: None,
+            from_addr: "b@y".into(),
+            auth: "DMARC pass".into(),
+            subject: "s".into(),
+            snippet: None,
+            read_command: "k2 mail read m_1".into(),
+            delivered: true,
+            reason: None,
+            notice_id: 1,
+        };
+        let vip = OverlayDoc::mail_notice_card("v".into(), "a".into(), "VIP mail from b@y".into(), vip);
+        assert_eq!(vip.system_notice.as_ref().map(|n| n.kind.as_str()), Some(super::super::doc::NOTICE_INFO));
+        assert_eq!(DocMeta::of(&vip).quiet_notice, Some(false), "a VIP mail notice counts");
+        let changes = OverlayDoc::changes_card("c".into(), "k2".into(), "a".into(), "2 files".into(), Default::default());
+        assert_eq!(DocMeta::of(&changes).quiet_notice, Some(true), "a changed-files card is quiet");
         assert!(!sys(None).notice_unknown());
 
         let mut person = OverlayDoc::text("p".into(), "owner".into(), "a".into(), "hi".into(), "compose");
         person.author = Some(PostAuthor::owner());
         let m = DocMeta::of(&person);
-        assert_eq!(m.info_notice, None);
+        assert_eq!(m.quiet_notice, None);
         assert!(!m.encode().split('\t').nth(1).expect("flags").contains(['i', 'n']), "{}", m.encode());
 
         // A row an older build wrote for a K2 line: the reader asks the doc.

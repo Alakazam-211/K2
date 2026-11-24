@@ -37,7 +37,7 @@ mod old {
             && doc.imported.is_none()
             && doc.external.is_none()
             && doc.via.as_deref() != Some("import")
-            && !overlay::doc_meta::is_info_notice(doc)
+            && !overlay::doc_meta::is_quiet_notice(doc)
             && !(overlay::is_waiting_now(doc, now) && card_waits_for(person, doc))
     }
 
@@ -623,7 +623,7 @@ fn info_notices_never_count_and_old_rows_read_their_doc() {
 
     let info = k2_notice(&conn, &c, &project, overlay::SystemNotice::info("job.added"));
     assert_row_matches_doc(&info);
-    assert_eq!(doc_meta_test::row(&info).expect("row").expect("present").info_notice, Some(true));
+    assert_eq!(doc_meta_test::row(&info).expect("row").expect("present").quiet_notice, Some(true));
     assert_eq!((unread(), listed()), (0, 0), "an info notice is never unread");
     let action = k2_notice(&conn, &c, &project, overlay::SystemNotice::action("clone.proposed"));
     assert_eq!((unread(), listed()), (1, 1), "an action notice counts");
@@ -633,12 +633,18 @@ fn info_notices_never_count_and_old_rows_read_their_doc() {
     assert_eq!((unread(), listed()), (3, 3), "a kind this build doesn't know counts");
     k2_notice(&conn, &c, &project, overlay::SystemNotice::info("reminder.fired"));
     assert_eq!((unread(), listed()), (3, 3));
+    // VIP mail is info on the wire and still counts (the person's important
+    // mail); a changed-files card is quiet.
+    k2_notice(&conn, &c, &project, overlay::SystemNotice::info(overlay::doc::NOTICE_CODE_MAIL_VIP));
+    assert_eq!((unread(), listed()), (4, 4), "a VIP mail notice counts");
+    k2_notice(&conn, &c, &project, overlay::SystemNotice::info(overlay::doc::NOTICE_CODE_TURN_CHANGES));
+    assert_eq!((unread(), listed()), (4, 4), "a changed-files card doesn't");
     for id in [&action, &delivery, &later] {
         assert_row_matches_doc(id);
-        assert_eq!(doc_meta_test::row(id).expect("row").expect("present").info_notice, Some(false), "{id}");
+        assert_eq!(doc_meta_test::row(id).expect("row").expect("present").quiet_notice, Some(false), "{id}");
     }
     read_counts::take();
-    assert_eq!(unread(), 3);
+    assert_eq!(unread(), 4);
     assert_eq!(read_counts::take().doc_parses, 0, "the row says which notice it is");
 
     // Rows an older build wrote (no notice flag): the doc answers.
@@ -656,7 +662,7 @@ fn info_notices_never_count_and_old_rows_read_their_doc() {
     read_counts::take();
     assert_eq!(
         (unread(), listed()),
-        (4, 4),
+        (5, 5),
         "an old row of a K2 line without systemNotice counts; the old info row stays quiet; the old action row counts"
     );
     assert!(read_counts::take().doc_parses > 0, "old K2 rows are read from the doc");

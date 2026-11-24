@@ -31,7 +31,8 @@
 //! **What counts.**
 //! - `unread`: items past the cursor that someone else wrote (an agent or
 //!   another person), not imported history, not a collected line, not
-//!   K2's info notice (0.46.18; K2's action and delivery notices count),
+//!   K2's quiet info notice (0.46.18; K2's action and delivery notices
+//!   and VIP mail notices count: `doc_meta::is_quiet_notice`),
 //!   and not a card that is waiting (that one is in `waiting` instead).
 //!   Capped at [`UNREAD_CAP`] ("99+" on clients).
 //! - `waiting`: pending choice / secret cards in a Thread whose time has
@@ -483,14 +484,14 @@ pub fn is_muted(conn: &Connection, person: &str, kind: &str, id: &str, now: i64)
 /// Does this Thread line count as unread for `person` (when past the
 /// cursor)? Someone else's post, not history, not a card waiting on them,
 /// never an action card for an App guest (it can't see one), and never
-/// K2's info notice (0.46.18: nothing for a person to do; K2's action and
-/// delivery notices still count). Reads the line's stored facts
+/// K2's quiet info notice (0.46.18: nothing for a person to do; K2's action
+/// and delivery notices and VIP mail notices still count). Reads the line's stored facts
 /// ([`DocMeta`], speed pass P6), never its doc.
 fn line_counts(person: &Person, line: &DocMeta, now: i64) -> bool {
     if person.guest.is_some() && line.action_card {
         return false;
     }
-    if line.info_notice == Some(true) {
+    if line.quiet_notice == Some(true) {
         return false;
     }
     !person.wrote_line(line) && !line.history && !(line.is_waiting_now(now) && card_waits_for(person, line))

@@ -31,9 +31,14 @@
 //! (`src/brand_text.rs`, `SOURCE_NAME`). In a build of a brand with
 //! another command (`K2_BRAND_DIR`, read through the `k2-brand` build
 //! dependency) each page and the manifest are rewritten to that name by
-//! the CLI name rule (`brand_text::rewrite`) and the rewritten copies,
-//! under `$OUT_DIR/text`, are embedded. A default build embeds the files
-//! as they are.
+//! the CLI name rule (`brand_text::rewrite`). Then, in every build, their
+//! `{company}` and `{login}` slots are filled with the brand's
+//! `names.company` and `names.login` (`brand_text::fill`; in the
+//! manifest, escaped for its JSON strings), so no slot reaches a person.
+//! A page that changes is embedded from its copy under `$OUT_DIR/text`,
+//! any other from its file. In the default brand the embedded bytes are
+//! the bytes `cli/k2` prints. The captured help forms hold the two names
+//! as escapes (`\o`, `\l`), which `text::render` spells at run time.
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -47,16 +52,27 @@ mod schema_join;
 #[path = "src/brand_text.rs"]
 mod brand_text;
 
-/// The command's name in this build (the brand file's `[cli] name`) and
-/// the verbs the rewrite reads text by, when it differs from the name the
-/// sources spell; `None` in a default build (nothing is rewritten).
+/// This build's brand, as its text needs it: the names the slots take
+/// (the brand file's `names.company` and `names.login`, the default
+/// brand's where it leaves one out), and the command's rewrite when its
+/// name differs from the one the sources spell.
 struct Brand {
+    company: &'static str,
+    login: &'static str,
+    rename: Option<Rename>,
+}
+
+/// The command's name in this build (the brand file's `[cli] name`) and
+/// the verbs the rewrite reads text by.
+struct Rename {
     name: &'static str,
     verbs: std::collections::BTreeSet<String>,
 }
 
-impl Brand {
-    fn of_this_build(manifest: &Path) -> Option<Brand> {
+impl Rename {
+    /// `None` in a build whose command is the name the sources spell
+    /// (nothing is rewritten).
+    fn of_this_build(manifest: &Path) -> Option<Rename> {
         let name = k2_brand::CLI_NAME;
         if name == brand_text::SOURCE_NAME {
             return None;
@@ -64,12 +80,54 @@ impl Brand {
         let root = manifest.join("../..");
         println!("cargo:rerun-if-changed={}", root.join("cli/src").display());
         let verbs = brand_text::verbs(&root).unwrap_or_else(|e| panic!("the CLI's verbs: {e}"));
-        Some(Brand { name, verbs })
+        Some(Rename { name, verbs })
+    }
+}
+
+impl Brand {
+    fn of_this_build(manifest: &Path) -> Brand {
+        Brand {
+            company: k2_brand::names::COMPANY,
+            login: k2_brand::LOGIN_NAME,
+            rename: Rename::of_this_build(manifest),
+        }
     }
 
     fn rewrite(&self, text: &str) -> String {
-        brand_text::rewrite(text, brand_text::SOURCE_NAME, self.name, &self.verbs)
+        match &self.rename {
+            Some(r) => brand_text::rewrite(text, brand_text::SOURCE_NAME, r.name, &r.verbs),
+            None => text.to_string(),
+        }
     }
+
+    /// A page as this build prints it: rewritten, then its slots filled.
+    fn page(&self, text: &str, at: &Path) -> String {
+        filled(
+            brand_text::fill(&self.rewrite(text), self.company, self.login),
+            at,
+        )
+    }
+
+    /// The manifest as this build prints it: the same, with the names
+    /// escaped for the JSON strings the slots sit in.
+    fn manifest(&self, text: &str, at: &Path) -> String {
+        let company = brand_text::json_escaped(self.company);
+        let login = brand_text::json_escaped(self.login);
+        filled(brand_text::fill(&self.rewrite(text), &company, &login), at)
+    }
+}
+
+/// `text`, which must hold no slot now: a brand name that is itself a
+/// slot would leave one.
+fn filled(text: String, at: &Path) -> String {
+    for slot in [brand_text::COMPANY_SLOT, brand_text::LOGIN_SLOT] {
+        assert!(
+            !text.contains(slot),
+            "{}: the slot {slot} is still there after the fill",
+            at.display()
+        );
+    }
+    text
 }
 
 /// How far into the script the version line may be (prelude.sh puts it
@@ -126,14 +184,14 @@ fn main() {
     std::fs::write(&rs_path, rs).unwrap_or_else(|e| panic!("write {}: {e}", rs_path.display()));
 
     let brand = Brand::of_this_build(&manifest);
-    text(&manifest, &out, brand.as_ref());
-    schema(&manifest, &out, brand.as_ref());
+    text(&manifest, &out, &brand);
+    schema(&manifest, &out, &brand);
 }
 
 /// `$OUT_DIR/schema.rs`: the body `k2 --schema` prints after its version
 /// line, joined from `cli/src` as `scripts/build-cli.sh` joins it
-/// (`src/families/schema/join.rs`).
-fn schema(manifest: &Path, out: &Path, brand: Option<&Brand>) {
+/// (`src/families/schema/join.rs`), as this build prints it.
+fn schema(manifest: &Path, out: &Path, brand: &Brand) {
     let src = manifest.join("../../cli/src");
     for name in ["ORDER", "schema-head.sh", "schema-tail.sh", "schema"] {
         println!("cargo:rerun-if-changed={}", src.join(name).display());
@@ -144,10 +202,7 @@ fn schema(manifest: &Path, out: &Path, brand: Option<&Brand>) {
     };
     let order = read("ORDER").unwrap_or_else(|e| panic!("{e}"));
     let body = schema_join::body(&order, read).unwrap_or_else(|e| panic!("--schema: {e}"));
-    let body = match brand {
-        Some(b) => b.rewrite(&body),
-        None => body,
-    };
+    let body = brand.manifest(&body, &src.join("schema"));
     let txt = out.join("schema.txt");
     std::fs::write(&txt, body).unwrap_or_else(|e| panic!("write {}: {e}", txt.display()));
     let lit = txt
@@ -162,18 +217,18 @@ fn schema(manifest: &Path, out: &Path, brand: Option<&Brand>) {
 }
 
 /// `$OUT_DIR/text.rs`: the study and help pages, and the help forms.
-fn text(manifest: &Path, out: &Path, brand: Option<&Brand>) {
+fn text(manifest: &Path, out: &Path, brand: &Brand) {
     let text_dir = manifest.join("../../cli/text");
     let native = manifest.join("src/help_native.txt");
     println!("cargo:rerun-if-changed={}", text_dir.display());
     println!("cargo:rerun-if-changed={}", native.display());
 
-    let study = branded(
+    let study = built(
         pages(&text_dir.join("study")),
         brand,
         &out.join("text/study"),
     );
-    let help = branded(pages(&text_dir.join("help")), brand, &out.join("text/help"));
+    let help = built(pages(&text_dir.join("help")), brand, &out.join("text/help"));
     let mut rs = String::new();
     for (name, list) in [("STUDY", &study), ("HELP", &help)] {
         writeln!(rs, "pub static {name}: &[(&str, &str)] = &[").expect("write to a String");
@@ -351,41 +406,38 @@ fn captured(manifest: &Path, file_forms: &[Vec<String>], rs: &mut String) {
     rs.push_str("];\n");
 }
 
-/// The pages to embed: in a brand's build, each page rewritten to its
-/// command's name and written under `dir` (`<key>.txt`); else the files
-/// as they are.
-fn branded(
-    list: Vec<(String, PathBuf)>,
-    brand: Option<&Brand>,
-    dir: &Path,
-) -> Vec<(String, PathBuf)> {
-    let Some(brand) = brand else {
-        return list;
-    };
+/// The pages to embed, as this build prints them ([`Brand::page`]): a
+/// page that changes is written under `dir` (`<key>.txt`) and embedded
+/// from there; any other is embedded from its file.
+fn built(list: Vec<(String, PathBuf)>, brand: &Brand, dir: &Path) -> Vec<(String, PathBuf)> {
     list.into_iter()
         .map(|(key, path)| {
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let page = brand.page(&text, &path);
+            if page == text {
+                return (key, path);
+            }
             let to = dir.join(format!("{key}.txt"));
             let parent = to.parent().expect("a page's file has a folder");
             std::fs::create_dir_all(parent)
                 .unwrap_or_else(|e| panic!("create {}: {e}", parent.display()));
-            std::fs::write(&to, brand.rewrite(&text))
-                .unwrap_or_else(|e| panic!("write {}: {e}", to.display()));
+            std::fs::write(&to, page).unwrap_or_else(|e| panic!("write {}: {e}", to.display()));
             (key, to)
         })
         .collect()
 }
 
 /// Whether `text` uses only the escapes `src/help_captured.txt` has:
-/// `\\`, `\n`, `\t`, `\c` (the command's name) and `\p` (the
-/// product's), and no tab or newline of its own.
+/// `\\`, `\n`, `\t`, `\c` (the command's name), `\p` (the
+/// product's), `\o` (the company's) and `\l` (the sign-in service's),
+/// and no tab or newline of its own.
 fn escapes_ok(text: &str) -> Result<(), String> {
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
         match c {
             '\\' => match chars.next() {
-                Some('\\' | 'n' | 't' | 'c' | 'p') => {}
+                Some('\\' | 'n' | 't' | 'c' | 'p' | 'o' | 'l') => {}
                 other => return Err(format!("an escape it doesn't know: \\{other:?}")),
             },
             '\t' | '\n' | '\r' => return Err(format!("a raw {c:?} in a text")),

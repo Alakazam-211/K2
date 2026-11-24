@@ -15,6 +15,14 @@
 //! other use stay as they are. `text.rs`'s tests hold this port to the
 //! Python, file by file.
 //!
+//! The company and the sign-in service are slots in the same text,
+//! `{company}` and `{login}` ([`COMPANY_SLOT`], [`LOGIN_SLOT`]): every
+//! build fills them with its brand's `names.company` and `names.login`
+//! ([`fill`]; `scripts/build-cli.sh` fills bash's with ours, through
+//! `scripts/brand/page_slots.py`), after the rewrite, so a brand's names
+//! are never read as the command. In the default brand the filled text is
+//! the text as it was before the slots, byte for byte.
+//!
 //! Used by `build.rs` (by path) and by the tests; nothing at run time.
 
 use std::collections::BTreeSet;
@@ -278,9 +286,42 @@ fn command_end(after: &str) -> bool {
         .is_some_and(|rest| !rest.chars().next().is_some_and(word_char))
 }
 
+/// The slot a page or a schema entry holds for the company's name
+/// (`names.company`).
+pub const COMPANY_SLOT: &str = "{company}";
+
+/// The slot for the sign-in service's name (`names.login`).
+pub const LOGIN_SLOT: &str = "{login}";
+
+/// `text` with every [`COMPANY_SLOT`] spelled `company` and every
+/// [`LOGIN_SLOT`] spelled `login`. Every other byte is kept.
+pub fn fill(text: &str, company: &str, login: &str) -> String {
+    text.replace(COMPANY_SLOT, company)
+        .replace(LOGIN_SLOT, login)
+}
+
+/// `name` as it goes inside a JSON string: the schema manifest's slots
+/// sit in its strings, and a brand's name may hold a quote or a
+/// backslash (a name is one line, so no other escape is needed).
+pub fn json_escaped(name: &str) -> String {
+    name.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_slots_are_filled_and_nothing_else_moves() {
+        assert_eq!(
+            fill("Tell {company}; {login} ({login}).", "Acme", "Acme ID"),
+            "Tell Acme; Acme ID (Acme ID)."
+        );
+        let other = "{cli} {product} {Company} {company";
+        assert_eq!(fill(other, "A", "B"), other);
+        assert_eq!(json_escaped(r#"Say "hi" \ bye"#), r#"Say \"hi\" \\ bye"#);
+        assert_eq!(json_escaped("Globex Corporation"), "Globex Corporation");
+    }
 
     fn known() -> BTreeSet<String> {
         ["msg", "agent", "help"]

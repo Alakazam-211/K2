@@ -1268,6 +1268,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
     expect(body.freshProvider).toBe('claude')
   })
 
+  // Slow under full-suite load; ~3.5 s alone: an explicit limit above vitest's 5 s default.
   it('legacy Start does not refresh or resume, and the dialog survives Loading session…', async () => {
     h.supported.value = false
     let resumeCalls = 0
@@ -1338,7 +1339,7 @@ describe('Continue in a new chat — pinned session switcher', () => {
     expect(h.daemonCliPost.mock.calls.some((call) => call[0] === 'terminal/send-message')).toBe(false)
     expect(h.addTabToGroup).not.toHaveBeenCalled()
     expect(screen.getByTestId('continue-new-chat')).toBeTruthy()
-  })
+  }, 15_000)
 })
 
 // A sleeping agent stays asleep while the person only reads its Thread (K2
@@ -2117,7 +2118,8 @@ describe('folder trust: the decision shows where the session would be', () => {
     await waitFor(() => expect(screen.queryByTestId('terminal-pane')).not.toBeNull())
     h.daemonCliPost.mockClear()
     h.sessionHandlers.current!.onRemoved!({ agent_name: 'proj-1', workspace_path: '/ws' })
-    await screen.findByText('Chat session ended')
+    // Slow under full-suite load; ~3.5 s alone.
+    await screen.findByText('Chat session ended', undefined, { timeout: 10000 })
     expect(screen.queryByTestId('folder-trust-hold')).toBeNull()
     expect(ensureBodies()).toHaveLength(0)
   })

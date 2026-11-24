@@ -188,6 +188,11 @@ pub const K2_OWN_UNITS: &[&str] = &[
     "k2agents-anchor.service",
     "k2agents-open-anchor.service",
     "k2agents-fenced-anchor.service",
+    // The bus policy's in-effect probe names it (crates/k2-root-proto/src/
+    // agent_scope_policy.rs `PROBE_UNIT`, run by `agents layout` and `agents
+    // setup`, protocol 19). Never a real unit; denied so the name can never
+    // become one that gets owner credentials.
+    "k2-agents-probe.service",
 ];
 
 /// K2's generated families, as (prefix, middle) patterns: the stem starts

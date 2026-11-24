@@ -434,10 +434,11 @@ pub struct Config {
     // --- the store ---
     /// The store's settings ([`crate::store::StoreSettings`]: its cache size, default
     /// 64 MiB). They take effect where the store is opened: the host passes them to
-    /// [`crate::store::DocStore::open_with`]. A manager reports what its store was opened with
-    /// ([`super::SessionManager::new`] sets this field from
-    /// [`crate::store::DocStore::settings`]), so `capabilities` from a manager's config lists
-    /// the store as it runs. Listed as `store_cache_bytes`, and its commit durability as
+    /// [`crate::store::DocStore::open_with`]; the commit durability can change later, live
+    /// ([`super::SessionManager::set_commit_durability`]). A manager reports what its store was
+    /// opened with ([`super::SessionManager::new`] sets this field from
+    /// [`crate::store::DocStore::settings`]), and [`super::SessionManager::config_now`] what it
+    /// runs with now, so `capabilities` from that config lists the store as it runs. Listed as `store_cache_bytes`, and its commit durability as
     /// `store_commit_grouped` (1 when grouped), `store_commit_max_changes` and
     /// `store_commit_max_ms` (0 at [`crate::store::CommitDurability::Immediate`]).
     pub store: crate::store::StoreSettings,
@@ -449,6 +450,12 @@ pub struct Config {
     /// allocator passes that allocator's call here. Default `None`: the kit's own. Listed as
     /// `host_release` (0 or 1).
     pub release: Option<super::HostRelease>,
+    /// After a tick that wrote a doc back to its file, the same release
+    /// ([`Config::release`], else the kit's own) runs, at most once in this many ms (v0.24).
+    /// A write-back encodes and renders the whole doc, and an outside save merges it: what
+    /// those free stays with the allocator until something returns it, and a Yrs doc makes
+    /// no cut that would. 0: never. Default 30 s. Listed as `release_after_write_ms`.
+    pub release_after_write_ms: u64,
 }
 
 /// When the host-wide cut queue runs a native doc's cut ([`Config::native_cut_queue`]). Made
@@ -1033,6 +1040,7 @@ impl Config {
             native_cut_queue,
             store,
             release,
+            release_after_write_ms,
         } = self;
         let grouped = match store.commit_durability() {
             crate::store::CommitDurability::Grouped {
@@ -1158,6 +1166,7 @@ impl Config {
             ),
             ("store_commit_max_ms", grouped.map_or(0, |g| g.1)),
             ("host_release", u64::from(release.is_some())),
+            ("release_after_write_ms", *release_after_write_ms),
         ]
     }
 }
@@ -1279,6 +1288,7 @@ impl Default for Config {
             native_cut_queue: CutQueueSettings::BETA,
             store: crate::store::StoreSettings::DEFAULT,
             release: None,
+            release_after_write_ms: 30_000,
         }
     }
 }

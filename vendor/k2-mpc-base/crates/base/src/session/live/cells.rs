@@ -214,7 +214,7 @@ impl Session {
     /// as stored, by address.
     pub fn set_cells(&self, conn: ConnId, cells: Option<Cells>) -> Result<Option<Cells>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::Cursor, now)?;
         if st.members[i].watcher {
@@ -487,7 +487,7 @@ impl Session {
         hold: bool,
     ) -> Result<ClaimInfo> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);

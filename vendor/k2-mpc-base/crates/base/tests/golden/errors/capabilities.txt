@@ -1,4 +1,4 @@
-k2-mpc-base 0.23.0
+k2-mpc-base 0.24.0
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -427,6 +427,7 @@ Limits in effect:
   store_commit_max_changes = 0
   store_commit_max_ms = 0
   host_release = 0
+  release_after_write_ms = 30000
   tool_output_max_bytes = 33554432
 
 Positions (docs/POSITIONS.md):

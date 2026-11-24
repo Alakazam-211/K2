@@ -190,6 +190,13 @@ pub struct NodeChange {
     /// Whether the key names the same thing across the outside saves the diff spans
     /// ([`IndexDiff::saves`]): `None` when it crosses none, or none in doubt.
     pub identity: Option<Identity>,
+    /// **Its changed children wholly explain it** (`docs/SESSIONS.md`, "A container's own
+    /// record"): the change is its record alone (`props` is `["record"]`, nothing else), its
+    /// own record's hash ([`crate::index::IndexNode::own_hash`]) is there and equal in both
+    /// versions, and a node whose parent it is (in either) changed in the same diff. The
+    /// overlap checks (`--base`, a revert's) leave a node out when both sides' changes to it
+    /// are so: the children are compared themselves. Never in an output.
+    pub by_children: bool,
 }
 
 /// A diff row's key across an outside save ([`NodeChange::identity`]; `docs/SESSIONS.md`,
@@ -749,6 +756,7 @@ pub(crate) fn diff(a: &IndexView, b: &IndexView) -> Vec<NodeChange> {
                 changes: [NodeChangeKind::Added].into(),
                 props: Vec::new(),
                 identity: None,
+                by_children: false,
             });
             continue;
         };
@@ -781,6 +789,7 @@ pub(crate) fn diff(a: &IndexView, b: &IndexView) -> Vec<NodeChange> {
                 changes,
                 props: p,
                 identity: None,
+                by_children: false,
             });
         }
     }
@@ -794,10 +803,71 @@ pub(crate) fn diff(a: &IndexView, b: &IndexView) -> Vec<NodeChange> {
                 changes: [NodeChangeKind::Removed].into(),
                 props: Vec::new(),
                 identity: None,
+                by_children: false,
             });
         }
     }
+    mark_by_children(a, b, &wa, &wb, &mut out);
     out
+}
+
+/// Sets [`NodeChange::by_children`] on each change of `out` (the diff from `a` to `b`) that its
+/// changed children wholly explain. The planted faults: `ContainerAlwaysCounted` (none is: the
+/// check before), `ContainerNeverCounted` (the own record's hash not asked).
+fn mark_by_children(
+    a: &IndexView,
+    b: &IndexView,
+    wa: &Walk<'_>,
+    wb: &Walk<'_>,
+    out: &mut [NodeChange],
+) {
+    if plant_on!(
+        crate::differential::tier0_verb_mutant()
+            == Some(crate::differential::Tier0VerbMutant::ContainerAlwaysCounted)
+    ) {
+        return;
+    }
+    let own_asked = !plant_on!(
+        crate::differential::tier0_verb_mutant()
+            == Some(crate::differential::Tier0VerbMutant::ContainerNeverCounted)
+    );
+    // the parents of every changed node, in either version
+    let mut parents: BTreeSet<&str> = BTreeSet::new();
+    for c in out.iter() {
+        let k = c.key.as_str();
+        if let Some(p) = wa.index_of(k).and_then(|i| a.nodes[i].parent.as_ref()) {
+            parents.insert(p.as_str());
+        }
+        if let Some(p) = wb.index_of(k).and_then(|i| b.nodes[i].parent.as_ref()) {
+            parents.insert(p.as_str());
+        }
+    }
+    let marked: Vec<bool> = out
+        .iter()
+        .map(|c| {
+            let k = c.key.as_str();
+            let record_only = c.changes.len() == 1
+                && c.changes.contains(&NodeChangeKind::Props)
+                && c.props.len() == 1
+                && c.props[0] == "record";
+            if !record_only || !parents.contains(k) {
+                return false;
+            }
+            if !own_asked {
+                return true;
+            }
+            match (wa.index_of(k), wb.index_of(k)) {
+                (Some(i), Some(j)) => match (a.nodes[i].own_hash, b.nodes[j].own_hash) {
+                    (Some(x), Some(y)) => x == y,
+                    _ => false,
+                },
+                _ => false,
+            }
+        })
+        .collect();
+    for (c, m) in out.iter_mut().zip(marked) {
+        c.by_children = m;
+    }
 }
 
 // ---------------------------------------------------------------------------------------

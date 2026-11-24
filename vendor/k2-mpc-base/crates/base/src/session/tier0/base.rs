@@ -53,9 +53,11 @@ fn node_level(c: &NodeChange) -> Option<NodeChangeKind> {
         .find(|k| c.changes.contains(k))
 }
 
-/// The field two changes to one node share (`None`: they don't overlap). Either change being
-/// node-level overlaps (the field names it); text overlaps only text; props overlap when they
-/// share an entry.
+/// The field two changes to one node share (`None`: they don't overlap), for `--base` and a
+/// revert's check alike. Both changes being the node's changed children's alone
+/// ([`NodeChange::by_children`]: a container whose own record didn't change) don't overlap:
+/// the children are compared themselves. Else either change being node-level overlaps (the
+/// field names it); text overlaps only text; props overlap when they share an entry.
 pub(super) fn overlap(mine: &NodeChange, theirs: &NodeChange) -> Option<String> {
     if planted!(BaseNodeLevelOnly) {
         return Some(
@@ -66,6 +68,9 @@ pub(super) fn overlap(mine: &NodeChange, theirs: &NodeChange) -> Option<String> 
                 .map_or("record", |k| k.as_str())
                 .to_owned(),
         );
+    }
+    if mine.by_children && theirs.by_children {
+        return None;
     }
     if let Some(k) = node_level(theirs).or_else(|| node_level(mine)) {
         return Some(k.as_str().to_owned());
@@ -338,6 +343,8 @@ fn merged(key: &NodeKey, d_v: &[NodeChange], d_h: &[NodeChange]) -> NodeChange {
     let mut it = d_v.iter().chain(d_h).filter(|c| &c.key == key);
     let mut m = it.next().expect("the node's own change").clone();
     for c in it {
+        // the children's alone only when every side's change is
+        m.by_children &= c.by_children;
         m.changes.extend(c.changes.iter().copied());
         for p in &c.props {
             if !m.props.contains(p) {

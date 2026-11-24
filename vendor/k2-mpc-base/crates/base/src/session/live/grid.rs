@@ -2003,7 +2003,7 @@ impl Session {
         opts: &EditOptions,
     ) -> Result<EditResult> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::Edit, now)?;
         Self::check_version(st, opts.if_version)?;
@@ -2072,7 +2072,7 @@ impl Session {
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         let want_result = capture.is_some();
         let now = self.now();
-        let mut guard = self.lock()?;
+        let mut guard = self.lock_for(conn)?;
         let st = &mut *guard;
         let i = self.admit_edit(st, conn, Action::Edit, now)?;
         Self::check_version(st, opts.if_version)?;
@@ -2173,7 +2173,7 @@ impl Session {
         f: impl FnOnce(&View, &dyn VerbHistory) -> (R, Option<ClaimSpan>, bool),
     ) -> Result<(ReadHead, R, Notes, Option<awareness::ForEdit>)> {
         let now = self.now();
-        let mut guard = self.lock()?;
+        let mut guard = self.lock_for(conn)?;
         let st = &mut *guard;
         let i = self.admit(st, conn, Need::Read, Action::Read, now)?;
         // a table's read verbs print and take line numbers, positions in its rendered file:
@@ -2256,7 +2256,7 @@ impl Session {
     /// purge is). Anyone else: [`SessionError::Forbidden`] with [`Need::Owner`] (exit 3).
     pub fn drop_deleted(&self, conn: ConnId) -> Result<EditResult> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::DropDeleted, now)?;
         if !st.members[i].rights.owner {
@@ -2474,7 +2474,7 @@ impl Session {
         opts: &GridWriteOptions,
     ) -> Result<GridWriteReport> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::WriteBase, now)?;
         self.check_backlog(st, i)?;
@@ -2591,7 +2591,7 @@ impl Session {
         opts: &GridWriteOptions,
     ) -> Result<GridWriteReport> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::WriteBase, now)?;
         self.check_backlog(st, i)?;
@@ -3083,7 +3083,7 @@ impl Session {
         vid: crate::store::VersionId,
     ) -> Result<Vec<(String, Neutral)>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::History, now)?;
         self.admit(&mut st, conn, Need::History, Action::History, now)?;
         let v = self
@@ -3120,7 +3120,7 @@ impl Session {
         facet: Facet,
     ) -> Result<Option<ElemBlame>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
         self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
         let st = &*st;
@@ -3201,7 +3201,7 @@ impl Session {
 
     fn blame_structure_inner(&self, conn: ConnId) -> Result<StructureBlame> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
         self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
         let st = &*st;

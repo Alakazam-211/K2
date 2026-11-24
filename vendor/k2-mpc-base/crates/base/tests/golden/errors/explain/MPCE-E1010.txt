@@ -1,0 +1,21 @@
+MPCE-E1010 checkpoint_over_limit (limits)
+exit:     2
+message:  the engine refused a cut: the native doc's checkpoint would be over a limit
+next:     Nothing was written. The doc keeps working from its log as it is, more slowly as the log grows; it isn't cut while the checkpoint is over the limit.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E1010",
+  "name": "checkpoint_over_limit",
+  "area": "limits",
+  "exit": 2,
+  "message": "the engine refused a cut: the native doc's checkpoint would be over a limit",
+  "next": "Nothing was written. The doc keeps working from its log as it is, more slowly as the log grows; it isn't cut while the checkpoint is over the limit.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

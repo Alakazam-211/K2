@@ -20,6 +20,8 @@ struct Image {
     unsynced: Vec<Unsynced>,
     /// The next sync fails ([`PowerLoss::fail_next_sync`]).
     fail_sync: bool,
+    /// The syncs that succeeded ([`PowerLoss::syncs`]).
+    syncs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +67,7 @@ impl PowerLoss {
                 durable,
                 unsynced: Vec::new(),
                 fail_sync: false,
+                syncs: 0,
             })),
         }
     }
@@ -74,6 +77,11 @@ impl PowerLoss {
     /// would find it.
     pub(crate) fn fail_next_sync(&self) {
         self.image.lock().unwrap().fail_sync = true;
+    }
+
+    /// How many syncs have succeeded: a change is durable only once one has, after its writes.
+    pub(crate) fn syncs(&self) -> u64 {
+        self.image.lock().unwrap().syncs
     }
 
     /// The image a power loss now leaves (module docs), from `seed`: the durable image and a
@@ -161,6 +169,7 @@ impl redb::StorageBackend for PowerLoss {
         }
         im.durable = im.seen.clone();
         im.unsynced.clear();
+        im.syncs += 1;
         Ok(())
     }
 

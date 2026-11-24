@@ -254,7 +254,7 @@ impl Session {
     ) -> std::result::Result<Vec<ChangeEvent>, ErrorReport> {
         timed!(EventsSince);
         let now = self.now();
-        let mut st = self.lock().map_err(rep)?;
+        let mut st = self.lock_for(conn).map_err(rep)?;
         let i = self
             .admit(&mut st, conn, Need::Read, Action::Read, now)
             .map_err(rep)?;
@@ -293,7 +293,7 @@ impl Session {
         head: usize,
     ) -> Result<CursorAtVersion> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Edit, Action::Cursor, now)?;
         let (mut anchor, mut head) = (anchor, head);
         if version > st.version {
@@ -365,7 +365,7 @@ impl Session {
         opts: &EditOptions,
     ) -> std::result::Result<EditAtBase, ErrorReport> {
         let now = self.now();
-        let mut st = self.lock().map_err(rep)?;
+        let mut st = self.lock_for(conn).map_err(rep)?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::Edit, now).map_err(rep)?;
         Self::check_version(st, opts.if_version).map_err(|e| self.viewer_rep(st, i, e))?;

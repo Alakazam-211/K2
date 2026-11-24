@@ -114,6 +114,10 @@ pub struct TickReport {
     /// no cut was made): the host's release ([`Config::release`]) when it set one, else the
     /// kit's own. An unload's cut reports its own ([`NativeCut::released`]).
     pub memory_released: Option<super::MemoryRelease>,
+    /// What returning freed memory to the OS did after this tick wrote a doc back (v0.24,
+    /// [`Config::release_after_write_ms`]): `None` when it wrote nothing, when this tick's
+    /// cut already released, or inside the interval since the last such release.
+    pub memory_released_after_write: Option<super::MemoryRelease>,
 }
 
 /// Why a native doc's cut ran ([`NativeCut`]).
@@ -217,6 +221,9 @@ pub struct SessionManager {
     /// The host's clock, which the store holds weakly to bound a group's wait (grouped
     /// commits, [`crate::store::CommitDurability::Grouped`]).
     _clock: Arc<crate::store::StoreClock>,
+    /// When the last release after a write-back ran (host clock; `None`: not yet), for
+    /// [`Config::release_after_write_ms`].
+    write_release_ms: Mutex<Option<u64>>,
 }
 
 impl SessionManager {
@@ -249,6 +256,7 @@ impl SessionManager {
             keys: super::live::KeysSource::default(),
             cut_inbox: Arc::default(),
             _clock: clock,
+            write_release_ms: Mutex::new(None),
         }
     }
 
@@ -263,8 +271,24 @@ impl SessionManager {
         self.blobs.as_ref()
     }
 
+    /// The config the manager was made with, its store's settings as they were then
+    /// ([`SessionManager::new`]). [`SessionManager::config_now`] has them as they are now.
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// [`SessionManager::config`] with the store's settings as they are now
+    /// ([`DocStore::settings`]: its commit durability after
+    /// [`SessionManager::set_commit_durability`]), so `capabilities` from it lists the store as
+    /// it runs. On a released manager, [`SessionManager::config`].
+    pub fn config_now(&self) -> Config {
+        let mut c = (*self.config).clone();
+        if let Ok(pool) = self.pool() {
+            if let Some(store) = &pool.store {
+                c.store = store.settings();
+            }
+        }
+        c
     }
 
     fn pool(&self) -> Result<MutexGuard<'_, Pool>> {
@@ -457,7 +481,14 @@ impl SessionManager {
     /// The host's clock tick (every second or so): closes idle connections, runs the disk
     /// stat backup and due write-backs, and unloads idle sessions (writing back first).
     /// Time is [`super::Host::now_ms`], like every other timer in the kit.
+    ///
+    /// The tick's calls wait in the prompt lane: the docs' locks and the store's writer turn
+    /// are handed to it ahead of agents (`fair.rs`).
     pub fn tick(&self) -> Result<TickReport> {
+        crate::fair::in_prompt_lane(|| self.tick_steps())
+    }
+
+    fn tick_steps(&self) -> Result<TickReport> {
         timed!(Tick);
         // grouped commits: a store that failed at the disk is reopened, and every live doc
         // reloaded, before anything else runs
@@ -545,6 +576,7 @@ impl SessionManager {
                 Err(e) => rep.errors.push((k, e)),
             }
         }
+        self.release_after_write(&mut rep);
         rep.unloaded = self.unload_idle()?;
         let mut pool = self.pool()?;
         rep.native_cuts.append(&mut pool.unload_cuts);
@@ -1018,6 +1050,34 @@ impl SessionManager {
     /// Deliver every loaded doc's roster events that are due
     /// ([`super::Config::roster_interval_ms`]). Cheap when nobody subscribes: call it on a
     /// timer at least that often (`tick` calls it too). Returns how many docs it looked at.
+    /// After a tick that wrote a doc back ([`TickReport::written`]): the release of freed
+    /// memory ([`Config::release`], else the kit's own), once per
+    /// [`Config::release_after_write_ms`] at most, and not when this tick's cut already ran it
+    /// (v0.24). A write-back encodes and renders the whole doc; a Yrs doc makes no cut, so
+    /// without this nothing returns what it freed.
+    fn release_after_write(&self, rep: &mut TickReport) {
+        let every = self.config.release_after_write_ms;
+        if every == 0 || rep.written.is_empty() || rep.memory_released.is_some() {
+            return;
+        }
+        // the plant: a write-back's tick releases nothing
+        if crate::beta_plant::planted("write-release-skipped") {
+            return;
+        }
+        let now = self.host.now_ms();
+        let mut last = self
+            .write_release_ms
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if last.is_some_and(|t| now.saturating_sub(t) < every) {
+            return;
+        }
+        *last = Some(now);
+        drop(last);
+        rep.memory_released_after_write =
+            Some(crate::memory::release_with(self.config.release.as_ref()));
+    }
+
     pub fn flush_rosters(&self) -> usize {
         let Ok(sessions) = self.loaded() else {
             return 0;
@@ -1155,6 +1215,27 @@ impl SessionManager {
             return Err(SessionError::Released);
         }
         Self::barrier(&pool, "flush")
+    }
+
+    /// Change when the store's commits reach the disk, now, with no restart
+    /// ([`crate::store::CommitDurability`]: a host's "every change on disk" or "grouped
+    /// saves"). Every change before the call is made durable first, as by
+    /// [`SessionManager::flush`], so [`SessionManager::durable_through`] is at least the
+    /// store's commits before the call when it returns; every change after it is made under
+    /// `commit`: at `Immediate` each is durable when its call returns
+    /// ([`crate::session::EditResult::durable`]); grouped, they group under the new bounds from
+    /// the next change. A change in flight on another thread commits wholly under the setting
+    /// it began with; none commits under a half-made one. The same setting again is a flush.
+    /// [`SessionManager::config_now`] (and `capabilities` from it) then lists the new setting.
+    /// Refused [`SessionError::Released`] on a released manager, and `MPC-E526`
+    /// `store_recovering` (exit 1: retry after the next [`SessionManager::tick`]) while a
+    /// commit that failed at the disk waits for the store's reopen; on any refusal the setting
+    /// is as it was.
+    pub fn set_commit_durability(&self, commit: crate::store::CommitDurability) -> Result<()> {
+        let pool = self.pool()?;
+        let store = pool.store.as_ref().ok_or(SessionError::Released)?;
+        store.set_commit_durability(commit)?;
+        Ok(())
     }
 
     /// How many of the store's commits since its open are on disk

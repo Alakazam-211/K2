@@ -61,6 +61,18 @@ fn store_errors_with(x: &str) -> Vec<StoreError> {
             stored: "mpce".into(),
             stored_format: 1,
         },
+        S::EntryEngineRefused {
+            doc: 3,
+            entry: "Yrs",
+            stored: "mpce".into(),
+            stored_format: 1,
+        },
+        S::EngineStampRefused {
+            doc: 3,
+            entry: "Yrs",
+            asked: "mpce".into(),
+            asked_format: 1,
+        },
         S::NewerData {
             table: "later_kit".into(),
         },

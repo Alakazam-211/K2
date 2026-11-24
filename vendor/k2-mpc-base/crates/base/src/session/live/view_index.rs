@@ -93,7 +93,7 @@ impl Session {
     /// pages.
     pub fn view_index(&self, conn: ConnId) -> Result<Option<ViewIndex>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Read, now)?;
         Ok(self.kept_view_index(st)?.map(|ix| (*ix).clone()))
@@ -244,7 +244,7 @@ impl Session {
     /// what the change touched.
     pub fn view_unit(&self, conn: ConnId, address: &str) -> Result<Option<Unit>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Read, now)?;
         let Some(ix) = self.kept_view_index(st)? else {
@@ -267,7 +267,7 @@ impl Session {
     /// fields, `unit_count` among them). Needs read. `None` when there is none.
     pub fn view_container(&self, conn: ConnId, address: &str) -> Result<Option<Container>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Read, now)?;
         Ok(self
@@ -280,7 +280,7 @@ impl Session {
     /// holds no such container.
     pub fn view_derived(&self, conn: ConnId, container: &str) -> Result<Option<UnitsDerived>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Read, now)?;
         Ok(self.kept_view_index(st)?.and_then(|ix| {
@@ -341,7 +341,7 @@ impl Session {
     /// whose mapping isn't one to one is [`SessionError::Pack`].
     pub fn resolve_address(&self, conn: ConnId, address: &str) -> Result<(String, Key)> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::View, now)?;
         let candidates = key_candidates(&*self.pack, address).map_err(|e| match e {

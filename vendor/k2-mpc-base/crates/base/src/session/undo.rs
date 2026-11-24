@@ -153,8 +153,19 @@ pub(crate) struct RegionRoots {
 }
 
 impl RegionRoots {
+    /// Its heap (capacities, v0.24): the three root lists and the per-hunk list's slots.
     fn mem(&self) -> usize {
-        self.after.mem() + self.before.mem() + self.ours.iter().map(Ids::mem).sum::<usize>()
+        self.after.mem()
+            + self.before.mem()
+            + self.ours.capacity() * std::mem::size_of::<Ids>()
+            + self.ours.iter().map(Ids::mem).sum::<usize>()
+    }
+
+    fn shrink(&mut self) {
+        self.after.shrink();
+        self.before.shrink();
+        self.ours.shrink_to_fit();
+        self.ours.iter_mut().for_each(Ids::shrink);
     }
 }
 
@@ -310,15 +321,30 @@ impl Region {
         );
     }
 
-    /// Retained bytes (U6): its texts, ours' text, theirs' hunks and its roots.
+    /// Retained bytes (U6): what it holds on the heap, by capacity (v0.24: the bytes the
+    /// budget bounds are the bytes held): its root's name, its texts, ours' hunks and their
+    /// text, theirs' shapes and its roots. Its inline slot is its batch's ([`Batch::bytes`]).
     pub fn bytes(&self) -> usize {
-        self.before.len()
-            + self.after.len()
-            + self.ours.iter().map(|h| h.insert.len() + 24).sum::<usize>()
-            + self.theirs.len() * 24
+        self.root.capacity()
+            + self.before.capacity()
+            + self.after.capacity()
+            + self.ours.capacity() * std::mem::size_of::<Hunk>()
+            + self.ours.iter().map(|h| h.insert.capacity()).sum::<usize>()
+            + self.theirs.capacity() * std::mem::size_of::<Shape>()
             + self.roots.as_ref().map_or(0, RegionRoots::mem)
-            + self.root.len()
-            + 64
+    }
+
+    /// Every allocation trimmed to its contents (v0.24), when its batch is kept.
+    pub fn shrink(&mut self) {
+        self.root.shrink_to_fit();
+        self.before.shrink_to_fit();
+        self.after.shrink_to_fit();
+        self.ours.shrink_to_fit();
+        self.ours.iter_mut().for_each(|h| h.insert.shrink_to_fit());
+        self.theirs.shrink_to_fit();
+        if let Some(r) = self.roots.as_mut() {
+            r.shrink();
+        }
     }
 
     /// The region undone, merged with `live`: the clean merge (its text, **its own hunks**
@@ -653,8 +679,24 @@ pub(crate) struct Batch {
 }
 
 impl Batch {
+    /// Retained bytes (U6, by capacity since v0.24): its own slot on its stack, its regions'
+    /// slots and what each holds, the person it was made for.
     pub fn bytes(&self) -> usize {
-        self.regions.iter().map(Region::bytes).sum::<usize>() + 64
+        std::mem::size_of::<Batch>()
+            + self.regions.capacity() * std::mem::size_of::<Region>()
+            + self.regions.iter().map(Region::bytes).sum::<usize>()
+            + self.on_behalf_of.as_ref().map_or(0, String::capacity)
+    }
+
+    /// Every allocation trimmed to its contents (v0.24): a batch is kept for as long as its
+    /// owner's history holds it, and a list built by pushes keeps spare slots (a one-region
+    /// batch held four region slots).
+    pub fn shrink(&mut self) {
+        self.regions.shrink_to_fit();
+        self.regions.iter_mut().for_each(Region::shrink);
+        if let Some(p) = self.on_behalf_of.as_mut() {
+            p.shrink_to_fit();
+        }
     }
 
     pub fn transform(&mut self, root: &str, hunks: &[Hunk]) {
@@ -809,7 +851,7 @@ pub(crate) enum Plan {
 /// each step to scratch copies of the texts and of `prov` as the step will apply, so a
 /// later step sees what an earlier one put back.
 pub(crate) fn plan(
-    texts: &[(&'static str, String)],
+    texts: &[(&'static str, crate::SharedText)],
     prov: &Prov,
     next: ElemId,
     order: IdOrder,
@@ -824,7 +866,7 @@ pub(crate) fn plan(
                 .iter()
                 .any(|b| b.regions.iter().any(|g| g.root == *r))
         })
-        .map(|(r, t)| (*r, t.clone()))
+        .map(|(r, t)| (*r, t.as_str().to_owned()))
         .collect();
     let mut sprov = prov.clone();
     let u = prov.units();
@@ -1028,7 +1070,11 @@ mod tests {
 
     /// `plan` with no provenance map and regions of unknown roots: v1.7's merge, which these
     /// tests pin (by root is the session's, `tests/history.rs`).
-    fn plan_v17(texts: &[(&'static str, String)], batches: Vec<Batch>, mode: Mode) -> Plan {
+    fn plan_v17(
+        texts: &[(&'static str, crate::SharedText)],
+        batches: Vec<Batch>,
+        mode: Mode,
+    ) -> Plan {
         plan(
             texts,
             &Prov::empty(Units::Utf16),
@@ -1053,8 +1099,8 @@ mod tests {
         b.transform(R, &diff::hunks(old, new));
     }
 
-    fn texts(t: &str) -> Vec<(&'static str, String)> {
-        vec![(R, t.to_owned())]
+    fn texts(t: &str) -> crate::SharedTexts {
+        vec![(R, crate::SharedText::new(t.to_owned()))]
     }
 
     fn undone(live: &str, b: Batch, mode: Mode) -> (String, Vec<ConflictRegion>) {

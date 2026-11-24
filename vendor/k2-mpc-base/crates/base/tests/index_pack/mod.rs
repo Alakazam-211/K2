@@ -67,6 +67,11 @@ pub struct IxPack {
     /// With `line_merge`: the merge also sets the last line's note to `strayed` (a merge that
     /// changes a node neither side changed).
     pub merge_strays: bool,
+    /// A parent's record holds its children's, as a slide's whole XML holds its shapes': each
+    /// node's record is its own line's digest with its children's records after it, and its
+    /// own record's digest ([`DraftNode::own`]) its line's with its children's keys in order.
+    /// A line's tenth field and on is in its record only (a field the index doesn't show).
+    pub containers: bool,
 }
 
 impl Default for IxPack {
@@ -86,13 +91,51 @@ impl Default for IxPack {
             reach: &[],
             line_merge: false,
             merge_strays: false,
+            containers: false,
         }
+    }
+}
+
+/// [`IxPack::containers`]: each record with its children's after it, each own digest with its
+/// children's keys (children after their parent, so from the last node back).
+fn hold_children(draft: &mut IndexDraft) {
+    let n = draft.nodes.len();
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, d) in draft.nodes.iter().enumerate() {
+        if let Some(p) = d.parent {
+            kids[p as usize].push(i);
+        }
+    }
+    let line: Vec<Digest> = draft.nodes.iter().map(|d| d.record).collect();
+    let mut record = line.clone();
+    for i in (0..n).rev() {
+        if kids[i].is_empty() {
+            continue;
+        }
+        let mut rec = line[i].as_bytes().to_vec();
+        let mut own = line[i].as_bytes().to_vec();
+        for &k in &kids[i] {
+            rec.extend_from_slice(record[k].as_bytes());
+            own.extend_from_slice(b"|");
+            own.extend_from_slice(draft.nodes[k].key.as_deref().unwrap_or("-").as_bytes());
+        }
+        record[i] = Digest::of(&rec);
+        draft.nodes[i].own = Some(Digest::of(&own));
+    }
+    for (d, r) in draft.nodes.iter_mut().zip(record) {
+        d.record = r;
     }
 }
 
 impl BlobPack for IxPack {
     fn index_spec(&self) -> Option<IndexSpec> {
-        Some(IndexSpec::new(self.pack, self.format, &VERBS))
+        let spec = IndexSpec::new(self.pack, self.format, &VERBS);
+        // own record digests declared: the kit stores them under its offset format
+        Some(if self.containers {
+            spec.with_own_records()
+        } else {
+            spec
+        })
     }
 
     fn index(
@@ -116,6 +159,9 @@ impl BlobPack for IxPack {
             draft
                 .nodes
                 .insert(0, DraftNode::new("extra", "Extra", Digest::of(b"extra")));
+        }
+        if self.containers {
+            hold_children(&mut draft);
         }
         Ok(draft)
     }
@@ -357,8 +403,18 @@ thread_local! {
     static HOOK: RefCell<Option<Box<dyn FnMut()>>> = RefCell::new(None);
 }
 
-/// How many times `part set` and `part guard` planned (any thread).
-pub static PLANS: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    /// How many times `part set` and `part guard` planned on this thread ([`plans`]).
+    static PLANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times `part set` and `part guard` planned on this thread: per test, since a test's
+/// verbs plan on its own thread (its [`set_hook`] runs there too), so other tests running beside
+/// it in the same binary never move the count. A row reads it before and after the verb it
+/// counts.
+pub fn plans() -> u64 {
+    PLANS.with(|n| n.get())
+}
 
 /// Set `part set`'s hook on this thread (`None` clears it).
 pub fn set_hook(f: Option<Box<dyn FnMut()>>) {
@@ -415,7 +471,7 @@ fn part_set(
             f();
         }
     });
-    PLANS.fetch_add(1, Ordering::SeqCst);
+    PLANS.with(|n| n.set(n.get() + 1));
     let (key, field, value) = (
         arg(args, 0, "KEY")?,
         arg(args, 1, "FIELD")?,
@@ -508,6 +564,56 @@ pub static BASE_SET: &[BlobVerb] = &[
     )
     .with_word("added"),
 ];
+
+/// The verbs on a doc whose parents' records hold their children's ([`IxPack::containers`]):
+/// `part set` declares the line's parent too (its record changes with the line's).
+pub static CONTAINER_SET: &[BlobVerb] = &[BlobVerb::edit(
+    "part set",
+    "KEY name|text|content|note|tag VALUE",
+    EDIT,
+    VerbMerge::Pack,
+    VerbInput::Stream,
+    part_set_in,
+)
+.with_word("set")];
+
+/// `part set` under [`IxPack::containers`]: the line's parent (by its line index) is declared
+/// too.
+fn part_set_in(
+    _ctx: &BlobVerbCtx<'_>,
+    src: &mut dyn Read,
+    args: &[String],
+) -> Result<BlobVerbOut, BlobVerbRefused> {
+    let (key, field, value) = (
+        arg(args, 0, "KEY")?,
+        arg(args, 1, "FIELD")?,
+        arg(args, 2, "VALUE")?,
+    );
+    let at = field_at(field)?;
+    let ls = lines(src)?;
+    let l = line_of(&ls, key)?;
+    let new = with_field(&l.text, at, value);
+    let nodes: Vec<&Line> = ls
+        .iter()
+        .skip(1)
+        .filter(|x| !x.text.starts_with('#'))
+        .collect();
+    let parent = l
+        .text
+        .split('|')
+        .nth(3)
+        .and_then(|p| p.parse::<usize>().ok())
+        .and_then(|p| nodes.get(p))
+        .and_then(|p| p.text.split('|').next())
+        .filter(|k| *k != "-")
+        .map(str::to_owned);
+    let plan = BlobPlan::new().span(l.at, l.text.len() as u64, new.into_bytes());
+    let mut out = BlobVerbOut::edit(plan, format!("set {key} {field}\n")).touching(key);
+    if let Some(p) = parent {
+        out = out.touching(p);
+    }
+    Ok(out)
+}
 
 /// The verbs for a tier-0 batch ([`BASE_SET`]'s four, `part guard` (under the caller's own
 /// lease), `part bad` (misbehaves as asked) and `part peek` (a read)).

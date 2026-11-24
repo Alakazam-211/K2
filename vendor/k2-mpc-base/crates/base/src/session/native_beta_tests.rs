@@ -526,9 +526,20 @@ fn the_verbs_end_alike_on_both_engines() {
 }
 
 /// Blame's sampled check (every blame, here) runs on a copy of the doc on its own engine, off
-/// the session's lock, and finds the kept map sound.
+/// the session's lock, and finds the kept map sound. A native doc's copy is built outside the
+/// engine's single-writer mode (a relay-built doc no store holds).
+/// `MPC_MPCE_PLANT=copier-in-mode` (the copy made in the mode, whose relay the engine refuses)
+/// fails at the sampled blame.
 #[test]
 fn the_blame_check_copies_on_the_docs_engine() {
+    under_copier_plant(blame_check_copies_row);
+}
+
+fn under_copier_plant(f: fn()) {
+    f();
+}
+
+fn blame_check_copies_row() {
     for col in cols() {
         let f = fx(
             "blame",

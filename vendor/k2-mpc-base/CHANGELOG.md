@@ -1,5 +1,455 @@
 # Changelog
 
+## v0.24.0
+
+A host release on v0.23.0. The crate version is `0.24.0`; the client's is `0.24.0`, with no API
+change. The live wire stays version 3. No store needs a migration: `STORE_FORMAT` stays 6,
+`STORE_FORMAT_BASE` 5 and `STORE_FORMAT_READ` 8. Pairs with the pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.23.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The native engine stays off.
+
+### Breaking
+
+- **A person's edit goes ahead of agents at a doc's lock and at the store's writer turn** (a
+  behaviour change). A waiting call passed over by 128 later agent calls is let in next, and a
+  person's call (or the manager's tick) is let in ahead of agents as soon as it waits. Agents'
+  edits a second are as before; no API, setting or store format changes.
+- **`Config::undo_max_bytes` counts the bytes a person's undo and redo stacks hold** (a
+  behaviour change). It counted about a third of them, so the same budget holds fewer batches
+  (about 30% fewer in the measured doc). The default stays 4 MiB per person; a host that sets
+  it may want a larger number.
+- **The tick returns freed memory to the OS after it wrote a doc back** (a behaviour change, on
+  by default): at most once per `Config::release_after_write_ms` (new; default 30,000; 0
+  never), through the host's `Config::release` when it gave one, else glibc's `malloc_trim(0)`.
+  `TickReport::memory_released_after_write` (new) reports it.
+- **The store refuses a log entry, or an engine stamp, of the other engine** (new id
+  `MPC-E527` `entry_engine_refused`, exit 6; `StoreError::EntryEngineRefused` and
+  `StoreError::EngineStampRefused`). No kit path writes one; a host that writes a store's log
+  or metadata itself maps the new variants.
+- **Index row format 3 for a pack that declares its containers' own records**
+  (`INDEX_ROW_FORMAT` is 3; the pptx pack does). Its versions are indexed again by the next
+  index job, under the kit's offset format (`OWN_FORMAT_OFFSET`). A previous release doesn't
+  read those rows: it indexes such a version again under its own format, and minted keys
+  re-mint after such a round trip, as after any format bump. A pack that declares none writes
+  format 2 rows, byte for byte as before.
+- **A retired person writer's row is kept, marked retired** (a bit in the row's state byte),
+  after a grouped store's recovery or a native store's copy or restore. A previous release
+  reads such a row as unknown and never lets that writer again.
+- **`capabilities` lists more:** `release_after_write_ms`, and the error rows `MPC-E527`,
+  `MPCE-E1008`, `MPCE-E1010` and `MPCE-E1013`. A reader that compares it whole (a saved golden)
+  sees the new lines.
+- **Native docs only (feature `native`, off by default):** every native document a store holds
+  runs in the engine's single-writer mode; `Doc::try_state_vector` and
+  `Doc::state_vector_parts` refuse such a document (`MPC-E166`), and the deprecated
+  `Doc::state_vector` returns the engine's wire tag alone for it; a copied or restored native
+  store's agents and host-device persons get fresh writers.
+
+### What changes for K2
+
+**With no code change:**
+
+- A person's keystroke and the tick wait behind at most the agent edit in progress, however
+  many agents write.
+- The undo budget counts what it holds (above).
+- Less memory per open text doc on Yrs: the session's text is the only copy, the disk replica
+  holds the file's texts, and holders share a text until it changes. The tick returns freed
+  memory after write-backs, every 30 s at most.
+- No store migration, wire still 3. The native engine stays off.
+
+**To wire:**
+
+- **Commit durability changed live:** `SessionManager::set_commit_durability(CommitDurability)`
+  makes every change before it durable, then applies the new setting with no restart. Map its
+  refusals: `SessionError::Released`, and `MPC-E526` `store_recovering` (exit 1, retry after the
+  next tick). `SessionManager::config_now()` gives `capabilities` as the store runs.
+- **Error ids to map:** `MPC-E527` (exit 6), from a store write that holds the other engine's
+  entry or stamp.
+- **The memory release:** a host built with another allocator passes its call as
+  `Config::release` (`HostRelease::new(f)`); the kit calls it after cuts and, now, after
+  write-backs. Set `Config::release_after_write_ms` to change how often (0 turns it off).
+- **Client 0.24.0:** the version only.
+
+### Overview
+
+A person's edit never waits behind an agent flood; the store checks that every log entry fits
+its doc's engine; commit durability can change live; a container's own record, so sibling edits
+don't conflict on revert or `--base`; less memory per text doc (one copy of its text, shared
+holders, a replica of texts only, an undo budget at its real size, freed memory returned after
+write-backs); the native engine's documents keep one writer's stable point, and its cut holds
+less memory (off in this tag).
+
+### A person's edit never waits behind an agent flood
+
+- **Fixed:** a doc's session lock and the store's writer turn (one write at a time across every
+  doc in the store) went to whoever took them first once free, so with the edit rate limit
+  lifted, agents writing back to back could pass over a person's keystroke (and the manager's
+  tick) for seconds, on the same doc or from other docs in the same store. Both locks now keep
+  that cheap path but bound it: a waiting call passed over by 128 later agent calls is handed
+  the lock next, and a person's call (or the tick) is handed it ahead of agents as soon as it
+  waits, so it waits behind at most the agent edit in progress. While a person waits for a
+  doc's lock, the agent holding it writes to the store ahead of other agents too. Nothing else
+  changes: no API, store format or default; the rate limit is as it was. Behaviour change: the
+  order waiting calls are let in at these two locks (whoever won the race, now bounded, with
+  people and the tick first).
+- Rows: `session/fair_lock_tests.rs`, timing-free (a test-only count of the later agent calls
+  let in ahead of each waiting call; 31 agents flat out and the tick every 20 ms; every person
+  edit and every tick passed over at most once, every agent call at most 128 times):
+  `overtakes_a_person_behind_31_agents_at_most_once_each` (the agents on the person's doc),
+  `overtakes_a_person_on_one_doc_behind_31_agents_on_another` and
+  `overtakes_a_person_behind_31_agents_on_31_other_docs` (the agents on other docs in the same
+  store); and four typist rows (a person at 8 keystrokes a second, the tick every 250 ms, the
+  agents flat out or at the default rate limit, on one doc or 31), printed with the agents'
+  edits a second and the typist's and the tick's waits, under a loose 2 s. Liveness under
+  random load: `fair_tests.rs` `the_locks_stay_live_and_bounded_under_random_load` (random
+  lanes, hold times, participants coming and going, 1 or 4 docs over the store turn, the
+  tick; a progress watchdog; the bounds) and
+  `a_holder_unwinding_poisons_the_lock_as_std_does_and_leaves_the_queue_clear`;
+  `session/fair_lock_tests.rs` `sessions_stay_live_and_bounded_as_people_and_agents_come_and_go`
+  and `an_edit_that_unwinds_leaves_the_session_usable_and_its_lock_clear`. Plants
+  `session-lock-barging`, `store-gate-barging` (each lock as before) and `fair-lane-skipped` (a
+  person's call in the agents' lane), each caught alone, in the plants part.
+
+### The store refuses a log entry, or an engine stamp, its doc's log doesn't fit
+
+- **Fixed:** `DocStore::append` put entries in a doc's log without checking they were of the
+  doc's engine, so a Yrs entry could be logged in a native document's log (or a native entry in
+  a Yrs document's), which its next load then refused as damage. Every store write that logs an
+  entry (an append, a commit, an import's create, a promotion of a blob doc) now checks each
+  entry first and refuses one of another engine, typed, before anything is written:
+  `StoreError::EntryEngineRefused` (new id `MPC-E527` `entry_engine_refused`, exit 6; details
+  `doc`, `entry` naming the entry's engine, `stored`, `stored_format`), the log and the document
+  as they were.
+- **Fixed:** the same mix through a document's metadata: `DocStore::put_meta` (and a commit's or
+  a write-back's metadata) could change a document's engine stamp between the native engine and
+  Yrs while its log held the other engine's entries, leaving a store that refuses its own
+  document at load. Such a stamp change, on a document that holds log rows or a snapshot, is now
+  refused, typed, with nothing written: `StoreError::EngineStampRefused` (`MPC-E527`; details
+  `doc`, `entry` naming the engine of its rows, `asked`, `asked_format`). A stamp change within
+  one engine (another library version or format, an unstamped document) and one on a document
+  with no rows are unchanged; such a document's load decides, as before.
+- Without the native engine, a write to a native document's log is refused as its load is,
+  `StoreError::NativeEngineMissing` (`MPC-E169`). No kit path writes such an entry or stamp;
+  honest writes are unchanged. No store format or default changes.
+- Rows: `store/tests.rs` `an_entry_of_another_engine_is_refused_at_every_log_write` (a native
+  entry appended to a Yrs document, a Yrs entry to a native one, both ways at an import's
+  create, a promotion; honest appends and creates beside them) and
+  `an_engine_restamp_under_a_log_is_refused` (`put_meta`, a disk commit and a write-back's
+  synced state; a log, a snapshot alone, a native log; a stamp within one engine and a
+  document with no rows beside them). The rows that build a mixed log or restamp a document for
+  the load's own checks now write past the store (`put_meta_unchecked`, test builds and feature
+  `test-support` only), as only damage or another build leaves one. Plants
+  `append-engine-check-skipped` and `restamp-engine-check-skipped` (each check skipped, as
+  before), each caught alone in the plants part.
+
+### Commit durability changed live, with no restart (host API)
+
+- **`SessionManager::set_commit_durability(CommitDurability)`** (new; and
+  `DocStore::set_commit_durability`): a host's "every change on disk" or "grouped saves"
+  setting takes effect at once. Every change before the call is made durable first, as by
+  `SessionManager::flush()`. After it, at `Immediate` every change is durable when its call
+  returns; grouped, changes group under the new bounds from the next change. A change in
+  flight on another thread commits wholly under the setting it began with. Refused
+  `SessionError::Released` on a released manager, and `MPC-E526` `store_recovering` (exit 1:
+  retry after the next tick) while a commit that failed at the disk waits for the store's
+  reopen; a refused switch leaves the setting as it was.
+- **`SessionManager::config_now()`** (new): the manager's config with the store's settings as
+  they are now, so `capabilities` from it lists `store_commit_grouped`,
+  `store_commit_max_changes` and `store_commit_max_ms` as the store runs.
+  `SessionManager::config()` still reports them as the manager was made. `DocStore::settings()`
+  now gives the commit durability in effect, and `DocStore::commit_durability()` (new) that
+  alone.
+- **Stored:** a switch to grouped sets the grouped open mark in its own commit, so an abrupt
+  stop after it is a recovery, as after a grouped open; a switch to `Immediate` removes it, as a
+  clean close does.
+- Rows: `session/grouped_commit_tests.rs`
+  `a_switch_to_immediate_makes_the_group_durable_at_once`,
+  `a_switch_to_grouped_groups_the_next_changes`,
+  `a_switch_racing_edits_loses_and_tears_nothing` (three threads editing while the durability
+  is switched over and over, then a power loss with the editors running),
+  `a_switch_is_refused_released_or_rolling_back`. Plants, each caught alone:
+  `durability-switch-skips-flush`, `durability-switch-mid-group`.
+
+### A container's own record: no false conflict between siblings (index row format 3)
+
+A tier-0 revert, and a call with `--base`, refused when an edit to one child of a container met
+a later edit to another child: a pack whose container record holds its children's (a slide's
+whole XML) showed the container changed both times. Reverting one shape's edit conflicted with
+any later edit to another shape of the same slide.
+
+- **`DraftNode::own`** (new): the node's own record's digest, its record with each child's
+  span replaced by a stand-in naming the child. A pack sets it on a node whose record holds its
+  children's. Stored keyed as **`IndexNode::own_hash`**.
+- **`NodeChange::by_children`** (new): the node's change is its record alone, its own hash is
+  equal in both versions, and a child of it changed in the same diff. The overlap check
+  `--base` and a revert share leaves out a node when both sides' changes to it are so; its
+  children are compared themselves. A change of the container's own (its children's order, an
+  added or removed child, an attribute, a field the index doesn't show) still conflicts
+  (`MPC-E723`, `MPC-E731`).
+- **Known limit:** a node named after a child (a slide after its title) is `renamed` when that
+  child's text changes, so a title edit still conflicts with a later edit to another shape of
+  the slide.
+- **Stored: index row format 3** (`INDEX_ROW_FORMAT` is 3): format 2 plus each node's own hash.
+  A row with no own hash is written as format 2 (or 1), byte for byte as before. The index wire
+  goes to version 3 for a draft with one.
+- **`IndexSpec::with_own_records()`** (new): a pack declares own digests; a draft with any from
+  a spec that doesn't is refused (`MPC-E714`), nothing recorded. **The kit picks the stored
+  format:** a declared spec's rows and minted keys go under `format + OWN_FORMAT_OFFSET` (new,
+  2^24), read in order: that format, the pack's `format`, its older format. A pack needn't bump
+  its own format for own digests.
+- **Older kits:** a previous release never asks for the offset format, so it finds such a
+  version pending and indexes it under its own, whatever the pack's format; it never decodes a
+  row of format 3. Back here that version reads with its own hashes absent until indexed
+  again, and **minted keys re-mint after such a round trip**, as after any format bump. Rows of
+  format 2 it wrote read here unchanged. `tools/n1/n1.sh layout-own` / `node-own` checks both
+  ways (`n1_own_producer`, `n1_own_after`, `tools/n1/consumer-own`).
+- **The pptx pack declares own records** (slides and group shapes carry their own record's
+  digest); its index format stays 2. Rows of format 2 read with the own hashes absent and are
+  indexed again by the next index job, under the kit's offset format.
+- Rows: `tests/tier0_revert.rs` `revert_container_children_alone`,
+  `revert_container_own_change_refused`; `tests/tier0_base.rs` `base_container_children_alone`,
+  `base_container_own_change_refused`; `tests/blob_index_v2.rs`
+  `own_digests_are_stored_and_an_older_row_reads_without_them`,
+  `own_records_live_out_of_an_older_kits_reach`; the row and wire codecs' and the stored format's
+  unit rows. Plants: `container-always-counted` (the count before), `container-never-counted`,
+  `own-offset-skipped` (`MPC_INDEX_MUTANT`: the pack's own format used).
+
+### The undo history at the size it holds (memory)
+
+The undo budget now counts the bytes each kept batch really holds. Before, it counted about a
+third of them: at 126,690 changes the kit counted 445,490 B for 1,351,681 B held. Each kept
+batch is also trimmed to what it holds; a one-region batch had kept four region slots.
+
+- **`Config::undo_max_bytes` now bounds the bytes held** by a person's undo and redo stacks:
+  - its slots and its regions' slots;
+  - capacities, not lengths;
+  - the roots' lists.
+  The default is unchanged (4 MiB per person). **A host that sets `undo_max_bytes` should
+  know the same number now holds fewer batches**. In the measured doc (126,690 changes, 900
+  kept batches) a batch counts 706 B against 495 B before, so the same budget holds about 30%
+  fewer, while each batch holds half the memory it did. A person whose edits are large keeps
+  fewer undo steps under the same budget; the oldest go first, as before.
+- Nothing stored changes.
+- Rows: `session::undo_budget_tests`. `tests/history.rs` `undo_bounds_are_per_pid`'s budget
+  goes from 600 to 2,000 B, since a batch there now counts about 1 KB. Plant:
+  `undo-batch-unshrunk`.
+
+### Freed memory returned after write-backs (memory)
+
+A Yrs doc makes no cut, so what its write-backs and outside saves free was never returned to
+the OS. At 126,690 changes that left about 28 MiB of the process's resident memory with the
+allocator. The tick now releases after it wrote a doc back.
+
+- **`Config::release_after_write_ms`** (new; default 30,000; 0 never): after a tick that wrote
+  a doc back, the release runs at most once in this many ms. It is the host's
+  (`Config::release`) when the host gave one, else the kit's own (glibc's `malloc_trim(0)`).
+  It is skipped when the tick's cut already released.
+- **`TickReport::memory_released_after_write`** (new): what that release did, `None` when it
+  didn't run.
+- `capabilities` lists `release_after_write_ms`.
+- Nothing stored changes; merges and outcomes are as before.
+
+### A text doc's texts shared by their holders until they change (memory)
+
+A text doc's session, its disk replica and its read bases each held their own copy of the
+same text: every write-back and every read base copied the live text. They now share one copy
+until the live text changes. An edit gives the live text a new copy and leaves the other
+holders' as they were, so the replica and each read base keep exactly the text they took.
+
+- After a write-back with no edit since, the doc holds its text once where it held it twice. A
+  read base taken with no edit since adds no copy, and neither does an outside save the doc then
+  holds (the replica takes the live text).
+- Under steady edits the live text gets a new copy per edit, as it did.
+- Nothing stored changes; merges, outcomes and files are as before.
+- Rows: `session::writeback_diff_tests` (one allocation until an edit; an edit after sharing
+  leaves the replica's and the read base's text as they were, and a `write --base` at the shared
+  base merges from it; outside saves after sharing against a decoded replica) and
+  `session::grouped_commit_tests` (a rollback reload after sharing).
+- Plant: `shared-text-written-in-place`.
+
+### A text doc's text is held once on Yrs (memory)
+
+On Yrs the session held each text root's text, and the engine adapter held a second copy, its
+text cache. A text doc's session now owns the only copy. Edits are planned on the session's
+text; the engine keeps none, and its reads walk the doc. That saves one text per Yrs text doc,
+0.77 MB at 126,690 changes.
+
+- **The canary checks the session's text.** On a sampled edit it is compared with a fresh read.
+  On a mismatch:
+  - it is reported (`AuditEvent::TextCacheMismatch`);
+  - the edit is refused, typed (`DocError::Apply`), with nothing applied;
+  - the session takes the doc's texts back, so a retry lands where the doc's text puts it.
+- Structured docs keep the engine's cache. The native engine is unchanged.
+- **The write-back passes the session's texts to the disk replica**, so it never walks the doc.
+- Nothing stored changes; merges, outcomes and files are as before.
+- Rows:
+  - `session::writeback_diff_tests` compares the session-owned texts with the engine's cache in
+    lockstep, and checks the engine keeps no text;
+  - `session::engine_check_tests` `a_wrong_session_text_is_reported_and_never_used`;
+  - the cache row runs on the reference switch.
+- Plant: `session-text-stale`.
+
+### A text doc's disk replica holds its texts only (memory)
+
+On Yrs, a text doc with a file kept a second decoded copy of the doc as its disk replica:
+about the size of the doc itself, growing with its history. The replica now holds the file's
+texts, as it already did on the native engine. `docs/SESSIONS.md`, "Disk sync".
+
+- **Nothing stored changes:** the synced state is still the engine's encoding, with the same
+  rows and bytes. Older and newer kits read each other's stores as before.
+- **The one step that needs the replica's elements decodes on demand.** That step is an
+  outside save the doc doesn't hold, stored as a client of its own. It decodes the stored
+  synced state, makes the save on it and drops it. The sync check's element comparison and a
+  purge's re-encode decode it the same way.
+- **The decode is checked.** The stored state must be the one the session synced and hold the
+  replica's texts. Otherwise the save is refused with `DocError::Load`: nothing is merged or
+  stored, and the doc keeps its text.
+- **What a host sees:** the same merges, files and stored states; less memory per open text
+  doc. A structured doc's replica is unchanged (a decoded doc).
+- Rows: `session::writeback_diff_tests` compares the text-only replica with the decoded one in
+  lockstep (files, live docs, stored states, merge bases, the sync check) and steps through the
+  save the doc doesn't hold. It also checks what the replica holds, and the refusals.
+  `tests/disk.rs` keeps the restart repair row on the decoded replica, beside the text-only
+  one. Plant: `yrs-replica-state-from-texts` (the plants part).
+
+### The previous release's rewrite of a store holding verb records (checks only)
+
+- **The N−1 verbs check** (`tools/n1/n1.sh layout-verbs`, then `node-verbs`) takes a previous
+  release that knows `blob_verbs` (v0.22.0 and later): that release rewrites the store, and this
+  build holds the live doc's record byte for byte to what it wrote, after that rewrite and after
+  its own. Against v0.21.0 the rewrite is still refused, naming the table (`NewerData`).
+- **Row** `store::verbs::tests::a_rewrite_keeps_every_blob_verbs_row_byte_for_byte`: a verb's and
+  a batch's records (version 1) and a revert's (version 2) come through a rewrite byte for byte.
+  Plant `MPC_STORE_PLANT=rewrite-drops-blob-verbs-row` (the rewrite leaves the table's first row
+  out), caught at that row's assert.
+- No store, wire or API change.
+
+### The tier-0 tests build for Windows, two test fixes, and the cut's guard (tests and tools)
+
+- **`tests/tier0.rs` and `tests/tier0_verbs.rs` build for Windows.** The rows that need a
+  read-only folder or a symlink run on Unix only (on Windows a folder's read-only attribute
+  doesn't stop a file being made in it, and a symlink needs a privilege); the file-identity
+  helpers read the inode on Unix, and the bytes, size and modification time elsewhere. Linux and
+  macOS run every row as before.
+- **`head_moved_mid_plan` counts its own plans:** the index test pack's plan counter is per
+  thread, so rows running beside it in one test binary leave its count alone.
+- **The public cut's guard reads the engine words it refuses from outside the tree**
+  (`tools/check-public-cut.sh`), as `tools/check-private.sh` reads its patterns:
+  `MPC_ENGINE_PROSE_WORDS`, `MPC_ENGINE_PROSE_WORDS_FILE` or
+  `~/.config/k2-mpc/engine-prose-words.txt`. With none, as in a public cut's copy, that part of
+  the labels rule is off and the run says so on a `check-public-cut (note):` line;
+  `MPC_ENGINE_PROSE_REQUIRED=1` makes none an error. The gate's plants take their words from
+  the same list.
+- No product code changed.
+
+### Every native Beta plant runs in the plants part (tests)
+
+Thirty of the native Beta's test-only plants (`MPC_BETA_PLANT`) were documented beside their
+rows but never run by the gate. Each now runs alone in the plants part (`tools/tests/full.sh`,
+`PART=plants`) after a green control of its suite, and must fail exactly the rows its docs name,
+at their own assertions: twelve without the native engine (the cut cadence's settings and
+rules, the cut queue, a native refusal's exit, the memory release) and eighteen with it (the
+Beta switch, the engine's limits, the host's cadence, writer rows, the text replica, the sync
+refusals, the text cap and its code, the store salt, the cuts at a tick, an unload and a
+close, a copy on the doc's engine, the engine chosen at create, and the refused demotion and
+promotion). Five break other rows' setup too (a doc that can't load, nothing queued), so they
+run over their named rows alone. No product code changed.
+
+### Native documents keep one writer's stable point (feature `native` only)
+
+- **Every native document a store holds, or a session opens, now runs in the native engine's
+  single-writer mode.** Its stable point follows its latest change: each change is stored with
+  its stable record, in the change's own transaction, so a commit (immediate or grouped) never
+  leaves a change on disk without it. A native document built in memory from another document's
+  state (`Doc::load_on`, `Doc::new_on`, the copy blame's sampled check makes) stays outside the
+  mode: no store holds it.
+- **The open writes a lifted stable point.** When a store's latest stable record is behind its
+  last change (a store written by an earlier kit, or a commit cut short), the open moves the
+  stable point to the last change and writes that record before the document is handed out.
+  Grouped, the write is durable with its group; if it is lost, the next open does it again, to
+  the same change. If the store changed between the open's read and that write, the open fails
+  with nothing written; open it again.
+- **A native document's cut** leaves the stable point where it is (it is already at the last
+  change), and keeps the document's memory at what a fresh open holds after each cut.
+- **Sync calls on a native document a store holds are refused:** `Doc::try_state_vector` and
+  `Doc::state_vector_parts` now return `MPC-E166` (`native_one_replica`), as `Doc::encode_diff`
+  already did. The deprecated `Doc::state_vector`, which can't fail, returns the native engine's
+  wire tag alone for such a document: never a vector a peer could take as what the document
+  has (every receiver refuses it), and it always returns. Use the typed calls.
+- **Three engine codes join the kit's table**, each with its next step: `MPCE-E1008`
+  (`single_replica_mode`, a sync call on a one-copy document), `MPCE-E1010`
+  (`checkpoint_over_limit`) and `MPCE-E1013` (`stable_not_at_head`, a cut whose stable point
+  isn't at the last change).
+- **The memory figure moves:** with the mode, a native document's live memory grows with the
+  changes since its last cut and returns to a fresh open's at each cut.
+
+### Edit hunks end alike on both engines (feature `native` only, a correctness fix)
+
+- **No change to what an edit's hunks come to:** the kit checks them before either engine, so a
+  start after its end, hunks out of order or overlapping, two insertions at one offset, an empty
+  insertion and an offset off a character boundary or past the text are refused with the same
+  `MPC-E151` (its problem and hunk index) on Yrs and on the native engine, as before.
+- **The native engine's own hunk refusals name the hunk:** were hunks ever to reach the native
+  engine unchecked, its refusal now comes back as the kit's check names it (order, range or
+  empty, and the hunk's index), not always as a range problem at hunk 0. No kit entry passes it
+  unchecked hunks today.
+
+### A native document's cut deletes its old rows a page at a time (feature `native` only)
+
+- **Fixed:** a native document's cut deleted its old generation's records, and the log rows it
+  trims, with the store library's range-retain, which copies a page for every row it deletes
+  (redb 2.6), even a page the cut's own transaction has already copied. The copies then sat in
+  the store's page cache: about 1,400 page buffers per cut on a 3,000-change document with
+  eight agents, and the process held about 4 MiB more than it needed between cuts. The cut now
+  reads the keys and removes them one by one in the same transaction, so each page is copied
+  once. The same rows go, in the same one transaction: the store's rows after a cut, and after
+  a cut stopped part-way, are byte for byte what they were. No store format, setting or API
+  changes.
+
+### The native engine at a newer development version, and records lent to it (feature `native` only)
+
+- **The vendored engine crates** (feature `native` only, not for hosts; the native engine stays
+  off, and a public cut has none of them) move to a newer development version of the native
+  engine. Public API additions only: a single-writer mode a host may turn on (off by default;
+  the kit turns it on for the documents a store holds, above); a typed refusal when a
+  document's store changed under it; typed limits on a checkpoint's size; and key material
+  wiped from memory when it is dropped. A load does less work and holds less memory; what a
+  loaded document reads, edits and undoes is unchanged.
+- **A new dependency, feature `native` only:** `zeroize` 1.9.2 (Apache-2.0 OR MIT, no default
+  features), in `Cargo.lock`. A public cut has no native engine, so its lock has no `zeroize`.
+- **The reference model** (`mpce-model`, with `mpce-order` and `mpce-reg`) stays at its vendored
+  version: the newer engine doesn't change those three crates, and the vendored copies differ
+  from them only by their public-text edits.
+- **A store v0.23.0 wrote** still opens on this engine in the single-writer mode, takes an edit
+  and a cut, and reopens with its text, as the kit's previous-release row asserts.
+- **No copy of a record the kit holds in memory.** The kit's record sources give the native
+  engine the records they hold in memory lent rather than copied: every record of a document no
+  store holds, and a stored document's pending records and pending purge's rewrites, through a
+  load's and a cut's reads too. A record only the store holds is still read from the store as a
+  copy (a read from the store lasts only as long as its own lookup). The same bytes either way.
+
+### A copied or restored native store's writers are fresh (feature `native`)
+
+`docs/SESSIONS.md`, "Person-writer reuse". A follow-up to v0.23.0's writer reuse.
+
+- **A restored or copied native store's agents and host-device persons get fresh writer
+  ids.** An open that rotates the store's writer incarnation (a copy, a move, a restore written
+  as a new file, an unclean close, a missing incarnation) retires, in the same transaction,
+  every writer a join could reuse: each agent's (`Config::reuse_agent_clients`) and each
+  person's on a host's device, as a grouped store's recovery already did. Before, those
+  writers were reused on a restored older store and wrote again seqs the original had held
+  with other content. Cost: one fresh writer per agent and per device after each copy,
+  restore or unclean close; names don't change (blame and the doc's owners name the same
+  participant). A person's retired writer keeps its row, marked retired (the row's state byte
+  gains a retired bit; a kit before it reads such a row as unknown, never reused), so a late
+  reclaim of its last lease is still told when that lease ended (`Joined::prev_ended`); a
+  grouped store's recovery now keeps it too. With the native engine built in, a host-device
+  person whose process ended takes a fresh writer at its next join, even after the park
+  expiry (`tests/person_writers.rs` R4, restated). N-1 (`tools/n1/n1.sh node-retired`, and
+  `node-retired-prev` the other way): the previous release opens a store holding a retired row,
+  never lets that writer again (a free one it lets, the control), and this build reads the
+  store back; this build reads the previous release's rows field for field.
+
 ## v0.23.0
 
 A host release on v0.22.0. The crate version is `0.23.0`; the client's is `0.23.0`. The live

@@ -151,6 +151,31 @@
 #                                                indexes them again. The last line is
 #                                                `N-1 INDEX OK`.
 #
+# The structure index's row format 3 (a container's own record digest, after v0.23.0), both
+# ways:
+#
+#   tools/n1/n1.sh layout-own <previous rev> <dir>  no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/own-consumer the consumer
+#                                                (tools/n1/consumer-own)
+#   tools/n1/n1.sh node-own <dir>                on a build node, from the repo root: this
+#                                                build's `n1_own_producer` writes <dir>/own
+#                                                (a.idx, a pack with own records and a bumped
+#                                                format, and bad.idx, one that declared own
+#                                                records without bumping: both stored under the
+#                                                kit's offset format); the previous release
+#                                                finds both pending (never Corrupt), indexes
+#                                                them under its own format (its commit removes
+#                                                the offset rows), and writes <dir>/prev-own (a
+#                                                row of format 2); this build's `n1_own_after`
+#                                                reads a.idx and bad.idx from those rows with
+#                                                the own hashes absent and indexes them again,
+#                                                and reads the previous release's row
+#                                                unchanged. The last line is `N-1 OWN OK`. With
+#                                                MPC_INDEX_MUTANT=own-offset-skipped (the plant:
+#                                                rows under the packs' own formats) the
+#                                                previous release's side fails on bad.idx,
+#                                                naming the Corrupt it read.
+#
 # The text → tier 0 demotion (`demoted_changes`, after v0.16.0), both ways:
 #
 #   tools/n1/n1.sh layout-demote <previous tag> <dir>   no cargo: <dir>/old is the previous
@@ -203,13 +228,18 @@
 #                                                (tools/n1/consumer-verbs)
 #   tools/n1/n1.sh node-verbs <dir>              on a build node, from the repo root: this
 #                                                build's `n1_verbs_producer` writes two blob
-#                                                docs, each with a version a verb made; the
-#                                                previous release reads the versions, writes one,
-#                                                is refused a rewrite naming `blob_verbs`
-#                                                (NewerData) and deletes a doc; this build's
-#                                                `n1_verbs_after` finds the deleted doc's rows
-#                                                swept at its open, reads the verb back and
-#                                                rewrites. The last line is `N-1 VERBS OK`.
+#                                                docs, each with a version a verb made, and
+#                                                saves the rows' bytes; the previous release
+#                                                reads the versions, writes one, rewrites the
+#                                                store (a release that knows `blob_verbs`, from
+#                                                v0.22.0) or is refused the rewrite naming it
+#                                                (NewerData, v0.21.0 and before), and deletes a
+#                                                doc; this build's `n1_verbs_after` finds the
+#                                                deleted doc's rows gone, holds the live doc's row
+#                                                byte for byte to the producer's, after the
+#                                                previous release and after its own rewrite, and
+#                                                reads the verb back. The last line is
+#                                                `N-1 VERBS OK`.
 #
 # A tier-0 revert's record (`blob_verbs` record version 2, after v0.22.0):
 #
@@ -224,6 +254,20 @@
 #                                                this build's `n1_revert_after` reads the
 #                                                revert's record back whole. The last line is
 #                                                `N-1 REVERT OK`.
+#
+# The person-writer row's retired bit (a retired writer: its row kept, marked never let again),
+# which a release before it reads as an unknown row, the other way:
+#
+#   tools/n1/n1.sh layout-retired <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/retired the consumer
+#                                                (tools/n1/consumer-retired)
+#   tools/n1/n1.sh node-retired-prev <dir>       on a build node, from the repo root: the
+#                                                previous release writes prev.redb (ada's free
+#                                                writer on laptop, a parked one on her phone) and
+#                                                lists its rows; this build's
+#                                                `n1_retired_prev_rows` reads each row field for
+#                                                field, unchanged, and lets the free writer
+#                                                again. The last line is `N-1 RETIRED PREV OK`.
 #
 #
 # Grouped commits (`CommitDurability::Grouped`, after v0.22.0), both ways:
@@ -283,7 +327,7 @@ tree_of() {
     git -C "$1" archive "$2" | tar -x -C "$3"
   fi
 }
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir> | layout-verbs <rev> <dir> | node-verbs <dir> | layout-revert <rev> <dir> | node-revert <dir> | layout-grouped <rev> <dir> | node-grouped <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-own <rev> <dir> | node-own <dir> | layout-demote <tag> <dir> | node-demote <dir> | layout-format <tag> <dir> | node-format <dir> | layout-opened <tag> <dir> | node-opened <dir> | layout-verbs <rev> <dir> | node-verbs <dir> | layout-revert <rev> <dir> | node-revert <dir> | layout-grouped <rev> <dir> | node-grouped <dir> | layout-retired <tag> <dir> | node-retired-prev <dir> | node-retired <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -486,6 +530,28 @@ case $MODE in
     K2MB_N1_OUT="$OUT" cargo test -p k2-mpc-base --test blob_index_v2 n1_index_after -- --ignored --nocapture
     echo "N-1 INDEX OK"
     ;;
+  layout-own)
+    TAG=${2:?previous release rev}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/own-consumer"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-own/." "$OUT/own-consumer/"
+    cp "$OUT/old/Cargo.lock" "$OUT/own-consumer/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-own)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the own-digest rows"
+    K2MB_N1_OUT="$OUT" cargo test -p k2-mpc-base --test blob_index_v2 n1_own_producer -- --ignored --nocapture
+    echo "== the previous release ($(kit_version "$OUT/old"))"
+    (cd "$OUT/own-consumer" && K2MB_N1_OUT="$OUT" cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT" cargo test -p k2-mpc-base --test blob_index_v2 n1_own_after -- --ignored --nocapture
+    echo "N-1 OWN OK"
+    ;;
   layout-demote)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -539,6 +605,28 @@ case $MODE in
     echo "== this build opens it as before"
     K2MB_N1_OUT="$OUT/format" cargo test -p k2-mpc-base --test engine_stamp n1_format_after -- --ignored --nocapture
     echo "N-1 FORMAT OK"
+    ;;
+  layout-retired)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/retired"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-retired/." "$OUT/retired/"
+    cp "$OUT/old/Cargo.lock" "$OUT/retired/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-retired-prev)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    D="$OUT/retired"
+    PREV=$(kit_version "$OUT/old")
+    echo "== the previous release ($PREV) writes prev.redb"
+    (cd "$D" && cargo run -q -- produce "$D")
+    echo "== this build reads its rows (n1_retired_prev_rows)"
+    K2MB_N1_OUT="$D" cargo test -p k2-mpc-base --lib n1_retired_prev_rows -- --ignored --nocapture
+    echo "N-1 RETIRED PREV OK"
     ;;
   layout-grouped)
     REV=${2:?previous release rev}; OUT=${3:?dir}

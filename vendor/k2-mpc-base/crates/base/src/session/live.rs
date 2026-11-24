@@ -6,7 +6,9 @@ use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+
+use crate::fair::{FairGuard, FairMutex, Lane};
 
 mod at_base;
 #[cfg(test)]
@@ -105,6 +107,7 @@ use crate::text::diff::{self, Hunk};
 use crate::text::lines;
 use crate::text::merge::{self, Conflict, Merge};
 use crate::turn::Turn;
+use crate::{SharedText, SharedTexts};
 
 /// Returned by [`Session::join`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -971,7 +974,8 @@ impl History {
 struct ReadBase {
     version: Seq,
     at_ms: u64,
-    texts: Vec<(&'static str, String)>,
+    /// The live texts at `version`: the same allocations until the live text changes.
+    texts: SharedTexts,
     /// A table's content at that version, by key (deleted rows where they sit). A keyed doc
     /// that isn't a table keeps none: its live view and the journal rebuild it
     /// (`live/keyed_view.rs`).
@@ -986,8 +990,9 @@ struct State {
     store: Option<Arc<DocStore>>,
     closed: Option<SessionError>,
     doc: Doc,
-    /// Each root's current text, in schema order (kept in step with `doc`).
-    texts: Vec<(&'static str, String)>,
+    /// Each root's current text, in schema order (kept in step with `doc`). Shared with the
+    /// disk replica and the read bases until it changes: an edit installs a new one (v0.24).
+    texts: SharedTexts,
     codec: Vec<u8>,
     declined: Option<String>,
     version: Seq,
@@ -1156,6 +1161,9 @@ struct State {
     outside_without_identity: bool,
     /// The undo group token of the edit being committed ([`EditOptions::group`]).
     group_hint: Option<u64>,
+    /// The session's texts are the doc's only copy (v0.24, a Yrs text doc): edits are planned
+    /// on them and the engine keeps none ([`Doc::set_session_texts`]). Taken at the load.
+    texts_owned: bool,
     /// The pin when the plant `OpenedInMemory` keeps it in memory only (test-only use).
     opened_mem: Option<crate::store::OpenedRec>,
 }
@@ -1224,6 +1232,9 @@ struct Disk {
     /// client the doc never has ([`Session::replica_to_file`]).
     replica: Replica,
     replica_bytes: u64,
+    /// The replica keeps the file's texts only ([`Replica::Text`]): a native doc's, and a Yrs
+    /// text doc's (v0.23; `Session::texts_only_replica`), taken when the file is attached.
+    texts_only: bool,
     /// The keyed hash of the file's bytes as last synced (empty: unknown, after a purge).
     synced_hash: Vec<u8>,
     synced_seq: Seq,
@@ -1272,6 +1283,13 @@ struct Disk {
 /// stored synced state at once, a second full decode on every load besides the doc's own; it
 /// stays encoded until the disk path first reads or changes it ([`Replica::get`]), and
 /// decodes then exactly as before (the same state, the same runtime-check settings).
+///
+/// A text doc's replica is its texts on both engines (v0.23): the file's texts at the sync
+/// point, the base an outside save is merged from, and nothing else. On Yrs the synced state
+/// the store keeps is still the engine's encoding (the same rows and bytes as before); the one
+/// path that needs its elements decodes it from the store on demand
+/// ([`Session::synced_doc_from_store`]). A structured doc's replica stays a decoded doc: its
+/// outside edits are aligned on the replica's keyed state.
 // one per session with a file, and decoded is its usual state: boxing the doc would only add
 // an indirection to every disk-path read
 #[allow(clippy::large_enum_variant)]
@@ -1282,28 +1300,76 @@ enum Replica {
         schema: Schema,
         /// The runtime checks' settings (`Session::checked`): every, scale, position.
         checks: (u32, u64, u32),
+        /// A text doc's (v0.23): decoded, it keeps its texts only ([`Replica::Text`]).
+        texts_only: bool,
     },
-    /// A native doc's replica: the file's texts at the sync point, every text root's in schema
-    /// order, and nothing else (`live/native.rs`): no engine copy.
-    Text(Vec<(&'static str, String)>),
+    /// A text doc's replica: the file's texts at the sync point, every text root's in schema
+    /// order, and nothing else (`live/native.rs`, `live/text_replica.rs`): no engine copy.
+    /// At a write-back, the live texts themselves (shared until the live text changes).
+    Text(SharedTexts),
+}
+
+/// Every text root's text in `doc`, in schema order.
+fn schema_texts(schema: &Schema, doc: &Doc) -> std::result::Result<SharedTexts, DocError> {
+    schema
+        .roots
+        .iter()
+        .filter(|(_, k)| *k == Kind::Text)
+        .map(|(r, _)| Ok((*r, SharedText::new(doc.text(r)?))))
+        .collect()
 }
 
 impl Replica {
     /// Root `root`'s text as the file holds it at the sync point.
-    fn text(&mut self, root: &str) -> std::result::Result<String, DocError> {
-        if let Replica::Text(texts) = self {
+    fn text(&mut self, root: &str) -> std::result::Result<SharedText, DocError> {
+        if let Some(texts) = self.texts()? {
             return texts
                 .iter()
                 .find(|(r, _)| *r == root)
-                .map(|(_, t)| t.clone())
+                .map(|(_, t)| SharedText::clone(t))
                 .ok_or_else(|| DocError::Malformed(format!("no text root {root:?}")));
         }
-        self.get()?.text(root)
+        Ok(SharedText::new(self.get()?.text(root)?))
     }
 
-    /// Whether this is a native doc's text-only replica.
+    /// Whether this is a text doc's text-only replica (decoded or not yet).
     fn is_text(&self) -> bool {
-        matches!(self, Replica::Text(_))
+        matches!(
+            self,
+            Replica::Text(_)
+                | Replica::Stored {
+                    texts_only: true,
+                    ..
+                }
+        )
+    }
+
+    /// A text-only replica's texts, decoded now if they weren't yet (`None`: a replica that
+    /// is a doc). A stored state that doesn't decode is an error, never replaced unseen.
+    fn texts(&mut self) -> std::result::Result<Option<&[(&'static str, SharedText)]>, DocError> {
+        if let Replica::Stored {
+            state,
+            schema,
+            texts_only: true,
+            ..
+        } = &*self
+        {
+            let texts = schema_texts(schema, &Doc::load(*schema, state)?)?;
+            *self = Replica::Text(texts);
+        }
+        match self {
+            Replica::Text(t) => Ok(Some(t)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Decoded now, whichever kind it is (a stored state that doesn't decode is an error).
+    fn ensure(&mut self) -> std::result::Result<(), DocError> {
+        if self.is_text() {
+            self.texts().map(|_| ())
+        } else {
+            self.get().map(|_| ())
+        }
     }
 
     /// The replica, decoded now if it wasn't yet. A text-only replica has no doc
@@ -1311,13 +1377,14 @@ impl Replica {
     fn get(&mut self) -> std::result::Result<&mut Doc, DocError> {
         if self.is_text() {
             return Err(DocError::Malformed(
-                "a native doc's disk replica holds its texts, not a doc".into(),
+                "a text doc's disk replica holds its texts, not a doc".into(),
             ));
         }
         if let Replica::Stored {
             state,
             schema,
             checks,
+            ..
         } = &*self
         {
             let mut d = Doc::load(*schema, state)?;
@@ -1349,7 +1416,8 @@ pub(crate) type WritebackState = (Vec<u8>, Option<Vec<u8>>, bool, Option<Vec<u8>
 
 /// One loaded doc: its live text, the participants in it, their carets, undo history and
 /// rate limits, and the subscribers to its changes. Thread-safe (`Send + Sync`): every call
-/// takes the session's lock for its duration. Get one from
+/// takes the session's lock for its duration, and waiting calls are let in in the order they
+/// arrive (a person's edit waits behind at most one call per other writer). Get one from
 /// [`super::SessionManager::open`].
 ///
 /// Every call names a connection ([`ConnId`], from [`Session::join`]). A participant (pid)
@@ -1366,7 +1434,11 @@ pub struct Session {
     /// typed, changes are recorded by key.
     structured: bool,
     doc_id: DocId,
-    state: Mutex<State>,
+    /// Every waiting call's wait is bounded, and a person's goes ahead of agents' (`fair.rs`).
+    state: FairMutex<State>,
+    /// The connections whose calls wait in the prompt lane (a person's), read before the lock
+    /// is taken (`fair.rs`). Connection ids are never reused.
+    prompt_conns: std::sync::Mutex<std::collections::HashSet<ConnId>>,
     last_used_ms: AtomicU64,
     /// The manager's blob store, for a doc promoted from tier 0 that kept tier-0 history
     /// (v0.9.2; `tier0_history.rs`). Set by the manager when it has one.
@@ -1653,13 +1725,59 @@ fn check_engine(meta: &DocMeta) -> Result<StoredEngine> {
 }
 
 /// Each text root's text, in schema order (a structured root has none).
-fn texts_of(doc: &Doc, schema: &Schema) -> Result<Vec<(&'static str, String)>> {
+/// Whether a session's texts are its doc's only copy (v0.24, [`State::texts_owned`]): a text
+/// doc's (a structured doc's verbs read the engine), unless the test-only switch keeps the
+/// engine's own cache ([`crate::differential::with_engine_text_cache`]).
+fn texts_owned_by_session(schema: &Schema) -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::engine_text_cache_on() {
+        return false;
+    }
+    schema.roots.iter().all(|(_, k)| *k == Kind::Text)
+}
+
+/// The session's texts as an edit plans on them (v0.24): its own, or the plant's stale copy
+/// (a character the doc doesn't hold at each root's start; a two-byte one, so every offset
+/// past it counts other units).
+fn plan_texts<'a>(
+    texts: &'a [(&'static str, SharedText)],
+) -> std::borrow::Cow<'a, [(&'static str, SharedText)]> {
+    if crate::beta_plant::planted("session-text-stale") {
+        let stale: SharedTexts = texts
+            .iter()
+            .map(|(r, t)| (*r, SharedText::new(format!("\u{e9}{t}"))))
+            .collect();
+        return std::borrow::Cow::Owned(stale);
+    }
+    std::borrow::Cow::Borrowed(texts)
+}
+
+fn texts_of(doc: &Doc, schema: &Schema) -> Result<SharedTexts> {
     schema
         .roots
         .iter()
         .filter(|(_, k)| *k == Kind::Text)
-        .map(|(r, _)| Ok((*r, doc.text(r)?)))
+        .map(|(r, _)| Ok((*r, SharedText::new(doc.text(r)?))))
         .collect()
+}
+
+/// The plant `shared-text-written-in-place` (test builds only): an edit of a shared live text
+/// reaches its other holders, as a write through the shared allocation would. The disk
+/// replica's and the read bases' entries that are `before` become `after`.
+fn plant_shared_text_written(st: &mut State, before: &SharedText, after: &SharedText) {
+    fn swap(held: &mut [(&'static str, SharedText)], before: &SharedText, after: &SharedText) {
+        for (_, t) in held.iter_mut() {
+            if Arc::ptr_eq(t, before) {
+                *t = SharedText::clone(after);
+            }
+        }
+    }
+    if let Some(Replica::Text(t)) = st.disk.as_mut().map(|d| &mut d.replica) {
+        swap(t, before, after);
+    }
+    for b in st.read_bases.iter_mut() {
+        swap(&mut b.texts, before, after);
+    }
 }
 
 /// An engine error after which the in-memory doc can't be trusted (see
@@ -1708,10 +1826,10 @@ pub(super) fn ordered_roots(
     Ok(ordered)
 }
 
-fn neutral(texts: &[(&'static str, String)]) -> Vec<(String, Neutral)> {
+fn neutral(texts: &[(&'static str, SharedText)]) -> Vec<(String, Neutral)> {
     texts
         .iter()
-        .map(|(r, t)| ((*r).to_owned(), Neutral::Text(t.clone())))
+        .map(|(r, t)| ((*r).to_owned(), Neutral::Text(t.as_str().to_owned())))
         .collect()
 }
 
@@ -1738,6 +1856,9 @@ impl Session {
         } = init;
         let schema = pack.schema();
         let texts = texts_of(&doc, &schema)?;
+        let texts_owned = texts_owned_by_session(&schema);
+        let mut doc = doc;
+        doc.set_session_texts(texts_owned);
         let last_version_seq = store.last_version(doc_id)?.map_or(0, |(_, v)| v.seq);
         let hash_key = store.doc_key(doc_id)?;
         let reusable_clients = match planted_reusable_at_load(&store, doc_id)? {
@@ -1761,7 +1882,9 @@ impl Session {
             blobs: std::sync::OnceLock::new(),
             keys: keys.clone(),
             cut_inbox: std::sync::OnceLock::new(),
-            state: Mutex::new(State {
+            prompt_conns: Default::default(),
+            state: FairMutex::session(State {
+                texts_owned,
                 key: meta.key,
                 store: Some(store),
                 closed: None,
@@ -1907,7 +2030,7 @@ impl Session {
         let client = mint_client_id();
         let edits = grid::import_edits(&ordered);
         // a native doc's live text fits its cap from the start (an empty doc's texts before)
-        let empty: Vec<(&'static str, String)> = texts_of(&doc, &schema)?;
+        let empty: SharedTexts = texts_of(&doc, &schema)?;
         text_cap::check_text_cap(&doc, &empty, &edits)?;
         let made = doc.edit_made(client, &edits)?;
         let (made, firsts) = (made.edited, made.firsts);
@@ -2082,8 +2205,17 @@ impl Session {
 
     // ----- plumbing -----
 
-    fn lock(&self) -> Result<MutexGuard<'_, State>> {
-        let g = self.lock_any()?;
+    fn lock(&self) -> Result<FairGuard<'_, State>> {
+        Self::open_only(self.lock_any()?)
+    }
+
+    /// [`Session::lock`] for a call through `conn`: a person's waits in the prompt lane.
+    fn lock_for(&self, conn: ConnId) -> Result<FairGuard<'_, State>> {
+        Self::open_only(self.lock_any_for(conn)?)
+    }
+
+    /// A locked doc that is open and not waiting for its store's reopen, else the refusal.
+    fn open_only(g: FairGuard<'_, State>) -> Result<FairGuard<'_, State>> {
         if let Some(e) = &g.closed {
             return Err(e.clone());
         }
@@ -2096,10 +2228,53 @@ impl Session {
         Ok(g)
     }
 
-    fn lock_any(&self) -> Result<MutexGuard<'_, State>> {
+    fn lock_any(&self) -> Result<FairGuard<'_, State>> {
+        self.lock_any_in(crate::fair::current_lane())
+    }
+
+    /// The session lock in `lane` (`fair.rs`).
+    fn lock_any_in(&self, lane: Lane) -> Result<FairGuard<'_, State>> {
         self.state
-            .lock()
+            .lock_in(lane)
             .map_err(|_| SessionError::Broken("session lock poisoned by a panic".into()))
+    }
+
+    /// [`Session::lock_any`] for a call through `conn`: a person's waits in the prompt lane.
+    fn lock_any_for(&self, conn: ConnId) -> Result<FairGuard<'_, State>> {
+        let prompt = self
+            .prompt_conns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&conn);
+        let lane = if prompt { Lane::Prompt } else { Lane::Agent };
+        self.lock_any_in(lane)
+    }
+
+    /// `conn` waits in the prompt lane when its participant is a person (`fair.rs`).
+    fn set_lane(&self, conn: ConnId, kind: ParticipantKind) {
+        let mut p = self
+            .prompt_conns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match kind {
+            ParticipantKind::Person => p.insert(conn),
+            _ => p.remove(&conn),
+        };
+    }
+
+    /// Test builds: the lock's queue as it stands (held, waiting, handed, woken, prompt
+    /// waiters; `fair.rs`).
+    #[cfg(test)]
+    pub(crate) fn lock_snapshot_for_tests(&self) -> (bool, usize, bool, bool, usize) {
+        self.state.snapshot()
+    }
+
+    /// `conn` has left: its lane is dropped.
+    fn drop_lane(&self, conn: ConnId) {
+        self.prompt_conns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&conn);
     }
 
     fn now(&self) -> u64 {
@@ -2128,6 +2303,19 @@ impl Session {
     /// during change `change` (v0.9.3). Metadata only: no content.
     fn report_engine_checks(&self, st: &mut State, change: Seq) {
         let mut found = st.doc.take_engine_checks();
+        // the session owns the texts (v0.24): the live doc's canary found one that isn't the
+        // doc's. The edit was planned on the doc's own; the session takes the doc's texts back
+        // (and builds its provenance again), so nothing serves the wrong one
+        let stale = st.texts_owned
+            && found
+                .iter()
+                .any(|f| matches!(f, crate::engine::EngineCheck::TextCache { .. }));
+        if stale {
+            if let Ok(t) = texts_of(&st.doc, &self.schema) {
+                st.texts = t;
+                st.prov = None;
+            }
+        }
         if let Some(r) = st.disk.as_mut().and_then(|d| d.replica.loaded()) {
             found.extend(r.take_engine_checks());
         }
@@ -2180,6 +2368,7 @@ impl Session {
         stays_present: bool,
     ) {
         let m = st.members.remove(i);
+        self.drop_lane(m.conn);
         st.subs.retain(|(c, _, _)| *c != m.conn);
         st.watch.drop_conn(m.conn);
         st.roster.drop_conn(m.conn);
@@ -2431,6 +2620,7 @@ impl Session {
         if shared {
             if let Some(m) = st.members.iter_mut().find(|m| m.shares_with(&p)) {
                 m.p = p;
+                self.set_lane(m.pres.conn, m.p.kind);
                 m.last_active_ms = now;
                 if stay == Stay::Held {
                     m.stay = Stay::Held;
@@ -2584,6 +2774,7 @@ impl Session {
             writers_full,
             counted: can_write && !writers_full,
         });
+        self.set_lane(conn, st.members.last().expect("pushed above").p.kind);
         if can_write {
             self.note_writers(st);
         }
@@ -2653,7 +2844,7 @@ impl Session {
     /// while it has other connections; its undo history stays until the session unloads.
     pub fn leave(&self, conn: ConnId) -> Result<bool> {
         self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         match Self::member(&st, conn) {
             Ok(i) => {
                 self.remove_member(&mut st, i, LeaveReason::Left);
@@ -2673,7 +2864,7 @@ impl Session {
     /// Keep a connection present (any call does this too). Needs read.
     pub fn touch(&self, conn: ConnId) -> Result<()> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Touch, now)?;
         Ok(())
     }
@@ -2681,7 +2872,7 @@ impl Session {
     /// Set how long a connection stays without activity.
     pub fn set_stay(&self, conn: ConnId, stay: Stay) -> Result<()> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Touch, now)?;
         st.members[i].stay = stay;
         Ok(())
@@ -2692,7 +2883,7 @@ impl Session {
     /// [`Config::away_after_ms`].
     pub fn set_visible(&self, conn: ConnId, visible: bool) -> Result<()> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::View, now)?;
         if !st.members[i].watcher {
             st.members[i].set_visible(visible, now);
@@ -2707,7 +2898,7 @@ impl Session {
             return self.set_cursor_elem(conn, &anchor, &head);
         }
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Edit, Action::Cursor, now)?;
         let (_, text) = self.text_of(&st, root)?;
         let res = |a: At| {
@@ -2729,7 +2920,7 @@ impl Session {
     /// Needs read. `last` past the end is clamped; returns the range as stored.
     pub fn set_view(&self, conn: ConnId, range: LineRange) -> Result<LineRange> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::View, now)?;
         if self.is_grid() {
             // the rendered lines, as the rows on them
@@ -2774,7 +2965,7 @@ impl Session {
     /// in order of first join within each. Needs read.
     pub fn roster(&self, conn: ConnId) -> Result<Vec<RosterEntry>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
         self.expire_claims(&mut st, now);
         let rows: Vec<RosterEntry> = self
@@ -2905,7 +3096,7 @@ impl Session {
     /// [`SessionManager::flush_rosters`]: super::SessionManager::flush_rosters
     pub fn subscribe_roster(&self, conn: ConnId) -> Result<Receiver<RosterEvent>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
         let app = Self::app_viewer(&st, i);
         // the others get what is pending first, so the new subscriber starts where they are
@@ -2952,7 +3143,7 @@ impl Session {
 
     /// Whether this connection is in this doc.
     pub(crate) fn has_conn(&self, conn: ConnId) -> bool {
-        self.lock()
+        self.lock_for(conn)
             .is_ok_and(|st| st.members.iter().any(|m| m.conn == conn))
     }
 
@@ -3029,7 +3220,7 @@ impl Session {
     /// roster's `watching: N`. Needs read.
     pub fn watching(&self, conn: ConnId) -> Result<usize> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
         Ok(Self::watching_count(&st))
     }
@@ -3122,7 +3313,7 @@ impl Session {
     /// should re-read and subscribe again. Versions are consecutive, so a gap is visible.
     pub fn subscribe(&self, conn: ConnId) -> Result<Receiver<ChangeEvent>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
         let (tx, rx) = sync_channel(self.config.subscriber_queue.max(1));
         let app = Self::app_viewer(&st, i);
@@ -3135,7 +3326,7 @@ impl Session {
     /// neither the content nor the version. Needs read. A full or dropped receiver is cut off.
     pub fn subscribe_settings(&self, conn: ConnId) -> Result<Receiver<SettingsChanged>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
         let (tx, rx) = sync_channel(self.config.subscriber_queue.max(1));
         st.settings_subs.push((conn, tx));
@@ -3162,7 +3353,7 @@ impl Session {
 
     fn read_inner(&self, conn: ConnId) -> Result<ReadResult> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
         self.read_locked(&mut st, i, now)
     }
@@ -3185,7 +3376,7 @@ impl Session {
         f: impl FnOnce(&ReadResult, &str, Option<&crate::table::LineMap>) -> (R, Shown),
     ) -> Result<(ReadResult, R, Notes, Option<awareness::ForEdit>)> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
         if self.is_grid() {
             // a grid's read verbs see its rendered file (CSV contract §3.2)
@@ -3394,7 +3585,7 @@ impl Session {
                 .texts
                 .iter()
                 .find(|(r, _)| *r == root)
-                .map(|(_, t)| t.clone()));
+                .map(|(_, t)| t.as_str().to_owned()));
         }
         let store = self.store(st)?;
         // a version a purge cut spans from is no merge base: its text isn't what was read
@@ -3460,7 +3651,7 @@ impl Session {
             return self.edit_ops(conn, edits, &opts);
         }
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
         Self::check_version(&st, if_version)?;
         self.check_backlog(&st, i)?;
@@ -3579,7 +3770,7 @@ impl Session {
         let now = self.now();
         let mut st = {
             prof!("session.lock");
-            self.lock()?
+            self.lock_for(conn)?
         };
         let i = {
             prof!("session.admit");
@@ -3695,7 +3886,7 @@ impl Session {
     ) -> Result<EditResult> {
         let policy = opts.policy;
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
         self.check_backlog(&st, i)?;
         let new_text = self
@@ -3776,7 +3967,7 @@ impl Session {
         let policy = opts.policy;
         timed!(WriteBase);
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit_edit(st, conn, Action::WriteBase, now)?;
         self.check_backlog(st, i)?;
@@ -3904,7 +4095,7 @@ impl Session {
     fn undo_redo(&self, conn: ConnId, req: &UndoRequest, origin: Origin) -> Result<UndoOutcome> {
         timed!(Undo);
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let action = if origin == Origin::Undo {
             Action::Undo
         } else {
@@ -4359,7 +4550,7 @@ impl Session {
             && st.members[i].p.kind == ParticipantKind::Agent
             && st.last_version_seq != st.version;
         // the touched roots' text before everything (multi-step summary, agent versions)
-        let orig: Vec<(&'static str, String)> = if n_steps > 1 || agent_cut {
+        let orig: SharedTexts = if n_steps > 1 || agent_cut {
             st.texts.clone()
         } else {
             Vec::new()
@@ -4746,8 +4937,8 @@ impl Session {
         }
         if n_steps > 1 {
             for (root, before) in &orig {
-                let after = &self.text_of(st, root)?.1;
-                if before != after {
+                let after = self.text_of(st, root)?.1;
+                if before.as_str() != after {
                     let hs = diff::hunks(before, after);
                     changed.extend(summary::changed_lines(root, after, &hs));
                     let (a, r) = summary::line_counts(before, after, &hs);
@@ -4858,8 +5049,12 @@ impl Session {
     /// Put a batch on `pid`'s undo stack (an edit, a redo) or redo stack (an undo), within
     /// [`Config::undo_depth`] and [`Config::undo_max_bytes`] per pid (oldest first, U6). A
     /// new edit clears the redo stack (U7).
-    fn push_batch(&self, st: &mut State, pid: &str, batch: Batch, origin: Origin) {
+    fn push_batch(&self, st: &mut State, pid: &str, mut batch: Batch, origin: Origin) {
         let c = &self.config;
+        // kept for as long as the history holds it: trimmed to what it holds (v0.24)
+        if !crate::beta_plant::planted("undo-batch-unshrunk") {
+            batch.shrink();
+        }
         let h = st.hist.entry(pid.to_owned()).or_default();
         let History {
             undo, redo, bytes, ..
@@ -5000,7 +5195,21 @@ impl Session {
         // a native doc's live text stays within its cap (`live/native.rs`), nothing applied
         text_cap::check_text_cap(&st.doc, &st.texts, &canon)?;
         let clock_before = st.doc.clock_of(client);
-        let made = st.doc.edit_made(client, &canon)?;
+        let made = match st.texts_owned {
+            true => match st
+                .doc
+                .edit_made_with_texts(client, &canon, &plan_texts(&st.texts))
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    // refused, nothing applied: a canary finding (the session's text isn't the
+                    // doc's) is reported and the session takes the doc's texts back
+                    self.report_engine_checks(st, st.next_seq());
+                    return Err(e.into());
+                }
+            },
+            false => st.doc.edit_made(client, &canon)?,
+        };
         let Some(update) = made.edited.update else {
             return Ok(None);
         };
@@ -5043,9 +5252,16 @@ impl Session {
             a.widened |= authored.is_some();
             let told = authored.unwrap_or_else(|| hunks.clone());
             let (ti, _) = self.text_of(st, &root)?;
-            let before = std::mem::take(&mut st.texts[ti].1);
+            // the text before, shared: the live text takes a new one below, and this one is
+            // never written through (the disk replica and read bases may hold it, v0.24)
+            let before = SharedText::clone(&st.texts[ti].1);
             let after = diff::apply(&before, &hunks);
-            debug_assert_eq!(Ok(after.as_str()), st.doc.text(&root).as_deref());
+            // (a doc whose texts the session owns is checked by the canary, and a walk per
+            // edit here would undo what owning them saves)
+            debug_assert!(
+                st.texts_owned || Ok(after.as_str()) == st.doc.text(&root).as_deref(),
+                "the session's text is the doc's"
+            );
             // per hunk: the roots it deletes, what it inserts (its IDs, the roots it puts
             // back), and the provenance rows of what it puts back
             let mut pairs = Vec::with_capacity(hunks.len());
@@ -5128,6 +5344,10 @@ impl Session {
                 .sum();
             let last = told.last().expect("non-empty");
             a.last_end = Some((root.clone(), (last.end as isize + delta) as usize));
+            let after = SharedText::new(after);
+            if crate::beta_plant::planted("shared-text-written-in-place") {
+                plant_shared_text_written(st, &before, &after);
+            }
             st.texts[ti].1 = after;
             a.roots.push((root, told));
         }
@@ -5196,7 +5416,7 @@ impl Session {
     pub(super) fn prov_from(
         doc_id: DocId,
         doc: &Doc,
-        texts: &[(&'static str, String)],
+        texts: &[(&'static str, SharedText)],
         store: &DocStore,
     ) -> Result<Prov> {
         let broken = |why: &str| SessionError::Doc(DocError::Apply(format!("provenance: {why}")));
@@ -5315,7 +5535,7 @@ impl Session {
         out: Result<T>,
         f: impl FnOnce(&mut super::handles::Lens<'_>, T) -> T,
     ) -> Result<T> {
-        let Ok(mut st) = self.lock() else {
+        let Ok(mut st) = self.lock_for(conn) else {
             return out;
         };
         let Some(i) = st.members.iter().position(|m| m.conn == conn) else {
@@ -5341,7 +5561,7 @@ impl Session {
         out: std::result::Result<crate::tools::ToolOutput, crate::tools::ToolRunError>,
     ) -> std::result::Result<crate::tools::ToolOutput, crate::tools::ToolRunError> {
         use crate::tools::ToolRunError;
-        let Ok(mut st) = self.lock() else {
+        let Ok(mut st) = self.lock_for(conn) else {
             return out;
         };
         let Some(i) = st.members.iter().position(|m| m.conn == conn) else {
@@ -5382,7 +5602,7 @@ impl Session {
     /// pids; anyone else's unchanged.
     pub(super) fn unhandle_query(&self, conn: ConnId, q: &LogQuery) -> LogQuery {
         let mut q = q.clone();
-        let Ok(mut st) = self.lock() else {
+        let Ok(mut st) = self.lock_for(conn) else {
             return q;
         };
         let Some(i) = st.members.iter().position(|m| m.conn == conn) else {
@@ -5510,6 +5730,8 @@ impl Session {
             Ok((texts, loaded)) => {
                 let version = loaded.version;
                 st.doc = loaded.doc;
+                let owned = st.texts_owned;
+                st.doc.set_session_texts(owned);
                 st.texts = texts;
                 st.version = version;
                 // reloaded: any field may differ from what a range was set on
@@ -5641,7 +5863,7 @@ impl Session {
 
     fn set_approval_inner(&self, conn: ConnId, seq: Seq, state: ApprovalState) -> Result<Approval> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Approve, now)?;
         let pid = st.members[i].p.pid.clone();
         let store = self.store(&st)?.clone();
@@ -5694,7 +5916,7 @@ impl Session {
 
     fn approval_inner(&self, conn: ConnId, seq: Seq) -> Result<Option<Approval>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
         let pid = st.members[i].p.pid.clone();
         let a = self.store(&st)?.approval(self.doc_id, seq)?;
@@ -5719,7 +5941,7 @@ impl Session {
 
     fn approvals_inner(&self, conn: ConnId) -> Result<Vec<(Seq, Approval)>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
         let (pid, history) = (st.members[i].p.pid.clone(), st.members[i].rights.history);
         let mut all = self.store(&st)?.approvals(self.doc_id)?;
@@ -5736,9 +5958,17 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn writers_for_tests(&self) -> Result<super::one_writer_tests::Writers> {
         let mut st = self.lock()?;
-        let replica = match st.disk.as_mut() {
-            Some(d) => Some(d.replica.get()?.clocks_for_tests()),
-            None => None,
+        // a Yrs text doc's replica holds its texts (v0.23): its clocks are the stored synced
+        // state's
+        let yrs_texts =
+            !st.doc.is_native() && st.disk.as_ref().is_some_and(|d| d.replica.is_text());
+        let replica = if yrs_texts {
+            Some(self.synced_doc_from_store(&mut st)?.clocks_for_tests())
+        } else {
+            match st.disk.as_mut() {
+                Some(d) => Some(d.replica.get()?.clocks_for_tests()),
+                None => None,
+            }
         };
         let store = self.store(&st)?.clone();
         let live = st
@@ -5770,7 +6000,11 @@ impl Session {
         let Some(d) = st.disk.as_mut() else {
             return Ok(Vec::new());
         };
-        let mut out = vec![d.replica.get()?.encode_state()?];
+        let mut out = vec![match d.replica.texts()? {
+            // a text doc's replica: its texts
+            Some(t) => text_replica::encode_texts(t),
+            None => d.replica.get()?.encode_state()?,
+        }];
         out.extend(d.catch_up.iter().flatten().cloned());
         Ok(out)
     }
@@ -5795,7 +6029,11 @@ impl Session {
         let mut st = self.lock()?;
         let live = st.doc.encode_state()?;
         let replica = match st.disk.as_mut() {
-            Some(d) => Some(d.replica.get()?.encode_state()?),
+            Some(d) => Some(match d.replica.texts()? {
+                // a text doc's replica: its texts
+                Some(t) => text_replica::encode_texts(t),
+                None => d.replica.get()?.encode_state()?,
+            }),
             None => None,
         };
         let known = st.disk.as_ref().is_some_and(|d| d.catch_up.is_some());
@@ -5807,11 +6045,195 @@ impl Session {
         Ok((live, replica, known, stored))
     }
 
+    /// Tests only (v0.23): what the disk replica holds now, without decoding it: `"text"` (the
+    /// file's texts), `"stored-text"` (a text doc's stored state, not decoded yet), `"doc"` (a
+    /// decoded engine doc), `"stored"` (a doc's stored state, not decoded yet); and the bytes
+    /// it holds (the texts', or the encoded state's; a decoded doc's encoding). `None` without
+    /// a file.
+    #[cfg(test)]
+    pub(crate) fn disk_replica_kind_for_tests(&self) -> Result<Option<(&'static str, usize)>> {
+        let st = self.lock()?;
+        let Some(d) = st.disk.as_ref() else {
+            return Ok(None);
+        };
+        Ok(Some(match &d.replica {
+            Replica::Text(t) => ("text", t.iter().map(|(_, x)| x.len()).sum()),
+            Replica::Stored {
+                state,
+                texts_only: true,
+                ..
+            } => ("stored-text", state.len()),
+            Replica::Stored { state, .. } => ("stored", state.len()),
+            Replica::Doc(doc) => ("doc", doc.encode_state()?.len()),
+        }))
+    }
+
+    /// Tests only: the disk replica's texts (the merge base), every text root's, in schema
+    /// order, whatever kind of replica it is (decoded now if it wasn't).
+    #[cfg(test)]
+    pub(crate) fn disk_replica_texts_for_tests(&self) -> Result<Option<Vec<(String, String)>>> {
+        let mut st = self.lock()?;
+        let roots: Vec<&'static str> = self
+            .schema
+            .roots
+            .iter()
+            .filter(|(_, k)| *k == Kind::Text)
+            .map(|(r, _)| *r)
+            .collect();
+        let Some(d) = st.disk.as_mut() else {
+            return Ok(None);
+        };
+        let mut out = Vec::with_capacity(roots.len());
+        for r in roots {
+            out.push((r.to_owned(), d.replica.text(r)?.as_str().to_owned()));
+        }
+        Ok(Some(out))
+    }
+
+    /// Tests only: whether the disk replica's texts (`.0`) and the newest read base's (`.1`)
+    /// are the live texts' own allocations, every text root's (`None`: no text-only replica in
+    /// memory; no read base). Reads only: nothing is decoded.
+    #[cfg(test)]
+    pub(crate) fn text_sharing_for_tests(&self) -> Result<(Option<bool>, Option<bool>)> {
+        let st = self.lock()?;
+        let same = |held: &[(&'static str, SharedText)]| {
+            held.len() == st.texts.len()
+                && held
+                    .iter()
+                    .zip(&st.texts)
+                    .all(|((r, a), (l, b))| r == l && Arc::ptr_eq(a, b))
+        };
+        let replica = match st.disk.as_ref().map(|d| &d.replica) {
+            Some(Replica::Text(t)) => Some(same(t)),
+            _ => None,
+        };
+        let read_base = st.read_bases.back().map(|b| same(&b.texts));
+        Ok((replica, read_base))
+    }
+
+    /// Tests only: the texts of the read base kept at `version`, every text root's, in schema
+    /// order (`None`: none kept at that version).
+    #[cfg(test)]
+    pub(crate) fn read_base_texts_for_tests(
+        &self,
+        version: Seq,
+    ) -> Result<Option<Vec<(String, String)>>> {
+        let st = self.lock()?;
+        Ok(st
+            .read_bases
+            .iter()
+            .find(|b| b.version == version)
+            .map(|b| {
+                b.texts
+                    .iter()
+                    .map(|(r, t)| ((*r).to_owned(), t.as_str().to_owned()))
+                    .collect()
+            }))
+    }
+
+    /// Tests only (v0.23): replace the synced state the store keeps with one holding `append`
+    /// at the end of the first text root (a fresh client's edit on it), as a stale or foreign
+    /// row would, leaving the session's memory as it is; with `record`, the session also takes
+    /// its length as the one it synced (so only the texts differ). The on-demand decode must
+    /// refuse it.
+    #[cfg(test)]
+    pub(crate) fn plant_synced_row_for_tests(&self, append: &str, record: bool) -> Result<()> {
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let store = self.store(st)?.clone();
+        let row = store
+            .sync_states(self.doc_id)?
+            .0
+            .ok_or_else(|| SessionError::BadPath("no synced state".into()))?;
+        let mut doc = Doc::load(self.schema, &row.state)?;
+        let root = self
+            .schema
+            .roots
+            .iter()
+            .find(|(_, k)| *k == Kind::Text)
+            .map(|(r, _)| *r)
+            .ok_or_else(|| SessionError::BadPath("no text root".into()))?;
+        let end = doc.text(root)?.len();
+        doc.edit_as(
+            mint_client_id(),
+            &[Edit::Text {
+                root: root.to_owned(),
+                hunks: vec![Hunk {
+                    start: end,
+                    end,
+                    insert: append.to_owned(),
+                }],
+            }],
+        )?;
+        let sync = SyncState {
+            hash: row.hash,
+            seq: row.seq,
+            state: doc.encode_state()?,
+        };
+        let meta = store.meta(self.doc_id)?;
+        store.commit_disk(self.doc_id, st.version + 1, &[], &[], &[], &meta, &sync)?;
+        if record {
+            if let Some(d) = st.disk.as_mut() {
+                d.replica_bytes = sync.state.len() as u64;
+            }
+        }
+        Ok(())
+    }
+
+    /// Tests only (v0.24): `pid`'s undo batches, oldest first: `(regions, region slots, the
+    /// budget's bytes, every text and hunk list trimmed to its length)`.
+    #[cfg(test)]
+    pub(crate) fn undo_slots_for_tests(
+        &self,
+        pid: &str,
+    ) -> Result<Vec<(usize, usize, usize, bool)>> {
+        let st = self.lock()?;
+        let Some(h) = st.hist.get(pid) else {
+            return Ok(Vec::new());
+        };
+        Ok(h.undo
+            .iter()
+            .map(|b| {
+                let trimmed = b.regions.iter().all(|r| {
+                    r.before.capacity() == r.before.len()
+                        && r.after.capacity() == r.after.len()
+                        && r.ours.capacity() == r.ours.len()
+                        && r.theirs.capacity() == r.theirs.len()
+                });
+                (b.regions.len(), b.regions.capacity(), b.bytes(), trimmed)
+            })
+            .collect())
+    }
+
+    /// Tests only (v0.24): the bytes `pid`'s history counts against the budget.
+    #[cfg(test)]
+    pub(crate) fn undo_bytes_for_tests(&self, pid: &str) -> Result<usize> {
+        Ok(self.lock()?.hist.get(pid).map_or(0, |h| h.bytes))
+    }
+
+    /// Tests only (v0.24): the bytes of text the live doc's engine keeps of its own (a Yrs
+    /// doc's text cache; 0 when the session owns its texts).
+    #[cfg(test)]
+    pub(crate) fn engine_text_cache_bytes_for_tests(&self) -> Result<usize> {
+        Ok(self.lock()?.doc.text_cache_bytes_for_tests())
+    }
+
     /// Tests only: how many times the disk replica was brought forward by its catch-up list
     /// (no reload), write-backs and outside saves alike.
     #[cfg(test)]
     pub(crate) fn replica_caught_up_for_tests(&self) -> Result<u64> {
         Ok(self.lock()?.disk.as_ref().map_or(0, |d| d.caught_up))
+    }
+
+    /// Tests only (v0.24): make the session's own text for `root` a wrong one (a session that
+    /// owns its texts plans edits on it).
+    #[cfg(test)]
+    pub(crate) fn corrupt_session_text_for_tests(&self, root: &str, text: &str) -> Result<()> {
+        let mut st = self.lock()?;
+        if let Some(t) = st.texts.iter_mut().find(|(r, _)| *r == root) {
+            t.1 = SharedText::new(text.to_owned());
+        }
+        Ok(())
     }
 
     /// Tests only: make the live doc's engine cache hold a wrong text for `root`.
@@ -5838,7 +6260,7 @@ impl Session {
     /// Whether `conn` is an agent's connection (agents' positional edits are checked); a
     /// connection that isn't joined: no (the verb's admission refuses it).
     pub(crate) fn is_agent(&self, conn: ConnId) -> bool {
-        self.lock().is_ok_and(|st| {
+        self.lock_for(conn).is_ok_and(|st| {
             st.members
                 .iter()
                 .any(|m| m.conn == conn && m.p.kind == ParticipantKind::Agent)
@@ -6101,7 +6523,7 @@ impl Session {
 
     fn flush_in(&self, conn: ConnId) -> Result<FlushOutcome> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Flush, now)?;
         let written = self.write_back(&mut st, now)?;
         // clean: the file holds the doc, so its keyed hash is the doc's (no second encode at
@@ -6175,11 +6597,21 @@ impl Session {
             out.push(SyncDrift::Pending { replica: false });
         }
         let clean = matches!(Self::disk_state(st), Some(DiskState::Clean));
+        // a Yrs text doc's replica holds its texts (v0.23): its elements are the synced state
+        // the store keeps, read here, decoded below once its texts are found the doc's
+        let yrs_texts = !st.doc.is_native()
+            && clean
+            && out.is_empty()
+            && st.disk.as_ref().is_some_and(|d| d.replica.is_text());
+        let row = match yrs_texts {
+            true => self.store(st)?.sync_states(self.doc_id)?.0,
+            false => None,
+        };
         let Some(d) = st.disk.as_mut() else {
             return Ok(out);
         };
         if d.replica.is_text() {
-            // a native doc's replica is the file's texts: they must be the doc's
+            // a text doc's replica is the file's texts: they must be the doc's
             if !out.is_empty() || !clean {
                 return Ok(out);
             }
@@ -6188,6 +6620,29 @@ impl Session {
                     out.push(SyncDrift::Text {
                         root: (*root).to_owned(),
                     });
+                }
+            }
+            if !yrs_texts || !out.is_empty() {
+                return Ok(out);
+            }
+            // a Yrs doc's: the stored synced state, decoded on demand, must hold the doc's
+            // elements (refused, never reported as in step, when it isn't this session's)
+            let synced = self.synced_doc_of(d, row)?;
+            if synced.unresolved() {
+                out.push(SyncDrift::Pending { replica: true });
+                return Ok(out);
+            }
+            for (root, text) in &st.texts {
+                let ids = |doc: &Doc| {
+                    doc.blame_runs(root)
+                        .ok()
+                        .and_then(|runs| super::prov::elem_ids(doc.units(), text, &runs))
+                };
+                match (ids(&st.doc), ids(&synced)) {
+                    (Some(a), Some(b)) if a == b => {}
+                    _ => out.push(SyncDrift::Elements {
+                        root: (*root).to_owned(),
+                    }),
                 }
             }
             return Ok(out);
@@ -6210,7 +6665,7 @@ impl Session {
             }
         }
         for (root, text) in &st.texts {
-            if replica.text(root)? != *text {
+            if replica.text(root)? != **text {
                 out.push(SyncDrift::Text {
                     root: (*root).to_owned(),
                 });
@@ -6259,7 +6714,7 @@ impl Session {
                     .texts
                     .iter()
                     .find(|(r, _)| *r == root)
-                    .map(|(_, t)| t.clone())
+                    .map(|(_, t)| t.as_str().to_owned())
                     .unwrap_or_default();
                 (root.to_owned(), e, cached)
             })
@@ -6359,25 +6814,70 @@ impl Session {
     #[cfg(any(test, feature = "differential"))]
     pub fn plant_disk_replica_for_tests(&self, root: &str, text: &str) -> Result<()> {
         let mut st = self.lock()?;
+        let st = &mut *st;
         let version = st.version;
         let d = st
             .disk
             .as_mut()
             .ok_or_else(|| SessionError::BadPath("this session has no file".into()))?;
-        let old = d.replica.get()?.text(root)?;
-        let hunks = vec![Hunk {
-            start: 0,
-            end: old.len(),
-            insert: text.to_owned(),
-        }];
-        let client = mint_client_id();
-        d.replica.get()?.edit_as(
-            client,
-            &[Edit::Text {
+        let hunks = |old: &str| {
+            vec![Edit::Text {
                 root: root.to_owned(),
-                hunks,
-            }],
-        )?;
+                hunks: vec![Hunk {
+                    start: 0,
+                    end: old.len(),
+                    insert: text.to_owned(),
+                }],
+            }]
+        };
+        if d.replica.is_text() {
+            // a text doc's replica holds its texts (v0.23): they take `text`; on Yrs the synced
+            // state the store keeps takes the same edit, as a fresh client (its elements, which
+            // the sync audit reads from there)
+            let texts = d
+                .replica
+                .texts()?
+                .map(<[_]>::to_vec)
+                .ok_or_else(|| SessionError::BadPath("no texts".into()))?;
+            let old = texts
+                .iter()
+                .find(|(r, _)| *r == root)
+                .map(|(_, t)| t.as_str().to_owned())
+                .ok_or_else(|| DocError::Malformed(format!("no text root {root:?}")))?;
+            if !st.doc.is_native() {
+                let mut synced = self.synced_doc_from_store(st)?;
+                synced.edit_as(mint_client_id(), &hunks(&old))?;
+                let state = synced.encode_state()?;
+                let store = self.store(st)?.clone();
+                let d = st.disk.as_ref().expect("has disk");
+                let sync = SyncState {
+                    hash: d.synced_hash.clone(),
+                    seq: d.synced_seq,
+                    state,
+                };
+                let meta = store.meta(self.doc_id)?;
+                store.commit_disk(self.doc_id, st.version + 1, &[], &[], &[], &meta, &sync)?;
+                st.disk.as_mut().expect("has disk").replica_bytes = sync.state.len() as u64;
+            }
+            let d = st.disk.as_mut().expect("has disk");
+            d.replica = Replica::Text(
+                texts
+                    .into_iter()
+                    .map(|(r, t)| {
+                        if r == root {
+                            (r, SharedText::new(text.to_owned()))
+                        } else {
+                            (r, t)
+                        }
+                    })
+                    .collect(),
+            );
+            d.synced_seq = version.wrapping_add(1);
+            return Ok(());
+        }
+        let old = d.replica.get()?.text(root)?;
+        let client = mint_client_id();
+        d.replica.get()?.edit_as(client, &hunks(&old))?;
         // out of date, as a change since the sync would leave it (the marker is the change
         // counter)
         d.synced_seq = version.wrapping_add(1);
@@ -6424,12 +6924,19 @@ impl Session {
         }
         let store = self.store(st)?.clone();
         let (synced, pending) = store.sync_states(self.doc_id)?;
+        let texts_only = self.texts_only_replica(st);
         // the replica stays encoded until the disk path first needs it (v0.9.8); a native
-        // doc's is its texts (`live/native.rs`)
+        // doc's is its texts (`live/native.rs`), and a Yrs text doc's decodes to its texts
+        // (v0.23)
         let (replica, replica_bytes, hash, seq) = match synced {
             Some(s) => {
                 let n = s.state.len() as u64;
-                (self.replica_from_state(st, s.state)?, n, s.hash, s.seq)
+                (
+                    self.replica_from_state(st, s.state, texts_only)?,
+                    n,
+                    s.hash,
+                    s.seq,
+                )
             }
             // a doc from before disk sync: take its content as what the file held
             None if st.doc.is_native() => {
@@ -6495,6 +7002,7 @@ impl Session {
             root: root.to_owned(),
             replica,
             replica_bytes,
+            texts_only,
             synced_hash: hash,
             synced_seq: seq,
             own: VecDeque::new(),
@@ -6526,10 +7034,7 @@ impl Session {
                 meta.synced_hash = Some(p.hash.clone());
                 meta.synced_seq = p.seq;
                 store.promote_pending_sync(self.doc_id, &meta)?;
-                d.replica = match text_replica {
-                    true => Replica::Text(text_replica::decode_texts(&self.schema, &p.state)?),
-                    false => Replica::Doc(self.checked(Doc::load(self.schema, &p.state)?)),
-                };
+                d.replica = self.replica_loaded(st, &p.state, texts_only)?;
                 d.replica_bytes = p.state.len() as u64;
                 d.synced_hash = p.hash;
                 d.synced_seq = p.seq;
@@ -7055,7 +7560,8 @@ impl Session {
             // the same text in other bytes (line endings, BOM), or a save the doc already
             // holds: adopt the file's format; the doc doesn't change. No update to add to the
             // catch-up list: a replica that becomes the doc takes the ones it has (v0.9.7)
-            let (state, held) = match self.replica_to_file(st, &roots, &file_edits) {
+            let in_step = st.texts.clone();
+            let (state, held) = match self.replica_to_file(st, &roots, &file_edits, in_step) {
                 Ok(s) => s,
                 Err(e) => {
                     self.recover(st, &e.to_string());
@@ -7178,7 +7684,12 @@ impl Session {
         }
         // the merge is made on the live doc itself, as the external participant: changes made
         // since the last write-back are kept, and nothing is merged in from the replica
-        let made = st.doc.edit_made(client, &edits);
+        let made = match st.texts_owned {
+            true => st
+                .doc
+                .edit_made_with_texts(client, &edits, &plan_texts(&st.texts)),
+            false => st.doc.edit_made(client, &edits),
+        };
         let (update, firsts) = match made {
             Ok(m) => (
                 m.edited.update.expect("non-empty edits change the doc"),
@@ -7198,7 +7709,8 @@ impl Session {
         if let Some(c) = st.disk.as_mut().and_then(|d| d.catch_up.as_mut()) {
             c.push(update.clone());
         }
-        let (replica_state, _) = match self.replica_to_file(st, &roots, &file_edits) {
+        let now_texts = after.clone();
+        let (replica_state, _) = match self.replica_to_file(st, &roots, &file_edits, now_texts) {
             Ok(s) => s,
             Err(e) => {
                 self.recover(st, &e.to_string());
@@ -7250,7 +7762,7 @@ impl Session {
                         super::prov::identity_hunks(old, old_ids, new, &new_ids)
                     })
                 };
-                let hunks = if diff::apply(old, given) == *new {
+                let hunks = if diff::apply(old, given) == **new {
                     // a sampled save: a difference is reported; the given hunks, which the
                     // engine applied, stay the record's, and the map (which would follow
                     // them) is dropped
@@ -7673,7 +8185,8 @@ impl Session {
         };
         // the replica follows the doc as at a write-back (v0.9.7): the changes since
         // applied to it, or reloaded from `state` when those aren't known
-        self.replica_to(st, &state)?;
+        let in_step = st.texts.clone();
+        self.replica_to(st, &state, Some(in_step))?;
         let d = st.disk.as_mut().expect("has disk");
         d.replica_bytes = state.len() as u64;
         d.synced_seq = st.version;
@@ -7722,11 +8235,14 @@ impl Session {
     /// The replica is no longer the base an outside save is made on (only its text is), so
     /// this keeps the sync check meaningful and the stored state small; it is the one
     /// place an ingest sets the replica.
+    ///
+    /// `texts`: the doc's texts now (shared, v0.24): a held save's replica takes them.
     fn replica_to_file(
         &self,
         st: &mut State,
         file: &[(String, Neutral)],
         file_edits: &[Edit],
+        texts: SharedTexts,
     ) -> Result<(Vec<u8>, bool)> {
         // the doc's texts as they are now (`st.texts` follows after the bookkeeping)
         let mut held = true;
@@ -7741,24 +8257,32 @@ impl Session {
             let state = self.replica_state(st)?;
             // the replica becomes the doc as a write-back makes it (v0.9.7): brought forward
             // by the updates the doc took since its last sync (the merged save's included),
-            // reloaded from `state` only when those aren't known. Then in step
-            self.replica_to(st, &state)?;
+            // reloaded from `state` only when those aren't known. Then in step; a text-only
+            // replica takes the doc's texts (`texts`, shared)
+            self.replica_to(st, &state, Some(texts))?;
             return Ok((state, true));
         }
-        let d = st.disk.as_mut().expect("has disk");
-        if d.replica.is_text() {
-            // a native doc's replica is the file's texts, whatever the doc holds
-            let texts: Vec<(&'static str, String)> = file
+        if st.disk.as_ref().expect("has disk").replica.is_text() {
+            // a text doc's replica is the file's texts, whatever the doc holds
+            let texts: SharedTexts = file
                 .iter()
                 .filter_map(|(root, n)| {
                     let root = self.schema.roots.iter().find(|(r, _)| r == root)?.0;
-                    Some((root, n.as_text()?.to_owned()))
+                    Some((root, SharedText::new(n.as_text()?.to_owned())))
                 })
                 .collect();
-            let state = text_replica::encode_texts(&texts);
+            // the stored state: a native doc's texts; a Yrs doc's synced state with the save
+            // made on it as a client of its own, decoded from the store on demand (v0.23)
+            let state = match st.doc.is_native() {
+                true => text_replica::encode_texts(&texts),
+                false => self.synced_state_with_save(st, file_edits)?,
+            };
+            let d = st.disk.as_mut().expect("has disk");
             d.replica = Replica::Text(texts);
+            d.catch_up = None;
             return Ok((state, false));
         }
+        let d = st.disk.as_mut().expect("has disk");
         // the replica takes a save the doc never holds (a client of its own, below): the next
         // write-back replaces it whole (v0.9.7), never brings it forward
         d.catch_up = None;
@@ -7810,9 +8334,7 @@ impl Session {
         // the disk replica, decoded now if a reopen left it encoded (v0.9.8): a stored sync
         // state that doesn't decode fails the write-back here, before anything is written,
         // with the error opening the doc gave before v0.9.8 (a native doc's is its texts)
-        if !d.replica.is_text() {
-            d.replica.get()?;
-        }
+        d.replica.ensure()?;
         let real = match disk::probe(&d.path, &d.root) {
             Ok(Probe::File { real, .. }) => real,
             Ok(_) => {
@@ -7880,7 +8402,8 @@ impl Session {
         // the file and the store are done: memory follows them, then any failure is reported
         let replica = {
             prof!("wb.replica_to");
-            self.replica_to(st, &pending.state)
+            let in_step = st.texts.clone();
+            self.replica_to(st, &pending.state, Some(in_step))
         };
         let d = st.disk.as_mut().expect("has disk");
         d.replica_bytes = pending.state.len() as u64;
@@ -7919,14 +8442,22 @@ impl Session {
     /// reported ([`AuditEvent::DiskReplicaMismatch`]) and the replica reloaded. Fails only if
     /// `state` doesn't load (never on a correct stream: it was just encoded from the live
     /// doc); the changes since are then not known.
-    fn replica_to(&self, st: &mut State, state: &[u8]) -> Result<()> {
+    /// `texts`: the doc's texts when the caller has them (the session's, in step; a held
+    /// save's, the file's), else read from the doc.
+    fn replica_to(&self, st: &mut State, state: &[u8], texts: Option<SharedTexts>) -> Result<()> {
         let key = st.key.clone();
         let version = st.version;
         let every = u64::from(self.config.writeback_check_every);
         let d = st.disk.as_mut().expect("has disk");
-        if d.replica.is_text() {
-            // a native doc's replica takes the doc's texts: no engine state, no catch-up
-            let texts = self.doc_texts(&st.doc)?;
+        if d.texts_only {
+            // a text doc's replica takes the doc's texts: no engine state, no catch-up. One a
+            // reopen left encoded is decoded first (v0.9.8): a stored sync state that doesn't
+            // decode is an error, never replaced unseen
+            d.replica.ensure()?;
+            let texts = match texts {
+                Some(t) => t,
+                None => self.doc_texts(&st.doc)?,
+            };
             d.writebacks += 1;
             d.replica = Replica::Text(texts);
             d.catch_up = None;
@@ -8029,14 +8560,12 @@ impl Session {
             st.codec = meta.codec;
             st.declined = meta.declined;
         }
-        let text_replica = st.doc.is_native();
-        if let (Some(d), Ok((Some(s), _))) = (st.disk.as_mut(), store.sync_states(self.doc_id)) {
-            let loaded = match text_replica {
-                true => text_replica::decode_texts(&self.schema, &s.state).map(Replica::Text),
-                false => Doc::load(self.schema, &s.state)
-                    .map(|d| Replica::Doc(self.checked(d)))
-                    .map_err(SessionError::from),
-            };
+        let Some(texts_only) = st.disk.as_ref().map(|d| d.texts_only) else {
+            return;
+        };
+        if let Ok((Some(s), _)) = store.sync_states(self.doc_id) {
+            let loaded = self.replica_loaded(st, &s.state, texts_only);
+            let d = st.disk.as_mut().expect("has disk");
             if let Ok(r) = loaded {
                 d.replica = r;
                 d.replica_bytes = s.state.len() as u64;

@@ -103,12 +103,14 @@ impl Fx {
         self.store.find(&key(path)).unwrap().unwrap()
     }
 
-    /// Restamp doc `id` as written by `engine` in `format`; nothing else changes.
+    /// Restamp doc `id` as written by `engine` in `format`; nothing else changes. Past the
+    /// store's checks (`put_meta_unchecked`, feature `test-support`), as another build leaves
+    /// it: `put_meta` refuses a stamp of the other entry engine over a doc's log.
     fn restamp(&self, id: DocId, engine: &str, format: u32) {
         let mut meta = self.store.meta(id).unwrap();
         meta.engine = engine.to_owned();
         meta.engine_format = format;
-        self.store.put_meta(id, &meta).unwrap();
+        self.store.put_meta_unchecked(id, &meta).unwrap();
     }
 
     /// This build's own stamp, as it stores it on a doc it makes.

@@ -19,6 +19,14 @@
 //! an abrupt stop or a power loss reopens the store at its last durable commit, a prefix of
 //! the commits, never a torn one.
 //!
+//! **A change of the setting, live** ([`super::DocStore::set_commit_durability`]): one commit
+//! that waits for the disk, as a flush, so the group waiting is durable first; the new setting
+//! takes effect once it committed, before any other transaction begins (each holds the store's
+//! commit gate from its begin to its commit, and the change holds it through its own commit),
+//! so no commit is made under two settings. From `Immediate` the next commit starts a group;
+//! to `Immediate` every later commit waits for the disk; a group's new bounds count from the
+//! next commit.
+//!
 //! **A failed commit, grouped.** When a commit fails at the disk (or the store library refuses
 //! every call after an earlier failure), the commits not yet durable are gone from the disk
 //! while live docs still hold them: as after an abrupt stop, inside the process. The store

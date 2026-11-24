@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1401,6 +1401,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E527",
+      "name": "entry_engine_refused",
+      "exit": 6,
+      "status": "live"
+    },
+    {
       "id": "MPC-E601",
       "name": "purge_current_version",
       "exit": 2,
@@ -1991,6 +1997,24 @@
     {
       "id": "MPCE-E1000",
       "name": "own_line_parents",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E1008",
+      "name": "single_replica_mode",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E1013",
+      "name": "stable_not_at_head",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E1010",
+      "name": "checkpoint_over_limit",
       "exit": 2,
       "status": "live"
     },

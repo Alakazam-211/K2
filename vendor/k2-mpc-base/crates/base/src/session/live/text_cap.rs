@@ -22,7 +22,7 @@ pub(super) fn text_cap(doc: &Doc) -> Option<usize> {
 /// refused, so a doc over the cap can still shrink.
 pub(super) fn check_text_cap(
     doc: &Doc,
-    texts: &[(&'static str, String)],
+    texts: &[(&'static str, crate::SharedText)],
     edits: &[Edit],
 ) -> Result<()> {
     let Some(cap) = text_cap(doc) else {

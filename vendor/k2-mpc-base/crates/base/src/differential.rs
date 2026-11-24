@@ -67,6 +67,10 @@ pub enum IndexMutant {
     NoDecodeBudget,
     /// A stored row of format 2 drops a node's view geometry (row format 2's items).
     IndexV2FieldDropped,
+    /// A spec with own records (`IndexSpec::with_own_records`) is stored under the pack's own
+    /// format, not the kit's offset one: an older kit asking for that format decodes a row of
+    /// format 3.
+    OwnOffsetSkipped,
     // the read side and claims by node
     /// A structure read checks no rights: not read, not history for another version.
     ReadSkipsRights,
@@ -125,6 +129,7 @@ impl IndexMutant {
             "row-parents-unchecked" => Self::RowParentsUnchecked,
             "no-decode-budget" => Self::NoDecodeBudget,
             "index-v2-field-dropped" => Self::IndexV2FieldDropped,
+            "own-offset-skipped" => Self::OwnOffsetSkipped,
             "read-skips-rights" => Self::ReadSkipsRights,
             "no-budget" => Self::NoBudget,
             "guesses-near-name" => Self::GuessesNearName,
@@ -634,6 +639,14 @@ pub enum Tier0VerbMutant {
     RedoNotCleared,
     /// A tier-0 revert skips the claim check: an agent's revert into a held node lands.
     RevertSkipsClaims,
+    /// The overlap checks (`--base`, a revert's) count every change to a container as its
+    /// own, as they did before the own record: an edit to one child conflicts with any later
+    /// edit to a sibling.
+    ContainerAlwaysCounted,
+    /// The overlap checks leave out any record-only change to a node whose child changed,
+    /// without asking its own record's hash: a container's own change (its children's order, a
+    /// field the index doesn't show) is missed.
+    ContainerNeverCounted,
 }
 
 impl Tier0VerbMutant {
@@ -700,6 +713,8 @@ impl Tier0VerbMutant {
             "undo-latest-any" => Self::UndoLatestAny,
             "redo-not-cleared" => Self::RedoNotCleared,
             "revert-skips-claims" => Self::RevertSkipsClaims,
+            "container-always-counted" => Self::ContainerAlwaysCounted,
+            "container-never-counted" => Self::ContainerNeverCounted,
             _ => return None,
         })
     }
@@ -2155,6 +2170,12 @@ pub struct Side {
     /// File write-backs reload the disk replica from a whole encode of the doc, as before
     /// v0.9.7 (the write-back's differential test).
     full_writeback: bool,
+    /// A Yrs text doc's disk replica kept decoded, as before v0.23 (the rows that compare the
+    /// text-only replica with it, and the catch-up's own rows).
+    decoded_replica: bool,
+    /// The engine keeps its own text cache (a Yrs doc's), as before v0.24 (the rows that
+    /// compare the session-owned texts with it).
+    engine_text_cache: bool,
     /// The engine's position index off: every lookup walks from the text's start, as before
     /// k2.3 (the soak's diagnosis, v0.9.7).
     no_position_index: bool,
@@ -2215,6 +2236,24 @@ impl Side {
         }
     }
 
+    /// A Yrs text doc opened while this side is installed keeps its disk replica decoded, as
+    /// before v0.23, instead of its texts only ([`with_decoded_replica`]).
+    pub fn decoded_replica(self) -> Self {
+        Self {
+            decoded_replica: true,
+            ..self
+        }
+    }
+
+    /// A doc loaded while this side is installed keeps the engine's own text cache, as before
+    /// v0.24, instead of the session owning its texts ([`with_engine_text_cache`]).
+    pub fn engine_text_cache(self) -> Self {
+        Self {
+            engine_text_cache: true,
+            ..self
+        }
+    }
+
     /// Keep an [`EditRecord`] of every edit (its state is a full encode: tests only).
     pub fn recording(self) -> Self {
         Self {
@@ -2246,6 +2285,51 @@ thread_local! {
     static FULL_WB: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The installed side's `no_position_index`.
     static NO_POSINDEX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The installed side's `decoded_replica`, or [`with_decoded_replica`]'s.
+    static DECODED_REPLICA: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The installed side's `engine_text_cache`, or [`with_engine_text_cache`]'s.
+    static ENGINE_TEXT_CACHE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a doc loaded now keeps the engine's own text cache, as before v0.24.
+pub(crate) fn engine_text_cache_on() -> bool {
+    ENGINE_TEXT_CACHE.with(|p| p.get())
+}
+
+/// Run `f` with every doc loaded on this thread keeping the engine's own text cache (a Yrs
+/// doc's copy of each text beside the session's), as before v0.24: the reference side of the
+/// rows that compare the session-owned texts with it. Removed afterwards, however `f` ends.
+pub fn with_engine_text_cache<R>(f: impl FnOnce() -> R) -> R {
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            ENGINE_TEXT_CACHE.with(|p| p.set(self.0));
+        }
+    }
+    let _back = Back(ENGINE_TEXT_CACHE.with(|p| p.replace(true)));
+    f()
+}
+
+/// Whether a Yrs text doc attached to its file now keeps its disk replica decoded, as before
+/// v0.23 (the installed side's `decoded_replica`, or inside [`with_decoded_replica`]).
+pub(crate) fn decoded_replica_on() -> bool {
+    DECODED_REPLICA.with(|p| p.get())
+}
+
+/// Run `f` with every Yrs text doc attached to its file on this thread keeping its disk
+/// replica decoded, as before v0.23 (a whole Yrs doc beside the live one, brought forward by
+/// the changes since each sync), instead of the file's texts only: the reference side of the
+/// rows that compare the two, and the catch-up's own rows. Removed afterwards, however `f`
+/// ends (an unwinding `f` too).
+pub fn with_decoded_replica<R>(f: impl FnOnce() -> R) -> R {
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            DECODED_REPLICA.with(|p| p.set(self.0));
+        }
+    }
+    let _back = Back(DECODED_REPLICA.with(|p| p.replace(true)));
+    f()
 }
 
 /// Whether the installed side writes back files the old way.
@@ -2291,12 +2375,15 @@ pub(crate) fn planted_divergence() -> bool {
 /// Run `f` with `side` installed on this thread (every edit `f` makes, directly or through a
 /// session, takes its path). The side is handed back afterwards, even if `f` panics.
 pub fn with_side<R>(side: &mut Side, f: impl FnOnce() -> R) -> R {
-    struct Back<'a>(&'a mut Side);
+    struct Back<'a>(&'a mut Side, bool, bool);
     impl Drop for Back<'_> {
         fn drop(&mut self) {
             PLANT.with(|p| p.set(false));
             FULL_WB.with(|p| p.set(false));
             NO_POSINDEX.with(|p| p.set(false));
+            // back to what it was (an enclosing `with_decoded_replica` keeps it on)
+            DECODED_REPLICA.with(|p| p.set(self.1));
+            ENGINE_TEXT_CACHE.with(|p| p.set(self.2));
             if let Some(s) = SIDE.with(|t| t.borrow_mut().take()) {
                 *self.0 = s;
             }
@@ -2305,9 +2392,11 @@ pub fn with_side<R>(side: &mut Side, f: impl FnOnce() -> R) -> R {
     PLANT.with(|p| p.set(side.plant));
     FULL_WB.with(|p| p.set(side.full_writeback));
     NO_POSINDEX.with(|p| p.set(side.no_position_index));
+    let decoded = DECODED_REPLICA.with(|p| p.replace(side.decoded_replica || p.get()));
+    let cache = ENGINE_TEXT_CACHE.with(|p| p.replace(side.engine_text_cache || p.get()));
     let prev = SIDE.with(|t| t.borrow_mut().replace(std::mem::take(side)));
     assert!(prev.is_none(), "with_side: a side is already installed");
-    let _back = Back(side);
+    let _back = Back(side, decoded, cache);
     f()
 }
 

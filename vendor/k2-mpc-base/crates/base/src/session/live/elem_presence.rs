@@ -248,7 +248,7 @@ impl Session {
         selection: Option<ElemSelection>,
     ) -> Result<Option<ElemSelection>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::Cursor, now)?;
         self.refuse_watcher(st, i)?;
@@ -273,7 +273,7 @@ impl Session {
     /// ([`SessionError::Watching`]).
     pub fn set_pointer(&self, conn: ConnId, pointer: Option<Point>) -> Result<()> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::Cursor, now)?;
         self.refuse_watcher(st, i)?;
@@ -286,7 +286,7 @@ impl Session {
     /// watcher is refused ([`SessionError::Watching`]).
     pub fn set_viewport(&self, conn: ConnId, viewport: Option<Rect>) -> Result<()> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::View, now)?;
         self.refuse_watcher(st, i)?;
@@ -307,7 +307,7 @@ impl Session {
             .map(|a| presence_address("the view address", a))
             .transpose()?;
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::View, now)?;
         self.refuse_watcher(st, i)?;
@@ -326,7 +326,7 @@ impl Session {
         time: Option<TimePosition>,
     ) -> Result<Option<TimePosition>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::View, now)?;
         self.refuse_watcher(st, i)?;
@@ -350,7 +350,7 @@ impl Session {
             return;
         }
         let now = self.now();
-        let Ok(mut st) = self.lock() else {
+        let Ok(mut st) = self.lock_for(conn) else {
             return;
         };
         let st = &mut *st;
@@ -451,7 +451,7 @@ impl Session {
     /// it too ([`Session::set_range`]).
     pub fn set_focus(&self, conn: ConnId, focus: Option<ElemFocus>) -> Result<Option<ElemFocus>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::View, now)?;
         self.refuse_watcher(st, i)?;
@@ -480,7 +480,7 @@ impl Session {
     /// new one.
     pub fn set_range(&self, conn: ConnId, range: Option<ElemRange>) -> Result<Option<ElemRange>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Cursor, now)?;
         self.refuse_watcher(st, i)?;

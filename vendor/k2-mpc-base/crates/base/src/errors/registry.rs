@@ -1248,6 +1248,14 @@ STORE_RECOVERING = e("MPC-E526", "store_recovering", Store, 1, "grouped commits"
     .indirect("a read or a write of a grouped store between a commit failing at the disk and \
      the host's next tick or flush");
 
+ENTRY_ENGINE_REFUSED = e("MPC-E527", "entry_engine_refused", Store, 6, "a log of one engine", HOST,
+    "a log entry of {entry} can't go in doc {doc}'s log: the doc is on engine {stored} (format \
+     {stored_format}); nothing was written",
+    "Nothing was written: this entry was made for a different engine than the doc's. Write only \
+     entries made by the doc's own engine.")
+    .indirect("a store write of a log entry another engine made, or of an engine stamp the \
+     doc's log doesn't fit (a kit bug)");
+
 // ---------------------------------------------------------------- 6xx erasure
 
 PURGE_CURRENT = e("MPC-E601", "purge_current_version", Erasure, 2, "K-T0-9, K-PURGE-1",
@@ -2138,6 +2146,27 @@ OWN_LINE_PARENTS = e("MPCE-E1000", "own_line_parents", Session, 2,
     "Nothing changed. Name only the latest parent on each agent's line. At a load, the store \
      holds a run no released writer makes: restore the document from another copy.")
     .indirect("the native engine's admission (feature native)");
+
+SINGLE_REPLICA_MODE = e("MPCE-E1008", "single_replica_mode", Session, 2,
+    "the MPCE seam (stable codes)", SYNC,
+    "the engine refused a sync call: the native doc keeps one copy, the host's",
+    "Nothing changed. Edit the doc through the host's session verbs; a native doc a store \
+     holds isn't synced to another copy.")
+    .indirect("the native engine's single-writer mode (feature native)");
+
+STABLE_NOT_AT_HEAD = e("MPCE-E1013", "stable_not_at_head", Store, 1,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused a cut: the native doc's stable point isn't at its latest change",
+    "Nothing was cut. Commit the doc's pending changes (each writes its stable record with \
+     it), or reopen the doc from the store, then cut again.")
+    .indirect("the native engine's single-writer mode (feature native)");
+
+CHECKPOINT_OVER_LIMIT = e("MPCE-E1010", "checkpoint_over_limit", Limits, 2,
+    "the MPCE seam (stable codes)", &["(host)"],
+    "the engine refused a cut: the native doc's checkpoint would be over a limit",
+    "Nothing was written. The doc keeps working from its log as it is, more slowly as the log \
+     grows; it isn't cut while the checkpoint is over the limit.")
+    .indirect("the native engine's cut (feature native)");
 
 OUTBOUND_FRAME_TOO_LARGE = e("MPCE-E982", "outbound_frame_too_large", Limits, 2,
     "the MPCE seam (stable codes)", SYNC,

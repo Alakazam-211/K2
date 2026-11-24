@@ -229,7 +229,7 @@ impl IndexJob {
             no: sp.no,
             blob: &self.blob,
             pack: self.spec.pack,
-            format: self.spec.format,
+            format: self.spec.stored_format(),
             row: &encoded,
             keys: keys_enc.as_deref(),
         })?;
@@ -247,7 +247,7 @@ impl IndexJob {
                     sp.no,
                     &self.blob,
                     self.spec.pack,
-                    self.spec.format,
+                    self.spec.stored_format(),
                 )?;
                 status = match stored {
                     Some(RowStatus::Ready { nodes }) => IndexStatus::Ready {
@@ -306,8 +306,8 @@ impl IndexJob {
     /// stored ones, else minted, carried from a neighbour and stored, exactly as a read of the
     /// version mints them); `None` when it isn't there.
     fn stored_view(&self, no: u64, version: VersionId, blob: &BlobId) -> Option<IndexView> {
-        let formats = [Some(self.spec.format), self.spec.older_format];
-        formats.into_iter().flatten().find_map(|format| {
+        let formats = std::iter::once(self.spec.stored_format()).chain(self.spec.fallbacks());
+        formats.into_iter().find_map(|format| {
             let raw = self
                 .store
                 .blob_struct_row(no, blob, self.spec.pack, format)
@@ -329,10 +329,7 @@ impl IndexJob {
                 }
                 k
             } else {
-                let spec = IndexSpec {
-                    format,
-                    ..self.spec
-                };
+                let spec = self.spec.at(format);
                 ensure_keys_in(&self.store, self.doc, version, no, blob, &spec, &ready).ok()?
             };
             view_of(version, ready, &keys).ok()
@@ -357,54 +354,96 @@ impl IndexJob {
                     IndexStatus::NotIndexed { version, why },
                 )
             }
-            // the view items only from a pack that bumped its format for them: an older kit,
-            // asking under the older format, never meets a row that carries them
-            IndexOutcome::Draft(d) if d.has_view_items() && self.spec.older().is_none() => {
-                return Err(IndexJobError::BadResult(
-                    "view items from a pack whose index spec names no older format \
-                     (IndexSpec::with_older_format)"
-                        .to_owned(),
-                ))
+            // the view items only from a pack that bumped its format for them, and own record
+            // digests only from a spec that declares them (stored under the kit's offset
+            // format): an older kit never meets a row that carries either
+            IndexOutcome::Draft(d) => {
+                if let Some(why) = later_items_refused(&d, &self.spec) {
+                    return Err(IndexJobError::BadResult(why));
+                }
+                self.shaped_row(d, space_key, no)?
             }
-            IndexOutcome::Draft(d) => match d.shape(&self.limits) {
-                Err(DraftFault::Malformed(m)) => return Err(IndexJobError::BadResult(m)),
-                Err(DraftFault::Over(why)) => (
+        })
+    }
+
+    /// A draft the spec allows, as its row, keys and status.
+    fn shaped_row(
+        &self,
+        d: crate::index::IndexDraft,
+        space_key: &[u8; 32],
+        no: u64,
+    ) -> std::result::Result<(StructRow, Option<KeysRow>, IndexStatus), IndexJobError> {
+        let version = self.version;
+        let shape = match d.shape(&self.limits) {
+            Err(DraftFault::Malformed(m)) => return Err(IndexJobError::BadResult(m)),
+            Err(DraftFault::Over(why)) => {
+                return Ok((
                     StructRow::NotIndexed(why.clone()),
                     None,
                     IndexStatus::NotIndexed { version, why },
-                ),
-                Ok(shape) => {
-                    let ready = build_row(&d, &shape, space_key);
-                    // the planted fault: a seeded row's keys minted afresh, not carried
-                    let carry = !(self.seeded
-                        && plant_on!(
-                            crate::differential::tier0_verb_mutant()
-                                == Some(crate::differential::Tier0VerbMutant::SeedWithoutCarry)
-                        ));
-                    let keys = if needs_mint(&ready) {
-                        Some(minted(
-                            &self.store,
-                            self.doc,
-                            version,
-                            no,
-                            &self.blob,
-                            &self.spec,
-                            &ready,
-                            carry,
-                        )?)
-                    } else {
-                        None
-                    };
-                    let nodes = ready.nodes.len() as u32;
-                    (
-                        StructRow::Ready(ready),
-                        keys,
-                        IndexStatus::Ready { version, nodes },
-                    )
-                }
-            },
-        })
+                ))
+            }
+            Ok(shape) => shape,
+        };
+        let ready = build_row(&d, &shape, space_key);
+        // the planted fault: a seeded row's keys minted afresh, not carried
+        let carry = !(self.seeded
+            && plant_on!(
+                crate::differential::tier0_verb_mutant()
+                    == Some(crate::differential::Tier0VerbMutant::SeedWithoutCarry)
+            ));
+        let keys = if needs_mint(&ready) {
+            Some(minted(
+                &self.store,
+                self.doc,
+                version,
+                no,
+                &self.blob,
+                &self.spec.at(self.spec.stored_format()),
+                &ready,
+                carry,
+            )?)
+        } else {
+            None
+        };
+        let nodes = ready.nodes.len() as u32;
+        Ok((
+            StructRow::Ready(ready),
+            keys,
+            IndexStatus::Ready { version, nodes },
+        ))
     }
+}
+
+/// Why a draft's later items are refused under `spec` (`MPC-E714`), if they are: view items
+/// from a spec that names no older format (a pack hands them only from a format it bumped to
+/// for them), own record digests from one that doesn't declare them
+/// ([`IndexSpec::with_own_records`]: the kit stores them under its offset format), or a spec
+/// with own records whose format reaches the offset.
+fn later_items_refused(d: &crate::index::IndexDraft, spec: &IndexSpec) -> Option<String> {
+    if d.has_view_items() && spec.older().is_none() {
+        return Some(
+            "view items from a pack whose index spec names no older format: bump the format \
+             and name the one before (IndexSpec::with_older_format)"
+                .to_owned(),
+        );
+    }
+    if d.has_own() && !spec.own_records {
+        return Some(
+            "own record digests from a pack whose index spec doesn't declare them: declare \
+             them (IndexSpec::with_own_records), so the kit stores them where an older kit \
+             never reads"
+                .to_owned(),
+        );
+    }
+    if spec.own_records && spec.format >= crate::index::OWN_FORMAT_OFFSET {
+        return Some(format!(
+            "an index spec with own records at format {}: its format must stay below {}",
+            spec.format,
+            crate::index::OWN_FORMAT_OFFSET
+        ));
+    }
+    None
 }
 
 /// Version `version`'s minted keys as a read takes them: the stored ones for this pack and
@@ -512,13 +551,16 @@ impl BlobSession {
         Ok(self.status_at(t, spec)?.0)
     }
 
-    /// [`BlobSession::status_of`], and the format of the row it read: `spec.format`'s, else
-    /// (none there, and the spec names an older format) a ready row of that older format,
-    /// which reads with the view items absent ([`IndexSpec::with_older_format`]).
+    /// [`BlobSession::status_of`], and the stored format of the row it read: the spec's
+    /// ([`IndexSpec::stored_format`]: the kit's offset one for a spec with own records), else
+    /// (none there) the first ready row of [`IndexSpec::fallbacks`] (the pack's own format for a
+    /// spec with own records, then its older format), which reads with the items it lacks
+    /// absent ([`IndexSpec::with_older_format`], [`IndexSpec::with_own_records`]).
     fn status_at(&self, t: &Target, spec: &IndexSpec) -> Result<(IndexStatus, u32)> {
         let version = t.version;
         let cap = self.config.blob_index_max_bytes;
-        let not_indexed = |why| Ok((IndexStatus::NotIndexed { version, why }, spec.format));
+        let stored = spec.stored_format();
+        let not_indexed = |why| Ok((IndexStatus::NotIndexed { version, why }, stored));
         if t.ver.redacted {
             return not_indexed(NotIndexedWhy::Purged);
         }
@@ -538,28 +580,25 @@ impl BlobSession {
             return not_indexed(NotIndexedWhy::Purged);
         }
         let status = |f| t.store.blob_struct_status(sp.no, &t.ver.blob, spec.pack, f);
-        Ok(match status(spec.format)? {
-            Some(RowStatus::Ready { nodes }) => {
-                (IndexStatus::Ready { version, nodes }, spec.format)
-            }
-            Some(RowStatus::NotIndexed(why)) => {
-                (IndexStatus::NotIndexed { version, why }, spec.format)
-            }
+        Ok(match status(stored)? {
+            Some(RowStatus::Ready { nodes }) => (IndexStatus::Ready { version, nodes }, stored),
+            Some(RowStatus::NotIndexed(why)) => (IndexStatus::NotIndexed { version, why }, stored),
             None => {
-                let older = match spec.older() {
-                    Some(o) => status(o)?.map(|s| (s, o)),
-                    None => None,
-                };
-                match older {
-                    Some((RowStatus::Ready { nodes }, o)) => {
-                        (IndexStatus::Ready { version, nodes }, o)
+                let mut older = None;
+                for f in spec.fallbacks() {
+                    if let Some(RowStatus::Ready { nodes }) = status(f)? {
+                        older = Some((nodes, f));
+                        break;
                     }
-                    _ => (
+                }
+                match older {
+                    Some((nodes, f)) => (IndexStatus::Ready { version, nodes }, f),
+                    None => (
                         IndexStatus::Pending {
                             version,
                             running: self.index_flight.contains(&t.ver.blob),
                         },
-                        spec.format,
+                        stored,
                     ),
                 }
             }
@@ -590,7 +629,7 @@ impl BlobSession {
         let t = self.index_target(version)?;
         let due = match self.status_at(&t, &spec)? {
             (IndexStatus::Pending { running, .. }, _) => !running,
-            (IndexStatus::Ready { .. }, f) => f != spec.format,
+            (IndexStatus::Ready { .. }, f) => f != spec.stored_format(),
             _ => false,
         };
         if !due {
@@ -643,7 +682,7 @@ impl BlobSession {
             .ok_or_else(|| SessionError::Broken("no space".into()))?;
         let stored = (
             t.store
-                .blob_struct_row(sp.no, &t.ver.blob, spec.pack, spec.format)?,
+                .blob_struct_row(sp.no, &t.ver.blob, spec.pack, spec.stored_format())?,
             t.store.blob_struct_keys(self.doc_id, version)?,
         );
         let slot = self
@@ -714,10 +753,8 @@ impl BlobSession {
         version: VersionId,
     ) -> Result<IndexView> {
         let unreadable = |why: String| SessionError::OutputUnreadable { why };
-        if draft.has_view_items() && spec.older().is_none() {
-            return Err(unreadable(
-                "view items from a pack whose index spec names no older format".to_owned(),
-            ));
+        if let Some(why) = later_items_refused(draft, spec) {
+            return Err(unreadable(why));
         }
         let limits = limits_of(&self.config);
         let shape = match draft.shape(&limits) {
@@ -754,7 +791,7 @@ impl BlobSession {
                 &ready,
                 Some((&was, &was_keys)),
                 spec.pack,
-                spec.format,
+                spec.stored_format(),
             )
         } else {
             KeysRow::default()
@@ -774,8 +811,8 @@ impl BlobSession {
             Err(std::sync::TryLockError::WouldBlock)
         ));
         let (status, format) = self.status_at(t, spec)?;
-        // the row read: this format's, or the older one's (its items absent, its keys its own)
-        let spec = IndexSpec { format, ..*spec };
+        // the row read: the stored format's, or a fallback's (its items absent, its keys its own)
+        let spec = spec.at(format);
         match status {
             IndexStatus::Ready { .. } => {}
             IndexStatus::Pending { version, .. } => {
@@ -856,7 +893,7 @@ impl BlobSession {
             return;
         };
         if matches!(
-            store.blob_struct_status(sp.no, &blob, spec.pack, spec.format),
+            store.blob_struct_status(sp.no, &blob, spec.pack, spec.stored_format()),
             Ok(None)
         ) {
             self.emit(AuditEvent::IndexWanted {

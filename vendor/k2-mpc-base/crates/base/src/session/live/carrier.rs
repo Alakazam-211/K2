@@ -181,10 +181,10 @@ impl Session {
             .disk
             .as_mut()
             .ok_or_else(|| SessionError::Disk("no disk replica to pair the carrier".into()))?;
-        let content = match &d.replica {
-            // a native doc's replica is the file's texts
-            super::Replica::Text(texts) => super::neutral(texts),
-            _ => self.content_of(d.replica.get()?)?,
+        let content = match d.replica.texts()? {
+            // a text doc's replica is the file's texts
+            Some(texts) => super::neutral(texts),
+            None => self.content_of(d.replica.get()?)?,
         };
         self.make_pairing(&content, &codec)
     }

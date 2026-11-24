@@ -1,0 +1,21 @@
+MPCE-E1013 stable_not_at_head (store)
+exit:     1
+message:  the engine refused a cut: the native doc's stable point isn't at its latest change
+next:     Nothing was cut. Commit the doc's pending changes (each writes its stable record with it), or reopen the doc from the store, then cut again.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E1013",
+  "name": "stable_not_at_head",
+  "area": "store",
+  "exit": 1,
+  "message": "the engine refused a cut: the native doc's stable point isn't at its latest change",
+  "next": "Nothing was cut. Commit the doc's pending changes (each writes its stable record with it), or reopen the doc from the store, then cut again.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

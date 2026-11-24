@@ -76,6 +76,41 @@ fn copy<K: redb::Key + 'static, V: redb::Value + 'static>(
     Ok(n)
 }
 
+/// [`copy`] less the table's first row: the plant `rewrite-drops-blob-verbs-row` (test builds
+/// only) on `blob_verbs`, a rewrite that loses a row of a table it knows.
+fn copy_but_first<K: redb::Key + 'static, V: redb::Value + 'static>(
+    r: &ReadTransaction,
+    w: &redb::WriteTransaction,
+    def: TableDefinition<K, V>,
+) -> Result<u64, StoreError> {
+    let src = match r.open_table(def) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    let mut dst = w.open_table(def)?;
+    let mut n = 0;
+    for kv in redb::ReadableTable::iter(&src)?.skip(1) {
+        let (k, v) = kv?;
+        dst.insert(k.value(), v.value())?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Test builds only: the plant `rewrite-drops-blob-verbs-row` (`MPC_STORE_PLANT`): a rewrite
+/// leaves the first row of `blob_verbs` out.
+#[cfg(test)]
+fn blob_verbs_row_dropped() -> bool {
+    std::env::var("MPC_STORE_PLANT").as_deref() == Ok("rewrite-drops-blob-verbs-row")
+}
+
+/// Outside test builds: nothing is planted.
+#[cfg(not(test))]
+fn blob_verbs_row_dropped() -> bool {
+    false
+}
+
 /// The first table this kit doesn't know (a multimap table, or a table in neither
 /// [`SHARED_TABLES`] nor [`DOC_TABLES`]), if any: data a newer kit wrote without a format
 /// bump.
@@ -118,6 +153,9 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
         }
         n += match *t {
             DocRows::One(d) => copy(&r, &w, d)?,
+            DocRows::Pair(d) if d.name() == "blob_verbs" && blob_verbs_row_dropped() => {
+                copy_but_first(&r, &w, d)?
+            }
             DocRows::Pair(d) => copy(&r, &w, d)?,
             DocRows::Owner(d) => copy(&r, &w, d)?,
             DocRows::Slot(d) => copy(&r, &w, d)?,

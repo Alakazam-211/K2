@@ -1,0 +1,21 @@
+MPCE-E1008 single_replica_mode (sessions and edits)
+exit:     2
+message:  the engine refused a sync call: the native doc keeps one copy, the host's
+next:     Nothing changed. Edit the doc through the host's session verbs; a native doc a store holds isn't synced to another copy.
+rule:     the MPCE seam (stable codes)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E1008",
+  "name": "single_replica_mode",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the engine refused a sync call: the native doc keeps one copy, the host's",
+  "next": "Nothing changed. Edit the doc through the host's session verbs; a native doc a store holds isn't synced to another copy.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

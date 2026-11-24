@@ -91,7 +91,7 @@ impl Session {
     /// or a deleted element holds. Without it: only what [`ReadResult::content`] shows.
     pub fn blob_refs(&self, conn: ConnId) -> Result<BlobRefs> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::Read, now)?;
         let store = self.store(st)?.clone();
@@ -106,7 +106,7 @@ impl Session {
     /// aren't. Needs read and history.
     pub fn blob_refs_at(&self, conn: ConnId, vid: crate::store::VersionId) -> Result<BlobRefs> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::History, now)?;
         self.admit(&mut st, conn, Need::History, Action::History, now)?;
         self.store(&st)?

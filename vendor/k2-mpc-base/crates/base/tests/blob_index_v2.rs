@@ -6,7 +6,9 @@
 //! stand-in ([`index_pack`] plus made-up items); the kit knows no format.
 //!
 //! The N−1 check against a previous release is `tools/n1/n1.sh layout-index` / `node-index`,
-//! with this file's ignored `n1_index_producer` and `n1_index_after`.
+//! with this file's ignored `n1_index_producer` and `n1_index_after`. Row format 3 (a
+//! container's own record digest, `DraftNode::own`) has its own: `layout-own` / `node-own`,
+//! with `n1_own_producer` and `n1_own_after`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -42,6 +44,11 @@ struct V2Pack {
     format: u32,
     older: Option<u32>,
     items: bool,
+    /// A parent's record holds its children's, with its own record's digest (row format 3:
+    /// [`IxPack::containers`]).
+    own: bool,
+    /// The spec declares own records ([`IndexSpec::with_own_records`]).
+    declared: bool,
 }
 
 /// The pack after the bump: format 2, items, reading format 1.
@@ -50,6 +57,8 @@ const BUMPED: V2Pack = V2Pack {
     format: 2,
     older: Some(1),
     items: true,
+    own: false,
+    declared: false,
 };
 
 /// The pack before it (and an older kit's): format 1, no items.
@@ -58,6 +67,8 @@ const BEFORE: V2Pack = V2Pack {
     format: 1,
     older: None,
     items: false,
+    own: false,
+    declared: false,
 };
 
 fn fonts() -> Vec<FontUse> {
@@ -118,9 +129,14 @@ fn add_items(d: &mut IndexDraft) {
 impl BlobPack for V2Pack {
     fn index_spec(&self) -> Option<IndexSpec> {
         let s = IndexSpec::new(self.pack, self.format, &VERBS);
-        Some(match self.older {
+        let s = match self.older {
             Some(o) => s.with_older_format(o),
             None => s,
+        };
+        Some(if self.declared {
+            s.with_own_records()
+        } else {
+            s
         })
     }
 
@@ -133,6 +149,7 @@ impl BlobPack for V2Pack {
         let base = IxPack {
             pack: self.pack,
             format: self.format,
+            containers: self.own,
             ..IxPack::default()
         };
         let mut d = base.index(src, size, limits)?;
@@ -590,4 +607,275 @@ fn n1_index_after() {
         assert!(f.view(&s).fonts.is_empty());
     }
     println!("N-1 INDEX OK");
+}
+
+// ----- row format 3: a container's own record digest -----
+
+/// A pack with own records, its format bumped as well: format 3, items and own digests
+/// (declared), reading format 2.
+const OWN3: V2Pack = V2Pack {
+    pack: "deck",
+    format: 3,
+    older: Some(2),
+    items: true,
+    own: true,
+    declared: true,
+};
+
+/// The pack before it (and a previous release's): format 2, items, no own digest.
+const OWN2: V2Pack = V2Pack {
+    pack: "deck",
+    format: 2,
+    older: Some(1),
+    items: true,
+    own: false,
+    declared: false,
+};
+
+/// A pack that gives own digests (declared) without bumping its format for them: the kit's
+/// offset format is what keeps its rows from an older kit asking for format 2.
+const UNBUMPED: V2Pack = V2Pack {
+    pack: "bad",
+    format: 2,
+    older: Some(1),
+    items: true,
+    own: true,
+    declared: true,
+};
+
+/// [`UNBUMPED`]'s pack as an older kit's: the same format, no own digest.
+const UNBUMPED_BEFORE: V2Pack = V2Pack {
+    own: false,
+    declared: false,
+    ..UNBUMPED
+};
+
+/// Each node's own record hash (by key) as `s`'s current index reads it: `true` when there.
+fn owns(s: &BlobSession) -> Vec<(String, bool)> {
+    s.index_view(None)
+        .unwrap()
+        .nodes
+        .iter()
+        .map(|n| (n.key.as_str().to_owned(), n.own_hash.is_some()))
+        .collect()
+}
+
+/// Whether the page (`@pg:1`) has a render hash in `s`'s current index (a view item: the
+/// previous release's pack gives that one only).
+fn renders(s: &BlobSession) -> bool {
+    s.index_view(None)
+        .unwrap()
+        .nodes
+        .iter()
+        .any(|n| n.key.as_str() == "@pg:1" && n.render_hash.is_some())
+}
+
+/// [`TREE`]'s nodes with whether each has an own record hash: the page and the group (the
+/// parents) when `own`.
+fn owned(own: bool) -> Vec<(String, bool)> {
+    ["@pg:1", "@pg:1/it:1", "@pg:1/it:2", "@pg:1/it:3"]
+        .iter()
+        .map(|k| (k.to_string(), own && (*k == "@pg:1" || *k == "@pg:1/it:2")))
+        .collect()
+}
+
+/// Own digests are stored and read back (row format 3); the same version read by the pack
+/// before them (format 2) is pending and indexed there, its commit taking the own-records row;
+/// read again by the own-records pack, that row reads with the own hashes absent and a job is
+/// offered that brings them back. Own digests from a spec that doesn't declare them are
+/// refused (`MPC-E714`), nothing recorded.
+#[test]
+fn own_digests_are_stored_and_an_older_row_reads_without_them() {
+    let f = fx("own");
+    let s = f.open(&OWN3, "a.idx", Some(&doc_file("a")));
+    index(&s);
+    let stored = owns(&s);
+    let s = f.reopen(&OWN2, "a.idx");
+    let before_bump = (s.index_status(None).unwrap(), index(&s), owns(&s));
+    let s = f.reopen(&OWN3, "a.idx");
+    let older = (owns(&s), s.index_job(None).unwrap().is_some());
+    index(&s);
+    let again = owns(&s);
+    let undeclared = V2Pack {
+        declared: false,
+        items: false,
+        ..OWN3
+    };
+    let u = f.open(&undeclared, "u.idx", Some(&doc_file("u")));
+    let out = u.index_job(None).unwrap().expect("a job").run();
+    let refused = matches!(out, Err(IndexJobError::BadResult(ref m))
+        if m.contains("own record digests") && m.contains("IndexSpec::with_own_records"));
+    let none_recorded = u.index_status(None).unwrap();
+    assert_eq!(
+        (stored, before_bump, older, again, refused, none_recorded),
+        (
+            owned(true),
+            (
+                IndexStatus::Pending {
+                    version: 1,
+                    running: false
+                },
+                IndexStatus::Ready {
+                    version: 1,
+                    nodes: 4
+                },
+                owned(false)
+            ),
+            (owned(false), true),
+            owned(true),
+            true,
+            IndexStatus::Pending {
+                version: 1,
+                running: false
+            }
+        ),
+        "own digests: stored (format 3); the format before them indexes the version again; read \
+         back with them absent and a job offered; undeclared, refused and nothing recorded \
+         ({out:?})"
+    );
+}
+
+/// A pack that declares own records without bumping its format: the kit stores its rows under
+/// the offset format, so the same pack without own digests (an older kit's, asking for the
+/// same format) finds the version pending, never a row of format 3; it indexes it, and the
+/// own-records pack then reads that row (its own format, a fallback) with the own hashes
+/// absent and a job offered that brings them back. Plant: `own-offset-skipped` (the pack's
+/// format used: the older pack reads the format-3 row).
+#[test]
+fn own_records_live_out_of_an_older_kits_reach() {
+    under_env_index_mutant(|| {
+        let f = fx("own-offset");
+        let s = f.open(&UNBUMPED, "b.idx", Some(&doc_file("b")));
+        index(&s);
+        let stored = owns(&s);
+        let s = f.reopen(&UNBUMPED_BEFORE, "b.idx");
+        let older_kit = s.index_status(None).unwrap();
+        if matches!(older_kit, IndexStatus::Pending { .. }) {
+            index(&s);
+        }
+        let s = f.reopen(&UNBUMPED, "b.idx");
+        let back = (
+            s.index_status(None).unwrap(),
+            owns(&s),
+            s.index_job(None).unwrap().is_some(),
+        );
+        assert_eq!(
+            (stored, older_kit, back),
+            (
+                owned(true),
+                IndexStatus::Pending {
+                    version: 1,
+                    running: false
+                },
+                (
+                    IndexStatus::Ready {
+                        version: 1,
+                        nodes: 4
+                    },
+                    owned(false),
+                    true
+                )
+            ),
+            "own records out of an older kit's reach: stored under the offset format, the same \
+             format without own digests finds the version pending, then this pack reads that \
+             row with them absent"
+        );
+    });
+}
+
+/// The store this build writes for the previous release (`<dir>/own`): `a.idx` indexed by a
+/// pack with own records and a bumped format (3), `bad.idx` by one that declared own records
+/// without bumping (format 2, the one the previous release reads): both stored under the kit's
+/// offset format. Under `MPC_INDEX_MUTANT=own-offset-skipped` (the plant run of `node-own`),
+/// they are stored under the packs' own formats instead.
+#[test]
+#[ignore = "N-1: run by tools/n1/n1.sh node-own"]
+fn n1_own_producer() {
+    under_env_index_mutant(|| {
+        let dir = n1_dir().join("own");
+        let _ = fs::remove_dir_all(&dir);
+        let f = fx_at(&dir, true);
+        let a = f.open(&OWN3, "a.idx", Some(&doc_file("a")));
+        index(&a);
+        assert_eq!(owns(&a), owned(true), "a.idx: own hashes stored");
+        let bad = f.open(&UNBUMPED, "bad.idx", Some(&doc_file("bad")));
+        index(&bad);
+        assert_eq!(owns(&bad), owned(true), "bad.idx: own hashes stored");
+        for k in ["a.idx", "bad.idx"] {
+            f.mgr.close(&key(k), "n1").unwrap();
+        }
+        println!(
+            "N-1 OWN producer: a.idx (pack format 3) and bad.idx (pack format 2), own records \
+             (planted: {:?})",
+            k2_mpc_base::differential::index_mutant()
+        );
+    });
+}
+
+/// After the previous release ran on this build's store (`<dir>/own`) and wrote its own
+/// (`<dir>/prev-own`): `a.idx` and `bad.idx` read from the rows the previous release recorded
+/// (format 2 each: its commit took the offset rows), own hashes absent, and a job brings them
+/// back; `p.idx`, the previous release's row of format 2, reads as it wrote it, its view items
+/// there and no own hash, until indexed again.
+#[test]
+#[ignore = "N-1: run by tools/n1/n1.sh node-own"]
+fn n1_own_after() {
+    let f = fx_at(&n1_dir().join("own"), true);
+    for (pack, doc) in [(&OWN3, "a.idx"), (&UNBUMPED, "bad.idx")] {
+        let s = f.open(pack, doc, None);
+        assert_eq!(
+            (s.index_status(None).unwrap(), owns(&s), renders(&s)),
+            (
+                IndexStatus::Ready {
+                    version: 1,
+                    nodes: 4
+                },
+                owned(false),
+                true
+            ),
+            "own/{doc}: the previous release's format-2 row reads, own hashes absent, its view \
+             item there"
+        );
+        index(&s);
+        assert_eq!(
+            owns(&s),
+            owned(true),
+            "own/{doc}: indexed again, own hashes back"
+        );
+    }
+    let p = fx_at(&n1_dir().join("prev-own"), true);
+    let s = p.open(&OWN3, "p.idx", None);
+    let ix = p.view(&s);
+    assert_eq!(
+        (
+            s.index_status(None).unwrap(),
+            owns(&s),
+            renders(&s),
+            unit(&ix, "@pg:1/it:1")
+                .text
+                .as_ref()
+                .map(|x| x.summary.clone())
+        ),
+        (
+            IndexStatus::Ready {
+                version: 1,
+                nodes: 4
+            },
+            owned(false),
+            true,
+            Some("Hello".to_owned())
+        ),
+        "prev-own/p.idx: the previous release's row of format 2 reads as written"
+    );
+    assert!(
+        s.index_job(None).unwrap().is_some(),
+        "prev-own/p.idx: a job is offered"
+    );
+    index(&s);
+    assert_eq!(
+        owns(&s),
+        owned(true),
+        "prev-own/p.idx: indexed again, own hashes there"
+    );
+    println!("N-1 OWN OK");
 }

@@ -150,9 +150,13 @@ mod disk_crash_tests;
 #[cfg(test)]
 mod engine_check_tests;
 #[cfg(test)]
+mod fair_lock_tests;
+#[cfg(test)]
 mod grouped_commit_tests;
 #[cfg(test)]
 mod manager_tests;
+#[cfg(test)]
+mod n1_retired_tests;
 #[cfg(test)]
 mod native_beta_tests;
 #[cfg(test)]
@@ -160,7 +164,11 @@ mod one_writer_tests;
 #[cfg(test)]
 mod promote_crash_tests;
 #[cfg(test)]
+mod release_tests;
+#[cfg(test)]
 mod tier0_crash_tests;
+#[cfg(test)]
+mod undo_budget_tests;
 #[cfg(test)]
 mod writeback_diff_tests;
 

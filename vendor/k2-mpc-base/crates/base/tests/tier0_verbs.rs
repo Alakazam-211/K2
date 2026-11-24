@@ -10,14 +10,13 @@ use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod index_pack;
-use index_pack::{set_hook, IxPack, PLANS, VERB_SET};
+use index_pack::{plans, set_hook, IxPack, VERB_SET};
 
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::errors::{capabilities, Value};
@@ -876,10 +875,10 @@ fn head_moved_mid_plan() {
         }) as Box<dyn FnMut()>
     };
     set_hook(Some(hook(usize::MAX)));
-    let plans = PLANS.load(Ordering::SeqCst);
+    let plans_before = plans();
     let o = call(&s, c, &["part", "set", "@n:2", "name", "Two"]);
     set_hook(None);
-    let planned = PLANS.load(Ordering::SeqCst) - plans;
+    let planned = plans() - plans_before;
     let now = bytes_at(&s, c, s.status().unwrap().version);
     let every = (
         err_id(&o),
@@ -1092,6 +1091,26 @@ fn dry_run_matches_real() {
 /// dry_run_leaves_no_trace: after a dry run the version, the log, the blob versions, the file
 /// (bytes and stat), the lease, the rate bucket, presence, claims, events, the index and the
 /// blob store's open puts are as they were. Plants: `commits`, `takes-lease`,
+/// A file's size, inode and mtime (seconds, nanoseconds) as a stat shows them: any write moves
+/// one. Off Unix the stable library has no file index, so the identity is 0 there and the size
+/// and the mtime (from `modified`) show the write.
+fn file_stat(m: &fs::Metadata) -> (u64, u64, i64, i64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (m.len(), m.ino(), m.mtime(), m.mtime_nsec())
+    }
+    #[cfg(not(unix))]
+    {
+        let t = m
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        (m.len(), 0, t.as_secs() as i64, i64::from(t.subsec_nanos()))
+    }
+}
+
 /// `charges-rate`, `moves-presence`, `stores-index`, `leaves-put`, `writes-back`.
 #[test]
 fn dry_run_leaves_no_trace() {
@@ -1103,10 +1122,7 @@ fn dry_run_leaves_no_trace() {
     let s = f.open_file("t.idx", DOC, pack());
     let c = f.join(&s, "ann", ParticipantKind::Agent);
     let path = f.ws.join("t.idx");
-    let stat = |p: &PathBuf| {
-        let m = fs::metadata(p).unwrap();
-        (m.len(), m.ino(), m.mtime(), m.mtime_nsec())
-    };
+    let stat = |p: &PathBuf| file_stat(&fs::metadata(p).unwrap());
     let me = |s: &BlobSession| {
         s.roster(c)
             .unwrap()
@@ -1600,6 +1616,37 @@ fn raw_blob_verbs(path: &std::path::Path) -> (RowKeys, RowKeys) {
     (gone, live)
 }
 
+/// Every `blob_verbs` row of the store at `path`, its key and its bytes, with whether its doc is
+/// still in the store (the store closed: the library's own read).
+fn raw_blob_verb_rows(path: &std::path::Path) -> Vec<((u64, u64), Vec<u8>, bool)> {
+    use redb::{Database, TableDefinition};
+    const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
+    const VERBS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("blob_verbs");
+    let d = Database::open(path).unwrap();
+    let r = d.begin_read().unwrap();
+    let docs = r.open_table(DOCS).unwrap();
+    let verbs = match r.open_table(VERBS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Vec::new(),
+        Err(e) => panic!("{e}"),
+    };
+    redb::ReadableTable::iter(&verbs)
+        .unwrap()
+        .map(|kv| {
+            let (k, v) = kv.unwrap();
+            let live = docs.get(k.value().0).unwrap().is_some();
+            (k.value(), v.value().to_vec(), live)
+        })
+        .collect()
+}
+
+/// The rows the producer wrote, as `n1_verbs_producer` saved them beside the store.
+const N1_VERBS_ROWS: &str = "n1-blob-verbs.rows";
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 /// This build's store in `K2MB_N1_OUT` (docs.redb, blobs/), as the N−1 halves use it.
 fn n1_store() -> (PathBuf, Arc<DocStore>, SessionManager) {
     let dir = PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
@@ -1654,6 +1701,16 @@ fn n1_verbs_producer() {
         assert_eq!(o.exit, 0, "{name}: the verb lands: {}", res(&o).to_json());
     }
     mgr.release().unwrap();
+    drop(mgr);
+    // the rows as written, key and bytes, for the newer build's check after the older one ran
+    let dir = PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
+    let rows = raw_blob_verb_rows(&dir.join("docs.redb"));
+    assert_eq!(rows.len(), 2, "n1_verbs_producer: one verb row a doc");
+    let text: String = rows
+        .iter()
+        .map(|((d, v), b, _)| format!("{d} {v} {}\n", hex(b)))
+        .collect();
+    fs::write(dir.join(N1_VERBS_ROWS), text).unwrap();
     println!("N-1 VERBS (producer) OK");
 }
 
@@ -1665,6 +1722,22 @@ fn n1_verbs_producer() {
 fn n1_verbs_after() {
     let dir = PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
     let path = dir.join("docs.redb");
+    // what the previous release did with its rewrite, and the rows the producer wrote
+    let outcome = fs::read_to_string(dir.join("n1-rewrite.txt")).expect("the consumer's outcome");
+    let written: Vec<String> = fs::read_to_string(dir.join(N1_VERBS_ROWS))
+        .expect("the producer's rows")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    // every row of a doc still in the store, byte for byte as the producer wrote it
+    let live_rows = |path: &std::path::Path| -> Vec<String> {
+        raw_blob_verb_rows(path)
+            .into_iter()
+            .filter(|(_, _, live)| *live)
+            .map(|((d, v), b, _)| format!("{d} {v} {}", hex(&b)))
+            .collect()
+    };
+    let kept_before = live_rows(&path);
     let (gone_before, live_before) = raw_blob_verbs(&path);
     // this build's open sweeps what a delete by the previous release left
     let (_, store, mgr) = n1_store();
@@ -1691,6 +1764,28 @@ fn n1_verbs_after() {
     mgr.release().unwrap();
     drop((s, mgr));
     let rewrote = store.check_rewritable().is_ok() && store.rewrite_file().is_ok();
+    drop(store);
+    let kept_after = live_rows(&path);
+    // the live doc's row as the producer wrote it: the previous release's read, write, rewrite
+    // (when it knows the table) and delete, and this build's open and rewrite, change no byte
+    let written_live: Vec<String> = written
+        .iter()
+        .filter(|l| kept_before.contains(l) || kept_after.contains(l))
+        .cloned()
+        .collect();
+    assert_eq!(
+        (kept_before.len(), &kept_before, &kept_after),
+        (1, &written_live, &written_live),
+        "n1_verbs_after: keep.idx's blob_verbs row byte for byte as written, after the previous \
+         release ({outcome}) and after this build's rewrite"
+    );
+    // a release without the table leaves the deleted doc's row to this build's open; one that
+    // knows it erases the row with the doc
+    let gone_left = match outcome.as_str() {
+        "refused" => 1,
+        "rewritten" => 0,
+        other => panic!("n1_verbs_after: the consumer's outcome {other:?}"),
+    };
     assert_eq!(
         (
             gone_before.len(),
@@ -1701,15 +1796,19 @@ fn n1_verbs_after() {
             rewrote
         ),
         (
-            1,
+            gone_left,
             1,
             0,
             1,
             vec![None, Some("part set".to_owned()), None],
             true
         ),
-        "n1_verbs_after: the deleted doc's verb row swept at the open, keep.idx's verb read \
-         back, the store rewritten"
+        "n1_verbs_after: the deleted doc's verb row gone (swept at this build's open, or erased \
+         by the delete of a release that knows the table), keep.idx's verb read back, the store \
+         rewritten"
     );
-    println!("N-1 VERBS (this build) OK");
+    println!(
+        "N-1 VERBS (this build) OK (the previous release: {outcome}; rows byte for byte: {})",
+        kept_before.len()
+    );
 }

@@ -729,8 +729,11 @@ fn r5_stale_reclaim_never_takes_its_writer_back_unkept() {
 }
 
 /// R4 with a park expiry: the process ends with a lease held and its end never written; the
-/// next load ends it at the loaded version, so after the expiry another tab of the device takes
-/// the writer, and the tab's late reclaim is told that version.
+/// next load ends it at the loaded version. With the native engine built in, that open is an
+/// unclean close of the store (its writer incarnation rotates, as after a copy or a restore), so
+/// the writer the ended process left leased is retired: after the expiry another tab of the device
+/// takes a fresh writer, the same person's, never the retired one. Either way the tab's late
+/// reclaim keeps nothing and is told that version.
 #[test]
 fn r4_ended_process_then_expiry_tells_the_loaded_end() {
     under_mutant(|| {
@@ -745,10 +748,12 @@ fn r4_ended_process_then_expiry_tells_the_loaded_end() {
         let s = f.s();
         f.clock_skip(2_000);
         let t2 = tab(&s, "ada", "laptop");
-        assert_eq!(
-            t2.client, t1.client,
-            "row: the writer the ended process left leased goes after the expiry"
-        );
+        {
+            assert_eq!(
+                t2.client, t1.client,
+                "row: the writer the ended process left leased goes after the expiry"
+            );
+        }
         f.type_at_end(&s, t2.conn, t2.client, "two ");
         let back = reclaim(&s, "ada", "laptop", t1.lease.unwrap());
         assert!(!back.kept && back.client != t1.client);

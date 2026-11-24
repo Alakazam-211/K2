@@ -37,7 +37,8 @@
 //!
 //! Keys are zero-padded, so their string order is their number order. At
 //! [`super::CommitDurability::Immediate`] (the default) none of this is written: such a store
-//! never gets a floor, a mark or a lost range, unless a grouped opener left them.
+//! never gets a floor, a mark or a lost range, unless a grouped opener, or the store while it
+//! grouped ([`super::DocStore::set_commit_durability`]), left them.
 
 use redb::{ReadableTable, TableHandle, WriteTransaction};
 
@@ -225,6 +226,39 @@ fn newest_in(w: &WriteTransaction, s: Space, id: DocId) -> Result<Seq, StoreErro
     Ok(newest)
 }
 
+/// Retire, in `w`, every writer of every doc that a later join could reuse, so every writer
+/// after this is fresh and no `(writer, clock)` the store's line may already have given out is
+/// made again: each agent's ([`KIND_AGENT`]) gets the kind "never reused" (an own replica's);
+/// each person's on a device (a person-writer row, the host's device or the store's) is marked
+/// retired, the rest of its row kept, so a late reclaim of its last lease is still told when
+/// that lease ended. Owner rows stay, so authorship still names the same participant. The one
+/// place this is done: a recovery ([`recover_in`]) and an open whose writer incarnation rotated
+/// (the store was copied, moved or restored, or not closed cleanly). Returns how many it retired
+/// (a row retired before isn't counted again).
+pub(super) fn retire_reusable_writers(w: &WriteTransaction) -> Result<u32, StoreError> {
+    if !w.list_tables()?.any(|t| t.name() == CLIENT_KINDS.name()) {
+        return Ok(0);
+    }
+    let mut retire: Vec<((u64, u64), Vec<u8>)> = Vec::new();
+    for kv in w.open_table(CLIENT_KINDS)?.iter()? {
+        let (k, row) = kv?;
+        let row = row.value();
+        if row == [KIND_AGENT].as_slice() {
+            retire.push((k.value(), vec![KIND_OWN_REPLICA]));
+        } else if let Some(mut p) = dec_person_row(row).filter(|p| !p.retired) {
+            p.retired = true;
+            retire.push((k.value(), super::enc_person_row(&p).to_vec()));
+        }
+    }
+    let mut t = w.open_table(CLIENT_KINDS)?;
+    let mut n = 0;
+    for (k, row) in retire {
+        t.insert(k, row.as_slice())?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 /// What a recovery did ([`recover_in`]).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Recovered {
@@ -252,25 +286,10 @@ pub(super) fn recover_in(w: &WriteTransaction) -> Result<Recovered, StoreError> 
             }
         }
     }
-    // every writer a later join could reuse is retired: never reused again
-    let held = w.list_tables()?.any(|t| t.name() == CLIENT_KINDS.name());
-    let mut retire: Vec<(u64, u64)> = Vec::new();
-    if held {
-        for kv in w.open_table(CLIENT_KINDS)?.iter()? {
-            let (k, row) = kv?;
-            let row = row.value();
-            if row == [KIND_AGENT].as_slice() || dec_person_row(row).is_some() {
-                retire.push(k.value());
-            }
-        }
-    }
-    // the plant: a recovery leaves the reusable writers reusable
+    // every writer a later join could reuse is retired: never reused again (the plant: a
+    // recovery leaves the reusable writers reusable)
     if !crate::beta_plant::planted("no-rotation-after-recovery") {
-        let mut t = w.open_table(CLIENT_KINDS)?;
-        for k in retire {
-            t.insert(k, [KIND_OWN_REPLICA].as_slice())?;
-            out.retired += 1;
-        }
+        out.retired = retire_reusable_writers(w)?;
     }
     if out.lost_ranges > 0 {
         super::features::stamp_feature(w, super::FEATURE_SEQ_FLOOR)?;
@@ -324,5 +343,27 @@ pub(super) fn at_open(
 /// A grouped store's clean close, in `w`: the mark removed.
 pub(super) fn close(w: &WriteTransaction) -> Result<(), StoreError> {
     w.open_table(META)?.remove(GROUPED_OPEN)?;
+    Ok(())
+}
+
+/// A change of the store's durability from `was` to `now`, in its own commit `w`, which waits
+/// for the disk ([`super::DocStore::set_commit_durability`]): the mark set when the store
+/// starts grouping, so an abrupt stop after it is a recovery, as after a grouped open; removed
+/// when it stops, as a clean close removes it (every commit before is durable with `w`). A
+/// change of a group's bounds alone writes nothing: the floors already on disk are past every
+/// version given out, and the next one past a floor raises it under the new bound.
+pub(super) fn switched(
+    w: &WriteTransaction,
+    was: super::CommitDurability,
+    now: super::CommitDurability,
+) -> Result<(), StoreError> {
+    let grouped = |c| matches!(c, super::CommitDurability::Grouped { .. });
+    match (grouped(was), grouped(now)) {
+        (false, true) => {
+            w.open_table(META)?.insert(GROUPED_OPEN, 1)?;
+        }
+        (true, false) => close(w)?,
+        _ => {}
+    }
     Ok(())
 }

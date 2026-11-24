@@ -985,6 +985,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E524` | `cut_pending_records` | 6 | a cut after the commit | `(host)` | live |
 | `MPC-E525` | `cut_doc_open` | 6 | no cut of an open doc | `(host)` | live |
 | `MPC-E526` | `store_recovering` | 1 | grouped commits | `*` | live |
+| `MPC-E527` | `entry_engine_refused` | 6 | a log of one engine | `(host)` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -1192,6 +1193,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** grouped commits
 - **Exit:** 1
 - **Reached by:** a read or a write of a grouped store between a commit failing at the disk and the host's next tick or flush
+
+### MPC-E527 `entry_engine_refused`
+
+- **Message:** `a log entry of {entry} can't go in doc {doc}'s log: the doc is on engine {stored} (format {stored_format}); nothing was written`
+- **Next:** Nothing was written: this entry was made for a different engine than the doc's. Write only entries made by the doc's own engine.
+- **Rule:** a log of one engine
+- **Exit:** 6
+- **Reached by:** a store write of a log entry another engine made, or of an engine stamp the doc's log doesn't fit (a kit bug)
 
 ## 6xx: erasure
 
@@ -1991,5 +2000,8 @@ Reserved for the engine, which allocates its ranges (decode, admission and secur
 - `MPCE-E995` `merge_not_a_fold`
 - `MPCE-E997` `causal_check_over_limit`
 - `MPCE-E1000` `own_line_parents`
+- `MPCE-E1008` `single_replica_mode`
+- `MPCE-E1013` `stable_not_at_head`
+- `MPCE-E1010` `checkpoint_over_limit`
 - `MPCE-E982` `outbound_frame_too_large`
 - `MPCE-E986` `request_malformed`

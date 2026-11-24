@@ -1,9 +1,12 @@
 //! N−1 of a file type's own verbs on a blob doc (tools/n1/n1.sh `layout-verbs`), built against
 //! the previous release, which has no `blob_verbs` table. The store comes from this repo's
 //! `n1_verbs_producer`: two blob docs, each with a version a verb made (its `blob_verbs` row).
-//! The previous release must read the versions, write one, refuse a rewrite naming the table
-//! it doesn't know (NewerData), and delete a doc; this repo's `n1_verbs_after` then reads the
-//! verb back, finds the deleted doc's rows swept and rewrites.
+//! The previous release must read the versions, write one, and delete a doc. Its rewrite: a
+//! release without the table (v0.21.0 and before) refuses it, naming the table (NewerData); one
+//! that knows the table (v0.22.0 and later) rewrites the store. Which it was goes in
+//! `n1-rewrite.txt` beside the store. This repo's `n1_verbs_after` then reads the verb back,
+//! finds the deleted doc's rows gone (swept at its open, or erased by the delete of a release
+//! that knows the table), holds every row left byte for byte to its producer's, and rewrites.
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -59,14 +62,24 @@ fn main() {
     println!("versions read ({}); a version written", vs.len());
     mgr.release().unwrap();
     drop((s, mgr));
-    // a rewrite is refused, naming the table it doesn't know
-    match store.check_rewritable() {
+    // the rewrite: refused naming the table by a release that doesn't know it; done by one
+    // that does (this build then holds the rows to its producer's, byte for byte)
+    let outcome = match store.check_rewritable() {
         Err(StoreError::NewerData { table }) => {
             assert_eq!(table, "blob_verbs", "the rewrite names the table");
             println!("rewrite refused (NewerData: {table})");
+            "refused"
+        }
+        Ok(()) => {
+            store
+                .rewrite_file()
+                .expect("a release that knows blob_verbs rewrites the store");
+            println!("store rewritten (this release knows blob_verbs)");
+            "rewritten"
         }
         other => panic!("a rewrite of a store holding blob_verbs: {other:?}"),
-    }
+    };
+    std::fs::write(dir.join("n1-rewrite.txt"), outcome).unwrap();
     // a doc delete runs, leaving its verb rows to the newer build
     let gone = store.find(&key("gone.idx")).unwrap().expect("gone.idx");
     store.delete_doc(gone, now.load(Ordering::SeqCst)).unwrap();

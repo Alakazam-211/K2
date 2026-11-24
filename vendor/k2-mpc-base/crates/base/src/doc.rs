@@ -545,6 +545,12 @@ impl Doc {
     /// on yet) is never sent smaller or empty, so there it fails hard naming `MPC-E164`. Use
     /// [`Doc::try_state_vector`] (typed) or [`Doc::state_vector_parts`]. Before any host turns
     /// the native engine on, this is removed or made fallible in a breaking release.
+    ///
+    /// **Not supported for a native doc a store holds or a session opens** (it keeps one copy,
+    /// the host's: [`DocError::NativeOneReplica`] from the typed calls). There it has no vector
+    /// to give, so it returns the native engine's wire tag alone: never a vector, empty or
+    /// made up, that a peer could take as what this doc has. Every receiver refuses it (the
+    /// kit's sync calls with `MPC-E166`, any decoder as malformed), and it always returns.
     #[deprecated(note = "use try_state_vector (typed) or state_vector_parts")]
     pub fn state_vector(&self) -> Vec<u8> {
         self.inner.state_vector()
@@ -552,16 +558,28 @@ impl Doc {
 
     /// The state vector (what this doc has), for sync step 1, typed: on the native engine a
     /// vector past one frame is [`DocError::VectorNeedsParts`] (`MPC-E164`, the engine's
-    /// own code beside it); send [`Doc::state_vector_parts`] then. Yrs's never fails.
+    /// own code beside it); send [`Doc::state_vector_parts`] then. Yrs's never fails. A native
+    /// doc a store holds or a session opens keeps one copy, the host's: refused,
+    /// [`DocError::NativeOneReplica`] (`MPC-E166`), nothing encoded.
     pub fn try_state_vector(&self) -> Result<Vec<u8>, DocError> {
+        self.single_writer_refused()?;
         self.inner.try_state_vector()
     }
 
     /// The state vector as the frames a peer answers with diff parts: on the native engine,
     /// kind-4 vector parts (any number of writers; each carries this doc's limits hint), on
-    /// Yrs the one vector. Never a smaller or empty vector.
+    /// Yrs the one vector. Never a smaller or empty vector. A native doc a store holds or a
+    /// session opens keeps one copy, the host's: refused, [`DocError::NativeOneReplica`]
+    /// (`MPC-E166`), nothing encoded.
     pub fn state_vector_parts(&self) -> Result<Vec<Vec<u8>>, DocError> {
+        self.single_writer_refused()?;
         self.inner.state_vector_parts()
+    }
+
+    /// The typed refusal of a sync vector for a native doc in the single-writer mode
+    /// ([`DocError::NativeOneReplica`]); any other doc passes.
+    fn single_writer_refused(&self) -> Result<(), DocError> {
+        Ok(())
     }
 
     /// Full state, in the compact store format. Fails with [`DocError::Pending`] on a
@@ -710,6 +728,67 @@ impl Doc {
             });
         }
         self.inner.edit_as(client, edits)
+    }
+
+    /// [`Doc::edit_made`] planned on the session's `texts` (v0.24): a Yrs doc keeps no copy
+    /// of its own ([`Doc::set_session_texts`]); a native doc plans on its own engine.
+    pub(crate) fn edit_made_with_texts(
+        &mut self,
+        client: ClientId,
+        edits: &[Edit],
+        texts: &[(&'static str, crate::SharedText)],
+    ) -> Result<crate::engine::Made, DocError> {
+        if self.is_native() {
+            return self.edit_made(client, edits);
+        }
+        // `edit_made`'s checks, then the edit planned on `texts`
+        timed!(EditAs);
+        check_client(client)?;
+        let mut text = false;
+        for e in edits {
+            match e {
+                Edit::Text { root, hunks } => {
+                    self.root(root, Kind::Text)?;
+                    // checked on the text it is planned on (a walk of the doc otherwise)
+                    match texts.iter().find(|(r, _)| *r == root.as_str()) {
+                        Some((_, t)) => crate::text::diff::validate(t, hunks)?,
+                        None => self.inner.check_hunks(root, hunks)?,
+                    }
+                    text |= !hunks.is_empty();
+                }
+                Edit::List { root, .. } => self.root(root, Kind::MovableList)?,
+                Edit::Map { root, .. } => self.root(root, Kind::Map)?,
+            }
+        }
+        if !text && edits.iter().all(|e| matches!(e, Edit::Text { .. })) {
+            return Ok(crate::engine::Made {
+                edited: Edited {
+                    update: None,
+                    applied: Vec::new(),
+                },
+                firsts: vec![Vec::new(); edits.len()],
+            });
+        }
+        match &mut self.inner {
+            Engine::Yrs(y) => y.edit_as_supplied(client, edits, texts),
+        }
+    }
+
+    /// Tests only (v0.24): the bytes of text a Yrs doc caches (0 on the native engine).
+    #[cfg(test)]
+    pub(crate) fn text_cache_bytes_for_tests(&self) -> usize {
+        match &self.inner {
+            Engine::Yrs(y) => y.text_cache_bytes_for_tests(),
+        }
+    }
+
+    /// The session holds this doc's texts (v0.24): a Yrs doc keeps no copy of its own from
+    /// now on (its reads walk the doc; its edits are planned on the session's texts). No
+    /// effect on a native doc.
+    pub(crate) fn set_session_texts(&mut self, on: bool) {
+        match &mut self.inner {
+            Engine::Yrs(y) => y.set_session_texts(on),
+        }
     }
 
     /// Sample one edit in `every` for the runtime check of the edit path and the engine's

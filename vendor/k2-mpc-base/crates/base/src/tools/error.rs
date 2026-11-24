@@ -254,6 +254,8 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         | S::NativeEngineMissing { .. }
         | S::NativeFormatUnread { .. }
         | S::NativeSnapshotRefused { .. }
+        | S::EntryEngineRefused { .. }
+        | S::EngineStampRefused { .. }
         | S::NonceReused { .. }
         | S::PurgeDocOpen { .. }
         | S::CutPendingRecords { .. }
@@ -441,6 +443,18 @@ mod tests {
                 doc: 3,
                 stored: "mpce".into(),
                 stored_format: 1,
+            },
+            S::EntryEngineRefused {
+                doc: 3,
+                entry: "Yrs",
+                stored: "mpce".into(),
+                stored_format: 1,
+            },
+            S::EngineStampRefused {
+                doc: 3,
+                entry: "Yrs",
+                asked: "mpce".into(),
+                asked_format: 1,
             },
             S::Corrupt("log entry"),
             S::ClockOverflow(1 << 32),

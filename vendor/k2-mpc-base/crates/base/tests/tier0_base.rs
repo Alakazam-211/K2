@@ -18,7 +18,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::time::Duration;
 
 mod index_pack;
-use index_pack::{IxPack, BASE_SET};
+use index_pack::{IxPack, BASE_SET, CONTAINER_SET};
 
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::errors::Value;
@@ -979,5 +979,93 @@ fn person_lease_refuses_agent_verb() {
         ),
         "person_lease_refuses_agent_verb: a person's lease refuses an agent's verb (E701); \
          released, it lands"
+    );
+}
+
+/// A parent whose record holds its children's (the index pack's `containers`, as a deck's
+/// slide holds its shapes), under a format bumped for its own record digest.
+fn containers() -> IxPack {
+    IxPack {
+        format: 2,
+        verbs: CONTAINER_SET,
+        merge: true,
+        containers: true,
+        ..IxPack::default()
+    }
+}
+
+/// A layer (`@n:1`) and two lines in it.
+const NEST: &str = "IDX\n@n:1|layer|Walls|-|1|-|-|-\n@n:2|line|Door|0|1|-|door|-\n\
+                    @n:3|line|Window|0|1|-|window|-\n";
+
+/// base_container_children_alone: since the base, one line of a layer changed; the call sets
+/// the other line. The layer's record holds both, but its own record didn't change: the call
+/// lands, both changes kept. Plant: `container-always-counted`.
+#[test]
+fn base_container_children_alone() {
+    let f = fx("container");
+    let s = f.open("n.idx", NEST, containers());
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let v = head(&s).to_string();
+    let a = call(&s, ann, &["part", "set", "@n:3", "note", "x"]);
+    assert!(
+        err_id(&a).is_none(),
+        "setup: the change since the base lands ({})",
+        res(&a).to_json()
+    );
+    let o = call(&s, bot, &["part", "set", "@n:2", "note", "y", "--base", &v]);
+    assert_eq!(
+        (
+            outcome(&o).0,
+            field(&s, bot, "@n:2", NOTE),
+            field(&s, bot, "@n:3", NOTE)
+        ),
+        (None, Some("y".to_owned()), Some("x".to_owned())),
+        "base_container_children_alone: --base per node: a sibling's change since the base, \
+         seen on the layer only through its lines, lands; both kept ({})",
+        res(&o).to_json()
+    );
+}
+
+/// base_container_own_change_refused: since the base, the layer itself changed in a way only
+/// its record shows (a field the index doesn't read), with its other line; the call sets one
+/// of its lines: `MPC-E723` naming the layer, nothing written. Plant: `container-never-counted`.
+#[test]
+fn base_container_own_change_refused() {
+    let f = fx("container-own");
+    let s = f.open("n.idx", NEST, containers());
+    let ann = f.join(&s, "ann", ParticipantKind::Person);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let v = head(&s).to_string();
+    // the layer's own change together with a change to its other line: the line's change
+    // alone would explain the layer's record if its own record weren't asked
+    let own = NEST
+        .replace("Walls|-|1|-|-|-", "Walls|-|1|-|-|-|-|hidden")
+        .replace("window|-", "window|x");
+    s.write_bytes(ann, own.as_bytes(), head(&s))
+        .expect("setup: the layer's own change lands");
+    index(&s);
+    let h = head(&s);
+    let o = call(&s, bot, &["part", "set", "@n:2", "note", "y", "--base", &v]);
+    let key = detail(&o, "conflicts").and_then(|c| match c {
+        Value::List(l) => l
+            .first()
+            .and_then(|c| c.get("key"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        _ => None,
+    });
+    assert_eq!(
+        (err_id(&o), key, head(&s), field(&s, bot, "@n:2", NOTE)),
+        (
+            Some("MPC-E723".to_owned()),
+            Some("@n:1".to_owned()),
+            h,
+            None
+        ),
+        "base_container_own_change_refused: --base per node: the layer's own change since the \
+         base refuses E723, naming the layer; nothing written ({})",
+        res(&o).to_json()
     );
 }

@@ -31,6 +31,15 @@
 //! A pack hands them only from a format it bumped to for them, naming the older one
 //! ([`IndexSpec::with_older_format`]): an older kit, asking under the older format, never meets
 //! a row of format 2.
+//!
+//! **A container's own record** (row format 3). A pack whose node record holds its children's
+//! (a slide's whole XML) can also give each such node its own record's digest
+//! ([`DraftNode::own`]): the record with each child's span replaced by a stand-in naming the
+//! child. The kit's overlap checks (`--base` and a revert's) then count a change to that node
+//! that its changed children wholly explain as theirs, not its own
+//! ([`NodeChange::by_children`]). A row with no own digest is stored as format 2 (or 1), byte
+//! for byte as before; a pack hands them only from a format it bumped to for them, naming the
+//! older one, as for the view items.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -86,8 +95,10 @@ pub const INDEX_WHY_MAX: usize = 256;
 /// A pending index: how long a verb says to wait before retrying (`details.retry_after_ms`).
 pub const INDEX_RETRY_AFTER_MS: u64 = 1_000;
 /// The newest stored row format: 1 holds the nodes; 2 adds the view items ([`NodeView`], a
-/// node's render digest, [`IndexDraft::fonts`]). A row with no view item is written as 1.
-pub const INDEX_ROW_FORMAT: u8 = 2;
+/// node's render digest, [`IndexDraft::fonts`]); 3 adds each node's own record digest
+/// ([`DraftNode::own`]). A row is written as the lowest format that holds it: one with no own
+/// digest as 2, one with no view item either as 1.
+pub const INDEX_ROW_FORMAT: u8 = 3;
 /// Most fonts a draft lists ([`IndexDraft::fonts`]), and most a node names
 /// ([`NodeView::fonts`]).
 pub const INDEX_FONTS_MAX: usize = 1024;
@@ -141,7 +152,17 @@ pub struct IndexSpec {
     /// the same nodes, keys and fields ([`IndexSpec::with_older_format`]). `None`: only rows of
     /// `format` are read.
     pub older_format: Option<u32>,
+    /// The pack gives its containers an own record digest ([`DraftNode::own`],
+    /// [`IndexSpec::with_own_records`]): the kit then stores its rows and keys under the
+    /// offset format ([`OWN_FORMAT_OFFSET`]).
+    pub own_records: bool,
 }
+
+/// What the kit adds to a pack's `format` to store the rows of a spec with own records
+/// ([`IndexSpec::with_own_records`]): a format no older kit asks for, whatever the pack's
+/// own format is, so an older kit finds those versions pending and indexes them again, never
+/// decoding a row of format 3. A pack's `format` stays below it.
+pub const OWN_FORMAT_OFFSET: u32 = 1 << 24;
 
 impl IndexSpec {
     pub const fn new(pack: &'static str, format: u32, verbs: &'static IndexVerbs) -> Self {
@@ -150,13 +171,71 @@ impl IndexSpec {
             format,
             verbs,
             older_format: None,
+            own_records: false,
         }
     }
 
-    /// This format's rows are format `older`'s plus the view items ([`NodeView`]), and a pack
-    /// hands those only with this declared (`older` below `format`; a job refuses them
-    /// otherwise, `MPC-E714`). A version whose only row is of format `older` reads from it,
-    /// `Ready`, the items absent, with that format's minted keys, and
+    /// **The pack gives own record digests** ([`DraftNode::own`]: a container whose record
+    /// holds its children's). A draft with any from a spec that doesn't say so is refused
+    /// (`MPC-E714`), nothing recorded. The kit picks where they are stored, so the pack needn't
+    /// bump its format for them: rows and their minted keys go under `format` +
+    /// [`OWN_FORMAT_OFFSET`], read in order: that format, then `format` itself (a row made
+    /// before own records, or by an older kit), then [`IndexSpec::older_format`]. A version
+    /// read from either of the last two has no own hash, and
+    /// [`crate::session::BlobSession::index_job`] offers a job that indexes it again. An older
+    /// kit never asks for the offset format: it finds such a version pending, indexes it under
+    /// its own format, and its commit removes the offset row. Minted keys re-mint after such a
+    /// round trip (a format's keys are its own), as after any format bump.
+    pub const fn with_own_records(mut self) -> Self {
+        self.own_records = true;
+        self
+    }
+
+    /// The format the kit stores this spec's rows and keys under: `format`, or with own records
+    /// `format` + [`OWN_FORMAT_OFFSET`] (the planted fault `own-offset-skipped`: `format`).
+    pub(crate) fn stored_format(&self) -> u32 {
+        let skipped = plant_on!(
+            crate::differential::index_mutant()
+                == Some(crate::differential::IndexMutant::OwnOffsetSkipped)
+        );
+        if self.own_records && !skipped {
+            self.format.saturating_add(OWN_FORMAT_OFFSET)
+        } else {
+            self.format
+        }
+    }
+
+    /// The formats read when [`IndexSpec::stored_format`] has no row, in order: with own
+    /// records `format` (when it isn't the stored one) then the older format; else the older
+    /// format.
+    pub(crate) fn fallbacks(&self) -> Vec<u32> {
+        let stored = self.stored_format();
+        let mut out = Vec::with_capacity(2);
+        if self.own_records && self.format != stored {
+            out.push(self.format);
+        }
+        if let Some(o) = self.older() {
+            out.push(o);
+        }
+        out
+    }
+
+    /// This spec read at the stored format `format` (one of [`IndexSpec::stored_format`] and
+    /// [`IndexSpec::fallbacks`]): its rows and keys there, nothing more.
+    pub(crate) fn at(&self, format: u32) -> IndexSpec {
+        IndexSpec {
+            format,
+            older_format: None,
+            own_records: false,
+            ..*self
+        }
+    }
+
+    /// This format's rows are format `older`'s plus the later items (the view items,
+    /// [`NodeView`]), and a pack hands those only with this declared (`older` below `format`;
+    /// a job refuses them otherwise, `MPC-E714`). A version whose only row is of format
+    /// `older` reads from it, `Ready`, the items it lacks absent, with that format's minted
+    /// keys, and
     /// [`crate::session::BlobSession::index_job`] offers a job that indexes it again (optional:
     /// until then it shows fewer details). An older kit, which reads only format `older`, never
     /// meets a row of format 2: it finds a version indexed only here pending, indexes it under
@@ -482,6 +561,9 @@ pub struct IndexNode {
     /// Keyed; what draws it (a container's render closure), from the pack's render digest
     /// (row format 2).
     pub render_hash: Option<NodeHash>,
+    /// Keyed; its own record, its children's taken out ([`DraftNode::own`], row format 3);
+    /// `None` on an older row and on a node the pack gives none.
+    pub own_hash: Option<NodeHash>,
 }
 
 /// A version's index ([`crate::session::BlobSession::index_view`]).
@@ -731,6 +813,29 @@ mod tests {
     use super::*;
     use crate::blob::{BlobConfig, BlobStore};
     use crate::store::DocStore;
+
+    const V: IndexVerbs = IndexVerbs::new("l", "s", "d", "b", None);
+
+    /// A spec with own records is stored under the kit's offset format and reads it, then its
+    /// own format, then its older one; a spec without them under its format, then its older one.
+    /// A spec read at a format is that format alone.
+    #[test]
+    fn own_records_are_stored_under_the_offset_format() {
+        let own = IndexSpec::new("p", 2, &V)
+            .with_older_format(1)
+            .with_own_records();
+        assert_eq!(
+            (own.stored_format(), own.fallbacks()),
+            (2 + OWN_FORMAT_OFFSET, vec![2, 1])
+        );
+        let plain = IndexSpec::new("p", 2, &V).with_older_format(1);
+        assert_eq!((plain.stored_format(), plain.fallbacks()), (2, vec![1]));
+        let at = own.at(2);
+        assert_eq!(
+            (at.stored_format(), at.fallbacks(), at.own_records),
+            (2, Vec::new(), false)
+        );
+    }
 
     /// The digest key can't be read off a blob id: a file holding the derivation's domain
     /// string gets an id that isn't the key.

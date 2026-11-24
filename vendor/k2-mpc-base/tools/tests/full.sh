@@ -112,6 +112,72 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base::roster/two_connections_of_one_pid_each_get_their_own_device_caret
              k2-mpc-base::roster/a_caret_move_on_connection_2_emits_its_client' \
             crates/base/tests/roster.rs '' -- tests -p k2-mpc-base --features planted-device-bugs --test roster
+          # the text-only disk replica (v0.23, MPC_BETA_PLANT, the kit's lib): the synced state
+          # an outside save the doc doesn't hold is stored on, made from the replica's texts on
+          # fresh elements instead of decoded from the store (stale texts where the decoded state
+          # was needed), fails both rows that compare it with the decoded replica's, at the
+          # stored state's comparison
+          timed control_text_replica control text-replica -- tests -p k2-mpc-base --lib writeback_diff_tests
+          timed plant_text_replica_state plant yrs-replica-state-from-texts \
+            'k2-mpc-base/session::writeback_diff_tests::the_text_replica_matches_the_decoded_replica
+             k2-mpc-base/session::writeback_diff_tests::an_outside_save_the_doc_doesnt_hold_stores_what_the_decoded_replica_stored' \
+            crates/base/src/session/writeback_diff_tests.rs "the stored synced states" MPC_BETA_PLANT=yrs-replica-state-from-texts \
+            -- tests -p k2-mpc-base --lib text_replica_matches an_outside_save_the_doc_doesnt_hold
+          # the release after a write-back tick (v0.24, MPC_BETA_PLANT, the kit's lib): a writing
+          # tick that releases nothing fails the interval row at its first release assert and the
+          # default row at its kit's-own assert
+          timed control_write_release control write-release -- tests -p k2-mpc-base --lib release_tests
+          timed plant_write_release_skipped plant write-release-skipped \
+            'k2-mpc-base/session::release_tests::a_write_back_tick_releases_once_per_interval
+             k2-mpc-base/session::release_tests::the_release_after_a_write_is_off_at_zero_and_the_kits_own_by_default' \
+            crates/base/src/session/release_tests.rs "release" MPC_BETA_PLANT=write-release-skipped \
+            -- tests -p k2-mpc-base --lib release_tests
+          # the undo history at its real size (v0.24, MPC_BETA_PLANT, the kit's lib): a batch kept
+          # as built (spare slots) fails the slot row at its slot assert
+          timed control_undo_budget control undo-budget -- tests -p k2-mpc-base --lib undo_budget_tests
+          timed plant_undo_batch_unshrunk plant undo-batch-unshrunk \
+            'k2-mpc-base/session::undo_budget_tests::a_kept_batch_holds_only_what_it_needs' \
+            crates/base/src/session/undo_budget_tests.rs "in one slot" MPC_BETA_PLANT=undo-batch-unshrunk \
+            -- tests -p k2-mpc-base --lib undo_budget_tests
+          # the write locks' bounded order (MPC_BETA_PLANT, the kit's lib): the session lock taken
+          # as it comes free, whoever is first, fails the overtake row at its overtake assert;
+          # a person's call in the agents' lane fails it at its person assert (the timed typist
+          # rows and the store rows are left out of these runs)
+          timed control_fair_lock control fair-lock -- tests -p k2-mpc-base --lib fair_lock_tests::overtakes_a_person_behind_31_agents_at_most
+          timed plant_session_lock_barging plant session-lock-barging \
+            'k2-mpc-base/session::fair_lock_tests::overtakes_a_person_behind_31_agents_at_most_once_each' \
+            crates/base/src/session/fair_lock_tests.rs "overtaken" MPC_BETA_PLANT=session-lock-barging \
+            -- tests -p k2-mpc-base --lib fair_lock_tests::overtakes_a_person_behind_31_agents_at_most
+          timed plant_fair_lane_skipped plant fair-lane-skipped \
+            'k2-mpc-base/session::fair_lock_tests::overtakes_a_person_behind_31_agents_at_most_once_each' \
+            crates/base/src/session/fair_lock_tests.rs "overtaken" MPC_BETA_PLANT=fair-lane-skipped \
+            -- tests -p k2-mpc-base --lib fair_lock_tests::overtakes_a_person_behind_31_agents_at_most
+          # the store's writer turn (MPC_BETA_PLANT, the kit's lib): the turn skipped (the store
+          # library's own writer lock lets in whoever is first) fails the 31-docs row at its
+          # person assert
+          timed control_store_turn control store-turn -- tests -p k2-mpc-base --lib fair_lock_tests::overtakes_a_person_behind_31_agents_on_31
+          timed plant_store_gate_barging plant store-gate-barging \
+            'k2-mpc-base/session::fair_lock_tests::overtakes_a_person_behind_31_agents_on_31_other_docs' \
+            crates/base/src/session/fair_lock_tests.rs "overtaken" MPC_BETA_PLANT=store-gate-barging \
+            -- tests -p k2-mpc-base --lib fair_lock_tests::overtakes_a_person_behind_31_agents_on_31
+          # the session-owned texts (v0.24, MPC_BETA_PLANT, the kit's lib): an edit planned on a
+          # stale copy of the session's text fails the lockstep against the engine's cache at
+          # its first comparison
+          timed control_owned_texts control owned-texts -- tests -p k2-mpc-base --lib owned_texts
+          timed plant_session_text_stale plant session-text-stale \
+            'k2-mpc-base/session::writeback_diff_tests::the_session_owned_texts_match_the_engines_cache' \
+            crates/base/src/session/writeback_diff_tests.rs "differ" MPC_BETA_PLANT=session-text-stale \
+            -- tests -p k2-mpc-base --lib owned_texts
+          # the shared texts (v0.24, MPC_BETA_PLANT, the kit's lib): an edit of a shared live
+          # text that reaches its other holders (the disk replica's, the read bases') fails the
+          # rows that check those holders after sharing, each at its own assertion
+          timed control_shared_texts control shared-texts -- tests -p k2-mpc-base --lib shared_texts
+          timed plant_shared_text_written_in_place plant shared-text-written-in-place \
+            'k2-mpc-base/session::writeback_diff_tests::shared_texts_are_one_allocation_until_an_edit
+             k2-mpc-base/session::writeback_diff_tests::an_edit_after_shared_texts_leaves_the_replica_and_read_base_as_they_were
+             k2-mpc-base/session::writeback_diff_tests::outside_saves_after_shared_texts_match_the_decoded_replica' \
+            crates/base/src/session/writeback_diff_tests.rs "after sharing" MPC_BETA_PLANT=shared-text-written-in-place \
+            -- tests -p k2-mpc-base --lib shared_texts
           # the store's plants (MPC_STORE_PLANT, test builds of the kit's lib): the cache size not
           # applied (the store library's default, 1 GiB) fails the cache rows that read the
           # library's evictions, each at its own assertion; the open with a wait letting the
@@ -123,11 +189,40 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
              k2-mpc-base/store::cache_tests::an_open_with_a_wait_applies_the_cache_size' \
             crates/base/src/store/cache_tests.rs '(evictions 0)' MPC_STORE_PLANT=store-cache-ignored \
             -- tests -p k2-mpc-base --lib store::cache_tests
+          # the person-writer row's retired bit (MPC_BETA_PLANT, the kit's lib): written without it,
+          # the codec row fails at its retired round trip (the previous release's side of the same
+          # plant is tools/n1/n1.sh node-retired's)
+          timed control_store_rows control store-rows -- tests -p k2-mpc-base --lib store::tests
+          timed plant_retired_bit_dropped plant retired-bit-dropped \
+            'k2-mpc-base/store::tests::person_writer_rows' \
+            crates/base/src/store/tests.rs 'a retired row keeps the rest of its row' MPC_BETA_PLANT=retired-bit-dropped \
+            -- tests -p k2-mpc-base --lib -E 'test(=store::tests::person_writer_rows)'
+          # a log entry of another engine than its doc's (MPC_BETA_PLANT, the kit's lib): the
+          # store's check skipped (any entry logged, as before) fails the row of every log write
+          # at its first refusal, the append's
+          timed plant_append_engine_check_skipped plant append-engine-check-skipped \
+            'k2-mpc-base/store::tests::an_entry_of_another_engine_is_refused_at_every_log_write' \
+            crates/base/src/store/tests.rs 'appended to a Yrs doc is refused' MPC_BETA_PLANT=append-engine-check-skipped \
+            -- tests -p k2-mpc-base --lib -E 'test(=store::tests::an_entry_of_another_engine_is_refused_at_every_log_write)'
+          # an engine stamp of the other entry engine over a doc's rows (MPC_BETA_PLANT, the
+          # kit's lib): the store's check skipped (any restamp written, as before) fails the
+          # restamp row at its first refusal, put_meta's
+          timed plant_restamp_engine_check_skipped plant restamp-engine-check-skipped \
+            'k2-mpc-base/store::tests::an_engine_restamp_under_a_log_is_refused' \
+            crates/base/src/store/tests.rs "a native stamp over a Yrs doc's log is refused" MPC_BETA_PLANT=restamp-engine-check-skipped \
+            -- tests -p k2-mpc-base --lib -E 'test(=store::tests::an_engine_restamp_under_a_log_is_refused)'
           timed control_store_lock control store-lock -- tests -p k2-mpc-base --lib store::lock_tests
           timed plant_retry_probe_then_open plant retry-probe-then-open \
             'k2-mpc-base/store::lock_tests::an_open_with_a_wait_keeps_the_store_it_found_free' \
             crates/base/src/store/lock_tests.rs 'the open with a wait opens' MPC_STORE_PLANT=retry-probe-then-open \
             -- tests -p k2-mpc-base --lib store::lock_tests
+          # a rewrite that leaves the first blob_verbs row out (MPC_STORE_PLANT, the kit's lib)
+          # fails the row that holds every blob_verbs row to its bytes, at that row's assert
+          timed control_store_verbs control store-verbs -- tests -p k2-mpc-base --lib store::verbs::tests
+          timed plant_rewrite_drops_blob_verbs_row plant rewrite-drops-blob-verbs-row \
+            'k2-mpc-base/store::verbs::tests::a_rewrite_keeps_every_blob_verbs_row_byte_for_byte' \
+            crates/base/src/store/verbs.rs 'byte for byte' MPC_STORE_PLANT=rewrite-drops-blob-verbs-row \
+            -- tests -p k2-mpc-base --lib store::verbs::tests
           # grouped commits (MPC_BETA_PLANT, the kit's lib): each plant alone fails its row of
           # session/grouped_commit_tests.rs at that row's own assertion
           timed control_grouped control grouped -- tests -p k2-mpc-base --lib session::grouped_commit_tests
@@ -203,6 +298,79 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base/session::grouped_commit_tests::barriers_make_the_group_durable' \
             crates/base/src/session/grouped_commit_tests.rs 'the barrier promote makes every commit before it durable' MPC_BETA_PLANT=barrier-skipped-promote \
             -- tests -p k2-mpc-base --lib session::grouped_commit_tests::barriers_make_the_group_durable
+          # the live switch of the durability (SessionManager::set_commit_durability): its commit
+          # made an ordinary one (the group left waiting) fails the switch-to-Immediate row at its
+          # durable-at-once assert; the setting changed at once, with no flush and no writer held,
+          # fails the race row at its switch assert
+          timed plant_g_durability_switch_skips_flush plant durability-switch-skips-flush \
+            'k2-mpc-base/session::grouped_commit_tests::a_switch_to_immediate_makes_the_group_durable_at_once' \
+            crates/base/src/session/grouped_commit_tests.rs 'makes every change before it durable at once' MPC_BETA_PLANT=durability-switch-skips-flush \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_switch_to_immediate_makes_the_group_durable_at_once
+          timed plant_g_durability_switch_mid_group plant durability-switch-mid-group \
+            'k2-mpc-base/session::grouped_commit_tests::a_switch_racing_edits_loses_and_tears_nothing' \
+            crates/base/src/session/grouped_commit_tests.rs 'every switch leaves every commit before it durable' MPC_BETA_PLANT=durability-switch-mid-group \
+            -- tests -p k2-mpc-base --lib session::grouped_commit_tests::a_switch_racing_edits_loses_and_tears_nothing
+          # the native Beta's plants that run without the engine (MPC_BETA_PLANT, the kit's lib):
+          # the cut cadence's settings and rules (session/native_beta_tests.rs), the cut queue
+          # (session/cut_queue_tests.rs), a native refusal's exit (errors/tests.rs) and the memory
+          # release (memory.rs); each alone fails the rows its docs name, at their own assertions
+          timed control_beta_cadence control beta-cadence -- tests -p k2-mpc-base --lib session::native_beta_tests
+          timed plant_bytes_before_t plant bytes-before-t \
+            'k2-mpc-base/session::native_beta_tests::the_cadence_above_30k_waits_for_the_bytes' \
+            crates/base/src/session/native_beta_tests.rs 'never due before T(n)' MPC_BETA_PLANT=bytes-before-t \
+            -- tests -p k2-mpc-base --lib session::native_beta_tests
+          timed plant_bytes_rule_below_30k plant bytes-rule-below-30k \
+            'k2-mpc-base/session::native_beta_tests::the_cadence_below_30k_is_the_t_rule' \
+            crates/base/src/session/native_beta_tests.rs 'whatever the tail'\''s bytes' MPC_BETA_PLANT=bytes-rule-below-30k \
+            -- tests -p k2-mpc-base --lib session::native_beta_tests
+          timed plant_bytes_rule_ignored plant bytes-rule-ignored \
+            'k2-mpc-base/session::native_beta_tests::forced_stays_live_above_30k
+             k2-mpc-base/session::native_beta_tests::the_cadence_above_30k_waits_for_the_bytes' \
+            crates/base/src/session/native_beta_tests.rs 'row: n=' MPC_BETA_PLANT=bytes-rule-ignored \
+            -- tests -p k2-mpc-base --lib session::native_beta_tests
+          timed plant_cadence_unchecked plant cadence-unchecked \
+            'k2-mpc-base/session::native_beta_tests::the_cadence_byte_settings_are_checked_and_listed
+             k2-mpc-base/session::native_beta_tests::the_cut_cadence_is_checked_and_defaults_to_the_betas' \
+            crates/base/src/session/native_beta_tests.rs 'is refused' MPC_BETA_PLANT=cadence-unchecked \
+            -- tests -p k2-mpc-base --lib session::native_beta_tests
+          timed plant_forced_dead_above_30k plant forced-dead-above-30k \
+            'k2-mpc-base/session::native_beta_tests::forced_stays_live_above_30k' \
+            crates/base/src/session/native_beta_tests.rs 'forced' MPC_BETA_PLANT=forced-dead-above-30k \
+            -- tests -p k2-mpc-base --lib session::native_beta_tests
+          timed control_cut_queue control cut-queue -- tests -p k2-mpc-base --lib session::cut_queue_tests
+          timed plant_duty_ignored plant duty-ignored \
+            'k2-mpc-base/session::cut_queue_tests::the_duty_gap_follows_a_measured_cut' \
+            crates/base/src/session/cut_queue_tests.rs 'inside the gap' MPC_BETA_PLANT=duty-ignored \
+            -- tests -p k2-mpc-base --lib session::cut_queue_tests
+          timed plant_forced_waits_for_idle plant forced-waits-for-idle \
+            'k2-mpc-base/session::cut_queue_tests::a_due_doc_is_queued_with_the_cadences_reason
+             k2-mpc-base/session::cut_queue_tests::a_forced_cut_runs_while_editing_goes_on' \
+            crates/base/src/session/cut_queue_tests.rs 'cut while not idle' MPC_BETA_PLANT=forced-waits-for-idle \
+            -- tests -p k2-mpc-base --lib session::cut_queue_tests
+          timed plant_idle_ignored plant idle-ignored \
+            'k2-mpc-base/session::cut_queue_tests::a_due_doc_is_queued_with_the_cadences_reason
+             k2-mpc-base/session::cut_queue_tests::the_queue_waits_for_idle' \
+            crates/base/src/session/cut_queue_tests.rs 'row:' MPC_BETA_PLANT=idle-ignored \
+            -- tests -p k2-mpc-base --lib session::cut_queue_tests
+          timed plant_queue_runs_two plant queue-runs-two \
+            'k2-mpc-base/session::cut_queue_tests::the_queue_hands_out_one_cut_at_a_time' \
+            crates/base/src/session/cut_queue_tests.rs 'no second cut' MPC_BETA_PLANT=queue-runs-two \
+            -- tests -p k2-mpc-base --lib session::cut_queue_tests
+          timed plant_refused_dropped plant refused-dropped \
+            'k2-mpc-base/session::cut_queue_tests::a_refused_cut_stays_queued_and_is_retried' \
+            crates/base/src/session/cut_queue_tests.rs 'stays queued' MPC_BETA_PLANT=refused-dropped \
+            -- tests -p k2-mpc-base --lib session::cut_queue_tests
+          timed control_native_exits control native-exits -- tests -p k2-mpc-base --lib errors::tests
+          timed plant_native_exit_drift plant native-exit-drift \
+            'k2-mpc-base/errors::tests::every_variant_maps_to_a_live_id_with_its_exit
+             k2-mpc-base/errors::tests::native_refusals_exit_as_their_standard_twins' \
+            crates/base/src/errors/tests.rs 'MPC-E721' MPC_BETA_PLANT=native-exit-drift \
+            -- tests -p k2-mpc-base --lib errors::tests
+          timed control_memory_release control memory-release -- tests -p k2-mpc-base --lib memory::tests
+          timed plant_release_skipped plant release-skipped \
+            'k2-mpc-base/memory::tests::freed_memory_leaves_the_process' \
+            crates/base/src/memory.rs 'the freed memory left the process' MPC_BETA_PLANT=release-skipped \
+            -- tests -p k2-mpc-base --lib memory::tests
           # the agent-result plants (differential::ErgoMutant, MPC_ERGO_MUTANT): each fails the rows
           # of tests/agent_results.rs that read what it breaks, at their own assertions. The
           # result written though not asked for changes every row's text, so its run is the one
@@ -440,7 +608,9 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
              k2-mpc-base::tier0_base/weak_key_if_version
              k2-mpc-base::tier0_base/base_dry_run_refuses_alike
              k2-mpc-base::tier0_base/two_agents_one_drawing
-             k2-mpc-base::tier0_base/swarm_on_one_doc' \
+             k2-mpc-base::tier0_base/swarm_on_one_doc
+             k2-mpc-base::tier0_base/base_container_children_alone
+             k2-mpc-base::tier0_base/base_container_own_change_refused' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-whole-doc \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_base_ignored plant t0b-base-ignored \
@@ -448,14 +618,16 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
              k2-mpc-base::tier0_base/base_selector_at_v
              k2-mpc-base::tier0_base/base_dry_run_refuses_alike
              k2-mpc-base::tier0_base/two_agents_one_drawing
-             k2-mpc-base::tier0_base/swarm_on_one_doc' \
+             k2-mpc-base::tier0_base/swarm_on_one_doc
+             k2-mpc-base::tier0_base/base_container_own_change_refused' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-ignored \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_base_node_level_only plant t0b-base-node-level-only \
             'k2-mpc-base::tier0_base/base_field_level
              k2-mpc-base::tier0_base/base_refuses_moved
              k2-mpc-base::tier0_base/two_agents_one_drawing
-             k2-mpc-base::tier0_base/swarm_on_one_doc' \
+             k2-mpc-base::tier0_base/swarm_on_one_doc
+             k2-mpc-base::tier0_base/base_container_children_alone' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=base-node-level-only \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_base_head_only plant t0b-base-head-only \
@@ -483,8 +655,19 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
              k2-mpc-base::tier0_base/base_selector_at_v
              k2-mpc-base::tier0_base/base_dry_run_refuses_alike
              k2-mpc-base::tier0_base/two_agents_one_drawing
-             k2-mpc-base::tier0_base/swarm_on_one_doc' \
+             k2-mpc-base::tier0_base/swarm_on_one_doc
+             k2-mpc-base::tier0_base/base_container_own_change_refused' \
             crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=plan-on-stale-head \
+            -- tests -p k2-mpc-base --test tier0_base
+          # a container's own record (index row format 3): the old count (every change to a
+          # container its own) and the opposite fault (its own record not asked)
+          timed plant_t0b_container_always_counted plant t0b-container-always-counted \
+            'k2-mpc-base::tier0_base/base_container_children_alone' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=container-always-counted \
+            -- tests -p k2-mpc-base --test tier0_base
+          timed plant_t0b_container_never_counted plant t0b-container-never-counted \
+            'k2-mpc-base::tier0_base/base_container_own_change_refused' \
+            crates/base/tests/tier0_base.rs '--base per node' MPC_T0V_MUTANT=container-never-counted \
             -- tests -p k2-mpc-base --test tier0_base
           timed plant_t0b_seed_gap_loses plant t0b-seed-gap-loses \
             'k2-mpc-base::tier0_base/seed_gap_race
@@ -566,18 +749,36 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
             'k2-mpc-base::tier0_batch/batch_strayed_union' \
             crates/base/tests/tier0_batch.rs 'a node no call declared refuses the batch' MPC_T0V_MUTANT=stray-unchecked \
             -- tests -p k2-mpc-base --test tier0_batch
+          # own records under the kit's offset format (tests/blob_index_v2.rs, MPC_INDEX_MUTANT):
+          # with the pack's own format used instead, the same format without own digests (an
+          # older kit's) reads the row of format 3
+          timed control_blob_index_v2 control blob-index-v2 -- tests -p k2-mpc-base --test blob_index_v2
+          timed plant_own_offset_skipped plant own-offset-skipped \
+            'k2-mpc-base::blob_index_v2/own_records_live_out_of_an_older_kits_reach' \
+            crates/base/tests/blob_index_v2.rs "out of an older kit's reach" MPC_INDEX_MUTANT=own-offset-skipped \
+            -- tests -p k2-mpc-base --test blob_index_v2
           # a tier-0 revert, undo and redo (tests/tier0_revert.rs): each plant alone fails the
           # rows that read what it breaks, at their own assertions
           timed control_tier0_revert control tier0-revert -- tests -p k2-mpc-base --test tier0_revert
           timed plant_t0rev_revert_takes_whole_version plant t0rev-revert-takes-whole-version \
             'k2-mpc-base::tier0_revert/revert_one_version
              k2-mpc-base::tier0_revert/undo_own_only
-             k2-mpc-base::tier0_revert/revert_stray_refused' \
+             k2-mpc-base::tier0_revert/revert_stray_refused
+             k2-mpc-base::tier0_revert/revert_container_children_alone' \
             crates/base/tests/tier0_revert.rs 'revert' MPC_T0V_MUTANT=revert-takes-whole-version \
             -- tests -p k2-mpc-base --test tier0_revert
           timed plant_t0rev_revert_overwrites plant t0rev-revert-overwrites \
-            'k2-mpc-base::tier0_revert/revert_conflict_names_who' \
-            crates/base/tests/tier0_revert.rs 'revert_conflict_names_who' MPC_T0V_MUTANT=revert-overwrites \
+            'k2-mpc-base::tier0_revert/revert_conflict_names_who
+             k2-mpc-base::tier0_revert/revert_container_own_change_refused' \
+            crates/base/tests/tier0_revert.rs 'since K refuses' MPC_T0V_MUTANT=revert-overwrites \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_container_always_counted plant t0rev-container-always-counted \
+            'k2-mpc-base::tier0_revert/revert_container_children_alone' \
+            crates/base/tests/tier0_revert.rs 'revert_container_children_alone' MPC_T0V_MUTANT=container-always-counted \
+            -- tests -p k2-mpc-base --test tier0_revert
+          timed plant_t0rev_container_never_counted plant t0rev-container-never-counted \
+            'k2-mpc-base::tier0_revert/revert_container_own_change_refused' \
+            crates/base/tests/tier0_revert.rs 'revert_container_own_change_refused' MPC_T0V_MUTANT=container-never-counted \
             -- tests -p k2-mpc-base --test tier0_revert
           timed plant_t0rev_revert_ignores_author plant t0rev-revert-ignores-author \
             'k2-mpc-base::tier0_revert/revert_needs_author_or_owner' \

@@ -56,6 +56,8 @@ impl Drop for TmpDir {
 }
 
 struct Fx {
+    /// Held for its drop (the folder goes with the fixture); read by the Unix-only symlink row.
+    #[cfg_attr(not(unix), allow(dead_code))]
     dir: TmpDir,
     /// The workspace: files live here.
     ws: PathBuf,
@@ -1858,8 +1860,13 @@ fn write_back_after_restart(by_version: bool) -> (Vec<AuditEvent>, Vec<SyncDrift
 /// replica in step from its version, as before the fix) the check fires once: the replica
 /// held the outside save's text, not the doc's. With the fix the reopen doesn't claim it, the
 /// write-back reloads the replica, and nothing fires. The sync audit is clean after both.
+/// That check is the decoded replica's (a structured doc's, and a text doc's before v0.23,
+/// kept by the test-only switch): a text doc's replica now holds the file's texts, with no
+/// catch-up for the fault to claim, so with or without it nothing is stale, nothing is
+/// reported, and the write-back is the doc's.
 #[test]
 fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
+    use k2_mpc_base::differential::with_decoded_replica;
     let repaired = |ev: &[AuditEvent]| {
         ev.iter()
             .filter(|e| matches!(e, AuditEvent::DiskReplicaRepaired { .. }))
@@ -1871,7 +1878,7 @@ fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
             .any(|e| matches!(e, AuditEvent::DiskReplicaMismatch { .. }))
     };
     // the fault planted: reported, with the lengths only, and repaired
-    let (ev, drift, state) = write_back_after_restart(true);
+    let (ev, drift, state) = with_decoded_replica(|| write_back_after_restart(true));
     let got = repaired(&ev);
     assert_eq!(got.len(), 1, "one report: {ev:?}");
     let AuditEvent::DiskReplicaRepaired {
@@ -1891,11 +1898,27 @@ fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
     assert_eq!(state, DiskState::Clean);
     assert_eq!(drift, vec![], "the sync audit after the repair");
     // the fix: nothing to report, and in sync
-    let (ev, drift, state) = write_back_after_restart(false);
+    let (ev, drift, state) = with_decoded_replica(|| write_back_after_restart(false));
     assert_eq!(repaired(&ev), vec![], "no report with the fix: {ev:?}");
     assert!(!mismatch(&ev), "{ev:?}");
     assert_eq!(state, DiskState::Clean);
     assert_eq!(drift, vec![], "the sync audit with the fix");
+    // v0.23, the text-only replica: nothing to claim, with the fault planted or not
+    for by_version in [true, false] {
+        let (ev, drift, state) = write_back_after_restart(by_version);
+        assert_eq!(
+            repaired(&ev),
+            vec![],
+            "texts only, fault {by_version}: {ev:?}"
+        );
+        assert!(!mismatch(&ev), "texts only, fault {by_version}: {ev:?}");
+        assert_eq!(state, DiskState::Clean, "texts only, fault {by_version}");
+        assert_eq!(
+            drift,
+            vec![],
+            "texts only, fault {by_version}: the sync audit"
+        );
+    }
 }
 
 /// A person edits the file in a plain editor (rewriting it in place or by
@@ -2233,4 +2256,66 @@ fn an_outside_edit_right_after_a_reopen_merges_on_the_synced_text() {
     assert_eq!(text(&s, c), t.replace("line 8", "line eight"));
     s.flush(c).unwrap();
     assert!(s.audit_disk_sync().unwrap().is_empty());
+}
+
+/// Two outside saves over unwritten edits (v0.23, hand-written from the shape a fuzz run took;
+/// the run used the property from before the three-way ingest, so it flagged the kit's rule
+/// below, on the decoded replica too). The doc holds edits the file doesn't: its lines rewritten
+/// into one, then two characters deleted and typed back. The first save deletes lines the live
+/// side already replaced: the three-way merge leaves the live text as it is, so the save is a
+/// save the doc already holds (`Unchanged`, the doc unchanged). The second adds a line at the
+/// end, which is taken in (`Ingested`). A flush then makes the file the doc. The text-only
+/// replica and the decoded one give the same outcomes, texts and file.
+#[test]
+fn two_outside_saves_over_unwritten_edits_match_on_both_replicas() {
+    let run = |decoded: bool| {
+        let f = fx(if decoded {
+            "two-saves-dec"
+        } else {
+            "two-saves-txt"
+        });
+        f.write("a.md", b"x y\na\na\n");
+        let s = f.open("a.md");
+        let b = f.join(&s, "agent");
+        // unwritten: the lines rewritten, then two characters deleted and typed back
+        set(&s, b, "ae\u{301}a\n");
+        set(&s, b, "\u{301}a\n");
+        set(&s, b, "ae\u{301}a\n");
+        let mut seen = Vec::new();
+        for saved in ["x y\n", "x y\nZ\n"] {
+            f.advance(1000);
+            f.write("a.md", saved.as_bytes());
+            let out = s.file_changed().unwrap();
+            seen.push((format!("{out:?}"), text(&s, b)));
+        }
+        assert!(s.flush(b).unwrap().written, "decoded {decoded}: {seen:?}");
+        let file = String::from_utf8(f.bytes("a.md")).unwrap();
+        assert_eq!(
+            file,
+            text(&s, b),
+            "decoded {decoded}: the file is the doc after a flush"
+        );
+        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "decoded {decoded}");
+        (seen, file)
+    };
+    let texts = run(false);
+    let decoded = k2_mpc_base::differential::with_decoded_replica(|| run(true));
+    assert_eq!(
+        texts, decoded,
+        "the text-only replica against the decoded one"
+    );
+    let (seen, file) = texts;
+    assert_eq!(
+        seen[0],
+        ("Unchanged".to_owned(), "ae\u{301}a\n".to_owned()),
+        "the first save is one the doc already holds"
+    );
+    assert!(
+        seen[1].0.starts_with("Ingested"),
+        "the second is taken in: {seen:?}"
+    );
+    assert!(
+        file.ends_with("Z\n"),
+        "the second save's line is kept: {file:?}"
+    );
 }

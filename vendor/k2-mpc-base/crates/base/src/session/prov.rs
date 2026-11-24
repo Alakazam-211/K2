@@ -112,9 +112,14 @@ impl Ids {
         self.0.iter().map(|r| r.bytes as usize).sum()
     }
 
-    /// Memory held, for the undo budget (U6).
+    /// Memory held, for the undo budget (U6): its runs' allocation (capacity, v0.24).
     pub fn mem(&self) -> usize {
-        self.0.len() * std::mem::size_of::<IdRun>()
+        self.0.capacity() * std::mem::size_of::<IdRun>()
+    }
+
+    /// Its runs' allocation trimmed to their count (an undo batch's, when it is kept).
+    pub fn shrink(&mut self) {
+        self.0.shrink_to_fit();
     }
 
     pub fn push(&mut self, r: IdRun) {
@@ -785,7 +790,7 @@ impl Prov {
     /// Is each text root's map aligned with its live text (`texts`), byte for byte? O(roots
     /// x chunks). A map that isn't is wrong for sure; one that is may still be wrong
     /// ([`Prov::differs`] says).
-    pub fn aligned(&self, texts: &[(&'static str, String)]) -> bool {
+    pub fn aligned(&self, texts: &[(&'static str, crate::SharedText)]) -> bool {
         texts
             .iter()
             .all(|(name, text)| self.map(name).is_some_and(|m| m.bytes() == text.len()))

@@ -363,7 +363,7 @@ impl Session {
     /// Audited as [`AuditEvent::Purged`] (metadata only).
     pub fn purge(&self, conn: ConnId, req: PurgeRequest) -> Result<PurgeOutcome> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Owner, Action::Purge, now)?;
         let by = st.members[i].p.pid.clone();
@@ -664,7 +664,7 @@ impl Session {
             }
             match (st.disk.as_mut(), stored) {
                 // the file's text stays (purge can't reach the file); its state is re-encoded
-                (Some(d), _) => {
+                (Some(d), stored) => {
                     let bytes = disk::probe(&d.path, &d.root).ok().and_then(|p| match p {
                         Probe::File { real, .. } => {
                             match disk::read(&real, self.config.disk_read_max_bytes) {
@@ -677,10 +677,17 @@ impl Session {
                     Some(SyncState {
                         hash: bytes.map_or_else(Vec::new, |b| file_hash(&key, &b)),
                         seq: d.synced_seq,
-                        state: match &d.replica {
-                            // a native doc's replica is the file's texts: nothing to re-encode
-                            Replica::Text(t) => text_replica::encode_texts(t),
-                            _ => d.replica.get()?.encode_state()?,
+                        state: if native || !d.replica.is_text() {
+                            match d.replica.texts()? {
+                                // a native doc's replica is the file's texts: nothing to
+                                // re-encode
+                                Some(t) => text_replica::encode_texts(t),
+                                None => d.replica.get()?.encode_state()?,
+                            }
+                        } else {
+                            // a Yrs text doc's replica holds its texts (v0.23): the synced
+                            // state the store keeps, decoded on demand, is re-encoded
+                            self.synced_doc_of(d, stored)?.encode_state()?
                         },
                     })
                 }
@@ -746,6 +753,8 @@ impl Session {
                 let out = store.purge_doc(self.doc_id, &purge)?;
                 // memory follows the store
                 st.doc = doc;
+                let owned = st.texts_owned;
+                st.doc.set_session_texts(owned);
                 out
             }
             None => self.purge_native_records(st, &store, i, &purge, now)?,
@@ -776,11 +785,9 @@ impl Session {
         } else {
             state.len() as u64
         };
+        let texts_only = st.disk.as_ref().is_some_and(|d| d.texts_only);
         let replica = match &sync {
-            Some(s) if native => Some(self.replica_from_state(st, s.state.clone())?),
-            Some(s) => Some(Replica::Doc(
-                self.checked(Doc::load(self.schema, &s.state)?),
-            )),
+            Some(s) => Some(self.replica_loaded(st, &s.state, texts_only)?),
             None => None,
         };
         if let (Some(d), Some(s), Some(replica)) = (st.disk.as_mut(), &sync, replica) {

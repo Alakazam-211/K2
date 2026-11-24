@@ -36,7 +36,7 @@ impl Session {
 
     fn note_opened_in(&self, conn: ConnId, at: OpenedAt) -> Result<Opened> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Edit, Action::Opened, now)?;
         if st.disk.is_none() {
@@ -104,7 +104,7 @@ impl Session {
 
     fn clear_opened_in(&self, conn: ConnId) -> Result<()> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Edit, Action::Opened, now)?;
         if let Some(d) = st.disk.as_mut() {

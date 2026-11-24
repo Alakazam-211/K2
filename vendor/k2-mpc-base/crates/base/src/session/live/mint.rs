@@ -13,7 +13,7 @@ impl Session {
     /// The writer tag of `conn`: its client ID in base 36 ([`WriterTag`]). Keys it inserts
     /// into a root its pack declares tagged ([`Pack::tagged_keys`]) must carry it.
     pub fn writer_tag(&self, conn: ConnId) -> Result<WriterTag> {
-        let st = self.lock()?;
+        let st = self.lock_for(conn)?;
         let i = Self::member(&st, conn)?;
         writer_tag_of(st.members[i].client)
     }
@@ -27,7 +27,7 @@ impl Session {
     /// Refusals: [`SessionError::BadEdit`] when the root or prefix isn't declared;
     /// [`SessionError::KeySpaceFull`] (exit 2) when no such key fits a list key's 24 bytes.
     pub fn mint_key(&self, conn: ConnId, root: &str, prefix: &str) -> Result<Key> {
-        let st = self.lock()?;
+        let st = self.lock_for(conn)?;
         let i = Self::member(&st, conn)?;
         let tag = writer_tag_of(st.members[i].client)?;
         let declared = self

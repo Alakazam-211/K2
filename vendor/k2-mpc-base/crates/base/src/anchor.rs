@@ -641,6 +641,7 @@ mod tests {
             },
             view: None,
             render_hash: None,
+            own_hash: None,
         }
     }
 

@@ -69,7 +69,7 @@ impl Session {
         hold: bool,
     ) -> Result<ClaimInfo> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -119,7 +119,7 @@ impl Session {
         hold: Option<bool>,
     ) -> Result<ClaimInfo> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -159,7 +159,7 @@ impl Session {
     /// `claim --release` verb exits 1). Needs read.
     pub fn release_claim(&self, conn: ConnId, id: Option<ClaimId>) -> Result<Vec<ClaimId>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -187,7 +187,7 @@ impl Session {
 
     fn claims_inner(&self, conn: ConnId) -> Result<Vec<ClaimInfo>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -200,7 +200,7 @@ impl Session {
     /// now_ms`). Needs read. [`SessionError::NoClaim`] when it isn't live.
     pub fn claim_remaining_ms(&self, conn: ConnId, id: ClaimId) -> Result<u64> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -223,7 +223,7 @@ impl Session {
     /// ([`Config::claim_waiters_max`]): [`SessionError::BadClaim`].
     pub fn register_waiter(&self, conn: ConnId, id: ClaimId) -> Result<Waiting> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -262,7 +262,7 @@ impl Session {
     /// Leave claim `id`'s queue. Returns whether the connection was waiting. Needs read.
     pub fn cancel_waiter(&self, conn: ConnId, id: ClaimId) -> Result<bool> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -301,7 +301,7 @@ impl Session {
 
     fn reservations_inner(&self, conn: ConnId) -> Result<Vec<ReservationInfo>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Claim, now)?;
         self.expire_claims(st, now);
@@ -323,7 +323,7 @@ impl Session {
 
     fn activity_inner(&self, conn: ConnId, n: usize) -> Result<Vec<ActivityEntry>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         self.admit(st, conn, Need::Read, Action::Activity, now)?;
         self.expire_claims(st, now);

@@ -252,7 +252,7 @@ struct Check {
     state: Vec<u8>,
     /// What a copy of the doc needs, on its engine (a native doc's under its keys).
     copier: crate::doc::DocCopier,
-    texts: Vec<(&'static str, String)>,
+    texts: crate::SharedTexts,
     kept: super::super::prov::Prov,
     version: Seq,
     store: Arc<DocStore>,
@@ -467,7 +467,7 @@ impl Session {
     fn blame_inner(&self, conn: ConnId, root: &str, lines: Option<LineRange>) -> Result<Blame> {
         let now = self.now();
         let (out, check) = {
-            let mut st = self.lock()?;
+            let mut st = self.lock_for(conn)?;
             self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
             self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
             let st = &mut *st;
@@ -516,7 +516,7 @@ impl Session {
         // one checked: replaced by the rebuild if nothing changed since, else dropped (wrong
         // then, so wrong now; the next need rebuilds it). A map replaced or dropped meanwhile
         // (a purge, a recovery) was another one: nothing to attribute, nothing to fix
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let (lineage, applied) = check.kept.token();
         match st.prov.as_ref().map(super::super::prov::Prov::token) {

@@ -195,6 +195,62 @@ pub(super) fn get_blob(
 mod tests {
     use super::*;
 
+    /// A rewrite copies every `blob_verbs` row byte for byte: a verb's and a batch's (record
+    /// version 1) and a revert's (record version 2), each under its doc and version, so an older
+    /// or a newer kit's rewrite of a store loses none of them. The plant
+    /// `MPC_STORE_PLANT=rewrite-drops-blob-verbs-row` (the copy leaves the table's first row out)
+    /// fails at the rows' assert.
+    #[test]
+    fn a_rewrite_keeps_every_blob_verbs_row_byte_for_byte() {
+        use redb::ReadableTable;
+        let dir = std::env::temp_dir().join(format!("k2mb-verbs-rewrite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = super::super::DocStore::open(dir.join("docs.redb")).unwrap();
+        let rows: Vec<((u64, u64), Vec<u8>)> = vec![
+            ((1, 2), enc_blob_verb("part set", &[], None)),
+            (
+                (1, 3),
+                enc_blob_verb(
+                    "batch",
+                    &["part set".to_owned(), "part add".to_owned()],
+                    None,
+                ),
+            ),
+            (
+                (2, 4),
+                enc_blob_verb("revert", &[], Some(Revert::new(2, RevertStep::Revert))),
+            ),
+        ];
+        let w = s.begin_write().unwrap();
+        {
+            let mut t = w.open_table(BLOB_VERBS).unwrap();
+            for (k, v) in &rows {
+                t.insert(*k, v.as_slice()).unwrap();
+            }
+        }
+        w.commit().unwrap();
+        s.rewrite_file().unwrap();
+        let r = s.begin_read().unwrap();
+        let t = r.open_table(BLOB_VERBS).unwrap();
+        let got: Vec<((u64, u64), Vec<u8>)> = t
+            .iter()
+            .unwrap()
+            .map(|kv| {
+                let (k, v) = kv.unwrap();
+                (k.value(), v.value().to_vec())
+            })
+            .collect();
+        drop(t);
+        drop(r);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            got, rows,
+            "row: a rewrite copies every blob_verbs row byte for byte"
+        );
+    }
+
     #[test]
     fn a_row_round_trips_and_another_version_reads_as_none() {
         assert_eq!(

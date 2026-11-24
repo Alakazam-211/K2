@@ -10,11 +10,19 @@
 //!   (`store/power_loss.rs`) loses power at a seeded point, writes in flight kept, lost or
 //!   torn;
 //! - `a_write_back_is_never_ahead_of_the_store`: a write-back, then a power loss that keeps no
-//!   write in flight: the reopened store holds everything the file holds.
+//!   write in flight: the reopened store holds everything the file holds;
+//! - the live switch of the durability (`SessionManager::set_commit_durability`):
+//!   `a_switch_to_immediate_makes_the_group_durable_at_once`,
+//!   `a_switch_to_grouped_groups_the_next_changes`,
+//!   `a_switch_racing_edits_loses_and_tears_nothing` (switches racing edits from three threads,
+//!   then a power loss with the editors running) and
+//!   `a_switch_is_refused_released_or_rolling_back`.
 //!
 //! Plants (`MPC_BETA_PLANT`), one per run: `durable-claimed-early` (every commit claimed
 //! durable) caught at the kill row's durable-kept assert; `write-back-skips-barrier` (the
-//! write-back doesn't make the group durable first) at the write-back row's outside-edit assert.
+//! write-back doesn't make the group durable first) at the write-back row's outside-edit assert;
+//! `durability-switch-skips-flush` at the switch-to-Immediate row's durable-at-once assert;
+//! `durability-switch-mid-group` at the race row's switch assert.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -1392,4 +1400,746 @@ fn a_lost_blob_version_is_refused_and_no_blob_version_is_reissued() {
         rows += 1;
     }
     assert_eq!(rows, 2, "control: both arms ran");
+}
+
+/// A file-backed Yrs text doc whose commit fails at the disk (v0.24: the disk replica holds the
+/// file's texts). The rollback reloads the doc from the store's durable prefix, and its disk
+/// replica from the stored synced state, as texts. Run on both replicas:
+/// - the text-only one (the default);
+/// - the decoded one (`with_decoded_replica`, as before).
+///
+/// After the reload:
+/// - the replica's texts are the file's, at the last sync, on both;
+/// - the text-only side's replica is texts, never a decoded doc;
+/// - then an outside save over an unwritten edit is taken in alike, the flush writes the same
+///   file, and the sync audit is clean on both.
+#[test]
+fn a_rollback_reload_keeps_the_text_replica_the_files_texts() {
+    use crate::store::power_loss::PowerLoss;
+    use std::sync::atomic::Ordering::SeqCst;
+    let run = |decoded: bool| {
+        let d = dir(if decoded { "rb-dec" } else { "rb-txt" });
+        let file = d.join("ws").join("a.md");
+        std::fs::write(&file, "start\n").unwrap();
+        let layer = PowerLoss::default();
+        let h = host(1_000_000);
+        let store = Arc::new(
+            DocStore::open_on_backend_for_tests(
+                layer.clone(),
+                d.join("docs.redb"),
+                grouped_as(1024, 100),
+            )
+            .unwrap(),
+        );
+        let m = manager(&store, &h);
+        let k = key("a.md");
+        let s = m
+            .open_file_with(Arc::new(MD), &k, &file, &d.join("ws"), &OpenOptions::new())
+            .unwrap();
+        let join = |s: &Session, pid: &str| {
+            s.join(
+                Participant::new(pid, pid, "#123456", ParticipantKind::Person, "tab"),
+                Stay::Held,
+            )
+            .unwrap()
+            .conn
+        };
+        let c = join(&s, "ann");
+        // a change written back and made durable: the sync point
+        append(&s, c, "synced");
+        assert!(s.flush(c).unwrap().written, "control: written back");
+        m.flush().unwrap();
+        let synced = std::fs::read_to_string(&file).unwrap();
+        // changes the disk hasn't made durable, then a commit that fails at the disk
+        append(&s, c, "lost one");
+        h.now.fetch_add(100, SeqCst);
+        layer.fail_next_sync();
+        assert!(
+            s.edit(
+                c,
+                vec![Edit::Text {
+                    root: ROOT.into(),
+                    hunks: vec![Hunk {
+                        start: 0,
+                        end: 0,
+                        insert: "lost two\n".into(),
+                    }],
+                }],
+                None,
+            )
+            .is_err(),
+            "control: the commit fails at the disk"
+        );
+        m.tick().unwrap();
+        let c = join(&s, "ann");
+        let kind = s.disk_replica_kind_for_tests().unwrap().map(|k| k.0);
+        let texts = s.disk_replica_texts_for_tests().unwrap();
+        assert_eq!(
+            texts,
+            Some(vec![(ROOT.to_owned(), synced.clone())]),
+            "row: decoded {decoded}: after the rollback the replica holds the file's texts"
+        );
+        // an unwritten edit, then an outside save
+        append(&s, c, "live");
+        h.now.fetch_add(1_000, SeqCst);
+        std::fs::write(&file, format!("outside\n{synced}")).unwrap();
+        let out = format!("{:?}", s.file_changed().unwrap());
+        assert!(s.flush(c).unwrap().written, "decoded {decoded}: {out}");
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "decoded {decoded}");
+        m.release().unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        (
+            kind,
+            texts,
+            out.split(" {").next().unwrap_or("").to_owned(),
+            after,
+        )
+    };
+    let txt = run(false);
+    let dec = crate::differential::with_decoded_replica(|| run(true));
+    assert!(
+        matches!(txt.0, Some("text" | "stored-text")),
+        "row: the text-only side's replica is texts after the reload: {:?}",
+        txt.0
+    );
+    assert!(
+        matches!(dec.0, Some("doc" | "stored")),
+        "control: the reference side keeps a decoded doc: {:?}",
+        dec.0
+    );
+    assert_eq!(
+        (&txt.1, &txt.2, &txt.3),
+        (&dec.1, &dec.2, &dec.3),
+        "row: the same replica texts, outcome and file on both replicas"
+    );
+    assert!(
+        txt.2.starts_with("Ingested"),
+        "row: the save is taken in: {txt:?}"
+    );
+    assert!(
+        txt.3.starts_with("outside\n") && txt.3.contains("live"),
+        "row: the file holds the save and the live edit: {txt:?}"
+    );
+}
+
+/// [`a_rollback_reload_keeps_the_text_replica_the_files_texts`] with shared texts (v0.24): the
+/// write-back before the failed commit leaves the disk replica's text, a read base's and the
+/// live text one allocation, and edits follow before the commit fails. After the rollback's
+/// reload, on both replicas:
+/// - the replica's texts are the file's, at the last sync;
+/// - the read base taken at the sync point still holds that text;
+/// - an outside save over an unwritten edit is taken in alike, the flush writes the same file,
+///   and the sync audit is clean.
+#[test]
+fn a_rollback_reload_after_shared_texts_keeps_the_replica_the_files_texts() {
+    use crate::store::power_loss::PowerLoss;
+    use std::sync::atomic::Ordering::SeqCst;
+    let run = |decoded: bool| {
+        let d = dir(if decoded { "rbs-dec" } else { "rbs-txt" });
+        let file = d.join("ws").join("a.md");
+        std::fs::write(&file, "start\n").unwrap();
+        let layer = PowerLoss::default();
+        let h = host(1_000_000);
+        let store = Arc::new(
+            DocStore::open_on_backend_for_tests(
+                layer.clone(),
+                d.join("docs.redb"),
+                grouped_as(1024, 100),
+            )
+            .unwrap(),
+        );
+        let m = manager(&store, &h);
+        let k = key("a.md");
+        let s = m
+            .open_file_with(Arc::new(MD), &k, &file, &d.join("ws"), &OpenOptions::new())
+            .unwrap();
+        let join = |s: &Session, pid: &str| {
+            s.join(
+                Participant::new(pid, pid, "#123456", ParticipantKind::Person, "tab"),
+                Stay::Held,
+            )
+            .unwrap()
+            .conn
+        };
+        let c = join(&s, "ann");
+        // a change written back and made durable, then read: the sync point, shared
+        append(&s, c, "synced");
+        assert!(s.flush(c).unwrap().written, "control: written back");
+        m.flush().unwrap();
+        s.read(c).unwrap();
+        let v_synced = s.status().unwrap().version;
+        let shared = s.text_sharing_for_tests().unwrap();
+        let synced = std::fs::read_to_string(&file).unwrap();
+        // edits after sharing the disk hasn't made durable, then a commit that fails at the disk
+        append(&s, c, "lost one");
+        h.now.fetch_add(100, SeqCst);
+        layer.fail_next_sync();
+        assert!(
+            s.edit(
+                c,
+                vec![Edit::Text {
+                    root: ROOT.into(),
+                    hunks: vec![Hunk {
+                        start: 0,
+                        end: 0,
+                        insert: "lost two\n".into(),
+                    }],
+                }],
+                None,
+            )
+            .is_err(),
+            "control: the commit fails at the disk"
+        );
+        m.tick().unwrap();
+        let c = join(&s, "ann");
+        let texts = s.disk_replica_texts_for_tests().unwrap();
+        assert_eq!(
+            texts,
+            Some(vec![(ROOT.to_owned(), synced.clone())]),
+            "row: decoded {decoded}: after sharing and the rollback the replica holds the \
+             file's texts"
+        );
+        let base = s.read_base_texts_for_tests(v_synced).unwrap();
+        // an unwritten edit, then an outside save
+        append(&s, c, "live");
+        h.now.fetch_add(1_000, SeqCst);
+        std::fs::write(&file, format!("outside\n{synced}")).unwrap();
+        let out = format!("{:?}", s.file_changed().unwrap());
+        assert!(s.flush(c).unwrap().written, "decoded {decoded}: {out}");
+        let after = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "decoded {decoded}");
+        m.release().unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        (
+            shared,
+            texts,
+            out.split(" {").next().unwrap_or("").to_owned(),
+            after,
+            base,
+            synced,
+        )
+    };
+    let txt = run(false);
+    let dec = crate::differential::with_decoded_replica(|| run(true));
+    assert_eq!(
+        (txt.0, dec.0),
+        ((Some(true), Some(true)), (None, Some(true))),
+        "control: the texts are shared before the failed commit (a decoded replica holds a doc)"
+    );
+    assert_eq!(
+        (&txt.1, &txt.2, &txt.3),
+        (&dec.1, &dec.2, &dec.3),
+        "row: after sharing, the same replica texts, outcome and file on both replicas"
+    );
+    assert!(
+        txt.2.starts_with("Ingested"),
+        "row: the save is taken in: {txt:?}"
+    );
+    assert!(
+        txt.3.starts_with("outside\n") && txt.3.contains("live"),
+        "row: the file holds the save and the live edit: {txt:?}"
+    );
+    for side in [&txt, &dec] {
+        if let Some(base) = &side.4 {
+            assert_eq!(
+                base,
+                &vec![(ROOT.to_owned(), side.5.clone())],
+                "row: after sharing, the read base at the sync point holds that text"
+            );
+        }
+    }
+}
+
+/// The store's commit durability changed live (`SessionManager::set_commit_durability`), from
+/// grouped (1,024 changes, 10 s, on the power-loss layer, so changes wait) to `Immediate`:
+/// every change before the switch is durable when it returns, and every change after it says
+/// durable and is; a power loss that keeps no write in flight then keeps every change. The
+/// switch ends the grouped open as a clean close does: the reopen after the loss is no
+/// recovery. `capabilities` from `config_now` lists the store at `Immediate`. Plant:
+/// `durability-switch-skips-flush` (the switch's commit an ordinary one, the group left
+/// waiting) caught at the durable-at-once assert.
+#[test]
+fn a_switch_to_immediate_makes_the_group_durable_at_once() {
+    use crate::store::power_loss::PowerLoss;
+    let d = dir("switch-immediate");
+    let layer = PowerLoss::default();
+    let h = host(1_000_000);
+    let store = Arc::new(
+        DocStore::open_on_backend_for_tests(
+            layer.clone(),
+            d.join("docs.redb"),
+            grouped_as(1024, 10_000),
+        )
+        .unwrap(),
+    );
+    let m = manager(&store, &h);
+    let sessions = make_docs(&m, &store);
+    let n = sessions.len() as u64;
+    let mut run = Run::default();
+    for i in 0..3 * n {
+        change(&sessions, i);
+        run.ack(i, store.commits(), store.durable_through());
+    }
+    let before = store.commits();
+    assert!(
+        store.durable_through() < before,
+        "control: the changes wait for their group"
+    );
+    m.set_commit_durability(CommitDurability::Immediate)
+        .unwrap();
+    assert_eq!(
+        m.durable_through().unwrap(),
+        store.commits(),
+        "row: the switch to Immediate makes every change before it durable at once"
+    );
+    assert_eq!(
+        store.commit_durability(),
+        CommitDurability::Immediate,
+        "row: the store runs at Immediate after the switch"
+    );
+    let listed = m.config_now().limits();
+    assert!(
+        listed.contains(&("store_commit_grouped", 0))
+            && listed.contains(&("store_commit_max_changes", 0)),
+        "row: capabilities from config_now list the store at Immediate: {listed:?}"
+    );
+    for i in 3 * n..6 * n {
+        let r = change(&sessions, i);
+        assert!(r.durable, "row: after the switch every change says durable");
+        assert_eq!(
+            store.durable_through(),
+            store.commits(),
+            "row: after the switch every change is durable"
+        );
+        run.ack(i, store.commits(), store.durable_through());
+    }
+    let image = layer.lose_power(0, true);
+    drop(sessions);
+    drop(m);
+    drop(store);
+    let store = Arc::new(
+        DocStore::open_on_backend_for_tests(
+            PowerLoss::from_image(image),
+            d.join("docs.redb"),
+            StoreSettings::DEFAULT,
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        store.recovered(),
+        None,
+        "row: the switch to Immediate closed the grouped open: the reopen is no recovery"
+    );
+    let k = check_prefix(&store, &h, &run, "switch to immediate");
+    assert_eq!(
+        k, run.acked,
+        "row: a power loss after the switch keeps every change"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// The store's commit durability changed live from `Immediate` to grouped (1,024 changes,
+/// 10 s): each doc's first change after the switch raises its seq floor (durable at once), and
+/// every later one waits for its group until a barrier; a second switch to groups of 4 changes
+/// bounds the waiting from the next change. The switch set the grouped open mark: a power loss
+/// with changes waiting is a recovery at the reopen, which holds a prefix of the changes, every
+/// durable one kept. `capabilities` from `config_now` lists the new bounds.
+#[test]
+fn a_switch_to_grouped_groups_the_next_changes() {
+    use crate::store::power_loss::PowerLoss;
+    let d = dir("switch-grouped");
+    let layer = PowerLoss::default();
+    let h = host(1_000_000);
+    let store = Arc::new(
+        DocStore::open_on_backend_for_tests(
+            layer.clone(),
+            d.join("docs.redb"),
+            StoreSettings::DEFAULT,
+        )
+        .unwrap(),
+    );
+    let m = manager(&store, &h);
+    let sessions = make_docs(&m, &store);
+    let n = sessions.len() as u64;
+    let mut run = Run::default();
+    let mut i = 0u64;
+    let mut next = |run: &mut Run| {
+        let r = change(&sessions, i);
+        run.ack(i, store.commits(), store.durable_through());
+        i += 1;
+        r
+    };
+    for _ in 0..n {
+        assert!(
+            next(&mut run).durable,
+            "control: at Immediate every change says durable"
+        );
+    }
+    let wide = CommitDurability::grouped(1024, 10_000).unwrap();
+    m.set_commit_durability(wide).unwrap();
+    assert_eq!(
+        store.commit_durability(),
+        wide,
+        "row: the store groups after the switch"
+    );
+    for _ in 0..n {
+        next(&mut run);
+    }
+    for _ in 0..3 * n {
+        assert!(
+            !next(&mut run).durable,
+            "row: after the switch to grouped a change waits for its group"
+        );
+    }
+    assert!(
+        store.durable_through() < store.commits(),
+        "row: after the switch to grouped the changes wait"
+    );
+    m.flush().unwrap();
+    assert_eq!(
+        store.durable_through(),
+        store.commits(),
+        "control: a flush makes them durable"
+    );
+    m.set_commit_durability(CommitDurability::grouped(4, 10_000).unwrap())
+        .unwrap();
+    let listed = m.config_now().limits();
+    assert!(
+        listed.contains(&("store_commit_grouped", 1))
+            && listed.contains(&("store_commit_max_changes", 4)),
+        "row: capabilities from config_now list the new bounds: {listed:?}"
+    );
+    let (mut lagged, mut reached) = (false, false);
+    for _ in 0..8 * n {
+        let r = next(&mut run);
+        let waiting = store.commits() - store.durable_through();
+        assert!(
+            waiting < 4,
+            "row: the new count bound from the next change: {waiting} commits wait (at most 3)"
+        );
+        lagged |= !r.durable;
+        reached |= waiting == 0;
+    }
+    assert!(
+        lagged && reached,
+        "control: changes waited under the new bound, and groups were made durable"
+    );
+    while store.durable_through() == store.commits() {
+        next(&mut run);
+    }
+    let image = layer.lose_power(7, false);
+    drop(sessions);
+    drop(m);
+    drop(store);
+    let store = Arc::new(
+        DocStore::open_on_backend_for_tests(
+            PowerLoss::from_image(image),
+            d.join("docs.redb"),
+            StoreSettings::DEFAULT,
+        )
+        .unwrap(),
+    );
+    assert!(
+        store.recovered().is_some(),
+        "row: the switch to grouped set the grouped open mark: the reopen after the loss is a \
+         recovery"
+    );
+    check_prefix(&store, &h, &run, "switch to grouped");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// A doc's options for the race row's editor `t`: with the native engine, every other one
+/// native.
+fn race_opts(t: usize) -> OpenOptions {
+    let _ = t;
+    OpenOptions::new()
+}
+
+/// The line `line` appended to `s`'s text by `c`, its result as it is.
+fn try_append(s: &Session, c: ConnId, line: &str) -> std::result::Result<EditResult, SessionError> {
+    let at = s.read(c)?.text_by_root[0].1.len();
+    s.edit(
+        c,
+        vec![Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![Hunk {
+                start: at,
+                end: at,
+                insert: format!("{line}\n"),
+            }],
+        }],
+        None,
+    )
+}
+
+/// Switches racing edits: `K2MB_SWITCH_ROUNDS` rounds (default 4), each on the power-loss
+/// layer. Three threads each append to a doc of their own while this one switches the store's
+/// durability over and over (`Immediate`, and groups of 64, 4 and 1 changes, seeded), a few
+/// changes between switches, then loses power with writes in flight while the editors still
+/// run. Every switch leaves every commit made before it durable when it returns; a change said
+/// durable had a sync of the disk during its call; the store reopened from the image alone
+/// holds, per doc, a prefix of its changes, none torn, every one said durable before the loss
+/// kept. Over the rounds changes were said durable and not, and switches found groups waiting.
+/// Plant: `durability-switch-mid-group` (the setting changed at once, with no flush and no
+/// writer held) caught at the switch's durable assert.
+#[test]
+fn a_switch_racing_edits_loses_and_tears_nothing() {
+    use crate::store::power_loss::PowerLoss;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering::SeqCst;
+    use std::sync::Mutex;
+    const EDITORS: usize = 3;
+    let rounds = env("K2MB_SWITCH_ROUNDS", 4);
+    let choices = [
+        CommitDurability::Immediate,
+        CommitDurability::grouped(64, 10_000).unwrap(),
+        CommitDurability::grouped(4, 10_000).unwrap(),
+        CommitDurability::grouped(1, 1).unwrap(),
+    ];
+    let (mut said_durable, mut said_waiting, mut found_waiting, mut total_switches) =
+        (0u64, 0u64, 0u64, 0u64);
+    for seed in 0..rounds {
+        let d = dir("switch-race");
+        let layer = PowerLoss::default();
+        let h = host(1_000_000);
+        let store = Arc::new(
+            DocStore::open_on_backend_for_tests(
+                layer.clone(),
+                d.join("docs.redb"),
+                grouped_as(64, 10_000),
+            )
+            .unwrap(),
+        );
+        let m = manager(&store, &h);
+        let keys: Vec<DocKey> = (0..EDITORS).map(|t| key(&format!("race{t}.md"))).collect();
+        let race: Vec<(Arc<Session>, ConnId)> = keys
+            .iter()
+            .enumerate()
+            .map(|(t, k)| make_one(&m, &store, k, &race_opts(t)))
+            .collect();
+        let stop = AtomicBool::new(false);
+        // each ack: (editor, change, said durable, a sync of the disk during its call)
+        let log: Mutex<Vec<(usize, u64, bool, bool)>> = Mutex::new(Vec::new());
+        let begun: Vec<AtomicU64> = (0..EDITORS).map(|_| AtomicU64::new(0)).collect();
+        let errors: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let switches = 20 + target(seed) % 60;
+        let mut pick = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+        let mut bad: Option<String> = None;
+        let mut stalled = false;
+        let (image, kept, kept_begun) = std::thread::scope(|sc| {
+            for (t, (s, c)) in race.iter().enumerate() {
+                let (stop, log, begun, errors, layer) = (&stop, &log, &begun, &errors, &layer);
+                sc.spawn(move || {
+                    let mut i = 0u64;
+                    while !stop.load(SeqCst) {
+                        begun[t].store(i + 1, SeqCst);
+                        let s0 = layer.syncs();
+                        match try_append(s, *c, &format!("c{i}")) {
+                            Ok(r) => {
+                                let synced = layer.syncs() > s0;
+                                log.lock().unwrap().push((t, i, r.durable, synced));
+                            }
+                            Err(e) => {
+                                errors
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("editor {t}, change {i}: {e}"));
+                                return;
+                            }
+                        }
+                        i += 1;
+                    }
+                });
+            }
+            // a few changes between switches (bounded: an editor that failed stops the round)
+            let wait_for = |at_least: usize| -> bool {
+                let t0 = std::time::Instant::now();
+                while log.lock().unwrap().len() < at_least {
+                    if !errors.lock().unwrap().is_empty()
+                        || t0.elapsed() > std::time::Duration::from_secs(60)
+                    {
+                        return false;
+                    }
+                    std::thread::yield_now();
+                }
+                true
+            };
+            for j in 0..switches {
+                let seen = log.lock().unwrap().len();
+                if !wait_for(seen + 2) {
+                    stalled = true;
+                    break;
+                }
+                pick ^= pick << 13;
+                pick ^= pick >> 7;
+                pick ^= pick << 17;
+                let to = choices[(pick % choices.len() as u64) as usize];
+                let before = store.commits();
+                found_waiting += u64::from(store.durable_through() < before);
+                if let Err(e) = m.set_commit_durability(to) {
+                    bad = Some(format!("switch {j} to {to:?} refused: {e}"));
+                    break;
+                }
+                total_switches += 1;
+                let durable = store.durable_through();
+                if durable < before {
+                    bad = Some(format!(
+                        "switch {j} to {to:?}: durable through {durable}, {before} commits before it"
+                    ));
+                    break;
+                }
+            }
+            // the loss, with the editors still running: every ack logged so far is before it
+            let (image, kept) = {
+                let l = log.lock().unwrap();
+                (layer.lose_power(seed, false), l.clone())
+            };
+            let kept_begun: Vec<u64> = begun.iter().map(|b| b.load(SeqCst)).collect();
+            stop.store(true, SeqCst);
+            (image, kept, kept_begun)
+        });
+        let errors = errors.into_inner().unwrap();
+        assert!(
+            errors.is_empty() && !stalled,
+            "control {seed}: every change landed: {errors:?}"
+        );
+        if let Some(b) = bad {
+            panic!("row {seed}: every switch leaves every commit before it durable: {b}");
+        }
+        let unsynced: Vec<_> = kept.iter().filter(|e| e.2 && !e.3).collect();
+        assert!(
+            unsynced.is_empty(),
+            "row {seed}: a change said durable had a sync of the disk during its call: {unsynced:?}"
+        );
+        said_durable += kept.iter().filter(|e| e.2).count() as u64;
+        said_waiting += kept.iter().filter(|e| !e.2).count() as u64;
+        drop(race);
+        drop(m);
+        drop(store);
+        let store = Arc::new(
+            DocStore::open_on_backend_for_tests(
+                PowerLoss::from_image(image),
+                d.join("docs.redb"),
+                StoreSettings::DEFAULT,
+            )
+            .unwrap(),
+        );
+        let m = manager(&store, &h);
+        for (t, k) in keys.iter().enumerate() {
+            let s = m
+                .open(Arc::new(MD), k, None)
+                .unwrap_or_else(|e| panic!("row {seed}: {k:?} reopens after the loss: {e}"));
+            let c = s
+                .join(
+                    Participant::new("bob", "Bob", "#654321", ParticipantKind::Person, "tab"),
+                    Stay::Held,
+                )
+                .unwrap()
+                .conn;
+            let text = s.read(c).unwrap().text_by_root[0].1.clone();
+            let mut lines = text.lines();
+            assert_eq!(
+                lines.next(),
+                Some("start"),
+                "row {seed}: {k:?} starts whole"
+            );
+            let mine: Vec<u64> = lines
+                .map(|l| {
+                    l.strip_prefix('c')
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or_else(|| panic!("row {seed}: {k:?} holds a torn line {l:?}"))
+                })
+                .collect();
+            assert!(
+                mine.iter().copied().eq(0..mine.len() as u64),
+                "row {seed}: {k:?} holds a prefix of its changes, in order: {mine:?}"
+            );
+            let kept_n = mine.len() as u64;
+            assert!(
+                kept_n <= kept_begun[t],
+                "control {seed}: {k:?}: no change past the last one begun ({kept_n} > {})",
+                kept_begun[t]
+            );
+            if let Some(last) = kept.iter().filter(|e| e.0 == t && e.2).map(|e| e.1).max() {
+                assert!(
+                    kept_n > last,
+                    "row {seed}: {k:?}: every change said durable before the loss is kept: \
+                     change {last} lost ({kept_n} kept)"
+                );
+            }
+        }
+        m.release().unwrap();
+        println!(
+            "SWITCH-RACE seed={seed} acks={} totals: switches={total_switches} durable={said_durable} waiting={said_waiting} found_waiting={found_waiting}",
+            kept.len()
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+    assert!(
+        said_durable > 0 && said_waiting > 0 && found_waiting > 0 && total_switches > 0,
+        "control: changes were said durable ({said_durable}) and not ({said_waiting}), and \
+         switches found groups waiting ({found_waiting} of {total_switches})"
+    );
+}
+
+/// A switch refused, the setting as it was: while a commit that failed at the disk waits for
+/// the store's reopen, `MPC-E526` (retry); after the tick's rollback it is taken; on a
+/// released manager, `Released`.
+#[test]
+fn a_switch_is_refused_released_or_rolling_back() {
+    use crate::store::power_loss::PowerLoss;
+    use std::sync::atomic::Ordering::SeqCst;
+    let d = dir("switch-refused");
+    let layer = PowerLoss::default();
+    let h = host(1_000_000);
+    let settings = grouped_as(1024, 100);
+    let store = Arc::new(
+        DocStore::open_on_backend_for_tests(layer.clone(), d.join("docs.redb"), settings).unwrap(),
+    );
+    let m = manager(&store, &h);
+    let sessions = make_docs(&m, &store);
+    let n = sessions.len() as u64;
+    for i in 0..2 * n {
+        change(&sessions, i);
+    }
+    h.now.fetch_add(100, SeqCst);
+    layer.fail_next_sync();
+    assert!(
+        change_r(&sessions, 2 * n).is_err() && store.rollback_pending(),
+        "control: a commit failed at the disk, and the store waits for its reopen"
+    );
+    let refused = m.set_commit_durability(CommitDurability::Immediate);
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.report().id() == "MPC-E526"),
+        "row: a switch while the store waits to roll back is refused MPC-E526: {refused:?}"
+    );
+    assert_eq!(
+        store.commit_durability(),
+        settings.commit_durability(),
+        "row: the refused switch leaves the setting as it was"
+    );
+    m.tick().unwrap();
+    m.set_commit_durability(CommitDurability::Immediate)
+        .unwrap();
+    assert_eq!(
+        store.commit_durability(),
+        CommitDurability::Immediate,
+        "control: after the rollback the switch is taken"
+    );
+    m.release().unwrap();
+    let refused = m.set_commit_durability(CommitDurability::grouped(4, 100).unwrap());
+    assert!(
+        matches!(refused, Err(SessionError::Released)),
+        "row: a switch on a released manager is refused Released: {refused:?}"
+    );
+    assert_eq!(
+        store.commit_durability(),
+        CommitDurability::Immediate,
+        "row: the switch refused on a released manager leaves the setting as it was"
+    );
+    drop(sessions);
+    let _ = std::fs::remove_dir_all(&d);
 }

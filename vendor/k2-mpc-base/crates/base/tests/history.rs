@@ -471,7 +471,9 @@ fn undo_survives_rejoin_not_unload() {
 fn undo_bounds_are_per_pid() {
     let mut c = config();
     assert_eq!((c.undo_depth, c.undo_max_bytes), (100, 4 << 20), "spec U6");
-    c.undo_max_bytes = 600;
+    // the budget counts the bytes a batch holds (v0.24): its slots too, so a batch here is
+    // about 1 KB; 2,000 keeps a couple of a's ten
+    c.undo_max_bytes = 2_000;
     let f = fx_with("bounds", c);
     let s = f.open("u.md", b"start\n");
     let a = f.join(&s, person("a"), Rights::editor());

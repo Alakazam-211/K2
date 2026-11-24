@@ -1,0 +1,21 @@
+MPC-E527 entry_engine_refused (store)
+exit:     6
+message:  a log entry of {entry} can't go in doc {doc}'s log: the doc is on engine {stored} (format {stored_format}); nothing was written
+next:     Nothing was written: this entry was made for a different engine than the doc's. Write only entries made by the doc's own engine.
+rule:     a log of one engine
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E527",
+  "name": "entry_engine_refused",
+  "area": "store",
+  "exit": 6,
+  "message": "a log entry of {entry} can't go in doc {doc}'s log: the doc is on engine {stored} (format {stored_format}); nothing was written",
+  "next": "Nothing was written: this entry was made for a different engine than the doc's. Write only entries made by the doc's own engine.",
+  "rule": "a log of one engine",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

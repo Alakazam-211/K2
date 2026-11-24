@@ -576,9 +576,7 @@ impl DocStore {
         barrier: bool,
     ) -> Result<(), StoreError> {
         use super::seq_floor::{floor_in, set_floor_in, Space};
-        if let super::CommitDurability::Grouped { max_changes, .. } =
-            self.settings.commit_durability()
-        {
+        if let super::CommitDurability::Grouped { max_changes, .. } = self.commit_durability() {
             if last >= floor_in(w, Space::Blob, id)? {
                 set_floor_in(w, Space::Blob, id, last + u64::from(max_changes) + 1)?;
                 if !barrier {

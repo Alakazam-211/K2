@@ -161,8 +161,65 @@ fn a_planted_edit_path_divergence_is_reported_and_never_served() {
     });
 }
 
+/// The engine's own text cache (a doc whose texts the session doesn't own: the reference
+/// switch since v0.24): a wrong cached text is reported, and never planned on.
 #[test]
 fn a_wrong_cached_text_is_reported_and_never_used() {
+    crate::differential::with_engine_text_cache(a_wrong_cached_text_is_reported_and_never_used_in)
+}
+
+/// The session owns the texts (v0.24): a wrong session text is found by the canary's sample
+/// and reported once; the edit planned on it is refused, typed, with nothing applied; the
+/// session takes the doc's texts back, and the same edit then lands where the doc's text puts
+/// it.
+#[test]
+fn a_wrong_session_text_is_reported_and_never_used() {
+    let f = fx("owned");
+    let (s, c) = f.open();
+    s.edit(c, two_inserts(0), None).unwrap();
+    let before = text(&s, c);
+    // the session's text is the doc's, but for its first line
+    let wrong = before.replacen("a0", "zz", 1);
+    assert_ne!(wrong, before, "control: the planted text differs");
+    s.corrupt_session_text_for_tests(ROOT, &wrong).unwrap();
+    let r = s.edit(c, two_inserts(1), None);
+    assert!(
+        matches!(&r, Err(SessionError::Doc(crate::doc::DocError::Apply(m))) if m.contains("isn't the doc's")),
+        "row: the edit is refused, typed: {:?}",
+        r.map(|x| x.version)
+    );
+    let m = f.mismatches();
+    assert_eq!(m.len(), 1, "row: reported once: {m:?}");
+    let AuditEvent::TextCacheMismatch { key, root, .. } = &m[0] else {
+        panic!("{m:?}")
+    };
+    assert_eq!((key, root.as_str()), (&f.key, ROOT));
+    assert_eq!(
+        text(&s, c),
+        before,
+        "row: the session serves the doc's text again"
+    );
+    // the same edit, again: planned on the doc's text
+    s.edit(c, two_inserts(1), None).unwrap();
+    let want = crate::text::diff::apply(
+        &before,
+        &[
+            Hunk {
+                start: 0,
+                end: 0,
+                insert: "a1\n".into(),
+            },
+            Hunk {
+                start: 4,
+                end: 4,
+                insert: "b1\n".into(),
+            },
+        ],
+    );
+    assert_eq!(text(&s, c), want, "row: the retry lands on the doc's text");
+}
+
+fn a_wrong_cached_text_is_reported_and_never_used_in() {
     let f = fx("cache");
     let (s, c) = f.open();
     s.edit(c, two_inserts(0), None).unwrap();

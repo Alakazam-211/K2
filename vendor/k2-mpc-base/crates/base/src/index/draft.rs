@@ -52,6 +52,14 @@ pub struct DraftNode {
     /// The raw digest of what draws it (a container's render closure; row format 2). Keyed
     /// before it is stored, as every digest.
     pub render: Option<Digest>,
+    /// The raw digest of the node's **own** record: its record with each child node's span
+    /// replaced by a stand-in naming that child (its key, else its place), for a node whose
+    /// record holds its children's (a slide's whole XML, say). The pack's promise: adding,
+    /// removing or reordering a child changes it, and when it is equal in two versions, every
+    /// byte that differs in the record lies inside some child's record. `None` (the default):
+    /// the kit counts any change to the record as the node's own (row format 3; `docs/SESSIONS.md`,
+    /// "A container's own record").
+    pub own: Option<Digest>,
 }
 
 impl DraftNode {
@@ -72,6 +80,7 @@ impl DraftNode {
             weak: BTreeMap::new(),
             view: None,
             render: None,
+            own: None,
         }
     }
 }
@@ -106,6 +115,20 @@ impl IndexDraft {
                 .nodes
                 .iter()
                 .any(|n| n.view.is_some() || n.render.is_some())
+    }
+
+    /// Whether a node of the draft carries its own record's digest ([`DraftNode::own`], row
+    /// format 3).
+    pub fn has_own(&self) -> bool {
+        self.nodes.iter().any(|n| n.own.is_some())
+    }
+
+    /// Whether the draft carries anything a pack's older format lacks (the view items or an own
+    /// record's digest): a pack hands those only with [`IndexSpec::with_older_format`] declared.
+    ///
+    /// [`IndexSpec::with_older_format`]: super::IndexSpec::with_older_format
+    pub fn has_later_items(&self) -> bool {
+        self.has_view_items() || self.has_own()
     }
 }
 
@@ -362,10 +385,34 @@ fn floor_char_boundary(s: &str, max: usize) -> usize {
 // ----- the wire -----
 
 const WIRE_MAGIC: [u8; 4] = *b"K2IX";
-/// The wire's version: 1 carries the nodes, 2 the view items too. A draft with none goes as 1,
-/// the bytes a worker before them sent.
+/// The wire's version: 1 carries the nodes, 2 the view items too, 3 each node's own record
+/// digest as well. A draft goes as the lowest that holds it (none: 1, the bytes a worker before
+/// them sent).
 const WIRE_VERSION: u8 = 1;
 const WIRE_VERSION_VIEW: u8 = 2;
+const WIRE_VERSION_OWN: u8 = 3;
+
+/// What a wire frame or a stored row carries past the nodes' first fields: the view items
+/// (version 2 and up), and each node's own record digest (version 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Items {
+    pub(crate) view: bool,
+    pub(crate) own: bool,
+}
+
+impl Items {
+    pub(crate) const NONE: Items = Items {
+        view: false,
+        own: false,
+    };
+    /// The lowest version that holds a draft or row with these.
+    pub(crate) fn of(view: bool, own: bool) -> Items {
+        Items {
+            view: view || own,
+            own,
+        }
+    }
+}
 const TAG_DRAFT: u8 = 0;
 const TAG_REFUSED: u8 = 1;
 const R_UNSUPPORTED: u8 = 0;
@@ -446,7 +493,7 @@ fn get_map(r: &mut R<'_>, budget: &mut Budget) -> Result<BTreeMap<String, String
     Ok(out)
 }
 
-fn put_node(w: &mut W, n: &DraftNode, items: bool) {
+fn put_node(w: &mut W, n: &DraftNode, items: Items) {
     w.opt_str(n.key.as_deref())
         .str(&n.kind)
         .str(&n.name)
@@ -473,9 +520,12 @@ fn put_node(w: &mut W, n: &DraftNode, items: bool) {
     w.bytes(n.record.as_bytes());
     w.opt_bytes(n.content.as_ref().map(|d| d.as_bytes().as_slice()));
     put_map(w, &n.weak);
-    if items {
+    if items.view {
         put_view(w, n.view.as_ref());
         w.opt_bytes(n.render.as_ref().map(|d| d.as_bytes().as_slice()));
+    }
+    if items.own {
+        w.opt_bytes(n.own.as_ref().map(|d| d.as_bytes().as_slice()));
     }
 }
 
@@ -490,7 +540,7 @@ fn get_node(
     r: &mut R<'_>,
     limits: &IndexLimits,
     budget: &mut Budget,
-    items: bool,
+    items: Items,
 ) -> Result<DraftNode, Stop> {
     let key = wf(r.opt_str_max(INDEX_KEY_MAX))?;
     let kind = wf(r.str_max(INDEX_KIND_MAX))?;
@@ -539,7 +589,7 @@ fn get_node(
     let record = get_digest(wf(r.bytes())?)?;
     let content = wf(r.opt_bytes())?.map(get_digest).transpose()?;
     let weak = get_map(r, budget)?;
-    let (view, render) = if items {
+    let (view, render) = if items.view {
         let mut cost = 0u64;
         let view = wf(get_view_with(r, limits.max_text_bytes as usize, &mut |n| {
             cost += n
@@ -549,6 +599,11 @@ fn get_node(
         (view, render)
     } else {
         (None, None)
+    };
+    let own = if items.own {
+        wf(r.opt_bytes())?.map(get_digest).transpose()?
+    } else {
+        None
     };
     Ok(DraftNode {
         key,
@@ -565,6 +620,7 @@ fn get_node(
         weak,
         view,
         render,
+        own,
     })
 }
 
@@ -582,10 +638,12 @@ impl IndexOutcome {
             Err(DraftFault::Malformed(m)) => return Err(IndexJobError::BadResult(m)),
             Err(DraftFault::Over(w)) => return encode_refused(&refused_of(&w)),
         }
-        let items = draft.has_view_items();
+        let items = Items::of(draft.has_view_items(), draft.has_own());
         let mut w = W::default();
         w.0.extend_from_slice(&WIRE_MAGIC);
-        w.u8(if items {
+        w.u8(if items.own {
+            WIRE_VERSION_OWN
+        } else if items.view {
             WIRE_VERSION_VIEW
         } else {
             WIRE_VERSION
@@ -593,7 +651,7 @@ impl IndexOutcome {
         .u8(TAG_DRAFT);
         w.str(&draft.source);
         put_map(&mut w, &draft.attrs);
-        if items {
+        if items.view {
             put_fonts(&mut w, &draft.fonts);
         }
         w.u32(draft.nodes.len() as u32);
@@ -627,8 +685,9 @@ impl IndexOutcome {
             }
         }
         let items = match wf(r.u8())? {
-            WIRE_VERSION => false,
-            WIRE_VERSION_VIEW => true,
+            WIRE_VERSION => Items::NONE,
+            WIRE_VERSION_VIEW => Items::of(true, false),
+            WIRE_VERSION_OWN => Items::of(true, true),
             _ => {
                 return Err(IndexJobError::BadResult(
                     "an indexer result of another version".to_owned(),
@@ -636,7 +695,7 @@ impl IndexOutcome {
             }
         };
         let outcome = match wf(r.u8())? {
-            TAG_REFUSED if !items => IndexOutcome::Refused(decode_refused(&mut r)?),
+            TAG_REFUSED if items == Items::NONE => IndexOutcome::Refused(decode_refused(&mut r)?),
             TAG_DRAFT => {
                 let mut budget = Budget(decode_budget(limits));
                 match decode_draft(&mut r, limits, b.len(), &mut budget, items) {
@@ -680,12 +739,12 @@ fn decode_draft(
     limits: &IndexLimits,
     wire_len: usize,
     budget: &mut Budget,
-    items: bool,
+    items: Items,
 ) -> Result<IndexOutcome, Stop> {
     let source = wf(r.str_max(INDEX_SOURCE_MAX))?;
     budget.string(&source)?;
     let attrs = get_map(r, budget)?;
-    let fonts = if items {
+    let fonts = if items.view {
         get_fonts(r, budget)?
     } else {
         Vec::new()
@@ -861,7 +920,7 @@ mod tests {
         put_map(&mut w, &d.attrs);
         w.u32(count);
         for n in &d.nodes {
-            put_node(&mut w, n, false);
+            put_node(&mut w, n, Items::NONE);
         }
         w.0
     }
@@ -903,6 +962,46 @@ mod tests {
             IndexOutcome::Draft(back) => assert_eq!(back, d),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// An own record's digest (wire 3) round-trips, with and without view items; a draft with
+    /// view items and no own digest still goes as wire 2, one with neither as wire 1.
+    #[test]
+    fn an_own_digest_round_trips_on_the_wire() {
+        let mut d = IndexDraft::new("f");
+        let mut p = node(None);
+        p.own = Some(Digest::of(b"own"));
+        d.nodes.push(p);
+        d.nodes.push(node(Some(0)));
+        let wire = IndexOutcome::Draft(d.clone()).to_wire(&limits()).unwrap();
+        assert_eq!(wire[4], WIRE_VERSION_OWN, "an own digest: wire 3");
+        match IndexOutcome::from_wire(&wire, &limits()).unwrap() {
+            IndexOutcome::Draft(back) => assert_eq!(back, d, "wire 3, no view item"),
+            other => panic!("{other:?}"),
+        }
+        d.nodes[1].render = Some(Digest::of(b"draws"));
+        let wire = IndexOutcome::Draft(d.clone()).to_wire(&limits()).unwrap();
+        assert_eq!(
+            wire[4], WIRE_VERSION_OWN,
+            "an own digest and a view item: wire 3"
+        );
+        match IndexOutcome::from_wire(&wire, &limits()).unwrap() {
+            IndexOutcome::Draft(back) => assert_eq!(back, d, "wire 3 with a view item"),
+            other => panic!("{other:?}"),
+        }
+        d.nodes[0].own = None;
+        let wire = IndexOutcome::Draft(d.clone()).to_wire(&limits()).unwrap();
+        assert_eq!(
+            wire[4], WIRE_VERSION_VIEW,
+            "a view item, no own digest: wire 2"
+        );
+        d.nodes[1].render = None;
+        let wire = IndexOutcome::Draft(d.clone()).to_wire(&limits()).unwrap();
+        assert_eq!(wire[4], WIRE_VERSION, "neither: wire 1");
+        // a frame past version 3 is refused
+        let mut newer = wire.clone();
+        newer[4] = WIRE_VERSION_OWN + 1;
+        assert!(IndexOutcome::from_wire(&newer, &limits()).is_err());
     }
 
     /// The view items (wire 2) round-trip; a draft without them goes as wire 1, the bytes a

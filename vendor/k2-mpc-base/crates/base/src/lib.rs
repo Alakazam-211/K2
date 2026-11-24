@@ -176,6 +176,9 @@ pub mod elem;
 mod engine;
 pub mod errors;
 pub mod export;
+mod fair;
+#[cfg(test)]
+pub(crate) mod fair_tests;
 pub mod grid;
 mod hash;
 pub mod ids;
@@ -207,3 +210,11 @@ pub use session::{
     TextFilePack,
 };
 pub use turn::Turn;
+
+/// A text doc's text, shared by its holders (the session's live text, the disk replica's, the
+/// read bases') until the live text changes (v0.24): copying it copies a pointer. An edit
+/// installs a new one for the live text and never writes through a shared one.
+pub(crate) type SharedText = std::sync::Arc<String>;
+
+/// Each text root's [`SharedText`], in schema order.
+pub(crate) type SharedTexts = Vec<(&'static str, SharedText)>;

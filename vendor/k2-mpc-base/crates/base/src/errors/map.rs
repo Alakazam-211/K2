@@ -521,6 +521,26 @@ fn store(e: &StoreError, msg: String) -> ErrorReport {
             .with("stored_format", *stored_format)
             .with("engine", crate::engine::ENGINE_NAME)
             .with("engine_format", crate::engine::ENGINE_FORMAT),
+        S::EntryEngineRefused {
+            doc,
+            entry,
+            stored,
+            stored_format,
+        } => rep(&r::ENTRY_ENGINE_REFUSED, msg)
+            .with("doc", *doc)
+            .with("entry", *entry)
+            .with("stored", stored)
+            .with("stored_format", *stored_format),
+        S::EngineStampRefused {
+            doc,
+            entry,
+            asked,
+            asked_format,
+        } => rep(&r::ENTRY_ENGINE_REFUSED, msg)
+            .with("doc", *doc)
+            .with("entry", *entry)
+            .with("asked", asked)
+            .with("asked_format", *asked_format),
         S::NativeFormatUnread {
             stored,
             found,

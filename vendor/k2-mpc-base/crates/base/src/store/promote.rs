@@ -124,7 +124,7 @@ impl DocStore {
             }
             let seqs: Vec<u64> = (1..=p.entries.len() as u64).collect();
             for (seq, e) in seqs.iter().zip(p.entries) {
-                put_entry(&w, id, *seq, e)?;
+                put_entry(&w, p.meta, id, *seq, e)?;
             }
             history::put_changes(&w, id, &seqs, p.changes)?;
             for (i, a) in p.approvals {

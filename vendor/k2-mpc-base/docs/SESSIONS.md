@@ -28,6 +28,16 @@ A host's audit event (`Host::on_event`) is emitted after its change commits: a c
 **Host rules.** `Host` methods are called **with a session locked**. They must be quick and
 must not call back into the kit, or they deadlock. Events carry metadata only, never doc content.
 
+**Order under load.** A doc's session lock and the store's one writer (shared by every doc in
+the store) are taken by whoever comes first while nobody waiting is due, so a writer back to back
+keeps going cheaply. A waiting call passed over by 128 later agent calls is handed the lock next,
+and a person's call or the manager's tick is handed it ahead of agents as soon as it waits: with
+the edit rate limit lifted and agents writing back to back, on the person's doc or on others in
+the same store, a person's edit waits behind at most the agent edit in progress. While a person
+waits for a doc's lock, the agent holding it writes to the store ahead of other agents. A person's (or
+the tick's) calls made back to back each go ahead of a waiting agent, so they can stretch an
+agent's wait past 128 calls by as many; the per-participant edit rate limit bounds that.
+
 ## Lifecycle
 
 1. `SessionManager::new(Arc<DocStore>, Arc<dyn Host>, Config)`.
@@ -298,6 +308,10 @@ standard one (Yrs). It is a Beta: off by default, text file types only.
   `fn() -> MemoryRelease` that usually returns `MemoryRelease::ByHost { returned }`), and the
   kit calls it instead, at every point; the kit never links an allocator itself.
   `capabilities` lists `host_release` (0 or 1).
+  Since v0.24 a tick that wrote a doc back releases too, at most once per
+  `Config::release_after_write_ms` (default 30 s; 0 never), unless its cut already did:
+  `TickReport::memory_released_after_write`. A Yrs doc makes no cut; without it, what its
+  write-backs and outside saves freed stays with the allocator.
   The tick reports it all: `TickReport::native_cuts` (`NativeCut { key, ms, tail, why, outcome,
   slow, released }`, `why` one of `NativeCutWhy::{Cadence, Unload, Forced}`, `outcome` one of
   `NativeCutOutcome::{Done, Refused}`, `released` what the release after a made cut did),
@@ -385,8 +399,11 @@ that person's writers on that device instead:
   (every person then takes one fresh writer on that store) when the last opener didn't close
   the store cleanly (a process killed or stopped, or a backup or copy taken while it was open), when the store file
   isn't the recorded one (another file or another path: a copy, a move, a restore written as a
-  new file), or when the incarnation is missing. A host sees nothing but that one fresh writer
-  per person. **Restore a native store as a new file** (copy it to a new file and move that
+  new file), or when the incarnation is missing. The same open retires every other writer a
+  join could reuse (an agent's, a person's on a host's device), as a grouped store's recovery
+  does: their tags don't follow the incarnation, so a restored older store would otherwise
+  continue their lines. A host sees nothing but one fresh writer per person and per agent;
+  each keeps its name (blame and the doc's owners name the same participant). **Restore a native store as a new file** (copy it to a new file and move that
   into place), never by writing over the live file in place: a cleanly closed backup written
   over the same file is the one case the store can't tell from itself. A refused re-sent
   change, where it is detected, is `MPC-E183` `native_equivocation` (exit 2), the engine's
@@ -693,6 +710,17 @@ to 10,000 ms; outside them `StoreSettingsError::GroupOutOfRange`) trades that fo
 commit waits for the disk per group instead of one per change. `capabilities` lists
 `store_commit_grouped`, `store_commit_max_changes` and `store_commit_max_ms`.
 
+**Changing it live.** `SessionManager::set_commit_durability(CommitDurability)` changes the
+setting with no restart (a host's "every change on disk" or "grouped saves" toggle). Every
+change before the call is made durable first, as by `flush()`; after it, at `Immediate` every
+change is durable when its call returns, and grouped, changes group under the new bounds from
+the next change. A change in flight on another thread commits wholly under the setting it began
+with. A switch to grouped sets the grouped open mark (below) in its own commit; a switch to
+`Immediate` removes it, as a clean close does. Refused `Released` on a released manager, and
+`MPC-E526` `store_recovering` (retry after the next tick) while a commit that failed at the disk
+waits for the store's reopen. `SessionManager::config_now()` gives the config with the setting
+in effect, for `capabilities`.
+
 **What a person or an agent is promised, grouped:**
 - **Acknowledged** (the call returns `Ok`): the change is applied, visible to every member and
   placed in the store's one order of commits. `EditResult::durable` says whether it is on disk
@@ -818,7 +846,9 @@ implemented once in `session/undo.rs` over the applied-hunk stream.
   undoable batches.
 - **Bounds** (U6): `undo_depth` (100) batches per stack and `undo_max_bytes` (4 MiB) per pid
   per doc, both stacks together; that pid's oldest batches go first. Stacks survive leave and
-  rejoin, and are lost on unload, recovery and restart.
+  rejoin, and are lost on unload, recovery and restart. Since v0.24 the bytes are the ones
+  held: each batch's slot, its regions' slots, and what each region holds at its capacity (its
+  texts, hunks, shapes and roots). A kept batch is trimmed to what it holds.
 - **Person grouping** (U3, v0.9.7): an edit through `edit_with_options` or
   `edit_at_base` with `EditOptions::group(token)` (the JS client sends one per edit) joins
   its connection's **open group**, the top of the person's undo stack, so a run of
@@ -1809,6 +1839,24 @@ the size, mtime or inode changed (a rename-save changes the inode):
     client of its own, one the doc never holds. The doc can't render the synced bytes
     again without a change or a write-back, and either replaces the replica whole. Nothing
     is ever merged from the replica into the doc.
+  - Since v0.24 a text doc's session owns its texts on Yrs: edits are planned on them and the
+    engine adapter keeps no copy of its own (its reads walk the doc). The canary compares the
+    session's text with a fresh read on its sample; on a mismatch the edit is refused, typed
+    (`DocError::Apply`, nothing applied), it is reported, and the session takes the doc's texts
+    back. A structured doc keeps the engine's cache.
+  - Since v0.24 the session's texts, the disk replica's and the read bases' share one copy
+    until the live text changes: a write-back, an outside save the doc then holds and a read
+    base take the live text without copying it. An edit gives the live text a new copy and
+    leaves the replica's and the read bases' as they were taken.
+  - Since v0.24 a text doc's replica holds the file's **texts only** in memory, on Yrs as on
+    the native engine. On Yrs the synced state the store keeps is unchanged: the same rows and
+    bytes. The one step that needs the replica's elements, a save the doc doesn't hold made
+    as a client of its own, decodes that stored state on demand. So do the sync check's
+    element comparison and a purge's re-encode. The decode is checked first: the stored
+    state must be the one the session synced (its length) and hold the replica's texts.
+    Otherwise the save is refused with `DocError::Load`, and nothing is merged or stored.
+    A structured doc's replica stays a decoded doc: its outside edits align on the replica's
+    keyed state.
 - A file that is the same text in other bytes (CRLF ↔ LF, a BOM added) adopts the new format.
 
 The disk is never the merge authority: the session is never replaced with the file's content
@@ -2604,7 +2652,8 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append: from `compact_entries` entries once the log's bytes are at least a quarter of the snapshot's (v0.9.8: its cost per change stays constant as the state grows), always at 8 × `compact_entries` entries or at `compact_bytes` bytes |
 | `unload_compact_entries` | 100 | compact on unload |
 | `memory_budget_bytes` / `memory_factor` / `idle_unload_ms` | 256 MiB / 20 / 10 min | the pool |
-| `host_release` (`Config::release`) | 0 (the kit's own) | the host's release of freed memory after a native cut and after an unload's cut (`HostRelease`) |
+| `host_release` (`Config::release`) | 0 (the kit's own) | the host's release of freed memory after a native cut, after an unload's cut and after a tick that wrote a doc back (`HostRelease`) |
+| `release_after_write_ms` | 30000 | after a tick that wrote a doc back, the same release runs, at most once in this many ms, and not when the tick's cut already ran it (`TickReport::memory_released_after_write`, v0.24). A write-back encodes and renders the whole doc, and a Yrs doc makes no cut that would return what it freed. 0: never |
 | `store_cache_bytes` (`Config::store`) | 64 MiB | the store's cache: one per opened store, 16 MiB to 1 GiB, set where the store is opened (`DocStore::open_with`); the manager reports its store's |
 | `write_quiet_ms` / `write_max_delay_ms` | 1 s / 5 s | write-back after this much quiet, or this long after the first unwritten change |
 | `disk_poll_ms` | 3 s | stat backup interval while anyone is present |
@@ -3450,6 +3499,48 @@ one with none as version 1. The blob tier's `ViewIndex` takes them over the plai
   (`Corrupt`): the format bump is what keeps it from getting there. Rows of format 1 this kit
   writes are its own bytes. `tools/n1/n1.sh layout-index` / `node-index` checks both ways.
 
+**A container's own record (row format 3).** A pack whose node record holds its children's (a
+slide's record is its whole XML, shapes included) also gives that node its own record's digest,
+`DraftNode::own`: the record with each child node's span replaced by a stand-in naming the child
+(its key, else its place). The pack's promise: adding, removing or reordering a child changes
+it, and when it is equal in two versions every byte that differs in the record lies inside some
+child's record. The kit keys it like every digest (`IndexNode::own_hash`); `None`, the default,
+leaves a node as before.
+
+- **What it changes: the overlap checks only.** In an index diff, a node's change is **its
+  children's alone** (`NodeChange::by_children`) when it is its record alone (`props` is
+  `["record"]`, no field, name, text, content or place of its own), its own hash is there and
+  equal in both versions, and a node whose parent it is changed in the same diff. `--base` and
+  a revert leave out a node when both sides' changes to it are so: the children are compared
+  themselves, so two edits to two shapes of one slide don't conflict. Any change of the
+  container's own (an attribute, its children's order, an added or removed child, a field the
+  index doesn't show) changes its own hash, and conflicts as before. Nothing else reads it:
+  blame, diffs and outputs are as before, and `by_children` is never printed.
+- **Known limit:** a node whose name the pack takes from a child (a slide's name is its title's
+  text) is `renamed` when that child's text changes, a change of its own: reverting a title
+  edit still refuses against a later edit to another shape of that slide, and `--base` alike.
+- **Stored as row format 3** (`INDEX_ROW_FORMAT`): format 2's, and each node's own hash after
+  its render hash. A row is written as the lowest format that holds it: with no own hash as
+  format 2 (or 1), byte for byte as before. A format-3 row with no own hash, or a format byte
+  past 3, is `Corrupt`. On the wire a draft with one goes as version 3.
+- **The kit picks where they are stored.** A pack declares them,
+  `IndexSpec::with_own_records()`; a draft with an own digest from a spec that doesn't is
+  refused (`MPC-E714`, its reason naming the declaration), nothing recorded. A declared spec's
+  rows and their minted keys are stored under `format + OWN_FORMAT_OFFSET` (2^24), a format no
+  older kit asks for, whether or not the pack bumped its own format; reads take that format,
+  then the pack's `format` (a row made before own records, or by an older kit), then its older
+  format. A version read from either of the last two has no own hash, so its containers count
+  as their own (a refusal, never a wrong pass) until `index_job` indexes it again.
+- **Older kits (N−1).** A kit before row format 3 never asks for the offset format: it finds
+  such a version pending, indexes it under its own format (row format 2 or 1), and its commit
+  removes the offset row (a commit keeps one format per pack and blob); back here the version
+  reads from that row, own hashes absent, until indexed again. So an older kit never decodes a
+  row of format 3, even for a pack that declared own records without bumping its format.
+  **Minted keys re-mint after such a round trip** (a format's minted keys are its own, as after
+  any format bump); a node with its file's own ID keeps its key. Rows of format 2 an older kit
+  wrote read here unchanged. `tools/n1/n1.sh layout-own` / `node-own` checks both ways, with a
+  pack that bumped and one that didn't.
+
 **Purge.** The row goes with the blob, and a version's overlay with the version. A
 `purge_space_key` rewrites the store file too (`PurgeReport::index_rows_removed`,
 `store_rewritten`): a space's rows hold names and text, and the key's own bytes must leave the
@@ -3870,7 +3961,9 @@ call to head if nothing it changes was changed since `V` in a way that overlaps.
    is in it, where the two changes overlap, refuses `MPC-E723 base_moved`, exit 1. Two changes
    overlap when either is `added`, `removed`, `moved`, `renamed` or `content`; when both change
    the text (text is a field of its own); or when both are `props` sharing an entry
-   (`attrs.<name>`, `bounds`, ...). `details.conflicts` lists each as `{address, root:
+   (`attrs.<name>`, `bounds`, ...). A node whose changes on both sides are its children's alone
+   ("A container's own record", above) doesn't overlap: its children are compared themselves.
+   `details.conflicts` lists each as `{address, root:
    "index", key, field, by, change}`: the field, and who changed it in which version (the
    newest version since `V` whose index shows the node changed). Keys the verb creates (absent
    from `V` in `D_V`, from head in `D_H`) are never in conflict, so two concurrent adds land.
@@ -4020,7 +4113,10 @@ Version 1 has nothing before it, so reverting it is a usage error too.
   whose next step is `restore --version <K-1>`: that also replaces every change made since.
   Each of the three versions is bounded by `blob_merge_max_bytes` (`MPC-E728`).
 - **Checked first, by node:** what K changed (the index diff from K-1 to K) against what
-  changed since (from K to head), with `--base`'s overlap rule ("`--base` per node", above).
+  changed since (from K to head), with `--base`'s overlap rule ("`--base` per node", above):
+  a container whose change on both sides is its children's alone is left to its children, so
+  reverting one shape's edit keeps a later edit to another shape of the same slide, while a
+  change of the container's own since (its shapes' order, say) still refuses.
   An overlap gets `MPC-E731 revert_conflict` (exit 1), with `details.conflicts` naming each
   node's field, who changed it and in which version. A merge that finds a conflict the index
   doesn't show is `MPC-E731` too, with no conflicts listed. Another program's save in

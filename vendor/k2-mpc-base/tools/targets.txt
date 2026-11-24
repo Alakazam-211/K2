@@ -17,7 +17,7 @@ k2-mpc-base|test|app_view||base-a2,base-c
 k2-mpc-base|test|blame||base-a2,base-d
 k2-mpc-base|test|blame_cost||base-a2,base-d
 k2-mpc-base|test|blame_incremental||base-a2,base-d
-k2-mpc-base|test|blob_index_v2||base-a2
+k2-mpc-base|test|blob_index_v2||base-a2,plants
 k2-mpc-base|test|blob_read||base-a2
 k2-mpc-base|test|blob_refs||base-a2
 k2-mpc-base|test|blob_struct||base-a2

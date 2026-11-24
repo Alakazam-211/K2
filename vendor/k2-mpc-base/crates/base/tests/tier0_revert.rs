@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 mod index_pack;
-use index_pack::{IxPack, BATCH_SET};
+use index_pack::{IxPack, BATCH_SET, CONTAINER_SET};
 
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::errors::Value;
@@ -824,4 +824,134 @@ fn a_revert_commit_takes_the_group_durability() {
         );
         mgr.release().unwrap();
     }
+}
+
+/// A parent whose record holds its two children's (the index pack's `containers`, as a deck's
+/// slide holds its shapes), under a format bumped for its own record digest.
+fn containers() -> IxPack {
+    IxPack {
+        format: 2,
+        verbs: CONTAINER_SET,
+        merge: true,
+        line_merge: true,
+        containers: true,
+        ..IxPack::default()
+    }
+}
+
+/// A layer (`@n:1`) and two lines in it.
+const NEST: &str = "IDX\n@n:1|layer|Walls|-|1|-|-|-\n@n:2|line|Door|0|1|-|door|-\n\
+                    @n:3|line|Window|0|1|-|window|-\n";
+
+/// A person's whole-file write of `bytes` on head, then indexed.
+fn written(s: &BlobSession, c: ConnId, bytes: &str) {
+    s.write_bytes(c, bytes.as_bytes(), head(s))
+        .expect("the write lands");
+    index(s);
+}
+
+/// The first conflict's key and field, as a revert's refusal lists them (`details.conflicts`).
+fn first_conflict(o: &ToolOutput) -> Option<(Option<String>, Option<String>)> {
+    match detail(o, "conflicts") {
+        Some(Value::List(l)) => l.first().map(|c| {
+            (
+                c.get("key").and_then(Value::as_str).map(str::to_owned),
+                c.get("field").and_then(Value::as_str).map(str::to_owned),
+            )
+        }),
+        _ => None,
+    }
+}
+
+/// revert_container_children_alone: version K changed one line of a layer, a later version
+/// the other line; the layer's record holds both, but its own record didn't change, so the
+/// revert takes K's change away and keeps the later one. Plant: `container-always-counted`.
+#[test]
+fn revert_container_children_alone() {
+    let f = fx("container");
+    let s = f.open_with("n.idx", NEST, containers());
+    let bot = f.agent(&s, "bot");
+    let ann = f.join_as(&s, "ann", ParticipantKind::Person, false);
+    let a = call(&s, bot, &["part", "set", "@n:2", "note", "a"]);
+    assert!(
+        err_id(&a).is_none(),
+        "setup: K lands ({})",
+        res(&a).to_json()
+    );
+    let k = head(&s);
+    let b = call(&s, ann, &["part", "set", "@n:3", "note", "b"]);
+    assert!(
+        err_id(&b).is_none(),
+        "setup: the later change lands ({})",
+        res(&b).to_json()
+    );
+    let o = revert(&s, bot, RevertWhat::Version(k));
+    assert_eq!(
+        (
+            err_id(&o),
+            [note(&s, bot, "@n:2"), note(&s, bot, "@n:3")],
+            head_entry(&s, bot)
+        ),
+        (
+            None,
+            [Some("-".to_owned()), Some("b".to_owned())],
+            (Some("revert".to_owned()), Some(k))
+        ),
+        "revert_container_children_alone: the layer changed only through its lines: K's change \
+         taken away, the sibling's later change kept ({})",
+        res(&o).to_json()
+    );
+}
+
+/// revert_container_own_change_refused: version K changed one line of a layer; since then the
+/// layer itself changed in a way only its record shows (a field the index doesn't read), or
+/// gained a line. Each refuses the revert (`MPC-E731`), its conflict naming the layer's record;
+/// nothing written. Plant: `container-never-counted`.
+#[test]
+fn revert_container_own_change_refused() {
+    // the layer's own field with its other line's note: that line alone would explain the
+    // layer's record if its own record weren't asked
+    let own = "IDX\n@n:1|layer|Walls|-|1|-|-|-|-|hidden\n@n:2|line|Door|0|1|-|door|a\n\
+               @n:3|line|Window|0|1|-|window|b\n";
+    let added = "IDX\n@n:1|layer|Walls|-|1|-|-|-\n@n:2|line|Door|0|1|-|door|a\n\
+                 @n:3|line|Window|0|1|-|window|-\n@n:4|line|Wall|0|1|-|wall|-\n";
+    let mut got = Vec::new();
+    for (arm, later) in [("own field", own), ("a line added", added)] {
+        let f = fx("container-own");
+        let s = f.open_with("n.idx", NEST, containers());
+        let bot = f.agent(&s, "bot");
+        let ann = f.join_as(&s, "ann", ParticipantKind::Person, false);
+        let a = call(&s, bot, &["part", "set", "@n:2", "note", "a"]);
+        assert!(
+            err_id(&a).is_none(),
+            "setup {arm}: K lands ({})",
+            res(&a).to_json()
+        );
+        let k = head(&s);
+        written(&s, ann, later);
+        let h = head(&s);
+        let o = revert(&s, bot, RevertWhat::Version(k));
+        got.push((
+            arm,
+            err_id(&o),
+            first_conflict(&o),
+            head(&s) == h,
+            note(&s, bot, "@n:2"),
+        ));
+    }
+    let want = |arm| {
+        (
+            arm,
+            Some("MPC-E731".to_owned()),
+            Some((Some("@n:1".to_owned()), Some("record".to_owned()))),
+            true,
+            Some("a".to_owned()),
+        )
+    };
+    assert_eq!(
+        got,
+        vec![want("own field"), want("a line added")],
+        "revert_container_own_change_refused: the layer's own change since K refuses, naming it; \
+         nothing written"
+    );
 }

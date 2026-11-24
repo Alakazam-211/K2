@@ -61,7 +61,12 @@
 #                the rule column holds no release-line or amendment label. Anywhere: a
 #                branch name (`feat/x`), and an engine code (`MPCE-Ennn`) with no entry in
 #                the public registry (a code alone in a string literal, as code matches it,
-#                passes).
+#                passes). In prose with its code spans: the native engine's type and method
+#                names (an engine type, `Mpce...`, a path into an engine crate the cut
+#                removes, or one of the engine's method and mechanism words, read from
+#                outside the tree: see ENGINE_PROSE_WORDS below), as
+#                `engine name in prose`; the reference model's crates
+#                (mpce-model, mpce-order, mpce-reg) stay allowed.
 #                LABEL_EXEMPT names the files read as data whole. Printed as
 #                `check-public-cut: labels: PATH:LINE: KIND`.
 #   repos        every k2-mpc name (lowercase, `k2_mpc_` too) in a kept text file (vendor/ and
@@ -97,7 +102,7 @@ DROPPED_CRATES="crates/conformance:k2-mpc-conformance"
 # records: docs/evidence/runs, about 16 MB, checked on main), and what names them in a kept
 # file: extended regexes, |-separated. DROPPED_REFS has no pattern for the run records: the
 # evidence notes the cut keeps name the folder their citations point to.
-DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs tools/mpc-tools/tests/data/vendor-manifests"
+DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs tools/mpc-tools/tests/data/vendor-manifests crates/base/tests/fixtures/native-v0230"
 DROPPED_REFS='(^|[^A-Za-z0-9_-])fuzz/|tools/fuzz([^A-Za-z0-9_-]|$)|(^[ \t]*|exclude.*)"fuzz"|cargo[- ]fuzz|k2[-_]mpc[-_]base[-_]fuzz|k2_mpc_base::fuzzing|(^|[^A-Z_])FUZZ_(CPUS|HOME|MAX_JOBS|MEM|NODES|SECS|SHIP|SUMMARY_DIR|TIMEOUT|TZ|USED|WINDOW|WITH|WS)'
 # Single files a public cut removes (a check of what the cut takes out), paths from the root.
 DROPPED_FILES="tools/check-engine-features.sh tools/test-engine-features.sh tools/vendor-engine.sh tools/test-vendor-engine.sh docs/CONFORMANCE.md docs/design/person-writer-reuse-r0.md"
@@ -133,6 +138,54 @@ plan stage=(^|[^A-Za-z])stage [A-Z]([^A-Za-z]|$)
 parity or plan item label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])P[0-9][0-9]?[a-z]?([^A-Za-z0-9_:'"'"'"]|: |$)
 finding label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])F[0-9][0-9]?([^A-Za-z0-9_:'"'"'"]|: |$)
 run label=(^|[^A-Za-z0-9_.!:$'"'"'"=/-])V([0-79]|[1-9][0-9])([^A-Za-z0-9_:'"'"'"]|: |$)'
+# The native engine's method and mechanism words the labels rule refuses in prose (with its
+# engine types, Mpce..., and paths into engine crates the cut removes). The words are kept
+# outside the tree, never in it, as check-private.sh's patterns are, so the guard doesn't
+# publish what it guards: the first of these that is set or exists:
+#   MPC_ENGINE_PROSE_WORDS        the words themselves, one per line (or `;` between them)
+#   MPC_ENGINE_PROSE_WORDS_FILE   a file of them
+#   ~/.config/k2-mpc/engine-prose-words.txt
+# Each line (`#` comments, blank lines ignored): `ident NAME`, a method, refused as a whole
+# identifier (a kit identifier that only contains it passes), or `phrase TEXT`, a mechanism,
+# refused wherever its words appear (letters, digits and spaces only). With none (a public
+# cut's copy: the cut ships no words), that part of the rule is off and every run says so on
+# one `check-public-cut (note):` line; the rest of the labels rule runs as always.
+# MPC_ENGINE_PROSE_REQUIRED=1 makes none an error (exit 2), as the release gates run it.
+# ENGINE_PROSE_WORDS is the regex built from them, ENGINE_PROSE_IDENT and ENGINE_PROSE_PHRASE
+# the first of each kind (the gate's plants use them), ENGINE_PROSE_SET 1 when any was read.
+epw_clean() { sed -e 's/#.*$//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' | grep -v '^$' || true; }
+EPW_CONF=${HOME:-/nonexistent}/.config/k2-mpc/engine-prose-words.txt
+if [ -n "${MPC_ENGINE_PROSE_WORDS:-}" ]; then
+  EPW_LINES=$(printf '%s\n' "$MPC_ENGINE_PROSE_WORDS" | tr ';' '\n' | epw_clean)
+elif [ -n "${MPC_ENGINE_PROSE_WORDS_FILE:-}" ] && [ -r "$MPC_ENGINE_PROSE_WORDS_FILE" ]; then
+  EPW_LINES=$(epw_clean < "$MPC_ENGINE_PROSE_WORDS_FILE")
+elif [ -r "$EPW_CONF" ]; then
+  EPW_LINES=$(epw_clean < "$EPW_CONF")
+else
+  EPW_LINES=
+fi
+ENGINE_PROSE_IDENTS=; ENGINE_PROSE_PHRASES=; ENGINE_PROSE_IDENT=; ENGINE_PROSE_PHRASE=
+EPW_BAD=0
+EPW_OLD_IFS=$IFS; IFS='
+'
+for epw in $EPW_LINES; do
+  case $epw in
+    "ident "*) w=${epw#ident }
+      if printf '%s\n' "$w" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+        ENGINE_PROSE_IDENTS=${ENGINE_PROSE_IDENTS:+$ENGINE_PROSE_IDENTS|}$w; ENGINE_PROSE_IDENT=${ENGINE_PROSE_IDENT:-$w}
+      else EPW_BAD=1; fi ;;
+    "phrase "*) w=${epw#phrase }
+      if printf '%s\n' "$w" | grep -qE '^[A-Za-z0-9]+( [A-Za-z0-9]+)*$'; then
+        ENGINE_PROSE_PHRASES=${ENGINE_PROSE_PHRASES:+$ENGINE_PROSE_PHRASES|}$w; ENGINE_PROSE_PHRASE=${ENGINE_PROSE_PHRASE:-$w}
+      else EPW_BAD=1; fi ;;
+    *) EPW_BAD=1 ;;
+  esac
+done
+IFS=$EPW_OLD_IFS
+ENGINE_PROSE_WORDS=
+[ -z "$ENGINE_PROSE_IDENTS" ] || ENGINE_PROSE_WORDS="(^|[^A-Za-z0-9_])($ENGINE_PROSE_IDENTS)([^A-Za-z0-9_]|\$)"
+[ -z "$ENGINE_PROSE_PHRASES" ] || ENGINE_PROSE_WORDS=${ENGINE_PROSE_WORDS:+$ENGINE_PROSE_WORDS|}$ENGINE_PROSE_PHRASES
+ENGINE_PROSE_SET=0; [ -z "$ENGINE_PROSE_WORDS" ] || ENGINE_PROSE_SET=1
 # Files the labels rule reads as data whole: this script and the gate, which name the patterns.
 LABEL_EXEMPT="tools/check-public-cut.sh tools/tests/public-cut-gate.sh"
 # The names a kept file may give a repo or crate as k2-mpc-NAME: the kit's own crates and tools,
@@ -141,11 +194,19 @@ PUBLIC_REPO_NAMES="base spec-undo client conformance engine perf timers-check un
 # ---------------------------------------------------------------------------------------------
 
 if [ "${1:-}" = --print-config ]; then
-  printf 'PUBLIC_ENGINE_CRATES=%s\nNATIVE_FEATURES=%s\nDROPPED_CRATES=%s\nDROPPED_TREES=%s\nDROPPED_FILES=%s\nDROPPED_REFS=%s\nTEXT_TERMS=%s\nTEXT_CODE_TOKENS=%s\nTEXT_BASE=%s\nTEXT_EXCEPTIONS=%s\nPUBLIC_REPO_NAMES=%s\n' \
-    "'$PUBLIC_ENGINE_CRATES'" "'$NATIVE_FEATURES'" "'$DROPPED_CRATES'" "'$DROPPED_TREES'" "'$DROPPED_FILES'" "'$DROPPED_REFS'" "'$TEXT_TERMS'" "'$TEXT_CODE_TOKENS'" "'$TEXT_BASE'" "'$TEXT_EXCEPTIONS'" "'$PUBLIC_REPO_NAMES'"
+  printf 'PUBLIC_ENGINE_CRATES=%s\nNATIVE_FEATURES=%s\nDROPPED_CRATES=%s\nDROPPED_TREES=%s\nDROPPED_FILES=%s\nDROPPED_REFS=%s\nTEXT_TERMS=%s\nTEXT_CODE_TOKENS=%s\nTEXT_BASE=%s\nTEXT_EXCEPTIONS=%s\nPUBLIC_REPO_NAMES=%s\nENGINE_PROSE_WORDS=%s\nENGINE_PROSE_IDENT=%s\nENGINE_PROSE_PHRASE=%s\nENGINE_PROSE_SET=%s\n' \
+    "'$PUBLIC_ENGINE_CRATES'" "'$NATIVE_FEATURES'" "'$DROPPED_CRATES'" "'$DROPPED_TREES'" "'$DROPPED_FILES'" "'$DROPPED_REFS'" "'$TEXT_TERMS'" "'$TEXT_CODE_TOKENS'" "'$TEXT_BASE'" "'$TEXT_EXCEPTIONS'" "'$PUBLIC_REPO_NAMES'" "'$ENGINE_PROSE_WORDS'" "'$ENGINE_PROSE_IDENT'" "'$ENGINE_PROSE_PHRASE'" "'$ENGINE_PROSE_SET'"
   exit 0
 fi
 case ${1:-} in -*) echo "usage: tools/check-public-cut.sh [ROOT] | --print-config" >&2; exit 2 ;; esac
+[ "$EPW_BAD" = 0 ] || { echo "check-public-cut: engine prose words: a line is neither \`ident NAME\` nor \`phrase TEXT\` (letters, digits, spaces); the words aren't printed" >&2; exit 2; }
+if [ "$ENGINE_PROSE_SET" = 0 ]; then
+  if [ "${MPC_ENGINE_PROSE_REQUIRED:-0}" = 1 ]; then
+    echo "check-public-cut: engine prose words: none set and MPC_ENGINE_PROSE_REQUIRED=1: set MPC_ENGINE_PROSE_WORDS (one per line), MPC_ENGINE_PROSE_WORDS_FILE (a file of them), or write ~/.config/k2-mpc/engine-prose-words.txt" >&2
+    exit 2
+  fi
+  echo "check-public-cut (note): no engine prose words set (a public cut ships none): that part of the labels rule is off"
+fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=${1:-$(cd "$HERE/.." && pwd)}
 [ -d "$ROOT" ] || { echo "check-public-cut: no directory $ROOT" >&2; exit 2; }
@@ -538,7 +599,7 @@ grep -Ev '^vendor/' "$LIST" | while IFS= read -r f; do
   case " $LABEL_EXEMPT " in *" $f "*) continue ;; esac
   grep -Iq . "$f" 2>/dev/null || continue
   printf '%s\n' "$f"
-done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTERNS" \
+done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTERNS" ENGINE_PROSE_WORDS="$ENGINE_PROSE_WORDS" \
   ENGINE_CODES="$(grep -oE 'e\("MPCE-E[0-9]+"' crates/base/src/errors/registry.rs 2>/dev/null | grep -oE 'MPCE-E[0-9]+' | tr '\n' ' ')" \
   TEXT_EXCEPTIONS="$TEXT_EXCEPTIONS" awk '
   BEGIN {
@@ -565,6 +626,10 @@ done | LABEL_PATTERNS="$LABEL_PATTERNS" LABEL_PROSE_PATTERNS="$LABEL_PROSE_PATTE
       else if ((p = index(line, "// ")) > 0) t = substr(line, p)
       # a table row whose first cell is a parity row id keeps that id (the kit prints it)
       if (t ~ /^[ \t]*\| *P[0-9]+[a-z]? *\|/) sub(/\| *P[0-9]+[a-z]? *\|/, "|", t)
+      # native engine type and method names in prose, code spans included (an engine type,
+      # Mpce..., or a path into a crate the cut removes): the reference model crates (mpce-model,
+      # mpce-order, mpce-reg) are public and stay allowed, with any path into them
+      if (t != "") { e = t; gsub(/mpce[-_](model|order|reg)(::[A-Za-z0-9_]+)*/, "", e); if (e ~ /Mpce[A-Z][A-Za-z0-9_]*/ || e ~ /mpce[-_](core|codec|sync)::/ || (ENVIRON["ENGINE_PROSE_WORDS"] != "" && e ~ ENVIRON["ENGINE_PROSE_WORDS"])) print "check-public-cut: labels: " file ":" ln ": engine name in prose" }
       if (t != "") { gsub(/`[^`]*`/, "", t); for (i = 1; i <= m; i++) if (t ~ prx[i]) print "check-public-cut: labels: " file ":" ln ": " pkind[i] }
       # an engine code the public registry has no entry for (a code value in a string literal
       # alone, as an adapter matches it, passes)

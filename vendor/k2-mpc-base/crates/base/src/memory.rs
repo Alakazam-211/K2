@@ -3,7 +3,10 @@
 //! allocator keeps freed pages it can't return from the top of its heap: the process's resident
 //! memory stays at its peak. [`release_freed`] asks the allocator to return every free page it
 //! can, so the memory a cut freed leaves the process. The cut queue calls it in its idle slot,
-//! after a cut; it is cheap when there is nothing to return.
+//! after a cut; it is cheap when there is nothing to return. Since v0.24 the tick also calls
+//! it after it wrote a doc back, at most once per
+//! [`crate::session::Config::release_after_write_ms`]: a write-back encodes and renders the
+//! whole doc, and a Yrs doc makes no cut.
 //!
 //! - **glibc (Linux):** `malloc_trim(0)`, which returns the free pages of every arena (not only
 //!   the top of the heap) to the OS.
@@ -45,8 +48,6 @@ impl HostRelease {
     }
 
     /// Run it.
-    // a build without the native engine (the public cut's) makes no cut, so calls none
-    #[allow(dead_code)]
     pub(crate) fn call(&self) -> Release {
         (self.0)()
     }
@@ -69,8 +70,6 @@ impl Eq for HostRelease {}
 
 /// Return freed memory to the OS with the host's release when it set one, else the kit's own
 /// ([`release_freed`]).
-// a build without the native engine (the public cut's) makes no cut, so calls none
-#[allow(dead_code)]
 pub(crate) fn release_with(host: Option<&HostRelease>) -> Release {
     match host {
         // the plant: the host's release is never called (the kit's own runs instead)

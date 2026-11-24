@@ -1648,7 +1648,7 @@ impl Session {
             return Ok(None);
         }
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
         let (page_bytes, frame_max) = opts.caps();
         let (id, rx) = self.watch_subscribe(&mut st, i, conn);

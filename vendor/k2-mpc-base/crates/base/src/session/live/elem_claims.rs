@@ -166,7 +166,7 @@ impl Session {
         hold: bool,
     ) -> Result<ClaimInfo> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Edit, Action::Claim, now)?;
         self.expire_claims(st, now);

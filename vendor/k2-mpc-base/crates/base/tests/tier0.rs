@@ -64,11 +64,17 @@ impl Host for TestHost {
 struct TmpDir(PathBuf);
 impl Drop for TmpDir {
     fn drop(&mut self) {
+        // a row may have left the workspace folder read-only (Unix only, below)
+        #[cfg(unix)]
         let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
         let _ = fs::remove_dir_all(&self.0);
     }
 }
 
+// The rows that leave a folder read-only, so a write-back into it fails, run on Unix only: on
+// Windows a folder's read-only attribute doesn't stop files being created in it (only an ACL
+// would), so there is no cheap equivalent.
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 struct Fx {
@@ -620,6 +626,7 @@ fn an_outside_save_without_a_lease_is_just_a_version() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_save_over_a_version_the_file_never_got_keeps_both_even_if_the_copy_fails() {
     let f = fx("unwritten");
     let path = f.path("sheet.xlsx");
@@ -1445,13 +1452,17 @@ fn an_edited_or_named_conflict_copy_is_never_deleted() {
         f.mgr.tick().unwrap().conflict_copies_removed,
         [(key("edited.bin"), copies[0].0.clone())]
     );
-    // a symlink in a copy's place is never followed or removed
-    let target = f.path("precious.txt");
-    fs::write(&target, b"alice's").unwrap();
-    std::os::unix::fs::symlink(&target, &copies[0].0).unwrap();
-    f.advance(DAY);
-    assert!(f.mgr.tick().unwrap().conflict_copies_removed.is_empty());
-    assert_eq!(fs::read(&target).unwrap(), b"alice's");
+    // a symlink in a copy's place is never followed or removed (Unix: making a symlink on
+    // Windows needs a privilege a test run may not have)
+    #[cfg(unix)]
+    {
+        let target = f.path("precious.txt");
+        fs::write(&target, b"alice's").unwrap();
+        std::os::unix::fs::symlink(&target, &copies[0].0).unwrap();
+        f.advance(DAY);
+        assert!(f.mgr.tick().unwrap().conflict_copies_removed.is_empty());
+        assert_eq!(fs::read(&target).unwrap(), b"alice's");
+    }
 }
 
 /// Records written by v0.3.x (a plain name: the copy beside the file) still resolve after
@@ -2375,11 +2386,15 @@ fn mtime_ms(path: &Path) -> u64 {
 }
 
 /// The file's bytes, mtime (ns) and inode: a write by anyone (in place or by rename) moves
-/// the mtime off the old value set here, or the inode.
+/// the mtime off the old value set here, or the inode. Off Unix the stable library has no file
+/// index, so the identity is 0 there and the bytes and mtime show the write.
 fn file_state(path: &Path) -> (Vec<u8>, std::time::SystemTime, u64) {
-    use std::os::unix::fs::MetadataExt;
     let m = fs::metadata(path).unwrap();
-    (fs::read(path).unwrap(), m.modified().unwrap(), m.ino())
+    #[cfg(unix)]
+    let id = std::os::unix::fs::MetadataExt::ino(&m);
+    #[cfg(not(unix))]
+    let id = 0;
+    (fs::read(path).unwrap(), m.modified().unwrap(), id)
 }
 
 /// A file the host wrote: its bytes saved by temp write and rename, then its mtime set an
@@ -2800,7 +2815,8 @@ fn record_saved_remembers_a_bounded_number_of_tickets() {
 /// The host saved alice's bytes and recorded them, and before the save's change event comes
 /// in, bob writes a version the file can't get yet (the folder is left read-only). Returns
 /// the session, alice's connection and bob's version; the doc then has [`AFTER_BOB`]
-/// versions.
+/// versions. Unix only (a read-only folder).
+#[cfg(unix)]
 fn recorded_then_a_write_the_file_lacks(f: &Fx, name: &str) -> (Arc<BlobSession>, ConnId, u64) {
     let path = f.path(name);
     fs::write(&path, b"v1").unwrap();
@@ -2818,6 +2834,7 @@ fn recorded_then_a_write_the_file_lacks(f: &Fx, name: &str) -> (Arc<BlobSession>
 }
 
 /// v1, the host's save, bob's write.
+#[cfg(unix)]
 const AFTER_BOB: usize = 3;
 
 /// The save's own change events after the record: the kit's content, nothing recorded.
@@ -2844,6 +2861,7 @@ fn record_saved_its_own_change_events_record_nothing() {
 /// yet): the file holding the host's save is the kit's own content, not an outside save over
 /// bob's.
 #[test]
+#[cfg(unix)]
 fn record_saved_is_not_taken_in_again_by_file_changed() {
     let f = fx("rs-echo-fc");
     let (s, a, w) = recorded_then_a_write_the_file_lacks(&f, "a.bin");
@@ -2870,6 +2888,7 @@ fn record_saved_is_not_taken_in_again_by_file_changed() {
 
 /// The same through the stat backup (`check_disk`, and `tick`).
 #[test]
+#[cfg(unix)]
 fn record_saved_is_not_taken_in_again_by_check_disk() {
     let f = fx("rs-echo-cd");
     let (s, a, w) = recorded_then_a_write_the_file_lacks(&f, "a.bin");
@@ -2972,6 +2991,7 @@ fn record_saved_control_unrecorded_bytes_are_an_outside_save() {
 /// kit's write-back waits while the host's ticket is open, so it never writes over the
 /// host's save, and once the save is recorded the file is clean.
 #[test]
+#[cfg(unix)]
 fn record_saved_leaves_the_file_clean() {
     let f = fx("rs-clean");
     let path = f.path("x.bin");

@@ -565,7 +565,7 @@ impl Session {
     pub fn take_notes(&self, conn: ConnId) -> Result<Notes> {
         timed!(Notes);
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Read, Action::Read, now)?;
         let waiting = self.drain_notes(st, i, now);

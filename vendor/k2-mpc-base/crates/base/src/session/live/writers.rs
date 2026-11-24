@@ -264,6 +264,7 @@ impl Session {
                 if own
                     && w.row.device == tag
                     && w.row.leased
+                    && !w.row.retired
                     && w.row.token == l.token
                     && !held(l.client)
                     && !planted(Plant::ReclaimNeverKeeps)
@@ -309,7 +310,11 @@ impl Session {
                 } else {
                     !w.row.leased || parked_out(w) || planted(Plant::ReuseParked)
                 };
-                w.owner == p.pid && w.row.device == tag && takeable && Some(**c) != stale
+                w.owner == p.pid
+                    && w.row.device == tag
+                    && !w.row.retired
+                    && takeable
+                    && Some(**c) != stale
             })
             .map(|(c, _)| *c);
         // at the cap, only a writer the doc counts already
@@ -327,7 +332,11 @@ impl Session {
             // the person's writers the doc counts, none held, none the stale reclaim's own
             let mine = || {
                 st.writers.map.iter().filter(|(c, w)| {
-                    w.owner == p.pid && !held(**c) && Some(**c) != stale && counted(st, **c)
+                    w.owner == p.pid
+                        && !w.row.retired
+                        && !held(**c)
+                        && Some(**c) != stale
+                        && counted(st, **c)
                 })
             };
             // a free writer of another device (re-tagged to this one by its lease)
@@ -536,7 +545,7 @@ impl Session {
     /// leaves.
     pub fn release(&self, conn: ConnId) -> Result<bool> {
         self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         match Self::member(&st, conn) {
             Ok(i) => {
                 if let Some(l) = st.members[i].lease.as_mut() {

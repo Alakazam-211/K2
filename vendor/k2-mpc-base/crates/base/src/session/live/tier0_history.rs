@@ -41,7 +41,7 @@ impl Session {
     /// blob doc. Needs history.
     pub fn tier0_log(&self, conn: ConnId) -> Result<Vec<BlobLogEntry>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::History, Action::History, now)?;
         let base = Self::copy_base(&st);
         blob_log(self.store(&st)?, self.doc_id, base.as_deref())
@@ -54,7 +54,7 @@ impl Session {
     /// [`SessionError::NoBlobStore`] when the manager has no blob store.
     pub fn read_tier0_version(&self, conn: ConnId, vid: VersionId) -> Result<BlobRead> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::History, Action::Versions, now)?;
         let blobs = self.blob_store()?;
         let info = self.store(&st)?.blob_version(self.doc_id, vid)?;
@@ -81,7 +81,7 @@ impl Session {
         state: ApprovalState,
     ) -> Result<BlobApproval> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Approve, now)?;
         let pid = st.members[i].p.pid.clone();
         let store = self.store(&st)?.clone();
@@ -146,7 +146,7 @@ impl Session {
     /// [`PurgeScope::History`] reaches the tier-0 history too).
     pub fn purge_tier0(&self, conn: ConnId, version: Option<VersionId>) -> Result<PurgeOutcome> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let st = &mut *st;
         let i = self.admit(st, conn, Need::Owner, Action::Purge, now)?;
         let by = st.members[i].p.pid.clone();

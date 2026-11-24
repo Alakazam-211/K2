@@ -307,6 +307,10 @@ pub struct PersonWriterRow {
     pub ended_seq: Seq,
     /// When it ended (the host's clock), for the park expiry.
     pub ended_ms: u64,
+    /// Retired: never let again, to any connection (a recovery, or an open whose writer
+    /// incarnation rotated: `seq_floor.rs`'s `retire_reusable_writers`). The rest of the row
+    /// stays, so a late reclaim of its last lease is still told when that lease ended.
+    pub retired: bool,
 }
 
 impl PersonWriterRow {
@@ -325,7 +329,11 @@ fn enc_person_row(r: &PersonWriterRow) -> [u8; PERSON_ROW_LEN] {
     let mut b = [0u8; PERSON_ROW_LEN];
     b[0] = KIND_PERSON_DEVICE;
     b[1] = PERSON_ROW_VERSION;
-    b[2] = u8::from(r.leased);
+    // the state: bit 0 leased, bit 1 retired (a kit before the retired bit reads a row with
+    // it set as unknown: never reused)
+    // the plant (N-1, `tools/n1/n1.sh node-retired`): the retired bit dropped on write
+    let retired = r.retired && !crate::beta_plant::planted("retired-bit-dropped");
+    b[2] = u8::from(r.leased) | (u8::from(retired) << 1);
     b[3..19].copy_from_slice(&r.device);
     b[19..27].copy_from_slice(&r.token.to_le_bytes());
     b[27..35].copy_from_slice(&r.ended_token.to_le_bytes());
@@ -341,13 +349,12 @@ fn dec_person_row(b: &[u8]) -> Option<PersonWriterRow> {
         return None;
     }
     let u = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().expect("8 bytes"));
-    let leased = match b[2] {
-        0 => false,
-        1 => true,
-        _ => return None,
-    };
+    if b[2] > 3 {
+        return None;
+    }
     Some(PersonWriterRow {
-        leased,
+        leased: b[2] & 1 == 1,
+        retired: b[2] & 2 == 2,
         device: b[3..19].try_into().expect("16 bytes"),
         token: u(19),
         ended_token: u(27),
@@ -901,6 +908,38 @@ pub enum StoreError {
         doc: u64,
         stored: String,
         stored_format: u32,
+    },
+    /// A log entry of another engine than its doc's, given to a store write that logs it (an
+    /// append, a commit, an import's create, a promotion): refused before anything is written,
+    /// the log as it was. A native doc logs only native entries and every other doc only Yrs
+    /// ones; a load refuses a log that mixes them as damage (`Corrupt("log entry engine")`), so
+    /// the store never writes one. `entry` names the entry's engine. `MPC-E527`
+    /// `entry_engine_refused` (a writer's bug, not a doc another build wrote). Exit 6.
+    #[error(
+        "a log entry of {entry} can't go in doc {doc}'s log: the doc is on engine {stored} \
+         (format {stored_format}); nothing was written"
+    )]
+    EntryEngineRefused {
+        doc: u64,
+        entry: &'static str,
+        stored: String,
+        stored_format: u32,
+    },
+    /// A doc's metadata replaced with an engine stamp of the other entry engine (a native doc's,
+    /// or every other doc's) while the doc holds rows of its own engine (log rows, or a
+    /// snapshot): its log would then mix engines and its next load refuse it as damage, so
+    /// nothing is written. Every write that replaces a doc's metadata checks it (`put_meta`, a
+    /// disk commit, a write-back's synced state). `entry` names the engine of the doc's rows.
+    /// `MPC-E527` `entry_engine_refused`. Exit 6.
+    #[error(
+        "doc {doc}'s log holds entries of {entry}; its engine stamp can't change to {asked} \
+         (format {asked_format}) while they're there; nothing was written"
+    )]
+    EngineStampRefused {
+        doc: u64,
+        entry: &'static str,
+        asked: String,
+        asked_format: u32,
     },
     /// A structured doc's row marks can't be read (`row_marks` is missing): a base can't be
     /// vouched for, so a keyed write naming one is refused as expired (fail closed).
@@ -1533,6 +1572,38 @@ impl EntryEngine {
             _ => Err(StoreError::Corrupt(LOG_ENTRY_ENGINE)),
         }
     }
+
+    /// The engine of the entries a write may add to the log of a doc stamped as `meta` is: a
+    /// native doc's are native, every other doc's Yrs (whether this build may load the doc
+    /// stays its load's question). Without the native engine, a native doc is refused whole
+    /// ([`StoreError::NativeEngineMissing`]), as its load, delete and purge are.
+    pub(crate) fn of_write(meta: &DocMeta) -> Result<Self, StoreError> {
+        if crate::engine::native_stamp(&meta.engine) {
+            return Err(StoreError::NativeEngineMissing {
+                stored: meta.engine.clone(),
+                stored_format: meta.engine_format,
+            });
+        }
+        Ok(EntryEngine::Yrs)
+    }
+
+    /// [`StoreError::EntryEngineRefused`] unless `body`, to be written to doc `id`'s log (its
+    /// stamp `meta`), is of this engine. The plant `append-engine-check-skipped` (test builds
+    /// only) lets any entry through, as before the store checked it.
+    fn check_write(self, id: DocId, meta: &DocMeta, body: &EntryBody) -> Result<(), StoreError> {
+        if self.check(body).is_ok() || crate::beta_plant::planted("append-engine-check-skipped") {
+            return Ok(());
+        }
+        Err(StoreError::EntryEngineRefused {
+            doc: id,
+            entry: match body {
+                EntryBody::Yrs(_) => "Yrs",
+                EntryBody::Native(_) => "the native engine",
+            },
+            stored: meta.engine.clone(),
+            stored_format: meta.engine_format,
+        })
+    }
 }
 
 pub struct DocStore {
@@ -1542,8 +1613,21 @@ pub struct DocStore {
     db: RwLock<Database>,
     path: PathBuf,
     /// What the store was opened with ([`DocStore::open_with`]); a rewrite's fresh file is
-    /// opened with it too.
+    /// opened with it too. Its commit durability is the open's: the one in effect is
+    /// `commit_now`.
     settings: StoreSettings,
+    /// When the store's commits reach the disk now ([`DocStore::set_commit_durability`]).
+    /// Changed only by a commit holding `commit_gate`, so every write transaction runs under one
+    /// setting from its begin to its commit.
+    commit_now: RwLock<CommitDurability>,
+    /// The store's writer turn: held by every write transaction ([`Wtx`]) from before it asks
+    /// the store library for its one writer until it commits or drops; a change of `commit_now`
+    /// holds it too, through its own commit, so no transaction begins between that commit and
+    /// the change. Every waiting write's wait is bounded, and a person's (or the tick's) goes
+    /// ahead of agents' (`fair.rs`): the store library's own writer lock lets in whoever takes it
+    /// first, so a flood of writers on other docs could pass over one doc's writer without
+    /// bound; under the turn it is only ever asked by one.
+    commit_gate: crate::fair::FairMutex<()>,
     /// What the store keeps of the [`crate::blob::BlobStore`] over it, if one is open: its
     /// folder (where a chunked version's manifest is read when the store drops it), its lock
     /// and its writes' waiting marks (`chunks.rs`).
@@ -1564,14 +1648,11 @@ pub struct DocStore {
 
 /// A clean close: the group not yet durable is made durable (grouped commits, `group.rs`), and
 /// (feature `native`) the writer incarnation's open mark is cleared in that same commit, so the
-/// next open keeps the incarnation (`incarnation.rs`). Best effort: a close that can't write
-/// leaves the mark set, and the next open rotates (the safe direction).
+/// next open keeps the incarnation (it finds the store closed cleanly). Best effort: a close
+/// that can't write leaves the mark set, and the next open rotates (the safe direction).
 impl Drop for DocStore {
     fn drop(&mut self) {
-        let grouped = matches!(
-            self.settings.commit_durability(),
-            CommitDurability::Grouped { .. }
-        );
+        let grouped = matches!(self.commit_durability(), CommitDurability::Grouped { .. });
         let inc = false;
         if !inc && !grouped {
             let _ = self.flush();
@@ -1597,6 +1678,10 @@ pub(crate) struct Wtx<'a> {
     now: Option<u64>,
     /// The store groups its commits (a failure at the disk then loses the group: `group.rs`).
     grouped: bool,
+    /// The store's writer turn; the store's durability can't change while this transaction
+    /// lives (`commit_gate`). Declared after `tx`, so the store library's writer is let go
+    /// before the turn passes on.
+    gate: crate::fair::FairGuard<'a, ()>,
 }
 
 /// Test builds: a test storage layer's database opened again ([`DocStore::reopen_in_place`]).
@@ -1615,6 +1700,12 @@ fn io_failed(e: &redb::StorageError) -> bool {
 
 impl Wtx<'_> {
     pub(crate) fn commit(self) -> Result<(), redb::CommitError> {
+        self.commit_then(|| {})
+    }
+
+    /// [`Wtx::commit`], and once it succeeded `then`, before any other transaction begins (the
+    /// store's `commit_gate` is still held): how a durability change takes effect.
+    fn commit_then(self, then: impl FnOnce()) -> Result<(), redb::CommitError> {
         let Wtx {
             mut tx,
             _g,
@@ -1622,6 +1713,7 @@ impl Wtx<'_> {
             mut durable,
             now,
             grouped,
+            gate,
         } = self;
         // a doc's seq floor raised in this commit: on disk before a version past it is issued
         // (`seq_floor.rs`)
@@ -1629,9 +1721,10 @@ impl Wtx<'_> {
             tx.set_durability(redb::Durability::Immediate);
             durable = true;
         }
-        match tx.commit() {
+        let out = match tx.commit() {
             Ok(()) => {
                 count.committed(durable, now);
+                then();
                 Ok(())
             }
             Err(e) => {
@@ -1640,7 +1733,9 @@ impl Wtx<'_> {
                 }
                 Err(e)
             }
-        }
+        };
+        drop(gate);
+        out
     }
 }
 
@@ -1819,12 +1914,56 @@ fn dec_approval(b: &[u8]) -> Result<Approval, StoreError> {
 }
 
 /// Insert one log entry, and its pending approval when it was made on someone's behalf.
+/// [`StoreError::EngineStampRefused`] when doc `id`'s metadata, `old`, is to be replaced by `new`,
+/// which stamps it with the other entry engine (a native doc's, or every other doc's), while the
+/// doc holds rows of its own engine (log rows, or a snapshot): its log would then mix engines and
+/// its next load refuse it as damage. Every write that replaces a doc's metadata keeping its key
+/// checks it in its own transaction. A stamp change within one engine (another library version or
+/// format, an unstamped doc) is not one: its load decides. The plant
+/// `restamp-engine-check-skipped` (test builds only) lets any restamp through, as before.
+fn check_restamp(
+    w: &redb::WriteTransaction,
+    id: DocId,
+    old: &DocMeta,
+    new: &DocMeta,
+) -> Result<(), StoreError> {
+    let native = |m: &DocMeta| crate::engine::native_stamp(&m.engine);
+    if native(old) == native(new) || crate::beta_plant::planted("restamp-engine-check-skipped") {
+        return Ok(());
+    }
+    let holds_rows = w
+        .open_table(UPDATES)?
+        .range((id, 0)..=(id, u64::MAX))?
+        .next()
+        .is_some()
+        || w.open_table(SNAPSHOTS)?.get(id)?.is_some();
+    if !holds_rows {
+        return Ok(());
+    }
+    Err(StoreError::EngineStampRefused {
+        doc: id,
+        entry: if native(old) {
+            "the native engine"
+        } else {
+            "Yrs"
+        },
+        asked: new.engine.clone(),
+        asked_format: new.engine_format,
+    })
+}
+
+/// Log entry `e` at position `seq` of doc `id` (its stamp `meta`), with its `Pending` approval
+/// when it has an `on_behalf_of`. Every write of a log entry goes through here, so an entry of
+/// another engine than the doc's is refused ([`StoreError::EntryEngineRefused`]) before it is
+/// written, whichever write gives it.
 fn put_entry(
     w: &redb::WriteTransaction,
+    meta: &DocMeta,
     id: DocId,
     seq: Seq,
     e: &LogEntry,
 ) -> Result<(), StoreError> {
+    EntryEngine::of_write(meta)?.check_write(id, meta, &e.body)?;
     w.open_table(UPDATES)?
         .insert((id, seq), enc_entry(e).as_slice())?;
     if let Some(p) = &e.on_behalf_of {
@@ -2099,26 +2238,30 @@ impl DocStore {
     fn begin_write_as(&self, barrier: bool) -> Result<Wtx<'_>, StoreError> {
         self.check_not_failed()?;
         let g = self.guard();
-        let grouped = matches!(
-            self.settings.commit_durability(),
-            CommitDurability::Grouped { .. }
-        );
+        // the store's writer turn, in the calling thread's lane (`fair.rs`); from here to its
+        // commit the durability stays as it is now (`commit_gate`). A poisoned turn still holds
+        // the turn: the data is `()`, so nothing is left half-changed
+        let gate = match self.commit_gate.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_guard(),
+        };
         #[allow(unused_mut)]
         let mut tx = match g.begin_write() {
             Ok(tx) => tx,
             Err(e) => {
+                let grouped = matches!(self.commit_durability(), CommitDurability::Grouped { .. });
                 if grouped && matches!(&e, redb::TransactionError::Storage(s) if io_failed(s)) {
                     self.commit_count.fail();
                 }
                 return Err(e.into());
             }
         };
+        let commit = self.commit_durability();
+        let grouped = matches!(commit, CommitDurability::Grouped { .. });
         // a mark an earlier transaction left without committing is not this one's
         self.commit_count.take_floor_raised();
         // decided once the store library's one writer is this one: no other commit between
-        let (durable, now) = self
-            .commit_count
-            .next(self.settings.commit_durability(), barrier);
+        let (durable, now) = self.commit_count.next(commit, barrier);
         if !durable {
             tx.set_durability(redb::Durability::None);
         }
@@ -2133,6 +2276,7 @@ impl DocStore {
             durable,
             now,
             grouped,
+            gate,
         })
     }
 
@@ -2249,7 +2393,7 @@ impl DocStore {
     /// Whether every commit so far is on disk: always at [`CommitDurability::Immediate`]
     /// (where a reader between a commit and its count must not see it otherwise).
     pub(crate) fn all_durable(&self) -> bool {
-        match self.settings.commit_durability() {
+        match self.commit_durability() {
             CommitDurability::Grouped { .. } => self.durable_through() >= self.commits(),
             _ => true,
         }
@@ -2265,10 +2409,7 @@ impl DocStore {
     /// The group made durable when it has waited `max_ms` (grouped commits; the session
     /// manager's tick): a store with no commit waiting does nothing.
     pub(crate) fn tick_group(&self) -> Result<(), StoreError> {
-        if self
-            .commit_count
-            .due_at_tick(self.settings.commit_durability())
-        {
+        if self.commit_count.due_at_tick(self.commit_durability()) {
             self.flush()?;
         }
         Ok(())
@@ -2317,7 +2458,7 @@ impl DocStore {
         // the grouped mark is still set (no clean close): a recovery (`seq_floor.rs`); and the
         // incarnation's open mark too: taken again, it rotates
         let w = db.begin_write()?;
-        let recovered = seq_floor::at_open(&w, &self.settings)?;
+        let recovered = seq_floor::at_open(&w, &self.settings())?;
         w.commit()?;
         *self
             .recovered
@@ -2346,9 +2487,60 @@ impl DocStore {
         &self.path
     }
 
-    /// The settings the store was opened with ([`DocStore::open_with`]).
+    /// The store's settings: those it was opened with ([`DocStore::open_with`]), with its
+    /// commit durability as it is now ([`DocStore::set_commit_durability`]).
     pub fn settings(&self) -> StoreSettings {
         self.settings
+            .with_commit_durability(self.commit_durability())
+    }
+
+    /// When the store's commits reach the disk now: the open's setting, or the last
+    /// [`DocStore::set_commit_durability`].
+    pub fn commit_durability(&self) -> CommitDurability {
+        *self
+            .commit_now
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Change when the store's commits reach the disk, now, with no reopen (`group.rs`). One
+    /// commit that waits for the disk, as [`DocStore::flush`]'s: every commit before it is
+    /// durable when this returns ([`DocStore::durable_through`] at least the
+    /// [`DocStore::commits`] made before the call), and every commit after it is made under
+    /// `commit`: at [`CommitDurability::Immediate`] each waits for the disk; grouped, the next
+    /// one starts the first group under the new bounds. No transaction runs under two
+    /// settings: the change waits for the one in flight, and the next begins once it took
+    /// effect. The same setting again is that one flush. The grouped open mark
+    /// (`seq_floor.rs`) is set in that commit when the store starts grouping, so an abrupt stop
+    /// after it is a recovery, and removed when it stops, as a clean close would. Refused
+    /// [`StoreError::Recovering`] while a commit that failed at the disk waits for the reopen
+    /// (`group.rs`), and with the store's error if its commit fails (the setting is then
+    /// unchanged).
+    pub fn set_commit_durability(&self, commit: CommitDurability) -> Result<(), StoreError> {
+        self.check_not_failed()?;
+        // the plant: the setting changed at once, with no flush and no writer held (a commit
+        // in flight finishes under the new one)
+        if crate::beta_plant::planted("durability-switch-mid-group") {
+            *self
+                .commit_now
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = commit;
+            return Ok(());
+        }
+        // the plant: an ordinary commit, the group left waiting
+        let w = if crate::beta_plant::planted("durability-switch-skips-flush") {
+            self.begin_write()?
+        } else {
+            self.begin_write_durable()?
+        };
+        seq_floor::switched(&w, self.commit_durability(), commit)?;
+        w.commit_then(|| {
+            *self
+                .commit_now
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = commit;
+        })?;
+        Ok(())
     }
 
     /// Open (or create) the store at `path`, with [`StoreSettings::DEFAULT`]
@@ -2451,6 +2643,8 @@ impl DocStore {
             unsynced: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             reopen_backend: None,
+            commit_now: RwLock::new(settings.commit_durability()),
+            commit_gate: crate::fair::FairMutex::store(()),
             commit_count: Default::default(),
             recovered: std::sync::Mutex::new(recovered.done),
         };
@@ -2510,6 +2704,8 @@ impl DocStore {
             unsynced: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             reopen_backend: None,
+            commit_now: RwLock::new(settings.commit_durability()),
+            commit_gate: crate::fair::FairMutex::store(()),
             commit_count: Default::default(),
             recovered: std::sync::Mutex::new(None),
         })
@@ -2710,7 +2906,7 @@ impl DocStore {
             w.open_table(CLIENTS)?.insert((id, client), owner)?;
             let seq = match entry {
                 Some(e) => {
-                    put_entry(w, id, 1, e)?;
+                    put_entry(w, meta, id, 1, e)?;
                     if let Some(c) = change {
                         history::put_changes(w, id, &[1], std::slice::from_ref(c))?;
                     }
@@ -2747,7 +2943,9 @@ impl DocStore {
         dec_meta(v.value())
     }
 
-    /// Replace a doc's metadata. The key can't change here; use [`DocStore::rekey`].
+    /// Replace a doc's metadata. The key can't change here; use [`DocStore::rekey`]. Nor can
+    /// the engine stamp move to the other entry engine (a native doc's, or every other doc's)
+    /// while the doc holds rows of its own: [`StoreError::EngineStampRefused`], nothing written.
     pub fn put_meta(&self, id: DocId, meta: &DocMeta) -> Result<(), StoreError> {
         let w = self.begin_write()?;
         {
@@ -2755,6 +2953,25 @@ impl DocStore {
             let old = dec_meta(t.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
             if old.key != meta.key {
                 return Err(StoreError::KeyChange);
+            }
+            check_restamp(&w, id, &old, meta)?;
+            t.insert(id, enc_meta(meta).as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Test builds and the `test-support` feature only: replace doc `id`'s metadata as stored,
+    /// past every check [`DocStore::put_meta`] makes (its engine stamp included), as a build on
+    /// another engine, or damage, leaves it. No host enables the feature.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn put_meta_unchecked(&self, id: DocId, meta: &DocMeta) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        {
+            let mut t = w.open_table(DOCS)?;
+            if t.get(id)?.is_none() {
+                return Err(StoreError::NoDoc(id));
             }
             t.insert(id, enc_meta(meta).as_slice())?;
         }
@@ -2783,6 +3000,9 @@ impl DocStore {
 
     /// Append entries to a doc's log in one durable transaction; returns their positions.
     /// An entry with `on_behalf_of` gets a `Pending` [`Approval`] in the same transaction.
+    /// Every entry must be of the doc's engine: an entry of another is refused
+    /// ([`StoreError::EntryEngineRefused`]) and nothing is written. Without the native engine,
+    /// a native doc is refused whole ([`StoreError::NativeEngineMissing`]).
     pub fn append(&self, id: DocId, entries: &[LogEntry]) -> Result<Vec<Seq>, StoreError> {
         let w = self.begin_write()?;
         let seqs = self.append_in(&w, id, entries)?;
@@ -2796,9 +3016,12 @@ impl DocStore {
         id: DocId,
         entries: &[LogEntry],
     ) -> Result<Vec<Seq>, StoreError> {
-        if w.open_table(DOCS)?.get(id)?.is_none() {
-            return Err(StoreError::NoDoc(id));
-        }
+        // the doc's stamp: each entry must be of its engine (`put_entry`)
+        let meta = {
+            let docs = w.open_table(DOCS)?;
+            let m = docs.get(id)?.ok_or(StoreError::NoDoc(id))?;
+            dec_meta(m.value())?
+        };
         let mut next = {
             let t = w.open_table(UPDATES)?;
             self.last_seq_in(&t, id)? + 1
@@ -2814,13 +3037,13 @@ impl DocStore {
         }
         let mut seqs = Vec::with_capacity(entries.len());
         for e in entries {
-            put_entry(w, id, next, e)?;
+            put_entry(w, &meta, id, next, e)?;
             seqs.push(next);
             next += 1;
         }
         // grouped: the floor is raised, durably, before a version at or past it is issued
         if let (CommitDurability::Grouped { max_changes, .. }, Some(&last)) =
-            (self.settings.commit_durability(), seqs.last())
+            (self.commit_durability(), seqs.last())
         {
             let text = seq_floor::Space::Text;
             if last >= seq_floor::floor_in(w, text, id)? {
@@ -3189,6 +3412,7 @@ impl DocStore {
             if old.key != meta.key {
                 return Err(StoreError::KeyChange);
             }
+            check_restamp(&w, id, &old, meta)?;
             docs.insert(id, enc_meta(meta).as_slice())?;
         }
         put_versions(&w, id, versions)?;
@@ -3248,6 +3472,7 @@ impl DocStore {
             if old.key != meta.key {
                 return Err(StoreError::KeyChange);
             }
+            check_restamp(&w, id, &old, meta)?;
             docs.insert(id, enc_meta(meta).as_slice())?;
         }
         w.commit()?;
@@ -3295,6 +3520,7 @@ impl DocStore {
             if old.key != meta.key {
                 return Err(StoreError::KeyChange);
             }
+            check_restamp(&w, id, &old, meta)?;
             docs.insert(id, enc_meta(meta).as_slice())?;
         }
         w.commit()?;

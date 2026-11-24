@@ -148,7 +148,7 @@ impl Session {
     /// Every version of the doc, oldest first, without content. Needs history.
     pub fn versions(&self, conn: ConnId) -> Result<Vec<VersionInfo>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit_history(&mut st, conn, now)?;
         Ok(self.store(&st)?.version_infos(self.doc_id)?)
     }
@@ -156,7 +156,7 @@ impl Session {
     /// `show --version V`: each root's text at version `vid`. Needs history.
     pub fn show(&self, conn: ConnId, vid: VersionId) -> Result<Vec<(String, String)>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit_history(&mut st, conn, now)?;
         let v = self
             .store(&st)?
@@ -182,7 +182,7 @@ impl Session {
     /// opaque bytes.
     pub fn file_at(&self, conn: ConnId, vid: VersionId) -> Result<FileBytes> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit_history(&mut st, conn, now)?;
         let v = self
             .store(&st)?
@@ -230,7 +230,7 @@ impl Session {
     /// read base is recorded and "contributors since last read" doesn't move.
     pub fn file_now(&self, conn: ConnId) -> Result<FileBytes> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
         Ok(FileBytes {
             bytes: self.render(&st)?,
@@ -267,7 +267,7 @@ impl Session {
         context: usize,
     ) -> Result<DiffOutput> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit_history(&mut st, conn, now)?;
         let name = st.key.path.clone();
         let store = self.store(&st)?.clone();
@@ -346,7 +346,7 @@ impl Session {
 
     fn log_inner(&self, conn: ConnId, q: &LogQuery) -> Result<Vec<LogItem>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit_history(&mut st, conn, now)?;
         let store = self.store(&st)?.clone();
         let approvals: HashMap<Seq, ApprovalState> = store
@@ -398,7 +398,7 @@ impl Session {
     /// other version. Needs history.
     pub fn settings_change(&self, conn: ConnId, vid: VersionId) -> Result<Option<String>> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit_history(&mut st, conn, now)?;
         let store = self.store(&st)?.clone();
         let infos = store.version_infos(self.doc_id)?;
@@ -469,7 +469,7 @@ impl Session {
         vid: Option<VersionId>,
     ) -> Result<VersionId> {
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         self.admit(&mut st, conn, Need::Edit, Action::Versions, now)?;
         if name.is_empty() || name.len() > 256 {
             return Err(SessionError::BadEdit(
@@ -515,7 +515,7 @@ impl Session {
     ) -> Result<EditResult> {
         let turn = history_turn(opts);
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit_edit(&mut st, conn, Action::Restore, now)?;
         self.admit(&mut st, conn, Need::History, Action::Restore, now)?;
         self.check_backlog(&st, i)?;
@@ -604,7 +604,7 @@ impl Session {
         let turn = history_turn(opts);
         timed!(Revert);
         let now = self.now();
-        let mut st = self.lock()?;
+        let mut st = self.lock_for(conn)?;
         let i = self.admit_edit(&mut st, conn, Action::Revert, now)?;
         let st = &mut *st;
         let store = self.store(st)?.clone();

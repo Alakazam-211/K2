@@ -258,6 +258,43 @@ tp_code_ts_string() { tp_new code-ts-string && tp_line "$TSF" "const planted = '
 tp_code_md() { tp_new code-md && tp_line docs/POSITIONS.md "$TK!(\"x\")" && tp_commit plant && expect_text code-md "$D" 1 "$FIND docs/POSITIONS.md:$L: $TK"; }
 tp_code_test_name() { tp_new code-test-name && tp_line "$RSF" "fn ${TK}s_on_planted() {}" && tp_commit plant && expect_text code-test-name "$D" 1 "$FIND $RSF:$L: $TK"; }
 tp_code_plain_word() { tp_new code-plain-word && tp_line "$RSF" "    and a $TO in a wrapped literal\"," && tp_commit plant && expect_text code-plain-word "$D" 1 "$FIND $RSF:$L: $TO"; }
+# the native engine's type and method names in prose (a comment, a code span in it, a Markdown
+# line) are refused; the reference model's crates (mpce-model, mpce-order, mpce-reg) stay allowed
+tp_engine_name() {
+  tp_new engine-name && tp_line crates/base/src/lib.rs "// a planted comment: an engine type (\`MpcePlanted::run\`)" && tp_commit plant \
+    && expect_text engine-name "$D" 1 "check-public-cut: labels: crates/base/src/lib.rs:$L: engine name in prose"
+}
+tp_engine_name_md() {
+  tp_new engine-name-md && tp_line docs/POSITIONS.md "A planted line: the engine's MpcePlanted keeps its records." && tp_commit plant \
+    && expect_text engine-name-md "$D" 1 "check-public-cut: labels: docs/POSITIONS.md:$L: engine name in prose"
+}
+tp_engine_model_allowed() {
+  tp_new engine-model-allowed && tp_line crates/base/src/lib.rs "// a planted comment: the reference model (\`mpce_model::Model\`, \`mpce-order\`, \`mpce-reg\`), the kit's \`native_${ENGINE_PROSE_IDENT:-planted}\`" \
+    && tp_commit plant && expect_text engine-model-allowed "$D" 0
+}
+# the engine's method and mechanism words in prose: a method in a comment's code span, and a
+# mechanism in a Markdown line, are refused. The words come from outside the tree
+# (check-public-cut.sh, ENGINE_PROSE_WORDS); the plants use the first of each kind, so the gate
+# never names them. With none (a public cut's own copy, run with no private words) both plants
+# are skipped and the clean copy must carry the checker's note that the words are off.
+tp_engine_method() {
+  if [ "${ENGINE_PROSE_SET:-0}" != 1 ]; then tp_engine_words_off engine-method; return; fi
+  tp_new engine-method && tp_line crates/base/src/lib.rs "// a planted comment: an engine method (\`$ENGINE_PROSE_IDENT\`)" && tp_commit plant \
+    && expect_text engine-method "$D" 1 "check-public-cut: labels: crates/base/src/lib.rs:$L: engine name in prose"
+}
+tp_engine_mechanism_md() {
+  if [ "${ENGINE_PROSE_SET:-0}" != 1 ]; then tp_engine_words_off engine-mechanism-md; return; fi
+  tp_new engine-mechanism-md && tp_line docs/POSITIONS.md "A planted line: the engine's $ENGINE_PROSE_PHRASE guards its state." && tp_commit plant \
+    && expect_text engine-mechanism-md "$D" 1 "check-public-cut: labels: docs/POSITIONS.md:$L: engine name in prose"
+}
+# no words set: the clean copy passes and its run carries the note that the words are off
+tp_engine_words_off() {
+  out=$(sh "$TP/tools/check-public-cut.sh" "$TP" 2>&1); r=$?
+  [ "$r" -eq 0 ] || { echo "PLANT $1: no words set, the clean copy exited $r"; return 1; }
+  printf '%s\n' "$out" | grep -q '^check-public-cut (note): no engine prose words set' \
+    || { echo "PLANT $1: no words set, and no note that the words are off"; return 1; }
+  echo "PLANT $1: skipped: no engine prose words set (a public cut's copy); the checker says so"
+}
 # text_plants STEP: every plant, each run by STEP LABEL CMD (timed gates, info_step doesn't)
 text_plants() {
   "$1" plant_text_md tp_md; "$1" plant_text_comment tp_comment; "$1" plant_text_test_name tp_test_name; "$1" plant_text_wrap tp_wrap
@@ -271,6 +308,8 @@ text_plants() {
   "$1" plant_code_passes tp_code_passes; "$1" plant_code_comment tp_code_comment; "$1" plant_code_string tp_code_string
   "$1" plant_code_string_token tp_code_string_token; "$1" plant_code_ts_string tp_code_ts_string; "$1" plant_code_md tp_code_md
   "$1" plant_code_test_name tp_code_test_name; "$1" plant_code_plain_word tp_code_plain_word
+  "$1" plant_engine_name tp_engine_name; "$1" plant_engine_name_md tp_engine_name_md; "$1" plant_engine_model_allowed tp_engine_model_allowed
+  "$1" plant_engine_method tp_engine_method; "$1" plant_engine_mechanism_md tp_engine_mechanism_md
 }
 info_step() {
   l=$1; shift

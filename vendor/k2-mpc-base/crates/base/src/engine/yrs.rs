@@ -55,6 +55,10 @@ pub(crate) struct YrsDoc {
     /// every item of the root, deleted ones included, so it grows with the doc's history,
     /// not its text; an edit made here knows its result. Emptied by every apply.
     text_cache: Mutex<HashMap<&'static str, String>>,
+    /// The session holds this doc's texts (v0.24, a session's live text doc): it supplies the
+    /// text an edit is planned on ([`YrsDoc::edit_as_supplied`]), and nothing is cached here:
+    /// a read walks the doc, an edit keeps no copy. The canary checks the supplied text.
+    session_texts: bool,
     /// The sampled runtime check of the edit path and the text cache (v0.9.3).
     checks: Checks,
     /// The structured part of the change being made (planned against the doc before any
@@ -454,7 +458,7 @@ pub(crate) fn insert_clocks(clock_before: u64, edits: &[Edit]) -> Vec<Vec<u64>> 
 
 impl YrsDoc {
     /// Drop the cached texts (the doc is about to change).
-    fn forget_texts(&mut self) {
+    pub(crate) fn forget_texts(&mut self) {
         self.text_cache
             .get_mut()
             .unwrap_or_else(|p| p.into_inner())
@@ -923,6 +927,7 @@ impl YrsDoc {
             slot_indexes: HashMap::new(),
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
+            session_texts: false,
             checks,
             positions,
             pending: self.pending.clone(),
@@ -1338,8 +1343,53 @@ impl YrsDoc {
 }
 
 impl YrsDoc {
+    /// Tests only (v0.24): the bytes of text cached.
+    #[cfg(test)]
+    pub(crate) fn text_cache_bytes_for_tests(&self) -> usize {
+        self.text_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .map(String::len)
+            .sum()
+    }
+
+    /// The session holds the texts (v0.24): no cache here from now on ([`Self::session_texts`]).
+    pub(crate) fn set_session_texts(&mut self, on: bool) {
+        self.session_texts = on;
+        if on {
+            self.forget_texts();
+        }
+    }
+
+    /// [`EngineDoc::edit_as`] planned on `texts`, the session's texts of the roots it edits
+    /// (v0.24), not on a cached or walked copy.
+    pub(crate) fn edit_as_supplied(
+        &mut self,
+        client: ClientId,
+        edits: &[Edit],
+        texts: &[(&'static str, crate::SharedText)],
+    ) -> Result<Made, DocError> {
+        let clock = self.clock_of(client);
+        let edited = self.edit_edited_on(client, edits, Some(texts))?;
+        Ok(Made {
+            edited,
+            firsts: insert_clocks(clock, edits),
+        })
+    }
+
     /// [`EngineDoc::edit_as`]'s change, made (its clocks are [`insert_clocks`]'s).
     fn edit_edited(&mut self, client: ClientId, edits: &[Edit]) -> Result<Edited, DocError> {
+        self.edit_edited_on(client, edits, None)
+    }
+
+    /// [`Self::edit_edited`], planned on `supplied` (the session's texts) when given.
+    fn edit_edited_on(
+        &mut self,
+        client: ClientId,
+        edits: &[Edit],
+        supplied: Option<&[(&'static str, crate::SharedText)]>,
+    ) -> Result<Edited, DocError> {
         self.usable()?;
         prof!("engine.edit_as");
         // the canary (v0.9.3): a sampled edit first checks the text cache its positions are
@@ -1349,12 +1399,43 @@ impl YrsDoc {
             self.check_text_cache();
         }
         // Positions are computed against the session's current text, before the replica exists.
-        let mut before: Vec<String> = Vec::with_capacity(edits.len());
+        let mut before: Vec<std::borrow::Cow<'_, str>> = Vec::with_capacity(edits.len());
         let mut plans: Vec<TextPlan> = Vec::with_capacity(edits.len());
         for e in edits {
             if let Edit::Text { root, hunks } = e {
                 prof!("engine.positions");
-                let cur = self.text(root)?;
+                let given = supplied.and_then(|t| {
+                    t.iter()
+                        .find(|(r, _)| *r == root.as_str())
+                        .map(|(_, s)| s.as_str())
+                });
+                let cur = match given {
+                    // the canary's sample checks the session's text against a fresh read: a
+                    // mismatch is reported and the edit refused (typed), nothing applied; the
+                    // session then takes the doc's texts back
+                    Some(s) if self.checks.now => {
+                        let (&name, t) = self
+                            .texts
+                            .get_key_value(root.as_str())
+                            .ok_or_else(|| DocError::Malformed(format!("no text root {root:?}")))?;
+                        let fresh = t.get_string(&self.doc.transact());
+                        if fresh != s {
+                            self.checks
+                                .found
+                                .push(EngineCheck::TextCache { root: name });
+                            return Err(DocError::Apply(format!(
+                                "the session's text of root {root:?} isn't the doc's: nothing applied"
+                            )));
+                        }
+                        std::borrow::Cow::Borrowed(s)
+                    }
+                    // positions are computed on it: its hunks must fit it
+                    Some(s) => {
+                        crate::text::diff::validate(s, hunks)?;
+                        std::borrow::Cow::Borrowed(s)
+                    }
+                    None => std::borrow::Cow::Owned(self.text(root)?),
+                };
                 let pos = to_utf16(&cur, hunks);
                 before.push(cur);
                 plans.push((root.as_str(), hunks.as_slice(), pos));
@@ -1437,7 +1518,11 @@ impl YrsDoc {
         prof!("engine.text_cache");
         // the texts it made are known: no walk of the doc to read them again (a root edited
         // twice in one call is read afresh)
-        let cache_on = !self.checks.cache_off;
+        // the session holds the texts: no copy is kept here
+        let cache_on = !self.checks.cache_off && !self.session_texts;
+        if self.session_texts {
+            self.forget_texts();
+        }
         let mut cache = self.text_cache.lock().unwrap_or_else(|p| p.into_inner());
         for (k, (root, hunks, _)) in plans.iter().enumerate() {
             if cache_on && plans.iter().filter(|p| p.0 == *root).count() == 1 {
@@ -1481,6 +1566,7 @@ impl EngineDoc for YrsDoc {
             slot_indexes: HashMap::new(),
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
+            session_texts: false,
             checks,
             positions,
             pending: None,
@@ -1511,7 +1597,7 @@ impl EngineDoc for YrsDoc {
             .texts
             .get_key_value(root)
             .ok_or_else(|| DocError::Malformed(format!("no text root {root:?}")))?;
-        if self.checks.cache_off {
+        if self.checks.cache_off || self.session_texts {
             return Ok(t.get_string(&self.doc.transact()));
         }
         let mut cache = self.text_cache.lock().unwrap_or_else(|p| p.into_inner());

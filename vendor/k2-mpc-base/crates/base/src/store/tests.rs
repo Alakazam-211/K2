@@ -274,10 +274,25 @@ fn person_writer_rows() {
         ended_token: 3,
         ended_seq: 1 << 40,
         ended_ms: 99,
+        retired: false,
     };
     let enc = enc_person_row(&row);
     assert_eq!(enc.len(), 51);
     assert_eq!(dec_person_row(&enc), Some(row));
+    let retired = PersonWriterRow {
+        retired: true,
+        ..row
+    };
+    assert_eq!(
+        dec_person_row(&enc_person_row(&retired)),
+        Some(retired),
+        "a retired row keeps the rest of its row"
+    );
+    assert_eq!(
+        enc_person_row(&retired)[2],
+        3,
+        "the state byte: leased and retired"
+    );
     let mut other_version = enc;
     other_version[1] = 2;
     assert_eq!(
@@ -2193,6 +2208,26 @@ fn raw_rows(s: &DocStore, id: DocId) -> Vec<(Seq, Vec<u8>)> {
     rows
 }
 
+/// Log `entries` in doc `id`'s log after its last row, past every check a store write makes:
+/// a log of mixed engines, as only damage leaves one, for the checks of what reads it.
+fn put_raw(s: &DocStore, id: DocId, entries: &[LogEntry]) {
+    let w = s.begin_write().unwrap();
+    {
+        let mut t = w.open_table(UPDATES).unwrap();
+        let last = t
+            .range((id, 0)..=(id, u64::MAX))
+            .unwrap()
+            .next_back()
+            .map(|kv| kv.unwrap().0.value().1)
+            .unwrap_or(0);
+        for (i, e) in entries.iter().enumerate() {
+            t.insert((id, last + 1 + i as u64), enc_entry(e).as_slice())
+                .unwrap();
+        }
+    }
+    w.commit().unwrap();
+}
+
 /// Version 3's bytes: a Yrs entry and a redacted one (author `agent-a`, client 9, at 5 ms, via
 /// `cli`, on behalf of `alice`, update `[1, 2, 3]`).
 const V3_YRS: &str = "03070000006167656e742d610900000000000000050000000000000003000000636c69\
@@ -2288,14 +2323,6 @@ fn native_entry_round_trips_as_version_4() {
     let b = enc_entry(&e);
     assert_eq!(b, hex_bytes(V4_NATIVE), "version 4's layout");
     assert_eq!(dec_entry_full(&b).unwrap(), (e.clone(), None));
-    // through the store: the row is the encoding, and decodes to the entry
-    let t = TmpDir::new("entry-v4");
-    let s = DocStore::open(t.db()).unwrap();
-    let id = s.create(&meta("a.md")).unwrap();
-    s.append(id, std::slice::from_ref(&e)).unwrap();
-    let rows = raw_rows(&s, id);
-    assert_eq!(rows, vec![(1, b.clone())]);
-    assert_eq!(dec_entry(&rows[0].1).unwrap(), e);
     // the pairings no build writes
     for tag in [0u8, 1] {
         let mut w = W::default();
@@ -2348,7 +2375,8 @@ fn a_mixed_log_is_refused() {
         let u = doc.replace_text_as(5, "source", "one\n").unwrap().unwrap();
         s.append(id, &[entry("a", 5, u)]).unwrap();
         assert_eq!(s.load(id).unwrap().updates.len(), 1, "a Yrs log loads");
-        s.append(id, &[native_entry("a", 5, 1)]).unwrap();
+        // as only damage leaves it: a store write refuses the entry
+        put_raw(&s, id, &[native_entry("a", 5, 1)]);
         assert_eq!(
             s.load(id),
             Err(StoreError::Corrupt(LOG_ENTRY_ENGINE)),
@@ -2372,6 +2400,366 @@ fn a_mixed_log_is_refused() {
     assert_eq!(EntryEngine::Yrs.check(&EntryBody::Yrs(vec![1])), Ok(()));
 }
 
+/// Every write of a log entry checks the entry is of its doc's engine before anything is
+/// written: a native entry to a Yrs doc, or a Yrs entry to a native doc, is refused, typed
+/// (`EntryEngineRefused`, `MPC-E527`), at an append (every commit appends the same way), at an
+/// import's create and at a promotion, the log and the doc as they were. Without the native
+/// engine, a native doc is refused whole (`NativeEngineMissing`, `MPC-E169`), whatever the
+/// entry. Honest appends and creates are unchanged. `MPC_BETA_PLANT=append-engine-check-skipped`
+/// (no check: any entry logged, as before) fails at the first refusal.
+#[test]
+fn an_entry_of_another_engine_is_refused_at_every_log_write() {
+    let t = TmpDir::new("entry-engine");
+    let s = DocStore::open(t.db()).unwrap();
+    let mut doc = Doc::new(S).unwrap();
+    let u = doc.replace_text_as(5, "source", "one\n").unwrap().unwrap();
+    let refused = |doc: DocId, entry: &'static str, m: &DocMeta| StoreError::EntryEngineRefused {
+        doc,
+        entry,
+        stored: m.engine.clone(),
+        stored_format: m.engine_format,
+    };
+
+    // an append to a Yrs doc
+    let ym = meta("a.md");
+    let y = s.create(&ym).unwrap();
+    assert_eq!(
+        s.append(y, &[entry("a", 5, u.clone())]),
+        Ok(vec![1]),
+        "control: a Yrs entry appended to a Yrs doc"
+    );
+    let before = raw_rows(&s, y);
+    let e = s
+        .append(y, &[entry("a", 5, u.clone()), native_entry("a", 5, 1)])
+        .err();
+    assert_eq!(
+        e,
+        Some(refused(y, "the native engine", &ym)),
+        "row: a native entry appended to a Yrs doc is refused"
+    );
+    assert_eq!(crate::errors::Refusal::report(&e.unwrap()).id(), "MPC-E527");
+    assert_eq!(
+        raw_rows(&s, y),
+        before,
+        "row: nothing of the refused append is written"
+    );
+    assert_eq!(
+        s.load(y).unwrap().updates.len(),
+        1,
+        "the Yrs doc loads as it was"
+    );
+    assert_eq!(
+        s.append(y, &[entry("a", 5, u.clone())]),
+        Ok(vec![2]),
+        "control: the next honest append takes the next position"
+    );
+
+    // an append to a native doc
+    let nm = DocMeta {
+        engine: crate::engine::NATIVE_ENGINE_NAME.into(),
+        engine_format: 1,
+        ..meta("n.md")
+    };
+    let n = s.create(&nm).unwrap();
+    let e = s.append(n, &[entry("a", 5, u.clone())]).err();
+    {
+        let missing = StoreError::NativeEngineMissing {
+            stored: nm.engine.clone(),
+            stored_format: nm.engine_format,
+        };
+        assert_eq!(
+            e,
+            Some(missing.clone()),
+            "row: a Yrs entry appended to a native doc is refused (the doc whole)"
+        );
+        assert_eq!(crate::errors::Refusal::report(&missing).id(), "MPC-E169");
+        assert_eq!(
+            s.append(n, &[native_entry("a", 5, 1)]).err(),
+            Some(missing),
+            "row: a native entry too, without the native engine"
+        );
+        assert!(
+            raw_rows(&s, n).is_empty(),
+            "row: nothing of either is written"
+        );
+    }
+
+    // an import's create
+    let v = Version {
+        seq: 0,
+        at_ms: 3,
+        reason: VersionReason::Import,
+        name: None,
+        authors: vec!["kit:import".into()],
+        content: vec![("source".into(), Neutral::Text("one\n".into()))],
+        codec: None,
+    };
+    let im = meta("i.md");
+    let e = s
+        .create_imported(
+            &im,
+            77,
+            "kit:import",
+            Some(&native_entry("kit:import", 77, 1)),
+            &v,
+        )
+        .err();
+    assert!(
+        matches!(
+            &e,
+            Some(StoreError::EntryEngineRefused { entry: "the native engine", stored, .. })
+                if *stored == im.engine
+        ),
+        "row: an import's create of a Yrs doc with a native entry is refused: {e:?}"
+    );
+    assert_eq!(
+        s.find(&key("i.md")).unwrap(),
+        None,
+        "row: nothing of the create is written"
+    );
+    let inm = DocMeta {
+        key: key("in.md"),
+        ..nm.clone()
+    };
+    let e = s
+        .create_imported(
+            &inm,
+            77,
+            "kit:import",
+            Some(&entry("kit:import", 77, u.clone())),
+            &v,
+        )
+        .err();
+    assert!(
+        matches!(&e, Some(StoreError::NativeEngineMissing { .. })),
+        "row: an import's create of a native doc is refused (the doc whole): {e:?}"
+    );
+    assert_eq!(
+        s.find(&key("in.md")).unwrap(),
+        None,
+        "row: nothing of it is written"
+    );
+    let (id, seq, _) = s
+        .create_imported(
+            &meta("ok.md"),
+            77,
+            "kit:import",
+            Some(&entry("kit:import", 77, u.clone())),
+            &v,
+        )
+        .unwrap();
+    assert_eq!(seq, Some(1), "control: an honest import's create");
+    assert_eq!(s.load(id).unwrap().updates.len(), 1);
+
+    // a promotion of a blob doc to a Yrs text doc
+    let b = blob_doc(&s, "b.md");
+    let last = blob::last_vid(&s.begin_write().unwrap(), b).unwrap();
+    let bm = meta("b.md");
+    let change = NewChange {
+        info: ChangeInfo::new(ChangeKind::Edit, "a", "cli", 5),
+        record: RevertRecord {
+            author: "a".into(),
+            on_behalf_of: None,
+            at_ms: 5,
+            roots: Vec::new(),
+            elems: Vec::new(),
+        },
+        span: None,
+        provenance: Vec::new(),
+        authored: None,
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
+        blob_refs: BlobRefScan::default(),
+    };
+    let sync = SyncState {
+        hash: vec![0; 32],
+        seq: 1,
+        state: Vec::new(),
+    };
+    let rows = PromoteRows {
+        expect_last: last,
+        meta: &bm,
+        clients: &[],
+        entries: &[native_entry("a", 5, 1)],
+        changes: std::slice::from_ref(&change),
+        approvals: &[],
+        versions: &[],
+        sync: &sync,
+        doc_key: &[0; 32],
+        moved: &[],
+        now: 0,
+    };
+    assert_eq!(
+        s.promote_blob_doc(b, &rows).err(),
+        Some(refused(b, "the native engine", &bm)),
+        "row: a promotion logging a native entry in a Yrs doc is refused"
+    );
+    assert_eq!(
+        s.meta(b).unwrap().pack,
+        BLOB_DOC_PACK,
+        "row: the doc is still the blob doc"
+    );
+    assert!(
+        raw_rows(&s, b).is_empty(),
+        "row: nothing of the promotion is written"
+    );
+}
+
+/// Every write that replaces a doc's metadata refuses, typed (`EngineStampRefused`,
+/// `MPC-E527`), an engine stamp of the other entry engine (a native doc's, or every other
+/// doc's) while the doc holds rows of its own (log rows, or a snapshot), the metadata as it was:
+/// its log would mix engines and its next load refuse it as damage. At `put_meta`, a disk commit
+/// and a write-back's synced state; a Yrs doc with a log and with only a snapshot, and a native
+/// doc's log. A stamp change within one engine, a doc with no rows, and the rest of the metadata
+/// are unchanged. `MPC_BETA_PLANT=restamp-engine-check-skipped` (any restamp let through, as
+/// before) fails at the first refusal.
+#[test]
+fn an_engine_restamp_under_a_log_is_refused() {
+    let t = TmpDir::new("restamp");
+    let s = DocStore::open(t.db()).unwrap();
+    let mut doc = Doc::new(S).unwrap();
+    let u = doc.replace_text_as(5, "source", "one\n").unwrap().unwrap();
+    let native = |m: DocMeta| DocMeta {
+        engine: crate::engine::NATIVE_ENGINE_NAME.into(),
+        engine_format: 1,
+        ..m
+    };
+    let refused = |doc: DocId, entry: &'static str| StoreError::EngineStampRefused {
+        doc,
+        entry,
+        asked: crate::engine::NATIVE_ENGINE_NAME.into(),
+        asked_format: 1,
+    };
+
+    // put_meta: a Yrs doc with a log
+    let y = s.create(&meta("a.md")).unwrap();
+    s.append(y, &[entry("a", 5, u.clone())]).unwrap();
+    let before = s.meta(y).unwrap();
+    let e = s.put_meta(y, &native(before.clone())).err();
+    assert_eq!(
+        e,
+        Some(refused(y, "Yrs")),
+        "row: a native stamp over a Yrs doc's log is refused"
+    );
+    assert_eq!(crate::errors::Refusal::report(&e.unwrap()).id(), "MPC-E527");
+    assert_eq!(s.meta(y).unwrap(), before, "row: the metadata as it was");
+    assert_eq!(
+        s.load(y).unwrap().updates.len(),
+        1,
+        "the doc loads as before"
+    );
+    // within one engine, and the rest of the metadata: unchanged
+    let mut same = before.clone();
+    same.engine = "yrs-9.9".into();
+    same.synced_seq = 7;
+    s.put_meta(y, &same).unwrap();
+    assert_eq!(
+        s.meta(y).unwrap(),
+        same,
+        "control: a stamp within one engine"
+    );
+    s.put_meta(y, &before).unwrap();
+
+    // a Yrs doc whose rows are a snapshot alone
+    let c = s.create(&meta("c.md")).unwrap();
+    s.append(c, &[entry("a", 5, u.clone())]).unwrap();
+    s.compact(c, 1, &doc.encode_state().unwrap()).unwrap();
+    assert!(raw_rows(&s, c).is_empty(), "the log is the snapshot alone");
+    assert_eq!(
+        s.put_meta(c, &native(s.meta(c).unwrap())).err(),
+        Some(refused(c, "Yrs")),
+        "row: a native stamp over a Yrs doc's snapshot is refused"
+    );
+
+    // a native doc's log: a Yrs stamp over it
+    let nm = native(meta("n.md"));
+    let n = s.create(&nm).unwrap();
+    put_raw(&s, n, &[native_entry("a", 5, 1)]);
+    assert_eq!(
+        s.put_meta(n, &meta("n.md")).err(),
+        Some(StoreError::EngineStampRefused {
+            doc: n,
+            entry: "the native engine",
+            asked: meta("n.md").engine,
+            asked_format: meta("n.md").engine_format,
+        }),
+        "row: a Yrs stamp over a native doc's log is refused"
+    );
+    assert_eq!(s.meta(n).unwrap(), nm, "row: the metadata as it was");
+
+    // a doc with no rows takes either stamp
+    let empty = s.create(&meta("e.md")).unwrap();
+    s.put_meta(empty, &native(meta("e.md"))).unwrap();
+    s.put_meta(empty, &meta("e.md")).unwrap();
+    assert_eq!(
+        s.meta(empty).unwrap(),
+        meta("e.md"),
+        "control: no rows, no refusal"
+    );
+
+    // a disk commit's metadata
+    let synced = SyncState {
+        hash: vec![1; 32],
+        seq: 2,
+        state: Vec::new(),
+    };
+    let change = NewChange {
+        info: ChangeInfo::new(ChangeKind::Edit, "a", "cli", 5),
+        record: RevertRecord {
+            author: "a".into(),
+            on_behalf_of: None,
+            at_ms: 5,
+            roots: Vec::new(),
+            elems: Vec::new(),
+        },
+        span: None,
+        provenance: Vec::new(),
+        authored: None,
+        row_marks: Vec::new(),
+        col_remap: false,
+        note_rows: Vec::new(),
+        blob_refs: BlobRefScan::default(),
+    };
+    let e = s
+        .commit_disk(
+            y,
+            2,
+            &[entry("a", 5, u.clone())],
+            std::slice::from_ref(&change),
+            &[],
+            &native(before.clone()),
+            &synced,
+        )
+        .err();
+    assert_eq!(
+        e,
+        Some(refused(y, "Yrs")),
+        "row: a disk commit restamping a Yrs doc native is refused"
+    );
+    assert_eq!(s.meta(y).unwrap(), before, "row: the metadata as it was");
+    assert_eq!(
+        raw_rows(&s, y).len(),
+        1,
+        "row: nothing of the commit is written"
+    );
+
+    // a write-back's synced state
+    s.set_pending_sync(y, &synced).unwrap();
+    assert_eq!(
+        s.promote_pending_sync(y, &native(before.clone())).err(),
+        Some(refused(y, "Yrs")),
+        "row: a write-back's sync restamping a Yrs doc native is refused"
+    );
+    let p = s.set_pending_sync(y, &synced).unwrap();
+    assert_eq!(
+        s.promote_written_sync(y, &native(before.clone()), &p).err(),
+        Some(refused(y, "Yrs")),
+        "row: a written sync restamping a Yrs doc native is refused"
+    );
+    assert_eq!(s.meta(y).unwrap(), before, "row: the metadata as it was");
+}
+
 /// A doc another engine stamped is refused whole at load (`MPC-E520`), before any of its
 /// entries is decoded: a row this build can't read doesn't turn the refusal into damage.
 /// Without the native engine, a native doc is refused the same way, as that doc's own
@@ -2381,7 +2769,7 @@ fn a_doc_of_another_engine_is_refused_whole_at_load() {
     let t = TmpDir::new("foreign-load");
     let s = DocStore::open(t.db()).unwrap();
     let id = s.create(&meta("a.md")).unwrap();
-    s.append(id, &[native_entry("a", 5, 1)]).unwrap();
+    put_raw(&s, id, &[native_entry("a", 5, 1)]);
     {
         let w = s.begin_write().unwrap();
         w.open_table(UPDATES)
@@ -2412,7 +2800,8 @@ fn a_doc_of_another_engine_is_refused_whole_at_load() {
             engine: "mpce-0.1".into(),
             ..foreign
         };
-        s.put_meta(id, &native).unwrap();
+        // as only another build (or damage) leaves it: a Yrs log under a native stamp
+        s.put_meta_unchecked(id, &native).unwrap();
         let e = s.load(id).unwrap_err();
         assert_eq!(
             e,
@@ -2437,14 +2826,14 @@ fn a_native_doc_takes_no_snapshot() {
         let t = TmpDir::new("native-no-snapshot");
         let s = DocStore::open(t.db()).unwrap();
         let id = s.create(&meta("a.md")).unwrap();
-        s.append(id, &[native_entry("a", 5, 1), native_entry("a", 5, 2)])
-            .unwrap();
+        put_raw(&s, id, &[native_entry("a", 5, 1), native_entry("a", 5, 2)]);
         let native = DocMeta {
             engine: "mpce".into(),
             engine_format: 1,
             ..s.meta(id).unwrap()
         };
-        s.put_meta(id, &native).unwrap();
+        // as only damage leaves it: a log under a stamp put on past the store's checks
+        s.put_meta_unchecked(id, &native).unwrap();
         let rows = |s: &DocStore| {
             let r = s.begin_read().unwrap();
             let log: Vec<(u64, Vec<u8>)> = r

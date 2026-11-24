@@ -182,7 +182,10 @@ const RECORDING_DM_OTHERS: &[&str] =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 87] = [
+/// A slice, not a fixed-size array: two landings that each add an action
+/// would both bump the length and merge cleanly to the wrong one. The test
+/// below pins the count and that every id is listed once.
+pub(crate) const V1_ACTIONS: &[&str] = &[
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -1793,7 +1796,7 @@ mod tests {
         // except the two whose holds attach to apps.approve, keep-mine
         // (K2-presented) — PRD §5.2 walls column — and apps.user-grant-box
         // (asked; `app.login-grant` and the box-login refusal name it).
-        for a in V1_ACTIONS {
+        for &a in V1_ACTIONS {
             if matches!(a, "apps.manage-full" | "apps.core" | "garden.keep-mine" | "garden.access-off" | "zen.sign-off" | "publish.pin" | "apps.user-grant-box") {
                 continue;
             }
@@ -2386,7 +2389,11 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 87);
+        assert_eq!(V1_ACTIONS.len(), 88);
+        let mut seen = std::collections::HashSet::new();
+        for a in V1_ACTIONS {
+            assert!(seen.insert(*a), "{a} is listed twice in V1_ACTIONS");
+        }
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -297,14 +297,23 @@ pub fn is_k5_binary(path: &Path) -> bool {
 /// marker, never run. Otherwise why not, in words the owner reads in
 /// Settings.
 pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
-    // What `want` is the version of, in the words below.
-    let of = if crate::brand::CLI_NO_BASH {
-        "this release"
+    check_binary_in(crate::brand::CLI_NO_BASH, path, want)
+}
+
+/// [`check_binary`] for a build that carries the shell CLI or not
+/// (`no_bash`), so a test of either kind runs in any build. A build with
+/// no shell CLI names the program by the brand's command, never as k5
+/// (K2's ruling: a partner build's notes don't say k5).
+pub fn check_binary_in(no_bash: bool, path: &Path, want: Option<&str>) -> Result<(), String> {
+    // What `want` is the version of, and the program, in the words below.
+    let of = if no_bash { "this release" } else { "the script" };
+    let program = if no_bash {
+        format!("{CLI_NAME}'s binary")
     } else {
-        "the script"
+        "the k5 program".to_string()
     };
     let Some(want) = want.filter(|w| !w.is_empty()) else {
-        return Err(if crate::brand::CLI_NO_BASH {
+        return Err(if no_bash {
             "this release's version can't be read".to_string()
         } else {
             "the script's version can't be read".to_string()
@@ -313,7 +322,11 @@ pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
     let meta = match fs::metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(format!("this release has no k5 program ({} is missing)", path.display()))
+            return Err(if no_bash {
+                format!("{program} is missing ({})", path.display())
+            } else {
+                format!("this release has no k5 program ({} is missing)", path.display())
+            })
         }
         Err(e) => return Err(format!("{PRODUCT_NAME} can't read {}: {e}", path.display())),
     };
@@ -321,7 +334,7 @@ pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
         return Err(format!("{} isn't a file", path.display()));
     }
     if meta.len() > BINARY_MAX_BYTES {
-        return Err(format!("{} is too large to be the k5 program", path.display()));
+        return Err(format!("{} is too large to be {program}", path.display()));
     }
     let bytes = fs::read(path).map_err(|e| format!("{PRODUCT_NAME} can't read {}: {e}", path.display()))?;
     let found = binary_versions(&bytes);
@@ -329,7 +342,8 @@ pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
         return Ok(());
     }
     match found.first() {
-        Some(v) => Err(format!("the k5 program is version {v}, {of} {want}")),
+        Some(v) => Err(format!("{program} is version {v}, {of} {want}")),
+        None if no_bash => Err(format!("{} carries no {CLI_NAME} version mark", path.display())),
         None => Err(format!("{} carries no k5 version mark", path.display())),
     }
 }
@@ -1655,6 +1669,40 @@ impl Names {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// K2's ruling: in a build with no shell CLI the binary check's notes
+    /// name the brand's command, never k5 (the brand's own name is taken
+    /// out first, so this holds for any brand); ours keep today's words.
+    #[test]
+    fn a_no_bash_build_s_binary_notes_name_the_brand_not_k5() {
+        let says_k5 = |text: &str| {
+            let rest = text.replace(CLI_NAME, "");
+            rest.contains("k5") || rest.contains("K5")
+        };
+        let dir = std::env::temp_dir().join(format!("k2-check-binary-notes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        let missing = dir.join("k5-cli");
+        let unmarked = dir.join("unmarked");
+        fs::write(&unmarked, b"\x7fELF no mark here").expect("write");
+        let other = dir.join("other");
+        fs::write(&other, b"..K5_CLI_VERSION=0.0.9\0..").expect("write");
+        let cases = [(&missing, "missing"), (&unmarked, "no mark"), (&other, "another version")];
+        for (path, what) in cases {
+            let note = check_binary_in(true, path, Some("1.2.3")).expect_err(what);
+            let shown = note.replace(&path.display().to_string(), "");
+            assert!(note.contains(CLI_NAME) && !says_k5(&shown), "{what}: {note}");
+        }
+        assert_eq!(
+            check_binary_in(false, &missing, Some("1.2.3")).expect_err("missing"),
+            format!("this release has no k5 program ({} is missing)", missing.display())
+        );
+        assert_eq!(
+            check_binary_in(false, &other, Some("1.2.3")).expect_err("another version"),
+            "the k5 program is version 0.0.9, the script 1.2.3"
+        );
+        fs::remove_dir_all(&dir).expect("clean up");
+    }
 
     #[test]
     fn k2_cli_target_is_a_k2_or_k2so_in_a_cli_folder() {

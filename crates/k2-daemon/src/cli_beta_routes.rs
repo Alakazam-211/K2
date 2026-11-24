@@ -30,6 +30,7 @@
 //! refuses whatever else reaches it (an agent passport, an App pass, a dead
 //! session). The agents' cell socket never serves it.
 
+use k2_core::brand::CLI_NAME;
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
@@ -106,6 +107,13 @@ pub(crate) fn handle_with(
     reteach: impl FnOnce(),
 ) -> CliResponse {
     let Some(by) = by else {
+        if fixed {
+            return refuse(
+                "403 Forbidden",
+                "owner_only",
+                &format!("Only the owner of this server sees or sets how {CLI_NAME} runs."),
+            );
+        }
         return refuse(
             "403 Forbidden",
             "owner_only",
@@ -119,7 +127,9 @@ pub(crate) fn handle_with(
         return refuse(
             "403 Forbidden",
             "fixed_in_this_build",
-            "This build has no shell CLI, so the commands always run the k5 program: there is nothing to switch.",
+            &format!(
+                "This build has no shell CLI, so {CLI_NAME} always runs its own commands: there is nothing to switch."
+            ),
         );
     }
     let parsed: Value = match serde_json::from_slice(body) {
@@ -356,6 +366,58 @@ mod tests {
                 None
             );
         });
+    }
+
+    /// K2's ruling: a build with no shell CLI never says k5 in what this
+    /// route tells the owner (the POST refusal, the owner-only refusal, the
+    /// GET note); it names the brand's command. The brand's own name is
+    /// taken out first, so the test holds for any brand, xy too.
+    #[test]
+    fn no_bash_words_name_the_brand_not_k5() {
+        let says_k5 = |text: &str| {
+            let rest = text.replace(CLI_NAME, "");
+            rest.contains("k5") || rest.contains("K5")
+        };
+        crate::test_support::with_temp_home(|| {
+            let heals = std::cell::Cell::new(0);
+            let reteaches = std::cell::Cell::new(0);
+            let q = format!("token={OWNER}");
+            let post = call_in(true, &q, true, r#"{"on": false}"#, &heals, &reteaches);
+            let hint = body(&post)["hint"].as_str().expect("a hint").to_string();
+            assert_eq!(
+                hint,
+                format!("This build has no shell CLI, so {CLI_NAME} always runs its own commands: there is nothing to switch.")
+            );
+            for r in [
+                call_in(true, "", false, "", &heals, &reteaches),
+                call_in(true, "", true, r#"{"on": true}"#, &heals, &reteaches),
+            ] {
+                assert_eq!(body(&r)["error"], "owner_only", "{}", r.body);
+                let hint = body(&r)["hint"].as_str().expect("a hint").to_string();
+                assert!(hint.contains(CLI_NAME) && !says_k5(&hint), "{hint}");
+            }
+            let get = call_in(true, &q, false, "", &heals, &reteaches);
+            assert!(!says_k5(&get.body.replace("k5-cli", "")), "{}", get.body);
+        });
+        // Each `runs` a no-bash GET can carry, with its note.
+        let bin = std::path::PathBuf::from("/opt/globex/bin/k5-cli");
+        for (runs, choice) in [
+            ("binary", k2_core::cli_install::Choice::from_found_in(true, true, Ok(bin.clone()))),
+            (
+                "none",
+                k2_core::cli_install::Choice::from_found_in(
+                    true,
+                    true,
+                    k2_core::cli_install::check_binary_in(true, &bin, Some("0.0.1")).map(|_| bin.clone()),
+                ),
+            ),
+        ] {
+            let v = serde_json::to_value(&choice).expect("a choice is JSON");
+            assert_eq!(v["runs"], runs, "{v}");
+            if let Some(note) = v.get("note").and_then(Value::as_str) {
+                assert!(note.contains(CLI_NAME) && !says_k5(note), "{runs}: {note}");
+            }
+        }
     }
 
     #[test]

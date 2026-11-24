@@ -405,7 +405,7 @@ pub fn current_choice() -> Choice {
     let not_here = |why: &str| {
         if NO_BASH {
             Choice::None {
-                note: "this daemon links the k5 program on Linux only".to_string(),
+                note: format!("this daemon links {}'s binary on Linux only", CLI_NAME),
             }
         } else {
             Choice::Script {

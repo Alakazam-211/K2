@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "libc",
  "redb",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-text"
-version = "0.2.29"
+version = "0.2.30"
 dependencies = [
  "k2-mpc-base",
  "proptest",

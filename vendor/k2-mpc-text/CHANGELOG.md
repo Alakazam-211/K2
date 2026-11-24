@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.30: pairs with kit v0.24.0
+
+**Requires `k2-mpc-base` v0.24.0**. This pack's behaviour is unchanged from v0.2.29.
+
+- Pairs with kit v0.24.0. Its one pack API addition is opt-in: a container's own record
+  (`DraftNode::own`, declared with `IndexSpec::with_own_records`; index row format 3). Its other
+  changes are the host's (a person's edit never waits behind an agent flood; the store checks a log
+  entry's engine, `MPC-E527`; commit durability changed live; memory: shared texts, the undo
+  history's size, freed memory after write-backs) and the native engine's (off).
+- `Cargo.lock`: k2-mpc-base 0.24.0; the crate version.
+
 ## v0.2.29: pairs with kit v0.23.0
 
 **Requires `k2-mpc-base` v0.23.0**. This pack's behaviour is unchanged from v0.2.28.

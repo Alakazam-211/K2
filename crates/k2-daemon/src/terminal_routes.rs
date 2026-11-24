@@ -992,6 +992,31 @@ fn spawn_command_parts(command: Option<&str>) -> (Option<String>, Option<Vec<Str
     }
 }
 
+/// A terminal spawn's own `v2_session_map` key: `terminal-<agent>-<8 hex>`,
+/// new for every spawn, so it is never a workspace's slot (its project id),
+/// a heartbeat's (`<id>:hb:<name>`), a tab's or a host session's, and never
+/// a live terminal from an earlier spawn. The agent part keeps only
+/// `[A-Za-z0-9._-]` (at most 40); a synthesized `terminal-<8 hex>` name is
+/// already unique and is the key itself.
+fn terminal_slot_key(agent_name: &str) -> String {
+    if let Some(rest) = agent_name.strip_prefix("terminal-") {
+        if rest.len() == 8 && rest.chars().all(|c| c.is_ascii_hexdigit()) {
+            return agent_name.to_string();
+        }
+    }
+    let clean: String = agent_name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(40)
+        .collect();
+    let short = &SessionId::new().to_string()[..8];
+    if clean.is_empty() {
+        format!("terminal-{short}")
+    } else {
+        format!("terminal-{clean}-{short}")
+    }
+}
+
 fn spawn_terminal_impl(
     params: &HashMap<String, String>,
     project_path: &str,
@@ -1058,12 +1083,15 @@ fn spawn_terminal_impl(
     } else {
         agent_param
     };
+    // 0.46.18: the session's own map slot, new for every spawn. Before,
+    // the slot was the cwd's project id when the folder was a registered
+    // workspace, so the spawn evicted (killed) the workspace's pinned chat
+    // and ran in its place; with the same `--agent` twice it reused the
+    // first terminal. `agent_name` stays the session's agent identity.
+    let slot_key = terminal_slot_key(&agent_name);
 
-    // Resolve project_id so the canonical-key idempotency applies
-    // when the caller is a workspace-agent spawn (agent_name matches
-    // the workspace's primary agent). For ad-hoc terminals (Cmd+T,
-    // tab-* synthetic names), the lookup still works — there's just
-    // never a conflicting prior session under the synthesized key.
+    // The workspace the session belongs to (its label, passport and vault
+    // scope). It never picks the map slot: `slot_key` does (0.46.18).
     let project_id = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1086,7 +1114,7 @@ fn spawn_terminal_impl(
             _ => (command.clone(), None),
         };
         let body = serde_json::json!({
-            "agent_name": agent_name,
+            "agent_name": slot_key,
             "cwd": cwd,
             "command": sandbox_command,
             "args": sandbox_args,
@@ -1114,7 +1142,7 @@ fn spawn_terminal_impl(
             args: spawn_args,
             cols,
             rows,
-            canonical_key: None,
+            canonical_key: Some(slot_key.clone()),
             // Ad-hoc terminal (caller-supplied command, no preset
             // resolution) — no preset env to merge.
             env: Default::default(),
@@ -1331,6 +1359,18 @@ mod tests {
         let key = build_canonical_read_key(pid, Some("frontend-eng"));
         assert!(key.contains(':'));
         assert_eq!(key, "abc:frontend-eng");
+    }
+
+    #[test]
+    fn terminal_slot_key_is_new_and_never_a_workspace_slot() {
+        let a = terminal_slot_key("frontend-eng");
+        let b = terminal_slot_key("frontend-eng");
+        assert_ne!(a, b, "a new key every spawn");
+        assert!(a.starts_with("terminal-frontend-eng-") && a.len() == "terminal-frontend-eng-".len() + 8, "{a}");
+        let hb = terminal_slot_key("proj-1:hb:daily");
+        assert!(!hb.contains(':'), "never a heartbeat key: {hb}");
+        assert!(terminal_slot_key("").starts_with("terminal-"));
+        assert_eq!(terminal_slot_key("terminal-0a1b2c3d"), "terminal-0a1b2c3d", "a synthesized name is its own key");
     }
 
     #[test]

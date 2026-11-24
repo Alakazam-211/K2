@@ -94,12 +94,22 @@ fn run(w: &World, mode: Option<Mode>, client: &str) -> (i32, HashMap<String, Str
     };
     c.env("K2_SB_ROOT", &w.root).env("K2_SB_TCP", w.tcp.to_string()).env("K2_SB_ABS", &w.abs).env("K2_SB_MODE_SEEN", mode.map_or("none", Mode::as_str));
     let mut child = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().expect("run the role");
+    // Read as it comes, so a run that never ends still shows how far it got.
     let mut pipe = child.stdout.take().unwrap();
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = pipe.read_to_string(&mut s);
-        s
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let sink = seen.clone();
+    std::thread::spawn(move || {
+        let mut b = [0u8; 4096];
+        while let Ok(n) = pipe.read(&mut b) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().push_str(&String::from_utf8_lossy(&b[..n]));
+        }
+        let _ = done_tx.send(());
     });
+    let shown = mode.map_or("no block", Mode::as_str);
     let t = Instant::now();
     let status = loop {
         if let Some(st) = child.try_wait().unwrap() {
@@ -109,13 +119,17 @@ fn run(w: &World, mode: Option<Mode>, client: &str) -> (i32, HashMap<String, Str
             // The helper killed: its program goes with it (its parent-death signal).
             let _ = child.kill();
             let _ = child.wait();
-            let partial = reader.join().unwrap();
-            panic!("{client} ({}) didn't finish in {ROLE_WAIT:?}; what it printed:\n{partial}", mode.map_or("no block", Mode::as_str));
+            let _ = done_rx.recv_timeout(Duration::from_secs(5));
+            let partial = seen.lock().unwrap().clone();
+            let last = partial.lines().rev().find(|l| l.starts_with("R ")).unwrap_or("(no row yet)").to_string();
+            panic!("{client} ({shown}) didn't finish in {ROLE_WAIT:?}; the last row it printed: {last}; all of it:\n{partial}");
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let text = reader.join().unwrap();
-    println!("──── {client} ({}) ────\n{text}", mode.map_or("no block", Mode::as_str));
+    // Something still holding its output (a process left behind) is a failure too.
+    assert!(done_rx.recv_timeout(Duration::from_secs(10)).is_ok(), "{client} ({shown}) exited but its output stayed open: a process of its session outlived it");
+    let text = seen.lock().unwrap().clone();
+    println!("──── {client} ({shown}) ────\n{text}");
     let rows = text.lines().filter_map(|l| l.strip_prefix("R ")).filter_map(|l| l.split_once(' ')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
     (status.code().unwrap_or(-1), rows, text)
 }

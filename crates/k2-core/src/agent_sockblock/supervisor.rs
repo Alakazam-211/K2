@@ -6,16 +6,18 @@
 //! over (the parent takes it with `pidfd_getfd`), closes every descriptor
 //! above 2 and runs the program. The parent stays as the session's first
 //! process: child subreaper, non-dumpable, every signal blocked and read
-//! from a `signalfd` (no handlers), and answers the session's notifications
-//! until the program exits, then ends what is left of the session and exits
-//! with the program's status.
+//! from a `signalfd` (no handlers); [`RECEIVERS`] threads answer the
+//! session's notifications (blocking on the listener, so a lowered
+//! open-file limit stops none of them) until the program exits; then it ends
+//! what is left of the session and exits with the program's status.
 //!
 //! Each `connect()`: the caller's own socket by a copy of its descriptor
 //! (`pidfd_getfd`), its family from the socket (`SO_DOMAIN`), its address
 //! copied out once (clamped to `sockaddr_storage`), the notification
 //! re-checked, the rule applied, and `connect()` done here on that copy;
-//! the result goes back (`EINPROGRESS` included). Blocking non-Unix
-//! connects go to a small capped pool of threads. Every error refuses
+//! the result goes back (`EINPROGRESS` included). A blocking non-Unix
+//! connect is done by its receiver while another receiver stays free, past
+//! that by a small capped pool of threads. Every error refuses
 //! (record mode: lets the call run). A panic aborts: the session ends.
 
 use std::collections::{HashSet, VecDeque};
@@ -30,8 +32,10 @@ use super::filter::{self, Arch, EPERM, ENOSYS};
 use super::sys::{self, Notif, NotifResp};
 use super::{parse_unix, plain_absolute, shown, BlockSpec, Mode, Record, UnixName};
 
-/// Blocking non-Unix connects in flight at once; past it a connect is
-/// refused (`EAGAIN`).
+/// Threads receiving notifications (several may receive from one listener).
+pub const RECEIVERS: usize = 4;
+/// Blocking non-Unix connects in flight at once beyond the receivers' own;
+/// past it a connect is refused (`EAGAIN`).
 pub const POOL_CAP: usize = 32;
 /// After a hang-up the program gets this long to exit before it is killed.
 pub const HUP_GRACE: Duration = Duration::from_secs(5);
@@ -331,6 +335,10 @@ struct Sup {
     arch: Arch,
     pool: Pool,
     foreign_seen: Mutex<HashSet<u32>>,
+    /// Receivers now in a blocking connect of their own.
+    blocking_inline: std::sync::atomic::AtomicUsize,
+    /// Threads' processes seen before (checked again on each use).
+    tgids: Mutex<std::collections::HashMap<u32, i32>>,
 }
 
 impl Sup {
@@ -417,7 +425,7 @@ impl Sup {
             // What the kernel says itself.
             return self.reply(id, libc::EINVAL);
         }
-        let sfd = match fetch(n.pid, fd) {
+        let sfd = match self.fetch(n.pid, fd) {
             Ok(s) => s,
             Err(e) if e.raw_os_error() == Some(libc::EBADF) => return self.reply(id, libc::EBADF),
             Err(e) => return self.refuse(&n, "connect", "?", None, &format!("its socket can't be taken ({e})"), libc::EPERM, true),
@@ -459,10 +467,48 @@ impl Sup {
         }
     }
 
+    /// The caller's descriptor `fd`, by a copy. A process's main thread:
+    /// its own id. Another thread (6.8 opens no pidfd on a thread): its
+    /// process, from /proc once, then from the cache while `tgkill` says the
+    /// thread is still in that process (the caller waits in its call, so its
+    /// id can't be reused meanwhile).
+    fn fetch(&self, tid: u32, fd: RawFd) -> io::Result<OwnedFd> {
+        let pidfd = match sys::pidfd_open(tid as i32) {
+            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
+                let cached = self.tgids.lock().unwrap_or_else(|e| e.into_inner()).get(&tid).copied();
+                // SAFETY: signal 0 only checks that tid is a thread of tgid.
+                let tgid = match cached.filter(|g| unsafe { libc::syscall(libc::SYS_tgkill, *g, tid as i32, 0) } == 0) {
+                    Some(g) => g,
+                    None => {
+                        let g = sys::tgid_of(tid)?;
+                        let mut m = self.tgids.lock().unwrap_or_else(|e| e.into_inner());
+                        if m.len() > 4096 {
+                            m.clear();
+                        }
+                        m.insert(tid, g);
+                        g
+                    }
+                };
+                sys::pidfd_open(tgid)?
+            }
+            r => r?,
+        };
+        sys::pidfd_getfd(&pidfd, fd)
+    }
+
     fn connect_other(self: &Arc<Self>, n: Notif, sfd: OwnedFd, bytes: Vec<u8>, family: String) {
         if !sys::is_blocking(sfd.as_raw_fd()) {
             return self.reply(n.id, sys::connect_bytes(sfd.as_raw_fd(), &bytes));
         }
+        // A receiver connects itself while one other stays free to receive;
+        // past that the pool takes it.
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.blocking_inline.fetch_add(1, SeqCst) < RECEIVERS - 1 {
+            let e = sys::connect_bytes(sfd.as_raw_fd(), &bytes);
+            self.blocking_inline.fetch_sub(1, SeqCst);
+            return self.reply(n.id, e);
+        }
+        self.blocking_inline.fetch_sub(1, SeqCst);
         let me = Arc::clone(self);
         let id = n.id;
         let job: Job = Box::new(move || {
@@ -474,17 +520,6 @@ impl Sup {
             self.refuse(&n, "connect", &family, None, &why, libc::EAGAIN, true);
         }
     }
-}
-
-/// The caller's descriptor `fd`, by a copy (its thread's process).
-fn fetch(tid: u32, fd: RawFd) -> io::Result<OwnedFd> {
-    // A process's main thread: its own id. Another thread (6.8 opens no
-    // pidfd on a thread): its process, read from /proc.
-    let pidfd = match sys::pidfd_open(tid as i32) {
-        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => sys::pidfd_open(sys::tgid_of(tid)?)?,
-        r => r?,
-    };
-    sys::pidfd_getfd(&pidfd, fd)
 }
 
 // ── the session ──────────────────────────────────────────────────────
@@ -615,8 +650,17 @@ pub fn run(prep: Prepared, cmd: std::process::Command) -> i32 {
         arch,
         pool: Pool::new(POOL_CAP),
         foreign_seen: Mutex::new(HashSet::new()),
+        blocking_inline: std::sync::atomic::AtomicUsize::new(0),
+        tgids: Mutex::new(std::collections::HashMap::new()),
     });
-    let status = main_loop(&sup, &sigfd, child, tty, notif_size);
+    for i in 0..RECEIVERS {
+        let s = Arc::clone(&sup);
+        if std::thread::Builder::new().name(format!("k2-sockblock-{i}")).stack_size(256 << 10).spawn(move || receive(&s, notif_size, child, tty)).is_err() {
+            send(child, tty, libc::SIGKILL);
+            break;
+        }
+    }
+    let status = main_loop(&sigfd, child, tty);
     end_session();
     exit_like(status)
 }
@@ -683,30 +727,28 @@ fn send(child: i32, tty: bool, sig: i32) {
     }
 }
 
-fn main_loop(sup: &Arc<Sup>, sigfd: &OwnedFd, child: i32, tty: bool, notif_size: usize) -> i32 {
+fn main_loop(sigfd: &OwnedFd, child: i32, tty: bool) -> i32 {
     let mut status: Option<i32> = None;
     let mut hup_at: Option<Instant> = None;
-    let mut listen = true;
     loop {
-        let mut fds = [
-            libc::pollfd { fd: if listen { sup.listener.as_raw_fd() } else { -1 }, events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: sigfd.as_raw_fd(), events: libc::POLLIN, revents: 0 },
-        ];
+        let mut fds = [libc::pollfd { fd: sigfd.as_raw_fd(), events: libc::POLLIN, revents: 0 }];
         // A periodic wake as well: SIGCHLD can't be lost, but reaping is cheap.
         let timeout = hup_at.map_or(1000, |t| t.saturating_duration_since(Instant::now()).as_millis().min(1000) as i32);
-        // SAFETY: two valid pollfds.
-        unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout) };
-        if fds[1].revents & libc::POLLIN != 0 {
-            let mut info = [0u8; 128];
-            while read_exact(sigfd.as_raw_fd(), &mut info) {
-                let sig = u32::from_ne_bytes([info[0], info[1], info[2], info[3]]) as i32;
-                if sig == libc::SIGHUP {
-                    send(child, tty, libc::SIGHUP);
-                    send(child, tty, libc::SIGCONT);
-                    hup_at.get_or_insert(Instant::now() + HUP_GRACE);
-                } else if FORWARD.contains(&sig) {
-                    send(child, tty, sig);
-                }
+        // SAFETY: one valid pollfd.
+        if unsafe { libc::poll(fds.as_mut_ptr(), 1, timeout) } < 0 {
+            // poll refuses more descriptors than RLIMIT_NOFILE allows (another
+            // process of this user may set it to zero): look every 20 ms instead.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut info = [0u8; 128];
+        while read_exact(sigfd.as_raw_fd(), &mut info) {
+            let sig = u32::from_ne_bytes([info[0], info[1], info[2], info[3]]) as i32;
+            if sig == libc::SIGHUP {
+                send(child, tty, libc::SIGHUP);
+                send(child, tty, libc::SIGCONT);
+                hup_at.get_or_insert(Instant::now() + HUP_GRACE);
+            } else if FORWARD.contains(&sig) {
+                send(child, tty, sig);
             }
         }
         loop {
@@ -727,21 +769,23 @@ fn main_loop(sup: &Arc<Sup>, sigfd: &OwnedFd, child: i32, tty: bool, notif_size:
             send(child, tty, libc::SIGKILL);
             hup_at = None;
         }
-        if fds[0].revents & libc::POLLIN != 0 {
-            match sys::notif_recv(sup.listener.as_raw_fd(), notif_size) {
-                Ok(n) => sup.handle(n),
-                // The caller went away between the wake and the receive.
-                Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT | libc::EINTR)) => {}
-                Err(e) => {
-                    // Nothing can be answered: end the session, never leave
-                    // it waiting.
-                    sup.log.line(&serde_json::json!({ "t": now(), "event": "stopped", "why": format!("receiving: {e}") }));
-                    send(child, tty, libc::SIGKILL);
-                    listen = false;
-                }
+    }
+}
+
+/// One receiver: blocks on the listener (no descriptor of its own, so a
+/// lowered open-file limit can't stop it) and answers each notification.
+fn receive(sup: &Arc<Sup>, notif_size: usize, child: i32, tty: bool) {
+    loop {
+        match sys::notif_recv(sup.listener.as_raw_fd(), notif_size) {
+            Ok(n) => sup.handle(n),
+            // The caller went away before it was received.
+            Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT | libc::EINTR)) => {}
+            Err(e) => {
+                // Nothing can be answered: end the session, never leave it waiting.
+                sup.log.line(&serde_json::json!({ "t": now(), "event": "stopped", "why": format!("receiving: {e}") }));
+                send(child, tty, libc::SIGKILL);
+                return;
             }
-        } else if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
-            listen = false;
         }
     }
 }

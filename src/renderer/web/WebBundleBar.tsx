@@ -60,7 +60,7 @@ export function WebBundleBarView({
           display: 'flex',
           alignItems: 'center',
           gap: '0.5rem',
-          maxWidth: 'min(40rem, calc(100vw - 2rem))',
+          maxWidth: 'min(40rem, calc(var(--k2-vw) - 2rem))',
           padding: '0.4rem 0.85rem',
           borderRadius: 'var(--radius-box, 0px)',
           background: 'rgba(20,20,20,0.92)',

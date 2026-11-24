@@ -485,8 +485,9 @@ pub const CWD_MISSING: &str = "cwd_missing";
 pub(crate) fn cwd_missing_detail(rel: Option<&str>, commit: Option<&str>, why: &str) -> String {
     match (rel, commit) {
         (Some(rel), Some(sha)) => format!(
-            "the job's working folder {rel} isn't in its checkout at {}: a job starts in the folder k2 compute run ran from (relative to the repo root), so that folder must be in the commit (one with only untracked or ignored files isn't); run it from a folder the commit has ({why})",
-            &sha[..sha.len().min(8)]
+            "the job's working folder {rel} isn't in its checkout at {}: a job starts in the folder {cli} compute run ran from (relative to the repo root), so that folder must be in the commit (one with only untracked or ignored files isn't); run it from a folder the commit has ({why})",
+            &sha[..sha.len().min(8)],
+            cli = k2_brand::CLI_NAME,
         ),
         (Some(rel), None) => format!("the job's working folder {rel} doesn't exist: a job with no source starts in its own empty folder ({why})"),
         (None, _) => format!("{why} after the checkout; nothing ran"),

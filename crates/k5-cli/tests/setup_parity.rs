@@ -1257,6 +1257,65 @@ fn the_writes() {
     let rig = Rig::new(VERB, "writes");
     let r = |s: u16, b: &str| refusal(s, b);
     let v = vec![
+        // Settings → Getting started's verbs (plan-getting-started-settings-v1).
+        // covers: setup restart
+        case(
+            "restart --kessel",
+            &["restart", "--kessel"],
+            &[],
+            vec![text(LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: setup restart --json
+        case(
+            "restart --json",
+            &["restart", "--json"],
+            &[],
+            vec![text(STATUS)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: setup kessel-welcome
+        case(
+            "kessel-welcome",
+            &["kessel-welcome"],
+            &[],
+            vec![text("Kessel is starting its welcome again on its Thread.\n")],
+            owner_and_port,
+            0,
+            1,
+        ),
+        // covers: setup kessel-welcome --json
+        case(
+            "kessel-welcome --json",
+            &["kessel-welcome", "--json"],
+            &[],
+            vec![text(r#"{"ok":true,"workspaceId":"ws-kessel","sent":true}"#)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "kessel-welcome with no Kessel: exit 4",
+            &["kessel-welcome"],
+            &[],
+            vec![r(404, r#"{"ok":false,"error":{"code":"no_kessel","hint":"this server has no Kessel"}}"#)],
+            owner_and_port,
+            4,
+            1,
+        ),
+        case(
+            "restart while the list is off, as a Member: exit 3",
+            &["restart"],
+            &[],
+            vec![r(403, r#"{"ok":false,"error":{"code":"role_required","hint":"only the owner or an admin can turn the setup list on"},"asked":{"ticketId":"t-1","already":false}}"#)],
+            owner_and_port,
+            3,
+            1,
+        ),
         // covers: setup hide
         case(
             "hide",

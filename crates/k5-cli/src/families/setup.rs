@@ -48,8 +48,7 @@
 //! theirs.
 //!
 //! The shell CLI answers these forms itself ([`run`] returns `None`): a
-//! command line with one of [`SHELL_VERBS`] (`restart`, `kessel-welcome`)
-//! anywhere; a command line with `-h` or `--help` anywhere (since 0.46.17 the shell
+//! command line with `-h` or `--help` anywhere (since 0.46.17 the shell
 //! prints the setup help for it and sends nothing: `setup skip --help`
 //! skipped a step named `--help`), or where the loop reads `help` as
 //! help (the front sends a help line on, [`crate::front`]); a word that
@@ -93,7 +92,7 @@ use crate::prelude::{self, Closing};
 use crate::python;
 use crate::text;
 use crate::transport::{permission, Channel, Error, Response};
-use k2_client::product_name;
+use k2_client::{cli_name, product_name};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -112,10 +111,6 @@ pub const READ_NATIVE: bool = true;
 /// The writes (`hide`, `show`, `skip`, `kessel`, `chief-of-staff`,
 /// `dismiss-offer`) are the binary's. Off, the shell answers them.
 pub const WRITE_NATIVE: bool = true;
-
-/// Words that send a command line to the shell ([`run`] returns `None`):
-/// verbs the shell knows and this parser doesn't yet.
-pub const SHELL_VERBS: &[&str] = &["restart", "kessel-welcome", "--kessel"];
 
 /// The tool `setup chief-of-staff` rides (`_cli_tool_id_for_verb`).
 pub const TOOL: &str = "agent-harness";
@@ -137,6 +132,8 @@ pub const CHIEF_USAGE: &str = "usage: k2 setup chief-of-staff --name N --about \
 pub const NO_HANDLE: &str = "k2 setup chief-of-staff: no --handle (its folder comes from --name)";
 /// `--about` after `kessel`.
 pub const NO_ABOUT: &str = "k2 setup kessel: no --about";
+/// `--kessel` anywhere but after `restart`.
+pub const KESSEL_GOES_WITH: &str = concat!(cli_name!(), " setup: --kessel goes with ", cli_name!(), " setup restart");
 
 /// A Kessel flag after another verb.
 pub fn goes_with(flag: &str) -> String {
@@ -169,6 +166,10 @@ pub enum Sub {
     ChiefOfStaff,
     DismissOffer,
     Skip,
+    /// Settings → Getting started's "Start setup again".
+    Restart,
+    /// Kessel's welcome again.
+    KesselWelcome,
 }
 
 impl Sub {
@@ -182,6 +183,8 @@ impl Sub {
             Sub::ChiefOfStaff => "chief-of-staff",
             Sub::DismissOffer => "dismiss-offer",
             Sub::Skip => "skip",
+            Sub::Restart => "restart",
+            Sub::KesselWelcome => "kessel-welcome",
         }
     }
 
@@ -195,6 +198,8 @@ impl Sub {
             Sub::ChiefOfStaff => "/cli/first-run/chief-of-staff",
             Sub::DismissOffer => "/cli/first-run/offer/dismiss",
             Sub::Skip => "/cli/first-run/skip",
+            Sub::Restart => "/cli/first-run/restart",
+            Sub::KesselWelcome => "/cli/first-run/kessel/welcome",
         }
     }
 
@@ -245,6 +250,7 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
         String::new(),
     );
     let mut have_about = false;
+    let mut restart_kessel = false;
     let mut row = String::new();
     let mut i = 0;
     while i < words.len() {
@@ -255,7 +261,7 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
                 json = true;
                 i += 1;
             }
-            "hide" | "show" | "kessel" | "chief-of-staff" | "dismiss-offer" => {
+            "hide" | "show" | "kessel" | "chief-of-staff" | "dismiss-offer" | "restart" | "kessel-welcome" => {
                 if sub.is_some() {
                     return Err(usage_err());
                 }
@@ -264,8 +270,17 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
                     "show" => Sub::Show,
                     "kessel" => Sub::Kessel,
                     "chief-of-staff" => Sub::ChiefOfStaff,
+                    "restart" => Sub::Restart,
+                    "kessel-welcome" => Sub::KesselWelcome,
                     _ => Sub::DismissOffer,
                 });
+                i += 1;
+            }
+            "--kessel" => {
+                if sub != Some(Sub::Restart) {
+                    return Err(line_err(KESSEL_GOES_WITH.to_string()));
+                }
+                restart_kessel = true;
                 i += 1;
             }
             "--tool" | "--name" | "--handle" | "--about" | "--focus-group" => {
@@ -346,7 +361,8 @@ pub fn parse(words: &[&str]) -> Result<Line, Stop> {
             format!("{{{}}}", fields.join(", "))
         }
         Sub::Skip => format!("{{\"row\": {}}}", jstr(&row)),
-        Sub::Hide | Sub::Show | Sub::DismissOffer => "{}".to_string(),
+        Sub::Restart if restart_kessel => "{\"kessel\": true}".to_string(),
+        Sub::Hide | Sub::Show | Sub::DismissOffer | Sub::Restart | Sub::KesselWelcome => "{}".to_string(),
         Sub::List => String::new(),
     };
     Ok(Line { sub, json, body })
@@ -393,11 +409,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .map(|a| a.to_str())
         .collect::<Option<_>>()?;
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
-        return None;
-    }
-    // Settings → Getting started's verbs (`restart [--kessel]`,
-    // `kessel-welcome`) are the shell's until the binary learns them.
-    if words.iter().any(|w| SHELL_VERBS.contains(w)) {
         return None;
     }
     let read = parse(&words);
@@ -869,7 +880,7 @@ pub fn render(sub: Sub, json: bool, raw: &[u8], utf8: fn() -> bool) -> Rendered 
 pub fn refusal_exit(code: &[u8], hint: &[u8]) -> Exit {
     match code {
         b"usage" | b"unknown_row" | b"tool_not_signed_in" => return Exit::Usage,
-        b"unknown_focus_group" | b"ambiguous_focus_group" => return Exit::NotFound,
+        b"unknown_focus_group" | b"ambiguous_focus_group" | b"no_kessel" => return Exit::NotFound,
         _ => {}
     }
     let mut low = code.to_ascii_lowercase();
@@ -1209,7 +1220,7 @@ impl Py {
         };
         Ok(match code {
             "usage" | "unknown_row" | "tool_not_signed_in" => Exit::Usage,
-            "unknown_focus_group" | "ambiguous_focus_group" => Exit::NotFound,
+            "unknown_focus_group" | "ambiguous_focus_group" | "no_kessel" => Exit::NotFound,
             _ if REFUSED_WORDS.iter().any(|w| low.contains(w)) => Exit::Refused,
             _ => Exit::Error,
         })

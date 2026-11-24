@@ -31,7 +31,7 @@ fn the_shell_s_lines() {
     for shell in [
         r#"            -h|--help|help) _setup_usage; return 0 ;;"#,
         r#"            --json) as_json=1; shift ;;"#,
-        r#"            hide|show|kessel|chief-of-staff|dismiss-offer)"#,
+        r#"            hide|show|kessel|chief-of-staff|dismiss-offer|restart|kessel-welcome)"#,
         r#"                [ -z "$sub" ] || { _setup_usage >&2; exit 2; }"#,
         r#"            --tool|--name|--handle|--about|--focus-group)"#,
         r#"                    *) echo "k2 setup: $1 goes with k2 setup kessel or k2 setup chief-of-staff" >&2; exit 2 ;;"#,
@@ -88,8 +88,12 @@ fn the_shell_s_lines() {
         r#"        hint="${body:0:200}""#,
         r#"    if [ -n "$err_code" ] && [[ "$hint" != *"$err_code"* ]]; then"#,
         r#"        echo "Error: ${err_code}: ${hint}" >&2"#,
+        r#"                [ "$sub" = "restart" ] || { echo "k2 setup: --kessel goes with k2 setup restart" >&2; exit 2; }"#,
+        r#"        restart) if [ "$restart_kessel" = 1 ]; then body='{"kessel": true}'; else body='{}'; fi ;;"#,
+        r#"        restart) raw="$(_setup_send POST /cli/first-run/restart "$as_json" "$body")" ;;"#,
+        r#"        kessel-welcome) raw="$(_setup_send POST /cli/first-run/kessel/welcome "$as_json" "$body")" ;;"#,
         r#"        usage|unknown_row|tool_not_signed_in) exit 2 ;;"#,
-        r#"        unknown_focus_group|ambiguous_focus_group) exit 4 ;;"#,
+        r#"        unknown_focus_group|ambiguous_focus_group|no_kessel) exit 4 ;;"#,
         r#"        *person_only*|*session_only*|*forbidden*|*role_required*|*token*|*passport*) exit 3 ;;"#,
         r#"    local re='"'"$1"'"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'"#,
     ] {
@@ -112,6 +116,8 @@ fn the_shell_s_lines() {
         (Sub::ChiefOfStaff, "chief-of-staff"),
         (Sub::DismissOffer, "dismiss-offer"),
         (Sub::Skip, "skip"),
+        (Sub::Restart, "restart"),
+        (Sub::KesselWelcome, "kessel-welcome"),
     ] {
         assert_eq!(sub.word(), word);
         assert_eq!(sub.post(), sub != Sub::List);
@@ -405,6 +411,9 @@ fn each_word_of_cmd_setup_is_parsed_or_handed_on() {
         "kessel",
         "chief-of-staff",
         "dismiss-offer",
+        "restart",
+        "kessel-welcome",
+        "--kessel",
         "agent-reports",
         "--tool",
         "--name",
@@ -424,6 +433,24 @@ fn each_word_of_cmd_setup_is_parsed_or_handed_on() {
         let got = parse(&[w.as_str()]);
         assert_ne!(got, unknown, "{w}: not parsed");
     }
+}
+
+/// Settings → Getting started's verbs, read as `cmd_setup` reads them.
+#[test]
+fn restart_and_kessel_welcome_are_parsed_as_the_shell_reads_them() {
+    let line = |w: &[&str]| parse(w).unwrap_or_else(|e| panic!("{w:?}: {e:?}"));
+    let r = line(&["restart"]);
+    assert_eq!((r.sub, r.json, r.body.as_str()), (Sub::Restart, false, "{}"));
+    assert_eq!(line(&["restart", "--kessel"]).body, r#"{"kessel": true}"#);
+    assert_eq!(line(&["--json", "restart", "--kessel"]).json, true);
+    let k = line(&["kessel-welcome", "--json"]);
+    assert_eq!((k.sub, k.json, k.body.as_str()), (Sub::KesselWelcome, true, "{}"));
+    assert_eq!(Sub::Restart.endpoint(), "/cli/first-run/restart");
+    assert_eq!(Sub::KesselWelcome.endpoint(), "/cli/first-run/kessel/welcome");
+    for w in [&["--kessel", "restart"][..], &["show", "--kessel"], &["kessel-welcome", "--kessel"]] {
+        assert_eq!(parse(w), Err(Stop::Usage(format!("{KESSEL_GOES_WITH}\n"))), "{w:?}");
+    }
+    assert_eq!(parse(&["restart", "show"]), Err(Stop::Usage(usage_text().to_string())));
 }
 
 #[test]

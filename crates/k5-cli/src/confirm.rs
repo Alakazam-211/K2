@@ -1156,8 +1156,8 @@ mod tests {
                     "(\" — \" + p[\"thread\"])",
                     "Confirming from this terminal (this server has no owner login yet)…",
                     "Which owner login on this server (k2 users lists them): ",
-                    "Sign-in password for owner login %s: ",
-                    "printf 'Vault password: '",
+                    "_k2_read_hidden pw \"Sign-in password for owner login $login: \"",
+                    "_k2_read_hidden pw 'Vault password: '",
                     "isn't there (is the ",
                 ]
                 .iter(),
@@ -1176,6 +1176,7 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/src/job.sh"),
         )
         .unwrap();
-        assert!(job.contains("printf 'Your K2 Connect password: '"));
+        assert!(job.contains("ask='Your K2 Connect password: '"));
+        assert!(job.contains("_k2_read_hidden pw \"$ask\""));
     }
 }

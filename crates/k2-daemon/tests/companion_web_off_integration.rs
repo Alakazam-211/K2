@@ -1180,22 +1180,16 @@ async fn a_temporary_owner_with_web_off_sets_its_password_with_a_ticket_then_sig
     assert_eq!(r.status, 200, "the paired phone through the edge with web off: {}", r.body);
 }
 
-/// The refusal a route gives, for comparing two credentials: the status and
-/// the error code (a string `error`, or `error.code`), never anything the
-/// request itself put in.
-fn refusal_shape(r: &Resp) -> (u16, String) {
-    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
-    let code = v["error"]["code"].as_str().or_else(|| v["error"].as_str()).unwrap_or("").to_string();
-    (r.status, code)
-}
-
 /// Steward (0.46.18): a live change-password ticket is an unknown token on
 /// every other route. For every row of the route table (GET and POST, any
 /// floor but the public ones, the change-password route itself aside), the
 /// WebSocket doors, the `/v1` API and the hook ingest, a live ticket as
-/// Bearer gets exactly the answer a dead ticket of the same shape gets, is
-/// never a success, and the answer never names the login; the ticket is
-/// still live afterwards (nothing spent or upgraded it).
+/// Bearer gets exactly (status and body) what a dead ticket of the same
+/// shape gets, never a socket, and the answer never names the login; the
+/// ticket is still live afterwards (nothing spent or upgraded it). Where a
+/// ticket gets a success at all (an open status read), an unknown session
+/// token and no token at all get that same answer: a ticket never gets
+/// more than an unknown or absent token.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_live_ticket_is_an_unknown_token_on_every_other_route() {
     use k2_daemon::routes::route_policy::{self, Floor};
@@ -1206,28 +1200,46 @@ async fn a_live_ticket_is_an_unknown_token_on_every_other_route() {
     temp_login("tp_table");
     let live = ticket_of(&ask_ticket(d.tunnel_port, "tp_table", TEMP_PW), "tp_table");
     let dead = format!("k2pct_{}", "0f".repeat(32));
+    let unknown = "5e".repeat(32);
     assert_ne!(live, dead);
 
-    // One request with each credential; a mismatch, a success or the
-    // login's name in the answer is a failure (all listed at the end).
-    fn check(port: u16, live: &str, dead: &str, method: &str, path: &str, extra: &[&str], fails: &mut Vec<String>) {
+    // One request with each credential; a different answer, a socket or
+    // the login's name in the answer is a failure (all listed at the end).
+    // Returns the live ticket's answer.
+    fn check(port: u16, creds: [&str; 3], method: &str, path: &str, extra: &[&str], fails: &mut Vec<String>) -> Resp {
+        let [live, dead, unknown] = creds;
         let body = (method == "POST").then_some("{}");
-        let with_live = http(port, method, path, body, &refs(&with(extra, &[&bearer(live)])));
-        let with_dead = http(port, method, path, body, &refs(&with(extra, &[&bearer(dead)])));
-        if refusal_shape(&with_live) != refusal_shape(&with_dead) {
-            fails.push(format!("{method} {path}: live {} {} vs dead {} {}", with_live.status, with_live.body, with_dead.status, with_dead.body));
+        let ask = |tok: Option<&str>| {
+            let auth: Vec<String> = tok.map(bearer).into_iter().collect();
+            http(port, method, path, body, &refs(&with(extra, &refs(&auth))))
+        };
+        let with_live = ask(Some(live));
+        let with_dead = ask(Some(dead));
+        if (with_live.status, &with_live.body) != (with_dead.status, &with_dead.body) {
+            fails.push(format!("{method} {path}: live {} {} vs a dead ticket {} {}", with_live.status, with_live.body, with_dead.status, with_dead.body));
         }
-        // `logout` answers any token with its idempotent success (it ends
-        // the presented session, if there is one): no session either way.
-        let open_to_any = path == "/cli/auth/logout" && (200..300).contains(&with_dead.status);
-        if ((200..300).contains(&with_live.status) && !open_to_any) || with_live.status == 101 {
-            fails.push(format!("{method} {path}: success with a ticket: {} {}", with_live.status, with_live.body));
+        if (200..300).contains(&with_live.status) {
+            let other = ask(Some(unknown));
+            if (with_live.status, &with_live.body) != (other.status, &other.body) {
+                fails.push(format!("{method} {path}: a ticket gets {} {} but an unknown token gets {} {}", with_live.status, with_live.body, other.status, other.body));
+            }
+            // What no token gets there, for the record (logout answers any
+            // token, not none; a status read answers everyone).
+            let none = ask(None);
+            if none.status != with_live.status && path != "/cli/auth/logout" {
+                fails.push(format!("{method} {path}: a ticket and an unknown token get {} but no token gets {} {}", with_live.status, none.status, none.body));
+            }
+        }
+        if with_live.status == 101 {
+            fails.push(format!("{method} {path}: a socket for a ticket"));
         }
         if with_live.body.contains("tp_table") {
             fails.push(format!("{method} {path}: names the login: {}", with_live.body));
         }
+        with_live
     }
     let mut fails: Vec<String> = Vec::new();
+    let mut open: Vec<String> = Vec::new();
     let mut rows = 0usize;
     for r in route_policy::ROUTES {
         for (m, floor) in [("GET", r.get), ("POST", r.post)] {
@@ -1235,7 +1247,10 @@ async fn a_live_ticket_is_an_unknown_token_on_every_other_route() {
             if floor == Floor::Public || r.path == "/cli/auth/change-password" {
                 continue;
             }
-            check(port, &live, &dead, m, r.path, &[], &mut fails);
+            let answer = check(port, [&live, &dead, &unknown], m, r.path, &[], &mut fails);
+            if (200..300).contains(&answer.status) {
+                open.push(format!("{m} {}", r.path));
+            }
             rows += 1;
         }
     }
@@ -1253,9 +1268,15 @@ async fn a_live_ticket_is_an_unknown_token_on_every_other_route() {
     assert!(doors.len() > 8, "only {} socket and API doors", doors.len());
     for (m, p, ws) in &doors {
         let extra: &[&str] = if *ws { &upgrade } else { &[] };
-        check(port, &live, &dead, m, p, extra, &mut fails);
+        let answer = check(port, [&live, &dead, &unknown], m, p, extra, &mut fails);
+        if (200..300).contains(&answer.status) {
+            open.push(format!("{m} {p}"));
+        }
     }
     assert!(fails.is_empty(), "{} of {} requests treated a live ticket differently:\n{}", fails.len(), rows + doors.len(), fails.join("\n"));
+    // The open reads seen (each already checked against no token): status
+    // reads that answer anyone, never a session.
+    assert!(open.len() < 10, "more routes than expected answer anyone: {open:?}");
 
     // Nothing spent it: it still changes the password, once.
     assert_eq!(k2_core::connect_password_ticket::holder(&live).as_deref(), Some("tp_table"));

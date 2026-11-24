@@ -30,12 +30,7 @@ pub const SKIN_RLS_TEMPLATE: &str = include_str!("skin_rls_template.sql");
 /// Help/doctor pointer — copy into `.k2/db/migrations` only if wanted.
 pub const SKIN_RLS_TEMPLATE_HINT: &str = "crates/k2-daemon/src/sql/skin_rls_template.sql — GUC k2.skin_principal + POLICY; no CREATE ROLE skin_*; no FORCE RLS; not auto-applied; no SET ROLE.";
 
-/// The single capability gate for the SQL sidecar (D4): V1 runs on
-/// **Linux deployments only**. RUNTIME `cfg!`, not a compile-time
-/// `#[cfg]` on the module — compiles + unit-tests on macOS.
-pub fn sql_supported() -> bool {
-    cfg!(target_os = "linux")
-}
+pub use sysops::sql_supported; // the capability gate (moved as it was)
 
 /// Serializes tests that touch the SINGLETON `sql_server` row.
 /// Takes the shared env lock FIRST (`k2_core::test_env::serial`), so a

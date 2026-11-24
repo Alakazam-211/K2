@@ -283,7 +283,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         "schemas" => {
             let sc = list(value);
             if sc.is_empty() || sc.iter().any(|x| !k2_root_proto::pg_major::role_name_ok(x) || x == "auth" || x == "k2" || x == "storage") {
-                return Err(usage("schemas: a comma list of your own schema names (not auth, k2 or storage)"));
+                return Err(usage("schemas: a comma list of your own schema names (not auth, storage or k2)"));
             }
             c.schemas = sc;
         }

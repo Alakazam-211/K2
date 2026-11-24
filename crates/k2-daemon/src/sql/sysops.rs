@@ -1716,3 +1716,10 @@ impl SystemOps for FakeSystemOps {
 pub fn is_baked(ops: &dyn SystemOps) -> bool {
     ops.path_exists(PSQL_PATH) && PG_UNIT_PATHS.iter().any(|p| ops.path_exists(p))
 }
+
+/// The single capability gate for the SQL sidecar (D4): V1 runs on
+/// **Linux deployments only**. RUNTIME `cfg!`, not a compile-time
+/// `#[cfg]` on the module — compiles + unit-tests on macOS.
+pub fn sql_supported() -> bool {
+    cfg!(target_os = "linux")
+}

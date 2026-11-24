@@ -167,6 +167,9 @@ pub mod guard;
 /// App users brought from another store: given ids, bcrypt at sign-in (S2).
 #[path = "skin_import.rs"]
 pub mod import;
+#[path = "skin_hash.rs"]
+mod hash;
+use hash::{build_dummy_hash, hash_password, verify_hash};
 /// App user profile: per-App profile settings, names and picture, the
 /// session list (prd-app-user-profile-v1, 0.46.5).
 #[path = "skin_profile.rs"]
@@ -911,39 +914,6 @@ fn room_access_from_policy(policy: &RoomPolicy, paths: Option<&RoomPaths>) -> Ve
 
 fn password_is_set(hash: Option<&str>) -> bool {
     hash.map(str::trim).is_some_and(|s| !s.is_empty())
-}
-
-fn hash_password(password: &str) -> Result<String, String> {
-    let _slot = guard::hash_slot();
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| format!("password hashing failed: {e}"))
-}
-
-fn verify_hash(password: &str, hash: &str) -> bool {
-    let parsed = match PasswordHash::new(hash) {
-        Ok(h) => h,
-        Err(_) => return import::verify_legacy(password, hash),
-    };
-    let _slot = guard::hash_slot();
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok()
-}
-
-fn build_dummy_hash() -> String {
-    let _slot = guard::hash_slot();
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(b"k2-skin-dummy-verify-target", &salt)
-        .map(|h| h.to_string())
-        .unwrap_or_else(|_| {
-            String::from(
-                "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            )
-        })
 }
 
 fn dummy_verify(password: &str) {

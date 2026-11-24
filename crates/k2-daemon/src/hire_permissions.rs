@@ -165,8 +165,8 @@ fn access_toggle(action: &str) -> Option<&'static str> {
 fn refused_hint(action: &str, setting: &str, settings_path: &str, floor: Floor, handle: &str) -> String {
     let path = settings_path.replace("{ws}", handle);
     let cmd = match action {
-        CARDS_ROW => Some(format!("k2 agent access set {handle} permission_cards on")),
-        _ => access_toggle(action).map(|t| format!("k2 agent access set {handle} {t} on")),
+        CARDS_ROW => Some(format!("{} agent access set {handle} permission_cards on", k2_core::brand::CLI_NAME)),
+        _ => access_toggle(action).map(|t| format!("{} agent access set {handle} {t} on", k2_core::brand::CLI_NAME)),
     };
     match cmd {
         Some(c) => format!(
@@ -232,7 +232,7 @@ fn can_grant(h: &Hirer, target: &str) -> Result<(), Cant> {
     }
     match crate::permission::actions::find(target) {
         Some(reg) => may_give(h, target, reg.spec.floor),
-        None => Err(cant("unknown", "K2 doesn't know this permission")),
+        None => Err(cant("unknown", concat!(k2_core::product_name!(), " doesn't know this permission"))),
     }
 }
 
@@ -259,7 +259,8 @@ fn records_error_text(handle: &str, e: &str, granted: &[String], carded: &[Strin
         format!("before it stopped, this hire {} (each audited); the rest was not decided", done.join(" and "))
     };
     format!(
-        "K2 couldn't read or keep what was declined or asked at hires of {handle} ({e}), so the hire stopped; {before}. Try again; if it repeats, the daemon log has the cause."
+        "{} couldn't read or keep what was declined or asked at hires of {handle} ({e}), so the hire stopped; {before}. Try again; if it repeats, the daemon log has the cause.",
+        k2_core::brand::PRODUCT_NAME
     )
 }
 
@@ -430,7 +431,11 @@ fn cards_row(inp: &StepIn<'_>, ctx: &mut RowCtx<'_>, out: &mut StepOut) {
 fn switch_row(inp: &StepIn<'_>, ctx: &RowCtx<'_>, action: &str, out: &mut StepOut) {
     let (h, t, handle) = (ctx.hirer, ctx.t, ctx.handle);
     let Some(reg) = crate::permission::actions::find(action) else {
-        let hint = format!("K2 doesn't know the permission {action}; check the template (k2 agent template show <id>).");
+        let hint = format!(
+            "{} doesn't know the permission {action}; check the template ({} agent template show <id>).",
+            k2_core::brand::PRODUCT_NAME,
+            k2_core::brand::CLI_NAME
+        );
         out.rows.push(Decision::new(action, "refused", Some("unknown permission".into()), Some(hint.clone())));
         out.refused.push(Refusal { action: action.into(), code: "unknown".into(), hint });
         record(inp, &t.cloned(), action, "refused:unknown", None);
@@ -539,7 +544,7 @@ fn card(inp: &StepIn<'_>, t: Option<&Target>, action: &str, c: Cant, out: &mut S
         records::record_card(&conn, &t.id, action, true, inp.template_name, &hirer, None, now())
     };
     if let Err(e) = stored {
-        let hint = format!("K2 couldn't keep the card for the agent's first start ({e}); run the hire again");
+        let hint = format!("{} couldn't keep the card for the agent's first start ({e}); run the hire again", k2_core::brand::PRODUCT_NAME);
         out.rows.push(Decision::new(action, "refused", Some(format!("{}; the card couldn't be kept", c.why)), Some(hint.clone())));
         out.refused.push(Refusal { action: action.into(), code: "store".into(), hint });
         record(inp, &Some(t.clone()), action, "refused:store", None);

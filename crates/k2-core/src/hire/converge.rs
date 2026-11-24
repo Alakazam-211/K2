@@ -122,7 +122,7 @@ pub fn check_new_folder(caller: &HireCaller, path: &str) -> Result<(), HireError
         return Err(HireError::new(
             403,
             "existing_workspace",
-            format!("{path} is already a workspace: {who} hires only into a new folder. Re-applying a template to an existing agent is a person's (k2 agent hire <dir> --template <id> from their own terminal)"),
+            format!("{path} is already a workspace: {who} hires only into a new folder. Re-applying a template to an existing agent is a person's ({} agent hire <dir> --template <id> from their own terminal)", crate::brand::CLI_NAME),
         ));
     }
     let p = Path::new(path);

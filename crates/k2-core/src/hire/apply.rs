@@ -440,8 +440,12 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
 /// The recipe doesn't take `declinePermissions` yet (prd-agent-templates-v1
 /// T3): refused by name, at the top level, on `agent` or on any member,
 /// before anything else, so a caller never thinks a permission was left off.
-pub const DECLINE_UNSUPPORTED: &str = "declinePermissions isn't supported on the recipe hire (/v1/agents/hire, /cli/agent-instances/hire) yet: \
-hire one agent from a template with POST /v1/w or POST /cli/agents/hire (k2 agent hire --template <id> --decline <permission>), which take it";
+pub const DECLINE_UNSUPPORTED: &str = concat!(
+    "declinePermissions isn't supported on the recipe hire (/v1/agents/hire, /cli/agent-instances/hire) yet: \
+hire one agent from a template with POST /v1/w or POST /cli/agents/hire (",
+    crate::cli_name!(),
+    " agent hire --template <id> --decline <permission>), which take it"
+);
 
 fn refuse_decline_permissions(raw: &serde_json::Value) -> Result<(), HireError> {
     let has = |v: &serde_json::Value| v.get("declinePermissions").is_some();

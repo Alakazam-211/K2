@@ -121,7 +121,7 @@ pub fn take_pending_hello(workspace_id: &str, workspace: &str) -> Result<Option<
         super::hello_record::take(&conn, workspace_id, &text).map_err(HireError::internal)?
     };
     if !recorded {
-        crate::log_debug!("[template-hello] {workspace}: the lock's hello is not one K2's hire wrote; not sent");
+        crate::log_debug!("[template-hello] {workspace}: the lock's hello is not one {}'s hire wrote; not sent", crate::brand::PRODUCT_NAME);
         return Ok(None);
     }
     l.hello_sent_at = Some(super::super::now_secs());

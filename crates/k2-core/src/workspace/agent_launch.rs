@@ -36,6 +36,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use crate::brand::PRODUCT_NAME;
 use crate::chat_history;
 use crate::db::schema::WorkspaceSession;
 use crate::skills::content::compose_agent_wake_context;
@@ -369,7 +370,7 @@ fn worktree_rel(project_path: &str, wt_path: &str) -> Result<(PathBuf, Vec<OsStr
     let refuse = || {
         format!(
             "{WORKTREE_OUTSIDE_WORKSPACE}: {wt_path} is not a folder under this workspace's .worktrees/ \
-             ({project_path}/.worktrees); K2 wrote nothing"
+             ({project_path}/.worktrees); {PRODUCT_NAME} wrote nothing"
         )
     };
     let wt = Path::new(wt_path);
@@ -401,16 +402,16 @@ fn walk_refusal(e: crate::hire::folder_walk::WalkError) -> String {
     use crate::hire::folder_walk::WalkError;
     match e {
         WalkError::NotAFolder(p) => format!(
-            "{WORKTREE_NOT_A_FOLDER}: {} is a link or not a folder; K2 follows no link to a worktree and wrote nothing",
+            "{WORKTREE_NOT_A_FOLDER}: {} is a link or not a folder; {PRODUCT_NAME} follows no link to a worktree and wrote nothing",
             p.display()
         ),
         WalkError::Unsafe(p) => format!(
-            "{WORKTREE_FOLDER_UNSAFE}: another user can change {}; K2 wrote nothing",
+            "{WORKTREE_FOLDER_UNSAFE}: another user can change {}; {PRODUCT_NAME} wrote nothing",
             p.display()
         ),
-        WalkError::Missing(p) => format!("{WORKTREE_MISSING}: {} is not there; K2 wrote nothing", p.display()),
-        WalkError::AlreadyThere(p) => format!("{WORKTREE_WRITE_FAILED}: {}; K2 wrote nothing", p.display()),
-        WalkError::Io(p, e) => format!("{WORKTREE_WRITE_FAILED}: {}: {e}; K2 wrote nothing", p.display()),
+        WalkError::Missing(p) => format!("{WORKTREE_MISSING}: {} is not there; {PRODUCT_NAME} wrote nothing", p.display()),
+        WalkError::AlreadyThere(p) => format!("{WORKTREE_WRITE_FAILED}: {}; {PRODUCT_NAME} wrote nothing", p.display()),
+        WalkError::Io(p, e) => format!("{WORKTREE_WRITE_FAILED}: {}: {e}; {PRODUCT_NAME} wrote nothing", p.display()),
     }
 }
 
@@ -478,7 +479,7 @@ fn write_task_claude_md(dir: &std::os::fd::OwnedFd, at: &Path, body: &str) -> Re
     if fd < 0 {
         let e = std::io::Error::last_os_error();
         if e.raw_os_error() == Some(libc::ELOOP) {
-            return Err(format!("{CLAUDE_MD_IS_A_LINK}: {} is a link; K2 wrote nothing", at.display()));
+            return Err(format!("{CLAUDE_MD_IS_A_LINK}: {} is a link; {PRODUCT_NAME} wrote nothing", at.display()));
         }
         return Err(failed(e));
     }
@@ -486,11 +487,11 @@ fn write_task_claude_md(dir: &std::os::fd::OwnedFd, at: &Path, body: &str) -> Re
     let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
     let meta = f.metadata().map_err(failed)?;
     if !meta.file_type().is_file() {
-        return Err(format!("{WORKTREE_WRITE_FAILED}: {} is not a plain file; K2 wrote nothing", at.display()));
+        return Err(format!("{WORKTREE_WRITE_FAILED}: {} is not a plain file; {PRODUCT_NAME} wrote nothing", at.display()));
     }
     if meta.nlink() > 1 {
         return Err(format!(
-            "{CLAUDE_MD_IS_A_LINK}: {} has another name (a hard link); K2 wrote nothing",
+            "{CLAUDE_MD_IS_A_LINK}: {} has another name (a hard link); {PRODUCT_NAME} wrote nothing",
             at.display()
         ));
     }
@@ -503,7 +504,7 @@ fn write_task_claude_md(dir: &std::os::fd::OwnedFd, at: &Path, body: &str) -> Re
 fn write_task_claude_md(_dir: &PathBuf, at: &Path, body: &str) -> Result<(), String> {
     if let Ok(m) = fs::symlink_metadata(at) {
         if m.file_type().is_symlink() {
-            return Err(format!("{CLAUDE_MD_IS_A_LINK}: {} is a link; K2 wrote nothing", at.display()));
+            return Err(format!("{CLAUDE_MD_IS_A_LINK}: {} is a link; {PRODUCT_NAME} wrote nothing", at.display()));
         }
     }
     fs::write(at, body).map_err(|e| format!("{WORKTREE_WRITE_FAILED}: {}: {e}", at.display()))

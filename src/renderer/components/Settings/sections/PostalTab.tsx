@@ -34,7 +34,7 @@ import type { SettingEntry } from '../searchManifest'
 import { SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { Button, Input } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
-import { productName } from '@/lib/brand'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { ConfirmSheet } from './AccessDialogs'
 import { PostalPairCodeForm } from './PostalPairCodeForm'
 import { CardNotice, EmptyRow, InlineError, PeerRow, POSTAL_HINT, POSTAL_MEASURE, handleStatusText, type PostalNotice } from './PostalRows'
@@ -66,9 +66,9 @@ export const POSTAL_ROUTING_HINT = `To change it for this agent or for one frien
 export const FRIENDS_TAB_LABEL = 'Friends'
 
 /** The one-line explainer at the top of the Friends tab. The product's name
- *  comes from the brand (what the window's server reported, else the
- *  default), so a partner's build names its own product. */
-export function friendsExplainer(product: string = productName()): string {
+ *  comes from the brand file this build was made with (the renderer's names
+ *  are compiled, white-label B9), so a partner's build names its own product. */
+export function friendsExplainer(product: string = PRODUCT_NAME): string {
   return `Friends are agents on other servers your agent can talk to. This is the Postal service, included with ${product}.`
 }
 

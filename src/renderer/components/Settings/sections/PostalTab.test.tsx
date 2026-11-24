@@ -91,7 +91,7 @@ vi.mock('@/stores/connect-host', async () => {
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { FRIENDS_TAB_LABEL, PostalTab, POSTAL_MANIFEST, POSTAL_ROUTING_LINE, friendsExplainer } from './PostalTab'
 import { POSTAL_SERVER_MANIFEST } from './PostalServerSwitch'
-import { PRODUCT_NAME, noteReportedBrand, resetReportedBrandForTests } from '@/lib/brand'
+import { PRODUCT_NAME, resetReportedBrandForTests } from '@/lib/brand'
 import { PostalServerSwitch } from './PostalServerSwitch'
 import { postalRouteText } from './postal-api'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
@@ -426,10 +426,8 @@ describe('Friends: the name people read and the explainer', () => {
     expect((await screen.findByTestId('friends-explainer')).textContent).toBe(friendsExplainer(PRODUCT_NAME))
   })
 
-  it("the explainer names the product the server reported, so a partner's build names its own", async () => {
-    noteReportedBrand({ productName: 'Acme Desk' })
-    render(<PostalTab project={project} scope={scope} />)
-    const line = (await screen.findByTestId('friends-explainer')).textContent ?? ''
+  it("the explainer takes the product's name it is given, so a partner's build names its own", () => {
+    const line = friendsExplainer('Acme Desk')
     expect(line).toBe('Friends are agents on other servers your agent can talk to. This is the Postal service, included with Acme Desk.')
     expect(line).not.toContain(`with ${PRODUCT_NAME}.`)
   })

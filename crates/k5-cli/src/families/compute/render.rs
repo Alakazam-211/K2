@@ -403,10 +403,21 @@ fn node_line_body(cx: &mut Cx, n: &Value) -> Result<String, Raise> {
             ),
         )?
     };
-    let l = ln!("queued = \"queued %d (this server%s)\"");
+    // heldPlanned: how many of queued are auto jobs held on this server
+    // that would go here now.
+    let hp = cx.at(ln!("hp = n.get(\"heldPlanned\")"), p::get(n, "heldPlanned"))?;
+    let l = ln!("queued = \"queued %d (this server%s%s)\"");
     let nq = cx.at(l, p::get_or(n, "queued", p::int(0)))?;
     let y = yours(cx, l, mine.as_ref(), "queued")?;
-    let queued = cx.at(l, p::pct("queued %d (this server%s)", &[nq, s(&y)]))?;
+    let held = if p::truthy(&hp) {
+        cx.at(l, p::pct("; %d held, planned here", &[hp]))?
+    } else {
+        String::new()
+    };
+    let queued = cx.at(
+        l,
+        p::pct("queued %d (this server%s%s)", &[nq, s(&y), s(&held)]),
+    )?;
     let l = ln!("g = n.get(\"grant\")");
     let g = cx.at(l, p::get(n, "grant"))?;
     let grant = if p::is_dict(&g) {
@@ -1110,18 +1121,26 @@ fn jobs(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
         let l = ln!("node, reason = j.get(\"node\") or \"?\", j.get(\"reason\") or \"\"");
         let mut node = p::or(cx.at(l, p::get(&j, "node"))?, s("?"));
         let mut reason = p::or(cx.at(l, p::get(&j, "reason"))?, s(""));
-        let l =
-            ln!("if state == \"queued\" and (j.get(\"wait\") or {}).get(\"reason\") == \"held\":");
+        let l = ln!("if state == \"queued\" and ((j.get(\"wait\") or {}).get(\"reason\") == \"held\" or j.get(\"planned\") is True):");
         let held = p::eq_s(&state, "queued") && {
             let w = p::or(cx.at(l, p::get(&j, "wait"))?, Value::Object(Vec::new()));
             p::eq_s(&cx.at(l, p::get(&w, "reason"))?, "held")
+                || matches!(cx.at(l, p::get(&j, "planned"))?, Value::Bool(true))
         };
         let l = ln!("elif state == \"queued\" and \"pinned\" in j:");
         if held {
-            // 0.46.17: an auto job held on this server, on no node yet.
+            // 0.46.17: an auto job held on this server, on no node yet;
+            // planned: its node is only where it would go now.
+            let lr = ln!("state, node, reason = \"held (auto)\", \"-\", (\"would go to %s\"");
             state = s("held (auto)");
             node = s("-");
-            reason = s("waits for a free slot");
+            let planned = matches!(cx.at(lr, p::get(&j, "planned"))?, Value::Bool(true));
+            reason = if planned && p::truthy(&cx.at(lr, p::get(&j, "node"))?) {
+                let n = cx.at(lr, p::idx(&j, "node"))?;
+                s(&cx.at(lr, p::pct("would go to %s", &[n]))?)
+            } else {
+                s("waits for a free slot")
+            };
         } else if p::eq_s(&state, "queued") && cx.at(l, p::has(&j, "pinned"))? {
             let l = ln!("state += \" (pin)\" if j[\"pinned\"] else \" (auto)\"");
             let pinned = cx.at(l, p::idx(&j, "pinned"))?;

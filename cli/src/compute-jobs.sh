@@ -480,7 +480,7 @@ if st == "queued" and q.get("line"):
 elif st == "queued" and wt.get("words"):
     line = "%s queued: %s%s" % (j.get("short"), wt["words"], elsewhere)
 elif st == "queued" and q:
-    line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
+    line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), ("%s (planned: held on this server)" % j.get("node")) if j.get("planned") is True else j.get("node"), q.get("position"),
         (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
 else:
     line = "%s %s on %s" % (j.get("short"), st, j.get("node"))

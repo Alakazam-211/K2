@@ -30,6 +30,11 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
     let g = |cx: &Cx, line: u32, k: &str| cx.at(line, p::get(j, k));
     let i = |cx: &Cx, line: u32, k: &str| cx.at(line, p::idx(j, k));
 
+    // planned: a held auto job; its node is only where it would go now.
+    let planned = matches!(
+        g(cx, ln!("planned = j.get(\"planned\") is True"), "planned")?,
+        Value::Bool(true)
+    );
     // 0.46.17: an auto job held on this server, on no node yet.
     let l = ln!("if j.get(\"state\") == \"queued\" and (j.get(\"queue\") or {}).get(\"held\"):");
     let held = p::eq_s(&g(cx, l, "state")?, "queued") && {
@@ -37,14 +42,28 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
         p::truthy(&cx.at(l, p::get(&q, "held"))?)
     };
     if held {
-        let l = ln!("print(\"job %s: held on this server (auto)\"");
+        let l = ln!("print(\"job %s: held on this server (auto)%s\"");
         let short = i(cx, l, "short")?;
-        let t = cx.at(l, p::pct("job %s: held on this server (auto)", &[short]))?;
+        let at = if planned && p::truthy(&g(cx, l, "node")?) {
+            let n = g(cx, l, "node")?;
+            cx.at(l, p::pct("; planned: %s", &[n]))?
+        } else {
+            String::new()
+        };
+        let t = cx.at(
+            l,
+            p::pct("job %s: held on this server (auto)%s", &[short, s(&at)]),
+        )?;
         cx.print(&t);
     } else {
         let l = ln!("print(\"job %s on %s: %s%s\"");
         let short = i(cx, l, "short")?;
         let node = g(cx, l, "node")?;
+        let node = if planned {
+            s(&cx.at(l, p::pct("%s (planned: held on this server)", &[node]))?)
+        } else {
+            node
+        };
         let state = i(cx, l, "state")?;
         let reason = if p::truthy(&g(cx, l, "reason")?) {
             let r = i(cx, l, "reason")?;
@@ -187,7 +206,7 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
         } else {
             "auto".to_string()
         };
-        let l = ln!("print(\"  placed on %s (%s, %s): %s%s%s\"");
+        let l = ln!("print(\"  %s %s (%s, %s): %s%s%s\" % (\"planned for\"");
         let pn = cx.at(l, p::get(&pl, "node"))?;
         let policy = cx.at(l, p::get(&pl, "policy"))?;
         let why = cx.at(l, p::get(&pl, "why"))?;
@@ -206,8 +225,16 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
         let t = cx.at(
             l,
             p::pct(
-                "  placed on %s (%s, %s): %s%s%s",
-                &[pn, s(&how), policy, why, s(&fits), s(&avoid)],
+                "  %s %s (%s, %s): %s%s%s",
+                &[
+                    s(if planned { "planned for" } else { "placed on" }),
+                    pn,
+                    s(&how),
+                    policy,
+                    why,
+                    s(&fits),
+                    s(&avoid),
+                ],
             ),
         )?;
         cx.print(&t);

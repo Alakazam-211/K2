@@ -527,9 +527,15 @@ pub fn info(body: &[u8]) -> Result<String, Raise> {
         } else {
             String::new()
         };
+        // planned: a held auto job; its node is only where it would go now.
+        let node = str_at(get(pairs(&j), "node"));
+        let node = if matches!(get(pairs(&j), "planned"), Some(Value::Bool(true))) {
+            format!("{node} (planned: held on this server)")
+        } else {
+            node
+        };
         format!(
-            "{short} queued on {}: position {}{of}{elsewhere} ({})",
-            str_at(get(pairs(&j), "node")),
+            "{short} queued on {node}: position {}{of}{elsewhere} ({})",
             str_at(get(pairs(&q), "position")),
             str_at(get(pairs(&q), "reason"))
         )

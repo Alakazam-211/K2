@@ -77,6 +77,18 @@ fn compute_wait_for_each_job() {
             6,
         ),
         case(
+            "a planned job's node is where it would go (held on this server)",
+            &["wait", "aaaa1111"],
+            &[],
+            vec![
+                ok(r#"{"id":"aaaa1111bbbb","short":"aaaa1111","state":"queued","node":"mini","planned":true,"queue":{"position":2,"of":3,"reason":"cpu"}}"#),
+                ok(DONE),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
+        case(
             "held, a pull back, held again, then done",
             &["wait", "aaaa1111"],
             &[],

@@ -35132,7 +35132,10 @@ def node_line(n):
         run = "runs %d/%s (this server %d%s%s)" % (room.get("running", 0), par if par is not None else "?", n.get("running", 0), yours("running"), others)
     else:
         run = "this server runs %d (of %s slots%s)" % (n.get("running", 0), par if par is not None else "?", yours("running"))
-    queued = "queued %d (this server%s)" % (n.get("queued", 0), yours("queued"))
+    # heldPlanned: how many of queued are auto jobs held on this server
+    # that would go here now (not bound to the node).
+    hp = n.get("heldPlanned")
+    queued = "queued %d (this server%s%s)" % (n.get("queued", 0), yours("queued"), ("; %d held, planned here" % hp) if hp else "")
     g = n.get("grant")
     grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
     reboot = "  reboot pending" if n.get("rebootPending") else ""
@@ -35319,22 +35322,25 @@ elif verb == "jobs":
         # <id> --auto releases it) or auto.
         state = j["state"]
         node, reason = j.get("node") or "?", j.get("reason") or ""
-        if state == "queued" and (j.get("wait") or {}).get("reason") == "held":
+        if state == "queued" and ((j.get("wait") or {}).get("reason") == "held" or j.get("planned") is True):
             # 0.46.17: an auto job held on this server until a node that
             # fits has a free slot; it is on no node yet (get names them).
-            state, node, reason = "held (auto)", "-", "waits for a free slot"
+            # planned: its node is only where it would go now.
+            state, node, reason = "held (auto)", "-", ("would go to %s" % j["node"]) if j.get("planned") is True and j.get("node") else "waits for a free slot"
         elif state == "queued" and "pinned" in j:
             state += " (pin)" if j["pinned"] else " (auto)"
         # 0.46.16: WHEN = started (the real start) and queued.
         print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), node[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], reason, when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
+    # planned: a held auto job; its node is only where it would go now.
+    planned = j.get("planned") is True
     if j.get("state") == "queued" and (j.get("queue") or {}).get("held"):
         # 0.46.17: held on this server, on no node yet (its line names
         # the nodes it fits).
-        print("job %s: held on this server (auto)" % j["short"])
+        print("job %s: held on this server (auto)%s" % (j["short"], ("; planned: %s" % j.get("node")) if planned and j.get("node") else ""))
     else:
-        print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
+        print("job %s on %s: %s%s" % (j["short"], ("%s (planned: held on this server)" % j.get("node")) if planned else j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
     # 0.46.7: a long command (an inline base64 script) is summarized;
     # --full prints all of it.
     argv = " ".join(j.get("argv") or [])
@@ -35378,7 +35384,7 @@ elif verb == "get":
         # Auto-placement (0.46.6): where K2 put it and why (a move says so).
         code = pl.get("code") or ""
         how = ("moved: " + code[len("moved_"):]) if code.startswith("moved_") else "auto"
-        print("  placed on %s (%s, %s): %s%s%s" % (pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else "", (" · avoids " + ", ".join(j["avoid"])) if j.get("avoid") else ""))
+        print("  %s %s (%s, %s): %s%s%s" % ("planned for" if planned else "placed on", pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else "", (" · avoids " + ", ".join(j["avoid"])) if j.get("avoid") else ""))
     if (j.get("move") or {}).get("note"):
         # A waiting job: may K2 move it, and how its last tries went.
         print("  move: %s" % j["move"]["note"])
@@ -37229,7 +37235,7 @@ if st == "queued" and q.get("line"):
 elif st == "queued" and wt.get("words"):
     line = "%s queued: %s%s" % (j.get("short"), wt["words"], elsewhere)
 elif st == "queued" and q:
-    line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
+    line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), ("%s (planned: held on this server)" % j.get("node")) if j.get("planned") is True else j.get("node"), q.get("position"),
         (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
 else:
     line = "%s %s on %s" % (j.get("short"), st, j.get("node"))

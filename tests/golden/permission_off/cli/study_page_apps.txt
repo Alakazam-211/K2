@@ -101,6 +101,10 @@ PER-APP LOGINS (0.45.5)
     k2 app user rooms <u> --app <app> --agent sales   that App's rooms
     k2 app grant add … --kind app --target <app> --role R | --room sales
     k2 app role create R --app <app>           a role only that App can use
+    k2 app user import <app> --file users.jsonl [--apply]   people from
+                                               another store, ids kept; bcrypt
+                                               passwords sign in (k2 study db,
+                                               FROM SUPABASE)
   <app> = a service id, or <workspace>/<publish name>. `host` = box login.
   AGENT APP USERS (0.46.4): an agent with "Let this agent manage its Apps'
   users" (its own switch, the owner's both ways) adds people to its

@@ -12465,6 +12465,14 @@ Database (a box Postgres database for an App, its own login, checked live):
   k2 app db status|check|disconnect <app-id>
                                        k2 app db --help; k2 study app-databases.
 
+Cron (the daemon calls the App's own route on a schedule, headless):
+  k2 app cron add <app-id> "<cron>" --path /api/cron/x [--method GET|POST]
+                                       Each call: Authorization: Bearer
+                                       $CRON_SECRET (a vault secret the App
+                                       gets as env). Overlaps skipped.
+  k2 app cron list|logs|run-now|rm <app-id> [<cron-id>]
+                                       k2 app cron --help; k2 study app-cron.
+
 Egress (guarded Apps reach only listed hosts, through their own proxy):
   k2 app egress <app-id>               Mode, hosts, pending requests, proxy.
   k2 app egress add <app-id> <host[:port]>... [--reason TEXT]
@@ -17933,6 +17941,475 @@ v = json.load(sys.stdin)
 print("%s (%s)" % (v.get("user"), v.get("id")))
 print("app_metadata  %s" % json.dumps(v.get("appMetadata")))
 print("user_metadata %s" % json.dumps(v.get("userMetadata")))'
+}
+
+# k2 app storage … (prd-app-supabase-compat-v1 §10, §11.3; lane D): an App's
+# Supabase-compatible /storage/v1 door, its buckets and the import from a
+# Supabase project. `k2 app data` is the App's /data folder, a different thing.
+
+_app_storage_usage() {
+    cat <<'EOF'
+k2 app storage: an App's Supabase-compatible file storage (/storage/v1 on the App's own host).
+
+  k2 app storage status <app-id> [--json]
+      The door (on while the Supabase-compatible layer is on), its database,
+      the buckets, the last import, and warnings (public buckets).
+  k2 app storage enable <app-id> [--json]
+      Put the storage schema (storage.buckets, storage.objects,
+      storage.foldername() …) into the App's compat database. Needs
+      `k2 app compat on <app-id> --db <db>` first. Safe to run again.
+  k2 app storage buckets <app-id> [--json]
+  k2 app storage bucket create|update|rm <app-id> <bucket> [--public|--private]
+                        [--file-size-limit 50MB] [--mime image/* …] [--json]
+      A public bucket answers /storage/v1/object/public/<bucket>/<path> to
+      anyone with the URL: K2 says so when you make one.
+  k2 app storage ls <app-id> <bucket> [<prefix>] [--limit N] [--json]
+  k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name>
+                        [--bucket <id>]… [--concurrency N] [--json]
+      Copy every bucket and object from a Supabase project, each object
+      checked by size and MD5, resumable (run it again: only what changed
+      moves). <name> is a vault secret in the App's workspace holding the
+      project's service-role key, with the project's host allowed for it
+      (k2 vault hosts <name> --add <ref>.supabase.co). Runs in the daemon;
+      watch it with import-status. Policies on storage.objects come with
+      the database dump (k2 db import supabase).
+  k2 app storage import-status <app-id> [--json]
+  k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]
+      Re-hash every object's bytes against what the import recorded, check
+      every row has its bytes, list bytes no row names (after a database
+      restore to an earlier moment), and (with --from) that nothing at the
+      source is missing here. Exit 1 when a row lacks its bytes or a hash
+      is off.
+  k2 app storage key rotate <app-id> --yes [--json]
+      A new signing key: every signed URL handed out before stops at once.
+
+Who: the owner, an Admin, or the App's agent with "Build and run Apps".
+More: k2 study app-storage
+EOF
+}
+
+cmd_app_storage() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        status) _app_storage_get /cli/app/storage/status "$@" ;;
+        enable) _app_storage_enable "$@" ;;
+        buckets) _app_storage_get /cli/app/storage/buckets "$@" ;;
+        bucket) _app_storage_bucket "$@" ;;
+        ls|list) _app_storage_ls "$@" ;;
+        import) _app_storage_import "$@" ;;
+        import-status) _app_storage_get /cli/app/storage/import/status "$@" ;;
+        verify) _app_storage_verify "$@" ;;
+        key) _app_storage_key "$@" ;;
+        ""|-h|--help|help) _app_storage_usage ;;
+        *) echo "usage: k2 app storage status|enable|buckets|bucket|ls|import|import-status|verify|key … (k2 app storage --help)" >&2; exit 2 ;;
+    esac
+}
+
+# Print a storage answer: --json as is, else a short readable form.
+_app_storage_print() {
+    local json_out="$1"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def human(n):
+    if n is None:
+        return "-"
+    n = float(n)
+    for u in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or u == "GiB":
+            return ("%d %s" % (n, u)) if u == "B" else ("%.1f %s" % (n, u))
+        n /= 1024.0
+if "on" in v:
+    if not v["on"]:
+        print("storage is off for %s: %s" % (v.get("app"), v.get("hint")))
+    else:
+        print("storage for %s: database %s, schema %s, anon lane %s" % (v["app"], v["database"], "in" if v.get("schema") else "MISSING", "on" if v.get("anon") else "off"))
+        for b in v.get("buckets") or []:
+            print("  bucket %-24s %s  limit %s" % (b["id"], "PUBLIC " if b.get("public") else "private", human(b.get("file_size_limit"))))
+    imp = v.get("import")
+    if imp:
+        print("last import from %s: %s (%d copied, %d skipped, %d failed of %d)" % (imp["from"], imp["status"], imp["copied"], imp["skipped"], imp["failed"], imp["planned"]))
+    for w in v.get("warnings") or []:
+        print("warning: %s" % w)
+elif "buckets" in v:
+    for b in v["buckets"]:
+        print("%-24s %s  limit %s  types %s" % (b["id"], "PUBLIC " if b.get("public") else "private", human(b.get("file_size_limit")), ",".join(b.get("allowed_mime_types") or []) or "any"))
+    if not v["buckets"]:
+        print("no buckets")
+elif "entries" in v:
+    for e in v["entries"]:
+        if e.get("id") is None:
+            print("  %s/" % e["name"])
+        else:
+            md = e.get("metadata") or {}
+            print("  %-48s %10s  %s" % (e["name"], human(md.get("size")), md.get("mimetype") or ""))
+    if not v["entries"]:
+        print("(empty)")
+elif "state" in v:
+    s = v.get("state")
+    if not s:
+        print("no import has run for %s" % v.get("app"))
+    else:
+        print("%s import from %s: %s" % ("running:" if v.get("running") else "last", s["from"], s["status"]))
+        print("  buckets %d, objects %d: %d copied (%s), %d skipped (unchanged), %d failed" % (s["buckets"], s["planned"], s["copied"], human(s["bytesCopied"]), s["skipped"], s["failed"]))
+        for e in s.get("errors") or []:
+            print("  error: %s" % e)
+elif "verify" in v:
+    r = v["verify"]
+    print("%s: %d objects checked, %d ok" % ("clean" if v["clean"] else "NOT CLEAN", r["checked"], r["ok"]))
+    for b in r.get("bad") or []:
+        print("  bad: %s" % b)
+    for m in r.get("missing") or []:
+        print("  missing here: %s" % m)
+    for o in r.get("retired") or []:
+        print("  retired, deleted after the grace: %s" % o)
+    for o in r.get("orphans") or []:
+        print("  bytes no row names (kept): %s" % o)
+else:
+    for k in ("warning", "note"):
+        if v.get(k):
+            print("%s: %s" % (k, v[k]))
+    print(json.dumps({k: x for k, x in v.items() if k not in ("warning", "note")}))
+'
+}
+
+_app_storage_get() {
+    local path="$1" app="" json_out=0
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else echo "usage: k2 app storage … <app-id>" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app storage … <app-id> [--json]" >&2; exit 2; }
+    _compute_call GET "$path" "app=$(urlencode "$app")"
+    _app_storage_print "$json_out"
+}
+
+_app_storage_enable() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app storage enable <app-id> [--json]" >&2; exit 2; }
+    _app_rt_post /cli/app/storage/enable "$(_compute_json K2_CJ_app="$app")"
+    _app_grace_done "$json_out"
+    _app_storage_print "$json_out"
+}
+
+_app_storage_bucket() {
+    local op="${1:-}" app="" bucket="" public="" limit="" json_out=0 mimes=()
+    shift || true
+    case "$op" in
+        create|update|rm) ;;
+        ""|-h|--help) _app_storage_usage; return 0 ;;
+        *) echo "usage: k2 app storage bucket create|update|rm <app-id> <bucket> …" >&2; exit 2 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --public) public=true; shift ;;
+            --private) public=false; shift ;;
+            --file-size-limit) limit="${2:-}"; shift 2 ;;
+            --mime) mimes+=("${2:-}"); shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$bucket" ]; then bucket="$1"; else echo "usage: k2 app storage bucket $op <app-id> <bucket>" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$bucket" ]; } && { echo "usage: k2 app storage bucket $op <app-id> <bucket> [--public|--private] [--file-size-limit 50MB] [--mime TYPE]…" >&2; exit 2; }
+    local mimes_j=""
+    if [ "${#mimes[@]}" -gt 0 ]; then
+        mimes_j="$(printf '%s\n' "${mimes[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+    fi
+    _app_rt_post /cli/app/storage/bucket "$(_compute_json K2_CJ_app="$app" K2_CJ_op="$op" K2_CJ_id="$bucket" K2_CJ_public_j="$public" K2_CJ_fileSizeLimit="$limit" K2_CJ_allowedMimeTypes_j="$mimes_j")"
+    _app_grace_done "$json_out"
+    _app_storage_print "$json_out"
+}
+
+_app_storage_ls() {
+    local app="" bucket="" prefix="" limit="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --limit) limit="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$bucket" ]; then bucket="$1"; elif [ -z "$prefix" ]; then prefix="$1"; else echo "usage: k2 app storage ls <app-id> <bucket> [<prefix>]" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$bucket" ]; } && { echo "usage: k2 app storage ls <app-id> <bucket> [<prefix>] [--limit N] [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/storage/ls "app=$(urlencode "$app")&bucket=$(urlencode "$bucket")&prefix=$(urlencode "$prefix")&limit=$(urlencode "$limit")"
+    _app_storage_print "$json_out"
+}
+
+_app_storage_import() {
+    local app="" from="" secret="" conc="" json_out=0 buckets=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from) from="${2:-}"; shift 2 ;;
+            --key-secret) secret="${2:-}"; shift 2 ;;
+            --bucket) buckets+=("${2:-}"); shift 2 ;;
+            --concurrency) conc="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    { [ -z "$app" ] || [ -z "$from" ] || [ -z "$secret" ]; } && { echo "usage: k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name> [--bucket <id>]… [--concurrency N] [--json]" >&2; exit 2; }
+    local buckets_j=""
+    if [ "${#buckets[@]}" -gt 0 ]; then
+        buckets_j="$(printf '%s\n' "${buckets[@]}" | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')"
+    fi
+    _app_rt_post /cli/app/storage/import "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_keySecret="$secret" K2_CJ_buckets_j="$buckets_j" K2_CJ_concurrency_n="$conc")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    echo "import started for $app from $from; watch it: k2 app storage import-status $app"
+}
+
+_app_storage_verify() {
+    local app="" from="" secret="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from) from="${2:-}"; shift 2 ;;
+            --key-secret) secret="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]" >&2; exit 2; }
+    _app_rt_post /cli/app/storage/verify "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_keySecret="$secret")"
+    _app_grace_done "$json_out"
+    _app_storage_print "$json_out"
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("clean") else 1)'
+}
+
+_app_storage_key() {
+    local sub="${1:-}" app="" yes="" json_out=0
+    shift || true
+    [ "$sub" = "rotate" ] || { echo "usage: k2 app storage key rotate <app-id> --yes" >&2; exit 2; }
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes|-y) yes=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_storage_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app storage key rotate <app-id> --yes" >&2; exit 2; }
+    _app_rt_post /cli/app/storage/key/rotate "$(_compute_json K2_CJ_app="$app" K2_CJ_yes_b="$yes")"
+    _app_grace_done "$json_out"
+    _app_storage_print "$json_out"
+}
+# ── k2 app cron (prd-app-supabase-compat-v1 §11.2) ───────────────────
+# The daemon calls an App's own route on a schedule, headless, with
+# `Authorization: Bearer <CRON_SECRET>` (a vault secret the App also gets
+# as env): /cli/app/cron (list), /cli/app/cron/add|rm|run-now (POST),
+# /cli/app/cron/logs. Exit codes: 0 done, 1 usage or a failed run-now, 3
+# refused.
+
+_app_cron_usage() {
+    cat <<'EOF'
+k2 app cron — the daemon calls an App's own route on a schedule
+
+  k2 app cron add <app-id> "<min hour day month weekday>" --path /api/cron/x
+        [--method GET|POST] [--missed skip|once] [--timeout 5m] [--json]
+      Box time (like k2 job --cron). Each call goes to the App's own port on
+      this box (not its public URL) with Authorization: Bearer $CRON_SECRET.
+      CRON_SECRET is the secret the App already gets under that name, else
+      one K2 makes in the vault and grants to the App (a running App is
+      re-hosted so it sees it). Never printed. The App checks the header.
+      --missed  a slot missed while the daemon was down: skip (default) or
+                once (one catch-up run, if the slot is under 12 h old)
+      --timeout how long one call may take (default 5m, at most 1h)
+  k2 app cron list <app-id> [--json]
+      Each cron: id, schedule, method, path, next slot, last run, failures
+      in a row.
+  k2 app cron run-now <app-id> <cron-id> [--json]
+      One call now (exit 1 when it fails). Refused while a run of it is still
+      going (cron_running, exit 3).
+  k2 app cron logs <app-id> [<cron-id>] [--limit N] [--json]
+      Every run and skip: ok, failed, timeout, not_running, skipped_overlap,
+      skipped_missed, interrupted; HTTP status, time, a short detail.
+  k2 app cron rm <app-id> <cron-id>
+      CRON_SECRET stays granted to the App.
+
+  Runs headless: no K2 window needs to be open. While a run is still going,
+  the next slot is skipped (skipped_overlap). Three failures in a row tell
+  the App's workspace once. Agents need "Build and run Apps" for add, rm
+  and run-now. More: k2 study app-cron
+EOF
+}
+
+_app_cron_bad() {
+    printf '{"error":"usage","hint":%s}\n' "$(printf '%s' "$1 (k2 app cron --help)" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" >&2
+    exit 1
+}
+
+cmd_app_cron() {
+    local sub="${1:-}"
+    case "$sub" in
+        add|list|ls|rm|remove|run-now|logs) shift ;;
+        ""|-h|--help|help) _app_cron_usage; return 0 ;;
+        *) _app_cron_bad "k2 app cron add|list|rm|run-now|logs <app-id>" ;;
+    esac
+    case "$sub" in ls) sub=list ;; remove) sub=rm ;; esac
+    local app="" json_out=0 schedule="" path="" method="" missed="" timeout="" id="" limit=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --path) _need_value "$@"; path="${2:-}"; shift 2 ;;
+            --path=*) path="${1#*=}"; shift ;;
+            --method) _need_value "$@"; method="${2:-}"; shift 2 ;;
+            --method=*) method="${1#*=}"; shift ;;
+            --missed) _need_value "$@"; missed="${2:-}"; shift 2 ;;
+            --missed=*) missed="${1#*=}"; shift ;;
+            --timeout) _need_value "$@"; timeout="${2:-}"; shift 2 ;;
+            --timeout=*) timeout="${1#*=}"; shift ;;
+            --limit) _need_value "$@"; limit="${2:-}"; shift 2 ;;
+            --limit=*) limit="${1#*=}"; shift ;;
+            -h|--help) _app_cron_usage; return 0 ;;
+            -*) _app_cron_bad "unknown flag $1" ;;
+            *)
+                if [ -z "$app" ]; then app="$1"
+                elif [ "$sub" = add ] && [ -z "$schedule" ]; then schedule="$1"
+                elif [ "$sub" != add ] && [ -z "$id" ]; then id="$1"
+                else _app_cron_bad "unexpected '$1'"
+                fi
+                shift ;;
+        esac
+    done
+    [ -n "$app" ] || _app_cron_bad "name the App: k2 app cron $sub <app-id>"
+    case "$sub" in
+        add)
+            [ -n "$schedule" ] && [ -n "$path" ] || _app_cron_bad "k2 app cron add <app-id> \"<min hour day month weekday>\" --path /api/cron/x"
+            _app_rt_post /cli/app/cron/add "$(_compute_json K2_CJ_app="$app" K2_CJ_schedule="$schedule" K2_CJ_path="$path" K2_CJ_method="$method" K2_CJ_missed="$missed" K2_CJ_timeout="$timeout")" ;;
+        rm|run-now)
+            [ -n "$id" ] || _app_cron_bad "k2 app cron $sub <app-id> <cron-id> (k2 app cron list <app-id>)"
+            if [ "$sub" = run-now ]; then
+                K2_CP_MAX_TIME=3700 _app_rt_post /cli/app/cron/run-now "$(_compute_json K2_CJ_app="$app" K2_CJ_id="$id")"
+            else
+                _app_rt_post /cli/app/cron/rm "$(_compute_json K2_CJ_app="$app" K2_CJ_id="$id")"
+            fi ;;
+        list)
+            _compute_split "$(_compute_send GET /cli/app/cron "app=$(urlencode "$app")")" ;;
+        logs)
+            local q="app=$(urlencode "$app")"
+            [ -z "$id" ] || q="$q&id=$(urlencode "$id")"
+            [ -z "$limit" ] || q="$q&limit=$(urlencode "$limit")"
+            _compute_split "$(_compute_send GET /cli/app/cron/logs "$q")" ;;
+    esac
+    [ "$_CP_STATUS" = 200 ] || _app_db_fail
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok", True) else 1)'
+        return
+    fi
+    printf '%s' "$_CP_BODY" | K2_CRON_SUB="$sub" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+sub = os.environ["K2_CRON_SUB"]
+def line(c):
+    last = c.get("last") or {}
+    tail = ""
+    if last:
+        tail = "  last %s %s%s" % (last.get("at"), last.get("status"), " (HTTP %s)" % last["http"] if last.get("http") else "")
+    print("%s  %-13s %-4s %s  next %s%s%s" % (c.get("id"), c.get("schedule"), c.get("method"), c.get("path"), c.get("next") or "-",
+        "  RUNNING" if c.get("running") else "", tail))
+    if c.get("failuresInARow"):
+        print("    %s failures in a row" % c["failuresInARow"])
+if sub == "add":
+    line(v)
+    s = v.get("secret") or {}
+    rh = (s.get("rehost") or {}).get("result")
+    if s.get("made"):
+        print("CRON_SECRET made and granted to the App (not shown)%s" % ({"done": "; the App was re-hosted to get it", "not_running": "; it gets it when it starts"}.get(rh, "; re-host: %s" % rh)))
+    else:
+        print("CRON_SECRET: the one the App already gets")
+    print("each call sends Authorization: Bearer $CRON_SECRET; the App checks it")
+elif sub == "list":
+    cs = v.get("crons") or []
+    if not cs:
+        print("no crons on %s (k2 app cron add %s \"*/15 * * * *\" --path /api/cron/x)" % (v.get("app"), v.get("app")))
+    for c in cs:
+        line(c)
+elif sub == "rm":
+    print("removed %s from %s (%s)" % (v.get("removed"), v.get("app"), v.get("note")))
+elif sub == "run-now":
+    print("%s %s: %s%s%s" % (v.get("app"), v.get("id"), v.get("status"), " (HTTP %s)" % v["http"] if v.get("http") else "", "  %s" % v["detail"] if v.get("detail") else ""))
+    if not v.get("ok"):
+        sys.exit(1)
+elif sub == "logs":
+    for e in v.get("logs") or []:
+        print("%s %s" % (e.get("id"), e.get("path")))
+        for r in e.get("runs") or []:
+            print("  %s  %-15s %-9s %s%s%s" % (r.get("at"), r.get("status"), r.get("trigger"), "HTTP %s " % r["http"] if r.get("http") else "",
+                "%s ms " % r["ms"] if r.get("ms") is not None else "", r.get("detail") or ""))
+'
+}
+
+# k2 study app-cron.
+_study_page_app_cron() {
+    cat <<'EOF'
+k2 study app-cron — scheduled calls to an App's own routes
+
+WHAT IT IS
+  The daemon calls a route of your App on a 5-field cron schedule (box
+  time). It runs headless on the box, with no window open. It replaces a
+  k2 job that curls the App: a job is a process outside the App's wall
+  that only reaches the public URL; cron calls the App's own port.
+
+ADD ONE
+  k2 app cron add <app> "*/15 * * * *" --path /api/cron/sync
+  k2 app cron add <app> "0 4 * * *" --path /api/cron/bill --method POST --missed once
+  Each call sends:
+    Authorization: Bearer <CRON_SECRET>
+    User-Agent: k2-cron/1
+    X-K2-Cron: <cron-id>
+  The App reads CRON_SECRET from its env and refuses a call without it
+  (the same check a Vercel cron route already does):
+    if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) return 401
+  The first add grants the App the CRON_SECRET it already has under that
+  name, else makes one in the vault (app-cron.<app>.CRON_SECRET). A running
+  App is re-hosted so it gets the new env. The value is never printed.
+
+RULES
+  Overlap   while a run is still going, the next slot is skipped and
+            logged skipped_overlap. run-now is refused (cron_running).
+  Missed    the daemon was down at the slot: --missed skip (default) logs
+            skipped_missed; --missed once runs one catch-up if the slot is
+            under 12 h old. Older slots are always skipped.
+  Timeout   --timeout 5m by default, at most 1h: logged timeout.
+  Stopped   the App isn't running: logged not_running, not counted as a
+            failure.
+  Failing   any answer other than 2xx is failed (the first 300 bytes of
+            the answer are kept as the detail). Three failures in a row
+            tell the App's workspace once. An ok run resets the count.
+
+LOOK
+  k2 app cron list <app>          schedule, next slot, last run, failures
+  k2 app cron logs <app> [<id>]   every run and skip, newest first
+  k2 app cron run-now <app> <id>  one call now; exit 1 when it fails
+  k2 app cron rm <app> <id>       CRON_SECRET stays with the App
+
+WHO
+  The owner and Admins. An agent needs "Build and run Apps" for add, rm
+  and run-now; list and logs are reads (Members too).
+EOF
 }
 # ── App box services (0.46.0) ────────────────────────────────────────
 # A walled App reaches a service on this box's loopback only through an
@@ -24942,6 +25419,8 @@ cmd_app() {
         engine) shift; cmd_app_engine "$@" ;;
         rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;
+        # Supabase-compat lane D: the /storage/v1 door, buckets, import.
+        storage) shift; cmd_app_storage "$@" ;;
         sdk) shift; cmd_app_sdk "$@" ;;
         updates) shift; cmd_app_updates "$@" ;;
         resources) shift; cmd_app_resources "$@" ;;
@@ -25020,6 +25499,7 @@ cmd_app() {
         # The Supabase-compatible data layer (prd-app-supabase-compat-v1, lane A).
         compat) shift; cmd_app_compat "$@" ;;
         identity) shift; cmd_app_identity "$@" ;;
+        cron) shift; cmd_app_cron "$@" ;;
         box-service|box-services) shift; cmd_app_box_service "$@" ;;
         token|tokens)
             shift || true
@@ -57987,6 +58467,66 @@ cmd_schema() {
       ]
     },
     {
+      "name": "db cluster basebackup",
+      "usage": "k2 db cluster basebackup <name> [--json]",
+      "description": "A base backup of an archiving, running named cluster K2 made, now, through the root helper (protocol 19): pg_basebackup as postgres into /var/lib/postgresql/k2-wal/<major>-<name>.base/<stamp> beside the WAL spool (where a backup ships from). The newest 7 stay. The daemon also takes one a day of every archiving named cluster, headless. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster (exit 3 otherwise).",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster backups",
+      "usage": "k2 db cluster backups <name> [--json]",
+      "description": "What a restore can use: the base backups on the box, the WAL spool (count, first, last, newest archived, a missing segment named), the window a restore can reach (restorableFrom, restorableTo, UTC), and K2's record of the last base backup and the last restore drill, with a warning when no good drill is newer than 30 days. Same rule as basebackup.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{ok, cluster, onBox:{baseBackups, wal, restorableFrom, restorableTo}, recorded:{lastBasebackupAt, lastDrillAt, lastDrillOk, drillWarning}}."}
+      ]
+    },
+    {
+      "name": "db cluster restore",
+      "usage": "k2 db cluster restore <name> --to <time> --as <new-name> [--json]",
+      "description": "Restore a named cluster to a moment as a NEW cluster beside the old one (never in place), through the root helper (protocol 19): the newest base backup that ended by then, its WAL replayed from the spool to the moment, then promoted; K2 records it in this workspace. Refused before anything is made on a missing WAL segment, a moment later than the newest WAL in the spool, or no base backup by then; Postgres stopping before the moment fails loudly and leaves the cluster stopped (drop-drill removes it). The old cluster is unchanged. Owner, or an agent with the Postgres versions switch for its own cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "time", "description": "The moment: 2026-11-22T10:15:00Z, 2026-11-22 10:15 (UTC), 2026-11-22T12:15:00+02:00, or -15m / -2h / -1d (required)."},
+        {"name": "--as", "arg": "new-name", "description": "The new cluster's name: 2-24 of a-z, 0-9 and _, never one in use (required)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster restore-drill",
+      "usage": "k2 db cluster restore-drill <name> [--to <time>] [--json]",
+      "description": "Prove a restore works: restore into the throwaway cluster <name>_drill, check it, remove it, record the result (k2 db cluster backups shows it; it warns after 30 days without a good one). Without --to: two marker rows in the source's postgres database around a moment, every table's row count at that moment, a restore to it; PASS needs the first marker present, the second absent and every count equal. With --to: a restore to that moment and the counts found. Takes a base backup first if there is none. Exit 1 on FAIL. Same rule as basebackup.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "time", "description": "A moment in the past instead of now (same forms as restore)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster drop-drill",
+      "usage": "k2 db cluster drop-drill <name> [--major <M>] [--json]",
+      "description": "Remove a cluster restore made as a drill, or one whose restore failed, through the root helper (protocol 19); the helper refuses any other cluster (not_drill). --major when K2 has no record of the name. Owner, or an agent for its own workspace's recorded cluster.",
+      "args": [{"name": "name", "required": true}],
+      "flags": [
+        {"name": "--major", "arg": "M", "description": "The Postgres major, when K2 has no record of the cluster."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "db cluster switch",
+      "usage": "k2 db cluster switch <db> --to <cluster> [--yes] [--json]",
+      "description": "Point a database at a cluster restore made from its current one, or back at the cluster it was switched away from (the rollback, while that one is kept). Without --yes it changes nothing and shows the moment the data goes back to and what is lost: every write after that moment stays behind in the old cluster, kept and closed. With --yes: the old copy closes (no write lands on both), K2's own logins get their passwords now (a restore's are locked), the record moves in one transaction (exactly one active row per name), each App connected to the database is connected again on the new cluster and re-hosted (a short downtime), and a restored target starts archiving with a base backup. A person at a terminal may type the database's name instead of --yes. Owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's database.",
+      "args": [{"name": "db", "required": true}],
+      "flags": [
+        {"name": "--to", "arg": "cluster", "description": "The restored cluster, or the one it was switched away from (required)."},
+        {"name": "--yes", "arg": null, "description": "Confirm: without it nothing changes (agents must pass it)."},
+        {"name": "--json", "arg": null, "description": "JSON output: the preview (needsConfirm, moment, lost, apps) or the result (switched, apps, loginsSet, archive, rollback)."}
+      ]
+    },
+    {
       "name": "db cluster restart",
       "usage": "k2 db cluster restart <name> [--json]",
       "description": "Restart one named cluster K2 made (a minor update, a drill), nothing else: its databases' connections drop and come back. The owner, or an agent with \"Let this agent manage Postgres versions\" for its own workspace's cluster.",
@@ -59935,6 +60475,56 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app cron add",
+      "usage": "k2 app cron add <app-id> \"<min hour day month weekday>\" --path /api/cron/x [--method GET|POST] [--missed skip|once] [--timeout 5m] [--json]",
+      "description": "The daemon calls the App's own route on this 5-field schedule (box time), headless, on the App's port on this box, with Authorization: Bearer $CRON_SECRET: the secret the App already gets under that name, else one K2 makes in the vault and grants (a running App is re-hosted to get it). Never printed. A slot while a run is still going is skipped; a slot missed while the daemon was down is skipped or, with --missed once, run once if under 12 h old. Three failures in a row tell the App's workspace. Agents need Build and run Apps.",
+      "args": [{"name": "app-id", "required": true}, {"name": "schedule", "required": true}],
+      "flags": [
+        {"name": "--path", "arg": "path", "description": "The App's route, starting with / (required)."},
+        {"name": "--method", "arg": "GET|POST", "description": "Default GET."},
+        {"name": "--missed", "arg": "skip|once", "description": "A slot missed while the daemon was down (default skip)."},
+        {"name": "--timeout", "arg": "duration", "description": "30s, 5m or 1h; default 5m, at most 1h."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron list",
+      "usage": "k2 app cron list <app-id> [--json]",
+      "description": "The App's crons: id, schedule, method, path, next slot, running, failures in a row, the last run.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron run-now",
+      "usage": "k2 app cron run-now <app-id> <cron-id> [--json]",
+      "description": "Call the App's route once now, with the same header. Exit 1 when the call fails; refused while a run of it is still going (cron_running, exit 3).",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron logs",
+      "usage": "k2 app cron logs <app-id> [<cron-id>] [--limit N] [--json]",
+      "description": "Every run and skip, newest first: ok, failed, timeout, not_running, skipped_overlap, skipped_missed, interrupted; trigger (schedule, catch_up, run_now), HTTP status, time, a short detail.",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": false}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "Runs per cron, 1-500 (default 20)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "app cron rm",
+      "usage": "k2 app cron rm <app-id> <cron-id> [--json]",
+      "description": "Remove a cron. CRON_SECRET stays granted to the App.",
+      "args": [{"name": "app-id", "required": true}, {"name": "cron-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "app db check",
       "usage": "k2 app db check <app-id> [--as NAME_URL] [--json]",
       "description": "The live check again, no card needed: log in as the App's own login from inside the App (the daemon for a process App) and run select 1 and version(). FAIL names the step (no_url, no_door, door_refused, auth_failed, db_missing, app_not_running, rehost_failed, exec_failed) and shows the App's last output lines. Exit 0 PASS, 1 FAIL.",
@@ -59987,6 +60577,91 @@ cmd_schema() {
         {"name": "--app-metadata", "arg": "JSON", "description": "Replaces app_metadata."},
         {"name": "--user-metadata", "arg": "JSON", "description": "Replaces user_metadata."},
         {"name": "--json", "arg": null, "description": "{ok, user, id, appMetadata, userMetadata}."}
+      ]
+    },
+    {
+      "name": "app storage status",
+      "usage": "k2 app storage status <app-id> [--json]",
+      "description": "An App's Supabase-compatible storage door (/storage/v1 on the App's own host): on while the compat layer is on, its database, whether the storage schema is in, the buckets, the last import and warnings (public buckets, the server key on the public host). GET /cli/app/storage/status. Owner, Admin, or the App's agent with Build and run Apps.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{app, on, database, schema, anon, door, buckets[], import, warnings[]}."}]
+    },
+    {
+      "name": "app storage enable",
+      "usage": "k2 app storage enable <app-id> [--json]",
+      "description": "Put the storage schema (storage.buckets, storage.objects, storage.foldername/filename/extension, Supabase's columns and grants) into the App's compat database as its migrator. Needs k2 app compat on first (compat_off, exit 3). Safe to run again. POST /cli/app/storage/enable.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{ok, app, database, door}."}]
+    },
+    {
+      "name": "app storage buckets",
+      "usage": "k2 app storage buckets <app-id> [--json]",
+      "description": "The App's buckets: id, public or private, file size limit, allowed types. GET /cli/app/storage/buckets.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{buckets:[{id, name, public, file_size_limit, allowed_mime_types, created_at, updated_at}]}."}]
+    },
+    {
+      "name": "app storage bucket",
+      "usage": "k2 app storage bucket create|update|rm <app-id> <bucket> [--public|--private] [--file-size-limit 50MB] [--mime TYPE]... [--json]",
+      "description": "Make, change or remove a bucket (rm only when empty). A public bucket answers /storage/v1/object/public/<bucket>/<path> to anyone with the URL: the answer carries a warning. POST /cli/app/storage/bucket.",
+      "args": [{"name": "op", "required": true}, {"name": "app-id", "required": true}, {"name": "bucket", "required": true}],
+      "flags": [
+        {"name": "--public", "arg": null, "description": "Anyone with an object's URL reads it."},
+        {"name": "--private", "arg": null, "description": "Storage policies decide every read (the default)."},
+        {"name": "--file-size-limit", "arg": "SIZE", "description": "Bytes, or 50MB / 1GB (default 50 MiB, at most 5 GiB)."},
+        {"name": "--mime", "arg": "TYPE", "description": "An allowed type (image/* style); repeat for more."},
+        {"name": "--json", "arg": null, "description": "{ok, op, bucket, result, warning?}."}
+      ]
+    },
+    {
+      "name": "app storage ls",
+      "usage": "k2 app storage ls <app-id> <bucket> [<prefix>] [--limit N] [--json]",
+      "description": "One folder level of a bucket, as the App's operator (service_role): folders and files with size and type. GET /cli/app/storage/ls.",
+      "args": [{"name": "app-id", "required": true}, {"name": "bucket", "required": true}, {"name": "prefix", "required": false}],
+      "flags": [
+        {"name": "--limit", "arg": "N", "description": "At most N entries (default 100, at most 1000)."},
+        {"name": "--json", "arg": null, "description": "{bucket, entries:[{name, id, updated_at, created_at, last_accessed_at, metadata}]}."}
+      ]
+    },
+    {
+      "name": "app storage import",
+      "usage": "k2 app storage import <app-id> --from https://<ref>.supabase.co --key-secret <name> [--bucket <id>]... [--concurrency N] [--json]",
+      "description": "Copy a Supabase project's buckets and objects into the App, in the daemon (no client needed): each object checked by size and by MD5 against the source's eTag, the ledger kept so a rerun copies only what changed and a cut transfer resumes. <name> is a vault secret in the App's workspace holding the project's service-role key, with the project's host allowed for it (k2 vault hosts <name> --add <ref>.supabase.co); it is never printed. A row the database dump carried keeps its id and owner. POST /cli/app/storage/import.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "URL", "description": "The project's https:// URL."},
+        {"name": "--key-secret", "arg": "NAME", "description": "The vault secret holding its service-role key."},
+        {"name": "--bucket", "arg": "ID", "description": "Only this bucket; repeat for more (default: all)."},
+        {"name": "--concurrency", "arg": "N", "description": "Objects at once, 1-32 (default 8)."},
+        {"name": "--json", "arg": null, "description": "{started, app, from, status}."}
+      ]
+    },
+    {
+      "name": "app storage import-status",
+      "usage": "k2 app storage import-status <app-id> [--json]",
+      "description": "The running or last import: buckets, objects planned, copied (bytes), skipped as unchanged, failed, and the first errors. GET /cli/app/storage/import/status.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{app, running, state:{from, status, startedAt, finishedAt, buckets, planned, copied, skipped, failed, bytesCopied, errors[]}}."}]
+    },
+    {
+      "name": "app storage verify",
+      "usage": "k2 app storage verify <app-id> [--from <url> --key-secret <name>] [--json]",
+      "description": "Re-hash every object's bytes against what the import recorded and check every row has its bytes; list bytes no row names (orphans, kept: after a database restore to an earlier moment); with --from, also list objects at the source that aren't here. Exit 0 clean, 1 not (orphans alone stay clean). POST /cli/app/storage/verify.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "URL", "description": "The source project, to list what is missing here."},
+        {"name": "--key-secret", "arg": "NAME", "description": "With --from: its service-role key's vault secret."},
+        {"name": "--json", "arg": null, "description": "{app, clean, verify:{checked, ok, bad[], missing[], orphans[]}}."}
+      ]
+    },
+    {
+      "name": "app storage key rotate",
+      "usage": "k2 app storage key rotate <app-id> --yes [--json]",
+      "description": "A new signing key for the App's signed URLs: every signed download and upload URL made before stops at once, so it needs --yes. POST /cli/app/storage/key/rotate.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--yes", "arg": null, "description": "Yes, end every outstanding signed URL."},
+        {"name": "--json", "arg": null, "description": "{ok, app, note}."}
       ]
     },
     {
@@ -66649,7 +67324,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases supabase-compat jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps postal"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-transfers-http app-rest app-storage app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases supabase-compat app-cron jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates suite-apps postal"
 
 _study_usage() {
     cat <<'EOF'
@@ -66694,6 +67369,7 @@ _study_title() {
         db-upgrade) echo "Moving a database to a newer Postgres" ;;
         app-databases) echo "An App's database: what reaches what, and connecting one" ;;
         supabase-compat) echo "Supabase-style RLS and auth.* on an App's database" ;;
+        app-cron) echo "App cron: scheduled calls to an App's own routes" ;;
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
@@ -66717,6 +67393,8 @@ _study_title() {
         app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
         app-transfers-http) echo "Resumable uploads over plain HTTP: every field, refusal and curl" ;;
+        app-rest) echo "supabase-js against your App's K2 doors: /rest/v1, /auth/v1, the shim" ;;
+        app-storage) echo "Supabase-compatible file storage: buckets, policies, signed URLs, import" ;;
         app-chat) echo "Chat, voice and calls in your App" ;;
         app-recording) echo "Recording in an App's calls: consent, required, server reads, the lock" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
@@ -66832,6 +67510,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
   app-databases       Connect an App to Postgres (k2 app db); which App kinds reach what
   supabase-compat     Supabase-style RLS, auth.uid() and auth.users on an App's database
+  app-cron            The daemon calls an App's route on a schedule with CRON_SECRET
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
@@ -66855,6 +67534,8 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   app-account-deletion  Delete my account from inside an App: the store rules, request or immediate, what stays
   app-transfers       Big uploads and downloads that survive a phone app in the background
   app-transfers-http  Resumable uploads without the SDK: every route, field, refusal; curl
+  app-rest            supabase-js against your App's K2 doors: /rest/v1, /auth/v1, the shim
+  app-storage         Supabase-compatible storage: buckets, policies, signed URLs, the import
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   app-recording       Recording in an App's calls: all off, consent, required, server reads, the card, the lock
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
@@ -66927,6 +67608,7 @@ _study_page() {
         db-upgrade) _study_page_db_upgrade ;;
         app-databases) _study_page_app_databases ;;
         supabase-compat) _study_page_supabase_compat ;;
+        app-cron) _study_page_app_cron ;;
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
@@ -66950,6 +67632,8 @@ _study_page() {
         app-account-deletion) _study_page_app_account_deletion ;;
         app-transfers) _study_page_app_transfers ;;
         app-transfers-http) _study_page_app_transfers_http ;;
+        app-rest) _study_page_app_rest ;;
+        app-storage) _study_page_app_storage ;;
         app-chat) _study_page_app_chat ;;
         app-recording) _study_page_app_recording ;;
         chat-voice) _study_page_chat_voice ;;
@@ -70601,8 +71285,8 @@ WHERE THE CLAIMS COME FROM
   older lane: per-user rules on k2.skin_uid() aren't a boundary for them.
 
 THE CLAIMS (auth.jwt())
-  {"sub": <user id>, "role": "authenticated", "email": …, "iss": "k2",
-   "aud": "authenticated", "session_id": …,
+  {"sub": <user id>, "role": "authenticated", "email": …,
+   "iss": "k2:app:<app>", "aud": "authenticated", "session_id": …,
    "app_metadata": {"k2_app": <app>, "k2_role": <App role>, …},
    "user_metadata": {…}, "iat": …, "exp": …}
   app_metadata and user_metadata: k2 app user meta <app> <user>.
@@ -70698,6 +71382,15 @@ NAMED CLUSTERS (the owner, or the Postgres-versions switch)
   k2 db cluster create 17 --name <n> [--wal-archive]   its own cluster
   k2 db cluster archive <n> on|off   WAL archive later (one restart);
                                      off keeps the spool and its WAL
+  k2 db cluster backups <n>          base backups, WAL, restorable window
+  k2 db cluster restore <n> --to -15m --as <n>_old   a new cluster at
+                                     that moment, never in place
+  k2 db cluster restore-drill <n>    prove a restore works (monthly)
+  k2 db cluster switch <db> --to <n>_old [--yes]   move the database
+    to the restore: every write after the restore's moment stays behind
+    in the old cluster (kept, closed). Logins and passwords go back to
+    the moment too: K2 sets its own and each App's again, re-hosts the
+    Apps (a moment's downtime). Roll back with switch <db> --to <old>.
   k2 db clusters --health --json     archiver: archivedCount,
     lastArchivedAt, failedCount, lastFailedAt, currentLsn (text LSN,
     0/1A2B3C4D); all null when the cluster isn't running.
@@ -71891,6 +72584,137 @@ k2 app init --help.
 EOF
 }
 
+_study_page_app_storage() {
+    cat <<'EOF'
+k2 study app-storage — Supabase-compatible file storage on an App's own host
+
+What it is. An App with the Supabase-compatible layer on gets /storage/v1
+on its own host: the same routes, bodies and answers as Supabase Storage,
+so supabase-js's storage.from(bucket) and the Dart storage client work with
+only the URL and the key changed. Buckets and objects are rows in the App's
+own database (storage.buckets, storage.objects, with Supabase's columns),
+and the App's own storage policies decide every call. The bytes live on
+this box, in a folder of the App that only the door reaches.
+
+TURN IT ON
+  k2 app compat on <app> --db <db>     the layer (roles, the door's login)
+  k2 app storage enable <app>          the storage schema into that database
+  k2 app storage status <app>          the door, buckets, warnings
+  Your migrations then write policies, exactly as on Supabase:
+    CREATE POLICY "org read" ON storage.objects FOR SELECT TO authenticated
+      USING (bucket_id = 'photos'
+             AND (storage.foldername(name))[1] IN (SELECT user_org_ids()));
+  storage.foldername(), storage.filename() and storage.extension() exist.
+
+WHO A CALL RUNS AS (the same rules as /rest/v1)
+  the App's session cookie (browser)    authenticated; a write also needs
+                                        this host's Origin (or a listed one)
+  a device pass or third-party token    authenticated (a phone app)
+  the person's pass on the gateway link authenticated (your server code)
+  the App key with the service scope    service_role (bypasses policies);
+                                        on the gateway link only, unless
+                                        service-key-public is on
+  nothing                               anon, only with the anon lane on
+  A web session's pass is never taken as a bearer on the public host.
+
+THE CALLS (all under /storage/v1)
+  POST|PUT object/<bucket>/<path>          upload; x-upsert: true replaces.
+                                           Raw body or multipart (the file
+                                           part, cacheControl, metadata)
+  GET|HEAD object/[authenticated/]<bucket>/<path>   download (Range, ETag)
+  GET  object/info/<bucket>/<path>         the row
+  DELETE object/<bucket>/<path>            one; DELETE object/<bucket>
+                                           {prefixes: [...]} several
+  POST object/list/<bucket>                {prefix, limit, offset, sortBy,
+                                           search}: one folder level
+  POST object/move | object/copy           {bucketId, sourceKey,
+                                           destinationKey, destinationBucket?}
+  POST object/sign/<bucket>/<path>         {expiresIn} → {signedURL}
+  POST object/sign/<bucket>                {expiresIn, paths} → per path
+  POST object/upload/sign/<bucket>/<path>  → {url, token}; PUT that url with
+                                           the bytes, no credential
+  GET  object/public/<bucket>/<path>       a public bucket, no credential
+  GET|POST bucket, GET|PUT|DELETE bucket/<id>, POST bucket/<id>/empty
+  Every answer closes the connection.
+
+ANSWERS ARE SUPABASE'S
+  A refusal is HTTP 400 with the real status in the body:
+    {"statusCode": "409", "code": "KeyAlreadyExists", "error": "Duplicate",
+     "message": "The resource already exists"}
+  That is the answer to an upload over an object that is there (without
+  x-upsert): an offline queue that replays uploads reads it as "done".
+  Not found is statusCode 404 (a policy that hides a row says not found);
+  a policy that refuses a write is 403 "new row violates row-level security
+  policy"; too big 413; a type the bucket doesn't take 415. Only "no
+  credential with the anon lane off" is a real 401.
+
+SIGNED URLS
+  Signed by the App's own key in the vault (HS256), naming one path and an
+  expiry; no session in them, no per-person cap. They keep working after the
+  person who made one signs out, until expiresIn runs out. A changed token,
+  another path or an expired one is refused (InvalidSignature,
+  ExpiredToken). k2 app storage key rotate <app> --yes makes a new key:
+  every link made before stops at once.
+
+PUBLIC BUCKETS
+  k2 app storage bucket create <app> logos --public: every object in it is
+  readable by anyone with its URL, with no sign-in. K2 warns when you make
+  one, and status lists them.
+
+LIMITS
+  Per bucket: a file size limit (50 MiB unless set, at most 5 GiB) and an
+  optional list of types (image/* style). Uploads stream to disk; nothing is
+  held in memory. The disk guard holds as for every K2 upload: an upload
+  that would cross the box's reserve is refused (statusCode 507,
+  InsufficientStorage, in Supabase's shape), checked again as the bytes
+  arrive. The import stops at the refuse line (status stopped_disk_low)
+  and carries on when run again.
+
+WHERE THE BYTES LIVE (backups and restore)
+  ~/.k2/apps/<app-id>/storage/objects/<id[0..2]>/<id>/<version>
+  The rows (storage.buckets, storage.objects) are in the App's database;
+  the bytes are files named by the object's id and the version of its last
+  write, never by its name. A row's version names its file. The folder is
+  the daemon's, outside the App's wall: the App's own code can't reach the
+  bytes except through the door.
+  Also under storage/: tmp/ (uploads in flight) and import/ (the import's
+  ledger and partial downloads); neither needs a backup.
+  Every file is written once: in tmp/, synced, renamed into place before
+  its row commits, never rewritten. Bytes a row stops naming (an upsert's
+  old version, a removed object) are retired, not deleted: listed in
+  storage/retired.log and deleted 48 hours later, so a backup that dumps
+  the database first and walks the files after finds every file the dump
+  names. A stop between a commit and the retire leaves an orphan, never a
+  row without its bytes.
+  Back up and restore the bytes with the database, to the same moment.
+  After a restore k2 app storage verify names every row whose bytes are
+  missing, and every file no row names (kept, never deleted by verify); a
+  storage import run again copies the missing ones back.
+
+MOVING FROM SUPABASE
+  1. k2 db import supabase <dump> --db <db>   the rows, with the storage
+     policies and storage.objects rows (ids, owners)
+  2. Put the project's service-role key in the App workspace's vault and
+     allow the project's host for it:
+       k2 vault hosts <name> --add <ref>.supabase.co
+  3. k2 app storage import <app> --from https://<ref>.supabase.co --key-secret <name>
+     Every bucket and object, each checked by size and MD5 against the
+     source's eTag. It runs in the daemon (no client needed); watch it with
+     k2 app storage import-status <app>. Run it again any time: unchanged
+     objects are skipped, new and changed ones copied, a cut transfer
+     resumes. A row the dump carried keeps its id and owner.
+  4. k2 app storage verify <app> --from … --key-secret …   re-hashes every
+     object and lists anything missing; exit 1 when it isn't clean.
+
+NOT IN V1
+  Image transforms (/render/image), resumable TUS uploads
+  (/upload/resumable), the S3 protocol (/s3): each is a 400 naming the part,
+  never a wrong answer.
+
+SEE ALSO
+  k2 app storage --help · k2 study app-databases · k2 study vault
+EOF
+}
 _study_page_app_pairing() {
     cat <<'EOF'
 k2 study app-pairing — pair your App's own phone app by QR
@@ -72854,6 +73678,104 @@ FROM JS: uploadToDoor in @k2/server (k2 app sdk add) does the loop above:
   It needs only fetch and crypto.subtle. The package's entry imports Node
   modules: for a browser bundle, copy its dist/server/src/transfer.js (and
   transfer.d.ts); it imports nothing.
+EOF
+}
+_study_page_app_rest() {
+    cat <<'EOF'
+k2 study app-rest — supabase-js against your App's K2 doors: /rest/v1 and /auth/v1
+
+THE SHAPE
+  An App with the Supabase-compatible layer on (k2 app compat on <app>
+  --db <db>, the owner's) answers /rest/v1 and /auth/v1 on its own host
+  (<app>.<box>.k2.dev, its custom names) and on its gateway link
+  (K2_GATEWAY_URL, from server code in the wall). K2 answers them before
+  your App, App up or down. supabase-js works unchanged for .from() and
+  .rpc(): only the URL and the key change. Auth calls go through a small
+  shim, @k2/supabase, so the session's pass never sits where page script
+  can read it.
+
+  createClient(<your App's own URL>, 'k2pk_<your App's service id>')
+    The publishable key names the App. It is not a secret and grants
+    nothing by itself (k2 app compat status shows it).
+
+WHO A REQUEST IS
+  browser, signed in      the HttpOnly session cookie (k2_skin_session),
+                          same origin; a write also needs its Origin
+  phone app               a device pass, or a third-party ID token from a
+                          trusted issuer, as Authorization: Bearer
+  server code, as a user  the person's pass as Authorization: Bearer, on
+                          K2_GATEWAY_URL (read it from the cookie)
+  server code, as service the App key with the service scope as apikey, on
+                          K2_GATEWAY_URL only unless the owner allows the
+                          public host; it runs as service_role (BYPASSRLS)
+  signed out              the publishable key alone: anon, only when the
+                          owner turned the anon lane on
+  A web session's pass sent as a bearer on the public host is refused
+  (web_pass_as_bearer). Every request runs in one Postgres transaction as
+  anon, authenticated or service_role, with request.jwt.claims set for
+  that transaction only: auth.uid(), auth.jwt(), auth.role(), auth.email()
+  and your row policies work as on Supabase.
+
+/rest/v1 (PostgREST's grammar)
+  verbs     GET HEAD POST PATCH DELETE on tables and views;
+            GET HEAD POST on rpc/<fn> (named arguments)
+  filters   eq neq gt gte lt lte like ilike match imatch in is cs cd,
+            not.<op>, or=(…) and and=(…) one level, filters on embeds
+  select    columns, alias:col, col::type, data->a->>b, *, embeds through
+            foreign keys: alias:rel!fk_or_column!inner(cols), nested,
+            rel=is.null, each embed's own order and limit
+  shape     order (asc desc nullsfirst nullslast), limit, offset, Range;
+            Accept: application/vnd.pgrst.object+json (single, maybeSingle)
+  counts    Prefer: count=exact|planned|estimated, Content-Range, HEAD
+  writes    Prefer: return=representation|minimal; bulk insert; columns=;
+            upsert: resolution=merge-duplicates|ignore-duplicates,
+            on_conflict=; missing=default. PATCH and DELETE need a filter
+            (21000, as on Supabase)
+  errors    PostgREST's {code, message, details, hint}: a unique
+            violation is 409 23505; an RLS refusal 403 (401 for anon)
+  limits    1,000 rows an answer; 8 s a statement (3 s anon, none for the
+            service role); 10 MiB bodies
+  NOT YET   textSearch, overlaps and range operators, csv(), nested and()
+            inside or(), spread embeds, aggregates, many-to-many embeds,
+            embeds through views, explain(), PUT, the OpenAPI root: a 400
+            K2REST001 naming the part, never a wrong answer. The schema
+            cache reloads by itself after a migration (on the first request
+            that names something new).
+  GAPS, AND WHAT TO DO INSTEAD
+    embeds through a view    select the view's columns, or embed from the
+                             underlying table; or write the join into the
+                             view itself
+    many-to-many embeds      embed the junction table and nest the far
+                             side (orders?select=*,order_items(products(*))),
+                             or an rpc / a view with explicit joins
+    textSearch, overlaps     an rpc that runs the query (it gets your RLS)
+  CHECKED AGAINST
+    /rest/v1 against real PostgREST 12.2.3 (the same fixture, policies and
+    identities on both sides; every answer compared). /auth/v1 against
+    GoTrue's documented shapes and supabase-js's own source, not a running
+    GoTrue.
+
+/auth/v1 (GoTrue's shapes, over K2 App users)
+  getUser updateUser({password}) signInWithPassword exchangeCodeForSession
+  verifyOtp({type: invite|recovery, token_hash}) setSession refreshSession
+  signOut({scope}); with the server key: auth.admin listUsers getUserById
+  createUser updateUserById deleteUser; generateLink (invite, recovery)
+  needs the key's links scope and hands the link back for your App to mail.
+  On the public host a session answer sets the HttpOnly cookies and its
+  JSON holds no token. On the link, access_token is the pass in a JWT's
+  shape (supabase-js decodes it in setSession); never edit its claims: a
+  token whose claims K2 didn't write is refused.
+  A link (invite or recovery) gives a short pass that only sets the
+  password (updateUser); setting it makes the real session. user_metadata,
+  email changes, OAuth, magic links, phone and MFA are not supported.
+
+THE SHIM (@k2/supabase, sdk/supabase in K2's repo, MIT)
+  server  createServerClient(url, key, { cookies: k2Cookies(cookieStore,
+          { supabaseUrl: url }) })
+  browser k2BrowserAuth(createBrowserClient(url, key), { url, key })
+
+SEE ALSO
+  k2 study app-databases, k2 study app-identity, k2 study app-api
 EOF
 }
 _study_page_skins() {
@@ -105383,6 +106305,26 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  protocol 18), then a restart if it runs. off removes the
                                  archive setting only: the spool and the WAL already in it
                                  stay for the backup to ship and prune. Same rule
+  cluster basebackup <name>      a base backup of an archiving named cluster now, beside
+                                 its WAL spool (the daemon takes one a day; the newest 7
+                                 stay). Root helper protocol 19. Same rule
+  cluster backups <name>         base backups, the WAL spool, the window a restore can
+                                 reach, the last backup and drill (warns after 30 days)
+  cluster restore <name> --to <time> --as <new>
+                                 a NEW cluster beside the old one, replayed to that moment
+                                 (never in place). Times: 2026-11-22T10:15:00Z, 2026-11-22
+                                 10:15 (UTC), +02:00 offsets, -15m / -2h / -1d. Refused on a
+                                 WAL gap or a time after the newest WAL
+  cluster restore-drill <name> [--to <time>]
+                                 restore into <name>_drill, check it (markers around the
+                                 moment and every table's rows), remove it, record it
+  cluster drop-drill <name>      remove a drill or a failed restore (only those)
+  cluster switch <db> --to <cluster> [--yes]
+                                 point a database at its restored cluster (or back at the
+                                 one it was switched away from): shows the moment and what
+                                 is lost, then closes the old copy, sets K2's logins, moves
+                                 the record and connects each App again (re-hosted). The old
+                                 cluster is kept, closed, for the rollback
   default-major <M> [--json]     owner: the major new databases go on (new boxes: 17;
                                  existing boxes keep their current major until set)
   enable [--json]                catalog + start unit if baked (--bake --with-db)
@@ -105761,7 +106703,9 @@ print("database cap: %s%s" % ("unlimited (0)" if cap == 0 else out["cap"], " (th
 # answer (`--json` raw).
 _db_named_post() {
     local body="$1" as_json="$2" what="$3" path="${4:-/cli/db/clusters}"
-    _compute_split "$(K2_CP_MAX_TIME=900 _compute_send POST "$path" "$body")"
+    # A restore or a drill waits for the whole replay (the daemon caps it at
+    # 6 h): those calls set _K2_DB_MAX_TIME.
+    _compute_split "$(K2_CP_MAX_TIME="${_K2_DB_MAX_TIME:-900}" _compute_send POST "$path" "$body")"
     if [ "$_CP_STATUS" != "200" ]; then
         printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 raw=sys.stdin.read()
@@ -105784,6 +106728,83 @@ if w == "cluster":
     print("next: k2 db create --cluster %s --name <db>" % (c.get("name")))
 elif w == "restart":
     print("restarted %s" % v.get("cluster"))
+elif w == "pitr-basebackup":
+    b = v.get("backup") or {}
+    print("base backup %s of %s: %s (WAL %s..%s)" % (b.get("stamp"), v.get("cluster"), b.get("dir"), b.get("startWal"), b.get("endWal")))
+    if b.get("pruned"):
+        print("removed (older than the newest %s): %s" % (b.get("kept"), ", ".join(b["pruned"])))
+elif w == "pitr-backups":
+    o = v.get("onBox") or {}
+    r = v.get("recorded") or {}
+    wal = o.get("wal") or {}
+    print("%s  WAL archive %s" % (v.get("cluster"), "on" if o.get("walArchive") else "off"))
+    for b in o.get("baseBackups") or []:
+        if b.get("complete"):
+            print("  base %s  ended %s  %s bytes" % (b.get("stamp"), b.get("endedAt"), b.get("bytes")))
+        else:
+            print("  base %s  unfinished (removed at the next backup)" % b.get("stamp"))
+    if not o.get("baseBackups"):
+        print("  no base backups yet")
+    print("  WAL      %s files, %s..%s, newest archived %s" % (wal.get("count"), wal.get("first"), wal.get("last"), wal.get("newestAt")))
+    if wal.get("gap"):
+        print("  GAP      segment %s is missing: a restore cannot pass it" % wal["gap"])
+    if o.get("restorableFrom"):
+        print("restorable from %s to %s (UTC)" % (o.get("restorableFrom"), o.get("restorableTo")))
+    else:
+        print("not restorable yet (a base backup and the WAL after it are needed)")
+    print("last base backup: %s%s" % (r.get("lastBasebackupAt") or "never", "" if r.get("lastBasebackupOk") in (None, True) else " (FAILED: %s)" % r.get("lastBasebackupNote")))
+    print("last drill: %s%s" % (r.get("lastDrillAt") or "never", "" if r.get("lastDrillOk") in (None, True) else " (FAILED)"))
+    if r.get("drillWarning"):
+        print("warning: %s" % r["drillWarning"])
+elif w == "pitr-restore":
+    print("restored %s to %s UTC as %s (port %s), from base backup %s" % (v.get("restoredFrom"), v.get("target"), v.get("cluster"), v.get("port"), v.get("baseBackup")))
+    print("next: %s" % v.get("next"))
+elif w == "pitr-drill":
+    print("drill of %s to %s UTC: %s" % (v.get("cluster"), v.get("target"), "PASS" if v.get("ok") else "FAIL"))
+    m = v.get("markers")
+    if m is not None:
+        print("  markers  before the moment: %s, after it: %s" % ("present" if m.get("before") else "MISSING", "PRESENT" if m.get("after") else "absent"))
+    for d in v.get("databases") or []:
+        line = "  %s  %s tables, %s rows" % (d.get("database"), d.get("tables"), d.get("rows"))
+        if "rowsMatch" in d:
+            line += ", rows match the moment" if d["rowsMatch"] else ", ROWS DIFFER"
+        print(line)
+        for x in d.get("diffs") or []:
+            print("    %s: %s at the moment, %s restored" % (x.get("table"), x.get("atTheMoment"), x.get("restored")))
+    for d in v.get("missingDatabases") or []:
+        print("  MISSING database %s" % d)
+    print("  storage  %s" % v.get("storageCheck"))
+    print("  drill cluster %s %s" % (v.get("drillCluster"), "removed" if v.get("dropped") else "NOT removed"))
+    if v.get("hint"):
+        print("hint: %s" % v["hint"])
+    if not v.get("ok"):
+        sys.exit(1)
+elif w == "pitr-switch":
+    if v.get("needsConfirm"):
+        print("switch %s: %s -> %s (%s)" % (v.get("db"), v.get("from"), v.get("to"), v.get("kind")))
+        print("moment: %s UTC" % v.get("moment"))
+        print("lost: %s" % v.get("lost"))
+        for a in v.get("apps") or []:
+            print("App %s (%s) is connected again on %s and re-hosted" % (a.get("app"), a.get("as"), v.get("to")))
+        sys.exit(0)
+    print("switched %s: %s -> %s (%s; data as at %s UTC)" % (v.get("db"), v.get("from"), v.get("to"), v.get("kind"), v.get("moment")))
+    for a in v.get("apps") or []:
+        if a.get("ok"):
+            print("  App %s (%s): connected on the new cluster" % (a.get("app"), a.get("as")))
+        else:
+            print("  App %s (%s): FAILED %s: %s" % (a.get("app"), a.get("as"), a.get("error"), a.get("hint")))
+    print("  logins set: %s" % ", ".join(v.get("loginsSet") or []))
+    if v.get("loginsNotSet"):
+        print("  logins NOT set (no secret K2 holds): %s" % ", ".join(v["loginsNotSet"]))
+    arc = v.get("archive")
+    if arc:
+        print("  archive: %s" % json.dumps(arc))
+    print("rollback: %s" % v.get("rollback"))
+    if not v.get("ok"):
+        sys.exit(1)
+elif w == "pitr-drop":
+    d = v.get("dropped") or {}
+    print("removed %s/%s (restored from %s)" % (d.get("major"), d.get("name"), d.get("from")) if d.get("dropped") else "nothing to remove")
 elif w == "archive":
     state = "on" if v.get("walArchive") else "off"
     if not v.get("changed"):
@@ -106226,7 +107247,76 @@ else:
                     case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster archive <name> on|off"; exit 2 ;; esac
                     case "$c_state" in on|off) ;; *) _db_err "usage" "k2 db cluster archive <name> on|off (got '${c_state}')"; exit 2 ;; esac
                     _db_named_post "$(_compute_json K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_archive="$c_state")" "$as_json" archive /cli/db/clusters/archive ;;
-                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off"; exit 2 ;;
+                # Point-in-time restore (prd-app-supabase-compat-v1 §11.1;
+                # root helper protocol 19): POST /cli/db/clusters {op}.
+                basebackup|backups)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1' — k2 db cluster $c_op <name>"; exit 2 ;; esac; done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster $c_op <name>"; exit 2 ;; esac
+                    _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op="$c_op" K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name")" "$as_json" "pitr-$c_op" ;;
+                restore|restore-drill)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    local c_to="" c_as=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --to) _need_value "$@"; c_to="${2:-}"; shift 2 ;;
+                            --to=*) c_to="${1#*=}"; shift ;;
+                            --as) _need_value "$@"; c_as="${2:-}"; shift 2 ;;
+                            --as=*) c_as="${1#*=}"; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster restore <name> --to <time> --as <new-name> | k2 db cluster restore-drill <name> [--to <time>]"; exit 2 ;;
+                        esac
+                    done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster $c_op <name>"; exit 2 ;; esac
+                    if [ "$c_op" = restore ]; then
+                        [ -n "$c_to" ] && [ -n "$c_as" ] || { _db_err "usage" "k2 db cluster restore <name> --to <time> --as <new-name> (a new cluster beside the old one; never in place)"; exit 2; }
+                        _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op=restore K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to" K2_CJ_as="$c_as")" "$as_json" pitr-restore
+                    else
+                        [ -z "$c_as" ] || { _db_err "usage" "restore-drill takes no --as (the drill cluster is <name>_drill, removed after)"; exit 2; }
+                        _K2_DB_MAX_TIME=21900 _db_named_post "$(_compute_json K2_CJ_op=restore-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_to="$c_to")" "$as_json" pitr-drill
+                    fi ;;
+                switch)
+                    # POST /cli/db/clusters {op: switch, db, to, yes}: shows the
+                    # moment and what is lost; nothing changes without --yes
+                    # (or a person typing the database's name at the prompt).
+                    local s_db="${1:-}"; shift 2>/dev/null || true
+                    local s_to="" s_yes=""
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --to) _need_value "$@"; s_to="${2:-}"; shift 2 ;;
+                            --to=*) s_to="${1#*=}"; shift ;;
+                            --yes) s_yes=1; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;;
+                        esac
+                    done
+                    case "$s_db" in ""|-*) _db_err "usage" "k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;; esac
+                    [ -n "$s_to" ] || { _db_err "usage" "k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2; }
+                    if [ -z "$s_yes" ]; then
+                        _db_named_post "$(_compute_json K2_CJ_op=switch K2_CJ_project="$(_compute_ws "")" K2_CJ_db="$s_db" K2_CJ_to="$s_to")" "$as_json" pitr-switch
+                        if [ -t 0 ] && [ -t 1 ] && [ "$as_json" != true ]; then
+                            printf 'Type the database name (%s) to switch it: ' "$s_db" >&2
+                            local s_typed=""; read -r s_typed || true
+                            [ "$s_typed" = "$s_db" ] || { _db_err "not_confirmed" "nothing changed"; exit 2; }
+                        else
+                            _db_err "confirm_needed" "nothing changed: read the moment and what is lost above, then run it again with --yes"; exit 2
+                        fi
+                    fi
+                    _K2_DB_MAX_TIME=3600 _db_named_post "$(_compute_json K2_CJ_op=switch K2_CJ_project="$(_compute_ws "")" K2_CJ_db="$s_db" K2_CJ_to="$s_to" K2_CJ_yes_b=1)" "$as_json" pitr-switch ;;
+                drop-drill)
+                    c_name="${1:-}"; shift 2>/dev/null || true
+                    while [ $# -gt 0 ]; do
+                        case "$1" in
+                            --json) as_json=true; shift ;;
+                            --major) _need_value "$@"; c_major="${2:-}"; shift 2 ;;
+                            --major=*) c_major="${1#*=}"; shift ;;
+                            *) _db_err "usage" "unexpected '$1' — k2 db cluster drop-drill <name> [--major <M>]"; exit 2 ;;
+                        esac
+                    done
+                    case "$c_name" in ""|-*) _db_err "usage" "k2 db cluster drop-drill <name> [--major <M>]"; exit 2 ;; esac
+                    if [ -n "$c_major" ]; then case "$c_major" in [1-9][0-9]) ;; *) _db_err "usage" "--major takes a Postgres major (e.g. 17)"; exit 2 ;; esac; fi
+                    _db_named_post "$(_compute_json K2_CJ_op=drop-drill K2_CJ_project="$(_compute_ws "")" K2_CJ_name="$c_name" K2_CJ_major_n="$c_major")" "$as_json" pitr-drop ;;
+                *) _db_err "usage" "k2 db cluster create <major> --name <name> [--port <port>] [--wal-archive] | k2 db cluster restart <name> | k2 db cluster archive <name> on|off | k2 db cluster basebackup|backups <name> | k2 db cluster restore <name> --to <time> --as <new> | k2 db cluster restore-drill <name> [--to <time>] | k2 db cluster drop-drill <name> | k2 db cluster switch <db> --to <cluster> [--yes]"; exit 2 ;;
             esac ;;
         default-major)
             local major="${1:-}"; shift || true
@@ -120508,8 +121598,9 @@ case "${1:-help}" in
             init|links|push|pairing|login|doctor|set|account-deletion|account-deletions|auth|recording|recordings)
                 shift; cmd_app "$@"
                 ;;
-            # 0.46.11: `k2 app db` (connect an App to a database) owns its --help.
-            db|database)
+            # 0.46.11: `k2 app db` (connect an App to a database) owns its --help;
+            # so does `k2 app cron` (the daemon calls the App on a schedule).
+            db|database|cron)
                 shift; cmd_app "$@"
                 ;;
             # The Supabase-compatible layer (lane A): `k2 app compat` and

@@ -40,8 +40,8 @@ WHERE THE CLAIMS COME FROM
   older lane: per-user rules on k2.skin_uid() aren't a boundary for them.
 
 THE CLAIMS (auth.jwt())
-  {"sub": <user id>, "role": "authenticated", "email": …, "iss": "k2",
-   "aud": "authenticated", "session_id": …,
+  {"sub": <user id>, "role": "authenticated", "email": …,
+   "iss": "k2:app:<app>", "aud": "authenticated", "session_id": …,
    "app_metadata": {"k2_app": <app>, "k2_role": <App role>, …},
    "user_metadata": {…}, "iat": …, "exp": …}
   app_metadata and user_metadata: k2 app user meta <app> <user>.

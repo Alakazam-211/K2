@@ -26,6 +26,7 @@ _study_title() {
         db-upgrade) echo "Moving a database to a newer Postgres" ;;
         app-databases) echo "An App's database: what reaches what, and connecting one" ;;
         supabase-compat) echo "Supabase-style RLS and auth.* on an App's database" ;;
+        app-cron) echo "App cron: scheduled calls to an App's own routes" ;;
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
@@ -49,6 +50,8 @@ _study_title() {
         app-account-deletion) echo "A person deletes their own App account: store rules, modes, what stays" ;;
         app-transfers) echo "Big files that survive the app in the background" ;;
         app-transfers-http) echo "Resumable uploads over plain HTTP: every field, refusal and curl" ;;
+        app-rest) echo "supabase-js against your App's K2 doors: /rest/v1, /auth/v1, the shim" ;;
+        app-storage) echo "Supabase-compatible file storage: buckets, policies, signed URLs, import" ;;
         app-chat) echo "Chat, voice and calls in your App" ;;
         app-recording) echo "Recording in an App's calls: consent, required, server reads, the lock" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
@@ -166,6 +169,7 @@ _study_page() {
         db-upgrade) _study_page_db_upgrade ;;
         app-databases) _study_page_app_databases ;;
         supabase-compat) _study_page_supabase_compat ;;
+        app-cron) _study_page_app_cron ;;
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
@@ -189,6 +193,8 @@ _study_page() {
         app-account-deletion) _study_page_app_account_deletion ;;
         app-transfers) _study_page_app_transfers ;;
         app-transfers-http) _study_page_app_transfers_http ;;
+        app-rest) _study_page_app_rest ;;
+        app-storage) _study_page_app_storage ;;
         app-chat) _study_page_app_chat ;;
         app-recording) _study_page_app_recording ;;
         chat-voice) _study_page_chat_voice ;;

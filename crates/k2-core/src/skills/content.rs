@@ -1585,6 +1585,7 @@ Run it as printed (without `token=` it rechecks every token). The owner or an ad
 - Making your own site private needs no card: `"#, cli_name!(), r#" publish visibility <name> private`.
 - To make it public, run `"#, cli_name!(), r#" publish visibility <name> public --reason "..."`. "#, product_name!(), r#" puts its `publish.public` card on your Thread and exits 2. Wait for the answer. A dev server can't be asked for: offer a PIN instead.
 - To put it behind a PIN, run `"#, cli_name!(), r#" publish visibility <name> pin`. "#, product_name!(), r#" puts its `publish.pin` card on your Thread and exits 2. The person types the PIN into "#, product_name!(), r#"'s own form. You never see it, so never ask for it.
+- A site name another workspace on this server holds (`label_owned_by_other_workspace`, often after a server move) isn't yours to take, and `--transfer` is the owner's or an admin's. The refusal ends with the line to ask with: `"#, cli_name!(), r#" permission request publish.transfer label=<name> --why "..."`. The card names who holds it now; the owner or an admin moves it to your workspace in one tap. When the `[permission:]` turn says approved, run your command again without `--transfer`.
 
 ## The answer
 
@@ -2651,6 +2652,8 @@ mod tests {
             "K2 puts a card on your Thread itself",
             // 0.46.15: adding a node to the agent's own compute node list.
             "k2 permission request compute.allow-nodes nodes=<node>[,<node>…]",
+            // 0.46.18: a site name another workspace holds.
+            "k2 permission request publish.transfer label=<name>",
             "allow_nodes_not_granted",
             // 0.46.17: the agent's own grant's limits on a node.
             "k2 permission request compute.grant node=<node> max-time=4h",

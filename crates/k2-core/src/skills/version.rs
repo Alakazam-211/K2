@@ -432,7 +432,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 66;
 /// own terminal's vault confirm, answered on their phone).
 /// v26 = 0.46.17: "LLM tokens" (`llm.tokens-refresh`; `access_expired` needs
 /// nothing).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 26;
+/// v27 = 0.46.18: a site name another workspace holds (`publish.transfer`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 27;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

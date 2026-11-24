@@ -182,7 +182,7 @@ const RECORDING_DM_OTHERS: &[&str] =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 86] = [
+pub(crate) const V1_ACTIONS: [&str; 87] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -253,6 +253,9 @@ pub(crate) const V1_ACTIONS: [&str; 86] = [
     // person types it into K2's own form).
     "publish.public",
     "publish.pin",
+    // 0.46.18: move a site's name another workspace on this server holds (a
+    // server swap leaves the old workspace's) to the asking one (walled).
+    "publish.transfer",
     // 0.46.7 App-governed Spaces: turn on or widen the agent's own App's
     // chat key, and switch who governs one of that App's Spaces.
     "apps.chat-key",
@@ -425,6 +428,17 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("label", &[ParamFrom::Response("/label")]), ("reason", &[ParamFrom::Body("/reason")])],
         ..row(ask("publish.public", Floor::Admin), code(403, "public_needs_person"), "/cli/publish/visibility", POST)
+    },
+    // 0.46.18: a name another workspace on this server holds, on a claim, run
+    // or start (409), and the same with --transfer (403, the owner's or an
+    // Admin's): ask to move it to this workspace. Both bodies carry the label.
+    Row {
+        params: &[("label", &[ParamFrom::Response("/label"), ParamFrom::Query("label")])],
+        ..row(ask("publish.transfer", Floor::Admin), code(409, crate::label_owner::CODE), "/cli/publish/", POST)
+    },
+    Row {
+        params: &[("label", &[ParamFrom::Response("/label"), ParamFrom::Query("label")])],
+        ..row(ask("publish.transfer", Floor::Admin), code(403, crate::label_owner::TRANSFER_CODE), "/cli/publish/", POST)
     },
     // ── compute ────────────────────────────────────────────────────────
     row(ask("compute.use", Floor::Admin), code(403, "compute_off"), "/cli/", ANY),
@@ -1197,9 +1211,19 @@ fn method_ok(want: WallMethod, method: &str) -> bool {
     }
 }
 
+/// A flat `error` sentence with its code beside it (`{"code":
+/// "label_owned_by_other_workspace","error":"label_owned_by_other_workspace:
+/// 'shop' belongs to …"}`): that top-level `code` names the refusal too.
+fn side_code(v: &Value) -> Option<&str> {
+    match v.get("error") {
+        Some(Value::String(_)) => v.get("code").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
 fn row_matches(r: &Row, req: &Refused<'_>, code: Option<&str>) -> bool {
     let hit = match r.matches {
-        WallMatch::Code { status, code: c } => req.status == status && code == Some(c),
+        WallMatch::Code { status, code: c } => req.status == status && (code == Some(c) || side_code(req.response) == Some(c)),
         WallMatch::Held { status, field, value } => {
             req.status == status
                 && match req.response.get(field) {
@@ -1637,6 +1661,8 @@ mod tests {
             (403, "POST", "/cli/zen/garden/delete", vec![], Some(json!({"garden":"garden-2"})), json!({"ok":false,"error":"garden_delete_person","garden":"garden-2","card":null}), "garden.delete"),
             // 0.46.5 S0: a sign that can't cover a placed widget's new version.
             (403, "POST", "/cli/publish/visibility", vec![], Some(json!({"label":"docs","mode":"public","reason":"launch"})), json!({"status":"held","code":"public_needs_person","label":"docs"}), "publish.public"),
+            // 0.46.18: `dropped_label_transfer`'s body (an agent's --transfer).
+            (403, "POST", "/cli/publish/subdomain/claim", vec![("label","pogshop"),("transfer","1")], None, json!({"code":"transfer_owner_only","error":"transfer_owner_only: only the server owner or an admin can transfer 'pogshop'.","hint":"Pick another name, or ask the server owner to transfer this one.","label":"pogshop"}), "publish.transfer"),
             (403, "POST", "/cli/zen/widget/sign", vec![], Some(json!({"widget":"board"})), json!({"ok":false,"error":"sign_needs_person","widget":"board","version":"ab".repeat(32),"card":null}), "zen.sign"),
             // Job tiers (prd-compute-job-tiers-v1 T13).
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
@@ -2309,7 +2335,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 86);
+        assert_eq!(V1_ACTIONS.len(), 87);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -2471,6 +2497,32 @@ mod tests {
             let p = teach_of(403, "POST", path, &[], Some(json!({"id":"acc_0123"})), refused.clone()).expect("a refusal");
             assert_eq!(p["requestable"], false, "{path}: {p}");
         }
+    }
+
+    /// 0.46.18: a name another workspace holds (a server swap): the claim's,
+    /// run's and start's 409 and the --transfer 403 end with the
+    /// publish.transfer line for that name; a 409 elsewhere, or one with
+    /// another code, doesn't.
+    #[test]
+    fn a_label_another_workspace_holds_teaches_the_transfer_card() {
+        let owned = json!({"code":"label_owned_by_other_workspace","error":"label_owned_by_other_workspace: 'shop' belongs to another workspace on this server, maintained by Sales (sales).","hint":"x","label":"shop","owner":{"agent":"Sales","kind":"agent"}});
+        let want = "k2 permission request publish.transfer label=shop --why \"<what you need it for>\"";
+        for path in ["/cli/publish/subdomain/claim", "/cli/publish/run", "/cli/publish/start"] {
+            let p = teach_of(409, "POST", path, &[("label", "shop"), ("check", "1")], None, owned.clone()).expect("taught");
+            assert_eq!(p["command"], want, "{path}: {p}");
+            assert_eq!(p["approvers"], "owner or admin", "{p}");
+        }
+        let xfer = json!({"code":"transfer_owner_only","error":"transfer_owner_only: only the server owner or an admin can transfer 'shop'.","hint":"x","label":"shop"});
+        let p = teach_of(403, "POST", "/cli/publish/subdomain/claim", &[("label", "shop"), ("transfer", "1")], None, xfer).expect("taught");
+        assert_eq!(p["command"], want, "{p}");
+        // The label from the form when the body has none.
+        let bare = json!({"code":"transfer_owner_only","error":"transfer_owner_only: no"});
+        let p = teach_of(403, "POST", "/cli/publish/subdomain/claim", &[("label", "shop")], None, bare).expect("taught");
+        assert_eq!(p["command"], want, "{p}");
+        // Not a publish route, or another 409: nothing of this card's.
+        assert!(teach_of(409, "POST", "/cli/app/domain/add", &[], None, owned.clone()).is_none_or(|p| p["action"] != "publish.transfer"));
+        let other = json!({"code":"label_needs_owner","error":"label_needs_owner: x","label":"shop"});
+        assert!(teach_of(409, "POST", "/cli/publish/subdomain/claim", &[], None, other).is_none_or(|p| p["action"] != "publish.transfer"));
     }
 
     /// 0.46.9 (Rosson 2026-11-05): a held compute node request (`held:

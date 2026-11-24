@@ -673,7 +673,7 @@ fn handle_leftovers(params: &HashMap<String, String>) -> CliResponse {
 ///   (audited). Agents and members get 403 `transfer_owner_only`.
 /// - `check=1&release=1`: the same ownership answer for a remove; skips the
 ///   `meet`/`chat` reservation (nothing is claimed). `skin` stays refused.
-fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
+pub(crate) fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliResponse {
     let label = str_param(params, "label");
     if label.trim().is_empty() {
         return CliResponse::bad_request("Missing label");

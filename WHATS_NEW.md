@@ -11,6 +11,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Published sites
 - **Published services started with --cmd now get HOST=127.0.0.1 and their PORT, and K2 warns when one listens beyond the server itself. Mark a service `k2 publish expose <name> public` if that's on purpose.** A service that listens on every address can be reached on its own port, around the server's front door (:443) and any App sign-in. K2 now checks where each `--cmd` service listens after it starts (and every 5 minutes) and warns in `k2 publish ps`, the service's log and `k2 vault doctor`, with the exact fix; it never stops the service. `k2 publish expose` is the owner's: `public` means no warning and no `HOST=127.0.0.1` from the service's next start (`ps` shows `[expose public]`, and the access audit log records it); `server` undoes it. An agent can't change it.
 
+### Permission cards
+- **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
+
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

@@ -20,7 +20,7 @@
 //! | `app_login.rs` | 0.46.7 | `app.login-grant` (add or remove a login on the agent's own App) |
 //! | `password_reset.rs` | 0.46.6 | `apps.user-password-reset` (reset an App user's password; the secret goes to the approver only) |
 //! | `workbench.rs` | 0.46.7 | `git.land`, `sidecar.retire` (a person lands / retires an agent's worktree sidecar) |
-//! | `publish.rs` | 0.46.7 | `publish.public`, `publish.pin` (who may open a published site) |
+//! | `publish.rs` | 0.46.7 | `publish.public`, `publish.pin` (who may open a published site); 0.46.18 `publish.transfer` (move a site's name another workspace holds to the asking one) |
 //! | `chat_cards.rs` | 0.46.7 | `apps.chat-key` (turn on or widen its App's chat key), `sew.space-governance` (switch who governs its App's Space) |
 //! | `docs.rs` | Markdown multiplayer v1 | `docs.share` (MI25) |
 //! | `chat_account.rs` | 0.46.8 | `chat.account` (the agent's own workspace's chat account) |

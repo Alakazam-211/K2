@@ -538,7 +538,7 @@ fn fixed_in(v: &serde_json::Value) -> R<Option<bool>> {
         Some(serde_json::Value::Bool(x)) => Ok(Some(*x)),
         Some(serde_json::Value::String(t)) if matches!(t.trim(), "on" | "true") => Ok(Some(true)),
         Some(serde_json::Value::String(t)) if matches!(t.trim(), "off" | "false") => Ok(Some(false)),
-        Some(_) => Err(no(compute::codes::BAD_REQUEST, 400, "fixed is on or off (k2 compute allow-nodes --fixed on|off)")),
+        Some(_) => Err(named_no(compute::codes::BAD_REQUEST, 400, format!("fixed is on or off ({CLI_SLOT} compute allow-nodes --fixed on|off)"))),
     }
 }
 
@@ -548,12 +548,12 @@ fn fixed_in(v: &serde_json::Value) -> R<Option<bool>> {
 fn set_fixed(who: &Who, requested: Option<&str>, on: bool) -> R<serde_json::Value> {
     if !who.is_admin() {
         let words = if on { "fixing" } else { "un-fixing" };
-        return Err(no(
+        return Err(named_no(
             FIXED_NEEDS_PERSON,
             403,
             format!(
                 "{words} a compute node list decides whether new machines may receive its workspace's code, so only a person does it: \
-                 the owner or an Admin, from a terminal outside {PRODUCT_NAME} (k2 compute allow-nodes --fixed on|off --workspace <ws>)"
+                 the owner or an Admin, from a terminal outside {PRODUCT_SLOT} ({CLI_SLOT} compute allow-nodes --fixed on|off --workspace <ws>)"
             ),
         ));
     }
@@ -563,12 +563,12 @@ fn set_fixed(who: &Who, requested: Option<&str>, on: bool) -> R<serde_json::Valu
         let conn = db.lock();
         let has = allow::get(&conn, &ws.id).map_err(|e| no("internal", 500, format!("the node list of {} can't be read: {e}", ws.handle)))?;
         if has.is_none() {
-            return Err(no(
+            return Err(named_no(
                 compute::codes::BAD_REQUEST,
                 400,
                 format!(
                     "workspace {} has no node list to fix (its jobs may go to any node granted to it); set one first: \
-                     k2 compute allow-nodes <node>[,<node>…] --workspace {}",
+                     {CLI_SLOT} compute allow-nodes <node>[,<node>…] --workspace {}",
                     ws.handle, ws.handle
                 ),
             ));
@@ -647,12 +647,12 @@ fn for_needs_person(
     };
     let why = format!(
         "{me} manages {} ({}), but another workspace's compute node list decides which machines receive that workspace's code, so a person decides: \
-         the owner or an Admin, on the card {me} asks for, or from a terminal outside {PRODUCT_NAME}",
+         the owner or an Admin, on the card {me} asks for, or from a terminal outside {PRODUCT_SLOT}",
         t.handle,
         how.words(&t.handle)
     );
-    let ask = |what: &str| format!("{CLI_NAME} permission request compute.allow-nodes-for target={} {what}", t.handle);
-    let base = |hint: String| no(FOR_NEEDS_PERSON, 403, hint).with("workspace", t.handle.clone());
+    let ask = |what: &str| format!("{CLI_SLOT} permission request compute.allow-nodes-for target={} {what}", t.handle);
+    let base = |hint: String| named_no(FOR_NEEDS_PERSON, 403, hint).with("workspace", t.handle.clone());
     if !asked.add.is_empty() {
         let rows = resolve(asked.add)?;
         let ungranted: Vec<String> = {
@@ -665,7 +665,7 @@ fn for_needs_person(
         }
         let names = rows.iter().map(|n| n.name.clone()).collect::<Vec<_>>().join(",");
         return Ok(base(format!(
-            "{why} (k2 compute allow-nodes --add {names} --workspace {}). The card: {}",
+            "{why} ({CLI_SLOT} compute allow-nodes --add {names} --workspace {}). The card: {}",
             t.handle,
             ask(&format!("add={names}"))
         ))
@@ -674,7 +674,7 @@ fn for_needs_person(
     if !asked.remove.is_empty() {
         let names = resolve(asked.remove)?.iter().map(|n| n.name.clone()).collect::<Vec<_>>().join(",");
         return Ok(base(format!(
-            "{why} (k2 compute allow-nodes --remove {names} --workspace {}). The card: {}",
+            "{why} ({CLI_SLOT} compute allow-nodes --remove {names} --workspace {}). The card: {}",
             t.handle,
             ask(&format!("remove={names}"))
         ))
@@ -682,7 +682,7 @@ fn for_needs_person(
     }
     if asked.clear {
         return Ok(base(format!(
-            "{why} (k2 compute allow-nodes --clear --workspace {}): clearing opens every node granted to {} at once. The card: {}",
+            "{why} ({CLI_SLOT} compute allow-nodes --clear --workspace {}): clearing opens every node granted to {} at once. The card: {}",
             t.handle,
             t.handle,
             ask("clear=true")
@@ -692,7 +692,7 @@ fn for_needs_person(
     // A whole list at once (`nodes`): the card takes one change.
     Ok(base(format!(
         "{why}. The card takes one change at a time: ask for the nodes to add ({}) or to take off ({}); a whole new list is a person's \
-         (k2 compute allow-nodes <node>[,<node>…] --workspace {})",
+         ({CLI_SLOT} compute allow-nodes <node>[,<node>…] --workspace {})",
         ask("add=<node>[,<node>…]"),
         ask("remove=<node>[,<node>…]"),
         t.handle

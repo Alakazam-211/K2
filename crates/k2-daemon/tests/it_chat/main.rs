@@ -44,6 +44,7 @@ mod thread_stream_integration;
 mod ticket_attachments_integration;
 mod ticket_brief_integration;
 mod ticket_thread_integration;
+mod project_thread_integration;
 mod tickets_list_all_integration;
 #[cfg(unix)]
 mod voice_admin_space_integration;

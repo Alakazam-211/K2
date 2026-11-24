@@ -203,6 +203,7 @@ import { __resetAddPickerListingsForTests } from './HomeAddPanels'
 import { ADD_TO_HOME_MARGIN, ADD_TO_HOME_MAX, ADD_TO_HOME_SHEET_BELOW_PX, ADD_TO_HOME_SIZE_CLASS } from './AddToHomeModal'
 import { useCommandPaletteStore } from '@/stores/command-palette'
 import { HOME_AGENT_COLORS_KEY, useHomeAvatarStore } from '@/lib/home-avatars'
+import { HOME_GROUP_FOCUS_KEY, __resetGroupFocusCacheForTests } from '@/lib/home-group-focus'
 
 // jsdom has neither CSS.escape nor scrollIntoView; the picker's list uses
 // both for its keyboard row.
@@ -322,6 +323,8 @@ beforeEach(async () => {
   __resetHostPoolForTests()
   __resetAddPickerListingsForTests()
   localStorage.removeItem(HOME_AGENT_COLORS_KEY)
+  localStorage.removeItem(HOME_GROUP_FOCUS_KEY)
+  __resetGroupFocusCacheForTests()
   useHomeAvatarStore.setState({ colors: {} })
   useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
   useSidebarStore.setState({ isCollapsed: false })
@@ -1589,6 +1592,85 @@ describe('entering Home selects the top row when nothing is selected', () => {
   })
 })
 
+// Rosson 2026-11-24: coming back to a group focuses the agent you had
+// focused there, not the top of its list. Group 1 is Cortana (top), Bee,
+// Cee, then Nova; group "Work" holds Quill on box B (its room), so no
+// agent of group 1 is on screen while Work is shown.
+describe('coming back to a group focuses the agent you had focused there', () => {
+  afterEach(async () => {
+    await act(async () => {
+      await homeRooms.closeAll()
+    })
+    const st = useHomesStore.getState()
+    for (const g of st.homes.slice(1)) st.deleteHome(g.id)
+  })
+
+  function twoGroups(): { first: string; work: string } {
+    useRemoteRoomsPreviewStore.setState({ enabled: true })
+    const st = useHomesStore.getState()
+    const first = st.homes[0].id
+    st.addRow(first, { address: 'nova::local', workspaceId: 'pn', label: 'Nova' })
+    const work = useHomesStore.getState().createHome('Work')
+    if (!work) throw new Error('createHome refused')
+    useHomesStore.getState().addRow(work, { address: 'quill::b.k2.dev', workspaceId: 'pq', label: 'Quill' })
+    useHomesStore.getState().selectHome(first)
+    return { first, work }
+  }
+
+  /** Render, focus Nova (not the top row) in group 1, then go to Work. */
+  async function focusNovaThenLeave(): Promise<{ first: string; work: string }> {
+    const ids = twoGroups()
+    render(<Shell />)
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+    await act(async () => {
+      fireEvent.click(rowOf('Nova'))
+    })
+    expect(useProjectsStore.getState().activeProjectId).toBe('pn')
+    expect(rowOf('Nova').getAttribute('aria-current')).toBe('true')
+    act(() => useHomesStore.getState().selectHome(ids.work))
+    // Work's only agent opens (its room); nothing of group 1 is on screen.
+    expect(homeRooms.store.getState().shown).toBe('quill::b.k2.dev')
+    return ids
+  }
+
+  it('focus Nova in group 1, go to Work, come back: Nova is focused, not the top row', async () => {
+    const { first } = await focusNovaThenLeave()
+    act(() => useHomesStore.getState().selectHome(first))
+    expect(homeRooms.store.getState().shown).toBeNull()
+    expect(useProjectsStore.getState().activeProjectId).toBe('pn')
+    expect(rowOf('Nova').getAttribute('aria-current')).toBe('true')
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBeNull()
+  })
+
+  it('the remembered agent was removed from the group: the top row opens, as before', async () => {
+    const { first } = await focusNovaThenLeave()
+    act(() => useHomesStore.getState().removeRow(first, 'nova::local'))
+    act(() => useHomesStore.getState().selectHome(first))
+    expect(homeRooms.store.getState().shown).toBeNull()
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+  })
+
+  it('after a reload, entering group 1 with nothing selected opens the remembered agent', async () => {
+    const { first, work } = await focusNovaThenLeave()
+    expect(JSON.parse(localStorage.getItem(HOME_GROUP_FOCUS_KEY) ?? 'null')).toEqual({
+      [first]: 'nova::local',
+      [work]: 'quill::b.k2.dev',
+    })
+    // The reload: the page goes, memory goes, localStorage stays.
+    cleanup()
+    await act(async () => {
+      await homeRooms.closeAll()
+    })
+    __resetGroupFocusCacheForTests()
+    useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
+    useHomesStore.getState().selectHome(first)
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBe('pn')
+    expect(rowOf('Nova').getAttribute('aria-current')).toBe('true')
+  })
+})
+
 describe('the tooltip of a row on another server (Z3, Z5)', () => {
   it('says what the click does: here, here view only, or switch', () => {
     expect(otherRowOpenTitle(true, 'use', 'Bee', 'Box B')).toBe('Open Bee from Box B here')
@@ -1821,10 +1903,14 @@ describe('the collapsed rail and the nav agree on the agent on screen', () => {
     collapse(false)
     expect(navSelected()).toEqual(['Nova'])
 
-    // Back to Group 1 (Nova is not on it: its top row, Cortana, opens).
-    act(() => useHomesStore.getState().selectHome(first))
-    expect(navSelected()).toEqual(['Cortana'])
+    // Back to Group 1 (Nova is not on it): the agent it had on screen,
+    // Bee's room, opens again (2026-11-24), not its top row.
+    await act(async () => {
+      useHomesStore.getState().selectHome(first)
+    })
+    expect(homeRooms.store.getState().shown).toBe('bee::b.k2.dev')
+    expect(navSelected()).toEqual(['Bee'])
     collapse(true)
-    expect(railSelected()).toEqual(['Cortana'])
+    expect(railSelected()).toEqual(['Bee'])
   })
 })

@@ -11,6 +11,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Home
 - **Attach files and images in Home DMs and channels.** The message box has the agent chat's own **+** (Attach a file or image), and you can also drop files on the chat or paste an image into the box. Each file uploads at once, its chip showing how far it is, and Send waits until all are up (up to 10 files per message, up to the size the server allows, 1 GB by default). Pictures show in the message, open in the image viewer, and every file has Download. Files go through your server's K2 as you, and only people who can read the message can open them. Files aren't scanned for viruses, so they always download as files and never open in K2. Your server's K2 needs this release.
+- **Home remembers which agent you had focused in each group when you switch back.**
 
 ### Projects
 - **A project's chat is now kept as a Thread.** It reads and works as before everywhere (the Projects page, the phone, Apps and `k2 project`), and every line, read mark and unread count carries over: projects from earlier releases move over in the background after the update. The chat stays with the project, whoever its point of contact is, and goes only when the project is deleted.

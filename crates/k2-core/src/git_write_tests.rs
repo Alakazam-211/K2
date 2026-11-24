@@ -304,3 +304,188 @@ fn child_writes_without_git() {
     // Reads still work.
     assert_eq!(crate::git::get_changed_files(s(&d)).len(), 1);
 }
+
+// ── A repository's own programs need trust (0.46.18) ─────────────────
+
+/// A marker program: records that it ran, then passes its input through.
+#[cfg(unix)]
+fn marker_prog(marks: &Path, name: &str) -> String {
+    std::fs::create_dir_all(marks).expect("mkdir marks");
+    let p = marks.join(format!("{name}.sh"));
+    crate::test_env::write_executable(&p, &format!("#!/bin/sh\n: > '{}'\ncat\n", marks.join(format!("{name}.ran")).display()));
+    p.display().to_string()
+}
+
+#[cfg(unix)]
+fn ran(marks: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(marks)
+        .expect("marks")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".ran"))
+        .collect();
+    v.sort();
+    v
+}
+
+/// An isolated HOME (folder trust and K2's own records live there) and a
+/// test database.
+#[cfg(unix)]
+fn trust_env() -> crate::test_env::TempHome {
+    let t = crate::test_env::TempHome::new();
+    crate::db::init_for_tests();
+    t
+}
+
+#[cfg(unix)]
+fn assert_needs_trust(e: &str, keys: &[&str], secret: &str) {
+    assert!(e.starts_with("git_config_runs_programs: "), "the typed code: {e}");
+    for k in keys {
+        assert!(e.to_ascii_lowercase().contains(k), "names {k}: {e}");
+    }
+    assert!(!e.contains(secret), "never a key's value: {e}");
+    assert!(e.contains("Trust the workspace first") && e.contains("k2 workspace trust"), "points to trust: {e}");
+}
+
+/// A repo whose `.gitattributes` sends every .txt through filter `x`, with
+/// one commit, and a.txt changed in the work tree.
+#[cfg(unix)]
+fn filtered_repo(tag: &str) -> PathBuf {
+    let d = fx::init(tag);
+    write(&d, ".gitattributes", "*.txt filter=x\n");
+    write(&d, "a.txt", "a\n");
+    fx::commit_all(&d, "base");
+    write(&d, "a.txt", "changed\n");
+    d
+}
+
+#[cfg(unix)]
+#[test]
+fn a_repo_filter_needs_trust_before_stage_and_then_runs() {
+    let _home = trust_env();
+    let d = filtered_repo("guard-filter");
+    let marks = fx::tmp("guard-filter-marks");
+    let prog = marker_prog(&marks, "filter");
+    fx::git(&d, &["config", "filter.x.clean", &prog]);
+    fx::git(&d, &["config", "filter.x.smudge", &prog]);
+    let before = fx::ls_files_stage(&d);
+    let e = stage_file(s(&d), "a.txt").expect_err("an untrusted repo filter refuses the stage");
+    assert_needs_trust(&e, &["filter.x.clean", "filter.x.smudge"], &prog);
+    assert!(ran(&marks).is_empty(), "nothing ran: {:?}", ran(&marks));
+    assert_eq!(fx::ls_files_stage(&d), before, "the index is untouched");
+    assert!(stage_all(s(&d)).is_err() && commit(s(&d), "x").is_err(), "every write is refused");
+    assert!(ran(&marks).is_empty());
+
+    // Trusted: as before, the person's git runs its filter.
+    crate::cli_folder_trust::gate::decide(s(&d), crate::cli_folder_trust::gate::Decision::Always, "owner", None).expect("trust");
+    stage_file(s(&d), "a.txt").expect("stage once trusted");
+    assert!(!ran(&marks).is_empty(), "the filter ran once trusted");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_filter_behind_an_include_needs_trust_too() {
+    let _home = trust_env();
+    let d = filtered_repo("guard-include");
+    let marks = fx::tmp("guard-include-marks");
+    let prog = marker_prog(&marks, "filter");
+    write(&d, ".git/extra.cfg", format!("[filter \"x\"]\n\tclean = {prog}\n"));
+    fx::git(&d, &["config", "include.path", "extra.cfg"]);
+    let e = stage_file(s(&d), "a.txt").expect_err("refused");
+    assert_needs_trust(&e, &["filter.x.clean"], &prog);
+    assert!(ran(&marks).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_case_variant_key_is_the_same_key() {
+    let _home = trust_env();
+    let d = filtered_repo("guard-case");
+    let marks = fx::tmp("guard-case-marks");
+    let prog = marker_prog(&marks, "filter");
+    let cfg = d.join(".git/config");
+    let mut text = std::fs::read_to_string(&cfg).expect("config");
+    text.push_str(&format!("[Filter \"x\"]\n\tCLEAN = {prog}\n"));
+    std::fs::write(&cfg, text).expect("write config");
+    let e = stage_file(s(&d), "a.txt").expect_err("refused");
+    assert_needs_trust(&e, &["filter.x.clean"], &prog);
+    assert!(ran(&marks).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_merge_driver_needs_trust_before_merge() {
+    let _home = trust_env();
+    let d = fx::init("guard-merge");
+    write(&d, ".gitattributes", "a.txt merge=x\n");
+    write(&d, "a.txt", "base\n");
+    fx::commit_all(&d, "base");
+    fx::git(&d, &["checkout", "-q", "-b", "side"]);
+    write(&d, "a.txt", "side\n");
+    fx::commit_all(&d, "side");
+    fx::git(&d, &["checkout", "-q", "main"]);
+    write(&d, "a.txt", "main\n");
+    fx::commit_all(&d, "main");
+    let marks = fx::tmp("guard-merge-marks");
+    let prog = marker_prog(&marks, "driver");
+    fx::git(&d, &["config", "merge.x.driver", &format!("{prog} %O %A %B")]);
+    let head = fx::git(&d, &["rev-parse", "HEAD"]);
+    let e = merge_branch(s(&d), "side").map(|_| ()).expect_err("refused");
+    assert_needs_trust(&e, &["merge.x.driver"], &prog);
+    assert!(ran(&marks).is_empty(), "the driver never ran");
+    assert_eq!(fx::git(&d, &["rev-parse", "HEAD"]), head);
+    assert!(!d.join(".git/MERGE_HEAD").exists());
+    let e = delete_branch(s(&d), "side").expect_err("delete is a write too");
+    assert!(e.starts_with("git_config_runs_programs: "), "{e}");
+}
+
+#[cfg(unix)]
+#[test]
+fn discard_is_refused_before_anything_goes_to_the_trash() {
+    let _home = trust_env();
+    let d = filtered_repo("guard-discard");
+    let marks = fx::tmp("guard-discard-marks");
+    let prog = marker_prog(&marks, "filter");
+    fx::git(&d, &["config", "filter.x.smudge", &prog]);
+    let e = crate::git_changes::discard(s(&d), &["a.txt".to_string()], false, &|_| panic!("nothing goes to the Trash"))
+        .expect_err("refused");
+    assert_eq!(e.code, "git_config_runs_programs", "{e}");
+    assert!(e.hint.contains("filter.x.smudge") && !e.hint.contains(&prog), "{e}");
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "changed\n");
+    assert!(ran(&marks).is_empty());
+}
+
+/// A repo with no program in its own config needs no trust; one K2 made
+/// on this machine needs none either, but a copy of it elsewhere (a clone
+/// from another server) is not K2-made.
+#[cfg(unix)]
+#[test]
+fn clean_and_k2_made_repos_need_no_trust_but_a_copy_does() {
+    let _home = trust_env();
+    let d = filtered_repo("guard-clean");
+    stage_file(s(&d), "a.txt").expect("no program, no trust needed");
+
+    let made = fx::tmp("guard-made");
+    write(&made, ".gitattributes", "*.txt filter=x\n");
+    write(&made, "a.txt", "a\n");
+    init_repo(s(&made)).expect("K2's own init");
+    fx::git(&made, &["config", "user.name", "K2 Test"]);
+    fx::git(&made, &["config", "user.email", "k2-test@example.com"]);
+    let marks = fx::tmp("guard-made-marks");
+    let prog = marker_prog(&marks, "filter");
+    fx::git(&made, &["config", "filter.x.clean", &prog]);
+    stage_file(s(&made), "a.txt").expect("K2 made this repo here");
+
+    let copy = fx::tmp("guard-copy").join("repo");
+    let out = std::process::Command::new("cp").arg("-R").arg(&made).arg(&copy).output().expect("cp");
+    assert!(out.status.success(), "cp: {}", String::from_utf8_lossy(&out.stderr));
+    for e in std::fs::read_dir(&marks).expect("marks") {
+        let p = e.expect("entry").path();
+        if p.extension().is_some_and(|x| x == "ran") {
+            std::fs::remove_file(p).expect("clear mark");
+        }
+    }
+    write(&copy, "a.txt", "changed in the copy\n");
+    let e = stage_file(s(&copy), "a.txt").expect_err("a copy from elsewhere isn't K2-made");
+    assert_needs_trust(&e, &["filter.x.clean"], &prog);
+    assert!(ran(&marks).is_empty());
+}

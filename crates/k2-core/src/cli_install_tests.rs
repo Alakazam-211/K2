@@ -773,8 +773,11 @@ fn settings_shows_a_link_to_the_binary_as_the_binary_with_its_version() {
     // Off: the links run the script; it is current, a script of 0.46.11.
     heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal off");
     let runs = choice_for_script(switch_on(), &cli);
-    assert_eq!(runs.target(&cli), cli.as_path());
-    assert_eq!(link_state(&k2, runs.target(&cli)), LinkState::Current);
+    assert_eq!(runs.target(&cli), Some(cli.as_path()));
+    assert_eq!(
+        link_state(&k2, runs.target(&cli).expect("a target")),
+        LinkState::Current
+    );
     let script = InstalledCli { runs: CliKind::Script, version: Some("0.46.11".to_string()) };
     assert_eq!(installed_cli(&k2, Some("0.46.11")), Some(script));
 
@@ -783,9 +786,13 @@ fn settings_shows_a_link_to_the_binary_as_the_binary_with_its_version() {
     switch(true);
     heal(&input(&cli, &shim, None, Some(BARE_LOGIN_PATH))).expect("heal on");
     let runs = choice_for_script(switch_on(), &cli);
-    assert_eq!(runs.target(&cli), binary.as_path());
+    assert_eq!(runs.target(&cli), Some(binary.as_path()));
     assert_eq!(link_target(&k2), binary);
-    assert_eq!(link_state(&k2, runs.target(&cli)), LinkState::Current, "not stale");
+    assert_eq!(
+        link_state(&k2, runs.target(&cli).expect("a target")),
+        LinkState::Current,
+        "not stale"
+    );
     let bin = InstalledCli { runs: CliKind::Binary, version: Some("0.46.11".to_string()) };
     assert_eq!(installed_cli(&k2, Some("0.46.11")), Some(bin.clone()));
     assert_eq!(installed_cli(&k5(h), None), Some(bin), "k5 too, the version from its mark");
@@ -797,7 +804,12 @@ fn settings_shows_a_link_to_the_binary_as_the_binary_with_its_version() {
     // A link to the script left elsewhere is now the stale one.
     let left = h.join("usr-local-bin-k2");
     std::os::unix::fs::symlink(&cli, &left).unwrap();
-    assert_eq!(link_state(&left, runs.target(&cli)), LinkState::Stale { target: cli.clone() });
+    assert_eq!(
+        link_state(&left, runs.target(&cli).expect("a target")),
+        LinkState::Stale {
+            target: cli.clone()
+        }
+    );
 
     // A binary of another release: its own version, so Settings offers the
     // update, and the heal goes back to the script.

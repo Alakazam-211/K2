@@ -707,3 +707,140 @@ fn macos_after_an_update_the_switch_on_links_k5_and_adds_the_block_past_an_old_s
     assert_eq!(read(&zprofile), K2_ZSH, "exactly one block");
     mode(&sys, 0o755);
 }
+
+// ── A build with no shell CLI ───────────────────────────────────────────
+
+/// A build with no shell CLI whose k5 binary is missing or fails: the links
+/// run nothing. Never the script, whatever the switch says; the default
+/// build's answer is unchanged. Brand-free: it passes the build kind in.
+#[test]
+fn no_shell_cli_and_no_binary_is_nothing_never_the_script() {
+    let why = "this release has no k5 program (/opt/x is missing)";
+    let none = Choice::None {
+        note: why.to_string(),
+    };
+    for on in [true, false] {
+        assert_eq!(
+            Choice::from_found_in(true, on, Err(why.to_string())),
+            none,
+            "switch {on}"
+        );
+    }
+    assert_eq!(
+        Choice::from_found_in(false, true, Err(why.to_string())),
+        Choice::Script {
+            note: Some(why.to_string())
+        }
+    );
+    assert_eq!(
+        Choice::from_found_in(false, false, Err(why.to_string())),
+        SCRIPT
+    );
+    let bin = PathBuf::from("/opt/x/bin");
+    for no_bash in [true, false] {
+        assert_eq!(
+            Choice::from_found_in(no_bash, true, Ok(bin.clone())),
+            Choice::Binary {
+                binary: bin.clone()
+            }
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&none).expect("json"),
+        serde_json::json!({"runs": "none", "note": why}),
+        "the shape GET /cli/k5-cli and Settings read"
+    );
+    assert_eq!(none.binary(), None);
+    assert_eq!(
+        none.target(Path::new("/opt/x/cli/k2")),
+        None,
+        "nothing to link at, not the script"
+    );
+    assert_eq!(
+        SCRIPT.target(Path::new("/opt/x/cli/k2")),
+        Some(Path::new("/opt/x/cli/k2"))
+    );
+}
+
+/// The live build's answer: in a build with no shell CLI the links are on
+/// by build and a failing binary is nothing; in ours, today's.
+#[test]
+fn from_found_follows_this_build() {
+    let got = Choice::from_found(false, Err("the switch is off".to_string()));
+    if crate::brand::CLI_NO_BASH {
+        assert!(links_on(), "on by build");
+        assert_eq!(
+            got,
+            Choice::None {
+                note: "the switch is off".to_string()
+            }
+        );
+    } else {
+        assert_eq!(links_on(), switch_on());
+        assert_eq!(got, SCRIPT);
+    }
+}
+
+/// A heal with nothing to link changes nothing: no link, no folder, no
+/// PATH block, and it says why.
+#[test]
+fn a_heal_with_nothing_to_link_touches_nothing() {
+    let home = Home::new("none-heal");
+    let h = home.path();
+    let (cli, _) = bundle(h, "XY", "xy", None);
+    let none = Choice::None {
+        note: "this release has no k5 program".to_string(),
+    };
+    let err = XY
+        .heal_at(h, &input(&cli, None, "/bin/zsh"), &none)
+        .expect_err("nothing to link");
+    assert_eq!(err, "xy links nothing: this release has no k5 program");
+    assert!(
+        fs::symlink_metadata(user_bin_dir(h)).is_err(),
+        "no ~/.local/bin made"
+    );
+    assert!(
+        !h.join(".zprofile").exists() && !h.join(".zshrc").exists(),
+        "no PATH block written"
+    );
+}
+
+/// With nothing to run, a K2 script first on the login PATH is not enough:
+/// the block still goes in, as when the links run the binary (a script
+/// there must never stand in for the k5 program).
+#[test]
+fn with_nothing_to_run_a_script_first_on_path_is_not_enough() {
+    let home = Home::new("none-path");
+    let h = home.path();
+    let names = Names::compiled();
+    let dir = h.join("fake-root/usr/bin");
+    fs::create_dir_all(&dir).expect("make the bin folder");
+    let pkg = dir.join(names.name);
+    fs::write(&pkg, "#!/bin/bash\nK2_CLI_VERSION=\"0.46.7\"\n").expect("write the script");
+    let login = dir.display().to_string();
+    assert_eq!(first_on_path(&login, names.name), Some(pkg.clone()));
+    // The control: with the script, that script is enough.
+    let got = names
+        .ensure_path_block_as(
+            h,
+            Path::new("/bin/bash"),
+            None,
+            Some(&login),
+            false,
+            &SCRIPT,
+        )
+        .expect("ensure the block");
+    assert_eq!(got, PathOutcome::FoundElsewhere { path: pkg });
+    let none = Choice::None {
+        note: "no k5 program".to_string(),
+    };
+    let got = names
+        .ensure_path_block_as(h, Path::new("/bin/bash"), None, Some(&login), false, &none)
+        .expect("ensure the block");
+    assert_eq!(
+        got,
+        PathOutcome::BlockAdded {
+            file: h.join(".bash_profile")
+        }
+    );
+}

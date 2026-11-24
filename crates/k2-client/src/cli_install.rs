@@ -293,11 +293,22 @@ pub fn is_k5_binary(path: &Path) -> bool {
 }
 
 /// `Ok` when the file at `path` is the k5 binary of version `want` (the
-/// script's): read for its marker, never run. Otherwise why not, in words
-/// the owner reads in Settings.
+/// script's; in a build with no shell CLI, this release's): read for its
+/// marker, never run. Otherwise why not, in words the owner reads in
+/// Settings.
 pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
+    // What `want` is the version of, in the words below.
+    let of = if crate::brand::CLI_NO_BASH {
+        "this release"
+    } else {
+        "the script"
+    };
     let Some(want) = want.filter(|w| !w.is_empty()) else {
-        return Err("the script's version can't be read".to_string());
+        return Err(if crate::brand::CLI_NO_BASH {
+            "this release's version can't be read".to_string()
+        } else {
+            "the script's version can't be read".to_string()
+        });
     };
     let meta = match fs::metadata(path) {
         Ok(m) => m,
@@ -318,7 +329,7 @@ pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
         return Ok(());
     }
     match found.first() {
-        Some(v) => Err(format!("the k5 program is version {v}, the script {want}")),
+        Some(v) => Err(format!("the k5 program is version {v}, {of} {want}")),
         None => Err(format!("{} carries no k5 version mark", path.display())),
     }
 }
@@ -332,14 +343,26 @@ pub enum Choice {
     Script { note: Option<String> },
     /// The k5 binary at this path.
     Binary { binary: PathBuf },
+    /// Nothing: a build with no shell CLI ([`crate::brand::CLI_NO_BASH`])
+    /// whose k5 binary is missing or fails its check. No link is made or
+    /// changed, and none ever points at a script. `note`: why.
+    None { note: String },
 }
 
 impl Choice {
     /// The binary when `found` is one, else the script, with the reason
-    /// only when the switch is on (off is not worth a note).
+    /// only when the switch is on (off is not worth a note). In a build with
+    /// no shell CLI, nothing instead of the script ([`Choice::from_found_in`]).
     pub fn from_found(on: bool, found: Result<PathBuf, String>) -> Self {
+        Choice::from_found_in(crate::brand::CLI_NO_BASH, on, found)
+    }
+
+    /// [`Choice::from_found`] for a build that carries the shell CLI or not
+    /// (`no_bash`), so a test of either kind runs in any build.
+    pub fn from_found_in(no_bash: bool, on: bool, found: Result<PathBuf, String>) -> Self {
         match found {
             Ok(binary) => Choice::Binary { binary },
+            Err(note) if no_bash => Choice::None { note },
             Err(why) => Choice::Script { note: on.then_some(why) },
         }
     }
@@ -348,21 +371,34 @@ impl Choice {
     pub fn binary(&self) -> Option<&Path> {
         match self {
             Choice::Binary { binary } => Some(binary),
-            Choice::Script { .. } => None,
+            Choice::Script { .. } | Choice::None { .. } => None,
         }
     }
 
-    /// What a link should point at: the binary when the links run it, else
-    /// the bundled `script`. Settings judges a link against this, so a link
-    /// to the binary is current while the switch has it.
-    pub fn target<'a>(&'a self, script: &'a Path) -> &'a Path {
-        self.binary().unwrap_or(script)
+    /// What a link should point at: the binary when the links run it, the
+    /// bundled `script` when they run the script, and nothing for
+    /// [`Choice::None`]. Settings judges a link against this, so a link to
+    /// the binary is current while the switch has it.
+    pub fn target<'a>(&'a self, script: &'a Path) -> Option<&'a Path> {
+        match self {
+            Choice::Binary { binary } => Some(binary),
+            Choice::Script { .. } => Some(script),
+            Choice::None { .. } => None,
+        }
     }
 }
 
 /// The owner's switch (`k5CliBeta`) from `settings.json`.
 pub fn switch_on() -> bool {
     crate::app_settings_view::load().k5_cli_beta
+}
+
+/// Whether the links should run the k5 binary: the owner's switch, or
+/// always in a build with no shell CLI, where there is no script to run
+/// ([`crate::brand::CLI_NO_BASH`]). The `on` the guarded functions below
+/// take.
+pub fn links_on() -> bool {
+    switch_on() || crate::brand::CLI_NO_BASH
 }
 
 /// The bundle's `Contents/MacOS` folder for a bundled script at
@@ -1083,7 +1119,8 @@ impl Names {
             Some(p) => {
                 // With the links on the k5 binary, only a k5 binary found
                 // first is enough: a script there would run instead of them.
-                let enough = |f: &PathBuf| is_k2_cli_script(f) && (runs.binary().is_none() || is_k5_binary(f));
+                let script = matches!(runs, Choice::Script { .. });
+                let enough = |f: &PathBuf| is_k2_cli_script(f) && (script || is_k5_binary(f));
                 if let Some(found) = first_on_path(p, self.name).filter(enough) {
                     return Ok(PathOutcome::FoundElsewhere { path: found });
                 }
@@ -1305,7 +1342,13 @@ impl Names {
     /// shim either way.
     #[cfg(unix)]
     pub fn heal_at(&self, home: &Path, input: &HealInput, runs: &Choice) -> Result<HealReport, String> {
-        let target = runs.target(input.cli);
+        // Nothing to link at (a build with no shell CLI and no k5 binary
+        // that passes): no link is made or changed.
+        let target = match runs {
+            Choice::None { note } => return Err(format!("{} links nothing: {note}", self.name)),
+            Choice::Binary { binary } => binary.as_path(),
+            Choice::Script { .. } => input.cli,
+        };
         let binary = runs.binary().is_some();
         let bin = user_bin_dir(home);
         let mut swept = self.sweep_temp_links(&bin);

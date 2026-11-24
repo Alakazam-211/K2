@@ -475,9 +475,15 @@ fn cli_install_status_now() -> Result<serde_json::Value, String> {
         // A link is judged against what the links should run: the k5 binary
         // while the owner's switch has it (then a link to it is current, not
         // stale), else the bundled script.
-        let runs = bundled.as_deref().map(|b| ci::choice_for_script(ci::switch_on(), b));
+        let runs = bundled
+            .as_deref()
+            .map(|b| ci::choice_for_script(ci::switch_on(), b));
         let state_of = |link: &Path| {
-            bundled.as_deref().zip(runs.as_ref()).map(|(b, r)| ci::link_state(link, r.target(b)))
+            bundled
+                .as_deref()
+                .zip(runs.as_ref())
+                .and_then(|(b, r)| r.target(b))
+                .map(|t| ci::link_state(link, t))
         };
         let user_link = user_link_path.as_deref().and_then(state_of);
         let system_link = state_of(system_link_path);
@@ -671,7 +677,13 @@ fn cli_install_system_now() -> Result<String, String> {
         // What the links run (the k5 binary while the owner's switch has
         // it, else the script), so this link matches ~/.local/bin/k2.
         let runs = ci::choice_for_script(ci::switch_on(), &cli_script);
-        let target = runs.target(&cli_script);
+        // Nothing to link at (a build with no shell CLI and no k5 program
+        // that passes): no link is made.
+        let target = match &runs {
+            ci::Choice::None { note } => return Err(format!("Nothing to link: {note}")),
+            ci::Choice::Binary { binary } => binary.as_path(),
+            ci::Choice::Script { .. } => cli_script.as_path(),
+        };
         if let ci::LinkState::Foreign { what } = ci::link_state(symlink_path, target) {
             return Err(format!("{CLI_SYMLINK_PATH} is {what}, not K2's, so K2 left it alone."));
         }

@@ -122,7 +122,11 @@ describe('the renderer module', () => {
 
   it('brand/xy\'s overlay and shell values name its own company and site', () => {
     const overlay = JSON.parse(run(['tauri', '--brand', 'brand/xy']))
-    expect(overlay.bundle).toEqual({ shortDescription: 'AI workspace orchestration by Globex Corporation', homepage: 'https://desk.example.invalid' })
+    // brand/xy is a no-bash brand (cli.no_bash), so its bundle also restates the app's resources
+    // without the shell CLI; the no-bash tests below pin that list.
+    const { resources, ...named } = overlay.bundle
+    expect(named).toEqual({ shortDescription: 'AI workspace orchestration by Globex Corporation', homepage: 'https://desk.example.invalid' })
+    expect(resources).not.toContain('../cli/k2')
     const shell = run(['shell', '--brand', 'brand/xy'])
     expect(shell).toContain("BRAND_COMPANY='Globex Corporation'\n")
     expect(shell).toContain("BRAND_LOCKUP='Globex Desk by Globex Corporation'\n")

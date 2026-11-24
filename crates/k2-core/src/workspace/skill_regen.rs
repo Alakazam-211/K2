@@ -3724,6 +3724,151 @@ mod tests {
         unregister(&proj, &id);
     }
 
+    /// A workspace for the person's-text tests: its folder (so its name)
+    /// starts with `said`, the brand's command typed by a person. Its dot
+    /// folder is `.k2` from the start: adding a catalog layer makes `.k2`,
+    /// and a workspace that began with `.k2so` would then read its files
+    /// from another folder than the test wrote them to.
+    fn persons_project(said: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("{said} {}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join(".k2/skills")).unwrap();
+        dir
+    }
+
+    /// The switch on and the links running k5: a person's text that types
+    /// the brand's command (`k2 msg …`) is never taught, wherever
+    /// `crate::agent_cli` runs. In AGENTS.md: the workspace's name, ROLE.md,
+    /// PROJECT.md, a person's own layer and a skill's title in the live
+    /// roster. In the wake context: the agent's role and profile, the task
+    /// and the workspace's name. In a per-agent skill: the workspace's and
+    /// agent's names and a person's custom layer. K2's own text around them
+    /// is taught.
+    #[test]
+    fn with_the_k5_switch_on_a_persons_text_is_never_taught() {
+        use crate::brand::{BRAND_ID, CLI_NAME};
+        let _home = crate::test_env::TempHome::new();
+        crate::app_settings::update(serde_json::json!({ "k5CliBeta": true })).expect("switch on");
+        let _runs = crate::agent_cli::K5RunsForTest::set(true);
+        let want = crate::agent_cli::name_for(BRAND_ID, CLI_NAME, || true, || true);
+        let said = format!("{CLI_NAME} msg acme");
+
+        let proj = persons_project(&said);
+        let path = proj.to_str().unwrap();
+        let ws_name = proj.file_name().unwrap().to_string_lossy().to_string();
+        let id = register(path, &ws_name);
+        let dot = crate::workspace_dot_dir(path);
+        let primary = crate::workspace::agent_identity::workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        let role_md = format!("---\nname: lead\nrole: {said} lead\ntype: manager\n---\n\nRole: `{said} \"hi\"`.\n");
+        fs::write(primary.join("ROLE.md"), &role_md).unwrap();
+        // The wake context reads the profile as AGENT.md.
+        fs::write(primary.join("AGENT.md"), &role_md).unwrap();
+        fs::write(dot.join("PROJECT.md"), format!("Project: {said} \"ship\".\n")).unwrap();
+        fs::create_dir_all(proj.join("notes")).unwrap();
+        fs::write(proj.join("notes/acme.md"), format!("A note: {said} \"later\".\n")).unwrap();
+        crate::workspace::context_layers::add_layer(path, Some("notes/acme.md"), None, None).expect("a person's layer");
+        fs::create_dir_all(dot.join("skills/acme")).unwrap();
+        fs::write(dot.join("skills/acme/SKILL.md"), format!("# {said} helper\n")).unwrap();
+        crate::workspace::context_layers::add_layer(path, None, Some("skills:roster"), None).expect("skills roster");
+
+        let agents_md = compose_agents_md(path);
+        assert!(agents_md.starts_with(&format!("# {ws_name}\n")), "the workspace's name as written:\n{agents_md}");
+        for line in [
+            format!("Role: `{said} \"hi\"`."),
+            format!("Project: {said} \"ship\"."),
+            format!("A note: {said} \"later\"."),
+            format!("- **acme** — {said} helper"),
+        ] {
+            assert!(agents_md.contains(&line), "kept as written: {line}\n{agents_md}");
+        }
+        assert!(agents_md.contains(&format!("{want} thread <addr>")), "K2's own text is taught:\n{agents_md}");
+
+        let task = crate::workspace::work_item::WorkItem {
+            filename: "t.md".into(),
+            title: format!("{said} \"fix it\""),
+            priority: "high".into(),
+            assigned_by: "owner".into(),
+            created: String::new(),
+            item_type: "task".into(),
+            folder: "active".into(),
+            body_preview: String::new(),
+            source: "manual".into(),
+        };
+        let wake = crate::skills::content::compose_agent_wake_context(path, "lead", Some(&task)).expect("wake context");
+        for line in [
+            format!("**Role:** {said} lead"),
+            format!("Role: `{said} \"hi\"`."),
+            format!("Project: {said} \"ship\"."),
+            format!("**{said} \"fix it\"** (priority: high"),
+            format!("**{ws_name}** workspace"),
+        ] {
+            assert!(wake.contains(&line), "kept as written: {line}\n{wake}");
+        }
+        assert!(wake.contains(&format!("{want} inbox")), "K2's own text is taught:\n{wake}");
+
+        // A per-agent skill: the agent isn't the primary, so its SKILL.md
+        // is written in its own folder; a person's custom layer goes in.
+        let layers = crate::paths::k2_home().join("templates/custom-agent");
+        fs::create_dir_all(&layers).unwrap();
+        fs::write(layers.join("acme-policy.md"), format!("Policy: {said} \"weekly\".\n")).unwrap();
+        fs::remove_dir_all(&primary).unwrap();
+        let agent = format!("{CLI_NAME} msg-bot");
+        crate::skills::writer::write_agent_skill_file(path, &agent, "custom");
+        let skill_path = crate::workspace::agent_identity::agent_dir(path, &agent).join("SKILL.md");
+        let skill = fs::read_to_string(&skill_path).unwrap_or_else(|e| panic!("{}: {e}", skill_path.display()));
+        for line in [format!("You are {agent}, a custom agent for {ws_name}."), format!("Policy: {said} \"weekly\".")] {
+            assert!(skill.contains(&line), "kept as written: {line}\n{skill}");
+        }
+        assert!(skill.contains(&format!("{want} inbox")), "K2's own text is taught:\n{skill}");
+        unregister(&proj, &id);
+    }
+
+    /// The switch off: the generators that hold a person's text give the
+    /// bytes they gave as written (a pass-through hold, nothing taught),
+    /// even when the links could run k5.
+    #[test]
+    fn with_the_k5_switch_off_the_held_generators_give_todays_bytes() {
+        use crate::brand::CLI_NAME;
+        use crate::workspace::context_layers as cl;
+        let _home = crate::test_env::TempHome::new();
+        let _runs = crate::agent_cli::K5RunsForTest::set(true);
+        assert_eq!(crate::agent_cli::name(), CLI_NAME, "off by default");
+        let said = format!("{CLI_NAME} msg acme");
+        let proj = persons_project(&said);
+        let path = proj.to_str().unwrap();
+        let id = register(path, "k5-off-held");
+        let dot = crate::workspace_dot_dir(path);
+        fs::create_dir_all(dot.join("skills/acme")).unwrap();
+        fs::write(dot.join("skills/acme/SKILL.md"), format!("# {said} helper\n")).unwrap();
+        let primary = crate::workspace::agent_identity::workspace_agent_path(path);
+        fs::create_dir_all(&primary).unwrap();
+        let role_md = format!("---\nname: lead\ntype: manager\n---\n\nRole: {said}.\n");
+        fs::write(primary.join("ROLE.md"), &role_md).unwrap();
+        // The wake context reads the profile as AGENT.md.
+        fs::write(primary.join("AGENT.md"), &role_md).unwrap();
+
+        let as_written: [(&str, fn(&str) -> String); 6] = [
+            (cl::CONNECTIONS_ROSTER_ID, cl::render_connections_roster_body),
+            (cl::SKILLS_ROSTER_ID, cl::render_skills_roster_body),
+            (cl::HEARTBEATS_ROSTER_ID, cl::render_heartbeats_roster_body),
+            (cl::USERS_ROSTER_ID, cl::render_users_roster_body),
+            (cl::SKIN_ROSTER_ID, cl::render_skin_roster_body),
+            (cl::APPS_MAINTAINED_ID, cl::render_apps_maintained_body),
+        ];
+        for (id, render) in as_written {
+            // Adding a layer can plant files (a pack, a skill): read both
+            // after it.
+            let layer = cl::add_layer(path, None, Some(id), None).expect(id);
+            assert_eq!(cl::render_live_layer_body(path, &layer), Some(render(path)), "{id}");
+        }
+        let project_name = proj.file_name().unwrap().to_string_lossy().to_string();
+        let wake = crate::skills::content::compose_agent_wake_context(path, "lead", None).expect("wake context");
+        assert!(wake.ends_with(&crate::skills::content::generate_manager_skill_content(path, &project_name)), "{wake}");
+        assert!(wake.contains(&format!("Role: {said}.")), "{wake}");
+        assert!(compose_agents_md(path).starts_with(&format!("# {project_name}\n\n<!-- GENERATED at ")));
+        unregister(&proj, &id);
+    }
+
     /// A flip regenerates: AGENTS.md and the k2-cli skill follow the switch
     /// both ways, and back off they are today's bytes again.
     #[test]

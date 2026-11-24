@@ -358,10 +358,49 @@ mod tests {
             format!("K2_{n} x"),
             format!("${n} x"),
             format!("x{n} msg"),
+            // The home folder, the skill, the crate path, the host, the
+            // script's path and the product, each as a person reads it.
+            format!(".{n}/"),
+            format!("{n}-cli"),
+            format!("{n}::host::x"),
+            format!("https://{n}.dev/docs"),
+            format!("{n}.dev"),
+            format!("cli/{n}"),
+            format!("\"cli/{n} msg\""),
+            "K2 msg".to_string(),
+            "the K2 app".to_string(),
         ];
         for text in kept {
             assert!(matches!(rename_command(&text, n, NEXT), Cow::Borrowed(_)), "{text}");
+            assert!(matches!(teach_as(&text, NEXT), Cow::Borrowed(_)), "{text}");
         }
+    }
+
+    /// A held value comes back byte for byte, whatever it says: a person's
+    /// text that types the command, one next to a command K2 wrote, one
+    /// with the stand-in's own characters in it. K2's text around it is
+    /// taught.
+    #[test]
+    fn a_held_value_comes_back_as_written_and_only_k2s_text_is_taught() {
+        let said = cmd("msg acme \"hi\"");
+        let odd = format!("{HOLD_OPEN}0{HOLD_CLOSE} {} {HOLD_OPEN}", cmd("read x"));
+        let held = Held::new();
+        let text = format!(
+            "Run `{}`. Note: {}. Then `{}`{}\n",
+            cmd("inbox"),
+            held.hold(&said),
+            cmd("msg"),
+            held.hold(&odd)
+        );
+        let taught = held.teach_as(&text, NEXT);
+        assert_eq!(taught, format!("Run `{NEXT} inbox`. Note: {said}. Then `{NEXT} msg`{odd}\n"));
+        assert_eq!(held.put_back(&text), format!("Run `{}`. Note: {said}. Then `{}`{odd}\n", cmd("inbox"), cmd("msg")));
+        // The brand's own command: the text as written, the values back.
+        assert_eq!(held.teach_as(&text, CLI_NAME), held.put_back(&text));
+        // Pass-through holds nothing: the value is the text itself.
+        let none = Held::pass_through();
+        assert!(matches!(none.hold(&said), Cow::Borrowed(v) if v == said));
+        assert_eq!(none.teach_as(&format!("{said}\n"), NEXT), format!("{NEXT} msg acme \"hi\"\n"));
     }
 
     #[test]

@@ -3377,4 +3377,176 @@ mod tests {
             assert_eq!(name_cell("403 Forbidden", refusal.clone()), refusal);
         });
     }
+
+    /// An answer to an agent with a person's text in every field a
+    /// refusal can carry: a Thread message, a note, a ticket body, a
+    /// workspace and an agent name, a file name, the Ask line's params and
+    /// command, and a hint with its template. Each one types the brand's
+    /// command (`k2 msg …`).
+    fn answer_with_persons_text() -> String {
+        let said = format!("{CLI_NAME} msg acme \"hi\"");
+        json!({
+            "ok": false,
+            "error": {
+                "code": "x",
+                "message": said,
+                "hint": format!("run {CLI_NAME} app list, then {CLI_NAME} msg acme"),
+                "hintTemplate": "run {cli} app list, then {cli} msg acme",
+                "name": said,
+                "workspace": said,
+            },
+            "thread": { "body": said, "messages": [{ "text": said }] },
+            "note": said,
+            "ticket": { "title": said, "body": said },
+            "file": format!("{said}.md"),
+            "hint": format!("{CLI_NAME} study x"),
+            "permission": {
+                "action": "compute.use",
+                "params": { "why": said },
+                "command": format!("{CLI_NAME} permission request compute.use why='{said}'"),
+                "tail": format!("permission request compute.use why='{said}'"),
+                "hint": format!("run {CLI_NAME} permission list"),
+            },
+        })
+        .to_string()
+    }
+
+    /// `body` with the value of every `"hint"` key replaced by `with`.
+    fn hints_set(body: &str, with: &str) -> Value {
+        fn walk(v: &mut Value, with: &str) {
+            match v {
+                Value::Object(m) => {
+                    for (k, x) in m.iter_mut() {
+                        if k == "hint" && x.is_string() {
+                            *x = Value::String(with.to_string());
+                        } else {
+                            walk(x, with);
+                        }
+                    }
+                }
+                Value::Array(a) => a.iter_mut().for_each(|x| walk(x, with)),
+                _ => {}
+            }
+        }
+        let mut v: Value = serde_json::from_str(body).expect("json");
+        walk(&mut v, with);
+        v
+    }
+
+    /// The daemon's answers to agents: only a `hint` is taught. The
+    /// message, names, notes, file names, Thread text, the Ask line's
+    /// params and command, and `hintTemplate` (its `{cli}` intact) keep
+    /// their bytes, on the cell socket and on TCP for an agent passport.
+    /// With the switch off, every byte as it was.
+    #[test]
+    fn only_a_refusals_hint_is_taught_never_the_rest_of_the_answer() {
+        crate::test_support::with_temp_home(|| {
+            let _runs = k2_core::agent_cli::K5RunsForTest::set(true);
+            let want = k2_core::agent_cli::name_for(k2_core::brand::BRAND_ID, CLI_NAME, || true, || true);
+            let body = answer_with_persons_text();
+
+            // Off: the same bytes, borrowed.
+            assert!(matches!(teach_hints(&body, CLI_NAME), Cow::Borrowed(_)));
+            assert_eq!(name_cell("403 Forbidden", body.clone()), body);
+            assert!(matches!(name_tcp("403 Forbidden", &body), Cow::Borrowed(_)));
+
+            k2_core::app_settings::update(json!({ "k5CliBeta": true })).expect("switch on");
+            let named = name_cell("403 Forbidden", body.clone());
+            let v: Value = serde_json::from_str(&named).expect("still JSON");
+            if want != CLI_NAME {
+                assert_eq!(v["error"]["hint"], format!("run {want} app list, then {want} msg acme"), "{named}");
+                assert_eq!(v["hint"], format!("{want} study x"), "{named}");
+                assert_eq!(v["permission"]["hint"], format!("run {want} permission list"), "{named}");
+            }
+            assert_eq!(v["error"]["hintTemplate"], "run {cli} app list, then {cli} msg acme", "the template stays raw");
+            // Every field but the hints is the answer's own.
+            assert_eq!(hints_set(&named, "-"), hints_set(&body, "-"), "{named}");
+            // And byte for byte: putting the hints back gives the body.
+            let mut back = named.clone();
+            for (taught, raw) in [
+                (format!("run {want} app list, then {want} msg acme"), format!("run {CLI_NAME} app list, then {CLI_NAME} msg acme")),
+                (format!("{want} study x"), format!("{CLI_NAME} study x")),
+                (format!("run {want} permission list"), format!("run {CLI_NAME} permission list")),
+            ] {
+                back = back.replacen(&format!("\"hint\":\"{taught}\""), &format!("\"hint\":\"{raw}\""), 1);
+            }
+            assert_eq!(back, body);
+
+            // A body that isn't JSON (a person's plain text) is left alone.
+            let plain = format!("{CLI_NAME} msg acme: no such workspace");
+            assert_eq!(name_cell("404 Not Found", plain.clone()), plain);
+            // A hint key's value that isn't a string, a "hint" inside a
+            // string, and pretty JSON.
+            let odd = format!("{{\n  \"hint\": null,\n  \"message\": \"say \\\"hint\\\": {CLI_NAME} msg x\",\n  \"error\": {{ \"hint\" : \"{CLI_NAME} inbox\" }}\n}}");
+            let taught = name_cell("400 Bad Request", odd.clone());
+            assert_eq!(taught, odd.replace(&format!("\"{CLI_NAME} inbox\""), &format!("\"{want} inbox\"")));
+        });
+    }
+
+    /// TCP: a refusal to an agent passport teaches its hints and nothing
+    /// else; the same refusal to a request without one keeps every byte.
+    #[test]
+    fn a_tcp_refusal_to_an_agent_teaches_only_its_hints() {
+        crate::test_support::with_temp_home(|| {
+            let _runs = k2_core::agent_cli::K5RunsForTest::set(true);
+            let want = k2_core::agent_cli::name_for(k2_core::brand::BRAND_ID, CLI_NAME, || true, || true);
+            k2_core::app_settings::update(json!({ "k5CliBeta": true })).expect("switch on");
+            let passport = crate::session_token::mint_session_token(
+                &k2_core::session::SessionId::new(),
+                "pane-hints",
+                crate::session_token::HookPrincipal { workspace_uuid: "w-acme".into(), agent_address: "acme".into() },
+                crate::session_token::CredMode::ApiKey,
+                crate::session_token::Provider::Anthropic,
+            );
+            let body = answer_with_persons_text();
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+            // The Org Chart on (this thread only) makes the dispatcher note
+            // the request, as it does with permission cards on.
+            let on_request = |query: String| {
+                let body = body.clone();
+                rt.block_on(crate::routes::pass_gate::scope(async move {
+                    k2_core::org_chart::with_enabled(true, || {
+                        crate::routes::pass_gate::fences(false, "GET", "/cli/x", &query);
+                        crate::routes::pass_gate::set_fenced(false);
+                        name_tcp("403 Forbidden", &body).into_owned()
+                    })
+                }))
+            };
+            let named = on_request(format!("token={passport}"));
+            assert_eq!(hints_set(&named, "-"), hints_set(&body, "-"), "{named}");
+            let v: Value = serde_json::from_str(&named).expect("json");
+            assert_eq!(v["error"]["hint"], format!("run {want} app list, then {want} msg acme"));
+            assert_eq!(v["error"]["hintTemplate"], "run {cli} app list, then {cli} msg acme");
+            assert_eq!(on_request("token=not-a-passport".to_string()), body, "no passport: every byte as it was");
+        });
+    }
+
+    /// Where the daemon calls `teach_as`: once, in [`teach_hints`], on a
+    /// hint's decoded string. No other daemon code passes text to it.
+    #[test]
+    fn the_daemon_teaches_only_in_teach_hints() {
+        let pattern = ["agent_cli::", "teach"].concat();
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        let mut dirs = vec![src.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read src") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("read a source file");
+                    for (n, line) in text.lines().enumerate() {
+                        let code = line.split("//").next().unwrap_or("");
+                        if code.contains(&pattern) {
+                            found.push(format!("{}:{}: {}", path.strip_prefix(&src).expect("under src").display(), n + 1, line.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(found[0].starts_with("permission/walls.rs:"), "{found:#?}");
+        assert!(found[0].ends_with(&["agent_cli::", "teach_as(&hint, cli) {"].concat()), "{found:#?}");
+    }
 }

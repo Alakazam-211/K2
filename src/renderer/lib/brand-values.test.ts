@@ -7,7 +7,6 @@ import { generateKeyPairSync, randomBytes } from 'node:crypto'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import { BRAND_ID, CLI_ALIASES, CLI_NAME, COMPANY_NAME, PRODUCT_LOCKUP, PRODUCT_NAME, PUBLIC_SITE, RELEASE_REPO, SUPPORT_EMAIL } from './brand'
 
@@ -390,7 +389,9 @@ describe('the update keys', () => {
   })
 
   it('ours is k2 or k5 in this repo\'s own brand/<id>, the rule of crates/k2-brand/src/ours.rs', async () => {
-    const mod = await import(pathToFileURL(SCRIPT).href)
+    // A plain path, not a file URL: Vite reads a URL's %20 (a space in the
+    // checkout's path) as a name and can't find the file.
+    const mod = await import(/* @vite-ignore */ SCRIPT)
     expect(mod.isOurs('k2', join(ROOT, 'brand/k2'))).toBe(true)
     expect(mod.isOurs('k5', join(ROOT, 'brand/k5'))).toBe(true)
     expect(mod.isOurs('xy', join(ROOT, 'brand/xy'))).toBe(false)
@@ -399,7 +400,9 @@ describe('the update keys', () => {
   })
 
   it('a brand of ours with keys other than the ceremony\'s is refused', async () => {
-    const mod = await import(pathToFileURL(SCRIPT).href)
+    // A plain path, not a file URL: Vite reads a URL's %20 (a space in the
+    // checkout's path) as a name and can't find the file.
+    const mod = await import(/* @vite-ignore */ SCRIPT)
     const keys = [{ role: 'primary', key_id: TEST_KEY.id, pubkey: TEST_KEY.line }]
     expect(mod.updateKeyProblems({ file: join(ROOT, 'brand/k2/brand.toml'), id: 'k2', ours: true, update: { keys } }).join('\n')).toContain(
       "brand k2 must carry exactly the ceremony's update keys",

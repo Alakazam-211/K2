@@ -72,6 +72,7 @@ use super::sew_wire::{
     self, ExternalId, SpaceMemberRemoveRequest, SpaceMembersAddRequest, SpaceMembersAddResponse,
 };
 use super::{outbox, Cause, NewOp, Op, CHAT_KIND};
+use crate::product_name;
 
 /// Ledger states.
 pub const PENDING_ADD: &str = "pending_add";
@@ -224,7 +225,7 @@ pub fn check_ids(app_id: &str, space_id: &str) -> Result<(), String> {
     }
     if app_id == crate::skin::HOST_APP_ID {
         return Err(
-            "the box login ('host') is not an App with its own Space: K2's default Space is not bound"
+            concat!("the box login ('host') is not an App with its own Space: ", product_name!(), "'s default Space is not bound")
                 .into(),
         );
     }

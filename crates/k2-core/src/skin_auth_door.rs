@@ -28,6 +28,7 @@ use super::{
     immediate_tx, invites, mint_app_session_conn, must_change, normalize_app_target, now_secs, principal_by_username, sha256_hex, ties,
     with_conn, SkinAppSession, HOST_LOGIN_DENIED,
 };
+use crate::brand::PRODUCT_NAME;
 
 /// Most extra page origins one App may list.
 pub const MAX_ORIGINS: usize = 10;
@@ -130,7 +131,7 @@ pub fn normalize_origins(raw: &[String]) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     for o in raw.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let n = super::app_pairing::normalize_native_origin(o).ok_or_else(|| {
-            format!("{o:?} isn't a page origin K2 takes: a scheme and a host, no path (tauri://localhost, http://tauri.localhost, https://tauri.localhost)")
+            format!("{o:?} isn't a page origin {PRODUCT_NAME} takes: a scheme and a host, no path (tauri://localhost, http://tauri.localhost, https://tauri.localhost)")
         })?;
         if !out.contains(&n) {
             out.push(n);

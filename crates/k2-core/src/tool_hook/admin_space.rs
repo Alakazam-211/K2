@@ -78,6 +78,7 @@ use super::sew_wire::{
 };
 use super::{outbox, Cause, NewOp, Op, CHAT_KIND};
 use crate::voice_rooms::{self, Hosting};
+use crate::brand::PRODUCT_NAME;
 
 /// The Space's own queue.
 pub const SUBJECT_SPACE: &str = "admin:space";
@@ -1109,7 +1110,7 @@ pub fn mark_verify(conn: &Connection, mode: &str, why: &str, now: i64, force: bo
 /// every member is added again, and every open row that names the old
 /// Space or an old room is skipped. The caller already wrote the new id.
 fn relink(conn: &Connection, old_space: &str, now: i64) -> Result<(), String> {
-    let why = format!("the K5 Space {old_space} is gone from Sew; K2 re-linked to the Space Sew holds");
+    let why = format!("the K5 Space {old_space} is gone from Sew; {PRODUCT_NAME} re-linked to the Space Sew holds");
     for r in rooms(conn)? {
         if let Some(ch) = r.channel_id.as_deref() {
             outbox::skip_open_prefix(conn, CHAT_KIND, &room_subject(ch), now, &why)?;

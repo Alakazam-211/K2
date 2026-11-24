@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use crate::product_name;
 
 /// The largest PNG kept or sent: 2 MiB.
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -86,7 +87,7 @@ impl ShotError {
                 format!("A screenshot is at most {MAX_SIDE} pixels a side; this one is {width}×{height}.")
             }
             ShotError::Animated => "Animated PNGs can't be attached.".into(),
-            ShotError::Unreadable(_) => "K2 can't read that PNG.".into(),
+            ShotError::Unreadable(_) => concat!(product_name!(), " can't read that PNG.").into(),
         }
     }
 }
@@ -240,7 +241,7 @@ pub fn normalize(b: &[u8]) -> Result<Normalized, ShotError> {
         // A critical chunk (uppercase first letter) a decoder must
         // understand: never dropped silently.
         if !keep && ty[0].is_ascii_uppercase() {
-            return Err(damaged("it has a chunk K2 doesn't know"));
+            return Err(damaged(concat!("it has a chunk ", product_name!(), " doesn't know")));
         }
         if keep {
             out.extend_from_slice(&b[i..end]);

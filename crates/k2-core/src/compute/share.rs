@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use super::proto::frames::Offer;
 use super::proto::share::{self, JobClass, Quote, Role, ServerStatus, ShareLimits, ShareView};
+use crate::{cli_name, product_name};
 
 /// The `--any` mover's damper (replaces V71's "at most twice in all"): a
 /// job may be withdrawn again this long after a withdraw that moved it
@@ -344,7 +345,7 @@ fn share_counts_line(v: &ShareView) -> String {
 /// What a blocked-by code means, for `get` and `queue` (§4.2).
 pub fn blocked_words(code: &str) -> String {
     match code {
-        share::blocked::FOREIGN_LOCK => "the node is busy with work outside K2 (a lock file)".into(),
+        share::blocked::FOREIGN_LOCK => concat!("the node is busy with work outside ", product_name!(), " (a lock file)").into(),
         share::blocked::PAUSED => "the node is paused".into(),
         share::blocked::SHARE_PAUSED => "the node's owner paused this server's share".into(),
         share::blocked::DISK_LOW => "the node is low on disk".into(),
@@ -638,7 +639,7 @@ pub fn parse_servers_list(result: &Value) -> Result<(share::ServersList, Vec<Ser
 /// binding goes to the node, and it is treated as a credential (V79).
 pub fn split_add_code(code_fp: &str) -> Result<(String, String), String> {
     let e = super::proto::pairing::EnrollString::parse(code_fp)
-        .ok_or("the code is CODE.FP (ABCDE-FGHJK.0123456789abcdef), as `k2 compute node add` printed it on the new server")?;
+        .ok_or(concat!("the code is CODE.FP (ABCDE-FGHJK.0123456789abcdef), as `", cli_name!(), " compute node add` printed it on the new server"))?;
     if !share::valid_fp_prefix(&e.controller_fp_prefix) {
         return Err("the part after the dot is the new server's 16-hex key prefix".into());
     }

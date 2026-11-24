@@ -15,6 +15,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{DataError, MadeBy};
+use crate::product_name;
 
 /// Rows kept per widget.
 pub const KEEP_PER_WIDGET: usize = 20;
@@ -266,7 +267,7 @@ pub fn signed_at(conn: &Connection, widget: &str, hash: &str) -> Result<Option<i
 /// The person's "It's mine": stamp `(widget, hash)` `owner`, overwriting.
 pub fn claim(conn: &Connection, widget: &str, hash: &str, now: i64) -> Result<(), DataError> {
     if is_builtin(widget) {
-        return Err(DataError::BadRequest("a built-in widget is K2's; there is nothing to claim".into()));
+        return Err(DataError::BadRequest(concat!("a built-in widget is ", product_name!(), "'s; there is nothing to claim").into()));
     }
     check_widget(widget)?;
     check_hash(hash)?;

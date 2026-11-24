@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::workspace::agent_identity::parse_frontmatter;
 use crate::workspace::work_item::{atomic_write, safe_read_to_string};
+use crate::brand::CLI_NAME;
 
 /// One inbox item — markdown file with YAML frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,7 +71,7 @@ pub fn check_item_id(id: &str) -> Result<(), String> {
     if is_plain_name(id) {
         Ok(())
     } else {
-        Err(format!("not an inbox item id: {id:?} (an id is a name from `k2 inbox list`, not a path)"))
+        Err(format!("not an inbox item id: {id:?} (an id is a name from `{CLI_NAME} inbox list`, not a path)"))
     }
 }
 
@@ -481,9 +482,9 @@ pub fn wake_pointer_text_n(id: &str, title: &str, file_count: Option<usize>) -> 
     let title = one_line(title);
     match file_count {
         Some(n) if n > 1 => {
-            format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}\n({n} files)")
+            format!("[inbox:{id}] {title}\nOpen: {CLI_NAME} inbox read {id}\n({n} files)")
         }
-        _ => format!("[inbox:{id}] {title}\nOpen: k2 inbox read {id}"),
+        _ => format!("[inbox:{id}] {title}\nOpen: {CLI_NAME} inbox read {id}"),
     }
 }
 
@@ -579,7 +580,7 @@ pub fn deliver_files(
         body_lines.push(String::new());
     }
     body_lines.push(format!(
-        "Multi-file package delivered via `k2 msg --inbox-*` ({n} files).\n",
+        "Multi-file package delivered via `{CLI_NAME} msg --inbox-*` ({n} files).\n",
         n = source_paths.len()
     ));
     body_lines.push(String::new());
@@ -609,7 +610,7 @@ pub fn deliver_files(
 
     body_lines.push(String::new());
     body_lines.push(format!(
-        "Open this cover note with `k2 inbox read {id}`. Sidecars live under `.k2/inbox/{id}.files/`.\n"
+        "Open this cover note with `{CLI_NAME} inbox read {id}`. Sidecars live under `.k2/inbox/{id}.files/`.\n"
     ));
 
     let created = simple_date_now();
@@ -974,10 +975,10 @@ fn deliver_binary_file(
     let rel_sidecar = format!("{id}.files/{safe_name}");
     let created = simple_date_now();
     let rest = format!(
-        "Attachment package delivered via `k2 msg --inbox-*`.\n\n\
+        "Attachment package delivered via `{CLI_NAME} msg --inbox-*`.\n\n\
          - **File:** `{safe_name}` ({size_human})\n\
          - **Sidecar:** `.k2/inbox/{rel_sidecar}` (or `.k2so/inbox/` on legacy workspaces)\n\n\
-         Open this cover note with `k2 inbox read {id}`. Open the sidecar path on disk for the file bytes.\n"
+         Open this cover note with `{CLI_NAME} inbox read {id}`. Open the sidecar path on disk for the file bytes.\n"
     );
     let body = cover_body_with_note(note, &rest);
     let (title, written) = cover_text(&title, "normal", &created, source, from, &body);

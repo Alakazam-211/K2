@@ -21,6 +21,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 /// The contract's version (`version` in the view). Bumped only on a
 /// breaking change; new fields are additive (PRD §4.1 rule 7).
@@ -413,8 +415,8 @@ pub fn rules(public: &[PortEntry], fmt: RulesFormat, label: &str, view_hash: &st
     let mut out = String::new();
     match fmt {
         RulesFormat::Nft => {
-            out.push_str(&format!("# K2 firewall rules for {} ({view_hash})\n", comment(label)));
-            out.push_str("# Review before applying; K2 does not apply these. SSH comes first.\n");
+            out.push_str(&format!("# {PRODUCT_NAME} firewall rules for {} ({view_hash})\n", comment(label)));
+            out.push_str(concat!("# Review before applying; ", product_name!(), " does not apply these. SSH comes first.\n"));
             out.push_str("# Apply: sudo nft -f <this file>   Remove: sudo nft delete table inet k2_filter\n");
             out.push_str("table inet k2_filter {\n  chain input {\n    type filter hook input priority 0; policy drop;\n");
             out.push_str("    ct state established,related accept\n    ct state invalid drop\n    iif \"lo\" accept\n");
@@ -438,8 +440,8 @@ pub fn rules(public: &[PortEntry], fmt: RulesFormat, label: &str, view_hash: &st
             out.push_str("  }\n}\n");
         }
         RulesFormat::Ufw => {
-            out.push_str(&format!("# K2 firewall rules for {} ({view_hash})\n", comment(label)));
-            out.push_str("# Review before running; K2 does not apply these. SSH comes first.\n");
+            out.push_str(&format!("# {PRODUCT_NAME} firewall rules for {} ({view_hash})\n", comment(label)));
+            out.push_str(concat!("# Review before running; ", product_name!(), " does not apply these. SSH comes first.\n"));
             for r in rows {
                 let p = r.proto.as_str();
                 let why = comment(&r.why);

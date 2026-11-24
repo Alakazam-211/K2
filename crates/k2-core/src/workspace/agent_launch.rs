@@ -36,7 +36,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::brand::PRODUCT_NAME;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 use crate::chat_history;
 use crate::db::schema::WorkspaceSession;
 use crate::skills::content::compose_agent_wake_context;
@@ -102,7 +102,7 @@ pub fn k2_agents_build_launch(
                                 You are in worktree `{wt_path}` on branch `{branch}`.\n\
                                 Current task: **{title}** (priority: {priority})\n\
                                 Task file: `.k2so/agents/{agent}/work/active/{filename}`\n\n\
-                                Continue where you left off. When done: `k2 agent complete --agent {agent} --file {filename}`",
+                                Continue where you left off. When done: `{CLI_NAME} agent complete --agent {agent} --file {filename}`",
                                 claude_md,
                                 agent = agent_name, wt_path = wt_path, branch = branch,
                                 title = item.title, priority = item.priority, filename = item.filename,
@@ -247,7 +247,7 @@ pub fn k2_agents_build_launch(
                         } else if heartbeat_name.is_none() {
                             missing_main = Some(format!(
                                 "{}: this workspace's main chat {sid} (claude) has no conversation on disk \
-                                 in any claude folder. K2 kept it pinned and did not start another chat.",
+                                 in any claude folder. {PRODUCT_NAME} kept it pinned and did not start another chat.",
                                 crate::workspace::resume_chat::MAIN_CHAT_MISSING
                             ));
                         }

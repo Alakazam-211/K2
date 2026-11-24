@@ -37,6 +37,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
+use crate::brand::PRODUCT_NAME;
 
 /// Default broker endpoint (the deployed control-plane `/cert` RPC).
 pub const DEFAULT_BROKER_URL: &str = crate::hosts::CERT_BROKER_URL;
@@ -323,7 +324,7 @@ pub fn provision_via_broker(subdomain: &str) -> Result<(String, String), BrokerE
     if let Some(e) = cfg.token_read_error.as_deref() {
         // Not an invalid token (0.45.7): the vault read failed; retry later.
         return Err(BrokerError::Protocol(format!(
-            "the tunnel token could not be read from the K2 vault ({e}); try again \
+            "the tunnel token could not be read from the {PRODUCT_NAME} vault ({e}); try again \
              once the vault is readable"
         )));
     }

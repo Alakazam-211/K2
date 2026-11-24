@@ -8,6 +8,7 @@
 //! - Defaults come from the OS account (username / display name) and a
 //!   synthetic local email — fine for local commits; users can change
 //!   globals later for GitHub etc.
+use crate::product_name;
 
 
 /// Ensure `user.name` and `user.email` resolve for subsequent git commits.
@@ -104,7 +105,7 @@ fn detect_user_display_name() -> String {
             return t.to_string();
         }
     }
-    "K2 User".to_string()
+    concat!(product_name!(), " User").to_string()
 }
 
 fn detect_user_email() -> String {

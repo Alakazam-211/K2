@@ -32,6 +32,8 @@ use serde_json::Value;
 
 use super::{slots, store};
 use super::{Entry, Tool, WalletError};
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 /// The account a credential or profile names. Never a secret.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -63,9 +65,9 @@ impl Source {
         match self {
             Source::Vendor => "checked with the provider",
             Source::Credential => "from the sign-in itself",
-            Source::K2Record => "K2's record of that token",
+            Source::K2Record => concat!(product_name!(), "'s record of that token"),
             Source::ClaudeConfig => "Claude's .claude.json, not checked with Anthropic",
-            Source::Label => "the email K2 recorded for that token",
+            Source::Label => concat!("the email ", product_name!(), " recorded for that token"),
         }
     }
 }
@@ -383,7 +385,7 @@ pub(crate) fn write_record(tool: Tool, id: &str, who: &AccountIdentity, source: 
     let key = account_key(who).ok_or_else(|| WalletError::Io("no account to record".into()))?;
     if let Some(old) = read_record(tool, id) {
         if old.identity().same_account(who) == Some(false) {
-            return Err(WalletError::Conflict("account_mismatch", "K2 refused to record another account for this token".into()));
+            return Err(WalletError::Conflict("account_mismatch", concat!(product_name!(), " refused to record another account for this token").into()));
         }
         // The same account: keep the stronger, older record.
         if !old.weak() || source == Source::Label {
@@ -603,7 +605,7 @@ pub(crate) fn set_live_profile(profile: &Value) -> Result<bool, WalletError> {
         write_with_mode(&path, new_text.as_bytes(), mode).map_err(|e| WalletError::Io(e.to_string()))?;
         return Ok(true);
     }
-    Err(WalletError::LockBusy { tool: "Claude".into(), holder: Some("Claude kept rewriting .claude.json while K2 wrote it".into()) })
+    Err(WalletError::LockBusy { tool: "Claude".into(), holder: Some(concat!("Claude kept rewriting .claude.json while ", product_name!(), " wrote it").into()) })
 }
 
 #[cfg(unix)]
@@ -714,9 +716,9 @@ fn render_value(value: &Value) -> String {
 /// every other byte. The result is checked: it parses, and every other
 /// top-level key is unchanged; anything else is refused.
 pub fn splice_top_level_key(text: &str, key: &str, value: &Value) -> Result<String, String> {
-    let original: Value = serde_json::from_str(text).map_err(|_| ".claude.json is not valid JSON; K2 left it alone".to_string())?;
+    let original: Value = serde_json::from_str(text).map_err(|_| concat!(".claude.json is not valid JSON; ", product_name!(), " left it alone").to_string())?;
     let Value::Object(orig_map) = &original else {
-        return Err(".claude.json is not a JSON object; K2 left it alone".into());
+        return Err(concat!(".claude.json is not a JSON object; ", product_name!(), " left it alone").into());
     };
     let b = text.as_bytes();
     let open = skip_ws(b, 0);
@@ -745,7 +747,7 @@ pub fn splice_top_level_key(text: &str, key: &str, value: &Value) -> Result<Stri
         let v_end = value_end(b, v_start)?;
         if k == key {
             if found.is_some() {
-                return Err(format!("{key} appears twice in .claude.json; K2 left it alone"));
+                return Err(format!("{key} appears twice in .claude.json; {PRODUCT_NAME} left it alone"));
             }
             found = Some((v_start, v_end));
         }
@@ -770,17 +772,17 @@ pub fn splice_top_level_key(text: &str, key: &str, value: &Value) -> Result<Stri
             format!("{}{sep}\n  {key_json}: {rendered}\n{}", &text[..end], &text[close..])
         }
     };
-    let parsed: Value = serde_json::from_str(&out).map_err(|_| "the edit did not produce valid JSON; K2 left the file alone".to_string())?;
+    let parsed: Value = serde_json::from_str(&out).map_err(|_| concat!("the edit did not produce valid JSON; ", product_name!(), " left the file alone").to_string())?;
     let Value::Object(new_map) = &parsed else {
         return Err("the edit did not produce an object".into());
     };
     if &new_map[key] != value {
-        return Err("the edit did not set the profile; K2 left the file alone".into());
+        return Err(concat!("the edit did not set the profile; ", product_name!(), " left the file alone").into());
     }
     let others_same = orig_map.len() + usize::from(found.is_none()) == new_map.len()
         && orig_map.iter().filter(|(k, _)| k.as_str() != key).all(|(k, v)| new_map.get(k) == Some(v));
     if !others_same {
-        return Err("the edit would have changed other settings; K2 left the file alone".into());
+        return Err(concat!("the edit would have changed other settings; ", product_name!(), " left the file alone").into());
     }
     Ok(out)
 }
@@ -846,7 +848,7 @@ fn note_live_profile_written(profile: &Value) {
     let res = store::ensure_private_dir(&store::tool_dir(Tool::Claude))
         .and_then(|_| store::write_private(&live_profile_written_path(), v.to_string().as_bytes()));
     if let Err(e) = res {
-        crate::log_debug!("[llm-accounts] claude: could not note the profile K2 wrote ({e})");
+        crate::log_debug!("[llm-accounts] claude: could not note the profile {PRODUCT_NAME} wrote ({e})");
     }
 }
 

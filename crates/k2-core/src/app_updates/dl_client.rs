@@ -25,6 +25,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value as J};
+use crate::brand::PRODUCT_NAME;
 
 /// Why a call failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,7 +185,7 @@ impl Client {
         let v: J = serde_json::from_str(&body).map_err(|e| DlError::Bad(format!("upload answer isn't JSON: {e}")))?;
         let got_sha = v.get("sha256").and_then(J::as_str).unwrap_or("");
         if got_sha != sha256 {
-            return Err(DlError::Bad(format!("the host stored sha256 {got_sha}, K2 sent {sha256}")));
+            return Err(DlError::Bad(format!("the host stored sha256 {got_sha}, {PRODUCT_NAME} sent {sha256}")));
         }
         let got_url = v.get("url").and_then(J::as_str).unwrap_or("").to_string();
         if !url_is_for(&got_url, id, version, sha256) {

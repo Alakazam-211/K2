@@ -35,6 +35,7 @@ use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
 use serde::{Deserialize, Serialize};
+use crate::product_name;
 
 /// F7: a saved-screen file larger than this is refused (and removed). A
 /// full 5,000-line scrollback is well under 8 MiB.
@@ -387,9 +388,9 @@ pub fn remove(sid: &str) {
 /// The standard cache-directory tag (bford.info/cachedir): borg, restic
 /// (`--exclude-caches`), GNU tar (`--exclude-caches`) and others skip a
 /// directory holding it.
-pub const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
-# This file is a cache directory tag created by K2: runtime state (saved agent\n\
-# screens, sockets, keys) that must not be backed up.\n";
+pub const CACHEDIR_TAG: &str = concat!("Signature: 8a477f597d28d172789f06886806bc55\n\
+# This file is a cache directory tag created by ", product_name!(), ": runtime state (saved agent\n\
+# screens, sockets, keys) that must not be backed up.\n");
 
 /// Security review F2: keep `<K2 home>/run` — saved screens, carried
 /// activity rows, sockets, ptyd's key — out of backups.

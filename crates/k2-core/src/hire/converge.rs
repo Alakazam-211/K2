@@ -12,6 +12,7 @@ use super::recipe::{InlineLayer, WikiNote};
 use super::steps::{self, PersonaSource};
 use super::{HireCaller, HireError};
 use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// The converge request (the `/v1/w` body; the CLI sends the same shape).
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -375,7 +376,7 @@ pub fn check_new_workspace_root(path: &str, auth: &ConvergeAuthority) -> Result<
         )
     } else {
         format!(
-            "a new workspace made with an API key must be inside the hire root {} (the owner sets it: k2 agent hire-root set <dir>)",
+            "a new workspace made with an API key must be inside the hire root {} (the owner sets it: {CLI_NAME} agent hire-root set <dir>)",
             root.display()
         )
     };
@@ -544,7 +545,7 @@ pub fn check_db_access(
         return Err(HireError::new(
             403,
             "owner_only",
-            "An agent can't grant 'db_agent_access'. Ask a human (owner or admin): Settings → Workspaces / Agents → (workspace) → Permissions → Database → \"Let this agent create databases\", or `k2 agent hire <dir> --db-access write` from a terminal outside a K2 agent session.",
+            concat!("An agent can't grant 'db_agent_access'. Ask a human (owner or admin): Settings → Workspaces / Agents → (workspace) → Permissions → Database → \"Let this agent create databases\", or `", cli_name!(), " agent hire <dir> --db-access write` from a terminal outside a ", product_name!(), " agent session."),
         ));
     }
     if let Some(max) = max_db {
@@ -567,7 +568,7 @@ pub fn check_chat_manage(caller: &HireCaller, requested: Option<bool>) -> Result
         return Err(HireError::new(
             403,
             "owner_only",
-            "An agent can't turn on 'Manage chat and voice' (chat_manage). Ask a human (owner or admin) to run `k2 agent access set <workspace> chat_manage on` from a terminal outside a K2 agent session (it has no Settings row).",
+            concat!("An agent can't turn on 'Manage chat and voice' (chat_manage). Ask a human (owner or admin) to run `", cli_name!(), " agent access set <workspace> chat_manage on` from a terminal outside a ", product_name!(), " agent session (it has no Settings row)."),
         ));
     }
     Ok(())

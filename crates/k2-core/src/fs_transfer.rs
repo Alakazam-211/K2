@@ -50,6 +50,7 @@ use sha2::{Digest, Sha256};
 
 use crate::fs_commands::{free_disk_space, MAX_TRANSFER_SIZE, MAX_UPLOAD_CHUNK_SIZE};
 use crate::fs_guest_upload as gu;
+use crate::brand::PRODUCT_NAME;
 
 /// Upload tokens: `k2up_<upload id>.<secret>`.
 pub const UPLOAD_TOKEN_PREFIX: &str = "k2up_";
@@ -308,7 +309,7 @@ impl std::fmt::Display for TransferError {
             }
             Self::Incomplete { missing } => write!(f, "{} range(s) still missing", missing.len()),
             Self::ChecksumMismatch { expected, actual } => {
-                write!(f, "the file's sha256 is {actual}, not {expected}; K2 dropped what it held, send the file again")
+                write!(f, "the file's sha256 is {actual}, not {expected}; {PRODUCT_NAME} dropped what it held, send the file again")
             }
             Self::TooFragmented => {
                 write!(f, "more than {MAX_FRAGMENTS} separate ranges held; send the gaps between them first")

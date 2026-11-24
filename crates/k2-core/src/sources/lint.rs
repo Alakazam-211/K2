@@ -8,6 +8,7 @@
 use std::net::IpAddr;
 
 use super::spec::{SpecError, SpecWarning};
+use crate::brand::PRODUCT_NAME;
 
 /// One parsed fetch URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +172,7 @@ pub fn check_header(name: &str, value: &str, field: &str) -> Result<(), SpecErro
     }
     let lower = name.to_ascii_lowercase();
     if ROUTING_HEADERS.contains(&lower.as_str()) || lower.starts_with("proxy-") {
-        return Err(err("forbidden_header", field, format!("{name} is set by K2; remove it")));
+        return Err(err("forbidden_header", field, format!("{name} is set by {PRODUCT_NAME}; remove it")));
     }
     if value.len() > 1024 || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
         return Err(err("forbidden_header", field, format!("{name} has a line break or is too long")));

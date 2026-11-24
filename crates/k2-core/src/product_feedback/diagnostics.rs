@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::scrub::{self, NameBook};
 use super::MAX_DIAGNOSTICS_BYTES;
+use crate::product_name;
 
 /// One section of the bundle, as previewed and as sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,10 +184,10 @@ pub fn build(facts: &Facts, logs: &Logs, book: &NameBook, now_ms: i64) -> Vec<Se
     let sections = vec![
         (S_VERSIONS, "Versions", lines_text(&facts.versions)),
         (S_COMPUTER, "Computer", lines_text(&facts.computer)),
-        (S_STATE, "K2 state", lines_text(&facts.k2_state)),
+        (S_STATE, concat!(product_name!(), " state"), lines_text(&facts.k2_state)),
         (S_TOOLS, "Agent tools", lines_text(&facts.agent_tools)),
         (S_ERRORS, "Recent errors (last 24 hours)", errors_text),
-        (S_TAIL, "End of K2's log", if tail_parts.is_empty() { "(no log files)".into() } else { tail_parts.join("\n\n") }),
+        (S_TAIL, concat!("End of ", product_name!(), "'s log"), if tail_parts.is_empty() { "(no log files)".into() } else { tail_parts.join("\n\n") }),
         (S_CONTEXT, "Where you were", lines_text(&facts.context)),
     ];
     let out: Vec<Section> = sections

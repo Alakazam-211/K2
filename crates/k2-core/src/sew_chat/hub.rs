@@ -29,6 +29,7 @@ use chrono::{Offset, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The `k2_session` the hub acts as (Sew-Via): the hub is not one of the
 /// agent's cell sessions.
@@ -490,7 +491,7 @@ fn one(d: &Delivery) -> String {
         extra.push(format!("{} attachment(s)", d.attachment_count));
     }
     if d.body_truncated {
-        extra.push(format!("cut — k2 chat read {id}"));
+        extra.push(format!("cut — {CLI_NAME} chat read {id}"));
     }
     let extra = if extra.is_empty() { String::new() } else { format!(" [{}]", extra.join(", ")) };
     let body = if d.body.trim().is_empty() {
@@ -514,7 +515,7 @@ pub fn render(status: Option<&str>, items: &[Delivery]) -> String {
         out.push('\n');
     }
     out.push_str(&format!(
-        "Chat — {} new (reply: k2 chat reply msg_… \"…\" · DM: k2 chat dm <user> \"…\" · all unread: k2 chat unread):",
+        "Chat — {} new (reply: {CLI_NAME} chat reply msg_… \"…\" · DM: {CLI_NAME} chat dm <user> \"…\" · all unread: {CLI_NAME} chat unread):",
         items.len()
     ));
     for d in items.iter().take(MAX_PER_INJECT) {
@@ -522,7 +523,7 @@ pub fn render(status: Option<&str>, items: &[Delivery]) -> String {
         out.push_str(&one(d));
     }
     if items.len() > MAX_PER_INJECT {
-        out.push_str(&format!("\n… and {} more: k2 chat unread", items.len() - MAX_PER_INJECT));
+        out.push_str(&format!("\n… and {} more: {CLI_NAME} chat unread", items.len() - MAX_PER_INJECT));
     }
     out
 }
@@ -552,12 +553,12 @@ pub fn reset_reason(wire: &str) -> &'static str {
 pub fn status_line(n: Notice) -> String {
     match n {
         Notice::Restart(k) => format!(
-            "Chat: K2 restarted while {k} chat deliver{} held for your batch or quiet hours; K2 keeps no chat text, \
-             so run `k2 chat unread` to catch up.",
+            "Chat: {PRODUCT_NAME} restarted while {k} chat deliver{} held for your batch or quiet hours; {PRODUCT_NAME} keeps no chat text, \
+             so run `{CLI_NAME} chat unread` to catch up.",
             if k == 1 { "y was" } else { "ies were" }
         ),
         Notice::Reset(r) => format!(
-            "Chat: your delivery feed was reset ({}); you may have missed messages — run `k2 chat unread`.",
+            "Chat: your delivery feed was reset ({}); you may have missed messages — run `{CLI_NAME} chat unread`.",
             match r {
                 "epoch_changed" => "Sew was restored from a backup",
                 "ahead_of_head" => "Sew's history moved back",
@@ -566,7 +567,7 @@ pub fn status_line(n: Notice) -> String {
             }
         ),
         Notice::Missed(k) => format!(
-            "Chat: {k} deliver{} couldn't reach this session; run `k2 chat unread` to see what's new.",
+            "Chat: {k} deliver{} couldn't reach this session; run `{CLI_NAME} chat unread` to see what's new.",
             if k == 1 { "y" } else { "ies" }
         ),
     }

@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::fs_atomic::atomic_write_str;
+use crate::brand::PRODUCT_NAME;
 
 /// A harness file detected on the workspace root, returned to the
 /// renderer (or printed by the CLI) so the user can pick which one
@@ -350,7 +351,7 @@ pub fn plant_root_agents_md(project_path: &str, composed_body: &str) -> PlantRes
     if is_dangling_k2_link(project_path, &target) {
         if let Err(e) = fs::remove_file(&target) {
             return PlantResult::Skipped {
-                reason: format!("remove dangling K2 link failed: {e}"),
+                reason: format!("remove dangling {PRODUCT_NAME} link failed: {e}"),
             };
         }
         if let Err(e) = atomic_write_str(&target, composed_body) {
@@ -359,7 +360,7 @@ pub fn plant_root_agents_md(project_path: &str, composed_body: &str) -> PlantRes
             };
         }
         crate::log_debug!(
-            "[agents-md-generate] replaced dangling K2 link at {}",
+            "[agents-md-generate] replaced dangling {PRODUCT_NAME} link at {}",
             target.display()
         );
         return PlantResult::Written;

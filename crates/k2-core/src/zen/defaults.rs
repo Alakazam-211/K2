@@ -25,6 +25,7 @@ use serde_json::{json, Value as J};
 use sha2::{Digest, Sha256};
 
 use super::schema::{self, FileKind, Layer};
+use crate::brand::PRODUCT_NAME;
 
 /// The archive format (`format` in a `.defaults/<fp>.json`).
 pub const DEFAULTS_FORMAT: u32 = 1;
@@ -162,7 +163,7 @@ impl Defaults {
     /// isn't a table (GS14).
     pub fn from_set(set: DefaultsSet) -> Result<Defaults, String> {
         if set.format != DEFAULTS_FORMAT {
-            return Err(format!("format {} is not supported (this K2 reads {DEFAULTS_FORMAT})", set.format));
+            return Err(format!("format {} is not supported (this {PRODUCT_NAME} reads {DEFAULTS_FORMAT})", set.format));
         }
         let fp = set.compute_fingerprint()?;
         if fp != set.fingerprint {

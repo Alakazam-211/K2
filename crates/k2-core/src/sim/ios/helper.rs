@@ -45,6 +45,8 @@ use serde_json::{json, Value as J};
 use sha2::{Digest, Sha256};
 
 use super::simctl::{Runner, SimError, SimResult};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// The helper's Swift source, compiled on first use. It lives in
 /// `k2-node-proto` so a Mac compute node (which never links k2-core) builds
@@ -134,7 +136,7 @@ fn newest_for(encode: Option<&str>) -> u32 {
 pub fn gate(ready: &J, newest: u32) -> SimResult<u32> {
     let theirs = link::spoken(ready);
     link::negotiate(OLDEST_PROTOCOL, newest, &theirs)
-        .ok_or_else(|| SimError::new("helper_version", format!("the helper speaks protocol {theirs:?}, K2 wants {OLDEST_PROTOCOL} to {newest}")))
+        .ok_or_else(|| SimError::new("helper_version", format!("the helper speaks protocol {theirs:?}, {PRODUCT_NAME} wants {OLDEST_PROTOCOL} to {newest}")))
 }
 
 pub fn sha256_hex(b: &[u8]) -> String {
@@ -168,7 +170,7 @@ pub fn ensure_built(dir: &Path, runner: &dyn Runner, xcode: &str) -> SimResult<P
     if found.status != 0 {
         return Err(SimError::new(
             "no_swiftc",
-            "K2 builds its Simulator helper with Xcode's Swift compiler, and `xcrun swiftc` isn't available. Install Xcode (or run `xcode-select --install`), open it once, then try again.",
+            concat!(product_name!(), " builds its Simulator helper with Xcode's Swift compiler, and `xcrun swiftc` isn't available. Install Xcode (or run `xcode-select --install`), open it once, then try again."),
         ));
     }
     std::fs::DirBuilder::new()
@@ -186,7 +188,7 @@ pub fn ensure_built(dir: &Path, runner: &dyn Runner, xcode: &str) -> SimResult<P
         let tail: String = out.stderr.lines().filter(|l| l.contains("error")).take(5).collect::<Vec<_>>().join("\n");
         return Err(SimError::new(
             "helper_build_failed",
-            format!("K2 couldn't build its Simulator helper with Xcode {xcode} (xcrun swiftc exited {}). Open Xcode once so it finishes installing, then try again.\n{tail}", out.status),
+            format!("{PRODUCT_NAME} couldn't build its Simulator helper with Xcode {xcode} (xcrun swiftc exited {}). Open Xcode once so it finishes installing, then try again.\n{tail}", out.status),
         ));
     }
     let bytes = std::fs::read(&tmp).map_err(|e| SimError::new("helper_build_failed", format!("swiftc wrote no binary: {e}")))?;
@@ -480,7 +482,7 @@ impl Inbox {
             return Ok(());
         }
         let why = self.gone_reason.lock().unwrap().clone().unwrap_or_else(|| "it exited".into());
-        Err(SimError::new("helper_gone", format!("the Simulator helper stopped ({why}); run k2 sim boot")))
+        Err(SimError::new("helper_gone", format!("the Simulator helper stopped ({why}); run {CLI_NAME} sim boot")))
     }
 
     /// One `nr` request (fix 3): `send` writes the line; no reply. A

@@ -34,6 +34,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Default frps relay (0.46.6): a DNS name K2 Web keeps pointed at the
 /// current primary relay, flipped together with `*.k2.dev`. Host only —
@@ -543,7 +544,7 @@ pub fn set_vault_closed(code: Option<&str>) {
 pub fn vault_closed_line() -> String {
     let code = VAULT_CLOSED.lock().unwrap_or_else(|p| p.into_inner()).clone();
     format!(
-        "the tunnel token is in the vault, which isn't open ({}); this device is still paired. k2 vault status says why (after a box move: k2 migrate import-secrets)",
+        "the tunnel token is in the vault, which isn't open ({}); this device is still paired. {CLI_NAME} vault status says why (after a box move: {CLI_NAME} migrate import-secrets)",
         code.as_deref().unwrap_or("vault_not_open")
     )
 }
@@ -709,14 +710,14 @@ fn note_vault_read(err: Option<&str>) {
         Some(e) => {
             if !FAILING.swap(true, Ordering::SeqCst) {
                 crate::log_debug!(
-                    "[tunnel] could not read the tunnel token from the K2 vault ({e}); \
+                    "[tunnel] could not read the tunnel token from the {PRODUCT_NAME} vault ({e}); \
                      the stored token is kept and the tunnel left as it is — retrying later"
                 );
             }
         }
         None => {
             if FAILING.swap(false, Ordering::SeqCst) {
-                crate::log_debug!("[tunnel] the tunnel token reads from the K2 vault again");
+                crate::log_debug!("[tunnel] the tunnel token reads from the {PRODUCT_NAME} vault again");
             }
         }
     }

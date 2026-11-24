@@ -38,6 +38,7 @@ use crate::workspace::agent_identity::{
     backup_sibling_legacy_persona, parse_frontmatter, persona_md_in, workspace_agent_md_path,
     workspace_agent_path,
 };
+use crate::cli_name;
 
 /// Cache entry: the resolved display name + the AGENT.md mtime it was
 /// derived from. A `None` mtime means AGENT.md was missing at read
@@ -197,8 +198,8 @@ pub fn is_persona_file_name(name: &str) -> bool {
 }
 
 /// Refusal text for [`is_persona_file_name`].
-pub const PERSONA_FILE_NAME_HINT: &str = "that's the persona file name, not an agent name \
-(old `k2 agent hire` bug); pass the agent's name";
+pub const PERSONA_FILE_NAME_HINT: &str = concat!("that's the persona file name, not an agent name \
+(old `", cli_name!(), " agent hire` bug); pass the agent's name");
 
 /// Drop the in-memory display-name cache for `project_path`.
 pub fn invalidate_agent_display_name_cache(project_path: &str) {

@@ -30,6 +30,7 @@ use crate::skills::content::generate_agent_claude_md_content;
 use crate::workspace::agent_identity::agent_dir;
 use crate::workspace::scheduler::agent_work_dir;
 use crate::workspace::work_item::{atomic_write, read_work_item};
+use crate::brand::CLI_NAME;
 
 /// Shorten a slug to a maximum length, breaking at word boundaries.
 /// Strips common filler prefixes (`bug-`, `feature-`, `task-`).
@@ -241,11 +242,11 @@ pub fn k2_agents_delegate(
     let completion_protocol = format!(
         "When done:\n\
         1. Commit all your changes to branch `{branch}`\n\
-        2. Run: `k2 agent complete --agent {agent} --file {filename}`\n\
+        2. Run: `{CLI_NAME} agent complete --agent {agent} --file {filename}`\n\
         This will move your work to done and flag it for human review.\n\
         3. Notify the workspace manager that your work is ready for review:\n\
-        Run `k2 connections list` to find the manager's workspace,\n\
-        then run: `k2 msg <manager-workspace> \"Ready for review: {title}. Branch: {branch}\"`",
+        Run `{CLI_NAME} connections list` to find the manager's workspace,\n\
+        then run: `{CLI_NAME} msg <manager-workspace> \"Ready for review: {title}. Branch: {branch}\"`",
         agent = target_agent, branch = worktree.branch, filename = item.filename, title = item.title,
     );
 

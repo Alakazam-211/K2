@@ -18,6 +18,7 @@
 //! - [`scan`]: the per-service warnings: env names the code reads, K2
 //!   paths it touches, programs it finds through `PATH`.
 //! - [`token_uses`]: owner-token calls attributed to a service.
+use crate::cli_name;
 
 pub mod config;
 pub mod keys;
@@ -57,7 +58,7 @@ pub fn cutover_now() -> bool {
 /// How every legacy `--cmd` service is labelled (status, `k2 publish
 /// list`, `k2 app list`, doctor): it keeps running; its agent moves it to
 /// an App when ready.
-pub const LEGACY_LABEL: &str = "legacy (--cmd): keeps running; move it to an App when ready (k2 study app-move)";
+pub const LEGACY_LABEL: &str = concat!("legacy (--cmd): keeps running; move it to an App when ready (", cli_name!(), " study app-move)");
 
 /// [`LEGACY_LABEL`], for callers that want a `String`.
 pub fn legacy_label() -> String {
@@ -65,7 +66,7 @@ pub fn legacy_label() -> String {
 }
 
 /// Where an agent reads how to move a legacy service to an App.
-pub const LEGACY_HINT: &str = "k2 study app-move";
+pub const LEGACY_HINT: &str = concat!(cli_name!(), " study app-move");
 
 #[cfg(test)]
 mod tests {

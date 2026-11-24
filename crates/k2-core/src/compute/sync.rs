@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::proto::crypto::{self, Sha256Stream};
+use crate::brand::PRODUCT_NAME;
 
 /// Hardened (no hooks, no fsmonitor, no ext diff: [`crate::git_safe`]),
 /// with `-C` so a missing folder is git's own error message.
@@ -194,7 +195,7 @@ pub fn nested_repo(ws_dir: &Path, rel: &str) -> Result<NestedRepo, String> {
             return Err(format!("--repo {rel:?}: plain folder names only (no '..', '.' or '//')"));
         }
         if part == K2_DIR {
-            return Err(format!("--repo {rel:?}: never inside .k2/ (the workspace's private K2 folder)"));
+            return Err(format!("--repo {rel:?}: never inside .k2/ (the workspace's private {PRODUCT_NAME} folder)"));
         }
     }
     let ws = ws_dir.canonicalize().map_err(|e| format!("the workspace folder: {e}"))?;

@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use crate::brand::PRODUCT_NAME;
 
 pub mod location;
 
@@ -708,7 +709,7 @@ pub fn read_note_fleet_or_local(
             aliases: vec!["Focus Group".into()],
             tags: vec!["focus-group".into()],
             body: format!(
-                "# {name}\n\nFocus group hub on the K2 map. Membership edges go to workspace hubs, not article wikilinks.\n"
+                "# {name}\n\nFocus group hub on the {PRODUCT_NAME} map. Membership edges go to workspace hubs, not article wikilinks.\n"
             ),
             path: String::new(),
             workspace_id: None,
@@ -725,7 +726,7 @@ pub fn read_note_fleet_or_local(
             aliases: vec!["Project".into()],
             tags: vec!["project".into()],
             body: format!(
-                "# {name}\n\nProject hub on the K2 map. Membership edges go to workspace hubs, not article wikilinks.\n"
+                "# {name}\n\nProject hub on the {PRODUCT_NAME} map. Membership edges go to workspace hubs, not article wikilinks.\n"
             ),
             path: String::new(),
             workspace_id: None,
@@ -990,7 +991,7 @@ tags: [moc, index]
 # {name} — Knowledge Base
 
 This is the living brain for this workspace. Notes use `[[wikilinks]]` to
-connect ideas. Open **View Wiki** in K2 to explore the map.
+connect ideas. Open **View Wiki** in {PRODUCT_NAME} to explore the map.
 
 ## Start here
 - [[_Index]] — terse pointer list

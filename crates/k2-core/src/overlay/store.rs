@@ -25,6 +25,7 @@ use redb::{Database, ReadableTable, TableDefinition};
 
 use super::doc::{OverlayDoc, OverlayItem};
 use super::doc_meta::DocMeta;
+use crate::brand::PRODUCT_NAME;
 
 const DOCS: TableDefinition<&str, &[u8]> = TableDefinition::new("docs");
 const THREAD: TableDefinition<&str, &str> = TableDefinition::new("thread");
@@ -467,7 +468,7 @@ fn open_store(path: &std::path::Path, already_open_wait: Duration) -> Result<Dat
             Err(e @ redb::DatabaseError::DatabaseAlreadyOpen) => {
                 return Err(format!(
                     "overlay redb create {}: {e} (another process holds the file: an old daemon \
-                     still draining after a hand-off, or a second daemon on the same K2 home)",
+                     still draining after a hand-off, or a second daemon on the same {PRODUCT_NAME} home)",
                     path.display()
                 ));
             }

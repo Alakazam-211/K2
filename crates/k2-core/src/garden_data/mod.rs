@@ -38,6 +38,8 @@ pub mod tx;
 
 pub use backend::{Change, ChangesPage, Cursor, Entry, Filter, Json, Op, Page, ReapReport, SpaceInfo, StoreBackend};
 pub use grants::{Access, EffectiveGrant, GrantFrom, GrantRow, NewGrant, SubjectKind};
+use crate::brand::CLI_NAME;
+use crate::{cli_name, product_name};
 
 // ── limits (contract §3.6) ───────────────────────────────────────────
 
@@ -371,13 +373,13 @@ impl DataError {
                 format!("op {i} ('{key}'): '{key}' changed since you read it; nothing was written. Read it again and retry")
             }
             DataError::NotGranted { .. } => {
-                "you have no grant for this key. Ask the person (k2 feedback or the Thread), or a grant admin".into()
+                concat!("you have no grant for this key. Ask the person (", cli_name!(), " feedback or the Thread), or a grant admin").into()
             }
             DataError::AuthorUnknown => {
-                "nobody signed this widget version. Run `k2 zen validate --widget <name>`, or click It's mine in Settings → Gardens → Local Data".into()
+                concat!("nobody signed this widget version. Run `", cli_name!(), " zen validate --widget <name>`, or click It's mine in Settings → Gardens → Local Data").into()
             }
             DataError::PersonOnly => {
-                "this needs a person. Run it outside K2, or use Settings → Gardens → Local Data".into()
+                concat!("this needs a person. Run it outside ", product_name!(), ", or use Settings → Gardens → Local Data").into()
             }
             DataError::SpaceFull { what } => format!("this widget's data is full ({what})"),
             DataError::StoreFull => "Garden data on this computer is full (512 MiB)".into(),
@@ -389,7 +391,7 @@ impl DataError {
             DataError::NotFound(code) => code.replace('_', " "),
             DataError::NoSnapshot { .. } => "no snapshot on or before that date".into(),
             DataError::BlobMissing { refs } => format!(
-                "a value names a file this widget's data doesn't hold ({}); upload it first (k2.blobs.put, k2 store blob put)",
+                "a value names a file this widget's data doesn't hold ({}); upload it first (k2.blobs.put, {CLI_NAME} store blob put)",
                 refs.first().map(String::as_str).unwrap_or("?")
             ),
             DataError::Refused { hint, .. } => hint.clone(),

@@ -64,6 +64,8 @@ use super::{
     canonical_abs, current_home, grant_keys, is_refused_path, leftover_grants, main_checkout, revoke_grants,
     revoke_slot_homes, skip_unisolated_home, upgrade_k2_grants, worktree_top, write_grants, GrantedKeys,
 };
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// The 409 code while a card is waiting (or nobody decided yet).
 pub const PENDING: &str = "folder_trust_pending";
@@ -1006,9 +1008,9 @@ fn revoke_k2(conn: &Connection, scope: &str, home: &Path) -> Vec<String> {
         ) {
             return vec![format!("folder_trust write: {e}")];
         }
-        log_debug!("[folder-trust] removed K2's grants for {scope}");
+        log_debug!("[folder-trust] removed {PRODUCT_NAME}'s grants for {scope}");
     } else {
-        log_debug!("[folder-trust] removing K2's grants for {scope}: {errors:?}");
+        log_debug!("[folder-trust] removing {PRODUCT_NAME}'s grants for {scope}: {errors:?}");
     }
     errors
 }
@@ -1050,13 +1052,13 @@ pub fn shell_quote(p: &str) -> String {
 
 /// `k2 workspace trust <folder> --yes|--always|--no (owner)`.
 pub fn decide_hint(path: &str) -> String {
-    format!("k2 workspace trust {} --yes|--always|--no (owner)", shell_quote(path))
+    format!("{CLI_NAME} workspace trust {} --yes|--always|--no (owner)", shell_quote(path))
 }
 
 /// `k2 workspace trust forget <folder> (owner)`: remove every trust entry
 /// for the folder in every CLI's store, the person's own included.
 pub fn forget_hint(path: &str) -> String {
-    format!("k2 workspace trust forget {} (owner)", shell_quote(path))
+    format!("{CLI_NAME} workspace trust forget {} (owner)", shell_quote(path))
 }
 
 /// A gated program in a folder K2 can't check at all (no folder, `$HOME`,
@@ -1065,7 +1067,7 @@ pub fn refusal_unchecked(path: &str, why: &str) -> Refusal {
     Refusal {
         error: DENIED.to_string(),
         message: format!(
-            "K2 won't start programs in {path}: {why}. Only a plain terminal tab runs there; start the program in a project folder instead."
+            "{PRODUCT_NAME} won't start programs in {path}: {why}. Only a plain terminal tab runs there; start the program in a project folder instead."
         ),
         path: path.to_string(),
         scope: path.to_string(),
@@ -1092,14 +1094,14 @@ fn refusal(code: &str, eval: &Evaluation, pending: Option<&Pending>, leftover: V
         String::new()
     } else {
         format!(
-            " Trust K2 didn't write still covers it ({}); to remove it: {}.",
+            " Trust {PRODUCT_NAME} didn't write still covers it ({}); to remove it: {}.",
             leftover.join("; "),
             forget_hint(&eval.path)
         )
     };
     let message = if code == DENIED {
         format!(
-            "K2 won't start programs in {}: the owner chose \"Don't trust\" for its settings ({first}). To change it: Settings → Workspaces → Folder trust → Reset, or {}.{leftover_note}",
+            "{PRODUCT_NAME} won't start programs in {}: the owner chose \"Don't trust\" for its settings ({first}). To change it: Settings → Workspaces → Folder trust → Reset, or {}.{leftover_note}",
             eval.path,
             decide_hint(&eval.path)
         )
@@ -1336,7 +1338,7 @@ pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option
         return Err("test HOME is not isolated".into());
     }
     let home = canonical_abs(&home).unwrap_or(home);
-    let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path} ($HOME, / or a parent of $HOME), so there is nothing to decide"))?;
+    let eval = evaluate_in(path, &home).ok_or_else(|| format!("{PRODUCT_NAME} never trusts {path} ($HOME, / or a parent of $HOME), so there is nothing to decide"))?;
     let fingerprint = match decision {
         Decision::Once => card_fingerprint.map(str::to_string).or_else(|| eval.fingerprint.clone()),
         Decision::Always | Decision::Deny => eval.fingerprint.clone(),
@@ -1357,12 +1359,12 @@ pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option
                 errors.extend(revoke_slot_homes(&eval.keys));
             }
             let leftover = leftover_grants(&home, &eval.keys, eval.in_git);
-            let mut message = "Not trusted. K2 won't start programs in this folder (a plain shell tab still opens).".to_string();
+            let mut message = concat!("Not trusted. ", product_name!(), " won't start programs in this folder (a plain shell tab still opens).").to_string();
             if !leftover.is_empty() {
                 message.push_str(&format!(" Still trusted elsewhere: {}.", leftover.join("; ")));
             }
             if !errors.is_empty() {
-                message.push_str(&format!(" K2 couldn't remove: {}.", errors.join("; ")));
+                message.push_str(&format!(" {PRODUCT_NAME} couldn't remove: {}.", errors.join("; ")));
             }
             Ok(DecideResult { path: eval.path, scope: eval.scope, decision, granted: false, leftover, errors, message })
         }
@@ -1375,8 +1377,8 @@ pub fn decide(path: &str, decision: Decision, by: &str, card_fingerprint: Option
             }
             let message = match (decision, covers) {
                 (Decision::Always, _) => "Always trusted. Undo in Settings → Workspaces.".to_string(),
-                (_, true) => "Trusted. K2 asks again if these settings change.".to_string(),
-                (_, false) => "Trusted the version on the card, but these settings changed since; K2 asks again.".to_string(),
+                (_, true) => concat!("Trusted. ", product_name!(), " asks again if these settings change.").to_string(),
+                (_, false) => concat!("Trusted the version on the card, but these settings changed since; ", product_name!(), " asks again.").to_string(),
             };
             Ok(DecideResult { path: eval.path, scope: eval.scope, decision, granted: covers, leftover: Vec::new(), errors: Vec::new(), message })
         }
@@ -1391,7 +1393,7 @@ pub fn reset(path: &str, by: &str) -> Result<StatusView, String> {
         return Err("test HOME is not isolated".into());
     }
     let home = canonical_abs(&home).unwrap_or(home);
-    let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path}, so there is nothing to reset"))?;
+    let eval = evaluate_in(path, &home).ok_or_else(|| format!("{PRODUCT_NAME} never trusts {path}, so there is nothing to reset"))?;
     let db = crate::db::shared();
     {
         let conn = db.lock();
@@ -1428,7 +1430,7 @@ pub fn forget(path: &str, by: &str) -> Result<Forgotten, String> {
         return Err(SKIP_TEST_HOME.into());
     }
     let home = canonical_abs(&home).unwrap_or(home);
-    let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path} ($HOME, / or a parent of $HOME)"))?;
+    let eval = evaluate_in(path, &home).ok_or_else(|| format!("{PRODUCT_NAME} never trusts {path} ($HOME, / or a parent of $HOME)"))?;
     let mut errors = {
         let db = crate::db::shared();
         let conn = db.lock();
@@ -1466,7 +1468,7 @@ pub fn decide_checked(path: &str, decision: Decision, by: &str, seen: Seen<'_>) 
     let home = current_home().ok_or_else(|| DecideError::Failed("no HOME".into()))?;
     let home = canonical_abs(&home).unwrap_or(home);
     let eval = evaluate_in(path, &home)
-        .ok_or_else(|| DecideError::Failed(format!("K2 never trusts {path} ($HOME, / or a parent of $HOME), so there is nothing to decide")))?;
+        .ok_or_else(|| DecideError::Failed(format!("{PRODUCT_NAME} never trusts {path} ($HOME, / or a parent of $HOME), so there is nothing to decide")))?;
     if let Some(p) = seen.path {
         if p != eval.path {
             return Err(DecideError::Changed(format!("{p} now resolves to {}", eval.path)));
@@ -1515,7 +1517,7 @@ pub struct StatusView {
 pub fn status(path: &str) -> Result<StatusView, String> {
     let home = current_home().ok_or("no HOME")?;
     let home = canonical_abs(&home).unwrap_or(home);
-    let eval = evaluate_in(path, &home).ok_or_else(|| format!("K2 never trusts {path} ($HOME, / or a parent of $HOME)"))?;
+    let eval = evaluate_in(path, &home).ok_or_else(|| format!("{PRODUCT_NAME} never trusts {path} ($HOME, / or a parent of $HOME)"))?;
     let row = {
         let db = crate::db::shared();
         let conn = db.lock();

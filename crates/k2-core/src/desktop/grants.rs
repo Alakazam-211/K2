@@ -17,6 +17,7 @@ use serde::Serialize;
 
 use super::wire::Mode;
 use crate::connect_users::Role;
+use crate::brand::CLI_NAME;
 
 /// What the desktop needs to know about a login.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +80,7 @@ impl GrantError {
 
     pub fn hint(&self) -> String {
         match self {
-            GrantError::NoSuchUser(u) => format!("there's no login named '{u}' on this server (k2 users list)"),
+            GrantError::NoSuchUser(u) => format!("there's no login named '{u}' on this server ({CLI_NAME} users list)"),
             GrantError::Disabled(u) => format!("the login '{u}' is disabled; enable it first"),
             GrantError::NotNeeded(r) => format!(
                 "{} logins open Remote desktop without a grant; grants are for Members",

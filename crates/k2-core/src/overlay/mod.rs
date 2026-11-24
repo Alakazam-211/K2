@@ -1122,7 +1122,7 @@ pub fn answer_card(
         // the vault and then calls [`mark_secret`]. Nothing here writes a
         // value anywhere.
         let _ = (project_id, secret_bytes);
-        return Err("secret cards are answered through the K2 vault".to_string());
+        return Err(concat!("secret cards are answered through the ", product_name!(), " vault").to_string());
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };

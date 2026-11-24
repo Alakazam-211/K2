@@ -9,6 +9,8 @@ use serde_json::{json, Map, Value};
 
 use super::schema::{self, clean, clean_meta, normalize, table_ids, upgrade_object};
 use super::{meta_key, obj_key, BoardError, FORMAT};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::cli_name;
 
 /// One stored key.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +79,7 @@ pub fn check_format(format: Option<&Value>) -> Result<(), BoardError> {
     match format {
         Some(f) if !readable(f) => Err(BoardError::new(
             "newer_format",
-            format!("a newer K2 made this board (format {f}; this K2 knows up to {FORMAT}), so it's read only here. Update K2 to change it. Nothing was written."),
+            format!("a newer {PRODUCT_NAME} made this board (format {f}; this {PRODUCT_NAME} knows up to {FORMAT}), so it's read only here. Update {PRODUCT_NAME} to change it. Nothing was written."),
         )),
         _ => Ok(()),
     }
@@ -255,7 +257,7 @@ pub fn cascade(board: &Board, id: &str) -> Vec<String> {
 pub const LOCK_FREE: &[&str] = &["locked", "votes", "reactions"];
 
 fn lock_msg(id: &str) -> BoardError {
-    BoardError::new("locked", format!("{id} is locked: unlock it first (k2 board update {id} --locked false), or leave it")).field(id)
+    BoardError::new("locked", format!("{id} is locked: unlock it first ({CLI_NAME} board update {id} --locked false), or leave it")).field(id)
 }
 
 fn is_locked(v: &Map<String, Value>) -> bool {
@@ -481,7 +483,7 @@ pub fn add_vote(board: &Board, id: &str, who: &str) -> Result<Value, BoardError>
     if voting.get("active") != Some(&Value::Bool(true)) {
         return Err(BoardError::new(
             "voting_off",
-            "voting is not on (the person starts it, or: k2 board meta --voting '{\"active\":true,\"perPerson\":5}')",
+            concat!("voting is not on (the person starts it, or: ", cli_name!(), " board meta --voting '{\"active\":true,\"perPerson\":5}')"),
         ));
     }
     let o = board.object(id).ok_or_else(|| BoardError::new("no_object", format!("no object {id} on this board")).field(id))?;

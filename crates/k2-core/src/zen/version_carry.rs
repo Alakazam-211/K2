@@ -55,6 +55,8 @@ use super::widget_store::{
 };
 use super::widgets::{self, Manifest};
 use crate::garden_data::{authors, DataError, MadeBy};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// The Access Audit event: one line per run, one per difference.
 pub const AUDIT_EVENT: &str = "zen-widget-version-carry";
@@ -324,8 +326,8 @@ pub fn version_changes(files: &ZenFiles, conn: &Connection, widget: &str) -> Res
         let context = match (manifest_diff(&v.manifest, live_m), v.legacy) {
             (Some(d), false) => format!("{BASE}, it {d}."),
             (None, false) => format!("{BASE}, only its code changed."),
-            (Some(d), true) => format!("{BASE} (before K2 0.46.5, when a manifest wasn't part of what was signed), it {d}."),
-            (None, true) => format!("{BASE} (before K2 0.46.5, when a manifest wasn't part of what was signed), its manifest looks the same."),
+            (Some(d), true) => format!("{BASE} (before {PRODUCT_NAME} 0.46.5, when a manifest wasn't part of what was signed), it {d}."),
+            (None, true) => format!("{BASE} (before {PRODUCT_NAME} 0.46.5, when a manifest wasn't part of what was signed), its manifest looks the same."),
         };
         return Ok(Some(format!("{whole} {context}")));
     }
@@ -405,9 +407,9 @@ pub fn carry_once(conn: &Connection, files: &ZenFiles, now: i64) -> Result<Optio
                     let refused = if late && authors::maker_of(&tx, &name, &old)? != MadeBy::Unclaimed {
                         match (base, &differs) {
                             (None, _) => Some(
-                                "K2 0.46.5 ran before this carry and no copy saved before it matches this code, so K2 can't tell what was signed".to_string(),
+                                concat!(product_name!(), " 0.46.5 ran before this carry and no copy saved before it matches this code, so ", product_name!(), " can't tell what was signed").to_string(),
                             ),
-                            (Some(_), Some(d)) => Some(format!("K2 0.46.5 ran before this carry and since then it {d}")),
+                            (Some(_), Some(d)) => Some(format!("{PRODUCT_NAME} 0.46.5 ran before this carry and since then it {d}")),
                             (Some(_), None) => None,
                         }
                     } else {
@@ -607,7 +609,7 @@ pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
         .iter()
         .map(|v| {
             format!(
-                "{}: signed by {}; since then it {}. Sign it in its History, or an agent asks you with k2 zen widget sign {} --ask",
+                "{}: signed by {}; since then it {}. Sign it in its History, or an agent asks you with {CLI_NAME} zen widget sign {} --ask",
                 v.widget,
                 v.maker.as_deref().unwrap_or("nobody"),
                 v.differs.as_deref().unwrap_or_default(),
@@ -617,7 +619,7 @@ pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
         .collect();
     detail.extend(refused.iter().map(|v| {
         format!(
-            "{}: K2 didn't keep its signature: {}. It runs without your data until you sign it in its History, or an agent asks you with k2 zen widget sign {} --ask",
+            "{}: {PRODUCT_NAME} didn't keep its signature: {}. It runs without your data until you sign it in its History, or an agent asks you with {CLI_NAME} zen widget sign {} --ask",
             v.widget,
             v.refused.as_deref().unwrap_or_default(),
             v.widget
@@ -625,11 +627,11 @@ pub fn notice(r: &CarryReport) -> Option<super::news::NoticeItem> {
     }));
     detail.extend(r.failed.iter().map(|p| format!("couldn't update {p}; that saved copy isn't used")));
     let mut body = String::from(
-        "From this K2, a widget's manifest (its caps, the data it reads, its libraries) is part of the version you sign, like its code.",
+        concat!("From this ", product_name!(), ", a widget's manifest (its caps, the data it reads, its libraries) is part of the version you sign, like its code."),
     );
     if !differing.is_empty() {
         body.push_str(&format!(
-            " K2 kept the signature on {} widget{} whose manifest changed after it was signed; check the changes below and sign it if they're right (a card asks you when an agent next works on it).",
+            " {PRODUCT_NAME} kept the signature on {} widget{} whose manifest changed after it was signed; check the changes below and sign it if they're right (a card asks you when an agent next works on it).",
             differing.len(),
             if differing.len() == 1 { "" } else { "s" }
         ));

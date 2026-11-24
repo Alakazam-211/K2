@@ -9,6 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::{now_secs, HireCaller, HireError};
+use crate::brand::CLI_NAME;
 
 /// `origin_link_id` prefix for a team's own internal edges (made at hire).
 pub const INSTANCE_ORIGIN_PREFIX: &str = "inst:";
@@ -313,9 +314,9 @@ pub fn managing_origin(conn: &Connection, relation_id: &str) -> Option<String> {
 pub fn managed_hint(origin: &str) -> String {
     if let Some(inst) = origin.strip_prefix(INSTANCE_ORIGIN_PREFIX) {
         format!(
-            "this connection belongs to the hired team {inst}; it goes away when the team is retired (k2 agent instances retire {inst})"
+            "this connection belongs to the hired team {inst}; it goes away when the team is retired ({CLI_NAME} agent instances retire {inst})"
         )
     } else {
-        format!("this connection belongs to team link {origin}; remove the link instead (k2 agent team unlink {origin})")
+        format!("this connection belongs to team link {origin}; remove the link instead ({CLI_NAME} agent team unlink {origin})")
     }
 }

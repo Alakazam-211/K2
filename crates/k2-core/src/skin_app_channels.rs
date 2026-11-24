@@ -37,6 +37,8 @@ use super::{app_grant, normalize_username, principal_by_username, with_conn, HOS
 use crate::tool_hook::app_space::{self, Wanted};
 use crate::tool_hook::sew_wire::{self, ChannelCreateResponse, ExternalId, SpaceMembersAddResponse};
 use crate::tool_hook::{features, CHAT_KIND};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// The catalog cap of `chat.createChannel` (the App's own; never a role's).
 pub const CAP: &str = super::CAP_CHAT_CHANNELS;
@@ -49,7 +51,7 @@ pub const RATE_PER_MIN: usize = super::guest_rooms::RATE_PER_MIN;
 /// The `deploy_audit` event.
 pub const AUDIT_EVENT: &str = "chat_channel";
 /// What `sew_feature_missing` says.
-pub const NEEDS_SEW: &str = "this server's Sew can't make channels for Apps yet: it needs Sew 0.5.0+ (feature app_channel_create); the owner upgrades Sew (k2 hostchat upgrade)";
+pub const NEEDS_SEW: &str = concat!("this server's Sew can't make channels for Apps yet: it needs Sew 0.5.0+ (feature app_channel_create); the owner upgrades Sew (", cli_name!(), " hostchat upgrade)");
 
 /// K2's own `notAdded` reasons (Sew's pass through as they are:
 /// `not_provisioned`, `deactivated`, `assistant`, `guest`,
@@ -132,8 +134,8 @@ impl Refusal {
                 if existing_type.is_empty() { "non-text" } else { existing_type.as_str() }
             ),
             Refusal::FeatureMissing => NEEDS_SEW.into(),
-            Refusal::ChatOff => "Chat and voice are not set up on this server: the owner runs k2 hostchat enable".into(),
-            Refusal::Unreachable(m) => format!("Sew didn't answer ({m}); retry in a moment (k2 hostchat status)"),
+            Refusal::ChatOff => concat!("Chat and voice are not set up on this server: the owner runs ", cli_name!(), " hostchat enable").into(),
+            Refusal::Unreachable(m) => format!("Sew didn't answer ({m}); retry in a moment ({CLI_NAME} hostchat status)"),
             Refusal::RateLimited { retry_after_ms } => {
                 format!("at most {RATE_PER_MIN} channel calls a minute per App; retry after {retry_after_ms} ms")
             }
@@ -171,7 +173,7 @@ impl Ask {
             None | Some(serde_json::Value::Null) => None,
             Some(serde_json::Value::String(s)) if s.trim().is_empty() => None,
             Some(serde_json::Value::String(s)) if sew_wire::is_sew_id(s.trim()) => Some(s.trim().to_string()),
-            Some(_) => return Err(Refusal::Usage("space is a Sew Space id (k2 hostchat app-space list), or absent for the App's own".into())),
+            Some(_) => return Err(Refusal::Usage(concat!("space is a Sew Space id (", cli_name!(), " hostchat app-space list), or absent for the App's own").into())),
         };
         let slug = o.get("slug").and_then(|s| s.as_str()).map(str::trim).unwrap_or("");
         if !sew_wire::is_channel_slug(slug) {
@@ -418,13 +420,13 @@ fn pick_space(conn: &rusqlite::Connection, app: &str, named: Option<&str>) -> Re
         Some(s) => match app_space::bound_app(conn, s)? {
             Some(_) => Err(Refusal::AppMismatch(format!("Space {s} belongs to another App; an App makes channels in its own Space only"))),
             None => Err(Refusal::SpaceUnbound(format!(
-                "Space {s} isn't bound to this App (the owner or an agent with Manage chat and voice binds it: k2 hostchat app-space bind <app> <space-id>)"
+                "Space {s} isn't bound to this App (the owner or an agent with Manage chat and voice binds it: {CLI_NAME} hostchat app-space bind <app> <space-id>)"
             ))),
         },
         None => match mine.as_slice() {
             [one] => Ok(one.clone()),
             [] => Err(Refusal::SpaceUnbound(
-                "this App has no Sew Space yet (k2 chat space create, then k2 hostchat app-space bind <app> <space-id>; k2 study app-chat)".into(),
+                concat!("this App has no Sew Space yet (", cli_name!(), " chat space create, then ", cli_name!(), " hostchat app-space bind <app> <space-id>; ", cli_name!(), " study app-chat)").into(),
             )),
             many => Err(Refusal::Usage(format!("this App has {} Spaces: name one (space: {})", many.len(), many.join(", ")))),
         },

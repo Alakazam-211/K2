@@ -42,6 +42,7 @@ use chrono::{DateTime, Local, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::schema::AgentHeartbeat;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Audit decision: one scheduled fire skipped because WAKEUP.md is missing
 /// or can't be read. One row per slot. The `skipped_` prefix makes every
@@ -172,7 +173,7 @@ impl WaitingEpisode {
     /// outage never rewrites the stored row.
     pub fn detail(&self) -> String {
         format!(
-            "waiting for WAKEUP.md since {}, {} skipped: {}. K2 retries every fire; it runs as soon as the file can be read",
+            "waiting for WAKEUP.md since {}, {} skipped: {}. {PRODUCT_NAME} retries every fire; it runs as soon as the file can be read",
             fmt_utc(self.since),
             fires(self.skipped),
             self.cause,
@@ -326,13 +327,13 @@ fn deliver(project_path: &str, code: &str, title: &str, body: &str, thread_first
 fn notice_text(hb: &AgentHeartbeat, ep: &WaitingEpisode) -> (String, String) {
     let title = format!("Heartbeat {} is waiting for its WAKEUP.md", hb.name);
     let body = format!(
-        "K2 skipped heartbeat '{name}' at {at}: {cause}.\n\n\
-         Nothing is turned off. The heartbeat stays on and K2 keeps retrying: \
+        "{PRODUCT_NAME} skipped heartbeat '{name}' at {at}: {cause}.\n\n\
+         Nothing is turned off. The heartbeat stays on and {PRODUCT_NAME} keeps retrying: \
          it checks again every minute while a fire is due, and it runs as soon \
          as the file can be read. You get one more note when it can be read again.\n\n\
          - If the file was deleted by mistake, put it back at {rel}.\n\
-         - If you meant to stop this heartbeat, turn it off: k2 heartbeat disable {name}\n\
-         - See where it stands: k2 heartbeat list",
+         - If you meant to stop this heartbeat, turn it off: {CLI_NAME} heartbeat disable {name}\n\
+         - See where it stands: {CLI_NAME} heartbeat list",
         name = hb.name,
         at = fmt_local(ep.since),
         cause = ep.cause,
@@ -386,7 +387,7 @@ pub fn skip_due_fire(
             hb,
             DECISION_SKIPPED_WAKEUP,
             &format!(
-                "{SLOT_PREFIX}{slot}: {cause}; skipped, the heartbeat stays on and K2 retries"
+                "{SLOT_PREFIX}{slot}: {cause}; skipped, the heartbeat stays on and {PRODUCT_NAME} retries"
             ),
             now,
         );

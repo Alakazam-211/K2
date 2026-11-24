@@ -37,6 +37,8 @@ use crate::workspace::provider_resume::{
     provider_resume_for_command, ProviderResume, ResumeGrammar,
 };
 use crate::workspace_session_handles as handles;
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// Live sidecars allowed per workspace (SC14). `K2_SIDECAR_CAP` overrides.
 pub const DEFAULT_CAP: usize = 8;
@@ -230,7 +232,7 @@ pub fn resolve_preset(conn: &Connection, harness: &str) -> Result<HarnessPreset,
         return Err(SidecarError::new(
             "harness_unknown",
             400,
-            "pass --harness <preset> (see k2 preset list)",
+            concat!("pass --harness <preset> (see ", cli_name!(), " preset list)"),
         ));
     }
     let presets = crate::db::schema::AgentPreset::list(conn)
@@ -263,7 +265,7 @@ pub fn resolve_preset(conn: &Connection, harness: &str) -> Result<HarnessPreset,
             SidecarError::new(
                 "harness_unknown",
                 400,
-                format!("no enabled preset matches '{wanted}' (see k2 preset list)"),
+                format!("no enabled preset matches '{wanted}' (see {CLI_NAME} preset list)"),
             )
         })?;
     let (program, args) = crate::workspace::agent_resolve::parse_command_string(&hit.command);

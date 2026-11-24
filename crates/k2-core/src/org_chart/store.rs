@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, HashSet};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{text, OrgError, Result, MAX_ORGS_PER_AGENT};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// One live org.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,7 +184,7 @@ fn require_agent(conn: &Connection, project_id: &str) -> Result<()> {
     if agent_exists(conn, project_id)? {
         Ok(())
     } else {
-        Err(OrgError::not_found("agent", project_id, "k2 organization list shows the agents on this server."))
+        Err(OrgError::not_found("agent", project_id, concat!(cli_name!(), " organization list shows the agents on this server.")))
     }
 }
 
@@ -254,7 +256,7 @@ pub fn lookup_org(conn: &Connection, token: &str) -> Result<Option<Org>> {
 /// [`lookup_org`], refusing with `not_found` when there's none.
 pub fn find_org(conn: &Connection, token: &str) -> Result<Org> {
     lookup_org(conn, token)?.ok_or_else(|| {
-        OrgError::not_found("org", token.trim(), "k2 organization list shows the orgs on this server.")
+        OrgError::not_found("org", token.trim(), concat!(cli_name!(), " organization list shows the orgs on this server."))
     })
 }
 
@@ -300,7 +302,7 @@ pub fn rename_org(conn: &Connection, org_id: &str, name: &str, now: i64) -> Resu
         params![org_id, name, text::name_key(&name), now],
     )?;
     bump(conn)?;
-    get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, "k2 organization list shows them."))
+    get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")))
 }
 
 pub fn set_purpose(conn: &Connection, org_id: &str, purpose: &str, now: i64) -> Result<Org> {
@@ -310,7 +312,7 @@ pub fn set_purpose(conn: &Connection, org_id: &str, purpose: &str, now: i64) -> 
         params![org_id, purpose, now],
     )?;
     bump(conn)?;
-    get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, "k2 organization list shows them."))
+    get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")))
 }
 
 /// Delete an org: it goes soft, its members leave and its lines and
@@ -321,7 +323,7 @@ pub fn delete_org(conn: &Connection, org_id: &str, now: i64) -> Result<()> {
         params![org_id, now],
     )?;
     if n == 0 {
-        return Err(OrgError::not_found("org", org_id, "k2 organization list shows them."));
+        return Err(OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")));
     }
     // Members' spots inside the bucket go with it.
     conn.execute(
@@ -378,7 +380,7 @@ pub fn add_member(conn: &Connection, org_id: &str, project_id: &str, actor: &str
 /// [`add_member`] with the cap given: the tables are many-to-many, the cap
 /// is the rule.
 pub fn add_member_capped(conn: &Connection, org_id: &str, project_id: &str, actor: &str, now: i64, cap: usize) -> Result<bool> {
-    let org = get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, "k2 organization list shows them."))?;
+    let org = get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")))?;
     require_agent(conn, project_id)?;
     if is_member(conn, org_id, project_id)? {
         return Ok(false);
@@ -391,7 +393,7 @@ pub fn add_member_capped(conn: &Connection, org_id: &str, project_id: &str, acto
             409,
             "agent_in_another_org",
             format!(
-                "{name} is already in {other}. Move it with `k2 organization move {name} {}`, or remove it first (k2 organization remove {other} {name}).",
+                "{name} is already in {other}. Move it with `{CLI_NAME} organization move {name} {}`, or remove it first ({CLI_NAME} organization remove {other} {name}).",
                 org.name
             ),
         ));
@@ -428,7 +430,7 @@ pub fn remove_member(conn: &Connection, org_id: &str, project_id: &str, now: i64
 /// Move an agent out of its org(s) and into `org_id`. Returns the orgs it
 /// left.
 pub fn move_member(conn: &Connection, project_id: &str, org_id: &str, actor: &str, now: i64) -> Result<Vec<Org>> {
-    get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, "k2 organization list shows them."))?;
+    get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")))?;
     require_agent(conn, project_id)?;
     let mut left = Vec::new();
     for o in orgs_of(conn, project_id)? {
@@ -444,14 +446,14 @@ pub fn move_member(conn: &Connection, project_id: &str, org_id: &str, actor: &st
 
 /// Set (or clear, `None`) an org's head. The head must be a member.
 pub fn set_head(conn: &Connection, org_id: &str, project_id: Option<&str>, now: i64) -> Result<()> {
-    let org = get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, "k2 organization list shows them."))?;
+    let org = get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")))?;
     if let Some(p) = project_id {
         if !is_member(conn, org_id, p)? {
             let name = agent_name(conn, p);
             return Err(OrgError::new(
                 400,
                 "head_not_member",
-                format!("{name} isn't in {}. The head must be a member: add it first (k2 organization add {} {name}).", org.name, org.name),
+                format!("{name} isn't in {}. The head must be a member: add it first ({CLI_NAME} organization add {} {name}).", org.name, org.name),
             ));
         }
     }
@@ -538,7 +540,7 @@ pub fn add_line(conn: &Connection, kind: LineKind, a: NodeRef, b: NodeRef, actor
     }
     for n in [&a, &b] {
         if !node_exists(conn, n)? {
-            return Err(OrgError::not_found(n.kind.as_str(), &n.id, "k2 organization list shows the orgs and their agents."));
+            return Err(OrgError::not_found(n.kind.as_str(), &n.id, concat!(cli_name!(), " organization list shows the orgs and their agents.")));
         }
     }
     let (a, b) = if kind == LineKind::Beside && b < a { (b, a) } else { (a, b) };
@@ -560,7 +562,7 @@ pub fn add_line(conn: &Connection, kind: LineKind, a: NodeRef, b: NodeRef, actor
             409,
             "line_exists",
             format!(
-                "{} and {} already have a {} line. Unlink them first (k2 organization unlink {} {}).",
+                "{} and {} already have a {} line. Unlink them first ({CLI_NAME} organization unlink {} {}).",
                 node_name(conn, &a),
                 node_name(conn, &b),
                 existing.kind.as_str(),
@@ -646,7 +648,7 @@ pub fn check_bulletin_writer(conn: &Connection, org: &Org, actor: &Actor) -> Res
                 403,
                 "not_org_head",
                 format!(
-                    "{} has no head yet, so only an Owner or Admin writes its bulletin. They set a head with k2 organization head {} <agent>.",
+                    "{} has no head yet, so only an Owner or Admin writes its bulletin. They set a head with {CLI_NAME} organization head {} <agent>.",
                     org.name, org.name
                 ),
             ),
@@ -657,7 +659,7 @@ pub fn check_bulletin_writer(conn: &Connection, org: &Org, actor: &Actor) -> Res
 /// Write an org's bulletin (live at once). Checks the writer, then the
 /// 5-line / 160-character rules.
 pub fn set_bulletin(conn: &Connection, org_id: &str, actor: &Actor, parts: &[String], now: i64) -> Result<Bulletin> {
-    let org = get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, "k2 organization list shows them."))?;
+    let org = get_org(conn, org_id)?.ok_or_else(|| OrgError::not_found("org", org_id, concat!(cli_name!(), " organization list shows them.")))?;
     check_bulletin_writer(conn, &org, actor)?;
     let lines = text::bulletin(parts)?;
     conn.execute(

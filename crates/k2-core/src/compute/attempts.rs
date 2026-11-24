@@ -200,7 +200,7 @@ pub fn next_words(next: &str, node: &str, then: Option<&str>) -> String {
     let elsewhere = then.map(|t| format!(" on {t}")).unwrap_or_default();
     match next {
         next::RETRY_AUTO => format!("retried automatically{elsewhere} (an infrastructure end, not your command's result; --retries 0 turns this off)"),
-        next::RETRY_ASKED => format!("retried on request (k2 compute retry){elsewhere}"),
+        next::RETRY_ASKED => format!("retried on request ({CLI_NAME} compute retry){elsewhere}"),
         next::RESENT => format!("taken back from {node}'s queue before it started and sent again with the grant's new caps (no retry used)"),
         next::WITHDRAWN => format!("taken back from {node}'s queue before it started, to move it{} (no retry used)", then.map(|t| format!(" to {t}")).unwrap_or_default()),
         next::NODE_LOST => format!("{node} went offline before it started it; placed again{elsewhere} (no retry used)"),
@@ -282,8 +282,8 @@ pub fn list_json(j: &JobRow, names: &HashMap<String, String>) -> Vec<serde_json:
         let then_id = recs.get(i + 1).map(|n| n.node_id.as_str()).unwrap_or(j.node_id.as_str());
         let then = (then_id != r.node_id).then(|| name(then_id));
         let addressable = picked.contains(&r.generation);
-        let logs_cmd = if addressable { format!("k2 compute logs {short} --attempt {}", r.attempt) } else { format!("(generation {}: never started, no log)", r.generation) };
-        let fetch = format!("k2 compute fetch {short} --attempt {}", r.attempt);
+        let logs_cmd = if addressable { format!("{CLI_NAME} compute logs {short} --attempt {}", r.attempt) } else { format!("(generation {}: never started, no log)", r.generation) };
+        let fetch = format!("{CLI_NAME} compute fetch {short} --attempt {}", r.attempt);
         out.push(serde_json::json!({
             "attempt": r.attempt,
             "generation": r.generation,
@@ -326,8 +326,8 @@ pub fn list_json(j: &JobRow, names: &HashMap<String, String>) -> Vec<serde_json:
         "exitCode": j.exit_code,
         "why": ended.then(|| end_words(&j.state, j.reason.as_deref(), j.started_at.is_some(), &node)),
         "next": serde_json::Value::Null,
-        "log": log_json(&j.id, j.generation, &format!("k2 compute logs {short}")),
-        "artifacts": artifacts_json(asked, j.started_at.is_some(), ended, outputs.as_ref(), j.reason.as_deref(), &node, &format!("k2 compute fetch {short}")),
+        "log": log_json(&j.id, j.generation, &format!("{CLI_NAME} compute logs {short}")),
+        "artifacts": artifacts_json(asked, j.started_at.is_some(), ended, outputs.as_ref(), j.reason.as_deref(), &node, &format!("{CLI_NAME} compute fetch {short}")),
     }));
     out
 }

@@ -23,6 +23,8 @@ use serde_json::{json, Value as J};
 use super::bundle::{self, asset_mime, sniff_asset, Bundle};
 use super::schema::Diagnostic;
 use super::stdlib;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// `~/.k2/zen/widgets/`.
 pub const WIDGETS_DIR: &str = "widgets";
@@ -373,7 +375,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
             "schema" => {
                 saw_schema = true;
                 if val.as_u64() != Some(MANIFEST_SCHEMA) {
-                    err(k, format!("schema must be {MANIFEST_SCHEMA}; this K2 reads widget manifest schema 1"));
+                    err(k, format!("schema must be {MANIFEST_SCHEMA}; this {PRODUCT_NAME} reads widget manifest schema 1"));
                 }
             }
             "name" => match val.as_str().map(str::trim) {
@@ -444,7 +446,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                                             warnings.push(d(
                                                 l,
                                                 c,
-                                                format!("no K2 feature is called '{f}'; copy the key from the verb's row in k2 zen guide api"),
+                                                format!("no {PRODUCT_NAME} feature is called '{f}'; copy the key from the verb's row in {CLI_NAME} zen guide api"),
                                             ));
                                         }
                                         features.push(f.to_string());
@@ -466,7 +468,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                                         } else {
                                             let (l, c) = at(&key);
                                             warnings.push(Diagnostic {
-                                                suggestion: Some("ask for a line, never a patch: k2 zen guide libs".into()),
+                                                suggestion: Some(concat!("ask for a line, never a patch: ", cli_name!(), " zen guide libs").into()),
                                                 ..d(l, c, f.message.clone())
                                             });
                                         }
@@ -477,7 +479,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                             },
                             other => {
                                 let (l, c) = at(&p);
-                                warnings.push(d(l, c, format!("requires.{other} is read by a later K2; this version ignores it")));
+                                warnings.push(d(l, c, format!("requires.{other} is read by a later {PRODUCT_NAME}; this version ignores it")));
                             }
                         }
                     }
@@ -571,7 +573,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                 None => err(k, "restoreSkips is a list of key prefixes a restore leaves alone: [\"access/\"]".into()),
             },
             "net" | "secrets" => {
-                err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes from data sources: ask for sources:read and name them in \"sources\" (k2 study data-sources)"))
+                err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes from data sources: ask for sources:read and name them in \"sources\" ({CLI_NAME} study data-sources)"))
             }
             other => {
                 if let Some((_, ty)) = RESERVED_KEYS.iter().find(|(r, _)| *r == other) {
@@ -622,7 +624,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
         errors.push(d(1, 1, "manifest.json needs \"schema\": 1".into()));
     }
     if name.is_none() && !obj.contains_key("name") {
-        errors.push(d(1, 1, "manifest.json needs a \"name\" (shown in K2's review dialog as the widget's own words)".into()));
+        errors.push(d(1, 1, concat!("manifest.json needs a \"name\" (shown in ", product_name!(), "'s review dialog as the widget's own words)").into()));
     }
     let sources_cap = crate::sources::SOURCES_READ_CAP;
     if sources.is_some() && !caps.iter().any(|c| c == sources_cap) {
@@ -748,14 +750,14 @@ pub fn read_folder(dir: &Path, prefix: &str) -> WidgetFiles {
         }
         if meta.is_dir() {
             if !name.starts_with('.') {
-                out.warnings.push(at(&name, format!("widgets are one flat folder; K2 ignores {name}/")));
+                out.warnings.push(at(&name, format!("widgets are one flat folder; {PRODUCT_NAME} ignores {name}/")));
             }
             continue;
         }
         match file_role(&name) {
             Some(false) => continue,
             None => {
-                out.warnings.push(at(&name, format!("K2 ignores '{name}': a widget reads .html, .js, .css, images and .woff2 fonts")));
+                out.warnings.push(at(&name, format!("{PRODUCT_NAME} ignores '{name}': a widget reads .html, .js, .css, images and .woff2 fonts")));
                 continue;
             }
             Some(true) => {}
@@ -988,10 +990,10 @@ pub fn library_globals_not_loaded(
         };
         out.push(Diagnostic {
             message: format!(
-                "{name} is K2's {} library, but this widget doesn't load it; add \"{}@{}\" to requires.libs",
+                "{name} is {PRODUCT_NAME}'s {} library, but this widget doesn't load it; add \"{}@{}\" to requires.libs",
                 e.id, e.id, e.line
             ),
-            suggestion: Some("K2's libraries are globals that load before your scripts; list them, never copy them (k2 zen guide libs)".into()),
+            suggestion: Some(concat!(product_name!(), "'s libraries are globals that load before your scripts; list them, never copy them (", cli_name!(), " zen guide libs)").into()),
             ..place.clone()
         });
     }

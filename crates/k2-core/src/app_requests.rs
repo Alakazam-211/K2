@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use crate::brand::PRODUCT_NAME;
 
 /// `PRAGMA user_version` of a current file.
 pub const SCHEMA_VERSION: i64 = 1;
@@ -121,7 +122,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v > SCHEMA_VERSION {
         return Err(rusqlite::Error::InvalidParameterName(format!(
-            "app-requests.db is schema {v}; this K2 knows {SCHEMA_VERSION} (update K2)"
+            "app-requests.db is schema {v}; this {PRODUCT_NAME} knows {SCHEMA_VERSION} (update {PRODUCT_NAME})"
         )));
     }
     if v < 1 {

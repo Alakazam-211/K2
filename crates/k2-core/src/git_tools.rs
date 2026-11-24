@@ -36,6 +36,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::git_safe::{self, GitProbe};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// What an agent sees when it runs git on a Mac without the CLT.
 pub const AGENT_NOTE_MAC: &str = "git isn't installed yet; the owner is installing Apple's command line tools";
@@ -157,7 +159,7 @@ pub fn require_folder(root: &Path) -> Result<(), String> {
     if root.exists() {
         return Err(format!("{} isn't a folder", root.display()));
     }
-    Err(format!("There's no folder at {} (check the path; K2 doesn't create it)", root.display()))
+    Err(format!("There's no folder at {} (check the path; {PRODUCT_NAME} doesn't create it)", root.display()))
 }
 
 pub fn clear_deferred(root: &Path) {
@@ -351,7 +353,7 @@ pub fn wait_shim_script(note: &str, apple: Option<&git_safe::ApplePair>) -> Stri
     };
     format!(
         r#"#!/bin/sh
-# K2 git-wait shim (0.46.4). Staged by the K2 daemon while git isn't
+# {PRODUCT_NAME} git-wait shim (0.46.4). Staged by the {PRODUCT_NAME} daemon while git isn't
 # installed; hands over to the real git once there is one.
 self_dir=$(cd "${{0%/*}}" && pwd -P)
 apple_git='{apple_git}'
@@ -570,7 +572,7 @@ pub fn start_apple_install() -> Result<InstallStart, String> {
                 let code = status.code().map(|c| format!("exit {c}")).unwrap_or_else(|| "killed".into());
                 return Err(if said.to_ascii_lowercase().contains("already installed") {
                     format!(
-                        "Apple's command line tools are already installed ({} says: {said}). If git still fails, `k2 git-tools` shows what it says.",
+                        "Apple's command line tools are already installed ({} says: {said}). If git still fails, `{CLI_NAME} git-tools` shows what it says.",
                         xs.display()
                     )
                 } else {
@@ -723,7 +725,7 @@ pub fn render_text(s: &GitToolsStatus, started: Option<InstallStart>, finished: 
     let mut out: Vec<String> = Vec::new();
     match started {
         Some(InstallStart::Started) => {
-            out.push("Apple's installer is open on this Mac's screen (it can be behind the K2 window).".into());
+            out.push(concat!("Apple's installer is open on this Mac's screen (it can be behind the ", product_name!(), " window).").into());
             out.push("Click Install, not Get Xcode (that opens the App Store for the full Xcode),".into());
             out.push("agree to Apple's licence, then wait for the download (about 5-15 min).".into());
         }
@@ -760,7 +762,7 @@ pub fn render_text(s: &GitToolsStatus, started: Option<InstallStart>, finished: 
         if s.state == InstallState::GitBroken {
             out.push("fix        :".into());
         } else if s.can_install {
-            out.push("install    : k2 git-tools install   (opens Apple's installer on this Mac)".into());
+            out.push(concat!("install    : ", cli_name!(), " git-tools install   (opens Apple's installer on this Mac)").into());
             out.push("over SSH   : run these yourself (admin password needed):".into());
         } else {
             out.push("install    : run this yourself:".into());

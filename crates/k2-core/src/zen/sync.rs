@@ -31,6 +31,8 @@ use serde_json::{json, Value as J};
 use super::defaults::{Defaults, DefaultsSet};
 use super::schema::{Diagnostic, Layer};
 use super::store::{ZenError, ZenFile, ZenFiles, GARDENS_DIR};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// Per-Garden state (GS8).
 pub const SYNC_FILE: &str = "sync.json";
@@ -401,7 +403,7 @@ impl GardenDefaults {
                 line: 1,
                 col: 1,
                 message: format!(
-                    "K2's archived defaults {fp} are damaged ({msg}); this Garden shows K2's current defaults until it is fixed. k2 zen doctor has the detail"
+                    "{PRODUCT_NAME}'s archived defaults {fp} are damaged ({msg}); this Garden shows {PRODUCT_NAME}'s current defaults until it is fixed. {CLI_NAME} zen doctor has the detail"
                 ),
             })
             .collect()
@@ -692,7 +694,7 @@ impl ZenFiles {
             sf.previous_defaults = prev.clone();
             sf.live_defaults = Some(fp.clone());
             self.write_sync(&sf)?;
-            let line = format!("[zen/sync] K2's Garden defaults are now {fp} (previous {})", prev.as_deref().unwrap_or("none"));
+            let line = format!("[zen/sync] {PRODUCT_NAME}'s Garden defaults are now {fp} (previous {})", prev.as_deref().unwrap_or("none"));
             return Ok((vec![line], prev.map(|p| (p, fp))));
         }
         if !had_mirrors && !had_sets {
@@ -956,7 +958,7 @@ impl ZenFiles {
         let wanted: Vec<Part> = parts.list().iter().copied().filter(|p| offered.contains(p)).collect();
         if wanted.is_empty() {
             return Err(ZenError::BadRequest(format!(
-                "Keep my previous look isn't offered for {} ({}): it needs a synced part whose look changed with this K2's defaults",
+                "Keep my previous look isn't offered for {} ({}): it needs a synced part whose look changed with this {PRODUCT_NAME}'s defaults",
                 g.name,
                 parts.name()
             )));
@@ -1203,7 +1205,7 @@ impl ZenFiles {
             problems.is_empty(),
             if problems.is_empty() {
                 format!(
-                    "{} Garden(s), {copies} with an own copy; K2's defaults {}",
+                    "{} Garden(s), {copies} with an own copy; {PRODUCT_NAME}'s defaults {}",
                     self.gardens().len(),
                     sf.live_defaults.as_deref().unwrap_or("not archived yet")
                 )
@@ -1246,7 +1248,7 @@ impl ZenFiles {
             "frame floor",
             below.is_empty(),
             if below.is_empty() {
-                "no set asks for a looser control check than K2's floor".into()
+                concat!("no set asks for a looser control check than ", product_name!(), "'s floor").into()
             } else {
                 format!("clamped to the floor: {}", below.join("; "))
             },

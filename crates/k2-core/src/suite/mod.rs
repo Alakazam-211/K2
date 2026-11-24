@@ -36,6 +36,8 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 use crate::deploy::manifest::{Manifest, Requires};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// The compiled-in catalog (R28).
 pub const CATALOG_JSON: &str = include_str!("catalog.json");
@@ -242,7 +244,7 @@ pub fn valid_label(s: &str) -> bool {
 /// checked by a test; a malformed one never loads ([`catalog`]).
 pub fn check(c: &Catalog) -> Result<(), String> {
     if c.schema != SCHEMA {
-        return Err(format!("catalog schema {} (this K2 reads {SCHEMA})", c.schema));
+        return Err(format!("catalog schema {} (this {PRODUCT_NAME} reads {SCHEMA})", c.schema));
     }
     let mut seen = BTreeSet::new();
     let mut ids = BTreeSet::new();
@@ -301,7 +303,7 @@ pub fn check(c: &Catalog) -> Result<(), String> {
             }
             for s in &v.setup {
                 if !SETUP_STEPS.contains(&s.as_str()) {
-                    return Err(format!("{}: {vat}: setup step {s} is not one this K2 knows", codes::SETUP_UNKNOWN));
+                    return Err(format!("{}: {vat}: setup step {s} is not one this {PRODUCT_NAME} knows", codes::SETUP_UNKNOWN));
                 }
             }
         }
@@ -335,7 +337,7 @@ impl Catalog {
 }
 
 /// The badge a verified entry shows (Settings, `k2 app catalog`).
-pub const VERIFIED_WORDS: &str = "Verified by K2";
+pub const VERIFIED_WORDS: &str = concat!("Verified by ", product_name!());
 
 impl Entry {
     /// "Verified by K2" holds only when a version is pinned in this K2 and
@@ -352,13 +354,13 @@ impl Entry {
         if self.versions.is_empty() {
             return Err((
                 codes::NOT_PINNED,
-                format!("no version of {} is pinned in this K2 yet; it arrives with a K2 update once {} publishes it", self.name, self.publisher.name),
+                format!("no version of {} is pinned in this {PRODUCT_NAME} yet; it arrives with a {PRODUCT_NAME} update once {} publishes it", self.name, self.publisher.name),
             ));
         }
         if let Some(a) = asked.map(str::trim).filter(|a| !a.is_empty()) {
             return self.versions.iter().find(|v| v.version == a).ok_or_else(|| {
                 let have: Vec<&str> = self.versions.iter().map(|v| v.version.as_str()).collect();
-                (codes::VERSION_NOT_FOUND, format!("{} has no version {a} in this K2 (pinned: {})", self.name, have.join(", ")))
+                (codes::VERSION_NOT_FOUND, format!("{} has no version {a} in this {PRODUCT_NAME} (pinned: {})", self.name, have.join(", ")))
             });
         }
         if let Some(st) = &self.stable {
@@ -420,7 +422,7 @@ impl Mismatch {
     }
     /// The same in plain words for people (the install job's failure text).
     pub fn text(&self) -> String {
-        format!("The downloaded files aren't exactly what this K2 release pinned ({}: {}), so nothing was installed", self.field, self.detail)
+        format!("The downloaded files aren't exactly what this {PRODUCT_NAME} release pinned ({}: {}), so nothing was installed", self.field, self.detail)
     }
 }
 
@@ -509,7 +511,7 @@ pub fn sew_floor_unmet(pin: &Pin, sew_version: Option<&str>) -> Option<String> {
     let have = sew_version?;
     let req = semver::VersionReq::parse(&want.split_whitespace().collect::<Vec<_>>().join(", ")).ok()?;
     let v = semver::Version::parse(have.trim().trim_start_matches('v')).ok()?;
-    (!req.matches(&v)).then(|| format!("{} {} needs Sew {want}; this box runs {have} (k2 hostchat upgrade)", pin.name, pin.version))
+    (!req.matches(&v)).then(|| format!("{} {} needs Sew {want}; this box runs {have} ({CLI_NAME} hostchat upgrade)", pin.name, pin.version))
 }
 
 // ── addresses (R7, R10, R13, R14) ────────────────────────────────────
@@ -534,7 +536,7 @@ pub fn normalize_address(raw: &str) -> Result<Option<String>, String> {
     };
     if first.contains('.') {
         return Err(format!(
-            "{raw} looks like your own domain: custom domains at deploy come in a later K2; deploy with a K2 address, then add it with k2 app domain add <app> {raw}"
+            "{raw} looks like your own domain: custom domains at deploy come in a later {PRODUCT_NAME}; deploy with a K2 address, then add it with {CLI_NAME} app domain add <app> {raw}"
         ));
     }
     if !valid_label(&first) {

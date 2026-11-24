@@ -31,6 +31,7 @@ use super::{
     clear_lockouts_for_principal_conn, hash_password, immediate_tx, normalize_app_target, now_secs, password_too_long,
     revoke_sessions_for_principal, sha256_hex, with_conn, ties, PASSWORD_TOO_LONG,
 };
+use crate::product_name;
 
 /// Token prefix: never a pass (`k2skn_`), a key (`k2sk_`) or a refresh token.
 pub const INVITE_PREFIX: &str = "k2inv_";
@@ -275,10 +276,10 @@ fn has_scheme_link(s: &str) -> bool {
 fn check_no_link(s: &str) -> Result<(), String> {
     let lower = s.to_ascii_lowercase();
     if lower.contains("{link}") || lower.contains(INVITE_PREFIX) {
-        return Err("K2 adds the set-password link itself; a template can't place it ({link} and k2inv_ are not allowed)".into());
+        return Err(concat!(product_name!(), " adds the set-password link itself; a template can't place it ({link} and k2inv_ are not allowed)").into());
     }
     if lower.contains("http://") || lower.contains("https://") || lower.contains("www.") {
-        return Err("a template carries no links (http://, https:// or www.): K2 adds the one set-password link itself".into());
+        return Err(concat!("a template carries no links (http://, https:// or www.): ", product_name!(), " adds the one set-password link itself").into());
     }
     Ok(())
 }
@@ -312,7 +313,7 @@ pub fn url_host(raw: &str) -> Option<(String, String, Option<u16>)> {
 /// userinfo, no #fragment (K2 puts the token there).
 pub fn check_set_password_url(raw: &str, allowed_hosts: &[String]) -> Result<String, String> {
     let u = raw.trim();
-    let bad = || "set-password page: https:// on the App's own domain or this box's K2 domain, no #fragment (K2 adds #k2inv_… itself)".to_string();
+    let bad = || concat!("set-password page: https:// on the App's own domain or this box's ", product_name!(), " domain, no #fragment (", product_name!(), " adds #k2inv_… itself)").to_string();
     if u.contains('#') || u.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(bad());
     }

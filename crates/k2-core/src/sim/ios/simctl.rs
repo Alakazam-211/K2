@@ -450,7 +450,7 @@ pub fn simctl_error(verb: &str, out: &Output) -> SimError {
         );
     }
     if lower.contains("invalid device") || lower.contains("no devices are booted") {
-        return SimError::new("no_device", format!("That device isn't in K2's device set any more. Run k2 sim boot. simctl said: {text}"));
+        return SimError::new("no_device", format!("That device isn't in {PRODUCT_NAME}'s device set any more. Run {CLI_NAME} sim boot. simctl said: {text}"));
     }
     if lower.contains("unable to boot") && lower.contains("current state") {
         return SimError::new("bad_state", format!("simctl {verb}: {text}"));
@@ -603,3 +603,4 @@ mod tests {
 
 #[cfg(test)]
 pub(crate) use tests::FakeRunner;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};

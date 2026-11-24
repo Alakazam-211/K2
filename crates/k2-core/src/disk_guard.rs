@@ -39,6 +39,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The daemon-environment switch that wins over the setting.
 pub const ENV_MODE: &str = "K2_DISK_GUARD";
@@ -780,7 +781,7 @@ impl Finding {
             Level::Refuse => {
                 if self.fs.used_pct >= self.lines.refuse_pct as f64 {
                     format!(
-                        "Disk {mount} is {}% full ({} free); new {action}s stop at {}%. This box keeps {} free for Postgres, mail and K2.",
+                        "Disk {mount} is {}% full ({} free); new {action}s stop at {}%. This box keeps {} free for Postgres, mail and {PRODUCT_NAME}.",
                         self.fs.used_pct,
                         human_gib(self.fs.free_bytes),
                         self.lines.refuse_pct,
@@ -788,7 +789,7 @@ impl Finding {
                     )
                 } else {
                     format!(
-                        "This {action} would leave {} free on {mount}. This box keeps {} free for Postgres, mail and K2.",
+                        "This {action} would leave {} free on {mount}. This box keeps {} free for Postgres, mail and {PRODUCT_NAME}.",
                         human_gib(self.left_bytes()),
                         human_gib(self.lines.reserve_bytes)
                     )
@@ -895,7 +896,7 @@ pub fn reserve_ok(path: &Path, need: u64) -> Result<(), Box<Finding>> {
 /// the reserve (no override, PRD §6.2).
 pub fn upload_refusal_text(f: &Finding) -> String {
     format!(
-        "Not enough disk space: this upload would leave {} free on {}, and this server keeps {} free for Postgres, mail and K2. See k2 app resources.",
+        "Not enough disk space: this upload would leave {} free on {}, and this server keeps {} free for Postgres, mail and {PRODUCT_NAME}. See {CLI_NAME} app resources.",
         human_gib(f.left_bytes()),
         f.fs.label(),
         human_gib(f.lines.reserve_bytes)

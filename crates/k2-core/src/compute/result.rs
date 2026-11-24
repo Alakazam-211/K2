@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use super::proto::frames::SignedReceipt;
 use super::proto::results::Outputs;
 use super::store::JobRow;
+use crate::brand::CLI_NAME;
 
 /// The node-reported outputs stored on the job row, if any.
 pub fn outputs(j: &JobRow) -> Option<Outputs> {
@@ -247,16 +248,16 @@ pub fn envelope(j: &JobRow, node: Option<&str>) -> Value {
     let mut next: Vec<String> = Vec::new();
     if j.is_terminal() {
         if o.as_ref().and_then(|o| o.tests.as_ref()).is_some_and(|t| !t.passed_all()) || (j.state == "done" && j.exit_code != Some(0)) {
-            next.push(format!("k2 compute logs {short} --failures"));
+            next.push(format!("{CLI_NAME} compute logs {short} --failures"));
         }
         if !artifacts.is_empty() {
-            next.push(format!("k2 compute fetch {short} --out <dir>"));
+            next.push(format!("{CLI_NAME} compute fetch {short} --out <dir>"));
         }
         if j.state != "done" {
-            next.push(format!("k2 compute retry {short}"));
+            next.push(format!("{CLI_NAME} compute retry {short}"));
         }
     } else {
-        next.push(format!("k2 compute attach {short}"));
+        next.push(format!("{CLI_NAME} compute attach {short}"));
     }
     let mut v = json!({
         "job": j.id,

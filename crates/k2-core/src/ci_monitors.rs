@@ -23,6 +23,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::ci::RunRow;
+use crate::brand::CLI_NAME;
 
 /// At most this many monitors per workspace.
 pub const MAX_PER_WORKSPACE: usize = 20;
@@ -204,10 +205,10 @@ pub fn get(conn: &Connection, ws: &str, name: &str) -> Option<Monitor> {
 /// Store a new monitor (the caller checked its values). `Err((code, why))`.
 pub fn add(conn: &Connection, m: &Monitor) -> Result<(), (&'static str, String)> {
     if get(conn, &m.workspace_id, &m.name).is_some() {
-        return Err((codes::EXISTS, format!("a monitor '{}' exists: k2 ci monitor rm {} first, or pick another name", m.name, m.name)));
+        return Err((codes::EXISTS, format!("a monitor '{}' exists: {CLI_NAME} ci monitor rm {} first, or pick another name", m.name, m.name)));
     }
     if list(conn, &m.workspace_id).len() >= MAX_PER_WORKSPACE {
-        return Err((codes::LIMIT, format!("at most {MAX_PER_WORKSPACE} monitors per workspace: remove one (k2 ci monitors)")));
+        return Err((codes::LIMIT, format!("at most {MAX_PER_WORKSPACE} monitors per workspace: remove one ({CLI_NAME} ci monitors)")));
     }
     let (to_kind, target) = match &m.to {
         To::Workspace(w) => ("workspace", w.as_str()),
@@ -322,7 +323,7 @@ fn fact(conn: &Connection, m: &Monitor, run: &RunRow, now: i64) -> Option<String
                 .unwrap_or(0);
             (n > 0).then(|| {
                 format!(
-                    "{n} test{} turned flaky{} (run {short}; names: k2 ci tests --flaky)",
+                    "{n} test{} turned flaky{} (run {short}; names: {CLI_NAME} ci tests --flaky)",
                     if n == 1 { "" } else { "s" },
                     m.check.as_deref().map(|c| format!(" in check {c}")).unwrap_or_default()
                 )
@@ -355,7 +356,7 @@ pub fn evaluate(conn: &Connection, run: &RunRow, now: i64) -> Vec<Fired> {
             "UPDATE ci_monitors SET last_fired_at = ?3, last_key = ?4, fired = fired + 1 WHERE workspace_id = ?1 AND name = ?2",
             params![m.workspace_id, m.name, now, run.id],
         );
-        out.push(Fired { name: m.name.clone(), to: m.to.clone(), text: format!("[ci] monitor {}: {f} · k2 ci status {}", m.name, run.short()) });
+        out.push(Fired { name: m.name.clone(), to: m.to.clone(), text: format!("[ci] monitor {}: {f} · {CLI_NAME} ci status {}", m.name, run.short()) });
     }
     out
 }

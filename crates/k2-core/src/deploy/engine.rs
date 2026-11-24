@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Serialize;
+use crate::brand::PRODUCT_NAME;
 
 /// The App's wall (§2, K12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -239,7 +240,7 @@ pub fn require_isolation(engine: &dyn RuntimeEngine, wanted: Isolation) -> Resul
         Err(EngineError::new(
             super::codes::ENGINE_UNAVAILABLE,
             format!(
-                "this App wants isolation={} but this box's engine gives {}; K2 never runs an App behind a weaker wall than asked",
+                "this App wants isolation={} but this box's engine gives {}; {PRODUCT_NAME} never runs an App behind a weaker wall than asked",
                 wanted.as_str(),
                 engine.isolation().as_str()
             ),

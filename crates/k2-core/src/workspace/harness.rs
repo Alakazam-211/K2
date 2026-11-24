@@ -43,6 +43,8 @@ use crate::workspace::migrations::{
     inject_first_migration_banner,
 };
 use crate::workspace::skill_regen::write_workspace_skill_file;
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 // ══════════════════════════════════════════════════════════════════════
 // Constants
@@ -196,7 +198,7 @@ fn write_cursor_rules_mdc(project_path: &str, canonical: &Path) {
     }
 
     let mdc = format!(
-        "---\n{signature}\ndescription: K2 workspace context — generated from .k2/AGENTS.md (AGENT.md persona + PROJECT.md)\nalwaysApply: true\n---\n\n{body}\n",
+        "---\n{signature}\ndescription: {PRODUCT_NAME} workspace context — generated from .k2/AGENTS.md (AGENT.md persona + PROJECT.md)\nalwaysApply: true\n---\n\n{body}\n",
         signature = K2_GENERATED_SIGNATURE,
         body = body,
     );
@@ -220,7 +222,7 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
             &path,
             atomic_write_str(
                 &path,
-                "# K2: ship workspace context to Aider on every session.\nread:\n  - AGENTS.md\n",
+                concat!("# ", product_name!(), ": ship workspace context to Aider on every session.\nread:\n  - AGENTS.md\n"),
             ),
         );
         return;
@@ -248,7 +250,7 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
             out.push(line.to_string());
             let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
             out.push(format!("{}  - AGENTS.md", indent));
-            out.push(format!("{}  # ^ added by K2 — workspace context", indent));
+            out.push(format!("{}  # ^ added by {PRODUCT_NAME} — workspace context", indent));
             injected = true;
             i += 1;
             continue;
@@ -260,7 +262,7 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
         if !out.last().map(|l| l.trim().is_empty()).unwrap_or(true) {
             out.push(String::new());
         }
-        out.push("# K2: ship workspace context on every session.".to_string());
+        out.push(concat!("# ", product_name!(), ": ship workspace context on every session.").to_string());
         out.push("read:".to_string());
         out.push("  - AGENTS.md".to_string());
     }
@@ -304,7 +306,7 @@ pub fn k2_agents_preview_workspace_ingest(
                     path: rel.to_string(),
                     action: "refresh".to_string(),
                     size_bytes: None,
-                    note: format!("{} — already symlinked to K2 canonical (will refresh)", label),
+                    note: format!("{} — already symlinked to {PRODUCT_NAME} canonical (will refresh)", label),
                 });
             }
             Ok(meta) if meta.file_type().is_file() => {
@@ -378,11 +380,11 @@ pub fn k2_agents_preview_workspace_ingest(
         let action = if path.exists() { "marker_injected" } else { "create" };
         let note = if path.exists() {
             format!(
-                "{} — K2 block inserted between markers, your content preserved",
+                "{} — {PRODUCT_NAME} block inserted between markers, your content preserved",
                 label
             )
         } else {
-            format!("{} — will create with K2 block only", label)
+            format!("{} — will create with {PRODUCT_NAME} block only", label)
         };
         entries.push(WorkspacePreviewEntry {
             path: rel.to_string(),

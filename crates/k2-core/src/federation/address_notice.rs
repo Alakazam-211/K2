@@ -72,6 +72,7 @@ use super::peers::{
     fingerprint_of_spki_der, fingerprint_of_spki_pem, raw_point_from_spki_der, spki_pem_to_der,
     PeerStore, PeerTrust,
 };
+use crate::cli_name;
 
 /// Notice wire version. v2 binds the notice to its receiver
 /// (`to_fingerprint`); the receiver accepts only v2.
@@ -620,8 +621,8 @@ pub struct NoticeRow {
 /// What a peer answering `address_mismatch` with no spelling left to try
 /// is told to do (shown in `k2 fed peers`).
 pub const REPAIR_HINT: &str =
-    "this peer stores a different address for this server; pair again with it to update \
-     (k2 fed pair-start, or Settings → Network → Connected Servers → Pair again)";
+    concat!("this peer stores a different address for this server; pair again with it to update \
+     (", cli_name!(), " fed pair-start, or Settings → Network → Connected Servers → Pair again)");
 
 /// How many earlier announced addresses are kept as alternates.
 const HISTORY_LEN: usize = 5;

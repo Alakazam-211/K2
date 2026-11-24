@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 
 use json::J;
 pub use sew_kit::SewKit;
+use crate::brand::PRODUCT_NAME;
 
 /// The folder (inside the App folder) vendored tarballs go in.
 pub const VENDOR_DIR: &str = "vendor";
@@ -212,7 +213,7 @@ fn plain(p: &Path, want_dir: bool) -> Result<bool, SdkError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(folder_err(format!("{}: {e}", p.display()))),
         Ok(m) if m.file_type().is_symlink() => {
-            Err(folder_err(format!("{} is a symlink: K2 writes only inside the App folder, so it won't follow it", p.display())))
+            Err(folder_err(format!("{} is a symlink: {PRODUCT_NAME} writes only inside the App folder, so it won't follow it", p.display())))
         }
         Ok(m) if want_dir && !m.is_dir() => Err(folder_err(format!("{} is not a folder", p.display()))),
         Ok(m) if !want_dir && !m.is_file() => Err(folder_err(format!("{} is not a file", p.display()))),

@@ -10,6 +10,7 @@ use super::extract::Projection;
 use super::spec::{AgentAccess, Json, Keep};
 use super::state::{Health, SourceState, Transition, TransitionKind};
 use super::store::SourceRow;
+use crate::brand::CLI_NAME;
 
 /// One event in a (possibly coalesced) note.
 pub struct NoteEvent<'a> {
@@ -181,7 +182,7 @@ fn block(ev: &NoteEvent, host: &str, limit: usize) -> (String, usize) {
             if !line.is_empty() {
                 line.push_str("; ");
             }
-            line.push_str(&format!("and {} more; run `k2 sources show {}`", total - shown, row.name));
+            line.push_str(&format!("and {} more; run `{CLI_NAME} sources show {}`", total - shown, row.name));
         } else {
             line.push('.');
         }
@@ -201,7 +202,7 @@ fn block(ev: &NoteEvent, host: &str, limit: usize) -> (String, usize) {
         let n: String = n.chars().filter(|c| !c.is_control()).take(super::triggers::MAX_TRIGGER_NOTE).collect();
         lines.push(format!("Owner's note: {n}"));
     }
-    lines.push(format!("Read it: k2 sources show {}", row.name));
+    lines.push(format!("Read it: {CLI_NAME} sources show {}", row.name));
     (lines.join("\n"), total)
 }
 
@@ -256,7 +257,7 @@ pub fn build_test(source: &SourceRow, host: &str, owner_note: Option<&str>) -> S
     if let Some(n) = owner_note.map(str::trim).filter(|n| !n.is_empty()) {
         lines.push(format!("Owner's note: {n}"));
     }
-    lines.push(format!("Read it: k2 sources show {}", source.name));
+    lines.push(format!("Read it: {CLI_NAME} sources show {}", source.name));
     cut(&crate::redaction::redact(&lines.join("\n")), super::NOTE_MAX_BYTES)
 }
 

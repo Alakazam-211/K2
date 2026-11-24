@@ -24,6 +24,7 @@ use super::plan::{Plan, PlanContext};
 use super::recipe::HireRequest;
 use super::steps::{self, PersonaSource};
 use super::{HireCaller, HireError};
+use crate::{cli_name, product_name};
 
 // ── Trash seam ────────────────────────────────────────────────────────
 
@@ -711,6 +712,6 @@ pub fn teardown(
         "members": members_out,
         "unlinked": unlinked,
         "appLoginsRevoked": logins_revoked,
-        "hint": (!blocked.is_empty()).then(|| "some members were not retired (a guard refused); the owner decides: k2 agent retire <handle> --force from a terminal outside K2"),
+        "hint": (!blocked.is_empty()).then(|| concat!("some members were not retired (a guard refused); the owner decides: ", cli_name!(), " agent retire <handle> --force from a terminal outside ", product_name!())),
     }))
 }

@@ -43,6 +43,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::{app_login, immediate_tx, mint_app_session_conn, normalize_app_target, now_secs, with_conn, BASE62, HOST_APP_ID, HOST_LOGIN_DENIED};
+use crate::cli_name;
 
 /// Human prefix on the shown code. Optional when typed.
 pub const CODE_PREFIX: &str = "K2A";
@@ -1197,7 +1198,7 @@ pub fn parse_links_input(v: &serde_json::Value) -> Result<LinksInput, String> {
     }
     let mut drop = Vec::new();
     for s in str_list(v, "drop", MAX_LINK_PATHS)? {
-        let (p, q) = parse_link_spec(&s).ok_or_else(|| "drop: each is a path spec as it was set (k2 app links shows them)".to_string())?;
+        let (p, q) = parse_link_spec(&s).ok_or_else(|| concat!("drop: each is a path spec as it was set (", cli_name!(), " app links shows them)").to_string())?;
         drop.push(spec_of(&p, &q));
     }
     Ok(LinksInput { ios: apps.ios, android: apps.android, paths, drop })

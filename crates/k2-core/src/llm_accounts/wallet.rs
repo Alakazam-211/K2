@@ -18,6 +18,8 @@ use super::{
     active_id, get, list_for, live_owner, lookup, now, set_active, set_active_with_live, state,
     update_meta, Entry, MetaUpdate, Tool, WalletError,
 };
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 fn pinned_conflict(e: &Entry) -> WalletError {
     WalletError::Conflict(
@@ -133,7 +135,7 @@ impl Incoming<'_> {
 fn cross_file_refusal() -> WalletError {
     WalletError::Conflict(
         "account_mismatch",
-        "K2 never files one account's sign-in under another account's token; nothing was written".into(),
+        concat!(product_name!(), " never files one account's sign-in under another account's token; nothing was written").into(),
     )
 }
 
@@ -485,9 +487,9 @@ fn file_unverified(conn: &Connection, tool: Tool, bytes: &[u8], by: Option<&str>
     let e = super::create(conn, tool, &label, by)?;
     file_bytes(tool, &e.id, Some(&e), bytes, Incoming::Unknown, identity::origin::OUTSIDE_K2)?;
     let mut u = meta_update_from(&store::parse_meta(tool, bytes), state::UNKNOWN);
-    u.detail = Some(Some("K2 is checking which account this sign-in belongs to.".into()));
+    u.detail = Some(Some(concat!(product_name!(), " is checking which account this sign-in belongs to.").into()));
     update_meta(conn, &e.id, &u)?;
-    crate::log_debug!("[llm-accounts] {}: a sign-in K2 can't name yet saved as {}", tool.as_str(), e.id);
+    crate::log_debug!("[llm-accounts] {}: a sign-in {PRODUCT_NAME} can't name yet saved as {}", tool.as_str(), e.id);
     get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id))
 }
 
@@ -590,7 +592,7 @@ pub(crate) fn heal_drift(
         Some(b) => MetaUpdate {
             state: Some(state::SIGNED_IN.into()),
             detail: Some(Some(format!(
-                "Another account's sign-in was in its slot; K2 moved it to \"{}\" and put this token's own saved copy back.",
+                "Another account's sign-in was in its slot; {PRODUCT_NAME} moved it to \"{}\" and put this token's own saved copy back.",
                 a.label
             ))),
             email: rec.0.email.clone(),
@@ -600,7 +602,7 @@ pub(crate) fn heal_drift(
         None => MetaUpdate {
             state: Some(state::NEEDS_LOGIN.into()),
             detail: Some(Some(format!(
-                "Its saved sign-in turned out to be another account's, so K2 moved it to \"{}\". Sign it in again.",
+                "Its saved sign-in turned out to be another account's, so {PRODUCT_NAME} moved it to \"{}\". Sign it in again.",
                 a.label
             ))),
             email: rec.0.email.clone(),
@@ -798,7 +800,7 @@ pub fn resolve_unverified_with(db: &dyn DbAccess, tool: Tool, refresher: &dyn Re
         let ident = |t: Tool, b: &[u8]| refresher.identify(t, b);
         let who = identity::actual_identity(tool, &bytes, Some(&ident), false);
         let asked = t0.elapsed();
-        let Ok(tl) = store::lock_tool_as(tool, COMMIT_WAIT, "naming a token K2 is checking") else {
+        let Ok(tl) = store::lock_tool_as(tool, COMMIT_WAIT, concat!("naming a token ", product_name!(), " is checking")) else {
             crate::log_debug!("[llm-accounts] {}: checking token {}: busy, next time", tool.as_str(), e.id);
             continue;
         };
@@ -839,13 +841,13 @@ fn resolve_one(
         && !slot_busy(conn, &e.id)?
         && slots::read_slot(tool, &e.id)?.as_deref() == Some(bytes);
     if !still {
-        crate::log_debug!("[llm-accounts] {}: checking token {} changed while K2 asked; answer dropped", tool.as_str(), e.id);
+        crate::log_debug!("[llm-accounts] {}: checking token {} changed while {PRODUCT_NAME} asked; answer dropped", tool.as_str(), e.id);
         return Ok(None);
     }
     let Some(who) = who else {
         if now_secs - e.created_at > 24 * 3600 {
             update_meta(conn, &e.id, &MetaUpdate {
-                detail: Some(Some("K2 couldn't check which account this sign-in belongs to. Keep it, or Remove it.".into())),
+                detail: Some(Some(concat!(product_name!(), " couldn't check which account this sign-in belongs to. Keep it, or Remove it.").into())),
                 ..Default::default()
             })?;
         }
@@ -950,7 +952,7 @@ fn account_mismatch(label: &str, expected: &(AccountIdentity, Source), actual: &
     WalletError::Conflict(
         "account_mismatch",
         format!(
-            "K2 stopped the switch: the saved sign-in for \"{label}\" belongs to {} ({}), not {} ({}). The server default is unchanged. Sign \"{label}\" in again on Settings → Language Models → Subs / Tokens.",
+            "{PRODUCT_NAME} stopped the switch: the saved sign-in for \"{label}\" belongs to {} ({}), not {} ({}). The server default is unchanged. Sign \"{label}\" in again on Settings → Language Models → Subs / Tokens.",
             actual.0.describe(),
             actual.1.describe(),
             expected.0.describe(),
@@ -1326,7 +1328,7 @@ pub fn finalize_login_with(conn: &Connection, id: &str, by: Option<&str>, read: 
                 }
             }
             let hint = format!(
-                "That sign-in is {}'s, so K2 saved it as \"{}\". \"{}\" still needs {}: sign it in again with that account.",
+                "That sign-in is {}'s, so {PRODUCT_NAME} saved it as \"{}\". \"{}\" still needs {}: sign it in again with that account.",
                 w.0.describe(),
                 a.label,
                 e.label,
@@ -1461,7 +1463,7 @@ fn changed(tool: Tool) -> WalletError {
     WalletError::Conflict(
         "changed",
         format!(
-            "The {} tokens changed while K2 checked which accounts they belong to (another switch, a sign-in, or the CLI renewing its token). Nothing was switched; try again.",
+            "The {} tokens changed while {PRODUCT_NAME} checked which accounts they belong to (another switch, a sign-in, or the CLI renewing its token). Nothing was switched; try again.",
             tool.display()
         ),
     )
@@ -1872,7 +1874,7 @@ fn switch_inner(
             return Err(account_mismatch(&target.label, exp, act));
         };
         let hint = format!(
-            "K2 stopped the switch: the saved sign-in for \"{}\" belongs to {}, not {}. K2 saved it as the token \"{}\", and \"{}\" needs signing in again (Settings → Language Models → Subs / Tokens, or `k2 llm tokens login {} \"{}\"`). The server default is unchanged.",
+            "{PRODUCT_NAME} stopped the switch: the saved sign-in for \"{}\" belongs to {}, not {}. {PRODUCT_NAME} saved it as the token \"{}\", and \"{}\" needs signing in again (Settings → Language Models → Subs / Tokens, or `{CLI_NAME} llm tokens login {} \"{}\"`). The server default is unchanged.",
             target.label,
             moved.account,
             target_expected.as_ref().map(|(i, _)| i.describe()).unwrap_or_else(|| "the account on record".into()),
@@ -2188,8 +2190,8 @@ fn clear_default_locked(conn: &Connection, tool: Tool, by: Option<&str>) -> Resu
 
 fn subscription_default_hint(tool: Tool, e: &Entry) -> String {
     format!(
-        "{} is a subscription signed in to {}'s own store, so every chat on Server default uses it whatever K2 records. \
-         Make another token the server default first (`k2 llm tokens switch {} <label>`, Admin or Owner), or sign {} out in a terminal outside K2.",
+        "{} is a subscription signed in to {}'s own store, so every chat on Server default uses it whatever {PRODUCT_NAME} records. \
+         Make another token the server default first (`{CLI_NAME} llm tokens switch {} <label>`, Admin or Owner), or sign {} out in a terminal outside K2.",
         e.label,
         tool.display(),
         tool.as_str(),
@@ -2203,7 +2205,7 @@ fn active_refusal(tool: Tool, e: &Entry) -> WalletError {
         WalletError::Conflict(
             "active_login",
             format!(
-                "{} is the server default {} token. Remove it and leave no default: `k2 llm tokens remove {} \"{}\" --clear-default` \
+                "{} is the server default {} token. Remove it and leave no default: `{CLI_NAME} llm tokens remove {} \"{}\" --clear-default` \
                  (Admin or Owner; Settings asks you to confirm), or make another token the server default first.",
                 e.label,
                 tool.display(),
@@ -2223,7 +2225,7 @@ fn active_refusal(tool: Tool, e: &Entry) -> WalletError {
 fn ended_default_hint(tool: Tool, e: &Entry) -> String {
     format!(
         "{} is the server default {} token and its sign-in has ended. Remove it and leave no default: \
-         `k2 llm tokens remove {} \"{}\" --clear-default` (Admin or Owner; Settings asks you to confirm), or sign it in again.",
+         `{CLI_NAME} llm tokens remove {} \"{}\" --clear-default` (Admin or Owner; Settings asks you to confirm), or sign it in again.",
         e.label,
         tool.display(),
         tool.as_str(),
@@ -2365,7 +2367,7 @@ pub fn recheck(conn: &Connection, id: &str) -> Result<Entry, WalletError> {
 pub(crate) fn ended_detail(tool: Tool, e: &Entry, why: &store::ClaudeEnded, live: bool) -> String {
     if live && slot_good(tool, &e.id) {
         return format!(
-            "{} This token's own saved sign-in is still good: Apply saved sign-in puts it back (`k2 llm tokens switch {} \"{}\"`).",
+            "{} This token's own saved sign-in is still good: Apply saved sign-in puts it back (`{CLI_NAME} llm tokens switch {} \"{}\"`).",
             why.words(),
             tool.as_str(),
             e.label
@@ -2849,8 +2851,8 @@ pub fn claude_refresh_slot(
         }
     };
     if slots::read_slot(Tool::Claude, id).ok().flatten().as_deref() != Some(bytes.as_slice()) {
-        crate::log_debug!("[llm-accounts] claude: {id} changed while K2 refreshed it; refresh dropped");
-        return Err("the saved sign-in changed while K2 refreshed it; nothing was written".into());
+        crate::log_debug!("[llm-accounts] claude: {id} changed while {PRODUCT_NAME} refreshed it; refresh dropped");
+        return Err(concat!("the saved sign-in changed while ", product_name!(), " refreshed it; nothing was written").into());
     }
     // Refreshed from the slot's own bytes: the same sign-in (LT-A4).
     file_bytes(Tool::Claude, id, None, &updated, Incoming::OwnRefresh, identity::origin::K2_SIGN_IN).map_err(|e| e.to_string())

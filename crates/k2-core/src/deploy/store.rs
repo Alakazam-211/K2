@@ -4,6 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value as J;
+use crate::brand::CLI_NAME;
 
 // ── seeds ────────────────────────────────────────────────────────────
 
@@ -441,7 +442,7 @@ pub fn workspace_has_apps_error(conn: &Connection, workspace: &str) -> Result<()
     }
     Err(format!(
         "workspace_has_apps: this workspace maintains {} ({}). Hand them over, uninstall or park them first: \
-         k2 app release <workspace> --apps handover:<other-workspace>|uninstall|park",
+         {CLI_NAME} app release <workspace> --apps handover:<other-workspace>|uninstall|park",
         if apps.len() == 1 { "an App" } else { "Apps" },
         apps.join(", ")
     ))

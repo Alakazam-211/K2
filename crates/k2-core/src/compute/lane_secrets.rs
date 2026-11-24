@@ -46,6 +46,7 @@ use super::proto::lanes::LaneTemplate;
 use super::proto::secret::{codes as scodes, FEATURE_SECRET_ENV};
 use super::store::NodeRow;
 use super::trust;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A refusal: `(code, message for a person)`.
 pub type Refused = (&'static str, String);
@@ -364,7 +365,7 @@ pub struct GateInput<'a> {
 
 /// The command a person runs to agree (named in refusals).
 pub fn consent_command(owner_id: &str) -> String {
-    format!("k2 compute owners consent {owner_id} on")
+    format!("{CLI_NAME} compute owners consent {owner_id} on")
 }
 
 /// V25: may this server seal a secret to `node` for a job on `seat`?
@@ -392,7 +393,7 @@ pub fn lane_gate(i: &GateInput<'_>) -> Result<(), Refused> {
     if offer.protocol < PROTOCOL_CI || !has(offer, ci::FEATURE_LANE_SECRETS) || !has(offer, FEATURE_SECRET_ENV) {
         return Err((
             scodes::NEEDS_UPDATE,
-            format!("{who} doesn't offer lane secrets to this server: it needs k2-node with protocol 9, the lane on, and the job wall (k2 compute info {} shows its features)", node.name),
+            format!("{who} doesn't offer lane secrets to this server: it needs k2-node with protocol 9, the lane on, and the job wall ({CLI_NAME} compute info {} shows its features)", node.name),
         ));
     }
     if !has(offer, FEATURE_JOB_WALL) {
@@ -430,7 +431,7 @@ pub fn lane_gate(i: &GateInput<'_>) -> Result<(), Refused> {
         _ => Err((
             ci::codes::SECRET_OWNER_NOT_TRUSTED,
             format!(
-                "no person here agreed to send vault secrets to nodes owned by {} (their root can read them). Only a person can agree, in a terminal outside K2: {}",
+                "no person here agreed to send vault secrets to nodes owned by {} (their root can read them). Only a person can agree, in a terminal outside {PRODUCT_NAME}: {}",
                 seat.owner_id,
                 consent_command(&seat.owner_id)
             ),

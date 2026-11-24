@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 use crate::brand::CLI_NAME;
-use crate::cli_name;
+use crate::{cli_name, product_name};
 
 /// Who can fix it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +198,7 @@ pub fn by_area() -> BTreeMap<&'static str, Vec<&'static Refusal>> {
 /// The areas, in the order `k2 explain` lists them.
 pub const AREAS: &[(&str, &str)] = &[
     ("deploy", "validate, build, deploy, rollback"),
-    ("catalog", concat!("suite Apps from K2's catalog: ", cli_name!(), " app catalog, install --catalog")),
+    ("catalog", concat!("suite Apps from ", product_name!(), "'s catalog: ", cli_name!(), " app catalog, install --catalog")),
     ("runtime", "the App engine, the box, health"),
     ("access", "who may do what: switches, owners, workspaces"),
     ("approvals", "held requests the owner answers"),
@@ -239,7 +239,7 @@ pub fn list_text() -> String {
 pub fn row_text(r: &Refusal) -> String {
     let mut s = format!("{}  ({} · HTTP {} · exit {})\n", r.id, r.area, r.http, r.exit);
     if r.status == Status::Retired {
-        s.push_str("retired: this K2 no longer sends it; older K2 servers may.\n");
+        s.push_str(concat!("retired: this ", product_name!(), " no longer sends it; older ", product_name!(), " servers may.\n"));
     }
     s.push_str(&wrap(r.what, 76, ""));
     s.push_str(&wrap(&format!("fix: {}", r.fix), 76, "     ").replacen("     fix: ", "fix: ", 1));
@@ -248,7 +248,7 @@ pub fn row_text(r: &Refusal) -> String {
         Who::Owner => "the server's owner",
         Who::Admin => "the owner or an Admin",
         Who::Person => "the person signed in",
-        Who::K2 => "K2 (wait, retry or update)",
+        Who::K2 => concat!(product_name!(), " (wait, retry or update)"),
     };
     s.push_str(&format!("who fixes it: {who}\n"));
     if r.askable {
@@ -292,7 +292,7 @@ pub fn study_page() -> String {
         concat!("  ", cli_name!(), " explain <id>          what happened, the fix, who fixes it"),
         concat!("  ", cli_name!(), " explain <id> --json   the same as JSON"),
         concat!("  ", cli_name!(), " explain               every id, by area"),
-        "An App command that is refused prints fix: <the fix> before K2's own",
+        concat!("An App command that is refused prints fix: <the fix> before ", product_name!(), "'s own"),
         "Ask with: line, and its --json error object carries next (the fix) and",
         concat!("explain (\"", cli_name!(), " explain <id>\"). The exit code each id gives is beside it:"),
         "3 refused; 2 a bad request (fix the call); 1 a build or deploy that",
@@ -300,7 +300,7 @@ pub fn study_page() -> String {
         "exits 4 for an id it doesn't know.",
         "When the fix is the owner's or an Admin's: if the refusal ended with an",
         "Ask with: line, run it as printed (a permission card); otherwise tell",
-        "your human what the fix says. \"retired\" ids are ones older K2 servers",
+        concat!("your human what the fix says. \"retired\" ids are ones older ", product_name!(), " servers"),
         "send; they still explain.",
     ] {
         s.push_str(line);

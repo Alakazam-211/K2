@@ -37,6 +37,7 @@
 //! FA19: proven by the positive embed test in `tests/frame/`).
 
 use std::fmt;
+use crate::product_name;
 
 /// K2's desktop window origin on macOS (WKWebView) and Linux (WebKitGTK).
 pub const TAURI_ORIGIN: &str = "tauri://localhost";
@@ -349,7 +350,7 @@ pub fn normalize_origin(raw: &str) -> Result<String, FrameError> {
         return Err(bad("http:// is only for localhost or 127.0.0.1 (dev); use https://"));
     }
     if host == "tauri.localhost" || host.ends_with(".tauri.localhost") {
-        return Err(bad("K2's own windows are already allowed"));
+        return Err(bad(concat!(product_name!(), "'s own windows are already allowed")));
     }
     let default_port = if scheme == "https" { 443 } else { 80 };
     let mut out = format!("{scheme}://{host}");

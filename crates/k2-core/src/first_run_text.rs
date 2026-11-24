@@ -5,8 +5,9 @@
 //! is for. The wording is the CLI's (byte for byte); both renderers are
 //! pure.
 
-use crate::cli_name;
+use crate::{cli_name, product_name};
 use crate::first_run::{State, Status, AGENT_REPORTS, NOTE_INSTALLING, NOTE_NEEDS_KESSEL, NOTE_NEEDS_TUNNEL, OFFER_MEET_KESSEL};
+use crate::brand::CLI_NAME;
 
 /// The agent-reports row's words while nobody has answered
 /// (plan-agent-reports-opt-in-app-v1), after its label.
@@ -61,7 +62,7 @@ pub fn render_text(s: &Status) -> String {
             // Linux: the note is the install line to run.
             note = r.note.map(|n| format!("run: {n}"));
         } else if r.id == "dev_tools" && r.opens == Some("dev_tools") && note.is_none() {
-            note = Some("The Apple tools include git, which workspaces need: k2 git-tools install".to_string());
+            note = Some(concat!("The Apple tools include git, which workspaces need: ", cli_name!(), " git-tools install").to_string());
         }
         if let Some(n) = note {
             if r.state != State::Done {
@@ -71,19 +72,19 @@ pub fn render_text(s: &Status) -> String {
         out.push(line);
     }
     if s.finished {
-        out.push("Finished: the app no longer shows this list (k2 setup show brings it back).".into());
+        out.push(concat!("Finished: the app no longer shows this list (", cli_name!(), " setup show brings it back).").into());
     } else if s.hidden {
-        out.push("Hidden in the app (k2 setup show brings it back).".into());
+        out.push(concat!("Hidden in the app (", cli_name!(), " setup show brings it back).").into());
     }
     if !s.enabled {
         out.push("The app does not show setup lists on this server yet.".into());
     }
     if let Some(kessel) = &s.kessel {
         if let Some(live) = &kessel.kessel {
-            out.push(format!("Kessel: {} at {} (k2 thread <its handle> to talk to it)", live.name, live.path));
+            out.push(format!("Kessel: {} at {} ({CLI_NAME} thread <its handle> to talk to it)", live.name, live.path));
         }
         if kessel.offer == Some(OFFER_MEET_KESSEL) {
-            out.push("Next: meet Kessel, the agent that runs K2: k2 setup kessel".into());
+            out.push(concat!("Next: meet Kessel, the agent that runs ", product_name!(), ": ", cli_name!(), " setup kessel").into());
         }
     }
     let mut text = out.join("\n");
@@ -114,8 +115,8 @@ pub fn render_made_text(made: Made, name: &str, handle: &str, path: &str, grante
         out.push(format!("It asks on a permission card for: {}", asks.join(", ")));
     }
     out.push(match made {
-        Made::Kessel => format!("Kessel is starting and will say hello on its Thread: k2 thread {handle}"),
-        Made::ChiefOfStaff => format!("Tell your person on your Thread, and point them to {name} (k2 msg {handle})."),
+        Made::Kessel => format!("Kessel is starting and will say hello on its Thread: {CLI_NAME} thread {handle}"),
+        Made::ChiefOfStaff => format!("Tell your person on your Thread, and point them to {name} ({CLI_NAME} msg {handle})."),
     });
     let mut text = out.join("\n");
     text.push('\n');

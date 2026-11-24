@@ -7,6 +7,8 @@
 //! so it can't pose as a message from K2 or a person.
 
 use super::OrgError;
+use crate::brand::PRODUCT_NAME;
+use crate::cli_name;
 
 /// At most this many lines in an org bulletin.
 pub const BULLETIN_MAX_LINES: usize = 5;
@@ -70,7 +72,7 @@ fn stamp_error(what: &str) -> OrgError {
     OrgError::new(
         400,
         "bulletin_stamp",
-        format!("{what} can't start with a K2 stamp like [thread:…], [from …] or [org:…]; write plain text."),
+        format!("{what} can't start with a {PRODUCT_NAME} stamp like [thread:…], [from …] or [org:…]; write plain text."),
     )
 }
 
@@ -126,7 +128,7 @@ pub fn bulletin(parts: &[String]) -> Result<Vec<String>, OrgError> {
         return Err(OrgError::new(
             400,
             "bulletin_empty",
-            "An org bulletin needs at least one line: k2 organization bulletin set \"<line 1>\" \"<line 2>\" …",
+            concat!("An org bulletin needs at least one line: ", cli_name!(), " organization bulletin set \"<line 1>\" \"<line 2>\" …"),
         ));
     }
     if lines.len() > BULLETIN_MAX_LINES {

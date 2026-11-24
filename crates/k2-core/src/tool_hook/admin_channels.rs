@@ -47,6 +47,7 @@ use super::sew_wire::{
     ServerChannelCreateRequest, ServerChannelsBulkRequest, ServerMemberChannelsRequest,
 };
 use super::{outbox, Cause, NewOp, Op, CHAT_KIND};
+use crate::product_name;
 
 /// One Home channel's queue: `admin:chan:<slug>`.
 pub const CHANNEL_PREFIX: &str = "admin:chan:";
@@ -335,7 +336,7 @@ pub fn request_create(conn: &Connection, name: &str, open: bool, creator_ext: &s
             break;
         }
     }
-    let slug = slug.ok_or("K2 could not pick a free channel slug; try again")?;
+    let slug = slug.ok_or(concat!(product_name!(), " could not pick a free channel slug; try again"))?;
     for p in &people {
         put_member(conn, &slug, p, M_PENDING_ADD, now)?;
     }

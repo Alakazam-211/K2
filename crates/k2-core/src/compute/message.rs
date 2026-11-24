@@ -1,5 +1,6 @@
 //! The completion message (§5.4, CN6): facts only, never log text, so a
 //! log can't carry a prompt injection into the agent's session.
+use crate::brand::CLI_NAME;
 
 /// `"6m12s"`-style duration.
 pub fn duration(secs: i64) -> String {
@@ -63,7 +64,7 @@ pub fn completion_text(
         let node = node.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect::<String>();
         let waited = extra.detail.map(|d| format!(": {}", plain(d, 300))).unwrap_or_default();
         return format!(
-            "[compute] job {id} on {node}: failed (queue_timeout){waited}. Next: k2 compute retry {id}, or submit again with a longer --queue-timeout (e.g. 4h) · k2 compute get {id} --json"
+            "[compute] job {id} on {node}: failed (queue_timeout){waited}. Next: {CLI_NAME} compute retry {id}, or submit again with a longer --queue-timeout (e.g. 4h) · {CLI_NAME} compute get {id} --json"
         );
     }
     let after = secs.map(|s| format!(" after {}", duration(s))).unwrap_or_default();
@@ -105,12 +106,12 @@ pub fn completion_text(
         })
         .unwrap_or_default();
     let look = match tests {
-        Some(t) if !t.passed_all() => format!("k2 compute logs {id} --failures"),
-        _ => format!("k2 compute logs {id} --tail 50"),
+        Some(t) if !t.passed_all() => format!("{CLI_NAME} compute logs {id} --failures"),
+        _ => format!("{CLI_NAME} compute logs {id} --tail 50"),
     };
     let rust = extra.rustc.map(|r| format!(" ({})", plain(r, 60))).unwrap_or_default();
     let late = extra.late_secs.map(|l| format!(" (this server heard of it {} late)", duration(l))).unwrap_or_default();
-    format!("[compute] job {id} on {node}: {what}{rust}{counts}{late}. {look} · k2 compute get {id} --json")
+    format!("[compute] job {id} on {node}: {what}{rust}{counts}{late}. {look} · {CLI_NAME} compute get {id} --json")
 }
 
 /// One line when a split run (`--shards`) ends: the combined result.

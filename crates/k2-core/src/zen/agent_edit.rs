@@ -39,6 +39,7 @@ use sha2::{Digest, Sha256};
 
 use super::store::{ZenError, ZenFile, ZenFiles};
 use super::widgets::{self, CODE_EXTS};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A widget code file is at most this many bytes (the bundle's code cap).
 pub const MAX_PUT_BYTES: usize = super::bundle::MAX_CODE_BYTES;
@@ -172,7 +173,7 @@ impl ZenFiles {
         let (name, _) = self.widget_file_text(widget, file)?;
         if text.len() > MAX_PUT_BYTES {
             return Err(ZenError::BadRequest(format!(
-                "a widget code file is at most {} ({MAX_PUT_BYTES} bytes); this one is {} bytes. Split the code, or use K2's libraries (k2 zen guide libs)",
+                "a widget code file is at most {} ({MAX_PUT_BYTES} bytes); this one is {} bytes. Split the code, or use {PRODUCT_NAME}'s libraries ({CLI_NAME} zen guide libs)",
                 super::bundle::human_bytes(MAX_PUT_BYTES),
                 text.len()
             )));

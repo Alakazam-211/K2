@@ -69,6 +69,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use rusqlite::{Connection, OpenFlags};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// The database's name from 0.46.6 on.
 pub const NEW_NAME: &str = "k2.db";
@@ -133,10 +135,10 @@ impl Outcome {
             Outcome::Deferred { reason } => Some(reason.clone()),
             Outcome::Blocked { k2_projects, k2so_projects } => Some(format!(
                 "both files hold workspaces (k2.db {k2_projects}, k2so.db {k2so_projects}); \
-                 k2 db home --keep k2.db|k2so.db"
+                 {CLI_NAME} db home --keep k2.db|k2so.db"
             )),
             Outcome::HotJournal { journal, bytes } => Some(format!(
-                "{} holds {bytes} bytes of an unfinished write; K2 won't open the database",
+                "{} holds {bytes} bytes of an unfinished write; {PRODUCT_NAME} won't open the database",
                 journal.display()
             )),
             _ => None,
@@ -690,7 +692,7 @@ pub fn write_keep_choice(dir: &Path, keep: &str, by: &str) -> Result<serde_json:
     let old = dir.join(OLD_NAME);
     if kind(&new) != Kind::Real || kind(&old) != Kind::Real || same_file(&new, &old) {
         return Err(format!(
-            "there is nothing to choose: {} and {} are not two separate files (k2 db home shows what K2 uses)",
+            "there is nothing to choose: {} and {} are not two separate files ({CLI_NAME} db home shows what {PRODUCT_NAME} uses)",
             new.display(),
             old.display()
         ));
@@ -712,9 +714,9 @@ pub fn write_keep_choice(dir: &Path, keep: &str, by: &str) -> Result<serde_json:
         "keep": keep,
         "moveAside": other,
         "quarantine": dir.join(QUARANTINE_DIR).display().to_string(),
-        "when": "the next time K2 starts",
+        "when": concat!("the next time ", product_name!(), " starts"),
         "message": format!(
-            "At its next start K2 keeps {keep} and moves {other} into {} (it is never deleted). Restart K2 to finish.",
+            "At its next start {PRODUCT_NAME} keeps {keep} and moves {other} into {} (it is never deleted). Restart {PRODUCT_NAME} to finish.",
             dir.join(QUARANTINE_DIR).display()
         ),
     }))
@@ -839,9 +841,9 @@ fn hot(dir: &Path, mut rep: SwitchReport, journal: PathBuf, bytes: u64) -> Switc
 /// The owner-facing text for DB-A15.
 pub fn hot_journal_message(dir: &Path, journal: &Path, bytes: u64) -> String {
     format!(
-        "K2 did not start: {} holds {bytes} bytes of a write that never finished, made by a program that \
-         opened K2's database under its old name ({}). Opening {} now could lose or garble that write. \
-         Stop anything that uses {} and ask for help before you start K2 again; don't delete or move the \
+        "{PRODUCT_NAME} did not start: {} holds {bytes} bytes of a write that never finished, made by a program that \
+         opened {PRODUCT_NAME}'s database under its old name ({}). Opening {} now could lose or garble that write. \
+         Stop anything that uses {} and ask for help before you start {PRODUCT_NAME} again; don't delete or move the \
          journal file.",
         journal.display(),
         dir.join(OLD_NAME).display(),
@@ -925,10 +927,10 @@ fn do_rename(dir: &Path, opts: &SwitchOpts, mut rep: SwitchReport) -> SwitchRepo
 /// The owner-facing text for a refused switch.
 pub fn blocked_message(dir: &Path, using: &Path, k2: i64, k2so: i64) -> String {
     format!(
-        "K2 found two databases that both hold workspaces: {} ({k2so} workspace(s)) and {} \
+        "{PRODUCT_NAME} found two databases that both hold workspaces: {} ({k2so} workspace(s)) and {} \
          ({k2} workspace(s)). It did not rename or move either one, and it is still using {} \
          (the same file as before). To finish the move to k2.db, choose the copy to keep: \
-         k2 db home --keep k2so.db (or --keep k2.db), then restart K2. The other copy is moved \
+         {CLI_NAME} db home --keep k2so.db (or --keep k2.db), then restart {PRODUCT_NAME}. The other copy is moved \
          into {} and never deleted.",
         dir.join(OLD_NAME).display(),
         dir.join(NEW_NAME).display(),

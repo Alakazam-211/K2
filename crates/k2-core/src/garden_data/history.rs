@@ -33,6 +33,7 @@ use serde_json::json;
 use super::backend::{Filter, Json, Op};
 use super::sqlite::SqliteStore;
 use super::{keys, Actor, DataError, Space, CHANGE_LOG_KEEP_SECS};
+use crate::cli_name;
 
 /// The `/boot-status` feature and catalog `feature` of these verbs.
 pub const FEATURE: &str = "garden-history-v1";
@@ -470,7 +471,7 @@ fn no_history() -> DataError {
     DataError::Refused {
         code: "no_history",
         status: 409,
-        hint: "older than kept history (7 days of changes); the person can export a daily snapshot with k2 zen data export --at".into(),
+        hint: concat!("older than kept history (7 days of changes); the person can export a daily snapshot with ", cli_name!(), " zen data export --at").into(),
     }
 }
 

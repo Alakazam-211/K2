@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::config::{self, TunnelConfig};
+use crate::brand::PRODUCT_NAME;
 
 /// Path of the tombstone note a release leaves behind:
 /// `~/.k2/unpaired.json`. Honors `$HOME` so tests can redirect it.
@@ -404,7 +405,7 @@ pub fn perform_release_mode(mode: ReleaseMode) -> Result<ReleaseReport, String> 
     // loudly and touch nothing; the release can be retried.
     if let Some(e) = cfg.token_read_error.as_deref() {
         return Err(format!(
-            "the tunnel token could not be read from the K2 vault ({e}); nothing was \
+            "the tunnel token could not be read from the {PRODUCT_NAME} vault ({e}); nothing was \
              released — try again once the vault is readable"
         ));
     }

@@ -58,6 +58,8 @@ use super::news::NoticeItem;
 use super::schema::CUSTOM_KIND;
 use super::store::{list_lock, ZenError, ZenFile, ZenFiles};
 use super::sync::now;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// This move's name: the marker file and the backup file names.
 pub const CARD_MOVE: &str = "source-cards-at-3";
@@ -217,7 +219,7 @@ fn reason_text(reason: &str) -> &'static str {
         "has_errors" => "its file has errors",
         "not_toml" => "its file isn't valid TOML",
         "unusual_spelling" => "a card's name is written in an unusual way",
-        "changed_while_moving" => "its file changed while K2 was moving it",
+        "changed_while_moving" => concat!("its file changed while ", product_name!(), " was moving it"),
         "would_not_check" => "the moved file wouldn't check",
         "locked" => "locked",
         _ => "it couldn't be moved safely",
@@ -253,7 +255,7 @@ pub fn card_move_notice(r: &CardMoveReport) -> Option<NoticeItem> {
         let n: Vec<String> = r.moved.iter().map(|g| g.name.clone()).collect();
         let one = n.len() == 1;
         body.push(format!(
-            "K2 moved the data cards in {} to their newest version, without the \"Ask an agent\" button that stopped working. Nothing else in {} changed; the old {} in {} history (k2 zen history).",
+            "{PRODUCT_NAME} moved the data cards in {} to their newest version, without the \"Ask an agent\" button that stopped working. Nothing else in {} changed; the old {} in {} history ({CLI_NAME} zen history).",
             names(&n),
             if one { "it" } else { "them" },
             if one { "file is" } else { "files are" },
@@ -268,7 +270,7 @@ pub fn card_move_notice(r: &CardMoveReport) -> Option<NoticeItem> {
         let n: Vec<String> = r.locked.iter().map(|g| g.name.clone()).collect();
         let one = n.len() == 1;
         body.push(format!(
-            "{} {} locked, so K2 left {} as {}: unlock {} and change each card's @1 or @2 to @3.",
+            "{} {} locked, so {PRODUCT_NAME} left {} as {}: unlock {} and change each card's @1 or @2 to @3.",
             names(&n),
             if one { "is" } else { "are" },
             if one { "it" } else { "them" },
@@ -281,7 +283,7 @@ pub fn card_move_notice(r: &CardMoveReport) -> Option<NoticeItem> {
     }
     if !r.left.is_empty() {
         let n: Vec<String> = r.left.iter().map(|g| format!("{} ({})", g.name, reason_text(&g.reason))).collect();
-        body.push(format!("K2 couldn't move the cards in {}: change each card's @1 or @2 to @3 by hand.", names(&n)));
+        body.push(format!("{PRODUCT_NAME} couldn't move the cards in {}: change each card's @1 or @2 to @3 by hand.", names(&n)));
         for g in &r.left {
             let refs = unique(g.refs.clone());
             detail.push(format!(

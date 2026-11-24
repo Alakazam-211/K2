@@ -53,6 +53,7 @@ use serde_json::{json, Map, Value};
 use super::sew_wire::recording as wire;
 use super::{features, governed, home, Cause, NewOp, Op, CHAT_KIND};
 use crate::skin::{RoomPolicy, CAP_VOICE_JOIN, CAP_VOICE_RECORD};
+use crate::product_name;
 
 /// The actor on every row the rollout writes (attribution only).
 pub const ACTOR_ROLLOUT: &str = "k2:recording-rollout";
@@ -412,7 +413,7 @@ fn skip(why: &str) -> Step {
 /// `record_cap` = Sew reports `voice_record_cap`.
 pub fn step(conn: &Connection, app_id: &str, manifest: &ManifestChat, record_cap: bool) -> Result<Step, String> {
     if !crate::recording::in_apps() {
-        return Ok(skip("voice:record waits for K2's Sew 0.9.0 release"));
+        return Ok(skip(concat!("voice:record waits for ", product_name!(), "'s Sew 0.9.0 release")));
     }
     if !record_cap {
         return Ok(skip("this box's Sew doesn't report voice_record_cap"));

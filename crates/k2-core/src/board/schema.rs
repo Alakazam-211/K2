@@ -10,6 +10,8 @@
 use serde_json::{json, Map, Value};
 
 use super::BoardError;
+use crate::brand::PRODUCT_NAME;
+use crate::cli_name;
 
 /// Sticky colours (the widget draws them light and dark).
 pub const STICKY: &[&str] = &["yellow", "orange", "pink", "red", "violet", "blue", "cyan", "green", "lime", "gray", "white"];
@@ -617,7 +619,7 @@ pub fn check(field: &str, kind: Kind, v: &Value) -> Result<Option<Value>, BoardE
                 Value::String(s)
             } else if s.starts_with("data:") {
                 return Err(bad(
-                    "a Garden blob ref (k2blob:sha256-…): put the file in Board's data first (k2 store blob put <file> --widget k2:board prints the ref); data: images aren't written any more",
+                    concat!("a Garden blob ref (k2blob:sha256-…): put the file in Board's data first (", cli_name!(), " store blob put <file> --widget k2:board prints the ref); data: images aren't written any more"),
                 ));
             } else {
                 return Err(bad("a Garden blob ref (k2blob:sha256-…)"));
@@ -895,16 +897,16 @@ fn kind_words(k: Kind) -> String {
         Kind::List => format!("list (≤ {MAX_TAGS}, comma-separated or JSON)"),
         Kind::Points => format!("[[x,y],…] (≤ {MAX_POINTS})"),
         Kind::Rows => format!("[[cell,…],…] (≤ {MAX_ROWS} rows × {MAX_COLS} columns; ids kept in rowIds/colIds)"),
-        Kind::Ids(n) => format!("ids (≤ {n}; K2 keeps them in step with rows)"),
+        Kind::Ids(n) => format!("ids (≤ {n}; {PRODUCT_NAME} keeps them in step with rows)"),
         Kind::Widths => format!("[number,…] (≤ {MAX_COLS})"),
         Kind::End => "an object id, {\"id\":..,\"anchor\":auto|top|right|bottom|left} or {\"x\":..,\"y\":..}".into(),
         Kind::Checks => format!("[{{\"text\":..,\"done\":true|false}},…] (≤ {MAX_CHECKS}; ids added) or null"),
         Kind::Crop => "{\"x\",\"y\",\"w\",\"h\"} fractions 0–1, or null".into(),
         Kind::Link => "http(s) address, or null".into(),
-        Kind::Reactions => "{\"<person>\": [emoji,…]} (use k2 board react)".into(),
-        Kind::Votes => "{\"<person>\": n} (use k2 board vote)".into(),
+        Kind::Reactions => concat!("{\"<person>\": [emoji,…]} (use ", cli_name!(), " board react)").into(),
+        Kind::Votes => concat!("{\"<person>\": n} (use ", cli_name!(), " board vote)").into(),
         Kind::Replies => "[{\"by\",\"at\",\"text\"},…] (ids added)".into(),
-        Kind::ImageSrc => "k2blob:sha256-… (k2 store blob put <file> --widget k2:board)".into(),
+        Kind::ImageSrc => concat!("k2blob:sha256-… (", cli_name!(), " store blob put <file> --widget k2:board)").into(),
         Kind::Json => "JSON (≤ 20 KB)".into(),
     }
 }

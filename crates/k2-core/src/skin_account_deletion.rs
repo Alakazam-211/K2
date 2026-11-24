@@ -35,6 +35,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::{now_secs, with_conn, HOST_APP_ID};
+use crate::product_name;
 
 pub const MODE_REQUEST: &str = "request";
 pub const MODE_IMMEDIATE: &str = "immediate";
@@ -448,9 +449,9 @@ pub fn kept(scope: Scope) -> Vec<(&'static str, &'static str)> {
         (ROOM_FILES, "Files they uploaded into a room's folder stay there: they belong to that room."),
         (
             CHAT_MESSAGES,
-            "Chat (Sew), if they used it: K2 ends their chat sessions and Sew deactivates them, but Sew keeps their messages, files and reactions (it has no erase yet).",
+            concat!("Chat (Sew), if they used it: ", product_name!(), " ends their chat sessions and Sew deactivates them, but Sew keeps their messages, files and reactions (it has no erase yet)."),
         ),
-        (APP_DATA, "Anything the App keeps in its own database or files: the App deletes that itself (K2 can't see inside it)."),
+        (APP_DATA, concat!("Anything the App keeps in its own database or files: the App deletes that itself (", product_name!(), " can't see inside it).")),
         (HISTORY, "The App's History keeps one line that this account was deleted, with its username: the owner's record."),
     ];
     if scope == Scope::App {

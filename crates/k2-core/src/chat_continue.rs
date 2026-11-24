@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::chat_history::{
     matches_project_family, resolve_claude_session_file, resolve_root_project_path,
 };
+use crate::product_name;
 
 /// Each recent turn is capped at this many Unicode scalar values.
 pub const TURN_CHAR_CAP: usize = 4_000;
@@ -1179,7 +1180,7 @@ pub struct TranscriptDigest {
 }
 
 /// The sentence for a CLI whose message text K2 does not read.
-pub const CURSOR_NO_TEXT: &str = "cursor chats are stored in a database K2 does not read message text from";
+pub const CURSOR_NO_TEXT: &str = concat!("cursor chats are stored in a database ", product_name!(), " does not read message text from");
 
 /// The transcript file of a pi conversation by its header `id`
 /// (WS-A6: sidecars resume pi by file, agents see the id).

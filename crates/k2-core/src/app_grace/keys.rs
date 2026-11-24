@@ -24,6 +24,7 @@
 //! not pass the confirm).
 
 use serde::{Deserialize, Serialize};
+use crate::brand::PRODUCT_NAME;
 
 pub const SCOPE_USERS: &str = "users";
 pub const SCOPE_ROOMS: &str = "rooms";
@@ -140,7 +141,7 @@ pub fn parse_scopes(raw: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         if LATER_SCOPES.contains(&s.as_str()) {
-            return Err(format!("scope {s:?} isn't available yet (Space grants arrive with chat and voice in K2)"));
+            return Err(format!("scope {s:?} isn't available yet (Space grants arrive with chat and voice in {PRODUCT_NAME})"));
         }
         if !SCOPES.contains(&s.as_str()) {
             return Err(format!("unknown scope {s:?}; App keys take {}", SCOPES.join(", ")));

@@ -97,6 +97,7 @@ use crate::workspace::agent_resolve::{resolve_agent_command, ResolvedAgentComman
 use crate::workspace::provider_resume::{
     provider_resume_for_command, provider_resume_for_provider, ProviderResume,
 };
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Every refusal of a main chat whose conversation can't be found starts
 /// with this code, so callers stop instead of spawning something else.
@@ -109,8 +110,8 @@ pub fn is_main_chat_missing(error: &str) -> bool {
 fn main_chat_missing_error(session_id: &str, provider: &str) -> String {
     format!(
         "{MAIN_CHAT_MISSING}: this workspace's main chat {session_id} ({provider}) has no conversation on \
-         disk in any {provider} folder. K2 kept it pinned and did not start or switch to another chat. \
-         List chats with `k2 sessions --past`, then choose one with `k2 sessions main set <id>` \
+         disk in any {provider} folder. {PRODUCT_NAME} kept it pinned and did not start or switch to another chat. \
+         List chats with `{CLI_NAME} sessions --past`, then choose one with `{CLI_NAME} sessions main set <id>` \
          or from this chat's menu."
     )
 }
@@ -1253,7 +1254,7 @@ pub fn never_chatted_takes_model(
     };
     match apply_model(&command, &args, Some(model), ModelApplyMode::ApiOverride).1 {
         ModelApplyResult::IgnoredUnsupported => {
-            Err(format!("{command} has no model flag K2 knows, so --model can't reach it"))
+            Err(format!("{command} has no model flag {PRODUCT_NAME} knows, so --model can't reach it"))
         }
         _ => Ok(()),
     }

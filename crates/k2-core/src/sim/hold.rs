@@ -15,6 +15,8 @@
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 pub const PERSON_HOLD: Duration = Duration::from_secs(3);
 pub const AGENT_WAIT: Duration = Duration::from_secs(2);
@@ -49,13 +51,13 @@ impl AgentBlocked {
     pub fn message(&self) -> String {
         match self {
             AgentBlocked::Held { by, retry_after: None } => {
-                format!("held: {by} has taken over the device. Wait for Hand back (`k2 sim wait`); you can still read `k2 sim tree`.")
+                format!("held: {by} has taken over the device. Wait for Hand back (`{CLI_NAME} sim wait`); you can still read `{CLI_NAME} sim tree`.")
             }
             AgentBlocked::Held { .. } => {
-                "held: a person is using the device. Try again in a moment (`k2 sim wait`).".to_string()
+                concat!("held: a person is using the device. Try again in a moment (`", cli_name!(), " sim wait`).").to_string()
             }
             AgentBlocked::ReadTreeFirst => {
-                "the person handed the device back and the screen may have changed. Run `k2 sim tree` before acting.".to_string()
+                concat!("the person handed the device back and the screen may have changed. Run `", cli_name!(), " sim tree` before acting.").to_string()
             }
         }
     }

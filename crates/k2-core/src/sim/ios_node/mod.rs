@@ -50,6 +50,8 @@ use super::ios::helper::HelperIo;
 use super::ios::lane::{HelperFactory, IosLane, IosLaneConfig};
 use super::ios::simctl::{Output, Runner, SimError, SimResult};
 use super::lane::*;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::cli_name;
 
 // ── the daemon seam ──────────────────────────────────────────────────
 
@@ -240,7 +242,7 @@ fn progress(workspace_id: &str, step: &str) {
 
 /// The teaching line when no Mac node offers iPhones to this server.
 pub fn no_mac_node_line() -> String {
-    "No Mac can run an iPhone for this server yet. The server's owner adds one (a Mac mini is fine) as a compute node: on this server, `k2 compute node add <name>` prints an enroll code (setting up the Mac: `k2 study compute`, ADDING A MACHINE); then, on the Mac, the owner installs Xcode and an iOS runtime and runs `sudo k2-node setup --sim`.".into()
+    concat!("No Mac can run an iPhone for this server yet. The server's owner adds one (a Mac mini is fine) as a compute node: on this server, `", cli_name!(), " compute node add <name>` prints an enroll code (setting up the Mac: `", cli_name!(), " study compute`, ADDING A MACHINE); then, on the Mac, the owner installs Xcode and an iOS runtime and runs `sudo k2-node setup --sim`.").into()
 }
 
 /// The profile id a person sees: `<node>:<device type id>`.
@@ -256,11 +258,11 @@ pub fn profile_name(name: &str, node: &str) -> String {
 fn outdated_line(n: &NodeInfo) -> String {
     let remote = n.sim.as_ref().is_some_and(|s| s.remote_update);
     if remote {
-        format!("Update k2-node on {0}: `k2 compute node update {0}`", n.name)
+        format!("Update k2-node on {0}: `{CLI_NAME} compute node update {0}`", n.name)
     } else {
         // IR-13: remote admin is off on that node, so the update command
         // would fail; say what works.
-        format!("Update k2-node on {0}. Remote updates are off there, so the Mac's owner either copies the new k2-node build to {0} and runs `sudo k2-node setup` on it, or turns remote updates on at {0} (`sudo k2-node admin level policy`, which sets remote admin to policy) so this server's owner can run `k2 compute node update {0}`.", n.name)
+        format!("Update k2-node on {0}. Remote updates are off there, so the Mac's owner either copies the new k2-node build to {0} and runs `sudo k2-node setup` on it, or turns remote updates on at {0} (`sudo k2-node admin level policy`, which sets remote admin to policy) so this server's owner can run `{CLI_NAME} compute node update {0}`.", n.name)
     }
 }
 
@@ -298,7 +300,7 @@ impl IosNodeLane {
 
     /// The live session for a device, or why there is none.
     fn live(&self, dev: &DeviceRef) -> Result<Arc<Session>, LaneError> {
-        let s = self.session(&dev.workspace_key).ok_or_else(|| LaneError::not_running("the iPhone on the Mac node stopped. `k2 sim boot` starts it again (its apps and data are kept on the node)."))?;
+        let s = self.session(&dev.workspace_key).ok_or_else(|| LaneError::not_running(concat!("the iPhone on the Mac node stopped. `", cli_name!(), " sim boot` starts it again (its apps and data are kept on the node).")))?;
         match s.state() {
             State::Open => Ok(s),
             State::Opening | State::Reconnecting { .. } => Err(LaneError::not_running(format!("reconnecting to {}; try again in a moment", s.node_name))),
@@ -341,7 +343,7 @@ impl IosNodeLane {
             .collect();
         if sim_nodes.is_empty() {
             if let Some(w) = &want_node {
-                return Err(LaneError::node(NodeReason::LaneUnavailable, format!("{w} doesn't run iPhones for this server. `k2 sim list-devices --platform ios` lists the ones that do.")));
+                return Err(LaneError::node(NodeReason::LaneUnavailable, format!("{w} doesn't run iPhones for this server. `{CLI_NAME} sim list-devices --platform ios` lists the ones that do.")));
             }
             return Err(LaneError::node(NodeReason::LaneUnavailable, no_mac_node_line()));
         }
@@ -397,7 +399,7 @@ impl IosNodeLane {
                 return Err(LaneError::node(
                     NodeReason::NotAllowed,
                     format!(
-                        "{0} can run iPhones, but it isn't on this workspace's compute node list (`k2 compute allow-nodes`), so nothing from it goes there. Only a person adds it: `k2 compute allow-nodes --add {0} --workspace <workspace>` (the owner or an Admin, from a terminal outside K2).",
+                        "{0} can run iPhones, but it isn't on this workspace's compute node list (`{CLI_NAME} compute allow-nodes`), so nothing from it goes there. Only a person adds it: `{CLI_NAME} compute allow-nodes --add {0} --workspace <workspace>` (the owner or an Admin, from a terminal outside {PRODUCT_NAME}).",
                         n.name
                     ),
                 ));
@@ -405,7 +407,7 @@ impl IosNodeLane {
             let n = not_granted.first().expect("some reason");
             return Err(LaneError::node(
                 NodeReason::NotGranted,
-                format!("{0} can run iPhones, but this workspace has no grant on it. The owner can run: `k2 compute grant {0} --workspace <workspace>`", n.name),
+                format!("{0} can run iPhones, but this workspace has no grant on it. The owner can run: `{CLI_NAME} compute grant {0} --workspace <workspace>`", n.name),
             ));
         }
         // Where this workspace's device already is (its data is there),
@@ -623,7 +625,7 @@ fn closed_line(node: &str, code: &str, message: Option<&str>) -> String {
         psim::codes::REPLACED => "a new session replaced it".to_string(),
         _ => format!("{node} ended the session{}", message.map(|m| format!(": {m}")).unwrap_or_default()),
     };
-    format!("{why}. `k2 sim boot` starts it again (its apps and data are kept on {node}).")
+    format!("{why}. `{CLI_NAME} sim boot` starts it again (its apps and data are kept on {node}).")
 }
 
 fn refusal_error(node: &str, code: &str, message: &str) -> LaneError {
@@ -660,7 +662,7 @@ pub fn url_guard(url: &str, node: &str) -> Result<(), LaneError> {
     if local {
         return Err(LaneError::node(
             NodeReason::UrlUnreachable,
-            format!("The iPhone runs on {node}, which can't reach this server's localhost or LAN. Open the App's public URL (the url line of `k2 app inspect <app-id>`). If that says local only, the App has no public URL yet: publish it first (`k2 publish --help`)."),
+            format!("The iPhone runs on {node}, which can't reach this server's localhost or LAN. Open the App's public URL (the url line of `{CLI_NAME} app inspect <app-id>`). If that says local only, the App has no public URL yet: publish it first (`{CLI_NAME} publish --help`)."),
         ));
     }
     Ok(())

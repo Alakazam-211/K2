@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use super::manifest::{self, Manifest, MANIFEST_FILE};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// The name and version of the rule set, recorded in `createdWith`.
 pub const CHECKER: &str = "k2-app-validate-1";
@@ -71,7 +73,7 @@ pub fn validate_tree(root: &Path, opts: &Options) -> (Report, Option<Manifest>) 
         Err(e) => {
             errors.push(issue(
                 "manifest_missing",
-                format!("{MANIFEST_FILE} not readable at the folder root: {e}. An App needs one (k2 study apps)"),
+                format!("{MANIFEST_FILE} not readable at the folder root: {e}. An App needs one ({CLI_NAME} study apps)"),
                 None,
             ));
             return (Report { ok: false, errors, warnings, checks }, None);
@@ -130,7 +132,7 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
     for k in m.keys_needing_0464() {
         warnings.push(issue(
             "needs_k2_0464",
-            format!("{k} needs K2 0.46.4 or newer: K2 0.46.3 and older refuse this Seed (after a K2 rollback it won't start)"),
+            format!("{k} needs {PRODUCT_NAME} 0.46.4 or newer: {PRODUCT_NAME} 0.46.3 and older refuse this Seed (after a {PRODUCT_NAME} rollback it won't start)"),
             at(k),
         ));
     }
@@ -142,7 +144,7 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
         if !pinned {
             warnings.push(issue(
                 "needs_k2_0467",
-                "chat needs K2 0.46.7 or newer: K2 0.46.6 and older refuse this Seed. Set requires.k2 to \">=0.46.7\"",
+                concat!("chat needs ", product_name!(), " 0.46.7 or newer: ", product_name!(), " 0.46.6 and older refuse this Seed. Set requires.k2 to \">=0.46.7\""),
                 at("chat"),
             ));
         }
@@ -164,7 +166,7 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
     for k in m.keys_needing_0467() {
         warnings.push(issue(
             "needs_k2_0467",
-            format!("{k} needs K2 0.46.7 or newer: K2 0.46.6 and older refuse this Seed (after a K2 rollback it won't start)"),
+            format!("{k} needs {PRODUCT_NAME} 0.46.7 or newer: {PRODUCT_NAME} 0.46.6 and older refuse this Seed (after a {PRODUCT_NAME} rollback it won't start)"),
             at(k.split(':').next().unwrap_or(k)),
         ));
     }
@@ -175,7 +177,7 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
     }
     check_checks(m, errors);
     if m.schema != manifest::SCHEMA {
-        errors.push(issue("manifest_invalid", format!("schema {} is not supported; this K2 reads schema 1", m.schema), at("schema")));
+        errors.push(issue("manifest_invalid", format!("schema {} is not supported; this {PRODUCT_NAME} reads schema 1", m.schema), at("schema")));
     }
     if m.kind != "app" {
         errors.push(issue(
@@ -228,8 +230,8 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
         if h.as_test_guest {
             warnings.push(issue(
                 super::codes::TEST_GUEST_UNAVAILABLE,
-                "host.health.asTestGuest: logged-in health probes need test guests (`k2 app guest test`), which arrive in a later 0.46 \
-                 release; until then a deploy of this Seed fails its health gate with test_guest_unavailable",
+                concat!("host.health.asTestGuest: logged-in health probes need test guests (`", cli_name!(), " app guest test`), which arrive in a later 0.46 \
+                 release; until then a deploy of this Seed fails its health gate with test_guest_unavailable"),
                 at("host.health.asTestGuest"),
             ));
         }
@@ -246,7 +248,7 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
         } else if k.starts_with("K2_")
             || ["PORT", "PATH", "HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY"].contains(&k.as_str())
         {
-            errors.push(issue("manifest_invalid", format!("env name \"{k}\" is set by K2 and can't be declared"), at("env")));
+            errors.push(issue("manifest_invalid", format!("env name \"{k}\" is set by {PRODUCT_NAME} and can't be declared"), at("env")));
         } else if sensitive_name(k) {
             errors.push(issue(
                 "env_secret_inline",
@@ -368,7 +370,7 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
         // (`recording::in_apps`): unknown here until then, as before.
         let known = cat.cap(c).filter(|_| c != crate::skin::CAP_VOICE_RECORD || crate::recording::in_apps());
         match known {
-            None => errors.push(issue("cap_unknown", format!("cap \"{c}\" is not in K2's catalog"), Some(format!("caps: {c}")))),
+            None => errors.push(issue("cap_unknown", format!("cap \"{c}\" is not in {PRODUCT_NAME}'s catalog"), Some(format!("caps: {c}")))),
             Some(row) if !row.exposure.contains(&Exposure::App) => {
                 errors.push(issue("cap_not_for_apps", format!("cap \"{c}\" is not available to Apps"), Some(format!("caps: {c}"))))
             }
@@ -417,7 +419,7 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
         let catalog_features: Vec<&str> = cat.verbs.iter().map(|v| v.feature.as_str()).collect();
         for f in &req.features {
             if !crate::zen::widgets::KNOWN_FEATURES.contains(&f.as_str()) && !catalog_features.contains(&f.as_str()) {
-                errors.push(issue("feature_unknown", format!("requires.features: \"{f}\" is not a K2 feature key"), Some("requires.features".into())));
+                errors.push(issue("feature_unknown", format!("requires.features: \"{f}\" is not a {PRODUCT_NAME} feature key"), Some("requires.features".into())));
             }
         }
         if let Some(range) = &req.k2 {
@@ -425,7 +427,7 @@ fn check_contract(m: &Manifest, errors: &mut Vec<Issue>, _warnings: &mut Vec<Iss
                 Ok(true) => {}
                 Ok(false) => errors.push(issue(
                     "k2_version_unmet",
-                    format!("requires.k2 \"{range}\" is not met by this K2 ({})", env!("CARGO_PKG_VERSION")),
+                    format!("requires.k2 \"{range}\" is not met by this {PRODUCT_NAME} ({})", env!("CARGO_PKG_VERSION")),
                     Some("requires.k2".into()),
                 )),
                 Err(e) => errors.push(issue("manifest_invalid", format!("requires.k2: {e}"), Some("requires.k2".into()))),
@@ -540,7 +542,7 @@ fn sensitive_name(key: &str) -> bool {
 /// `>=0.46.0`, `>0.45`, `<=…`, `<…`, `=…` or a bare version, space-separated
 /// (all must hold).
 pub fn k2_range_ok(range: &str, have: &str) -> Result<bool, String> {
-    let have = parse_ver(have).ok_or_else(|| format!("bad K2 version {have}"))?;
+    let have = parse_ver(have).ok_or_else(|| format!("bad {PRODUCT_NAME} version {have}"))?;
     let mut any = false;
     for part in range.split_whitespace() {
         any = true;

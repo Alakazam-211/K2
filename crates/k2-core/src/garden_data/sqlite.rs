@@ -29,6 +29,7 @@ use super::{
     keys, Actor, DataError, Space, CHANGES_PAGE_ITEMS, CHANGE_LOG_KEEP_SECS, IDLE_CLOSE_SECS, MAX_FILE_BYTES,
     MAX_SAVE_BYTES, MAX_SAVE_KEYS, MAX_SPACE_BYTES, MAX_SPACE_KEYS, MAX_VALUE_BYTES, PAGE_BYTES, TOMBSTONE_KEEP_SECS,
 };
+use crate::brand::PRODUCT_NAME;
 
 /// The file name under `~/.k2/stores/`.
 pub const FILE_NAME: &str = "gardens.sqlite";
@@ -326,7 +327,7 @@ impl SqliteStore {
             let v: u32 = v.as_deref().unwrap_or("0").parse().unwrap_or(u32::MAX);
             if v > SCHEMA_VERSION {
                 return Err(DataError::Unavailable(format!(
-                    "Garden data was written by a newer K2 (schema {v}); update K2 to read it"
+                    "Garden data was written by a newer {PRODUCT_NAME} (schema {v}); update {PRODUCT_NAME} to read it"
                 )));
             }
         }

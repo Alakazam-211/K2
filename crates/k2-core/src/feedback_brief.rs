@@ -43,6 +43,8 @@ use html5ever::tokenizer::{
 };
 use rusqlite::params;
 use sha2::{Digest, Sha256};
+use crate::brand::CLI_NAME;
+use crate::{cli_name, product_name};
 
 // ── Policy (owner settings since 0.45.4) ────────────────────────────────
 
@@ -276,23 +278,23 @@ impl BriefError {
         match self {
             BriefError::TooLarge { bytes } => format!(
                 "the brief is {bytes} bytes; the cap is {MAX_BRIEF_BYTES} bytes (1 MiB, \
-                 inline images included). Shrink or drop screenshots. See `k2 study ticket-brief`."
+                 inline images included). Shrink or drop screenshots. See `{CLI_NAME} study ticket-brief`."
             ),
-            BriefError::Empty => "the brief has no visible text after cleaning. Fill in \
-                 `k2 tickets template` (Problem, What I tried, What I need from you). \
-                 See `k2 study ticket-brief`."
+            BriefError::Empty => concat!("the brief has no visible text after cleaning. Fill in \
+                 `", cli_name!(), " tickets template` (Problem, What I tried, What I need from you). \
+                 See `", cli_name!(), " study ticket-brief`.")
                 .to_string(),
-            BriefError::Invalid => "the brief is not valid UTF-8. Save the file as UTF-8 \
-                 and try again. See `k2 study ticket-brief`."
+            BriefError::Invalid => concat!("the brief is not valid UTF-8. Save the file as UTF-8 \
+                 and try again. See `", cli_name!(), " study ticket-brief`.")
                 .to_string(),
         }
     }
 }
 
 /// Hint for 400 `brief_required` and the `brief_missing` warning.
-pub const BRIEF_REQUIRED_HINT: &str = "agents must attach an HTML brief. Run \
-    `k2 tickets template > brief.html`, fill it in, then \
-    `k2 tickets ask \"<title>\" --html brief.html`. See `k2 study ticket-brief`.";
+pub const BRIEF_REQUIRED_HINT: &str = concat!("agents must attach an HTML brief. Run \
+    `", cli_name!(), " tickets template > brief.html`, fill it in, then \
+    `", cli_name!(), " tickets ask \"<title>\" --html brief.html`. See `", cli_name!(), " study ticket-brief`.");
 
 /// One `{code, hint}` warning on the create response (H17/H25).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -302,8 +304,8 @@ pub struct BriefWarning {
 }
 
 /// The owner setting behind the brief rule, as agents see it in hints.
-pub const BRIEF_SETTING: &str = "Settings → Tickets → \"Require an HTML brief\" \
-    (`k2 tickets settings --brief`)";
+pub const BRIEF_SETTING: &str = concat!("Settings → Tickets → \"Require an HTML brief\" \
+    (`", cli_name!(), " tickets settings --brief`)");
 
 /// Hint for the 400 `brief_required` refusal (Require): names the owner
 /// setting that refused it, then how to fix the ticket.
@@ -385,8 +387,8 @@ pub const ASSIGNEE_REQUIRED_MESSAGE: &str = "A ticket must be assigned to a user
     server (`--assign <user>`).";
 
 /// The owner setting behind the assignee rule, as agents see it in hints.
-pub const ASSIGNEE_SETTING: &str = "Settings → Tickets → \"Require an assignee\" \
-    (`k2 tickets settings --assignee-required`)";
+pub const ASSIGNEE_SETTING: &str = concat!("Settings → Tickets → \"Require an assignee\" \
+    (`", cli_name!(), " tickets settings --assignee-required`)");
 
 /// Hint for the 400 `assignee_required` refusal (Require).
 pub fn assignee_required_hint() -> String {
@@ -397,9 +399,9 @@ pub fn assignee_required_hint() -> String {
 }
 
 /// How to fix it: who the users are, and how to assign.
-pub const ASSIGNEE_REQUIRED_HINT: &str = "Run `k2 connections list --users` to see the \
-    users on this server, then `k2 tickets ask \"<title>\" --assign <user>`. Fix a filed \
-    ticket with `k2 tickets assign <id> <user>`. See `k2 study ticket-brief`.";
+pub const ASSIGNEE_REQUIRED_HINT: &str = concat!("Run `", cli_name!(), " connections list --users` to see the \
+    users on this server, then `", cli_name!(), " tickets ask \"<title>\" --assign <user>`. Fix a filed \
+    ticket with `", cli_name!(), " tickets assign <id> <user>`. See `", cli_name!(), " study ticket-brief`.");
 
 /// The `assignee_required` warning (Warn policy, agent door, no assignee).
 /// `ticket_id` (when filed) makes the fix command copy-pasteable.
@@ -407,7 +409,7 @@ pub fn assignee_missing_warning(ticket_id: Option<&str>) -> BriefWarning {
     let fix = match ticket_id {
         Some(id) => format!(
             " This ticket was filed unassigned: assign it now with \
-             `k2 tickets assign {} <user>`.",
+             `{CLI_NAME} tickets assign {} <user>`.",
             &id[..id.len().min(8)]
         ),
         None => String::new(),
@@ -588,18 +590,18 @@ impl CleanBrief {
         if self.removed {
             out.push(BriefWarning {
                 code: "brief_sanitized",
-                hint: "K2 removed markup the brief may not use (scripts, styles, forms, \
+                hint: concat!(product_name!(), " removed markup the brief may not use (scripts, styles, forms, \
                        remote images, comments, unknown tags or attributes). Check how it \
-                       reads with `k2 tickets show <id> --html`. See `k2 study ticket-brief`."
+                       reads with `", cli_name!(), " tickets show <id> --html`. See `", cli_name!(), " study ticket-brief`.")
                     .to_string(),
             });
         }
         if WARN_WITHOUT_NEED_SECTION && !self.has_need {
             out.push(BriefWarning {
                 code: "brief_no_need",
-                hint: "the brief has no `<section class=\"k2-need\">` (What I need from you). \
+                hint: concat!("the brief has no `<section class=\"k2-need\">` (What I need from you). \
                        Say plainly what the human must decide or do. \
-                       See `k2 tickets template`."
+                       See `", cli_name!(), " tickets template`.")
                     .to_string(),
             });
         }

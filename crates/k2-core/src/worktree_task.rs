@@ -27,6 +27,7 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use serde::Serialize;
+use crate::brand::PRODUCT_NAME;
 
 /// Refusal codes (the daemon answers `{"error":{"code","hint",…}}`).
 pub mod codes {
@@ -538,7 +539,7 @@ pub fn land(root: &Path, onto: &str, branch: &str, expect_onto: Option<&str>, ex
 /// Delete branch `branch` (always `k2/…`) in the repository at `root`.
 pub fn delete_branch(root: &Path, branch: &str) -> Result<(), WtError> {
     if !branch.starts_with("k2/") {
-        return Err(WtError::new(codes::GIT_FAILED, 500, format!("refusing to delete {branch}: not a K2 worktree branch")));
+        return Err(WtError::new(codes::GIT_FAILED, 500, format!("refusing to delete {branch}: not a {PRODUCT_NAME} worktree branch")));
     }
     if !local_branch_exists(root, branch) {
         return Ok(());

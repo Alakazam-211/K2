@@ -29,6 +29,8 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 pub mod audit;
 pub mod backoff;
@@ -169,10 +171,10 @@ pub fn engine_heal_enabled() -> bool {
 }
 
 /// What a refusal says when an App needs the process engine and it is off.
-pub const PROCESS_ENGINE_OFF_HINT: &str = "the unwalled process engine is off on this box (it would run App code as \
-     the daemon's user): deploy guarded (k2 app deploy <app> <folder|seed> --engine guarded, on Linux with the App \
+pub const PROCESS_ENGINE_OFF_HINT: &str = concat!("the unwalled process engine is off on this box (it would run App code as \
+     the daemon's user): deploy guarded (", cli_name!(), " app deploy <app> <folder|seed> --engine guarded, on Linux with the App \
      engine installed), or the owner turns it on for a dev machine with K2_APPS_PROCESS=1 or the owner-only setting \
-     appsProcessEngine";
+     appsProcessEngine");
 
 /// `isolation = none` (a plain process as the developer's user) is only
 /// for dev loops: off Linux, or with `K2_APPS_DEV=1` (AR28). Stage 1's
@@ -369,7 +371,7 @@ pub fn app_id_problem(id: &str) -> Option<(&'static str, String)> {
     if RESERVED_APP_IDS.contains(&id) || CORE_NOUNS.contains(&id) || crate::skin::is_reserved_nested_label(id) {
         return Some((
             codes::APP_ID_RESERVED,
-            format!("'{id}' is reserved (a k2 app subcommand or k2 noun); pick another App id with --as"),
+            format!("'{id}' is reserved (a {CLI_NAME} app subcommand or {CLI_NAME} noun); pick another App id with --as"),
         ));
     }
     None

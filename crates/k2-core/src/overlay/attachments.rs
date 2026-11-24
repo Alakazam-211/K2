@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::secret_paths::{self, SecretHit};
+use crate::brand::CLI_NAME;
 
 /// The only kind in v1.
 pub const KIND_FILE: &str = "file";
@@ -128,7 +129,7 @@ impl AttachError {
             ),
             AttachError::NotAFile { input } => format!("{input} is not a file in this workspace (missing, or a folder)"),
             AttachError::Secret { rel, .. } => format!(
-                "{rel} looks like a secret and can't ride a Thread message; secrets travel through the vault (k2 vault), not the Thread"
+                "{rel} looks like a secret and can't ride a Thread message; secrets travel through the vault ({CLI_NAME} vault), not the Thread"
             ),
         }
     }

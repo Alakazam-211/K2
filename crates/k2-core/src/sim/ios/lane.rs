@@ -20,6 +20,8 @@ use super::tree;
 use crate::sim::lane::*;
 use crate::stream::pixel::PixelLayers;
 use crate::stream::{Bytes, EncodedSource, EncodedUnit, LayerSpec, SourceError, SourceSizes};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// Xcode versions the helper has been run against end to end (the live
 /// test). Others are tried, and the helper refuses clearly if a private
@@ -79,7 +81,7 @@ const INPUT_TIMEOUT: Duration = Duration::from_secs(20);
 pub fn lane_err(e: SimError) -> LaneError {
     let m = e.message;
     match e.code {
-        "unsupported_xcode" => LaneError::unavailable(format!("sim_ios_unsupported_xcode: {m} K2's helper is tested with Xcode {}.", TESTED_XCODE.join(", "))),
+        "unsupported_xcode" => LaneError::unavailable(format!("sim_ios_unsupported_xcode: {m} {PRODUCT_NAME}'s helper is tested with Xcode {}.", TESTED_XCODE.join(", "))),
         "unsupported_os" | "no_xcode" | "no_runtime" | "no_swiftc" | "helper_build_failed" => LaneError::unavailable(m),
         "timeout" | "helper_timeout" => LaneError::timeout(m),
         "no_device" | "not_booted" | "helper_gone" | "helper_exited" => LaneError::not_running(m),
@@ -153,7 +155,7 @@ impl IosLane {
         self.k2_devices()?
             .into_iter()
             .find(|d| d.udid == udid)
-            .ok_or_else(|| SimError::new("no_device", format!("{udid} isn't one of K2's devices any more. Run k2 sim boot.")))
+            .ok_or_else(|| SimError::new("no_device", format!("{udid} isn't one of {PRODUCT_NAME}'s devices any more. Run {CLI_NAME} sim boot.")))
     }
 
     /// The live helper for a booted device, started on first need.
@@ -165,7 +167,7 @@ impl IosLane {
         }
         let d = self.owned(udid)?;
         if d.state != DeviceState::Booted {
-            return Err(SimError::new("not_booted", format!("{} isn't running. Run k2 sim boot.", d.name)));
+            return Err(SimError::new("not_booted", format!("{} isn't running. Run {CLI_NAME} sim boot.", d.name)));
         }
         let xcode = self.xcode_version()?;
         let h = (self.factory)(self.simctl.set_path(), udid, &xcode)?;
@@ -240,11 +242,11 @@ impl IosLane {
         };
         let Some(frame) = target else {
             if secret {
-                return Err(SimError::new("bad_request", "Nothing has focus to put the secret in. Tap the field first (k2 sim tap e3), then type --secret."));
+                return Err(SimError::new("bad_request", concat!("Nothing has focus to put the secret in. Tap the field first (", cli_name!(), " sim tap e3), then type --secret.")));
             }
             return match h.call("type", json!({"text": text}), INPUT_TIMEOUT) {
                 Ok(_) => Ok("typed"),
-                Err(e) if e.code == "unmappable" => Err(SimError::new("unmappable", format!("{} Tap the field first so K2 can set the text directly.", e.message))),
+                Err(e) if e.code == "unmappable" => Err(SimError::new("unmappable", format!("{} Tap the field first so {PRODUCT_NAME} can set the text directly.", e.message))),
                 Err(e) => Err(e),
             };
         };
@@ -292,7 +294,7 @@ impl IosLane {
         }
         Err(SimError::new(
             "type_incomplete",
-            format!("Typed {} characters but the field shows {seen:?}; the app may be rewriting input. Read k2 sim tree.", text.chars().count()),
+            format!("Typed {} characters but the field shows {seen:?}; the app may be rewriting input. Read {CLI_NAME} sim tree.", text.chars().count()),
         ))
     }
 
@@ -688,14 +690,14 @@ impl SimLane for IosLane {
         }
         let swiftc = self.simctl.runner().run("xcrun", &["--find".into(), "swiftc".into()], Duration::from_secs(30));
         if !matches!(swiftc, Ok(ref o) if o.status == 0) {
-            p.needs.push(LaneNeed::OwnerStep { what: "Install Xcode's command-line tools (K2 builds its Simulator helper with them)".into(), command: "xcode-select --install".into() });
+            p.needs.push(LaneNeed::OwnerStep { what: concat!("Install Xcode's command-line tools (", product_name!(), " builds its Simulator helper with them)").into(), command: "xcode-select --install".into() });
         }
         p.ready = p.needs.is_empty();
         let tested = TESTED_XCODE.contains(&xcode.as_str());
         p.detail = Some(if tested {
-            format!("Xcode {xcode}; K2's Simulator helper builds on first use")
+            format!("Xcode {xcode}; {PRODUCT_NAME}'s Simulator helper builds on first use")
         } else {
-            format!("Xcode {xcode} is untested (tested: {}); K2 checks the private APIs it needs at start and refuses clearly if one is gone", TESTED_XCODE.join(", "))
+            format!("Xcode {xcode} is untested (tested: {}); {PRODUCT_NAME} checks the private APIs it needs at start and refuses clearly if one is gone", TESTED_XCODE.join(", "))
         });
         p
     }
@@ -836,7 +838,7 @@ impl SimLane for IosLane {
                 Button::Home => self.helper(id).lane()?.call("button", json!({"name": "home"}), INPUT_TIMEOUT).map(|_| ()).lane(),
                 Button::Lock => self.helper(id).lane()?.call("button", json!({"name": "lock"}), INPUT_TIMEOUT).map(|_| ()).lane(),
                 Button::DevMenu => self.simctl.notify(id, SHAKE).lane(),
-                Button::Back => Err(LaneError::unsupported("iPhones have no Back button. Tap the app's own back control (find it with k2 sim tree), or swipe right from the left edge.")),
+                Button::Back => Err(LaneError::unsupported(concat!("iPhones have no Back button. Tap the app's own back control (find it with ", cli_name!(), " sim tree), or swipe right from the left edge."))),
                 Button::VolumeUp | Button::VolumeDown | Button::AppSwitch => Err(LaneError::unsupported(format!("{button:?} isn't available on the iOS lane yet."))),
             },
             Action::Tap { at } => {

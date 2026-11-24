@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::fs_atomic;
+use crate::{fs_atomic, product_name};
 
 /// Risky per-project config scanner (SS8).
 pub mod scan;
@@ -108,7 +108,7 @@ pub fn gate_harness_spawn(
         return Ok(None);
     }
     let Some(cwd) = cwd else {
-        return Err(gate::refusal_unchecked("(no folder)", "the session has no folder K2 can check"));
+        return Err(gate::refusal_unchecked("(no folder)", concat!("the session has no folder ", product_name!(), " can check")));
     };
     let cwd_s = cwd.to_string_lossy();
     let outcome = match env_home.map(str::trim).filter(|s| !s.is_empty()) {

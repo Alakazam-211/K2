@@ -182,6 +182,8 @@ pub mod handover;
 #[path = "skin_account_deletion.rs"]
 pub mod account_deletion;
 pub use paths::{RoomPathScope, RoomPaths};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
 pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
@@ -398,7 +400,7 @@ fn accepted_caps_csv() -> String {
 pub fn record_cap_not_yet() -> String {
     let now: Vec<&str> = ACCEPTED_CAPS.iter().copied().filter(|c| *c != CAP_VOICE_RECORD).collect();
     format!(
-        "unknown capability \"{CAP_VOICE_RECORD}\" on this K2 (recording in Apps comes with K2's Sew 0.9.0 release); accepted: {}",
+        "unknown capability \"{CAP_VOICE_RECORD}\" on this {PRODUCT_NAME} (recording in Apps comes with {PRODUCT_NAME}'s Sew 0.9.0 release); accepted: {}",
         now.join(", ")
     )
 }
@@ -1023,27 +1025,27 @@ pub const RESERVED_NESTED_LABELS: &[ReservedNestedLabel] = &[
     },
     ReservedNestedLabel {
         label: MEET_NESTED_LABEL,
-        purpose: "K2 Meet (meet.<box>.k2.dev)",
+        purpose: concat!(product_name!(), " Meet (meet.<box>.k2.dev)"),
         grandfathered: true,
     },
     ReservedNestedLabel {
         label: CHAT_NESTED_LABEL,
-        purpose: "K2 chat (chat.<box>.k2.dev)",
+        purpose: concat!(product_name!(), " chat (chat.<box>.k2.dev)"),
         grandfathered: true,
     },
     ReservedNestedLabel {
         label: MAIL_NESTED_LABEL,
-        purpose: "K2 webmail (mail.<box>.k2.dev)",
+        purpose: concat!(product_name!(), " webmail (mail.<box>.k2.dev)"),
         grandfathered: true,
     },
     ReservedNestedLabel {
         label: VOICE_NESTED_LABEL,
-        purpose: "K2 chat voice (voice.<box>.k2.dev)",
+        purpose: concat!(product_name!(), " chat voice (voice.<box>.k2.dev)"),
         grandfathered: true,
     },
     ReservedNestedLabel {
         label: TURN_NESTED_LABEL,
-        purpose: "K2 chat voice relay (TURN)",
+        purpose: concat!(product_name!(), " chat voice relay (TURN)"),
         grandfathered: true,
     },
 ];
@@ -1084,7 +1086,7 @@ pub fn reserved_nested_label_error(label: &str) -> String {
         ),
         // `skin` (and any non-reserved caller misuse) keeps the original text.
         _ => format!(
-            "reserved_label: '{label}' is reserved. Pick another nested label for your UI (k2 study apps; leftover: k2 study skins)."
+            "reserved_label: '{label}' is reserved. Pick another nested label for your UI ({CLI_NAME} study apps; leftover: {CLI_NAME} study skins)."
         ),
     }
 }
@@ -1944,8 +1946,8 @@ fn schema_version(conn: &Connection) -> Result<i64, String> {
 /// daemons never read the version, so this only guards later downgrades.
 pub fn schema_newer_error(found: i64) -> String {
     format!(
-        "skin.db schema version {found} is newer than this K2 understands ({SKIN_SCHEMA_VERSION}). \
-         Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
+        "skin.db schema version {found} is newer than this {PRODUCT_NAME} understands ({SKIN_SCHEMA_VERSION}). \
+         Refusing to open it: update {PRODUCT_NAME}, or restore the skin.db backup taken before the downgrade."
     )
 }
 
@@ -6411,7 +6413,7 @@ pub fn set_app_grant_rooms(
         match app_grant(&tx, &p.id, &app)? {
             Some(g) if g.role_id.is_some() => {
                 return Err(format!(
-                    "'{username}' has a role on that App; change the role's rooms (k2 app role room) or remove the grant first"
+                    "'{username}' has a role on that App; change the role's rooms ({CLI_NAME} app role room) or remove the grant first"
                 ));
             }
             Some(g) => {
@@ -6484,7 +6486,7 @@ pub fn set_app_grant_role(id: &str, role_token: &str) -> Result<(SkinGrant, bool
         };
         if old.kind != "app" {
             return Err(format!(
-                "only an App login (kind=app) has a role; this grant is kind={} (a chat grant changes with k2 app grant set --scope)",
+                "only an App login (kind=app) has a role; this grant is kind={} (a chat grant changes with {CLI_NAME} app grant set --scope)",
                 old.kind
             ));
         }
@@ -6601,12 +6603,12 @@ pub fn assign_login_role(username: &str, role: &str) -> Result<SkinPrincipal, St
         match fits.as_slice() {
             [one] => Ok(Some(one.id.clone())),
             [] => Err(format!(
-                "role '{}' is for another App: '{username}' signs in only to {} (k2 app role list)",
+                "role '{}' is for another App: '{username}' signs in only to {} ({CLI_NAME} app role list)",
                 role.name,
                 grants.iter().map(|g| g.target_id.as_str()).collect::<Vec<_>>().join(", ")
             )),
             many => Err(format!(
-                "'{username}' signs in to {} Apps: give one login the role with k2 app grant role <grant-id> --role {} (ids: k2 app grant list)",
+                "'{username}' signs in to {} Apps: give one login the role with {CLI_NAME} app grant role <grant-id> --role {} (ids: {CLI_NAME} app grant list)",
                 many.len(),
                 role.name
             )),

@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use crate::product_name;
 
 /// The shared desktop for people on a server with no screen.
 pub const VIRTUAL: &str = "virtual";
@@ -322,7 +323,7 @@ impl State {
     /// The tab's sentence (§6). `reason` covers `closed`.
     pub fn message(self, awake_limit: u32) -> String {
         match self {
-            State::Closed => "This server has no screen. K2 can start a desktop on it.".into(),
+            State::Closed => concat!("This server has no screen. ", product_name!(), " can start a desktop on it.").into(),
             State::Waiting => format!("Waiting for another desktop to go to sleep. This server runs {awake_limit} at a time."),
             State::Starting => "Starting the desktop…".into(),
             State::Ready => "Ready.".into(),

@@ -20,6 +20,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::when::{self, WhenInput};
 use crate::db::schema::{AgentHeartbeat, HeartbeatFire, REMINDER_KIND};
 use crate::workspace::agent_identity::resolve_project_id;
+use crate::brand::CLI_NAME;
 
 /// Longest reminder text. Always inline, under the 4096-byte file-pointer
 /// cutoff, so the agent gets the words and not a pointer to them.
@@ -161,7 +162,7 @@ pub fn add(project_path: &str, new: NewReminder<'_>, now: DateTime<Utc>) -> Resu
     let pending = pending_count(&conn, &project_id).map_err(|e| e.to_string())?;
     if pending >= MAX_PENDING {
         return Err(format!(
-            "this workspace already has {MAX_PENDING} pending reminders (the most it can hold); cancel some first: k2 heartbeat remind list"
+            "this workspace already has {MAX_PENDING} pending reminders (the most it can hold); cancel some first: {CLI_NAME} heartbeat remind list"
         ));
     }
     let name = match new.name.map(str::trim).filter(|n| !n.is_empty()) {
@@ -176,7 +177,7 @@ pub fn add(project_path: &str, new: NewReminder<'_>, now: DateTime<Utc>) -> Resu
             return Err(format!("a heartbeat is already named '{name}'; pick another --name"));
         }
         if existing.retired_at.is_none() {
-            return Err(format!("a reminder named '{name}' is already pending; pick another --name, or: k2 heartbeat remind snooze {name} <when>"));
+            return Err(format!("a reminder named '{name}' is already pending; pick another --name, or: {CLI_NAME} heartbeat remind snooze {name} <when>"));
         }
         // W13: the name of a finished reminder is free again. Its fires
         // keep `schedule_name`, so the history stays.

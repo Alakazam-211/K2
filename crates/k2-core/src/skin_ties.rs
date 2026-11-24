@@ -61,6 +61,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::{now_secs, with_conn, RoomPolicy, SkinGrant, SkinRole, HOST_APP_ID, PERSON_ONLY_CAPS};
+use crate::product_name;
 
 pub const REASON_CREATED: &str = "created";
 pub const REASON_PASSWORD: &str = "password";
@@ -432,8 +433,8 @@ impl Released {
     fn line(&self) -> String {
         let what = match self.via {
             VIA_OWNER_CLAIM | VIA_HANDOVER_CLAIM => "the owner took this login over".to_string(),
-            VIA_OWNER_RESET => "the person chose this password on K2's own page".to_string(),
-            _ => "the person chose this password; until a form posts straight to K2, the App's server could still have seen it".to_string(),
+            VIA_OWNER_RESET => concat!("the person chose this password on ", product_name!(), "'s own page").to_string(),
+            _ => concat!("the person chose this password; until a form posts straight to ", product_name!(), ", the App's server could still have seen it").to_string(),
         };
         format!(
             "tie released via {}: {what}. Set up by {} ({}) for workspace {}",

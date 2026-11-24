@@ -40,6 +40,7 @@ use super::bundle::asset_mime;
 use super::schema::Diagnostic;
 use super::store::{ZenError, ZenFiles};
 use super::widgets::{self, MANIFEST_FILE};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// At most this many files in one staged folder.
 pub const MAX_STAGED_FILES: usize = 64;
@@ -182,7 +183,7 @@ pub fn staged_name(given: Option<&str>, files: &BTreeMap<String, Vec<u8>>, fallb
         .ok_or_else(|| ZenError::BadRequest("name the widget (its folder name), or give manifest.json an \"id\"".into()))?;
     if name.starts_with(BUILTIN_PREFIX) {
         return Err(ZenError::BadRequest(format!(
-            "'{name}' is built into K2 and can't be changed; copy it with k2 zen widget new <name> --from {name}"
+            "'{name}' is built into {PRODUCT_NAME} and can't be changed; copy it with {CLI_NAME} zen widget new <name> --from {name}"
         )));
     }
     if !super::valid_theme_name(&name) {
@@ -333,7 +334,7 @@ impl ZenFiles {
         let name = self.check_widget_folder_put(widget, files)?;
         let dir = self.widget_dir(&name);
         if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(ZenError::BadRequest(format!("{} is a link; K2 writes only real widget folders", widgets::WIDGETS_DIR)));
+            return Err(ZenError::BadRequest(format!("{} is a link; {PRODUCT_NAME} writes only real widget folders", widgets::WIDGETS_DIR)));
         }
         fs::create_dir_all(&dir).map_err(|e| ZenError::Io(format!("{}: {e}", dir.display())))?;
         let mut written = Vec::new();
@@ -405,8 +406,8 @@ impl ZenFiles {
             cfg.push_str(&format!("{k} = {}", toml_string(v)));
         }
         format!(
-            "# K2's widget preview (k2 zen widget preview). K2 rewrites this page on\n\
-             # every preview and removes it with k2 zen widget preview --clear.\n\
+            "# {PRODUCT_NAME}'s widget preview ({CLI_NAME} zen widget preview). {PRODUCT_NAME} rewrites this page on\n\
+             # every preview and removes it with {CLI_NAME} zen widget preview --clear.\n\
              schema = 1\n\
              template = \"{blank}\"\n\
              \n\
@@ -480,7 +481,7 @@ impl ZenFiles {
             "validate": put["validate"],
             "page": placed["file"],
             "open": format!(
-                "Open Zen (Ctrl+Cmd+Z) and switch to the \"{PREVIEW_GARDEN}\" Garden. Runtime errors: k2 zen widget errors {folder}. Remove it: k2 zen widget preview --clear."
+                "Open Zen (Ctrl+Cmd+Z) and switch to the \"{PREVIEW_GARDEN}\" Garden. Runtime errors: {CLI_NAME} zen widget errors {folder}. Remove it: {CLI_NAME} zen widget preview --clear."
             ),
         }))
     }

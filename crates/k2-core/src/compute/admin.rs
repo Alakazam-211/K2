@@ -22,6 +22,8 @@ use serde_json::{json, Map, Value};
 use super::proto::admin::{self as wire, Class, SignedCommand};
 use super::proto::crypto;
 use super::proto::health::Health;
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// Pending requests one proposer (workspace, or human) may hold (R2).
 pub const MAX_PENDING_PER_PROPOSER: i64 = 10;
@@ -573,7 +575,7 @@ pub const POLICY_SMALLER_IS_WIDER: &[&str] = &["disk_floor_gb", "gate_reserved_s
 pub const POLICY_DEPRECATED: &[&str] = &["gate_reserved_slots"];
 /// The refusal for setting a deprecated key.
 pub const GATE_RESERVED_DEPRECATED: &str =
-    "gate_reserved_slots is ignored since 0.46.5: no slot is reserved, CI takes the next free slot (k2 compute run --tier ci). Remove it with gate_reserved_slots=null";
+    concat!("gate_reserved_slots is ignored since 0.46.5: no slot is reserved, CI takes the next free slot (", cli_name!(), " compute run --tier ci). Remove it with gate_reserved_slots=null");
 
 /// The controller's guess whether a `policy.set` narrows, against the
 /// policy the node last reported (`policy.show`). Conservative: only a
@@ -661,7 +663,7 @@ pub fn classify_servers_limits(
 pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, String)> {
     let class = step_class(verb).ok_or((
         codes::VERB_NOT_ALLOWED,
-        format!("{verb:?} is not an admin verb this node understands (k2 study compute)"),
+        format!("{verb:?} is not an admin verb this node understands ({CLI_NAME} study compute)"),
     ))?;
     if class == Class::Read {
         return Err((codes::BAD_ARGS, format!("{verb} is a read verb: no request needed")));
@@ -698,7 +700,7 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
             }
         }
         "control.pause" | "control.drain" | "control.resume" => only_keys(a, &[]).map_err(bad)?,
-        "node.update" => return Err(bad("updates go through k2 compute node update (a signed build offer)".into())),
+        "node.update" => return Err(bad(concat!("updates go through ", cli_name!(), " compute node update (a signed build offer)").into())),
         "node.rollback" => {
             only_keys(a, &["reason", wire::ARG_NOW]).map_err(bad)?;
             wire::now_arg(args).map_err(|r| bad(r.message))?;
@@ -869,7 +871,7 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
             if a.get("wipe").and_then(Value::as_bool) == Some(true) { ", wipe its files now" } else { ", wipe its files in 24 h" }
         ),
         "servers.owner" => format!(
-            "make {} (key {}; check it matches what that server shows as controllerFp in k2 compute nodes --json) the owner of {node} (as root): it gets this node's admin and approvals, after a drain{}; {}; caches {}",
+            "make {} (key {}; check it matches what that server shows as controllerFp in {CLI_NAME} compute nodes --json) the owner of {node} (as root): it gets this node's admin and approvals, after a drain{}; {}; caches {}",
             s("server"),
             s("fp"),
             if a.get("now").and_then(Value::as_bool) == Some(true) { " that stops running jobs" } else { " (running jobs finish first, up to 30 min)" },

@@ -33,6 +33,7 @@ use super::{
     valid_agent_id, AgentRef, Author, Card, CardOption, CardState, Detection, ExtError,
     ExternalAgent, ExternalAgentProvider, ProviderStatus, SendReceipt, ThreadMessage, ThreadPage,
 };
+use crate::product_name;
 
 pub const KIND: &str = "grokbot";
 pub const LABEL: &str = "Grok Bot";
@@ -719,7 +720,7 @@ impl ExternalAgentProvider for GrokBot {
         };
         if !transcript_layout_known(&conn) {
             return Ok(ThreadPage::unsupported(
-                "Grok Bot's chat store has a layout K2 doesn't know yet",
+                concat!("Grok Bot's chat store has a layout ", product_name!(), " doesn't know yet"),
                 since_v,
             ));
         }
@@ -835,7 +836,7 @@ impl ExternalAgentProvider for GrokBot {
             .map_err(|e| ExtError::Unreachable(redact_err(&e)))?;
         let status = resp.status();
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(ExtError::Unreachable("Grok Bot refused K2's token".into()));
+            return Err(ExtError::Unreachable(concat!("Grok Bot refused ", product_name!(), "'s token").into()));
         }
         if !status.is_success() {
             return Err(ExtError::Protocol(format!(
@@ -928,7 +929,7 @@ fn clean_entry_text(raw: &str) -> Option<String> {
 
 // ── transcript reading ──────────────────────────────────────────────────
 
-const UNKNOWN_LAYOUT: &str = "Grok Bot's chat store has a layout K2 doesn't know yet";
+const UNKNOWN_LAYOUT: &str = concat!("Grok Bot's chat store has a layout ", product_name!(), " doesn't know yet");
 const UNREADABLE: &str = "Grok Bot's chat store could not be read";
 
 /// What a read of an agent's `store.db` found.
@@ -1193,7 +1194,7 @@ fn agent_ref(v: &Value) -> Option<AgentRef> {
 fn denied() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::PermissionDenied,
-        "path outside K2's Grok Bot allowlist",
+        concat!("path outside ", product_name!(), "'s Grok Bot allowlist"),
     )
 }
 

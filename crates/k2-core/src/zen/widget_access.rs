@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
 
 use super::USER_WIDGET_CAPS;
+use crate::brand::PRODUCT_NAME;
 
 /// Files agents must never write (UWB26, as amended by
 /// prd-zen-garden-sync-defaults-v1 SD8/GT1): the sync state, its news and
@@ -214,7 +215,7 @@ pub fn check_placement_cap(
         return Err(not_approved(format!("'{widget}' has no good version now")));
     }
     if live != hash {
-        return Err(not_approved(format!("'{widget}' changed since its frame loaded; K2 reloads the widget")));
+        return Err(not_approved(format!("'{widget}' changed since its frame loaded; {PRODUCT_NAME} reloads the widget")));
     }
     let full = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
     // Garden access (switch on): the signer gate. Off: `full` unchanged.

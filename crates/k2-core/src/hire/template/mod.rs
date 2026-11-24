@@ -41,6 +41,7 @@ pub use save::{SaveInput, SaveOutcome, TemplateError};
 pub use upgrade::{upgrade, upgrade_at_start, UpgradeReport};
 
 use super::{HireCaller, HireError};
+use crate::brand::CLI_NAME;
 
 include!(concat!(env!("OUT_DIR"), "/agent_templates.rs"));
 
@@ -212,7 +213,7 @@ fn unknown(id: &str) -> HireError {
     HireError::new(
         404,
         "unknown_template",
-        format!("no agent template '{id}' (see: k2 agent template list --all)"),
+        format!("no agent template '{id}' (see: {CLI_NAME} agent template list --all)"),
     )
 }
 
@@ -367,7 +368,7 @@ pub fn bind_answers(t: &Template, given: &BTreeMap<String, String>) -> Result<BT
                 format!("its question ids: {}", ids.join(", "))
             };
             return Err(HireError::usage(format!(
-                "template '{}' has no question '{k}'; {valid} (see: k2 agent template show {})",
+                "template '{}' has no question '{k}'; {valid} (see: {CLI_NAME} agent template show {})",
                 t.meta.id, t.meta.id
             )));
         }

@@ -23,6 +23,8 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 pub const MODE_PRIVATE: &str = "private";
 pub const MODE_PIN: &str = "pin";
@@ -179,7 +181,7 @@ fn refuse_reserved(label: &str) -> R<()> {
     if is_covered(label) {
         Ok(())
     } else {
-        Err(format!("reserved_label: '{label}' is K2's own: its visibility isn't set here."))
+        Err(format!("reserved_label: '{label}' is {PRODUCT_NAME}'s own: its visibility isn't set here."))
     }
 }
 
@@ -369,7 +371,7 @@ pub fn set_dev(conn: &Connection, label: &str, dev: bool, idle_secs: Option<i64>
     refuse_reserved(&label)?;
     if let Some(s) = idle_secs {
         if s != 0 && !(IDLE_MIN_SECS..=IDLE_MAX_SECS).contains(&s) {
-            return Err("idle_range: --idle (how long an unused dev site runs before K2 stops it) is 5m to 24h, or off.".into());
+            return Err(concat!("idle_range: --idle (how long an unused dev site runs before ", product_name!(), " stops it) is 5m to 24h, or off.").into());
         }
     }
     upsert(conn, &label, by, "dev = ?4, idle_secs = ?5", &[&(dev as i64), &idle_secs])?;
@@ -425,10 +427,10 @@ pub const DOOR_UNSUPPORTED: &str = "visibility_door_unsupported";
 pub fn door_refusal() -> Option<String> {
     let cfg = match crate::tunnel::config::load_without_token() {
         Ok(c) => c,
-        Err(e) => return Some(format!("{DOOR_UNSUPPORTED}: the tunnel config can't be read, so K2 can't promise its gate covers this site ({e}).")),
+        Err(e) => return Some(format!("{DOOR_UNSUPPORTED}: the tunnel config can't be read, so {PRODUCT_NAME} can't promise its gate covers this site ({e}).")),
     };
     (!crate::tunnel::config::e2e_enabled(&cfg)).then(|| {
-        format!("{DOOR_UNSUPPORTED}: E2E is off on this server, so K2's gate can't see this site's traffic and can't make it private or add a PIN. Turn E2E back on first; until then this site stays as it is.")
+        format!("{DOOR_UNSUPPORTED}: E2E is off on this server, so {PRODUCT_NAME}'s gate can't see this site's traffic and can't make it private or add a PIN. Turn E2E back on first; until then this site stays as it is.")
     })
 }
 

@@ -25,6 +25,7 @@ pub mod store;
 use std::cmp::Ordering;
 
 use base64::Engine as _;
+use crate::{cli_name, product_name};
 
 /// Refusal codes (snake_case; the CLI prints them, `k2 explain` lists them).
 pub mod codes {
@@ -203,7 +204,7 @@ fn dns_part(p: &str) -> bool {
 pub fn dl_id(box_sub: &str, app_id: &str) -> Result<String, String> {
     let (b, a) = (box_sub.trim().to_ascii_lowercase(), app_id.trim().to_ascii_lowercase());
     if b.is_empty() {
-        return Err("this box has no K2 Connect name yet, so its Apps have no download id (k2 connect login first)".into());
+        return Err(concat!("this box has no K2 Connect name yet, so its Apps have no download id (", cli_name!(), " connect login first)").into());
     }
     if !dns_part(&b) {
         return Err(format!("the box name '{b}' can't be part of a download id ([a-z0-9-], no leading, trailing or double -)"));
@@ -264,8 +265,8 @@ pub fn parse_pubkey(raw: &str) -> Result<PubKey, (&'static str, String)> {
     let secret = || {
         (
             codes::SECRET_KEY_REFUSED,
-            "that is a SECRET key: K2 keeps only the App's public key. Keep the private key on your signing Mac (or in your vault \
-             for an unattended job on your own node) and give K2 the .pub file's content (tauri.conf.json plugins.updater.pubkey)"
+            concat!("that is a SECRET key: ", product_name!(), " keeps only the App's public key. Keep the private key on your signing Mac (or in your vault \
+             for an unattended job on your own node) and give ", product_name!(), " the .pub file's content (tauri.conf.json plugins.updater.pubkey)")
                 .to_string(),
         )
     };

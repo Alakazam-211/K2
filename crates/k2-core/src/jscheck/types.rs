@@ -23,6 +23,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use crate::zen::schema::Diagnostic;
+use crate::cli_name;
 
 /// The generated widget API the scripts are checked against.
 pub const K2_DTS: &str = include_str!("../../../../sdk/generated/k2.d.ts");
@@ -99,7 +100,7 @@ pub fn check_widget(label: &str, files: &BTreeMap<String, Vec<u8>>, checker: Opt
             line: d.line,
             col: d.col,
             message: format!("type: {}", d.message),
-            suggestion: Some("check the verb's arguments and answer in k2 zen guide api (k2.d.ts); types never block a widget".into()),
+            suggestion: Some(concat!("check the verb's arguments and answer in ", cli_name!(), " zen guide api (k2.d.ts); types never block a widget").into()),
         });
     }
     if r.hidden > 0 {

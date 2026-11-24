@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use crate::brand::PRODUCT_NAME;
 
 /// Read at most this much of one file; a bigger file is a finding.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024;
@@ -1010,7 +1011,7 @@ impl Scanner<'_> {
                 .collect::<Vec<_>>()
                 .join(" ");
             self.hash_invoked(&line);
-            let mut detail = format!("K2 starts `{}`", mask_command(&line));
+            let mut detail = format!("{PRODUCT_NAME} starts `{}`", mask_command(&line));
             if !env.is_empty() {
                 let e: Vec<String> = env.iter().map(|(k, v)| env_detail(k, v)).collect();
                 detail.push_str(&format!(" with {}", e.join(" ")));

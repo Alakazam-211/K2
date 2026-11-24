@@ -23,6 +23,8 @@ use super::limits;
 use super::store::{self, SimRow};
 use super::stream::SimState;
 use super::tree::Snapshot;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 // ── inputs ───────────────────────────────────────────────────────────
 
@@ -101,7 +103,7 @@ impl SimError {
         v
     }
     fn no_device() -> SimError {
-        SimError::new(409, "sim_no_device", "this workspace has no running device. Boot one with `k2 sim boot`.")
+        SimError::new(409, "sim_no_device", concat!("this workspace has no running device. Boot one with `", cli_name!(), " sim boot`."))
     }
 }
 
@@ -359,7 +361,7 @@ impl Manager {
                 return Err(SimError::new(
                     400,
                     SIM_LANE_UNKNOWN,
-                    format!("unknown platform '{other}': use android or ios (k2 sim status lists the lanes this server has)"),
+                    format!("unknown platform '{other}': use android or ios ({CLI_NAME} sim status lists the lanes this server has)"),
                 ));
             }
         };
@@ -535,7 +537,7 @@ impl Manager {
             if matches!(r.state, SimState::Running | SimState::Booting) {
                 if let Some(p) = req.platform.as_deref().and_then(LaneKind::parse) {
                     if p.platform() != r.lane.platform() {
-                        return Err(SimError::new(409, "sim_busy", format!("this workspace already runs a {} device; `k2 sim stop` it first", r.lane.platform())));
+                        return Err(SimError::new(409, "sim_busy", format!("this workspace already runs a {} device; `{CLI_NAME} sim stop` it first", r.lane.platform())));
                     }
                 }
                 return Ok(self.view(&r, ws));
@@ -554,7 +556,7 @@ impl Manager {
             let setup = probe.setup.as_ref();
             let has_licence = probe.needs.iter().any(|n| matches!(n, LaneNeed::Licence { .. }));
             let message = if setup.is_some_and(|s| s.running) {
-                format!("the {} lane is still setting up{detail}. Devices can boot when it finishes; `k2 sim status` follows it.", lane.kind())
+                format!("the {} lane is still setting up{detail}. Devices can boot when it finishes; `{CLI_NAME} sim status` follows it.", lane.kind())
             } else if setup.is_some_and(|s| s.error.is_some()) && !has_licence {
                 format!("the {} lane isn't set up{detail}. The server's owner runs it again: Retry setup on the Mobile tab.", lane.kind())
             } else {
@@ -828,7 +830,7 @@ impl Manager {
     fn resolve_point(&self, row: &SimRow, id: &str) -> R<(Point, Option<super::tree::Rect>)> {
         let snap = self.with_live(row.id, |l| l.snapshot.clone());
         let Some(snap) = snap else {
-            return Err(SimError::new(409, "sim_stale_element", format!("no snapshot yet for {id}. Run `k2 sim tree` first.")));
+            return Err(SimError::new(409, "sim_stale_element", format!("no snapshot yet for {id}. Run `{CLI_NAME} sim tree` first.")));
         };
         let el = snap.resolve(id).map_err(|e| SimError::new(409, "sim_stale_element", e.to_string()))?;
         let p = snap.tap_point(&el.id).map_err(|e| SimError::new(409, "sim_stale_element", e.to_string()))?;
@@ -1378,7 +1380,7 @@ impl Manager {
             });
         if let Err(e) = spawned {
             // Nothing runs: don't leave the lane reading "installing".
-            let why = format!("K2 couldn't start the setup: {e}");
+            let why = format!("{PRODUCT_NAME} couldn't start the setup: {e}");
             if let Some(st) = self.setup.lock().get_mut(&lane_kind) {
                 st.running = false;
                 st.error = Some(why.clone());
@@ -1503,7 +1505,7 @@ impl Manager {
                     out.push(format!("{} adopted", row.wire_id()));
                 }
                 Ok(None) => {
-                    self.mark(&row, SimState::Stopped, "the device stopped while K2 restarted", "adopt_lost");
+                    self.mark(&row, SimState::Stopped, concat!("the device stopped while ", product_name!(), " restarted"), "adopt_lost");
                     out.push(format!("{} gone", row.wire_id()));
                 }
                 Err(e) => {

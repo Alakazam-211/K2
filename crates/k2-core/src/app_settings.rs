@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use crate::cli_name;
 
 
 // ── Settings types (moved verbatim from src-tauri/src/commands/settings.rs) ──
@@ -1798,7 +1799,7 @@ pub fn apply_new_server_defaults(server_in_use: &dyn Fn() -> bool) -> Result<New
 
 /// The refusal for `gardenAccess: false` (or anything but `true`).
 pub const GARDEN_ACCESS_ALWAYS_ON: &str =
-    "gardenAccess can't be turned off: Garden access is how Gardens work from 0.46.3 (see `k2 study garden-changes`)";
+    concat!("gardenAccess can't be turned off: Garden access is how Gardens work from 0.46.3 (see `", cli_name!(), " study garden-changes`)");
 
 /// The Org Chart's night times (`orgChartNight`), `HH:MM` in the owner's
 /// timezone. Checked by `org_chart::day::NightTimes::parse` on write.

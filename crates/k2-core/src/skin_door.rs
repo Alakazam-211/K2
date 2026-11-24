@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::frame_policy::FramePolicy;
 use crate::skin::{self, SkinFrontDoor};
 use crate::tunnel::config::SUBDOMAIN_HOST;
+use crate::brand::CLI_NAME;
 
 /// Loopback listen for nested Internal + localhost. Not 38471 (air-gap), not 443.
 pub const LOOPBACK_PORT: u16 = 38472;
@@ -902,7 +903,7 @@ fn refuse_if_workspace_owned(label: &str) -> Result<(), String> {
         Some(_) => Err(format!(
             "label_owned_by_other_workspace: '{label}' is attributed to a workspace on this \
              server, so the front door will not take it over. The server owner can release it \
-             with `k2 publish subdomain unclaim {label}` from that workspace."
+             with `{CLI_NAME} publish subdomain unclaim {label}` from that workspace."
         )),
     }
 }

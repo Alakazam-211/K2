@@ -30,6 +30,8 @@ use super::widget_access::{effective_caps, WidgetOrigin, WidgetPauses};
 use super::schema::{self, Diagnostic};
 use super::store::{ZenError, ZenFile, ZenFiles, HISTORY_KEEP};
 use super::widgets::{self, Manifest, WIDGETS_DIR};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::cli_name;
 
 pub const LAST_GOOD_HTML: &str = "last-good.html";
 pub const LAST_GOOD_JSON: &str = "last-good.json";
@@ -160,7 +162,7 @@ pub fn widget_label(name: &str) -> String {
 }
 
 fn missing_folder_message(name: &str) -> String {
-    format!("no widget folder '{name}'; make one with k2 zen widget new {name}")
+    format!("no widget folder '{name}'; make one with {CLI_NAME} zen widget new {name}")
 }
 
 fn snapshot_at(name: &str) -> String {
@@ -247,7 +249,7 @@ impl ZenFiles {
         match parse_widget_ref(name.trim()) {
             Ok(WidgetRef::User(n)) => Ok(n),
             Ok(WidgetRef::Builtin { .. }) => Err(ZenError::BadRequest(format!(
-                "'{name}' is built into K2 and can't be changed; copy it with k2 zen widget new <name> --from {name}"
+                "'{name}' is built into {PRODUCT_NAME} and can't be changed; copy it with {CLI_NAME} zen widget new <name> --from {name}"
             ))),
             Err(m) => Err(ZenError::BadRequest(m)),
         }
@@ -440,7 +442,7 @@ impl ZenFiles {
         };
         let Some((c, read_errors, read_warnings, _)) = self.check_now(widget) else {
             let message = if builtin {
-                format!("this K2 has no built-in widget '{widget}'; update K2, or name one it has")
+                format!("this {PRODUCT_NAME} has no built-in widget '{widget}'; update {PRODUCT_NAME}, or name one it has")
             } else {
                 missing_folder_message(widget)
             };
@@ -668,7 +670,7 @@ impl ZenFiles {
         }
         let Some((c, mut errors, mut warnings, _)) = self.check_now(widget) else {
             return Err(ZenError::NotFound(if widget.starts_with(builtin_widgets::BUILTIN_PREFIX) {
-                format!("this K2 has no built-in widget '{widget}'")
+                format!("this {PRODUCT_NAME} has no built-in widget '{widget}'")
             } else {
                 missing_folder_message(widget)
             }));
@@ -709,13 +711,13 @@ impl ZenFiles {
                 "placements": v.placements,
                 "note": match status {
                     "failed" => format!(
-                        "these runtime errors were logged while the version on disk now ran, the newest {} (validate reads that log; it doesn't watch a running frame). Each counts for {} h. Fix, save and validate again; once fixed, k2 zen widget errors {name} --clear --all drops them",
+                        "these runtime errors were logged while the version on disk now ran, the newest {} (validate reads that log; it doesn't watch a running frame). Each counts for {} h. Fix, save and validate again; once fixed, {CLI_NAME} zen widget errors {name} --clear --all drops them",
                         newest.as_deref().unwrap_or("at an unknown time"),
                         runs::RUNTIME_FRESH_SECS / 3600,
                     ),
                     "pending" => "this version hasn't run in a Zen window yet (an open Zen window reloads it on its own); validate again to see its runtime errors".to_string(),
                     _ if !placed => "not placed in any Garden: it runs once a Garden places it".to_string(),
-                    _ if !v.stale.is_empty() => "no recent runtime errors; older ones are warnings (k2 zen widget errors <name> --clear drops them)".to_string(),
+                    _ if !v.stale.is_empty() => concat!("no recent runtime errors; older ones are warnings (", cli_name!(), " zen widget errors <name> --clear drops them)").to_string(),
                     _ => "ran in a Zen window with no runtime errors".to_string(),
                 },
             });
@@ -790,7 +792,7 @@ impl ZenFiles {
         let pick = match to {
             Some(t) => snaps.iter().find(|s| s.name == t.trim()).cloned().ok_or_else(|| {
                 ZenError::NotFound(format!(
-                    "no snapshot '{t}' for {}; list them with k2 zen history --widget {name}",
+                    "no snapshot '{t}' for {}; list them with {CLI_NAME} zen history --widget {name}",
                     widget_label(&name)
                 ))
             })?,
@@ -847,7 +849,7 @@ impl ZenFiles {
         let name = self.user_widget_name(widget)?;
         let dir = self.widget_dir(&name);
         if !fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
-            return Err(ZenError::UnknownWidget(format!("no widget folder '{name}'; list them with k2 zen widget list")));
+            return Err(ZenError::UnknownWidget(format!("no widget folder '{name}'; list them with {CLI_NAME} zen widget list")));
         }
         let mut gardens: Vec<(String, String)> = self
             .custom_placements()
@@ -877,7 +879,7 @@ impl ZenFiles {
             "widget": name,
             "file": widget_label(&name),
             "snapshot": snapshot,
-            "undo": format!("k2 zen reset --widget {name} --to {snapshot}"),
+            "undo": format!("{CLI_NAME} zen reset --widget {name} --to {snapshot}"),
         }))
     }
 
@@ -899,7 +901,7 @@ impl ZenFiles {
             match parse_widget_ref(from) {
                 Ok(r @ WidgetRef::Builtin { .. }) => {
                     let w = builtin_widgets::builtin_widget(&r)
-                        .ok_or_else(|| ZenError::BadRequest(format!("this K2 has no built-in widget '{from}'")))?;
+                        .ok_or_else(|| ZenError::BadRequest(format!("this {PRODUCT_NAME} has no built-in widget '{from}'")))?;
                     w.files.iter().map(|(n, t)| (n.to_string(), t.to_string())).collect()
                 }
                 _ => {
@@ -1075,7 +1077,7 @@ impl ZenFiles {
             if self.check_now(widget).is_none() && !frozen {
                 let (line, col) = at(format!("page.widget.{i}.widget"));
                 let message = if widget.starts_with(builtin_widgets::BUILTIN_PREFIX) {
-                    format!("this K2 has no built-in widget '{widget}'; update K2, or name one it has")
+                    format!("this {PRODUCT_NAME} has no built-in widget '{widget}'; update {PRODUCT_NAME}, or name one it has")
                 } else {
                     missing_folder_message(widget)
                 };
@@ -1104,7 +1106,7 @@ impl ZenFiles {
                             line,
                             col,
                             message: format!("'{a}' isn't a source address (name or name::host): {}", e.hint),
-                            suggestion: Some("set config.source to a source name or name::host (k2 sources list names them)".into()),
+                            suggestion: Some(concat!("set config.source to a source name or name::host (", cli_name!(), " sources list names them)").into()),
                         });
                     }
                 }
@@ -1140,7 +1142,7 @@ impl ZenFiles {
                         line,
                         col,
                         message: format!("'{a}' isn't a source address (name or name::host): {}", e.hint),
-                        suggestion: Some("set config.source to a source name or name::host (k2 sources list names them)".into()),
+                        suggestion: Some(concat!("set config.source to a source name or name::host (", cli_name!(), " sources list names them)").into()),
                     });
                 }
             }
@@ -1272,7 +1274,7 @@ fn runtime_diagnostics(name: &str, failing: &[J], now: chrono::DateTime<chrono::
     let newest = newest_error_age(failing, now).unwrap_or_else(|| "at an unknown time".to_string());
     let mut out = vec![Diagnostic {
         suggestion: Some(format!(
-            "read them with k2 zen widget errors {name}; fix, save and validate again (once fixed, k2 zen widget errors {name} --clear --all drops them)"
+            "read them with {CLI_NAME} zen widget errors {name}; fix, save and validate again (once fixed, {CLI_NAME} zen widget errors {name} --clear --all drops them)"
         )),
         file: widget_label(name),
         line: 1,
@@ -1312,7 +1314,7 @@ fn stale_runtime_warnings(name: &str, stale: &[J]) -> Vec<Diagnostic> {
     };
     vec![Diagnostic {
         suggestion: Some(format!(
-            "read them with k2 zen widget errors {name}; once fixed, drop them with k2 zen widget errors {name} --clear"
+            "read them with {CLI_NAME} zen widget errors {name}; once fixed, drop them with {CLI_NAME} zen widget errors {name} --clear"
         )),
         file: widget_label(name),
         line: 1,

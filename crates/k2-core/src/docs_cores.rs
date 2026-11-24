@@ -9,7 +9,7 @@
 //! starts with every core off, and while a core is off the daemon opens no live
 //! doc of that kind (`core_off`).
 
-use crate::product_name;
+use crate::{cli_name, product_name};
 
 /// What a person sees for a core (the multiplayer view, or none yet).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +108,7 @@ pub const CORES: &[Core] = &[
         id: BOARD,
         name: "Board",
         status: "beta",
-        description: "A whiteboard Garden for you and your agents. Single-person for now. Off: Board Gardens show a placeholder and agents' k2 board calls are refused; your boards are kept.",
+        description: concat!("A whiteboard Garden for you and your agents. Single-person for now. Off: Board Gardens show a placeholder and agents' ", cli_name!(), " board calls are refused; your boards are kept."),
         short: "the Board Garden (a whiteboard for you and your agents)",
         view: CoreView::Garden,
     },

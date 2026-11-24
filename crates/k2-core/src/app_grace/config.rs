@@ -16,6 +16,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use crate::product_name;
 
 /// The fields without a column of their own (`apps.config_json`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,8 +290,8 @@ pub fn describe(op: &Op, s: &State) -> String {
         Op::DbRaw(on) => format!("raw private-database connection {}", if *on { "on" } else { "off" }),
         Op::Io(col) => format!(
             "disk ceilings {} → {}",
-            s.io_max_json.as_deref().unwrap_or("K2's default"),
-            col.as_deref().unwrap_or("K2's default")
+            s.io_max_json.as_deref().unwrap_or(concat!(product_name!(), "'s default")),
+            col.as_deref().unwrap_or(concat!(product_name!(), "'s default"))
         ),
     }
 }

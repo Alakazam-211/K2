@@ -80,6 +80,7 @@ use super::sew_wire::{
 };
 use super::{features, outbox, Cause, NewOp, Op, CHAT_KIND};
 use crate::deploy::manifest::{ChatBlock, ChatChannel};
+use crate::brand::PRODUCT_NAME;
 
 /// Outbox subject prefix of a person's channel sync row.
 pub const CHAN_PREFIX: &str = "chan:";
@@ -574,7 +575,7 @@ pub fn plan_box_user_removes(conn: &Connection, space_id: &str, ids: &[String], 
             continue;
         };
         if !ext.is_box_user() {
-            crate::log_debug!("[grant-hook] box_users_present named {ext}, not a box user; K2 removes only box users");
+            crate::log_debug!("[grant-hook] box_users_present named {ext}, not a box user; {PRODUCT_NAME} removes only box users");
             continue;
         }
         let body = sew_wire::SpaceMemberRemoveRequest { space_id: space_id.to_string(), app_id: app.clone(), external_id: ext.clone() };
@@ -1589,8 +1590,8 @@ pub fn verdict_err(status: u16, code: &str, reason: &str, line: &str) -> Verdict
     }
     for r in [sew_wire::reasons::BOX_USER_NOT_ALLOWED, sew_wire::reasons::LEVEL_ABOVE_CEILING, sew_wire::reasons::AGENT_LEVEL] {
         if is(r) {
-            crate::log_debug!("[grant-hook] K2 BUG: Sew refused a channel sync item with {r} ({line}); K2 must never send that");
-            return Verdict::Held(format!("refused: {r} (a K2 bug, reported)"));
+            crate::log_debug!("[grant-hook] {PRODUCT_NAME} BUG: Sew refused a channel sync item with {r} ({line}); {PRODUCT_NAME} must never send that");
+            return Verdict::Held(format!("refused: {r} (a {PRODUCT_NAME} bug, reported)"));
         }
     }
     Verdict::Blocked(format!("{status} {line}"))

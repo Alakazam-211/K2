@@ -27,6 +27,8 @@ use serde_json::{json, Value as J};
 use super::{io, now_rfc3339, widget_label};
 use crate::zen::builtin_widgets::{parse_widget_ref, WidgetRef};
 use crate::zen::store::{ZenError, ZenFiles};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::cli_name;
 
 /// Events kept per widget (older ones are dropped when the log doubles).
 pub const KEEP: usize = 300;
@@ -197,19 +199,19 @@ fn cut(s: &str, max: usize) -> String {
 /// What an agent should try for a runtime error message.
 pub fn suggestion_for(widget: &str, message: &str) -> String {
     let m = message;
-    let validate = format!("k2 zen validate --widget {widget}");
+    let validate = format!("{CLI_NAME} zen validate --widget {widget}");
     if let Some(rest) = m.strip_prefix("k2: ") {
         // `k2: <verb> refused (<code>): <message>` from the frame runtime.
         let code = rest.split_once('(').and_then(|(_, r)| r.split_once(')')).map(|(c, _)| c).unwrap_or("");
         return match code {
-            "cap_not_granted" => "add the verb's cap to manifest.json \"caps\" (k2 zen guide api names each verb's cap), then save".into(),
+            "cap_not_granted" => concat!("add the verb's cap to manifest.json \"caps\" (", cli_name!(), " zen guide api names each verb's cap), then save").into(),
             "not_bound" => "use an address this widget reaches (k2.agents.list() lists them; for sources, the placement's config.source / config.sources)".into(),
             "server_not_saved" => "the source's server isn't one of the person's saved servers: ask them to add it in Settings → Network → Connected Servers".into(),
             "unreachable" => "the source's server didn't answer: draw the `last` view greyed and try again later".into(),
             "removed" => "the source was removed on its server: show that, and ask the person which source to use instead".into(),
             "no_history" => "this source keeps states only (keep: states): it has no history to chart".into(),
-            "" => "see the code in the message: k2 zen guide api lists every verb's errors".into(),
-            c => format!("handle '{c}' with an onError callback; k2 zen guide api explains it"),
+            "" => concat!("see the code in the message: ", cli_name!(), " zen guide api lists every verb's errors").into(),
+            c => format!("handle '{c}' with an onError callback; {CLI_NAME} zen guide api explains it"),
         };
     }
     if m.contains("not connected") {
@@ -227,7 +229,7 @@ pub fn suggestion_for(widget: &str, message: &str) -> String {
     if m.contains("Content Security Policy") || m.contains("Refused to") {
         return "the sealed frame blocks this (network, eval, inline handlers): use k2 verbs and files in the widget's folder".into();
     }
-    format!("find the line in the stack, fix it and save; k2 zen widget errors {widget} --since <seq> shows only new ones")
+    format!("find the line in the stack, fix it and save; {CLI_NAME} zen widget errors {widget} --since <seq> shows only new ones")
 }
 
 /// The text [`suggestion_for`] words a redacted row from: a refusal as the
@@ -255,7 +257,7 @@ impl ZenFiles {
         match parse_widget_ref(widget.trim()) {
             Ok(WidgetRef::User(n)) => Ok(n),
             Ok(WidgetRef::Builtin { .. }) => {
-                Err(ZenError::BadRequest(format!("'{widget}' is built into K2; its runtime errors aren't logged")))
+                Err(ZenError::BadRequest(format!("'{widget}' is built into {PRODUCT_NAME}; its runtime errors aren't logged")))
             }
             Err(m) => Err(ZenError::BadRequest(m)),
         }
@@ -336,14 +338,14 @@ impl ZenFiles {
                     row["address"] = J::String(a.clone());
                     if d.code == Some("not_bound") {
                         address_hint = Some(format!(
-                            "'{a}' is named in this widget's placement config but was refused: the window may have had an older page (K2 re-subscribes when the placement changes; Reload the widget otherwise). Check the source with k2 sources list"
+                            "'{a}' is named in this widget's placement config but was refused: the window may have had an older page ({PRODUCT_NAME} re-subscribes when the placement changes; Reload the widget otherwise). Check the source with {CLI_NAME} sources list"
                         ));
                     }
                 } else {
                     row["addressWithheld"] = J::Bool(true);
                     if d.code == Some("not_bound") {
                         address_hint = Some(format!(
-                            "the widget asked for a source no placement names: add it to the placement's config.sources (k2 zen widget show {name} lists what each placement reads)"
+                            "the widget asked for a source no placement names: add it to the placement's config.sources ({CLI_NAME} zen widget show {name} lists what each placement reads)"
                         ));
                     }
                 }

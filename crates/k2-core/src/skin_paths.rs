@@ -53,6 +53,7 @@ use super::{
     attach_role_handles, blank_to_none, enabled_app_grant, normalize_room_ids, role_by_id_or_name, with_conn,
     SkinPass, SkinRole, HOST_APP_ID,
 };
+use crate::brand::CLI_NAME;
 
 /// At most this many folders per list on one room line.
 pub const MAX_FOLDERS_PER_LIST: usize = 200;
@@ -578,7 +579,7 @@ where
         };
         if !role.room_policy.contains_key(&project_id) {
             return Err(format!(
-                "role '{}' has no line for that room; add it first with k2 app role room {} <room> --caps …",
+                "role '{}' has no line for that room; add it first with {CLI_NAME} app role room {} <room> --caps …",
                 role.name, role.name
             ));
         }
@@ -627,7 +628,7 @@ pub fn set_role_room_paths(id_or_name: &str, project_id: &str, scope: &RoomPathS
         };
         if !role.room_policy.contains_key(&project_id) {
             return Err(format!(
-                "role '{}' has no line for that room; add it first with k2 app role room {} <room> --caps …",
+                "role '{}' has no line for that room; add it first with {CLI_NAME} app role room {} <room> --caps …",
                 role.name, role.name
             ));
         }

@@ -25,6 +25,7 @@ use std::path::PathBuf;
 
 use crate::fs_atomic::{atomic_write_str, log_if_err};
 use crate::workspace::harness::HARNESS_WORKSPACE_FILES;
+use crate::product_name;
 
 // ══════════════════════════════════════════════════════════════════════
 // Public types
@@ -152,7 +153,7 @@ pub fn teardown_workspace_harness_files(
                     results.push(TeardownResult {
                         action: "removed".to_string(),
                         path: rel.to_string(),
-                        note: "No prior archive — K2 created this file fresh; sent to Trash.".to_string(),
+                        note: concat!("No prior archive — ", product_name!(), " created this file fresh; sent to Trash.").to_string(),
                     });
                 }
             },
@@ -194,7 +195,7 @@ pub fn teardown_workspace_harness_files(
             results.push(TeardownResult {
                 action: "removed".to_string(),
                 path: ".aider.conf.yml".to_string(),
-                note: "No prior archive — K2 scaffolded this file fresh; sent to Trash.".to_string(),
+                note: concat!("No prior archive — ", product_name!(), " scaffolded this file fresh; sent to Trash.").to_string(),
             });
         }
     }

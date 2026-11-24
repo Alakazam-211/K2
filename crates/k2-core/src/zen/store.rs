@@ -26,6 +26,8 @@ use serde_json::{json, Value as J};
 
 use super::defaults::Defaults;
 use super::schema::{self, Checked, Diagnostic, FileKind, Layer};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// Snapshots kept per file (Z14).
 pub const HISTORY_KEEP: usize = 20;
@@ -117,7 +119,7 @@ impl ZenFile {
         }
         if t.starts_with("pages/") {
             return Err(ZenError::BadRequest(
-                "Zen pages are Gardens now: gardens/<id>.toml (list them with k2 zen garden list)".into(),
+                concat!("Zen pages are Gardens now: gardens/<id>.toml (list them with ", cli_name!(), " zen garden list)").into(),
             ));
         }
         if let Some(rest) = t.strip_prefix("themes/") {
@@ -231,12 +233,12 @@ impl std::fmt::Display for ZenError {
             ZenError::NotSetUp => f.write_str(NOT_SET_UP),
             ZenError::UnknownTheme { name, known } => write!(
                 f,
-                "no theme '{name}' on this computer; themes: {}. Make one with k2 zen theme new {name}",
+                "no theme '{name}' on this computer; themes: {}. Make one with {CLI_NAME} zen theme new {name}",
                 known.join(", ")
             ),
             ZenError::UnknownGarden { garden, .. } => write!(
                 f,
-                "no Garden '{garden}' on this computer; list them with k2 zen garden list"
+                "no Garden '{garden}' on this computer; list them with {CLI_NAME} zen garden list"
             ),
             ZenError::LastGarden => f.write_str(LAST_GARDEN),
             ZenError::GardenLocked { name, .. } => f.write_str(&garden_locked_message(name)),
@@ -268,7 +270,7 @@ impl std::fmt::Display for ZenError {
 
 /// G46's sentence, shared by the routes and the CLI.
 pub const NOT_SET_UP: &str =
-    "Zen isn't set up on this computer. Turn it on with the Zen toggle in the K2 app's top bar.";
+    concat!("Zen isn't set up on this computer. Turn it on with the Zen toggle in the ", product_name!(), " app's top bar.");
 /// G35's sentence for `garden/delete` of the only Garden.
 pub const LAST_GARDEN: &str = "That's your last Garden.";
 
@@ -1378,7 +1380,7 @@ impl ZenFiles {
         let path = self.path_of(&f);
         if path.exists() {
             return Err(ZenError::Conflict(format!(
-                "{} already exists; edit it, or start over with k2 zen reset --theme {name}",
+                "{} already exists; edit it, or start over with {CLI_NAME} zen reset --theme {name}",
                 f.label()
             )));
         }
@@ -1609,7 +1611,7 @@ impl ZenFiles {
                 line: 1,
                 col: 1,
                 message: format!(
-                    "theme '{m}' doesn't exist any more; showing '{}'. Pick one with k2 zen theme set <name>",
+                    "theme '{m}' doesn't exist any more; showing '{}'. Pick one with {CLI_NAME} zen theme set <name>",
                     active.name
                 ),
             });
@@ -1733,7 +1735,7 @@ impl ZenFiles {
                 if target.is_some() {
                     let hint = match f {
                         ZenFile::Theme(n) if super::builtin_theme(n).is_some() => format!(
-                            " (the built-in theme '{n}' has no override; make one with k2 zen theme new {n})"
+                            " (the built-in theme '{n}' has no override; make one with {CLI_NAME} zen theme new {n})"
                         ),
                         _ => String::new(),
                     };
@@ -1950,7 +1952,7 @@ impl ZenFiles {
                 let name = if name.ends_with(".toml") { name.to_string() } else { format!("{name}.toml") };
                 let text = self.snapshot_text(f, &name).ok_or_else(|| {
                     ZenError::NotFound(format!(
-                        "no snapshot '{name}' for {}; list them with k2 zen history",
+                        "no snapshot '{name}' for {}; list them with {CLI_NAME} zen history",
                         f.label()
                     ))
                 })?;
@@ -2054,15 +2056,15 @@ impl ZenFiles {
             (ListSource::File, true) => (true, format!("{} Garden(s): {names}", list.len())),
             (ListSource::File, false) => (
                 false,
-                format!("pages with no Garden in gardens.json: {} (k2 zen garden list shows the Gardens)", orphans.join(", ")),
+                format!("pages with no Garden in gardens.json: {} ({CLI_NAME} zen garden list shows the Gardens)", orphans.join(", ")),
             ),
             (ListSource::Rebuilt, _) => (
                 false,
-                format!("gardens.json is missing; the list was rebuilt from gardens/*.toml ({names}). Any k2 zen garden change writes it again"),
+                format!("gardens.json is missing; the list was rebuilt from gardens/*.toml ({names}). Any {CLI_NAME} zen garden change writes it again"),
             ),
             (ListSource::Unreadable(m), _) => (
                 false,
-                format!("{m}; the list was rebuilt from gardens/*.toml ({names}). The next k2 zen garden change keeps the bad file in .history/"),
+                format!("{m}; the list was rebuilt from gardens/*.toml ({names}). The next {CLI_NAME} zen garden change keeps the bad file in .history/"),
             ),
             (ListSource::Missing, _) => (false, format!("no Gardens. {NOT_SET_UP}")),
         };
@@ -2263,15 +2265,15 @@ pub fn theme_starter(name: &str, from: &super::BuiltinTheme) -> String {
         .collect();
     let parent = if super::builtin_theme(name).is_some() { name } else { super::DEFAULT_THEME };
     format!(
-        "# Your Zen theme \"{name}\", started from K2's \"{src}\" theme.\n\
+        "# Your Zen theme \"{name}\", started from {PRODUCT_NAME}'s \"{src}\" theme.\n\
          #\n\
-         # This folder is yours: K2 never changes it, app updates included.\n\
-         # It sits on top of K2's \"{parent}\" theme: delete a line and K2's value\n\
+         # This folder is yours: {PRODUCT_NAME} never changes it, app updates included.\n\
+         # It sits on top of {PRODUCT_NAME}'s \"{parent}\" theme: delete a line and {PRODUCT_NAME}'s value\n\
          # shows again. Put a background image next to this file and name it in\n\
-         # [background] below. Check with `k2 zen validate`.\n\
+         # [background] below. Check with `{CLI_NAME} zen validate`.\n\
          #\n\
-         #   use it:   k2 zen theme set {name}\n\
-         #   undo:     k2 zen reset --theme {name}\n\
+         #   use it:   {CLI_NAME} zen theme set {name}\n\
+         #   undo:     {CLI_NAME} zen reset --theme {name}\n\
          {body}\n\
          # [background]\n\
          # image = \"background.jpg\"  # .png .jpg .jpeg .webp .gif, up to 2 MB\n\
@@ -2287,7 +2289,7 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
     let name: String = name.chars().filter(|c| !c.is_control()).collect();
     let body = if template == schema::BLANK_TEMPLATE_ID {
         format!(
-            "# This Garden starts empty. Place K2's built-in widgets with [layout]\n\
+            "# This Garden starts empty. Place {PRODUCT_NAME}'s built-in widgets with [layout]\n\
              # and [[widget]] blocks, for example a group's agents beside a\n\
              # conversation:\n\
              #\n\
@@ -2313,23 +2315,23 @@ pub fn garden_stub(id: &str, name: &str, template: &str) -> String {
              #   column = 1\n\
              #\n\
              # Theme tables ([colors.light], [font], [shape], ...) restyle this\n\
-             # Garden only. Check with `k2 zen validate --garden {id}`.\n"
+             # Garden only. Check with `{CLI_NAME} zen validate --garden {id}`.\n"
         )
     } else if let Some(e) = super::garden_catalog::garden_catalog().iter().find(|e| e.template_id == template) {
         let label: String = e.meta.label.chars().filter(|c| !c.is_control()).collect();
         format!(
-            "# This Garden is K2's ready-made \"{label}\" page ({template}). Theme\n\
+            "# This Garden is {PRODUCT_NAME}'s ready-made \"{label}\" page ({template}). Theme\n\
              # tables ([colors.light], [font], [shape], ...) restyle this Garden\n\
              # only; [layout] and [[widget]] replace its widgets (the k2-zen skill\n\
-             # has the grammar). Check with `k2 zen validate --garden {id}`.\n"
+             # has the grammar). Check with `{CLI_NAME} zen validate --garden {id}`.\n"
         )
     } else {
         format!(
             "# This Garden is the texting page: a group's agents beside the\n\
              # conversation with the one you pick. Theme tables ([colors.light],\n\
              # [font], [shape], ...) restyle this Garden only; [layout] and\n\
-             # [[widget]] rearrange K2's built-in widgets (the k2-zen skill has\n\
-             # the grammar). Check with `k2 zen validate --garden {id}`.\n"
+             # [[widget]] rearrange {PRODUCT_NAME}'s built-in widgets (the k2-zen skill has\n\
+             # the grammar). Check with `{CLI_NAME} zen validate --garden {id}`.\n"
         )
     };
     format!(

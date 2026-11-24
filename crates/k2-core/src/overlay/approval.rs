@@ -17,13 +17,14 @@ use serde::{Deserialize, Serialize};
 
 use super::doc::{now_secs, OverlayDoc};
 use super::{catalog, store, thread_item, CardCallback, OverlayItem, OverlayLink, WRITE};
+use crate::product_name;
 
 /// `kind` of the doc.
 pub const KIND: &str = "approval";
 
 /// The plain line every renderer may show (SA-15): never the payload's
 /// words, which only the person's device works out.
-pub const GENERIC_LINE: &str = "Approval requested: open K2 to read it";
+pub const GENERIC_LINE: &str = concat!("Approval requested: open ", product_name!(), " to read it");
 
 /// The body of an `approval` card.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

@@ -15,6 +15,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::lane::{Point, RawTree};
+use crate::brand::CLI_NAME;
 
 /// The element kinds every lane maps to. Unknown native classes become
 /// [`Role::Other`] with the native name kept in [`RawNode::native`].
@@ -304,9 +305,9 @@ impl std::fmt::Display for ResolveError {
         match self {
             ResolveError::Stale { given, current } => write!(
                 f,
-                "element ids are from snapshot {given}; the screen is now snapshot {current}. Run `k2 sim tree` and use the new ids."
+                "element ids are from snapshot {given}; the screen is now snapshot {current}. Run `{CLI_NAME} sim tree` and use the new ids."
             ),
-            ResolveError::Unknown { id } => write!(f, "no element {id} in this snapshot. Run `k2 sim tree` (or `--all`)."),
+            ResolveError::Unknown { id } => write!(f, "no element {id} in this snapshot. Run `{CLI_NAME} sim tree` (or `--all`)."),
             ResolveError::NoFrame { id } => write!(f, "element {id} has no position on screen; tap with --at x,y instead."),
         }
     }

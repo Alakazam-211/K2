@@ -18,6 +18,7 @@ use super::login_path;
 #[cfg(unix)]
 use super::path_env;
 use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 /// How long the installer may run before its process group is killed.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
@@ -71,7 +72,7 @@ pub fn fixed_install_command(program: &str) -> Option<&'static str> {
 /// Why there is nothing to run for `program`.
 fn no_installer(program: &str) -> String {
     if cfg!(windows) && program == "grok" {
-        return "grok has no Windows installer K2 can run; install it from x.ai, then try again".to_string();
+        return concat!("grok has no Windows installer ", product_name!(), " can run; install it from x.ai, then try again").to_string();
     }
     if cfg!(windows) && program == "agy" {
         return format!(

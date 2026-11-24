@@ -29,6 +29,7 @@
 //! content scan.
 
 use std::path::Path;
+use crate::product_name;
 
 /// Files larger than this are not content-scanned (binary blobs or bulk).
 /// 1 MiB is generous for config, source and env files.
@@ -540,10 +541,10 @@ fn secret_kind(line: &str) -> Option<&'static str> {
         }
     }
     if ["k2skn_", "k2rs_"].iter().any(|p| k2_token_present(line, p)) {
-        return Some("a K2 token");
+        return Some(concat!("a ", product_name!(), " token"));
     }
     if ["k2sk_", "k2pp_"].iter().any(|p| bounded_token_present(line, p)) {
-        return Some("a K2 key");
+        return Some(concat!("a ", product_name!(), " key"));
     }
     if bounded_token_present(line, "sk-ant-") {
         return Some("an Anthropic API key");

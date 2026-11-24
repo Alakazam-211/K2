@@ -45,6 +45,8 @@ use serde::Serialize;
 use super::store::{self, CredMeta};
 use super::{Entry, Tool, WalletError};
 use crate::sealed_slots::{self, SealAddr, SealKind, SealScope, SealedState, SecretSealer};
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 // ── The switch ──────────────────────────────────────────────────────
 
@@ -166,7 +168,7 @@ pub fn addr(tool: Tool, id: &str) -> SealAddr {
 
 fn unavailable(e: &str) -> WalletError {
     WalletError::VaultUnavailable(format!(
-        "the K2 vault isn't open ({}), so this saved login can't be read; the server default keeps working. Check Settings → Vault",
+        "the {PRODUCT_NAME} vault isn't open ({}), so this saved login can't be read; the server default keeps working. Check Settings → Vault",
         e.trim_start_matches("vault: ")
     ))
 }
@@ -415,7 +417,7 @@ impl SlotStore for VaultStore {
             }
             note_known(&a.name, None);
             return Err(WalletError::VaultUnavailable(format!(
-                "could not seal the API key in the K2 vault ({why}); nothing was saved"
+                "could not seal the API key in the {PRODUCT_NAME} vault ({why}); nothing was saved"
             )));
         }
         note_known(&a.name, Some(fp(key.as_bytes())));
@@ -812,7 +814,7 @@ pub fn recovery_confirmed() -> Option<bool> {
 /// The one-line nudge shown while the vault holds logins but its
 /// recovery key was never confirmed (Rosson #5: migrate anyway).
 pub const RECOVERY_NUDGE: &str =
-    "Your saved LLM logins are in the K2 vault, but its recovery key was never confirmed. Confirm it in Settings → Vault so they can be restored if this Mac's key is lost.";
+    concat!("Your saved LLM logins are in the ", product_name!(), " vault, but its recovery key was never confirmed. Confirm it in Settings → Vault so they can be restored if this Mac's key is lost.");
 
 #[cfg(test)]
 #[path = "slots_tests.rs"]

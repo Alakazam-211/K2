@@ -37,6 +37,7 @@ use oxc_allocator::Allocator;
 use oxc_parser::Parser;
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
+use crate::{cli_name, product_name};
 
 /// How bad a finding is. Errors stop a Garden widget version (the last
 /// good one stays live) and fail `validate`; warnings never block.
@@ -232,7 +233,7 @@ fn import_hint(text: &str, lang: Lang, errors: Vec<Finding>) -> Vec<Finding> {
                 rule: "parse-import",
                 message: "import/export only work in <script type=\"module\">, and a widget's files can't import each other"
                     .into(),
-                suggestion: "list each file in its own <script src=\"file.js\"> in order, and share values through globals; K2's libraries are globals: list them in requires.libs (k2 zen guide libs)"
+                suggestion: concat!("list each file in its own <script src=\"file.js\"> in order, and share values through globals; ", product_name!(), "'s libraries are globals: list them in requires.libs (", cli_name!(), " zen guide libs)")
                     .into(),
             }]
         }

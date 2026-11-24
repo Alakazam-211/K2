@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value as J;
 
 use super::{Catalog, Effect, Exposure, HttpMethod, RendererImpl, VerbKind, VerbRow};
+use crate::brand::PRODUCT_NAME;
 
 /// Keywords the generator understands (see the module docs).
 pub const SCHEMA_KEYWORDS: &[&str] = &[
@@ -126,7 +127,7 @@ fn lint_caps(c: &Catalog, out: &mut Vec<String>) {
             out.push(format!("cap {}: no label", cap.name));
         }
         if cap.exposure.contains(&Exposure::Widget) && cap.sentence.as_deref().is_none_or(|s| s.trim().is_empty()) {
-            out.push(format!("cap {}: a widget cap needs K2's sentence for the review dialog", cap.name));
+            out.push(format!("cap {}: a widget cap needs {PRODUCT_NAME}'s sentence for the review dialog", cap.name));
         }
     }
 }

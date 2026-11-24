@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
 
 use crate::app_grace::requests as reqs;
+use crate::brand::CLI_NAME;
 
 pub const KIND_BOX_SERVICE: &str = reqs::KIND_BOX_SERVICE;
 
@@ -279,7 +280,7 @@ pub fn conflict(conn: &Connection, app: &str, w: &Want) -> rusqlite::Result<Opti
     if let Some(r) = rows.iter().find(|r| r.name == w.name) {
         if r.host_port != w.host_port || r.app_port != w.app_port {
             return Ok(Some(format!(
-                "{} is already {} on App {app}; revoke it first (k2 app box-service revoke {app} {})",
+                "{} is already {} on App {app}; revoke it first ({CLI_NAME} app box-service revoke {app} {})",
                 w.name,
                 r.want().display(),
                 w.name

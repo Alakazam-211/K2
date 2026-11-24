@@ -14,6 +14,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
+use crate::cli_name;
 
 /// A note body longer than this is refused.
 pub const MAX_BODY_CHARS: usize = 20_000;
@@ -427,8 +428,8 @@ fn header(count: usize, workspace_path: &str) -> String {
     )
 }
 
-const FOOTER: &str = "When a note is fixed, resolve it: `k2 changes notes resolve <note id>`. \
-List them any time with `k2 changes notes`.";
+const FOOTER: &str = concat!("When a note is fixed, resolve it: `", cli_name!(), " changes notes resolve <note id>`. \
+List them any time with `", cli_name!(), " changes notes`.");
 
 /// Build the one message for `notes` (in order), taking as many as fit in
 /// [`MAX_MESSAGE_CHARS`] (always at least one). Returns the text and how

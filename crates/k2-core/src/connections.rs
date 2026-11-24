@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::schema::{log_activity, WorkspaceRelation, WorkspaceRemoteConnection};
 use crate::workspace::agent_identity::resolve_project_id;
+use crate::brand::CLI_NAME;
 
 /// A connected peer workspace, deduped across the directional
 /// `workspace_relations` rows. If the same peer appears as both an
@@ -193,18 +194,18 @@ fn resolve_target_project_id(
         }
         WorkspaceTokenResolve::Retired { handle } => {
             return Err(format!(
-                "{} Run `k2 connections list` for current workspaces.",
+                "{} Run `{CLI_NAME} connections list` for current workspaces.",
                 crate::workspace::handle::retired_handle_message(&handle)
             ));
         }
         WorkspaceTokenResolve::Miss => {
             return Err(match suggest_project_name(conn, token) {
                 Some(s) => format!(
-                    "Workspace '{}' not found — did you mean '{}'? Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
+                    "Workspace '{}' not found — did you mean '{}'? Run `{CLI_NAME} connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
                     token, s
                 ),
                 None => format!(
-                    "Workspace '{}' not found. Run `k2 connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
+                    "Workspace '{}' not found. Run `{CLI_NAME} connections list` for registered names, or pass a full path. For a cross-server agent use agent::host.k2.dev (or legacy agent@host.k2.dev).",
                     token
                 ),
             });
@@ -555,7 +556,7 @@ pub fn parse_remote_addr(addr: &str) -> Result<(String, String), String> {
         if parts.len() == 3 {
             return Err(format!(
                 "'{addr}' is federation wire form (<fp>::<workspace>::<agent>) — \
-                 use <agent>::<host> for connections / k2 msg"
+                 use <agent>::<host> for connections / {CLI_NAME} msg"
             ));
         }
         if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {

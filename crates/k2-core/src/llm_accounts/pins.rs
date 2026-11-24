@@ -51,6 +51,7 @@ use serde::Serialize;
 
 use super::{slots, store};
 use super::{active_id, get, kind, live_owner, lookup, now, state, update_meta, Entry, MetaUpdate, Tool, WalletError};
+use crate::product_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -485,7 +486,7 @@ pub fn materialize_codex_shadow_for(slot: &Path, shared: &Path, cwd: Option<&Pat
     let shared_cfg = std::fs::read_to_string(shared.join("config.toml")).unwrap_or_default();
     let shared_cfg = if strip.is_empty() { shared_cfg } else { strip_codex_projects(&shared_cfg, &strip)? };
     let mut lines: Vec<String> = Vec::new();
-    lines.push("# Written by K2 for a pinned Codex login: the shared config.toml with".into());
+    lines.push(concat!("# Written by ", product_name!(), " for a pinned Codex login: the shared config.toml with").into());
     lines.push("# the file credential store forced. Edit ~/.codex/config.toml instead.".into());
     lines.push("cli_auth_credentials_store = \"file\"".into());
     for l in shared_cfg.lines() {

@@ -25,6 +25,7 @@ use std::io::Read;
 use serde::Deserialize;
 
 use super::SdkError;
+use crate::brand::PRODUCT_NAME;
 
 /// Largest kit K2 reads.
 pub const MAX_KIT: usize = 64 << 20;
@@ -192,7 +193,7 @@ pub fn parse(kit: &[u8], expected_sha256: &str) -> Result<SewKit, SdkError> {
     if !sha.eq_ignore_ascii_case(expected_sha256) {
         return Err(SdkError::new(
             super::codes::SEW_KIT_TAMPERED,
-            format!("the Sew App kit's sha256 is {sha}, not the {expected_sha256} K2 pins: refusing it"),
+            format!("the Sew App kit's sha256 is {sha}, not the {expected_sha256} {PRODUCT_NAME} pins: refusing it"),
         ));
     }
     let files = members(kit, "the Sew App kit")?;
@@ -249,7 +250,7 @@ pub fn parse(kit: &[u8], expected_sha256: &str) -> Result<SewKit, SdkError> {
         }
         let scripts = str_map(&pj, "scripts", &what)?;
         if let Some(s) = INSTALL_SCRIPTS.iter().find(|s| scripts.contains_key(**s)) {
-            return Err(bad(format!("{what} has an install script ({s}): K2 vendors no package that runs code on install")));
+            return Err(bad(format!("{what} has an install script ({s}): {PRODUCT_NAME} vendors no package that runs code on install")));
         }
         let optional: BTreeSet<String> = pj
             .get("peerDependenciesMeta")

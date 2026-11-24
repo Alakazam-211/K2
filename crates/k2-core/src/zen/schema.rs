@@ -22,6 +22,8 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as J};
 use toml_edit::{Item, TableLike, Value};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 #[path = "schema_phone.rs"]
 mod phone_check;
@@ -241,7 +243,7 @@ pub const PAGE_TABLES: &[&str] = &["layout", "widget", "widgets", "control", "co
 /// FC52): a Garden places its controls with `[[widget]]` (chrome kinds), so
 /// this table does nothing. A warning, not an error, so old files load.
 pub const CONTROL_WARNING: &str =
-    "[[control]] is ignored: place controls with [[widget]] kind = \"zen-toggle\" (see k2 zen guide bands)";
+    concat!("[[control]] is ignored: place controls with [[widget]] kind = \"zen-toggle\" (see ", cli_name!(), " zen guide bands)");
 
 // ── Garden pages: layout and built-in widgets (G38) ─────────────────────
 
@@ -340,7 +342,7 @@ pub const FILL_WIDGET_KINDS: &[&str] = &["agents", "conversation", CUSTOM_KIND];
 /// a column-only content kind that fills its column.
 pub const CUSTOM_KIND: &str = "custom";
 /// What `custom` places, for errors and docs.
-pub const CUSTOM_KIND_DOC: &str = "a custom widget: an agent-written page in a sealed frame, from widgets/<name>/ (widget = \"<name>\") or a built-in (widget = \"k2:diary@1\"); it gets only the caps you allow with a click in the K2 app";
+pub const CUSTOM_KIND_DOC: &str = concat!("a custom widget: an agent-written page in a sealed frame, from widgets/<name>/ (widget = \"<name>\") or a built-in (widget = \"k2:diary@1\"); it gets only the caps you allow with a click in the ", product_name!(), " app");
 /// At most this many custom widgets on one page (UW6, UW29). 6 until
 /// 0.46.1; raised to 10 for the Fleet Ops page (gap 6): each is a sealed
 /// frame with its own call and subscription budgets, and 3 columns hold 10
@@ -390,7 +392,7 @@ pub const CHROME_KINDS: &[(&str, &str)] = &[
     ),
     (
         "menu",
-        "a menu button K2 draws (optional) that holds other Zen controls (`slot = \"menu\"`, `menu = \"<this id>\"`); it opens with a click, Enter, Space or Down",
+        concat!("a menu button ", product_name!(), " draws (optional) that holds other Zen controls (`slot = \"menu\"`, `menu = \"<this id>\"`); it opens with a click, Enter, Space or Down"),
     ),
 ];
 /// The kinds a `menu` may hold (FC9): no menu inside a menu, no content.
@@ -403,7 +405,7 @@ pub const MENU_LABEL_MAX: usize = 24;
 pub const DRAG_REGION_KIND: &str = "drag-region";
 /// The error for `kind = "drag-region"` (FC5).
 pub const DRAG_REGION_ERROR: &str =
-    "K2 makes the empty space in every band drag the window; there is nothing to place.";
+    concat!(product_name!(), " makes the empty space in every band drag the window; there is nothing to place.");
 
 /// Is `kind` a chrome kind ([`CHROME_KINDS`])?
 pub fn is_chrome_kind(kind: &str) -> bool {
@@ -421,7 +423,7 @@ pub fn required_chrome_error(kind: &str) -> String {
     let (why, align) =
         if kind == "zen-toggle" { ("the way out", "end") } else { ("the way to your other Gardens", "start") };
     format!(
-        "This file places Zen controls, so it replaces the template's. It must also place a {kind} ({why}): add [[widget]] kind = \"{kind}\" slot = \"top\" align = \"{align}\", or put it in a menu. See k2 zen guide required."
+        "This file places Zen controls, so it replaces the template's. It must also place a {kind} ({why}): add [[widget]] kind = \"{kind}\" slot = \"top\" align = \"{align}\", or put it in a menu. See {CLI_NAME} zen guide required."
     )
 }
 /// `nav-rail` `orientation`: a row of icons, or a column (strip).
@@ -1357,11 +1359,11 @@ fn check_with(
                     Some(Value::Integer(i)) if *i.value() == SCHEMA_VERSION => {}
                     Some(Value::Integer(i)) => {
                         let p = item_pos(&ctx, item, pos);
-                        ctx.error(p, format!("schema = {} is not supported; this K2 reads Zen schema 1", i.value()));
+                        ctx.error(p, format!("schema = {} is not supported; this {PRODUCT_NAME} reads Zen schema 1", i.value()));
                     }
                     _ => {
                         let p = item_pos(&ctx, item, pos);
-                        ctx.error(p, "schema must be the number 1; this K2 reads Zen schema 1");
+                        ctx.error(p, concat!("schema must be the number 1; this ", product_name!(), " reads Zen schema 1"));
                     }
                 }
             }
@@ -1386,14 +1388,14 @@ fn check_with(
             "type" => ctx.error(pos, "[type] is now [font] (family, size, line-height): one font for Zen and its terminals"),
             "background" if kind != FileKind::Theme => ctx.error(
                 pos,
-                "[background] belongs in a theme bundle (~/.k2/zen/themes/<name>/theme.toml), next to its image; make one with k2 zen theme new <name>",
+                concat!("[background] belongs in a theme bundle (~/.k2/zen/themes/<name>/theme.toml), next to its image; make one with ", cli_name!(), " zen theme new <name>"),
             ),
             k if PAGE_TABLES.contains(&k) && kind != FileKind::Garden => ctx.error(
                 pos,
-                format!("[{k}] belongs in a Garden file (~/.k2/zen/gardens/<id>.toml); list them with k2 zen garden list"),
+                format!("[{k}] belongs in a Garden file (~/.k2/zen/gardens/<id>.toml); list them with {CLI_NAME} zen garden list"),
             ),
             "control" | "controls" => ctx.warn(pos, CONTROL_WARNING),
-            "caps" => ctx.error(pos, "a page can't name caps: built-in widgets get K2's caps"),
+            "caps" => ctx.error(pos, concat!("a page can't name caps: built-in widgets get ", product_name!(), "'s caps")),
             "widgets" => ctx.error(pos, "use one [[widget]] block per widget (not `widgets`)"),
             "layout" => {
                 page_pos.get_or_insert(pos);
@@ -2090,12 +2092,12 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 "caps" if kind.as_deref() == Some(CUSTOM_KIND) => {
                     ctx.error(
                         pos,
-                        "a page can't grant caps: the widget's manifest.json asks for them, and the human allows them with a click in the K2 app",
+                        concat!("a page can't grant caps: the widget's manifest.json asks for them, and the human allows them with a click in the ", product_name!(), " app"),
                     );
                     ok = false;
                 }
                 "caps" => {
-                    ctx.error(pos, "a page can't name caps: built-in widgets get K2's caps");
+                    ctx.error(pos, concat!("a page can't name caps: built-in widgets get ", product_name!(), "'s caps"));
                     ok = false;
                 }
                 "widget" if kind.as_deref() == Some(CUSTOM_KIND) => {
@@ -2104,7 +2106,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                         Some(Ok(super::builtin_widgets::WidgetRef::Builtin { version: None, name })) => {
                             ctx.error(
                                 vp,
-                                format!("name a built-in widget with its version, like k2:{name}@1 (k2:{name} without a version is only for k2 zen widget new --from)"),
+                                format!("name a built-in widget with its version, like k2:{name}@1 (k2:{name} without a version is only for {CLI_NAME} zen widget new --from)"),
                             );
                             ok = false;
                         }
@@ -2198,7 +2200,7 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
         if kind.as_deref() == Some(CUSTOM_KIND) && t.get("widget").is_none() {
             ctx.error(
                 tpos,
-                "a custom widget needs widget = \"<folder name>\" (its folder under ~/.k2/zen/widgets/; make one with k2 zen widget new <name>)",
+                concat!("a custom widget needs widget = \"<folder name>\" (its folder under ~/.k2/zen/widgets/; make one with ", cli_name!(), " zen widget new <name>)"),
             );
             ok = false;
         }

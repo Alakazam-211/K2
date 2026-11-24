@@ -18,6 +18,8 @@ use chrono::{DateTime, Duration, Local, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::str::FromStr;
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// A missed slot still runs once when at most this late (as heartbeats).
 pub const MISSED_RUN_GRACE_SECS: i64 = 12 * 3600;
@@ -252,7 +254,7 @@ pub fn validate_name(name: &str) -> Result<()> {
 
 pub fn validate_argv(argv: &[String]) -> Result<()> {
     if argv.is_empty() || argv[0].trim().is_empty() {
-        return Err(JobError::bad("command_required", "give the command after --: k2 job add NAME --every 15m -- ./collect.sh"));
+        return Err(JobError::bad("command_required", concat!("give the command after --: ", cli_name!(), " job add NAME --every 15m -- ./collect.sh")));
     }
     if argv.len() > MAX_ARGS {
         return Err(JobError::bad("bad_command", format!("at most {MAX_ARGS} arguments")));
@@ -393,7 +395,7 @@ pub fn insert(conn: &Connection, j: NewJob, now: DateTime<Utc>) -> Result<Job> {
         return Err(JobError::bad("bad_timeout", "timeouts are 1 s to 6 h"));
     }
     if get_by_name(conn, &j.workspace_id, &j.name)?.is_some() {
-        return Err(JobError::new("job_exists", 409, format!("a job named {} already exists here (k2 job edit, or k2 job rm first)", j.name)));
+        return Err(JobError::new("job_exists", 409, format!("a job named {} already exists here ({CLI_NAME} job edit, or {CLI_NAME} job rm first)", j.name)));
     }
     if list(conn, Some(&j.workspace_id))?.len() >= MAX_JOBS_PER_WORKSPACE {
         return Err(JobError::new("too_many_jobs", 409, format!("a workspace has at most {MAX_JOBS_PER_WORKSPACE} jobs")));

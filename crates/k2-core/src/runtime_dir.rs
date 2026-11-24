@@ -37,6 +37,8 @@
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 /// Explicit runtime-dir override (absolute path; created 0700 if its
 /// parent exists).
@@ -316,7 +318,7 @@ pub fn check_not_real_under_test(dir: &Path, is_test: bool, real: &[PathBuf]) ->
     if real.iter().any(|r| canon(r) == d) {
         return Err(format!(
             "REFUSED: this looks like a test process ({TEST_MARKER_ENV} set, or $HOME is a temp dir) \
-             but the K2 private runtime dir resolved to the REAL user runtime dir {}. A test daemon \
+             but the {PRODUCT_NAME} private runtime dir resolved to the REAL user runtime dir {}. A test daemon \
              there overwrites and deletes the production frpc.toml and kills the production frpc. \
              Give every test daemon its own TMPDIR and XDG_RUNTIME_DIR under its temp root \
              (k2_core::test_env::DaemonRuntime), or set {RUNTIME_DIR_ENV} for in-process tests \
@@ -412,7 +414,7 @@ impl LogindRisk {
             what.push(format!("{user}'s /dev/shm files (RemoveIPC isn't off)"));
         }
         let mut m = format!(
-            "K2's runtime dir {} can vanish under the running daemon: {user} has no linger, so systemd-logind \
+            "{PRODUCT_NAME}'s runtime dir {} can vanish under the running daemon: {user} has no linger, so systemd-logind \
              deletes {} when {user}'s last login session (SSH, su) ends, taking frpc.toml and agents' secret \
              files with it. Fix: `sudo loginctl enable-linger {user}`",
             dirs.join(" and "),
@@ -424,8 +426,8 @@ impl LogindRisk {
         m.push('.');
         if self.under_systemd {
             m.push_str(
-                " Restarting the daemon's systemd unit also moves it to the unit's own /run/k2 once the unit \
-                 carries RuntimeDirectory=k2 (K2 0.46.4).",
+                concat!(" Restarting the daemon's systemd unit also moves it to the unit's own /run/k2 once the unit \
+                 carries RuntimeDirectory=k2 (", product_name!(), " 0.46.4)."),
             );
         }
         m

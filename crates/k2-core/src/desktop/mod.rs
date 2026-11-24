@@ -27,6 +27,7 @@
 //! box: the route gates, the role and grant rules, POST-only writes, no
 //! long-lived token in the stream URL, per-message control checks, grants
 //! keyed by id, the access log, and a phone push to every paired Owner.
+use crate::product_name;
 
 pub mod audit;
 pub mod grants;
@@ -53,11 +54,11 @@ pub const VIRTUAL_FEATURE_KEY: &str = "virtual-desktop-v1";
 pub const FEATURE_KEY: &str = "remote-desktop-v1";
 
 /// The enable card (S14), returned by `enable` and shown before Turn on.
-pub const ENABLE_CARD: &str = "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch (Members can still use terminal sessions, which run as this server's user). It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it.";
+pub const ENABLE_CARD: &str = concat!("Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch (Members can still use terminal sessions, which run as this server's user). It stays on until an Owner turns it off. On Linux, ", product_name!(), " can't hide password apps from the picture, and notifications (2FA codes too) show in it.");
 
 /// The enable card for the `virtual` switch (LD-18): every virtual
 /// desktop on the server, the shared one and each agent's.
-pub const VIRTUAL_ENABLE_CARD: &str = "K2 will start a desktop on this server. Anyone you allow can see and use whatever is opened on it. Programs on it run as this server's K2 user. It stays on until an Owner turns it off.";
+pub const VIRTUAL_ENABLE_CARD: &str = concat!(product_name!(), " will start a desktop on this server. Anyone you allow can see and use whatever is opened on it. Programs on it run as this server's ", product_name!(), " user. It stays on until an Owner turns it off.");
 
 /// The machine's state as the deskd side reports it (`status.state`, the
 /// stream's `state`). The tab adds `off`, `not_allowed` and `same_machine`
@@ -105,10 +106,10 @@ impl MachineState {
             MachineState::Ready => "Ready.".into(),
             MachineState::NeedsPermission => "Someone at this Mac has to allow K2 Screen once.".into(),
             MachineState::NoSession => "No one is logged in on this computer's screen.".into(),
-            MachineState::NoDisplay => "This computer has no screen K2 can show.".into(),
-            MachineState::Locked => "This Mac is locked. K2 can't unlock it.".into(),
+            MachineState::NoDisplay => concat!("This computer has no screen ", product_name!(), " can show.").into(),
+            MachineState::Locked => concat!("This Mac is locked. ", product_name!(), " can't unlock it.").into(),
             MachineState::PortalAllow => "Someone at this computer has to click Allow once.".into(),
-            MachineState::NeedsUpdate => "K2 Screen and K2 don't match; restarting it.".into(),
+            MachineState::NeedsUpdate => concat!("K2 Screen and ", product_name!(), " don't match; restarting it.").into(),
             MachineState::BlockedInLoginItems => {
                 "Turn K2 Screen on in System Settings → General → Login Items.".into()
             }

@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use super::proto::frames::Control;
+use crate::brand::CLI_NAME;
 
 /// Node home (`K2_NODE_HOME` overrides for tests and dev).
 pub fn node_home() -> PathBuf {
@@ -42,7 +43,7 @@ fn write_atomic(p: &Path, body: &str) -> Result<(), String> {
     let dir = p.parent().ok_or("no parent dir")?;
     if !dir.is_dir() {
         return Err(format!(
-            "{} doesn't exist: this computer isn't a compute node (see k2 compute local enable)",
+            "{} doesn't exist: this computer isn't a compute node (see {CLI_NAME} compute local enable)",
             dir.display()
         ));
     }

@@ -18,6 +18,8 @@ use oxc_syntax::scope::ScopeFlags;
 
 use super::{Finding, Severity, Surface};
 use crate::contract::{self, Exposure, VerbKind};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// Members of the frame's `k2` object that aren't verb surfaces
 /// (`sdk/k2-runtime.js`, "The k2 object").
@@ -468,7 +470,7 @@ impl Lint<'_> {
                         outer.property.span.start,
                         "catalog-unknown",
                         format!("k2.{member}(…) isn't part of the widget API"),
-                        format!("verbs are k2.<surface>.<action>(…); the k2 object itself has {names} (k2 zen guide api)"),
+                        format!("verbs are k2.<surface>.<action>(…); the k2 object itself has {names} ({CLI_NAME} zen guide api)"),
                     );
                 }
                 return;
@@ -506,16 +508,16 @@ impl Lint<'_> {
         let Some(row) = cat.verb(verb).filter(|r| widget_callable(r)) else {
             let (msg, sug) = if cat.verb(verb).is_some() {
                 (
-                    format!("{shown}: '{verb}' isn't open to widgets (only K2's own pages can use it), so it's undefined in a widget"),
-                    "k2 zen guide api lists every verb a widget can call".to_string(),
+                    format!("{shown}: '{verb}' isn't open to widgets (only {PRODUCT_NAME}'s own pages can use it), so it's undefined in a widget"),
+                    concat!(cli_name!(), " zen guide api lists every verb a widget can call").to_string(),
                 )
             } else {
                 let near = nearest(verb, &exposed);
                 (
-                    format!("{shown}: there's no verb '{verb}' in K2's catalog, so it's undefined in a widget"),
+                    format!("{shown}: there's no verb '{verb}' in {PRODUCT_NAME}'s catalog, so it's undefined in a widget"),
                     match near {
-                        Some(v) => format!("did you mean {v}? (k2 zen guide api lists every verb)"),
-                        None => "k2 zen guide api lists every verb a widget can call".to_string(),
+                        Some(v) => format!("did you mean {v}? ({CLI_NAME} zen guide api lists every verb)"),
+                        None => concat!(cli_name!(), " zen guide api lists every verb a widget can call").to_string(),
                     },
                 )
             };
@@ -549,7 +551,7 @@ impl Lint<'_> {
                         offset,
                         "catalog-arity",
                         format!("{shown} is called with {n} argument{}; {need}", if n == 1 { "" } else { "s" }),
-                        format!("call it as {sig} (k2 zen guide api)"),
+                        format!("call it as {sig} ({CLI_NAME} zen guide api)"),
                     );
                 }
             }
@@ -561,7 +563,7 @@ impl Lint<'_> {
                         offset,
                         "catalog-arity",
                         format!("{shown} is called with {n} argument{}; {need}", if n == 1 { "" } else { "s" }),
-                        format!("call it as {sig} (k2 zen guide api)"),
+                        format!("call it as {sig} ({CLI_NAME} zen guide api)"),
                     );
                 }
             }
@@ -650,7 +652,7 @@ impl<'a> Visit<'a> for Lint<'_> {
                 "import",
                 "widget-import",
                 "import: one script per file; imports between files don't load (list each file in a <script src>)".into(),
-                "list each file in its own <script src=\"file.js\"> in the order they need each other; K2's libraries are globals: list them in requires.libs (k2 zen guide libs)",
+                concat!("list each file in its own <script src=\"file.js\"> in the order they need each other; ", product_name!(), "'s libraries are globals: list them in requires.libs (", cli_name!(), " zen guide libs)"),
             );
         }
         walk::walk_import_declaration(self, it);
@@ -678,7 +680,7 @@ impl<'a> Visit<'a> for Lint<'_> {
             }
         }
         if self.is_global_ref(callee, "fetch") {
-            self.widget_once(it.span.start, "fetch", "widget-network", format!("fetch: {NO_NETWORK}"), "get data through a k2 verb (k2 zen guide api), or put the file in the widget's folder");
+            self.widget_once(it.span.start, "fetch", "widget-network", format!("fetch: {NO_NETWORK}"), concat!("get data through a k2 verb (", cli_name!(), " zen guide api), or put the file in the widget's folder"));
         }
         if matches!(callee, Expression::Identifier(id) if self.is_global(id, "eval")) {
             self.widget_once(it.span.start, "eval", "widget-csp", format!("eval: {CSP}"), "write the code directly; widgets can't build code from strings");
@@ -805,9 +807,9 @@ impl<'a> Visit<'a> for Lint<'_> {
     fn visit_identifier_reference(&mut self, it: &IdentifierReference<'a>) {
         if self.symbol_of(it).is_none() {
             let (key, msg, sug): (&'static str, &str, &str) = match it.name.as_str() {
-                "XMLHttpRequest" => ("XMLHttpRequest", NO_NETWORK, "get data through a k2 verb (k2 zen guide api)"),
-                "WebSocket" => ("WebSocket", NO_NETWORK, "get live data through a k2 subscription (k2 zen guide api)"),
-                "EventSource" => ("EventSource", NO_NETWORK, "get live data through a k2 subscription (k2 zen guide api)"),
+                "XMLHttpRequest" => ("XMLHttpRequest", NO_NETWORK, concat!("get data through a k2 verb (", cli_name!(), " zen guide api)")),
+                "WebSocket" => ("WebSocket", NO_NETWORK, concat!("get live data through a k2 subscription (", cli_name!(), " zen guide api)")),
+                "EventSource" => ("EventSource", NO_NETWORK, concat!("get live data through a k2 subscription (", cli_name!(), " zen guide api)")),
                 "localStorage" => ("localStorage", NO_STORAGE, "keep state in memory, or in the widget's config"),
                 "sessionStorage" => ("sessionStorage", NO_STORAGE, "keep state in memory, or in the widget's config"),
                 "indexedDB" => ("indexedDB", NO_STORAGE, "keep state in memory, or in the widget's config"),
@@ -830,9 +832,9 @@ impl<'a> Visit<'a> for Lint<'_> {
                 "localStorage" => ("localStorage", "widget-storage", NO_STORAGE, "keep state in memory, or in the widget's config"),
                 "sessionStorage" => ("sessionStorage", "widget-storage", NO_STORAGE, "keep state in memory, or in the widget's config"),
                 "indexedDB" => ("indexedDB", "widget-storage", NO_STORAGE, "keep state in memory, or in the widget's config"),
-                "XMLHttpRequest" => ("XMLHttpRequest", "widget-network", NO_NETWORK, "get data through a k2 verb (k2 zen guide api)"),
-                "WebSocket" => ("WebSocket", "widget-network", NO_NETWORK, "get live data through a k2 subscription (k2 zen guide api)"),
-                "EventSource" => ("EventSource", "widget-network", NO_NETWORK, "get live data through a k2 subscription (k2 zen guide api)"),
+                "XMLHttpRequest" => ("XMLHttpRequest", "widget-network", NO_NETWORK, concat!("get data through a k2 verb (", cli_name!(), " zen guide api)")),
+                "WebSocket" => ("WebSocket", "widget-network", NO_NETWORK, concat!("get live data through a k2 subscription (", cli_name!(), " zen guide api)")),
+                "EventSource" => ("EventSource", "widget-network", NO_NETWORK, concat!("get live data through a k2 subscription (", cli_name!(), " zen guide api)")),
                 _ => ("", "", "", ""),
             };
             if !key.is_empty() {

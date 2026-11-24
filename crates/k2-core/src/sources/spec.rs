@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use crate::cli_name;
 
 pub type Json = serde_json::Value;
 
@@ -438,7 +439,7 @@ impl SourceSpec {
         }
         if let Some(p) = &self.preset {
             if p.len() > 40 || !super::presets::is_known(p) {
-                return Err(e("bad_preset", "preset", "unknown preset (k2 study data-sources lists them)"));
+                return Err(e("bad_preset", "preset", concat!("unknown preset (", cli_name!(), " study data-sources lists them)")));
             }
         }
         let mut warnings = Vec::new();

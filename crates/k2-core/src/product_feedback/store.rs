@@ -19,6 +19,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension, Row as SqlRow};
 use serde::Serialize;
+use crate::brand::PRODUCT_NAME;
 
 /// How long a row keeps retrying before it is `failed` (PF16).
 pub const GIVE_UP_AFTER_MS: i64 = 7 * 86_400_000;
@@ -549,10 +550,10 @@ pub enum AgentLimit {
 impl AgentLimit {
     pub fn message(self) -> String {
         match self {
-            AgentLimit::PerMinute => format!("An agent may send feedback to K2 {AGENT_PER_MINUTE} time a minute. Try again in a minute."),
-            AgentLimit::PerDay => format!("An agent may send feedback to K2 {AGENT_PER_DAY} times a day. Try again tomorrow, or ask your human to send it."),
+            AgentLimit::PerMinute => format!("An agent may send feedback to {PRODUCT_NAME} {AGENT_PER_MINUTE} time a minute. Try again in a minute."),
+            AgentLimit::PerDay => format!("An agent may send feedback to {PRODUCT_NAME} {AGENT_PER_DAY} times a day. Try again tomorrow, or ask your human to send it."),
             AgentLimit::BoxPerDay => format!(
-                "Agents on this server have sent {AGENTS_PER_DAY} feedback messages to K2 today. Try again tomorrow, or ask your human to send it."
+                "Agents on this server have sent {AGENTS_PER_DAY} feedback messages to {PRODUCT_NAME} today. Try again tomorrow, or ask your human to send it."
             ),
         }
     }

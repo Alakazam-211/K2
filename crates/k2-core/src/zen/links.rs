@@ -26,6 +26,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::store::{valid_garden_id, ZenError};
+use crate::brand::CLI_NAME;
+use crate::product_name;
 
 /// The file, in the Zen folder.
 pub const LINKS_FILE: &str = "links.json";
@@ -56,10 +58,10 @@ pub fn site_of(raw: &str) -> Result<String, ZenError> {
     }
     let u = url::Url::parse(raw).map_err(|_| ZenError::BadRequest("that isn't a full http or https link".into()))?;
     if u.scheme() != "http" && u.scheme() != "https" {
-        return Err(ZenError::BadRequest("K2 opens only http and https links".into()));
+        return Err(ZenError::BadRequest(concat!(product_name!(), " opens only http and https links").into()));
     }
     if !u.username().is_empty() || u.password().is_some() {
-        return Err(ZenError::BadRequest("K2 never opens a link with a user name or password in it".into()));
+        return Err(ZenError::BadRequest(concat!(product_name!(), " never opens a link with a user name or password in it").into()));
     }
     let host = u.host_str().filter(|h| !h.is_empty()).ok_or_else(|| ZenError::BadRequest("the link has no host".into()))?;
     Ok(match u.port() {
@@ -127,7 +129,7 @@ pub fn allow(zen_dir: &Path, garden: &str, site: &str) -> Result<bool, ZenError>
     }
     if list.len() >= MAX_SITES_PER_GARDEN {
         return Err(ZenError::BadRequest(format!(
-            "a Garden remembers at most {MAX_SITES_PER_GARDEN} sites; forget one first (k2 zen links forget)"
+            "a Garden remembers at most {MAX_SITES_PER_GARDEN} sites; forget one first ({CLI_NAME} zen links forget)"
         )));
     }
     list.push(site);

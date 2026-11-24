@@ -16,6 +16,8 @@
 use std::path::{Path, PathBuf};
 
 use super::manifest::Manifest;
+use crate::brand::PRODUCT_NAME;
+use crate::{cli_name, product_name};
 
 /// Response headers a static App may set (TC-1).
 pub const ALLOWED_HEADERS: &[&str] = &[
@@ -156,7 +158,7 @@ pub fn canonical_header(name: &str) -> Option<&'static str> {
 /// one header line, and no `frame-ancestors` in a CSP.
 pub fn check_header(name: &str, value: &str) -> Result<(), String> {
     let Some(canon) = canonical_header(name) else {
-        return Err(format!("host.headers: \"{name}\" isn't one K2 lets an App set (allowed: {})", ALLOWED_HEADERS.join(", ")));
+        return Err(format!("host.headers: \"{name}\" isn't one {PRODUCT_NAME} lets an App set (allowed: {})", ALLOWED_HEADERS.join(", ")));
     };
     let v = value.trim();
     if v.is_empty() || v.len() > MAX_HEADER_VALUE || v.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
@@ -164,8 +166,8 @@ pub fn check_header(name: &str, value: &str) -> Result<(), String> {
     }
     if canon == "Content-Security-Policy" && crate::frame_policy::csp_has_frame_ancestors(v) {
         return Err(
-            "host.headers.Content-Security-Policy names frame-ancestors: framing is K2's (the App's frame policy, k2 publish frame <app>); \
-             drop frame-ancestors from the CSP"
+            concat!("host.headers.Content-Security-Policy names frame-ancestors: framing is ", product_name!(), "'s (the App's frame policy, ", cli_name!(), " publish frame <app>); \
+             drop frame-ancestors from the CSP")
                 .into(),
         );
     }
@@ -251,7 +253,7 @@ pub fn check_tree(m: &Manifest, seed_dir: &Path) -> Vec<(&'static str, String, &
     let mut out = Vec::new();
     let h = &m.host;
     if !h.start.is_empty() {
-        out.push(("manifest_invalid", "host.start: a static App runs no server; leave start out (K2 serves the files)".to_string(), "host.start"));
+        out.push(("manifest_invalid", concat!("host.start: a static App runs no server; leave start out (", product_name!(), " serves the files)").to_string(), "host.start"));
     }
     let root = match h.root.as_deref() {
         None => Some(".".to_string()),

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::extract::{self, Projection};
 use super::rules;
 use super::spec::{FetchTargets, Json, Keep, OnTargetError, SourceSpec};
+use crate::product_name;
 
 /// `Ord` = severity for "worst of"; unknown is counted apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -155,15 +156,15 @@ impl Reason {
             Reason::BlockedAddress => "The address is a private or local one, which sources can't reach.",
             Reason::Airgap => "This server is air-gapped, so it makes no outside checks.",
             Reason::HostSlept => "The computer running this check was asleep.",
-            Reason::DaemonRestarted => "K2 restarted on the computer running this check.",
+            Reason::DaemonRestarted => concat!(product_name!(), " restarted on the computer running this check."),
             Reason::TooLarge => "The answer was larger than this source allows.",
             Reason::NotJson => "The answer was not JSON.",
-            Reason::RateLimited => "The site asked K2 to slow down.",
+            Reason::RateLimited => concat!("The site asked ", product_name!(), " to slow down."),
             Reason::SecretMissing => "The secret this source uses is missing.",
             Reason::SecretDisabled => "The secret this source uses is disabled or no longer shared with it.",
             Reason::VaultUnavailable => "The vault is locked or unavailable.",
             Reason::RedirectOtherOrigin => "The site redirected to a different address.",
-            Reason::Budget => "K2 is holding checks to this site to stay within its rate.",
+            Reason::Budget => concat!(product_name!(), " is holding checks to this site to stay within its rate."),
             Reason::PausedByPerson => "A person paused this source.",
             Reason::UnexpectedStatus => "The site answered with a status this source doesn't expect.",
         }

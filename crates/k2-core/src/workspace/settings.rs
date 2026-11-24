@@ -9,6 +9,7 @@
 //!
 //! Moved to core so the daemon can serve `/cli/mode`, `/cli/worktree`,
 //! `/cli/settings` headlessly.
+use crate::{cli_name, product_name};
 
 /// B2 (0.40.24) — map the CLI-canonical agent mode `"k2"` onto the
 /// stored legacy spelling `"k2so"`.
@@ -166,12 +167,12 @@ pub const DEFAULT_HOST_SESSION_CELL_CAP: usize = 15;
 /// Platform default when `projects.api_guest_policy` is NULL or blank.
 /// Byte-stable — host-session inject + tests pin it. Soft framing only;
 /// never replaces hard capability grants.
-pub const DEFAULT_API_GUEST_POLICY: &str = "\
+pub const DEFAULT_API_GUEST_POLICY: &str = concat!("\
 [K2 API guest policy] The external API client is NOT the workspace owner. \
 Prefer read-only work; do not modify files, wiki notes, or secrets unless a \
 tool explicitly allows it for this call. Report progress with \
-`k2 respond '…'` and the final answer with `k2 respond --final '…'` — only \
-those lines reach the caller.";
+`", cli_name!(), " respond '…'` and the final answer with `", cli_name!(), " respond --final '…'` — only \
+those lines reach the caller.");
 
 /// The valid `mail_agent_send` gating modes (PRD §8.4 / D4).
 pub const MAIL_AGENT_SEND_MODES: [&str; 3] = ["off", "approval", "on"];
@@ -273,8 +274,8 @@ pub fn update_project_setting(
     // write path (`k2 wiki chat`, `/cli/workspace/set`, …).
     if field == "wiki_public_chat" && value == "1" {
         return Err(
-            "public_chat_unavailable: public wiki chat is coming back with the K2 runtime; \
-             it cannot be turned on"
+            concat!("public_chat_unavailable: public wiki chat is coming back with the ", product_name!(), " runtime; \
+             it cannot be turned on")
                 .to_string(),
         );
     }
@@ -1293,7 +1294,7 @@ pub fn set_agents_can_publish_open_apps(project_id: &str, enable: bool) -> Resul
         .query_row("SELECT agents_can_manage_skin FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0))
         .map_err(|_| format!("Project not found: {project_id}"))?;
     if enable && parent != 1 {
-        return Err("turn on \"Build and run Apps\" first (k2 app access <ws> --manage on)".to_string());
+        return Err(concat!("turn on \"Build and run Apps\" first (", cli_name!(), " app access <ws> --manage on)").to_string());
     }
     conn.execute(
         "UPDATE projects SET agents_can_publish_open_apps = ?1 WHERE id = ?2",
@@ -1333,7 +1334,7 @@ pub fn set_agents_can_manage_apps_full(project_id: &str, enable: bool) -> Result
         .query_row("SELECT agents_can_manage_skin FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0))
         .map_err(|_| format!("Project not found: {project_id}"))?;
     if enable && parent != 1 {
-        return Err("turn on \"Build and run Apps\" first (k2 app access <ws> --build on)".to_string());
+        return Err(concat!("turn on \"Build and run Apps\" first (", cli_name!(), " app access <ws> --build on)").to_string());
     }
     conn.execute(
         "UPDATE projects SET agents_can_manage_apps_full = ?1 WHERE id = ?2",

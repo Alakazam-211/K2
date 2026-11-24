@@ -35,6 +35,8 @@ use super::failover::{
 use super::frpc_proc::{self, FrpcProc};
 use super::render::render_frpc_toml_for_relay;
 use super::watchdog::DisconnectTracker;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// Where to find the `frpc` binary.
 #[derive(Debug, Clone)]
@@ -124,12 +126,12 @@ pub fn resolve_frpc(bin: &FrpcBinary) -> Result<PathBuf, String> {
                 }
             }
             Err(
-                "frpc not installed: the K2 Connect tunnel requires the `frpc` \
-                 client binary (fatedier/frp v0.61+). Desktop installs of K2 ship \
+                concat!("frpc not installed: the K2 Connect tunnel requires the `frpc` \
+                 client binary (fatedier/frp v0.61+). Desktop installs of ", product_name!(), " ship \
                  it next to the app and stage it under ~/.k2/bin — reinstall or \
-                 update K2 if this is missing. Otherwise install via your package \
+                 update ", product_name!(), " if this is missing. Otherwise install via your package \
                  manager (e.g. `brew install frpc`) or download a release from \
-                 https://github.com/fatedier/frp/releases and place it on your PATH."
+                 https://github.com/fatedier/frp/releases and place it on your PATH.")
                     .to_string(),
             )
         }
@@ -639,7 +641,7 @@ impl std::fmt::Display for SpawnBlock {
             SpawnBlock::Disabled => write!(
                 f,
                 "tunnel is disabled on this device (persisted in tunnel.json) — \
-                 turn it on again with `k2 tunnel enable` or Settings → Network → Tunnel → Status"
+                 turn it on again with `{CLI_NAME} tunnel enable` or Settings → Network → Tunnel → Status"
             ),
             SpawnBlock::Released => write!(
                 f,
@@ -1179,7 +1181,7 @@ pub const TOKEN_UNREADABLE_PREFIX: &str = "tunnel token unreadable";
 
 fn token_unreadable_error(e: &str) -> String {
     format!(
-        "{TOKEN_UNREADABLE_PREFIX}: the K2 vault could not be read ({e}); the stored \
+        "{TOKEN_UNREADABLE_PREFIX}: the {PRODUCT_NAME} vault could not be read ({e}); the stored \
          token is kept and nothing was changed — try again once the vault is readable"
     )
 }
@@ -1239,7 +1241,7 @@ pub fn start(
             // next start re-reads the vault.
             if let Some(e) = desired.token_read_error.as_deref() {
                 crate::log_debug!(
-                    "[tunnel] start: the tunnel token could not be read from the K2 vault \
+                    "[tunnel] start: the tunnel token could not be read from the {PRODUCT_NAME} vault \
                      ({e}) — keeping the running tunnel for {:?} up",
                     st.cfg.subdomain
                 );

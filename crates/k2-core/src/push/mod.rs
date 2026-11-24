@@ -44,6 +44,7 @@
 //!   can be wrapped in `Arc` and shared across tokio tasks.
 
 use std::fmt;
+use crate::product_name;
 
 pub mod budget;
 pub mod preview;
@@ -656,7 +657,7 @@ pub enum ThreadBudget {
 }
 
 /// The body of a signed-approval push (SA-15).
-pub const APPROVAL_PUSH_BODY: &str = "Approval requested: open K2 to read it";
+pub const APPROVAL_PUSH_BODY: &str = concat!("Approval requested: open ", product_name!(), " to read it");
 
 impl ThreadBudget {
     /// A targeted card push (permission or approval): never coalesced, drawn

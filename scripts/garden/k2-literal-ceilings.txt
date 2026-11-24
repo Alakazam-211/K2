@@ -51,44 +51,42 @@ keep crates/k2-daemon/src/mail/calendar_share.rs "k2 group (shared calendars)" o
 keep crates/k2-daemon/src/permission/actions/postal.rs "p5 k2 link" outside: p5's own subcommand, a word of p5's
 keep crates/k2-daemon/src/handoff_setup.rs "RuntimeDirectory=k2" outside: systemd's RuntimeDirectory value, a folder name
 
-561 apps
+524 apps
 369 mail
-186 compute
+164 compute
 158 apps (Sew)
 139 vault
 103 db
-94 zen
-65 other
-60 doc
-45 organization
-38 chat
+59 doc
+51 other
 38 publish
-35 ci
-34 inbox
+32 chat
 32 voice
-27 sim
-26 setup
-23 workspace
-19 agent sidecar
-17 desktop
+31 ci
+27 inbox
+26 organization
+20 zen
+19 setup
+17 agent sidecar
 17 firewall
-16 thread
+17 workspace
+16 desktop
 15 agent
-15 board
+15 thread
 14 domain
-12 heartbeat
-11 agent hire
-11 connect
 11 front
 11 msg/postal
-10 fed
-10 workspace trust
+9 board
 9 clone
-9 job
-8 llm
-6 git tools
+9 fed
+8 workspace trust
+7 heartbeat
+7 job
+6 connect
 5 approve
-4 sources
+3 llm
 3 terminal
+2 agent hire
 2 feedback
+2 git tools
 2 tickets

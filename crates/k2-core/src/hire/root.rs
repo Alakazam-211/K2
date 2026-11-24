@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::RwLock;
 
 use super::HireError;
+use crate::cli_name;
 
 /// Folder name under `$HOME` when the owner never set a root.
 pub const DEFAULT_ROOT_DIR: &str = "k2-agents";
@@ -32,7 +33,7 @@ pub fn hire_root() -> Result<PathBuf, HireError> {
         Some(s) => Ok(PathBuf::from(s)),
         None => crate::paths::home_dir()
             .map(|h| h.join(DEFAULT_ROOT_DIR))
-            .ok_or_else(|| HireError::internal("no home folder to put the hire root in; set one: k2 agent hire-root set <dir>")),
+            .ok_or_else(|| HireError::internal(concat!("no home folder to put the hire root in; set one: ", cli_name!(), " agent hire-root set <dir>"))),
     }
 }
 

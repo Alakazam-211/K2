@@ -47,6 +47,8 @@ pub mod when;
 pub mod usage_pause;
 
 pub use wait::{boot_reconcile, WAIT_SCHEDULE_ERROR, WAIT_WAKEUP_EMPTY};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::product_name;
 
 /// Heartbeat S3 (HB19) — re-derive the workspace's stored wait state
 /// after a write. A failure here never fails the user's write; the
@@ -975,7 +977,7 @@ pub fn k2_heartbeat_set_tz(project_path: String, name: String, raw: &str) -> Res
         .map_err(|e| e.to_string())?
         .ok_or_else(|| no_such_heartbeat(&name))?;
     if row.is_reminder() || row.is_mail_digest() {
-        return Err(format!("'{name}' is not a repeating heartbeat; --tz is for k2 heartbeat schedule rows"));
+        return Err(format!("'{name}' is not a repeating heartbeat; --tz is for {CLI_NAME} heartbeat schedule rows"));
     }
     AgentHeartbeat::update_tz(&conn, &project_id, &name, tz.as_deref()).map_err(|e| e.to_string())?;
     drop(conn);
@@ -1346,7 +1348,7 @@ fn retire_missed_reminder(
     missed_at: chrono::DateTime<chrono::Local>,
 ) {
     let reason = format!(
-        "reminder was due {} and is more than 24h late (asleep or K2 not running); retired as missed",
+        "reminder was due {} and is more than 24h late (asleep or {PRODUCT_NAME} not running); retired as missed",
         missed_at.to_rfc3339()
     );
     match reminders::retire(conn, project_id, &hb.name, "missed", chrono::Utc::now()) {
@@ -1365,7 +1367,7 @@ fn retire_missed_reminder(
     reminders::post_note(
         project_path,
         reminders::NOTE_MISSED,
-        &reminders::missed_note(hb, "it was more than 24 hours late (this computer was asleep or K2 wasn't running)"),
+        &reminders::missed_note(hb, concat!("it was more than 24 hours late (this computer was asleep or ", product_name!(), " wasn't running)")),
     );
     log_debug!("[heartbeat-tick] {} {reason}", hb.name);
 }
@@ -1433,7 +1435,7 @@ fn skip_missed_slot(
 ) {
     let hours = cron::MISSED_RUN_GRACE_SECS / 3600;
     let reason = format!(
-        "missed the slot scheduled {} by more than {hours}h (asleep or K2 not running); \
+        "missed the slot scheduled {} by more than {hours}h (asleep or {PRODUCT_NAME} not running); \
          skipped, next run is the next scheduled slot",
         missed_at.to_rfc3339()
     );

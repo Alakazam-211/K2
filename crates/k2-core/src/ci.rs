@@ -31,6 +31,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::compute::proto::ci_config::{CheckJob, CiConfig, StatusesConfig, WatchConfig, CI_CONFIG_PATH, CI_CONFIG_VERSION};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Runs in flight per workspace unless the watch says otherwise.
 pub const DEFAULT_MAX_INFLIGHT: u32 = 2;
@@ -552,7 +553,7 @@ pub fn verdict(j: &JobFacts, late: bool) -> (&'static str, String) {
         "done" if j.exit == Some(0) => (check_state::SUCCESS, format!("job {} on {}, {mins}m", j.short, j.node)),
         "done" => (
             check_state::FAILURE,
-            format!("job {} on {}: exit {} after {mins}m (k2 compute logs {} --failures)", j.short, j.node, j.exit.map(|e| e.to_string()).unwrap_or_else(|| "?".into()), j.short),
+            format!("job {} on {}: exit {} after {mins}m ({CLI_NAME} compute logs {} --failures)", j.short, j.node, j.exit.map(|e| e.to_string()).unwrap_or_else(|| "?".into()), j.short),
         ),
         "queued" | "assigned" | "preparing" | "running" | "finishing" => {
             if late {
@@ -620,7 +621,7 @@ pub fn run_message(run: &RunRow, checks: &[CheckRow], slowest: Option<(&str, i64
     if let Some((name, secs)) = slowest.filter(|(n, _)| crate::compute::proto::ci::is_name(n)) {
         parts.push(format!("slowest: {name} {}", crate::compute::message::duration(secs)));
     }
-    parts.push(format!("k2 ci status {}", run.short()));
+    parts.push(format!("{CLI_NAME} ci status {}", run.short()));
     parts.join(" · ")
 }
 
@@ -792,9 +793,9 @@ impl Starter {
         let cfg = self.config()?;
         let body = cfg.to_toml()?;
         let text = format!(
-            "# K2 CI for this repo (k2 study ci). Commit this file: K2 reads it at\n\
-             # each commit it checks. Every [checks.<name>] runs as one K2 Compute\n\
-             # job on the commit; `k2 ci run` checks HEAD now, `k2 ci watch on`\n\
+            "# {PRODUCT_NAME} CI for this repo ({CLI_NAME} study ci). Commit this file: {PRODUCT_NAME} reads it at\n\
+             # each commit it checks. Every [checks.<name>] runs as one {PRODUCT_NAME} Compute\n\
+             # job on the commit; `{CLI_NAME} ci run` checks HEAD now, `{CLI_NAME} ci watch on`\n\
              # checks each push to [watch] branches.\n{body}"
         );
         // Never write what K2 itself can't read back.

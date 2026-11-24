@@ -25,6 +25,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::{Tool, WalletError};
+use crate::brand::PRODUCT_NAME;
+use crate::product_name;
 
 // ── Paths ───────────────────────────────────────────────────────────
 
@@ -361,7 +363,7 @@ pub fn bounded_keychain_read(service: &str, account: &str, reader: std::sync::Ar
     let Some(r) = st.result.clone() else {
         let waited = st.started.elapsed();
         crate::log_debug!(
-            "[llm-accounts] keychain read of \"{service}\" not answered after {} ms (a macOS dialog may be open); K2 stopped waiting",
+            "[llm-accounts] keychain read of \"{service}\" not answered after {} ms (a macOS dialog may be open); {PRODUCT_NAME} stopped waiting",
             waited.as_millis()
         );
         return Err(KeychainReadError::Pending { waited });
@@ -439,10 +441,10 @@ fn claude_reader() -> Option<std::sync::Arc<KeychainReader>> {
 
 /// What the person reads when macOS holds a read of Claude's login on a
 /// dialog.
-pub const KEYCHAIN_PROMPT_HINT: &str = "macOS is asking to let K2 read Claude's login. Answer the keychain dialog (it may be behind other windows), then try again.";
+pub const KEYCHAIN_PROMPT_HINT: &str = concat!("macOS is asking to let ", product_name!(), " read Claude's login. Answer the keychain dialog (it may be behind other windows), then try again.");
 /// What the person reads when they declined that dialog.
 pub const KEYCHAIN_DECLINED_HINT: &str =
-    "macOS didn't let K2 read Claude's login (the keychain dialog was declined). Try again and choose Allow or Always Allow.";
+    concat!("macOS didn't let ", product_name!(), " read Claude's login (the keychain dialog was declined). Try again and choose Allow or Always Allow.");
 
 /// One of Claude's keychain items (the live one, a slot's), waiting at
 /// most [`keychain_read_wait`]. `Ok(None)`: no such item, or K2 doesn't
@@ -553,7 +555,7 @@ pub fn validate_cred(tool: Tool, bytes: &[u8]) -> Result<(), String> {
 pub(crate) fn invalid_cred(tool: Tool, what: &str, why: String) -> WalletError {
     WalletError::Conflict(
         "credential_invalid",
-        format!("{}'s {what} is not a whole sign-in ({why}); K2 left everything as it was", tool.display()),
+        format!("{}'s {what} is not a whole sign-in ({why}); {PRODUCT_NAME} left everything as it was", tool.display()),
     )
 }
 
@@ -1214,7 +1216,7 @@ impl Drop for TaskGuard {
 fn current_task() -> String {
     TASK.with(|t| t.borrow().clone()).unwrap_or_else(|| {
         let th = std::thread::current();
-        format!("K2 thread \"{}\"", th.name().unwrap_or("unnamed"))
+        format!("{PRODUCT_NAME} thread \"{}\"", th.name().unwrap_or("unnamed"))
     })
 }
 
@@ -1249,7 +1251,7 @@ fn holder_text(key: &str, lock_file: &Path) -> Option<String> {
     }
     match lock_file_pid(lock_file) {
         Some(pid) if pid != std::process::id() => Some(format!(
-            "another K2 process (pid {pid}) holds {}; if it is stuck, quit it",
+            "another {PRODUCT_NAME} process (pid {pid}) holds {}; if it is stuck, quit it",
             lock_file.display()
         )),
         _ => None,

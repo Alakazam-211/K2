@@ -52,6 +52,8 @@ pub mod trim;
 pub mod trust;
 
 pub use k2_node_proto as proto;
+use crate::brand::PRODUCT_NAME;
+use crate::cli_name;
 
 static SETTING_ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -91,7 +93,7 @@ pub const CI_ENV: &str = "K2_CI";
 pub const CI_PREVIEW_OFF: &str = "ci_preview_off";
 
 /// How the owner turns it on (help, study pages and every refusal say it).
-pub const CI_PREVIEW_HOW: &str = "k2 settings set ciPreview true";
+pub const CI_PREVIEW_HOW: &str = concat!(cli_name!(), " settings set ciPreview true");
 
 /// Where the same switch is in the app (0.46.17).
 pub const CI_PREVIEW_WHERE: &str = concat!("Settings → Compute → CI on ", crate::product_name!(), " Compute");
@@ -133,7 +135,7 @@ pub fn ci_enabled() -> bool {
 /// the owner turns the preview on.
 pub fn ci_preview_hint(what: &str) -> String {
     format!(
-        "{what} is part of CI on K2 Compute, a preview that is off on this server: the owner turns it on in {CI_PREVIEW_WHERE} ({CI_PREVIEW_HOW}, or {CI_ENV}=1 in the daemon's environment; compute must be on too)"
+        "{what} is part of CI on {PRODUCT_NAME} Compute, a preview that is off on this server: the owner turns it on in {CI_PREVIEW_WHERE} ({CI_PREVIEW_HOW}, or {CI_ENV}=1 in the daemon's environment; compute must be on too)"
     )
 }
 

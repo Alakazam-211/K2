@@ -15,6 +15,7 @@ use serde_json::json;
 use super::seed::{self, SeedError};
 use super::store::{self, SeedRow};
 use super::validate::{self, Options, Report};
+use crate::cli_name;
 
 /// Where a manifest `build` runs. Stage 1 has none (the folder is used as
 /// built); stage 3 gives the container engine's in-wall builder.
@@ -166,7 +167,7 @@ pub fn folder_manifest(label: &str, cmd: &str) -> super::manifest::Manifest {
         id: label.into(),
         name: label.into(),
         version: "0.0.0-folder".into(),
-        description: Some("k2 publish run --cmd (open path)".into()),
+        description: Some(concat!(cli_name!(), " publish run --cmd (open path)").into()),
         license: None,
         caps: Vec::new(),
         reasons: Default::default(),

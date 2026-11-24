@@ -12,6 +12,7 @@ use crate::zen::builtin_widgets::{parse_widget_ref, WidgetRef};
 use crate::zen::store::{ZenError, ZenFile, ZenFiles};
 use crate::zen::widget_access::{effective_caps, sources_reach_note, WidgetOrigin, WidgetPauses};
 use crate::zen::widget_store::widget_label;
+use crate::cli_name;
 
 impl ZenFiles {
     /// GET `/cli/zen/widget/show?widget=<name|k2:ref>`.
@@ -48,7 +49,7 @@ impl ZenFiles {
             let paused = pauses.get(&p.garden, &p.placement);
             let locked = self.is_locked(&p.garden);
             let state = match (gst.state.as_str(), paused.is_some()) {
-                ("broken", _) => "stopped: it doesn't bundle (k2 zen validate --widget shows why)",
+                ("broken", _) => concat!("stopped: it doesn't bundle (", cli_name!(), " zen validate --widget shows why)"),
                 (_, true) => "running; posting paused by the runaway guard (the person clicks Resume)",
                 ("errors", _) => "running its last good version (the folder has errors)",
                 _ => "running when a Zen window shows its Garden",

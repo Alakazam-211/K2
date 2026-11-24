@@ -37,6 +37,8 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::push::device_log::Reason as PushReason;
+use crate::brand::PRODUCT_NAME;
+use crate::cli_name;
 
 /// Default session lifetime. A connect-user's session token is valid
 /// for 7 days from issue (PRD connect-login-edge-only T1; was 30); after
@@ -93,7 +95,7 @@ pub enum Role {
 /// The error every role parser gives for the retired `"viewer"` string
 /// (`k2 users add --role viewer`, `POST /cli/users/set-role`, the boot
 /// seed-users file). The CLI and Settings show it as-is.
-pub const VIEWER_ROLE_REMOVED: &str = "the viewer role was removed: a login is owner, admin or member, or Voice & Chat only (voice_chat) for someone who should only use voice rooms. For other limited access, give the person an app pass instead (k2 app).";
+pub const VIEWER_ROLE_REMOVED: &str = concat!("the viewer role was removed: a login is owner, admin or member, or Voice & Chat only (voice_chat) for someone who should only use voice rooms. For other limited access, give the person an app pass instead (", cli_name!(), " app).");
 
 impl Role {
     /// Parse a wire role string (`"owner"` | `"admin"` | `"member"`).
@@ -613,7 +615,7 @@ pub fn is_reserved_username(name: &str) -> bool {
 /// The refusal for creating (or signing in as) a reserved name.
 pub fn reserved_username_hint(name: &str) -> String {
     format!(
-        "'{}' is a name K2 uses for the server's owner and its agents, so no login can have it; pick another username",
+        "'{}' is a name {PRODUCT_NAME} uses for the server's owner and its agents, so no login can have it; pick another username",
         name.trim().to_ascii_lowercase()
     )
 }
@@ -630,7 +632,7 @@ pub fn reserved_name_doctor_line(users: &[String]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "login(s) made before K2 0.46.6 with a name K2 uses for the server's owner and its agents: {}. They can't sign in and have no access now. Remove each in Settings → Admin Access and add the person again under another username.",
+        "login(s) made before {PRODUCT_NAME} 0.46.6 with a name {PRODUCT_NAME} uses for the server's owner and its agents: {}. They can't sign in and have no access now. Remove each in Settings → Admin Access and add the person again under another username.",
         users.join(", ")
     ))
 }

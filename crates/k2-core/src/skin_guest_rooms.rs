@@ -49,6 +49,7 @@ use super::{
     app_grant, normalize_room_ids, normalize_username, now_secs, parse_rooms_json, principal_by_username,
     role_by_id_or_name, rooms_from_json, rooms_json, with_conn, HOST_APP_ID,
 };
+use crate::brand::CLI_NAME;
 
 /// The catalog cap of both verbs (an owner grant per App, never a pass cap).
 pub const CAP: &str = "guests:rooms";
@@ -339,7 +340,7 @@ impl Refusal {
             Refusal::OutsideApp(r) => outside_app_hint("<app>", r),
             Refusal::AboveRole(r) => format!("the guest's role doesn't cover: {} (rooms never add caps beyond the role)", r.join(", ")),
             Refusal::HasRole(role) => format!(
-                "the guest has the role '{role}' on this App, so its rooms are the role's; give a narrower role instead (k2 app grant)"
+                "the guest has the role '{role}' on this App, so its rooms are the role's; give a narrower role instead ({CLI_NAME} app grant)"
             ),
             Refusal::RateLimited { retry_after_ms } => {
                 format!("at most {RATE_PER_MIN} guest-rooms calls a minute per App; retry after {retry_after_ms} ms")
@@ -354,7 +355,7 @@ impl Refusal {
 pub fn outside_app_hint(app: &str, rooms: &[String]) -> String {
     let flags: Vec<String> = rooms.iter().map(|r| format!("--room {r}")).collect();
     format!(
-        "not a room this App's own code may hand out: {}. Its code gets its own room and its guests-rooms grant: k2 app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, k2 app guest ceiling {app} shows them). An agent with \"Let this agent manage its Apps' users\" on doesn't need this: k2 app user rooms sets any room",
+        "not a room this App's own code may hand out: {}. Its code gets its own room and its guests-rooms grant: {CLI_NAME} app grant {app} --kind guests-rooms {} (it replaces the App's list: add a --room for each room the App already has, {CLI_NAME} app guest ceiling {app} shows them). An agent with \"Let this agent manage its Apps' users\" on doesn't need this: {CLI_NAME} app user rooms sets any room",
         rooms.join(", "),
         flags.join(" "),
     )

@@ -37,6 +37,7 @@ use serde::Serialize;
 
 use super::config::{self, TunnelConfig, SUBDOMAIN_HOST};
 use super::connector::{self, FrpcBinary, TunnelStatus};
+use crate::brand::PRODUCT_NAME;
 
 /// What makes a running tunnel "the same tunnel". Device id, label,
 /// auto-start and relays are not part of it (changing those never needs a
@@ -174,7 +175,7 @@ fn reconcile_locked(
     // would take a working tunnel down over a read error — leave all of it.
     if let Some(e) = cfg.token_read_error.as_deref() {
         let msg = format!(
-            "the tunnel token could not be read from the K2 vault ({e}); the tunnel, \
+            "the tunnel token could not be read from the {PRODUCT_NAME} vault ({e}); the tunnel, \
              listener and routes were left as they are — try again once the vault is readable"
         );
         return IdentityChangeReport {
@@ -448,7 +449,7 @@ impl DiskSnapshot {
             // a rollback could not put it back.
             vault_token: config::vault_token().map_err(|e| {
                 format!(
-                    "the tunnel token could not be read from the K2 vault ({e}); nothing was \
+                    "the tunnel token could not be read from the {PRODUCT_NAME} vault ({e}); nothing was \
                      changed — try again once the vault is readable"
                 )
             })?,
@@ -457,7 +458,7 @@ impl DiskSnapshot {
     fn restore(&self) -> Result<(), String> {
         if let Some(token) = &self.vault_token {
             config::restore_vault_token(token.as_deref())
-                .map_err(|e| format!("restore the tunnel token in the K2 vault: {e}"))?;
+                .map_err(|e| format!("restore the tunnel token in the {PRODUCT_NAME} vault: {e}"))?;
         }
         // tunnel.json + the tombstone carry the bearer (0600); the cert is
         // public (0644, like `cert_broker::install_cert`).
@@ -502,7 +503,7 @@ pub fn switch_subdomain(
         }
         None if before.token_unreadable() => {
             return Err(format!(
-                "the tunnel token could not be read from the K2 vault ({}); nothing was \
+                "the tunnel token could not be read from the {PRODUCT_NAME} vault ({}); nothing was \
                  changed — try again once the vault is readable",
                 before.token_read_error.as_deref().unwrap_or_default()
             ))

@@ -75,6 +75,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::config::{self, RelayEndpoint, TunnelConfig};
+use crate::brand::PRODUCT_NAME;
 
 /// The k2.dev relay-list endpoint (K2 Web owns it).
 pub const DEFAULT_RELAY_LIST_URL: &str = crate::hosts::RELAY_LIST_URL;
@@ -382,7 +383,7 @@ impl std::fmt::Display for FetchError {
             FetchError::Invalid(e) => write!(f, "invalid list: {e}"),
             FetchError::Persist(e) => write!(f, "save tunnel.json: {e}"),
             FetchError::TokenUnreadable(e) => {
-                write!(f, "tunnel token unreadable from the K2 vault: {e}")
+                write!(f, "tunnel token unreadable from the {PRODUCT_NAME} vault: {e}")
             }
         }
     }

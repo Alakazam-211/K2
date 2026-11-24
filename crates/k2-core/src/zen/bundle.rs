@@ -41,6 +41,8 @@ use sha2::{Digest, Sha256};
 
 use super::schema::Diagnostic;
 use crate::jscheck::{self, Lang, Severity, Surface};
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
+use crate::{cli_name, product_name};
 
 /// Code (HTML + JS + CSS that is inlined; assets and K2's libraries
 /// excluded) per widget: over it is an error (UW8; 1 MB from 0.46.5, WS1).
@@ -74,7 +76,7 @@ pub fn human_bytes(n: usize) -> String {
 /// The large-widget warning's text (WS2), for `code` bytes of code.
 pub fn large_widget_message(code: usize) -> String {
     format!(
-        "this widget is large: {} of code (K2 warns above {}; the limit is {})",
+        "this widget is large: {} of code ({PRODUCT_NAME} warns above {}; the limit is {})",
         human_bytes(code),
         human_bytes(WARN_CODE_BYTES),
         human_bytes(MAX_CODE_BYTES)
@@ -83,7 +85,7 @@ pub fn large_widget_message(code: usize) -> String {
 
 /// The large-widget warning's suggestion (WS2).
 pub const LARGE_WIDGET_SUGGESTION: &str =
-    "consider splitting it or using an App; K2's shared libraries don't count toward the limit (k2 zen guide libs)";
+    concat!("consider splitting it or using an App; ", product_name!(), "'s shared libraries don't count toward the limit (", cli_name!(), " zen guide libs)");
 
 /// Asset file types K2 inlines (UW8): extension → MIME. No SVG in this
 /// cut, as for theme backgrounds.
@@ -639,7 +641,7 @@ impl Ctx<'_> {
         };
         let Some(mime) = asset_mime(name) else {
             return Err(format!(
-                "'{name}' isn't an image or font; K2 inlines .png, .jpg, .jpeg, .webp, .gif and .woff2"
+                "'{name}' isn't an image or font; {PRODUCT_NAME} inlines .png, .jpg, .jpeg, .webp, .gif and .woff2"
             ));
         };
         use base64::Engine as _;
@@ -913,7 +915,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                                 file: cx.label(&entry_owned),
                                 line: pos.0,
                                 col: pos.1,
-                                message: "K2 ignores this <link>; only <link rel=\"stylesheet\" href=\"file.css\"> loads in a widget"
+                                message: concat!(product_name!(), " ignores this <link>; only <link rel=\"stylesheet\" href=\"file.css\"> loads in a widget")
                                     .to_string(),
                             });
                         }
@@ -963,7 +965,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
                         Ref::Local(file) => cx.html_error(
                             line,
                             &format!("{an}="),
-                            format!("K2 inlines '{file}' only from src on img, source, audio and video"),
+                            format!("{PRODUCT_NAME} inlines '{file}' only from src on img, source, audio and video"),
                         ),
                     }
                 }
@@ -1006,7 +1008,7 @@ pub fn bundle(prefix: &str, entry: &str, files: &BTreeMap<String, Vec<u8>>) -> B
             line: 1,
             col: 1,
             message: format!(
-                "this widget's code (HTML, JS and CSS) is {} bytes; the limit is {}. Split it into widgets, move data into k2.store, use K2's libraries (k2 zen guide libs), or make it an App",
+                "this widget's code (HTML, JS and CSS) is {} bytes; the limit is {}. Split it into widgets, move data into k2.store, use {PRODUCT_NAME}'s libraries ({CLI_NAME} zen guide libs), or make it an App",
                 cx.code_bytes,
                 human_bytes(MAX_CODE_BYTES)
             ),
@@ -1109,7 +1111,7 @@ fn copied_library_warnings(cx: &mut Ctx<'_>) {
         let file = cx.label(&c.file);
         cx.warnings.push(Diagnostic {
             suggestion: Some(format!(
-                "{what} and add \"{}@{}\" to requires.libs; code drops from {} to {} (k2 zen guide libs)",
+                "{what} and add \"{}@{}\" to requires.libs; code drops from {} to {} ({CLI_NAME} zen guide libs)",
                 c.id,
                 c.line,
                 human_bytes(before),
@@ -1119,7 +1121,7 @@ fn copied_library_warnings(cx: &mut Ctx<'_>) {
             line: c.pos.0,
             col: c.pos.1,
             message: format!(
-                "this looks like a copy of {} ({}, matched {}); K2 ships it as a shared library that doesn't count toward the code limit",
+                "this looks like a copy of {} ({}, matched {}); {PRODUCT_NAME} ships it as a shared library that doesn't count toward the code limit",
                 c.title, c.id, c.how
             ),
         });

@@ -32,6 +32,9 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::lane::*;
+use crate::brand::PRODUCT_NAME;
+#[cfg(target_os = "linux")]
+use crate::product_name;
 
 /// K2's own adb server (the default 5037 may be the person's).
 pub const ADB_SERVER_PORT: u16 = 5137;
@@ -267,7 +270,7 @@ impl AndroidLane {
         std::fs::write(avd_home.join(format!("{name}.ini")), ini).map_err(|e| LaneError::tool(e.to_string()))?;
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 4);
         let config = format!(
-            "avd.ini.encoding=UTF-8\nAvdId={name}\navd.ini.displayname={} (K2)\nPlayStore.enabled=false\nabi.type={abi}\nhw.cpu.arch={arch}\n\
+            "avd.ini.encoding=UTF-8\nAvdId={name}\navd.ini.displayname={} ({PRODUCT_NAME})\nPlayStore.enabled=false\nabi.type={abi}\nhw.cpu.arch={arch}\n\
              hw.cpu.ncore={cores}\nhw.ramSize=2048\nhw.lcd.width={}\nhw.lcd.height={}\nhw.lcd.density={}\nhw.keyboard=yes\n\
              hw.audioInput=no\nhw.audioOutput=no\nhw.gpu.enabled=yes\nhw.gpu.mode=swiftshader_indirect\n\
              image.sysdir.1={}\ntag.id=google_apis\ntarget=android-{}\ndisk.dataPartition.size=6G\nfastboot.forceColdBoot=no\n",
@@ -303,11 +306,11 @@ impl AndroidLane {
                     Err(("/dev/kvm is missing: this server has no hardware virtualisation (KVM) for the emulator".into(), None))
                 }
                 Err(e) => {
-                    let user = std::env::var("USER").unwrap_or_else(|_| "the K2 user".into());
+                    let user = std::env::var("USER").unwrap_or_else(|_| concat!("the ", product_name!(), " user").into());
                     Err((
                         format!("/dev/kvm: {e} for {user}"),
                         Some(LaneNeed::OwnerStep {
-                            what: format!("Let {user} use KVM (add it to the kvm group), then restart K2"),
+                            what: format!("Let {user} use KVM (add it to the kvm group), then restart {PRODUCT_NAME}"),
                             command: format!("sudo usermod -aG kvm {user}"),
                         }),
                     ))

@@ -25,6 +25,7 @@ use crate::workspace::agent_identity::{agent_dir, agent_type_for, resolve_projec
 use crate::db::schema::AgentHeartbeat;
 use crate::terminal::event_sink::TerminalEventSink;
 use crate::terminal::grid_types::GridUpdate;
+use crate::brand::PRODUCT_NAME;
 
 // Shipped templates. The markdown lives in
 // `crates/k2-core/wakeup_templates/*.md` and is built in with
@@ -283,7 +284,7 @@ pub fn wake_pointer_prompt(
         format!("heartbeat `{heartbeat_name}`")
     };
     format!(
-        "K2 {name} fired. Its wake instructions are {body_bytes} bytes, too long to paste \
+        "{PRODUCT_NAME} {name} fired. Its wake instructions are {body_bytes} bytes, too long to paste \
          safely, so they were not pasted here. Before doing anything else, read your wake \
          instructions in full, from the top, at `{}` and then follow them exactly.",
         wakeup_path.display()

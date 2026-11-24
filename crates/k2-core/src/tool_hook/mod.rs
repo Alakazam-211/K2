@@ -62,6 +62,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::skin::{SkinGrant, SkinGrantWrite, SkinPrincipal};
+use crate::{cli_name, product_name};
 
 /// The grant kind the Sew provisioner owns.
 pub const CHAT_KIND: &str = "chat";
@@ -1116,7 +1117,7 @@ pub fn status() -> Result<serde_json::Value, String> {
             "outbox": summary,
             "blocked": blocked,
             "held": held,
-            "actorNote": "actor is reported by K2; it is not proof a person acted",
+            "actorNote": concat!("actor is reported by ", product_name!(), "; it is not proof a person acted"),
         }))
     })
 }
@@ -2220,7 +2221,7 @@ pub fn governed_space_for_app(app_id: &str, space: Option<&str>) -> Result<Resul
             return Ok(Err((409, "sew_feature_missing", "this box's Sew can't do App-governed Spaces yet (it needs app_governed_spaces)".into())));
         }
         if !governed::chat_key(conn, app_id)?.is_some_and(|k| k.enabled) {
-            return Ok(Err((409, "chat_key_required", "this App has no chat key; the owner gives it one (k2 app grant <app> --kind chat-key)".into())));
+            return Ok(Err((409, "chat_key_required", concat!("this App has no chat key; the owner gives it one (", cli_name!(), " app grant <app> --kind chat-key)").into())));
         }
         let mine: Vec<String> = app_space::bindings(conn)?.into_iter().filter(|b| b.app_id == app_id).map(|b| b.space_id).collect();
         match space.map(str::trim).filter(|s| !s.is_empty()) {

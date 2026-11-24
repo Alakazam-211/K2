@@ -52,6 +52,7 @@ use super::grokbot::{fallback_name_for, GrokBot, StoreLine, StoreRead};
 use super::{valid_agent_id, Author, ExternalAgent, ExternalAgentProvider, ThreadMessage};
 use crate::overlay::doc::{ORIGIN_K2, ORIGIN_ROSTER, ORIGIN_STORE, ORIGIN_SYSTEM};
 use crate::overlay::{self, CollectedMeta, ExtTxn, OverlayDoc, OverlayItem, OverlayPage, PostAuthor};
+use crate::brand::PRODUCT_NAME;
 
 /// [`CollectedMeta::source`] for Grok Bot lines.
 pub const SOURCE: &str = "grokbot";
@@ -102,7 +103,7 @@ pub fn start_text(name: &str, started_ms: i64) -> String {
     let when = chrono::DateTime::from_timestamp_millis(started_ms)
         .map(|d| d.with_timezone(&chrono::Local).format("%b %-d, %Y").to_string())
         .unwrap_or_default();
-    format!("K2 started collecting {name}'s messages here on {when}.")
+    format!("{PRODUCT_NAME} started collecting {name}'s messages here on {when}.")
 }
 
 /// What the roster summary says about an agent's latest entry, already

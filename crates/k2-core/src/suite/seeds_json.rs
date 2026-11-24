@@ -18,6 +18,7 @@ use serde::Deserialize;
 
 use super::{FilePin, Health, Version, VariantPin, SETUP_APP_SPACE_RECORD, SETUP_MEETINGS_ENABLED, SETUP_MEET_INIT};
 use crate::deploy::manifest::Requires;
+use crate::brand::PRODUCT_NAME;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +86,7 @@ pub struct SeedRec {
 pub fn parse(text: &str) -> Result<SeedsDoc, String> {
     let d: SeedsDoc = serde_json::from_str(text).map_err(|e| format!("seeds.json: {e}"))?;
     if d.schema != 1 || d.kind != "sew-app-seeds" {
-        return Err(format!("seeds.json: schema {} kind {} (K2 reads schema 1, sew-app-seeds)", d.schema, d.kind));
+        return Err(format!("seeds.json: schema {} kind {} ({PRODUCT_NAME} reads schema 1, sew-app-seeds)", d.schema, d.kind));
     }
     Ok(d)
 }
@@ -100,7 +101,7 @@ pub fn map_setup(steps: &[SetupRec]) -> Result<Vec<String>, String> {
                 out.push(SETUP_APP_SPACE_RECORD.to_string());
             }
             "meetings-enabled" => out.push(SETUP_MEETINGS_ENABLED.to_string()),
-            other => return Err(format!("{}: Sew's setup step {other} is not one this K2 knows", super::codes::SETUP_UNKNOWN)),
+            other => return Err(format!("{}: Sew's setup step {other} is not one this {PRODUCT_NAME} knows", super::codes::SETUP_UNKNOWN)),
         }
     }
     Ok(out)

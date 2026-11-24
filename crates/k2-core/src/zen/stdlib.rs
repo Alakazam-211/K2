@@ -29,6 +29,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
+use crate::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The checked-in manifest.
 pub const ZEN_LIB_JSON: &str = include_str!("../../../../src/shared/zen-lib.json");
@@ -209,7 +210,7 @@ impl LibRef {
                 let (id, version) = s
                     .rsplit_once('@')
                     .filter(|(i, v)| !i.is_empty() && !v.is_empty())
-                    .ok_or_else(|| format!("'{s}': name a library as <id>@<line>, like uplot@1 (k2 zen guide libs)"))?;
+                    .ok_or_else(|| format!("'{s}': name a library as <id>@<line>, like uplot@1 ({CLI_NAME} zen guide libs)"))?;
                 Ok(LibRef::Named { id: id.to_string(), version: version.to_string() })
             }
             J::Object(o) => {
@@ -277,7 +278,7 @@ pub fn retired<'a>(m: &'a ZenLibManifest, id: &str, line: &str) -> Option<&'a Re
 pub fn resolve_one<'a>(m: &'a ZenLibManifest, id: &str, want: &str) -> Result<(&'a ZenLibEntry, Option<String>), String> {
     let rows: Vec<&ZenLibEntry> = m.libs.iter().filter(|e| e.id == id).collect();
     if rows.is_empty() {
-        return Err(format!("K2's widget library has no {id}@{want}; see k2 zen guide libs for what's available"));
+        return Err(format!("{PRODUCT_NAME}'s widget library has no {id}@{want}; see {CLI_NAME} zen guide libs for what's available"));
     }
     let newest = |v: Vec<&'a ZenLibEntry>| v.into_iter().max_by(|a, b| version_cmp(&a.version, &b.version));
     let mut warning: Option<String> = None;
@@ -299,13 +300,13 @@ pub fn resolve_one<'a>(m: &'a ZenLibManifest, id: &str, want: &str) -> Result<(&
             .collect();
         match newest(forward) {
             Some(e) => {
-                warning = Some(format!("K2 ships {id} {} and updates it inside line {}; write \"{id}@{}\"", e.version, e.line, e.line));
+                warning = Some(format!("{PRODUCT_NAME} ships {id} {} and updates it inside line {}; write \"{id}@{}\"", e.version, e.line, e.line));
                 e
             }
             None => {
                 if let Some(e) = newest(rows.iter().copied().filter(|e| e.line == line).collect()) {
                     return Err(format!(
-                        "K2 ships {id} {} in line {}; {id}@{want} is newer than K2's. Write \"{id}@{}\", or update K2",
+                        "{PRODUCT_NAME} ships {id} {} in line {}; {id}@{want} is newer than {PRODUCT_NAME}'s. Write \"{id}@{}\", or update {PRODUCT_NAME}",
                         e.version, e.line, e.line
                     ));
                 }
@@ -313,7 +314,7 @@ pub fn resolve_one<'a>(m: &'a ZenLibManifest, id: &str, want: &str) -> Result<(&
                 shipped.sort_by(|a, b| version_cmp(&a.version, &b.version));
                 let list: Vec<String> = shipped.iter().map(|e| format!("{} ({})", e.line, e.version)).collect();
                 return Err(format!(
-                    "K2 ships {id} line{} {}; this widget asks for {id}@{want} (k2 zen guide libs)",
+                    "{PRODUCT_NAME} ships {id} line{} {}; this widget asks for {id}@{want} ({CLI_NAME} zen guide libs)",
                     if list.len() == 1 { "" } else { "s" },
                     list.join(", ")
                 ));
@@ -322,7 +323,7 @@ pub fn resolve_one<'a>(m: &'a ZenLibManifest, id: &str, want: &str) -> Result<(&
     };
     if let Some(r) = retired(m, id, &pick.line) {
         let w = format!(
-            "K2 retired {id}@{} in {}: it downloads on first use now (not under air-gap); move to {}",
+            "{PRODUCT_NAME} retired {id}@{} in {}: it downloads on first use now (not under air-gap); move to {}",
             pick.line, r.release, r.use_instead
         );
         warning = Some(match warning {
@@ -396,7 +397,7 @@ pub fn resolve(m: &ZenLibManifest, libs: &[J]) -> Resolved {
         let key = e.key();
         if let Some(prev) = loaded.iter_mut().find(|(k, ..)| *k == key) {
             if explicit && prev.3 {
-                out.findings.push(LibFinding { index: Some(index), error: false, message: format!("'{key}' is listed twice; K2 loads it once") });
+                out.findings.push(LibFinding { index: Some(index), error: false, message: format!("'{key}' is listed twice; {PRODUCT_NAME} loads it once") });
             }
             prev.3 |= explicit;
             return;
@@ -429,7 +430,7 @@ pub fn resolve(m: &ZenLibManifest, libs: &[J]) -> Resolved {
                 Err(e) => out.findings.push(LibFinding { index: Some(i), error: true, message: e }),
                 Ok(()) => {
                     if out.keys.contains(item) {
-                        out.findings.push(LibFinding { index: Some(i), error: false, message: format!("{url} is listed twice; K2 loads it once") });
+                        out.findings.push(LibFinding { index: Some(i), error: false, message: format!("{url} is listed twice; {PRODUCT_NAME} loads it once") });
                     } else {
                         out.unknown_bytes = true;
                         out.keys.push(item.clone());

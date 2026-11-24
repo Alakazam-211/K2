@@ -34,6 +34,7 @@
 //! between them leaves both working, one on each.
 
 use std::path::{Path, PathBuf};
+use crate::brand::PRODUCT_NAME;
 
 /// The CLI script, embedded verbatim from `cli/k2` at the repo root so
 /// the daemon binary is self-contained (same reasoning as the SQL
@@ -210,7 +211,7 @@ pub fn stage_at(target: &Path, as_: StageAs<'_>, create: bool) -> Result<Option<
     if let Some(bytes) = &on_disk {
         let text = String::from_utf8_lossy(bytes);
         if !text.trim().is_empty() && k2_cli_version_of(&text).is_none() {
-            crate::log_debug!("[cli-stage] left {} alone: it isn't the K2 CLI", target.display());
+            crate::log_debug!("[cli-stage] left {} alone: it isn't the {PRODUCT_NAME} CLI", target.display());
             return Ok(None);
         }
     }

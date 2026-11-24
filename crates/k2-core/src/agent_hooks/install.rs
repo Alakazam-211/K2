@@ -28,6 +28,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use super::envelope::HookSource;
+use crate::brand::PRODUCT_NAME;
 
 /// Marks a K2 hook command.
 pub const NOTIFY_FRAGMENT: &str = "/.k2/hooks/notify.sh";
@@ -132,7 +133,7 @@ pub fn generate_hook_script(daemon_version: &str) -> String {
     let send = if cfg!(windows) { &HOOK_SEND_WINDOWS } else { &HOOK_SEND_UNIX };
     format!(
         r#"#!/bin/bash
-# K2 agent lifecycle hook. DO NOT EDIT: managed by the K2 daemon.
+# {PRODUCT_NAME} agent lifecycle hook. DO NOT EDIT: managed by the {PRODUCT_NAME} daemon.
 {VERSION_STAMP}{daemon_version}
 #
 # Agent CLIs (Claude Code, Cursor, Gemini) run this on lifecycle events.
@@ -148,7 +149,7 @@ SOURCE="${{K2_HOOK_SOURCE:-claude}}"
 AGENT_PID="${{K2_HOOK_AGENT_PID:-}}"
 SOCK="${{K2_HOOK_SOCK:-${{K2SO_HOOK_SOCK:-}}}}"
 SCOPED="${{K2_HOOK_TOKEN:-${{K2SO_HOOK_TOKEN:-}}}}"
-# A passport K2 re-minted for this same session (its env one was lost).
+# A passport {PRODUCT_NAME} re-minted for this same session (its env one was lost).
 if [ -n "${{K2_SECRETS_DIR:-}}" ] && [ -f "$K2_SECRETS_DIR/.k2-passport" ] && [ ! -L "$K2_SECRETS_DIR/.k2-passport" ]; then
     HEALED=""
     IFS= read -r HEALED <"$K2_SECRETS_DIR/.k2-passport" 2>/dev/null
@@ -289,11 +290,11 @@ k2_cfg() {
 pub fn generate_statusline_script(daemon_version: &str) -> String {
     format!(
         r#"#!/bin/bash
-# K2 live usage limits (Claude statusLine). DO NOT EDIT: managed by the K2 daemon.
+# {PRODUCT_NAME} live usage limits (Claude statusLine). DO NOT EDIT: managed by the {PRODUCT_NAME} daemon.
 {VERSION_STAMP}{daemon_version}
 #
 # Installed only when ~/.claude/settings.json had no statusLine of its own.
-# Forwards Claude's `rate_limits` to the K2 daemon; prints nothing.
+# Forwards Claude's `rate_limits` to the {PRODUCT_NAME} daemon; prints nothing.
 
 export LC_ALL=C
 PAYLOAD="$(cat 2>/dev/null; printf x)"

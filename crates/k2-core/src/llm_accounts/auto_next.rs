@@ -23,6 +23,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::{Tool, WalletError};
+use crate::product_name;
 
 /// At or above this percent of its binding window the live subscription
 /// is "at its limit".
@@ -37,8 +38,8 @@ pub const CONFIRM_ACTION: &str = "llm-auto-next";
 
 /// The words shown next to the switch (and in `k2 llm tokens auto-next`):
 /// what it does, and that it may conflict with the provider's terms.
-pub const TERMS_NOTE: &str = "When the subscription in use reaches 99% of its limit, K2 switches to the next signed-in one by itself. \
-Switching accounts automatically at the limit may go against the provider's terms. It's your decision; it's off unless you turn it on.";
+pub const TERMS_NOTE: &str = concat!("When the subscription in use reaches 99% of its limit, ", product_name!(), " switches to the next signed-in one by itself. \
+Switching accounts automatically at the limit may go against the provider's terms. It's your decision; it's off unless you turn it on.");
 
 /// One tool's setting (a row = on).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

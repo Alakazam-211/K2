@@ -38,6 +38,7 @@ use super::schema::font_family;
 use super::stdlib::{self, LibRef, LibSource};
 use super::store::ZenError;
 use super::widgets;
+use crate::brand::PRODUCT_NAME;
 
 /// The generated frame runtime (`contract-gen`), the same text the renderer
 /// inlines (`zen-custom-prelude.ts`).
@@ -450,11 +451,11 @@ pub fn shot_page(name: &str, files: &BTreeMap<String, Vec<u8>>, o: &ShotOptions)
             LibRef::Cdn { url, .. } => {
                 return Err(ZenError::BadRequest(format!("--shot can't load CDN libraries yet ({url}); preview it in Zen instead")));
             }
-            r @ LibRef::Named { .. } => stdlib::find(m, &r).ok_or_else(|| ZenError::BadRequest(format!("no library {key} in K2")))?,
+            r @ LibRef::Named { .. } => stdlib::find(m, &r).ok_or_else(|| ZenError::BadRequest(format!("no library {key} in {PRODUCT_NAME}")))?,
         };
         if entry.source != LibSource::Bundled {
             return Err(ZenError::BadRequest(format!(
-                "--shot can't load {} yet (a library K2 downloads on first use); preview it in Zen instead",
+                "--shot can't load {} yet (a library {PRODUCT_NAME} downloads on first use); preview it in Zen instead",
                 entry.key()
             )));
         }

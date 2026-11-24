@@ -14,6 +14,7 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+use crate::product_name;
 
 /// What one unpack may hold.
 #[derive(Debug, Clone, Copy)]
@@ -48,7 +49,7 @@ impl<R: Read> Read for Capped<R> {
             let mut probe = [0u8; 1];
             return match self.inner.read(&mut probe)? {
                 0 => Ok(0),
-                _ => Err(io::Error::other("the archive unpacks to more than K2 accepts for a Seed")),
+                _ => Err(io::Error::other(concat!("the archive unpacks to more than ", product_name!(), " accepts for a Seed"))),
             };
         }
         let n = buf.len().min(self.left.min(usize::MAX as u64) as usize);

@@ -52,6 +52,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{app_grant, normalize_username, now_secs, principal_by_username, with_conn, HOST_APP_ID};
+use crate::brand::CLI_NAME;
+use crate::cli_name;
 
 /// The catalog cap of both verbs (an owner grant per App, never a pass cap).
 pub const CAP: &str = "guests:chat";
@@ -297,22 +299,22 @@ impl Refusal {
         match self {
             Refusal::NotFound => "no such guest of this App".into(),
             Refusal::Usage(m) | Refusal::Store(m) | Refusal::Unusable(m) => m.clone(),
-            Refusal::AgentLogin => "an agent login is never a chat person (agents are their workspace in chat: k2 chat)".into(),
+            Refusal::AgentLogin => concat!("an agent login is never a chat person (agents are their workspace in chat: ", cli_name!(), " chat)").into(),
             Refusal::NotAppGranted => {
-                "this person's chat was given by the owner (or another App); only the owner changes it (k2 app user chat)".into()
+                concat!("this person's chat was given by the owner (or another App); only the owner changes it (", cli_name!(), " app user chat)").into()
             }
             Refusal::Disabled => "the owner switched this person's chat off; only the owner turns it back on".into(),
             Refusal::SharedPerson => {
-                "this person also signs in to another App (or the box); their chat stays (the owner: k2 app user chat <user> none)".into()
+                concat!("this person also signs in to another App (or the box); their chat stays (the owner: ", cli_name!(), " app user chat <user> none)").into()
             }
             Refusal::HasAssistants => "this person has assistant agents in chat; the owner removes those first".into(),
             Refusal::Limit { max } => format!(
-                "this App already gave chat to {max} people, its ceiling (the owner raises it: k2 app grant <app> --kind guests-chat --max N)"
+                "this App already gave chat to {max} people, its ceiling (the owner raises it: {CLI_NAME} app grant <app> --kind guests-chat --max N)"
             ),
-            Refusal::ChatOff => "Chat and voice are not set up on this server: k2 hostchat enable".into(),
-            Refusal::NotAppScoped => "an App can't give chat yet: this server's Sew doesn't keep an App's sessions to that App's own Spaces \
-                 (it needs app_scoped_sessions). Until it does, the owner gives chat: k2 app user chat <user> member --app <app> \
-                 (and this App can see all chat that person can)"
+            Refusal::ChatOff => concat!("Chat and voice are not set up on this server: ", cli_name!(), " hostchat enable").into(),
+            Refusal::NotAppScoped => concat!("an App can't give chat yet: this server's Sew doesn't keep an App's sessions to that App's own Spaces \
+                 (it needs app_scoped_sessions). Until it does, the owner gives chat: ", cli_name!(), " app user chat <user> member --app <app> \
+                 (and this App can see all chat that person can)")
                 .into(),
             Refusal::NoChatMember => {
                 "this user has no chat member yet: give them chat (guests.setChat); the member appears within seconds".into()

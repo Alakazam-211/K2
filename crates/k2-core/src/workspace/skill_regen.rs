@@ -2443,8 +2443,8 @@ mod tests {
         );
         assert!(body.contains("Priority is optional"), "k2-cli skill must say Priority is optional");
         assert!(body.contains("k2 study compute"), "k2-cli skill must point at k2 study compute");
-        // 0.46.6: remote runs lead with --dirty; --repo/--with/--cache are named.
-        for flag in ["--dirty -- cargo nextest run", "--repo <dir> --with <sibling>", "--cache <name>"] {
+        // 0.46.6: remote runs lead with --dirty (and --expect, v67); --repo/--with/--cache are named.
+        for flag in ["--dirty --expect 12m -- cargo nextest run", "--repo <dir> --with <sibling>", "--cache <name>"] {
             assert!(body.contains(flag), "k2-cli skill's Compute nodes block must show {flag}");
         }
         // 0.46.6 job tiers v2 (SKILL_VERSION_WORKSPACE 39→40): --mem always,

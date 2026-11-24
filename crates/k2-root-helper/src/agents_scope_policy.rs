@@ -27,7 +27,7 @@ use std::ffi::OsStr;
 
 use k2_root_proto::agent_scope_policy::{
     bus_policy, bus_policy_state, bus_reload_argv, classify_delegation, classify_policy_probe, delegate_dropin, full_restart_command,
-    policy_probe_argv, Delegation, FileState, PolicyProbe, BUS_CONFIG_DIR, BUS_POLICY_DIR, BUS_POLICY_FILE, BUS_POLICY_PATH,
+    box_kind, policy_probe_argv, Delegation, FileState, PolicyProbe, OPEN_AGENTS, BUS_CONFIG_DIR, BUS_POLICY_DIR, BUS_POLICY_FILE, BUS_POLICY_PATH,
     DELEGATE_DROPIN_FILE,
 };
 use k2_root_proto::apps::ENV;
@@ -174,6 +174,9 @@ pub(crate) fn report(ctx: &Ctx, entry: &DaemonEntry, delegate: Option<bool>, cgr
     m.insert("delegateDropin".into(), json!(dropin.as_str()));
     m.insert("delegateDropinPath".into(), json!(format!("{}/{}.d/{DELEGATE_DROPIN_FILE}", k2_root_proto::paths::SYSTEMD_SYSTEM_DIR, entry.unit)));
     m.insert("delegation".into(), json!(delegation.as_str()));
+    // The A2 ruling: which kind of box, and what isn't held.
+    m.insert("boxKind".into(), json!(box_kind(&entry.scope)));
+    m.insert("openAgents".into(), json!(OPEN_AGENTS));
     if delegation == Delegation::PendingFullRestart {
         m.insert("fullRestart".into(), json!(full_restart_command(&entry.unit)));
     }

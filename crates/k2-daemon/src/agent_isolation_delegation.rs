@@ -24,6 +24,24 @@ pub fn delegation(layout: &Value) -> Option<&str> {
     layout["delegation"].as_str()
 }
 
+/// The A2 ruling's box kind: the helper's answer (`daemon.toml`'s scope)
+/// when there is one, else this daemon's own cgroup
+/// (`k2_core::agent_cgroup::box_kind`).
+pub fn box_kind(layout: Option<&Value>) -> String {
+    layout
+        .and_then(|l| l["boxKind"].as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| k2_core::agent_cgroup::box_kind().to_string())
+}
+
+/// The A2 ruling's line: the helper's words, else the same words.
+pub fn open_agents(layout: Option<&Value>) -> String {
+    layout
+        .and_then(|l| l["openAgents"].as_str())
+        .unwrap_or(k2_root_proto::agent_scope_policy::OPEN_AGENTS)
+        .to_string()
+}
+
 /// What the owner still has to do for `delegation` to read `off`: `None`
 /// when it does already (or the helper reports no delegation).
 /// `running_sessions`: the agent sessions such a restart would end now.
@@ -113,6 +131,18 @@ mod tests {
             "sudo systemctl stop k2-daemon.service && sudo systemctl kill --kill-whom=all --signal=KILL k2-daemon.service; sudo systemctl start k2-daemon.service"
         );
         assert!(r["message"].as_str().expect("message").contains("still delegated"), "{r}");
+    }
+
+    #[test]
+    fn the_box_kind_and_the_open_agents_line_come_from_the_helper_else_this_daemon() {
+        let l = json!({ "boxKind": "server", "openAgents": "the helper's words" });
+        assert_eq!(box_kind(Some(&l)), "server");
+        assert_eq!(open_agents(Some(&l)), "the helper's words");
+        let own = k2_core::agent_cgroup::box_kind();
+        assert!(own == "server" || own == "desktop", "{own}");
+        assert_eq!(box_kind(None), own);
+        assert_eq!(box_kind(Some(&json!({}))), own, "an older helper says nothing");
+        assert_eq!(open_agents(None), "open agents are not fenced; only fenced sessions are held");
     }
 
     #[test]

@@ -223,6 +223,10 @@ fn agents_layout_is_ready_with_the_policy_the_dropin_and_delegation_off() {
     assert_eq!(v["p1"], "refused", "{v}");
     assert!(v.get("fullRestart").is_none(), "{v}");
     assert_eq!(v["ready"], true, "{v}");
+    // The A2 ruling: a system unit from daemon.toml is a server box, and
+    // the answer says open agents aren't held.
+    assert_eq!(v["boxKind"], "server", "{v}");
+    assert_eq!(v["openAgents"], "open agents are not fenced; only fenced sessions are held", "{v}");
 }
 
 #[test]

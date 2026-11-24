@@ -537,6 +537,9 @@ fn status(host: &dyn Host, who: &Who) -> CliResponse {
             "busPolicy": bus_policy,
             "delegation": delegation,
             "fullRestart": full_restart,
+            // The A2 ruling: which kind of box, and what isn't held.
+            "boxKind": crate::agent_isolation_delegation::box_kind(layout.as_ref()),
+            "openAgents": crate::agent_isolation_delegation::open_agents(layout.as_ref()),
             "layout": layout,
             "layoutError": layout_error,
         }),

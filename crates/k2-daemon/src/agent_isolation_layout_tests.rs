@@ -97,6 +97,8 @@ fn ready_layout(scopes: Value, survivors: Value) -> Value {
         "delegateDropin": "present",
         "delegation": "off",
         "unit": { "name": "k2-daemon.service", "delegate": false },
+        "boxKind": "server",
+        "openAgents": "open agents are not fenced; only fenced sessions are held",
     })
 }
 
@@ -439,6 +441,15 @@ fn on_names_the_full_restart_while_delegation_is_pending_and_status_shows_it() {
     let host = Stub::new(&[("layout", ready_layout(json!([]), json!([])))]);
     let (_, v) = post(&host, Caller::Owner, json!({ "mode": "status" }));
     assert_eq!((v["delegation"].as_str(), &v["fullRestart"]), (Some("off"), &Value::Null), "{v}");
+    // The A2 ruling: the helper's box kind and the open-agents line.
+    assert_eq!((v["boxKind"].as_str(), v["openAgents"].as_str()), (Some("server"), Some("open agents are not fenced; only fenced sessions are held")), "{v}");
+
+    // No helper: this daemon's own box kind, and the same line.
+    let mut host = Stub::new(&[]);
+    host.helper = Err("no root helper on this box".into());
+    let (_, v) = post(&host, Caller::Owner, json!({ "mode": "status" }));
+    assert_eq!(v["boxKind"].as_str(), Some(k2_core::agent_cgroup::box_kind()), "{v}");
+    assert_eq!(v["openAgents"].as_str(), Some("open agents are not fenced; only fenced sessions are held"), "{v}");
 
     // No bus policy: not ready, and the hint says which file.
     let mut bad = ready_layout(json!([]), json!([]));

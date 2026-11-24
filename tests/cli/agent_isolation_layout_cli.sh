@@ -43,6 +43,9 @@ class H(http.server.BaseHTTPRequestHandler):
             mode = b.get("mode")
             if mode == "status":
                 status, out = 200, {"ok": True, "placing": True, "setting": "on", "whyOff": None,
+                                    "busPolicy": "active", "delegation": "pending-full-restart",
+                                    "fullRestart": {"needed": True, "endsSessions": 3, "command": "sudo systemctl stop k2-daemon.service"},
+                                    "boxKind": "server", "openAgents": "open agents are not fenced; only fenced sessions are held",
                                     "layout": {"ready": True, "p1": "refused", "pidMax": 4194304,
                                                "scopes": [{"kind": "fenced"}, {"kind": "open"}], "survivors": []}}
             elif mode == "on" and b.get("confirmToken") == "tok-1":
@@ -118,6 +121,10 @@ run agent isolation layout status
 [ "$RC" -eq 0 ] || fail "status exits 0, got $RC: $ERR"
 grep -q "^Agent scopes: on (the owner's setting: on)" <<<"$OUT" || fail "status line: $OUT"
 grep -q "live scopes: 2 (1 fenced)" <<<"$OUT" || fail "live scopes: $OUT"
+grep -qF "bus policy: active; the daemon unit's delegation: pending-full-restart" <<<"$OUT" || fail "bus policy and delegation: $OUT"
+grep -qF "full restart needed (ends 3 agent session(s)): sudo systemctl stop k2-daemon.service" <<<"$OUT" || fail "full restart: $OUT"
+grep -q "^  box: server$" <<<"$OUT" || fail "box kind: $OUT"
+grep -q "^  open agents are not fenced; only fenced sessions are held$" <<<"$OUT" || fail "open agents line: $OUT"
 grep -q '^POST /cli/agent-isolation/layout {"mode": "status"}$' "$STAND_DIR/requests.log" || fail "status is a POST with mode status: $(cat "$STAND_DIR/requests.log")"
 run agent isolation layout status --json
 [ "$RC" -eq 0 ] && python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["placing"] is True, v' "$OUT" || fail "--json: $OUT"

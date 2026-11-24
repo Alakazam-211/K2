@@ -172,6 +172,19 @@ pub fn bus_policy_state(file: FileState, probe: Option<PolicyProbe>) -> &'static
     }
 }
 
+/// The A2 ruling's line every `agents layout` carries.
+pub const OPEN_AGENTS: &str = "open agents are not fenced; only fenced sessions are held";
+
+/// The A2 ruling's box kind from the daemon's `daemon.toml` scope:
+/// `server` for a system unit (a dedicated user), `desktop` otherwise.
+pub fn box_kind(scope: &str) -> &'static str {
+    if scope == "system" {
+        "server"
+    } else {
+        "desktop"
+    }
+}
+
 /// One K2 file as `agents layout` finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileState {
@@ -367,6 +380,14 @@ mod tests {
         assert!(!Delegation::On.not_delegated() && !Delegation::Unknown.not_delegated());
         let names: Vec<&str> = [Delegation::Off, Delegation::PendingFullRestart, Delegation::On, Delegation::Unknown].iter().map(|d| d.as_str()).collect();
         assert_eq!(names, ["off", "pending-full-restart", "on", "unknown"]);
+    }
+
+    #[test]
+    fn the_box_kind_follows_the_daemons_scope() {
+        assert_eq!(box_kind("system"), "server");
+        assert_eq!(box_kind("user"), "desktop");
+        assert_eq!(box_kind(""), "desktop");
+        assert_eq!(OPEN_AGENTS, "open agents are not fenced; only fenced sessions are held");
     }
 
     #[test]

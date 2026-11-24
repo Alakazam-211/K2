@@ -25603,6 +25603,15 @@ if mode == "status":
             print("  agents in the old layout: %d" % len(l["survivors"]))
     elif v.get("layoutError"):
         print("  layout: %s" % v["layoutError"])
+    if v.get("busPolicy") or v.get("delegation"):
+        print("  bus policy: %s; the daemon unit'"'"'s delegation: %s" % (v.get("busPolicy") or "unknown", v.get("delegation") or "unknown"))
+    fr = v.get("fullRestart")
+    if isinstance(fr, dict) and fr.get("needed"):
+        print("  full restart needed (ends %s agent session(s)): %s" % (fr.get("endsSessions"), fr.get("command")))
+    if v.get("boxKind"):
+        print("  box: %s" % v["boxKind"])
+    if v.get("openAgents"):
+        print("  %s" % v["openAgents"])
     for o in v.get("oldLayout") or []:
         print("  old layout: %s (%s)" % (o.get("agent"), o.get("why")))
 elif mode == "on":

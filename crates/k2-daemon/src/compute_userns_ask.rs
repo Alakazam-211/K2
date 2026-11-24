@@ -25,7 +25,7 @@
 //!   `Plan.no_addr_filter` sent to any other node ([`assign_wait`] checks
 //!   again at every assign).
 
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use k2_core::compute::proto::frames;
 use k2_core::compute::proto::jobnet::{JobNet, JobNetMode};
 use k2_core::compute::proto::userns::{codes, FEATURE_JOB_USERNS, FEATURE_NO_ADDR_FILTER};
@@ -39,7 +39,11 @@ use crate::compute_routes::{no, Refusal, R};
 pub(crate) const NODE_VERSION: &str = "0.46.18";
 
 /// `no_addr_filter_invalid`'s words.
-pub const NO_ADDR_FILTER_RULE: &str = "--no-addr-filter goes only with --userns and --network none, never with --netns-dummy: k2 compute run --userns --network none --no-addr-filter -- <command> (the job's own network namespace, loopback only, stays the wall)";
+pub const NO_ADDR_FILTER_RULE: &str = concat!(
+    "--no-addr-filter goes only with --userns and --network none, never with --netns-dummy: ",
+    k2_core::cli_name!(),
+    " compute run --userns --network none --no-addr-filter -- <command> (the job's own network namespace, loopback only, stays the wall)"
+);
 
 fn flag(v: &serde_json::Value, key: &str, what: &str) -> R<Option<bool>> {
     match v.get(key) {
@@ -100,7 +104,7 @@ pub(crate) fn grant_ask(
             codes::USERNS_NOT_GRANTED,
             403,
             format!(
-                "only the node's owner or an Admin turns {what} on or off for a grant: the owner runs k2 compute grant {} --workspace {ws} {what}",
+                "only the node's owner or an Admin turns {what} on or off for a grant: the owner runs {CLI_NAME} compute grant {} --workspace {ws} {what}",
                 n.name
             ),
         )
@@ -120,7 +124,7 @@ pub(crate) fn grant_ask(
                 codes::NO_ADDR_FILTER_INVALID,
                 400,
                 format!(
-                    "--no-addr-filter is granted only with --userns: k2 compute grant {} --workspace {ws} --userns --no-addr-filter",
+                    "--no-addr-filter is granted only with --userns: {CLI_NAME} compute grant {} --workspace {ws} --userns --no-addr-filter",
                     n.name
                 ),
             ));
@@ -197,11 +201,11 @@ pub fn owner_only_hint(node: &str) -> String {
 pub fn not_granted_hint(node: &str, ws: &str, naf: bool) -> String {
     if naf {
         return format!(
-            "--no-addr-filter: workspace {ws} isn't granted --userns with --no-addr-filter on '{node}'. The node's owner or an Admin grants it: k2 compute grant {node} --workspace {ws} --userns --no-addr-filter"
+            "--no-addr-filter: workspace {ws} isn't granted --userns with --no-addr-filter on '{node}'. The node's owner or an Admin grants it: {CLI_NAME} compute grant {node} --workspace {ws} --userns --no-addr-filter"
         );
     }
     format!(
-        "--userns: workspace {ws} isn't granted user namespaces on '{node}' (by default a job can't make them). The node's owner or an Admin grants it: k2 compute grant {node} --workspace {ws} --userns"
+        "--userns: workspace {ws} isn't granted user namespaces on '{node}' (by default a job can't make them). The node's owner or an Admin grants it: {CLI_NAME} compute grant {node} --workspace {ws} --userns"
     )
 }
 
@@ -304,7 +308,7 @@ pub(crate) fn assign_wait(
         return Some(frames::Refusal::new(
             codes::USERNS_NOT_GRANTED,
             format!(
-                "{what}: this workspace's grant on '{name}' no longer allows it; the node's owner or an Admin grants it again with k2 compute grant {name} --workspace <ws> {flags}"
+                "{what}: this workspace's grant on '{name}' no longer allows it; the node's owner or an Admin grants it again with {CLI_NAME} compute grant {name} --workspace <ws> {flags}"
             ),
         ));
     }

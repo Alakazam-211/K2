@@ -49,6 +49,8 @@ vi.mock('./projects-api', async () => {
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import ProjectsPage from './ProjectsPage'
+import { PROJECT_CHAT_THREAD_FEATURE } from './project-chat-thread-contract'
+import { primaryScope } from '@/kessel/server-scope'
 import { ProjectNavCollapseButton } from './ProjectNav'
 import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
 import { usePageViewStore } from '@/stores/page-view'
@@ -93,7 +95,14 @@ async function renderPage(): Promise<void> {
   await waitFor(() => expect(screen.getByTestId('dashboard-stub')).toBeTruthy())
 }
 
+let supportsSpy: { mockRestore: () => void } | null = null
+
 beforeEach(() => {
+  // The old chat panel (an older server): project-chat-thread-v1 draws the
+  // Thread pane instead (ProjectThreadPane.test.tsx).
+  const scope = primaryScope()
+  const supports = scope.serverSupports.bind(scope)
+  supportsSpy = vi.spyOn(scope, 'serverSupports').mockImplementation((f) => f !== PROJECT_CHAT_THREAD_FEATURE && supports(f))
   usePageViewStore.setState({ page: 'projects' })
   useProjectGroupsStore.setState({
     groups: [GROUP],
@@ -107,6 +116,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  supportsSpy?.mockRestore()
+  supportsSpy = null
 })
 
 describe('Projects top bar', () => {

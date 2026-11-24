@@ -266,6 +266,12 @@ export const REPORTED_FEATURES = {
    *  as its drawer, and no Thread | Agent tabs; without it the old column
    *  (Feedback/ticket-thread-contract.ts). */
   'ticket-thread-v1': 'ticket-thread-v1',
+  /** project-chat-thread-v1: a project's chat is a Thread conversation
+   *  (`project:<group id>`), read and posted through the Thread routes with
+   *  the project's rights. With it the Projects page draws the Thread pane
+   *  on it; without it the old panel
+   *  (Projects/project-chat-thread-contract.ts). */
+  'project-chat-thread-v1': 'project-chat-thread-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

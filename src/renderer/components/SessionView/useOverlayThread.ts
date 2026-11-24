@@ -109,7 +109,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { createViewingSender, windowIsLookedAt, type ViewingSender } from './threadViewing'
-import { useAutoMarkRead } from '@/stores/unread'
+import { useAutoMarkRead, type UnreadKind } from '@/stores/unread'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { applyThreadDelta, parseThreadDelta, THREAD_DELTA_PAGE } from './threadDelta'
 import { peekThreadView, readThreadView, saveThreadView, type CachedThreadView } from './threadViewCache'
@@ -194,6 +194,9 @@ export function useOverlayThread(opts: {
    *  Thread is being read, so its pushes stay quiet (§6.4). Default false:
    *  surfaces that only preview a Thread never claim it. */
   viewing?: boolean
+  /** Mark reading here on this cursor instead of the Thread's own (a
+   *  project's chat: kind `project`, its group id). */
+  readAs?: { kind: UnreadKind; id: string }
 }): {
   items: OverlayThreadItem[]
   conversationId: string
@@ -1082,8 +1085,8 @@ export function useOverlayThread(opts: {
   // §8: read while looking (thread-read-v1). An effect, never render.
   // §9: never from the cache's paint (nothing stale counts as read).
   useAutoMarkRead({
-    kind: 'thread',
-    id: resolvedConv || conversationId,
+    kind: opts.readAs?.kind ?? 'thread',
+    id: opts.readAs?.id ?? (resolvedConv || conversationId),
     newestSeq: fromCache ? 0 : newestSeq(items),
     visible: viewing && enabled && !fromCache,
     scope,

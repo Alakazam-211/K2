@@ -288,6 +288,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     enabled: active,
     // Thread push §6.4: shown here (and the window looked at) = quiet pushes.
     viewing: active && isTabVisible,
+    // A project's chat reads on the project's cursor.
+    ...(composeExtras?.readAs ? { readAs: composeExtras.readAs } : {}),
   })
 
   // This window's unconfirmed sends draw last, as pending bubbles (Fix 3).

@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import type { OverlayThreadItem, ThreadTurn } from './overlayThread'
+import type { UnreadKind } from '@/stores/unread'
 
 /** What a Thread that isn't an agent's own chat changes in its session
  *  body (a ticket's discussion, TicketThreadPane). Absent: an agent chat,
@@ -36,6 +37,11 @@ export interface ThreadComposeExtras {
   /** Told the server's whole answer to each post this box makes (a ticket's
    *  carries the ticket's status and whether its agent got the message). */
   onPosted?: (resp: Record<string, unknown>) => void
+  /** No message box (a project chat for a login that may only read it). */
+  readOnly?: boolean
+  /** Where reading this Thread is marked (a project's chat: the project's
+   *  cursor, kind `project` by group id). Absent: the Thread's own. */
+  readAs?: { kind: UnreadKind; id: string }
 }
 
 export const ThreadComposeExtrasContext = createContext<ThreadComposeExtras | null>(null)

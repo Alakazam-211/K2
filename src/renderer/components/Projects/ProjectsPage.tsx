@@ -44,7 +44,8 @@ import ProjectNav, { PROJECT_NAV_WIDTH, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import ProjectBar, { useViewerRole } from './ProjectBar'
 import { projectSettingsCaps } from './project-settings'
-import ProjectChatPanel from './ProjectChatPanel'
+import { ProjectChatSurface } from './ProjectThreadPane'
+import { projectChatThreadOn } from './project-chat-thread-contract'
 import { NoDashboardState, ProjectListLoadState, ProjectLoadState, ProjectsEmptyState } from './ProjectStates'
 import ProjectSettingsSheet from './ProjectSettingsSheet'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
@@ -184,7 +185,9 @@ function SelectedProjectView({
           survives them (SelectedProjectView is keyed by group id
           upstream: a project switch is a fresh panel). */}
       <AnimatedDrawer open={chatOpen && !chatFolded} side="right" bordered={false} clipAtRest={false}>
-        <ProjectChatPanel show={show} />
+        {/* project-chat-thread-v1: the chat is the Thread pane on
+            `project:<id>`; an older server keeps the old panel. */}
+        <ProjectChatSurface show={show} width={chatWidth} threadOn={projectChatThreadOn(primaryScope())} />
       </AnimatedDrawer>
     </div>
   )

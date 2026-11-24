@@ -240,7 +240,9 @@ export function TerminalComposeBar({
   const room = useRoom()
   const scope = room.scope
   // A view-only room sends nothing to its server: no composer.
-  const permitted = composerPermitted({ readOnly: room.readOnly })
+  // A project chat for a login that may only read it: no box either.
+  const readOnlyThread = useThreadComposeExtras()?.readOnly === true
+  const permitted = composerPermitted({ readOnly: room.readOnly || readOnlyThread })
   // Match Code Editor → Appearance → Font Size (default 12).
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   // MS3 — the pane's workspace path resolves in its room's own list.

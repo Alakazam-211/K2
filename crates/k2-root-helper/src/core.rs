@@ -449,7 +449,7 @@ pub fn cli_refresh_with(
     who: &crate::caller::Caller,
     names: &CliNames,
 ) -> HResult<serde_json::Value> {
-    let cli = cli_content().ok_or_else(|| Fail::state("this helper's embedded K2 CLI doesn't inflate to its cliSha256"))?;
+    let cli = cli_content().ok_or_else(|| Fail::state("this helper's embedded CLI doesn't inflate to its cliSha256"))?;
     let to = cli_version_of(cli.as_bytes())
         .and_then(|v| Semver::parse(&v))
         .ok_or_else(|| Fail::state("this helper carries no versioned K2 CLI"))?;

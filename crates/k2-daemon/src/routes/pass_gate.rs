@@ -612,12 +612,27 @@ mod tests {
     /// keeps those closed), or is a [`PREFIX_ARMS`] family. A new arm that
     /// takes `k2skn_` without a row fails here (and the gate refuses it at
     /// runtime anyway).
-    #[test]
-    fn every_pass_touching_arm_is_a_catalog_row_or_refuses() {
-        let src = include_str!("dispatcher.rs");
+    /// What the walk found in one source: every route of a pass-touching
+    /// arm, the `PREFIX_ARMS` families, what is wrong, and how many pass
+    /// markers it saw.
+    struct Walk {
+        seen: BTreeSet<String>,
+        families: BTreeSet<String>,
+        problems: Vec<String>,
+        markers_seen: usize,
+    }
+
+    /// A pass marker: a line that reads or resolves an App pass. The
+    /// dispatcher's `/cli/skin` block hands the pass to
+    /// `pass_read::answer(` (0.46.18, the two identical arms moved there for
+    /// the line ratchet), so that call is a marker too: its arm is walked
+    /// like any other.
+    const PASS_MARKERS: &[&str] = &["is_skin_token", "resolve_pass(", "resolve_skin_token(", "with_request_skin(", "pass_read::answer("];
+
+    fn walk(src: &str) -> Walk {
         let owned = strip_test_modules(src);
         let lines: Vec<&str> = owned.iter().map(String::as_str).collect();
-        let markers = ["is_skin_token", "resolve_pass(", "resolve_skin_token(", "with_request_skin("];
+        let markers = PASS_MARKERS;
         let consts = route_consts();
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut families: BTreeSet<String> = BTreeSet::new();
@@ -681,6 +696,12 @@ mod tests {
                 }
             }
         }
+        Walk { seen, families, problems, markers_seen }
+    }
+
+    #[test]
+    fn every_pass_touching_arm_is_a_catalog_row_or_refuses() {
+        let Walk { seen, families, problems, markers_seen } = walk(include_str!("dispatcher.rs"));
         assert!(problems.is_empty(), "{}", problems.join("\n"));
         assert!(markers_seen >= 30, "only {markers_seen} pass markers: extractor broken?");
         for must in ["/cli/thread/attachment", "/cli/skin/me", "/cli/fs/upload-chunk", "/cli/sessions/grid", "/cli/skin/agents"] {
@@ -691,6 +712,36 @@ mod tests {
         for r in REFUSING_ARMS {
             assert!(!admits("GET", r) && !admits("POST", r), "{r} must stay closed");
         }
+    }
+
+    /// The bite for the `pass_read::answer(` marker (0.46.18): an arm that
+    /// hands a pass to the helper is walked, so one that is neither a
+    /// catalog row nor on `REFUSING_ARMS` fails, and `/cli/skin/me` through
+    /// the helper is seen (a row: no problem).
+    #[test]
+    fn an_arm_through_pass_read_is_walked() {
+        let src = r#"
+        p if p.starts_with("/cli/skin") => {
+            let r = match p {
+                crate::skin_me_routes::ROUTE => {
+                    super::pass_read::answer(&query, crate::skin_me_routes::handle).await
+                }
+                "/cli/skin/not-a-row-anywhere" => {
+                    super::pass_read::answer(&query, h).await
+                }
+            };
+        }
+"#;
+        let w = walk(src);
+        assert_eq!(w.markers_seen, 2, "both helper calls are pass markers");
+        assert!(w.seen.contains("/cli/skin/me"), "{:?}", w.seen);
+        assert!(w.seen.contains("/cli/skin/not-a-row-anywhere"), "{:?}", w.seen);
+        assert_eq!(w.problems.len(), 1, "{:?}", w.problems);
+        assert!(
+            w.problems[0].starts_with("/cli/skin/not-a-row-anywhere ") && w.problems[0].contains("has no catalog app row"),
+            "{:?}",
+            w.problems
+        );
     }
 
     #[test]

@@ -4,6 +4,13 @@
 //! off the async thread with whether the request came on the App's own
 //! gateway link. Both arms of the dispatcher's `/cli/skin` block used to
 //! spell this out in full (moved here as it was, 0.46.18 queue, ratchet).
+//!
+//! Security pin: every caller of [`answer`] in the dispatcher is walked by
+//! `routes::pass_gate`'s `every_pass_touching_arm_is_a_catalog_row_or_refuses`
+//! (`pass_read::answer(` is one of its pass markers), so the arm that calls
+//! it must name a route with a catalog app row, or be on its refusing arms.
+//! A new caller needs its catalog row (crates/k2-core/src/contract/catalog.json)
+//! before it can pass that test.
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::SkinPass;

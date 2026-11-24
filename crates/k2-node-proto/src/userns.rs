@@ -43,6 +43,10 @@ pub mod codes {
     /// a tenant of the node (or a node checked the job came from a
     /// tenant's slot).
     pub const USERNS_OWNER_ONLY: &str = "userns_owner_only";
+    /// The node's kernel restricts user namespaces for unconfined processes
+    /// (Ubuntu 23.10+) and root couldn't load K2's AppArmor profile for
+    /// `--userns` units: the start is refused with why and the fix.
+    pub const USERNS_BLOCKED_BY_APPARMOR: &str = "userns_blocked_by_apparmor";
     /// No node this job may use runs `--userns` jobs yet (k2-node 0.46.18).
     pub const USERNS_NEEDS_UPDATE: &str = "userns_needs_update";
     /// `--no-addr-filter` without `--userns` and `--network none` (or

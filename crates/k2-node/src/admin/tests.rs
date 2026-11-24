@@ -1035,6 +1035,7 @@ fn no_unit_reaches_the_cache_generations() {
         own_userns: true,
         no_addr_filter: false,
         syscall_errno: true,
+        apparmor_profile: None,
         runtime_max_secs: None,
         gpu: None,
         netns: None,

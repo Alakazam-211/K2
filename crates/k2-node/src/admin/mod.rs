@@ -20,6 +20,7 @@
 //! - [`service`]: the node's own plist, rewritten when this build's differs.
 //! - [`netns`]: a job's own network namespace with dummy interfaces (0.46.14).
 
+pub mod apparmor;
 pub mod cli;
 pub mod config;
 pub mod courier;

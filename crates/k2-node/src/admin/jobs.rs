@@ -799,6 +799,11 @@ pub struct UnitPlan {
     /// systemd ≥ 247: the denylist's entries say `:EPERM` (refused); an
     /// older systemd kills the process instead (still a refusal).
     pub syscall_errno: bool,
+    /// 0.46.18, a `--userns` unit on a kernel that restricts user
+    /// namespaces for unconfined processes (Ubuntu 23.10+): the AppArmor
+    /// profile that lets it make one ([`super::apparmor`]), loaded by root
+    /// before the start. None anywhere else.
+    pub apparmor_profile: Option<String>,
     /// `RuntimeMaxSec` (already clamped), or none.
     pub runtime_max_secs: Option<u64>,
     /// GPU jobs (0.46.11): the leased device, or none (then the argv is
@@ -957,6 +962,11 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         prop(TEAM_RESTRICT_NAMESPACES.into());
     } else if !p.userns {
         prop(RESTRICT_USER_NAMESPACES.into());
+    }
+    if let Some(a) = p.apparmor_profile.as_ref().filter(|_| p.userns) {
+        // Ubuntu 23.10+: the one profile that lets this unit make user
+        // namespaces (no `-`: a profile that isn't loaded fails the start).
+        prop(format!("AppArmorProfile={a}"));
     }
     if !p.userns && p.own_userns {
         // The job's own user namespace, whose limit root sets to 0.
@@ -1896,6 +1906,17 @@ impl Executor {
         userns_slot_check(s.userns, s.tenant)?;
         no_addr_filter_check(s.no_addr_filter, s.userns, network, s.netns_dummies.len())?;
         let v = systemd();
+        // 0.46.18: on a kernel that restricts user namespaces for
+        // unconfined processes, a `--userns` unit runs under K2's profile
+        // that allows them (loaded now if it isn't); without it the start
+        // is refused, never run without the namespace it was granted.
+        let apparmor_profile = if s.userns && cfg!(target_os = "linux") && super::apparmor::kernel_restricts() {
+            super::apparmor::ensure_loaded()
+                .map_err(|e| refuse(k2_node_proto::userns::codes::USERNS_BLOCKED_BY_APPARMOR, super::apparmor::unavailable(&e)))?;
+            Some(super::apparmor::PROFILE.to_string())
+        } else {
+            None
+        };
         if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
             return Err(refuse(share::codes::TENANT_WALL_MISSING, format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: no tenant jobs here")));
         }
@@ -1922,6 +1943,7 @@ impl Executor {
             own_userns: !s.userns && self.own_userns_ready(),
             no_addr_filter: s.no_addr_filter,
             syscall_errno: v >= MIN_SYSTEMD_PROTECT_PROC,
+            apparmor_profile,
             runtime_max_secs: runtime_max(s.max_secs),
             gpu: None,
             netns: None,
@@ -2303,6 +2325,7 @@ mod tests {
             own_userns: true,
             no_addr_filter: false,
             syscall_errno: true,
+            apparmor_profile: None,
             runtime_max_secs: None,
             gpu: None,
             netns: None,
@@ -2552,6 +2575,14 @@ mod tests {
         for n in crate::jobsec::DENIED.iter().chain(crate::jobsec::DENIED_UNLESS_USERNS) {
             assert!(tf[0].contains(&format!("{n}:EPERM")), "{n}: {tf:?}");
         }
+        // Ubuntu 23.10+: a --userns unit names K2's profile; nothing else does.
+        assert!(!a.iter().chain(&plain).any(|x| x.starts_with("AppArmorProfile")), "{a:?}");
+        let mut aa = plan();
+        aa.userns = true;
+        aa.apparmor_profile = Some(super::super::apparmor::PROFILE.into());
+        assert!(systemd_run_argv(&aa).iter().any(|x| x == "AppArmorProfile=k2-job-userns"));
+        aa.userns = false;
+        assert!(!systemd_run_argv(&aa).iter().any(|x| x.starts_with("AppArmorProfile")), "never without --userns");
         // Root's slot check: the owner's slot only.
         assert!(userns_slot_check(true, OWNER_SLOT).is_ok());
         assert!(userns_slot_check(false, 3).is_ok());

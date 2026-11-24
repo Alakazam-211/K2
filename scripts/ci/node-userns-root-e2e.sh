@@ -116,7 +116,8 @@ snapshot() {
     cat /proc/sys/user/max_user_namespaces > "$S/maxns.$1"
     systemctl list-units --all --plain --no-legend 'k2job-*' | awk '{print $1}' | sort > "$S/units.$1"
     ip netns list 2>/dev/null | awk '{print $1}' | sort > "$S/netns.$1"
-    ls -d /var/lib/k2-nodesec-test-* /run/k2na-test-*.sock "$CHROME_DIR" 2>/dev/null | sort > "$S/paths.$1"
+    ls -d /var/lib/k2-nodesec-test-* /run/k2na-test-*.sock "$CHROME_DIR" /etc/apparmor.d/k2-job-userns 2>/dev/null | sort > "$S/paths.$1"
+    { grep -o '^k2-job-userns ' /sys/kernel/security/apparmor/profiles 2>/dev/null || true; } > "$S/aaprofile.$1"
     dpkg-query -W -f '${Package}\n' 2>/dev/null | sort > "$S/packages.$1"
 }
 snapshot before
@@ -167,6 +168,12 @@ for u in $(comm -13 "$S/users.before" "$S/users.after"); do userdel "$u" && echo
 for g in $(comm -13 "$S/groups.before" "$S/groups.after"); do getent group "$g" >/dev/null && groupdel "$g" && echo "removed group $g"; done
 for u in $(comm -13 "$S/units.before" "$S/units.after"); do systemctl stop "$u" 2>/dev/null; systemctl reset-failed "$u" 2>/dev/null; echo "stopped unit $u"; done
 for n in $(comm -13 "$S/netns.before" "$S/netns.after"); do ip netns delete "$n" && echo "removed netns $n"; done
+# K2's AppArmor profile for --userns units (loaded by root on a restricting
+# kernel): unloaded when the run loaded it, before its file goes.
+if [ ! -s "$S/aaprofile.before" ] && [ -s "$S/aaprofile.after" ]; then
+    apparmor_parser -R /etc/apparmor.d/k2-job-userns && echo "unloaded AppArmor profile k2-job-userns"
+fi
+echo "kernel.apparmor_restrict_unprivileged_userns: $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo absent)"
 for p in $(comm -13 "$S/paths.before" "$S/paths.after"); do rm -rf -- "$p" && echo "removed $p"; done
 added="$(comm -13 "$S/packages.before" "$S/packages.after" | tr '\n' ' ')"
 if [ -n "${added// /}" ]; then
@@ -174,7 +181,7 @@ if [ -n "${added// /}" ]; then
     DEBIAN_FRONTEND=noninteractive apt-get purge -y -q $added >/dev/null && echo "removed packages: $added"
 fi
 snapshot restored
-for k in users groups maxns units netns paths packages; do
+for k in users groups maxns units netns paths packages aaprofile; do
     if ! cmp -s "$S/$k.before" "$S/$k.restored"; then
         echo "FATAL: $k differs from before the run:" >&2
         diff "$S/$k.before" "$S/$k.restored" >&2

@@ -851,6 +851,25 @@ async fn a_job_makes_no_user_namespace_unless_userns_and_its_limit_is_its_own() 
     let out = text(&logs_of(&fr, "ns2"), LogStream::Out);
     assert!(out.contains("unshare=0"), "--userns: the owner's job may: {out}");
     assert!(out.contains(&format!("max={machine}\n")), "--userns: no namespace of its own: {out}");
+    // And it may map itself and mount in that namespace: on a kernel that
+    // restricts user namespaces for unconfined processes (Ubuntu 23.10+)
+    // only because root loaded and named K2's AppArmor profile.
+    let restricted = k2_node::admin::apparmor::kernel_restricts();
+    let probe = format!("{} wall-probe --syscall userns_mount_tmpfs --syscall keyctl", r.bin.display());
+    let mut p = plan("ns3", &["/bin/sh", "-c", &probe]);
+    p.userns = true;
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "ns3").await;
+    assert_eq!(last(&fr, "ns3").state, JobState::Done, "{fr:?}");
+    let out = text(&logs_of(&fr, "ns3"), LogStream::Out);
+    assert!(out.contains(r#""userns_mount_tmpfs":"ok""#), "--userns mounts in its own namespace (kernel restricts: {restricted}): {out}");
+    assert!(out.contains(r#""keyctl":"EPERM""#), "keyctl stays refused: {out}");
+    if restricted {
+        let loaded = std::fs::read_to_string(k2_node::admin::apparmor::LOADED).unwrap();
+        assert!(k2_node::admin::apparmor::loaded_in(&loaded), "root loaded {}", k2_node::admin::apparmor::PROFILE);
+    } else {
+        assert!(!Path::new(k2_node::admin::apparmor::PROFILE_PATH).exists(), "no profile where the kernel doesn't restrict");
+    }
     drop(n);
 }
 

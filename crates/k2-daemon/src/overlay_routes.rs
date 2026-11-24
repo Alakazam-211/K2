@@ -25,7 +25,9 @@ pub(crate) mod notice_resend;
 pub(crate) mod reply_to;
 mod body;
 mod context_line;
-use context_line::{context_label, thread_context_line};
+use context_line::thread_context_line;
+#[cfg(test)]
+use context_line::context_label;
 use body::{merge_body, restore_param, thread_post_body_type_error};
 mod system_notice;
 mod ask_once;

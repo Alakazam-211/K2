@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { openWorkspaceThread } from '@/lib/open-workspace-thread'
-import { productName } from '@/lib/brand'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { rowsLeft, useFirstRunStore, watchFirstRun, type FirstRunDoc } from '@/stores/first-run'
@@ -71,8 +71,8 @@ export function setupStateLine(doc: FirstRunDoc | null | undefined): string {
 /** The Kessel part's line: what Kessel is for, or who does it here. */
 export function kesselLine(name: string | null): string {
   return name
-    ? `${name} runs ${productName()} for you.`
-    : `Kessel runs ${productName()} for you: setup, settings and hiring your agents.`
+    ? `${name} runs ${PRODUCT_NAME} for you.`
+    : `Kessel runs ${PRODUCT_NAME} for you: setup, settings and hiring your agents.`
 }
 
 /** The owner token, an Owner or an Admin, from `auth/whoami`. */

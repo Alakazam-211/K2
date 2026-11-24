@@ -46,7 +46,7 @@ vi.mock('@/stores/confirm-dialog', () => ({
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { productName } from '@/lib/brand'
+import { PRODUCT_NAME } from '@/lib/brand'
 import { resetFirstRunForTests } from '@/stores/first-run'
 import { useSettingsStore } from '@/stores/settings'
 import { GETTING_STARTED_COPY, GettingStartedSection, kesselLine, setupStateLine } from './GettingStartedSection'
@@ -116,8 +116,8 @@ describe('the state line and the Kessel line', () => {
   })
 
   it('names what Kessel is for, or who does it', () => {
-    expect(kesselLine(null)).toBe(`Kessel runs ${productName()} for you: setup, settings and hiring your agents.`)
-    expect(kesselLine('Kay')).toBe(`Kay runs ${productName()} for you.`)
+    expect(kesselLine(null)).toBe(`Kessel runs ${PRODUCT_NAME} for you: setup, settings and hiring your agents.`)
+    expect(kesselLine('Kay')).toBe(`Kay runs ${PRODUCT_NAME} for you.`)
   })
 })
 

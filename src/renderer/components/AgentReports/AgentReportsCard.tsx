@@ -16,7 +16,7 @@ import { useCallback, useEffect, useId, useState } from 'react'
 import { Button, Checkbox, Radio } from '@/components/ui'
 import { AccessSheet, DIALOG_LABEL, DIALOG_MUTED } from '@/components/Settings/sections/AccessDialogs'
 import { SETTING_ROW_LABEL } from '@/components/Settings/controls/SettingControls'
-import { COMPANY_NAME, cliName, productName } from '@/lib/brand'
+import { CLI_NAME, COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
   fetchFeedbackSettings,
@@ -41,14 +41,14 @@ export function agentReportsCopy(): {
   notAnswered: string
   rowLine: string
 } {
-  const product = productName()
+  const product = PRODUCT_NAME
   return {
     heading: `May your agents report ${product} problems?`,
     body: `When an agent hits a problem with ${product}, it can send a short report to ${COMPANY_NAME}. Reports are private: they go only to ${COMPANY_NAME} and are never made public. You see every report in Send feedback, Sent.`,
     answers: [
       {
         id: 'cli',
-        label: `Yes, problems with the ${cliName()} commands agents run.`,
+        label: `Yes, problems with the ${CLI_NAME} commands agents run.`,
         hint: 'For example, a command that failed, an unclear error, or help that does not match.',
       },
       { id: 'all', label: `Yes, anything about ${product}.`, hint: null },

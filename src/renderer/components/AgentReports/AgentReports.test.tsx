@@ -38,7 +38,7 @@ vi.mock('@/stores/session-events', () => {
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { primaryScope } from '@/kessel/server-scope'
-import { COMPANY_NAME, cliName, productName } from '@/lib/brand'
+import { CLI_NAME, COMPANY_NAME, PRODUCT_NAME } from '@/lib/brand'
 import { agentReportsBody } from '@/lib/product-feedback'
 import { resetFirstRunForTests } from '@/stores/first-run'
 import { useAgentReportsCardStore } from '@/stores/agent-reports-card'
@@ -145,14 +145,14 @@ afterEach(() => {
 describe('the agent-reports card', () => {
   it('says what it is for with the brand names, never a hard-coded one', () => {
     const copy = agentReportsCopy()
-    expect(copy.heading).toBe(`May your agents report ${productName()} problems?`)
+    expect(copy.heading).toBe(`May your agents report ${PRODUCT_NAME} problems?`)
     expect(copy.body).toContain(`a short report to ${COMPANY_NAME}`)
     expect(copy.answers.map((a) => a.label)).toEqual([
-      `Yes, problems with the ${cliName()} commands agents run.`,
-      `Yes, anything about ${productName()}.`,
+      `Yes, problems with the ${CLI_NAME} commands agents run.`,
+      `Yes, anything about ${PRODUCT_NAME}.`,
       'No.',
     ])
-    expect(copy.always).toBe(`Always included: ${productName()} version and install kind`)
+    expect(copy.always).toBe(`Always included: ${PRODUCT_NAME} version and install kind`)
     expect(JSON.stringify(copy)).not.toMatch(/\bCLI\b/)
   })
 

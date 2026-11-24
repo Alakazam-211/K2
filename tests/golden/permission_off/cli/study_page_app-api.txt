@@ -42,7 +42,7 @@ THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
 EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
   me.get                   GET  /cli/skin/me                                     Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
-  identity.token           GET  /cli/skin/identity-token                         A 60-second claims token for the person whose session pass this is, for the App's own Postgres connection: in a transaction, SELECT k2.set_claims(token), then auth.uid() and the rest answer for that person (the Supabase-compatible layer must be on).
+  identity.token           GET  /cli/skin/identity-token (server only)           A 60-second claims token for the person whose session pass this is, for the App's own Postgres connection: in a transaction, SELECT k2.set_claims(token), then auth.uid() and the rest answer for that person (the Supabase-compatible layer must be on).
   me.events                WS   /cli/skin/me/events?scope=                       This pass's access changed: read me.get again. No details, ever. Also read me.get on every open. Any live pass opens it, one with no rooms too.
   roomAgents.list          GET  /cli/skin/agents                                 The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
   guests.login             POST /cli/skin/login (server only)                    Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.

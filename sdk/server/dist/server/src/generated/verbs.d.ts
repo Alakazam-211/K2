@@ -269,7 +269,7 @@ export declare const APP_VERBS: {
         readonly effect: "read";
         readonly kind: "call";
         readonly feature: "app-api-v1";
-        readonly door: "both";
+        readonly door: "link";
         readonly http: {
             readonly method: "GET";
             readonly route: "/cli/skin/identity-token";

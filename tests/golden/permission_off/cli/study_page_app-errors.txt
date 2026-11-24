@@ -314,6 +314,60 @@ DATABASE (an App's own database: k2 app db connect, check, disconnect)
       fix: Read the hint; check k2 db status and k2 vault status, then run
       the command again. If it repeats, report it.
 
+COMPAT (the Supabase-compatible layer: k2 app compat, identity, storage, user meta and import)
+  compat_failed (exit 3)
+      fix: Run the command again; k2 app compat status <app> shows where it
+      stands. If it repeats, report the message.
+  compat_key_missing (exit 3)
+      fix: Turn the layer on again, which puts the key back: k2 app compat
+      on <app> --db <db>
+  compat_off (exit 3)
+      fix: The owner, or the App's agent with Build and run Apps, turns it
+      on: k2 app compat on <app> --db <db>
+  compat_other_db (exit 3)
+      fix: Turn it off first (k2 app compat off <app>), then on with the
+      database you want.
+  gateway_link_only (exit 3)
+      fix: Ask for it from the App's server through K2_GATEWAY_URL, never
+      from a browser or the public host.
+  import_failed (exit 3)
+      fix: Fix what it names and run it again: it is a dry run until
+      --apply, and safe to repeat (k2 app user import --help).
+  import_running (exit 3)
+      fix: Follow it (k2 app storage import-status <app>) and start another
+      when it ends.
+  not_a_user (exit 3)
+      fix: The App's owner adds or enables them: k2 app user add <name>
+      --app <app>, or k2 app guests <app>
+  person_pass_required (exit 3)
+      fix: Send the pass the person's sign-in gave the App as the bearer.
+  storage_failed (exit 3)
+      fix: Run it again; k2 app storage status <app> and k2 app storage
+      verify <app> show where things stand.
+  user_not_found (exit 3)
+      fix: List them: k2 app guests <app>
+
+CRON (App cron: k2 app cron, the daemon calling an App's routes on a schedule)
+  app_cron_failed (exit 3)
+      fix: Run it again. If it repeats, read k2 app cron logs <app>
+      <cron-id> and report it.
+  app_cron_not_found (exit 3)
+      fix: List them: k2 app cron list <app>
+  app_cron_usage (exit 2)
+      fix: See k2 app cron --help; the ids are in k2 app cron list <app>.
+  app_cron_vault_closed (exit 3)
+      fix: Wait until K2 has finished starting (k2 vault status), then run
+      it again.
+  cron_exists (exit 3)
+      fix: Use the cron that is there (k2 app cron list <app>), or remove it
+      first: k2 app cron rm <app> <cron-id>
+  cron_full (exit 3)
+      fix: Remove one it doesn't need (k2 app cron rm <app> <cron-id>), then
+      add the new one.
+  cron_running (exit 3)
+      fix: Wait for it to end (k2 app cron logs <app> <cron-id>), then run
+      it again.
+
 BOX (box prep, box services, Podman)
   already_running (exit 3)
       fix: Wait for it to end (Settings → Cores → Apps → This server

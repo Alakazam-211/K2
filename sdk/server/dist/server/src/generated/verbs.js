@@ -24,7 +24,7 @@ export const APP_VERBS = {
         effect: 'read',
         kind: 'call',
         feature: 'app-api-v1',
-        door: 'both',
+        door: 'link',
         http: { method: 'GET', route: '/cli/skin/identity-token', params: {}, query: [] },
         socket: null,
         responseNames: {},

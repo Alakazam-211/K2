@@ -402,13 +402,17 @@ mod tests {
         // Each `runs` a no-bash GET can carry, with its note.
         let bin = std::path::PathBuf::from("/opt/globex/bin/k5-cli");
         for (runs, choice) in [
-            ("binary", k2_core::cli_install::Choice::from_found_in(true, true, Ok(bin.clone()))),
+            (
+                "binary",
+                k2_core::cli_install::Choice::from_found_in(true, true, Ok(bin.clone())),
+            ),
             (
                 "none",
                 k2_core::cli_install::Choice::from_found_in(
                     true,
                     true,
-                    k2_core::cli_install::check_binary_in(true, &bin, Some("0.0.1")).map(|_| bin.clone()),
+                    k2_core::cli_install::check_binary_in(true, &bin, Some("0.0.1"))
+                        .map(|_| bin.clone()),
                 ),
             ),
         ] {

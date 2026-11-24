@@ -352,7 +352,7 @@ fn a_proxy_that_fails_is_curl_s_code() {
     assert_eq!(closer.join().unwrap(), [5, 1, 0]);
     for (url, code) in [
         ("ftp://p.example", curl::COULDNT_CONNECT),
-        ("http://p.example:0", COULDNT_RESOLVE_PROXY),
+        ("http://p.example:99999", COULDNT_RESOLVE_PROXY),
     ] {
         let Err(f) = through(&via(url), "box.example", 443, "k5/t", soon()) else {
             panic!("{url} sent");

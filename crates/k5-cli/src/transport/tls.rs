@@ -123,6 +123,54 @@ pub(crate) fn shared() -> Result<Arc<ClientConfig>, Failure> {
         })
 }
 
+/// The config an `https://` proxy's certificate is checked with: the
+/// system's own roots, as curl's built-in bundle. curl's `--proxy-cacert`
+/// reads no environment variable: `SSL_CERT_FILE`, `SSL_CERT_DIR` and
+/// `CURL_CA_BUNDLE` are for the target only ([`shared`]). On Linux and
+/// the other Unixes, the first system bundle there is (curl's
+/// `/etc/ssl/certs/ca-certificates.crt` first); on macOS, the system's
+/// roots as [`native_roots`] reads them.
+pub(crate) fn proxy_shared() -> Result<Arc<ClientConfig>, Failure> {
+    static PROXY: OnceLock<Result<Arc<ClientConfig>, String>> = OnceLock::new();
+    PROXY
+        .get_or_init(|| system_roots().and_then(config))
+        .clone()
+        .map_err(|why| Failure::Broken {
+            curl: SSL_CACERT_BADFILE,
+            why,
+        })
+}
+
+/// The system bundles curl's builds name, most common first.
+#[cfg(all(unix, not(target_os = "macos")))]
+const SYSTEM_BUNDLES: [&str; 6] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+    "/etc/pki/tls/cacert.pem",
+];
+
+/// The system's roots, whatever the environment says.
+fn system_roots() -> Result<RootCertStore, String> {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let Some(bundle) = SYSTEM_BUNDLES.iter().map(Path::new).find(|p| p.is_file()) else {
+            return Err("no system root certificates".to_string());
+        };
+        let found = rustls_native_certs::load_certs_from_paths(Some(bundle), None);
+        let why = found.errors.first().map(ToString::to_string);
+        roots_with(found.certs, why, None)
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        let found = rustls_native_certs::load_native_certs();
+        let why = found.errors.first().map(ToString::to_string);
+        roots_with(found.certs, why, None)
+    }
+}
+
 /// The handshake on `tcp` for `host`, with the OS's roots, before
 /// `limit`.
 pub fn connect(tcp: impl Into<ProxyStream>, host: &str, limit: Instant) -> Result<Stream, Failure> {

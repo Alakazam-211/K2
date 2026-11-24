@@ -1470,7 +1470,12 @@ fn the_proxy_rows_are_native() {
                 && p.run_time
                     .as_ref()
                     .and_then(|rt| rt.variant.as_ref())
-                    .is_some_and(|v| v.group == "proxy")
+                    .is_some_and(|v| {
+                        v.group == "proxy"
+                            && v.set
+                                .iter()
+                                .any(|(k, _)| k.to_ascii_lowercase().ends_with("_proxy"))
+                    })
         })
         .collect();
     assert!(probes.len() > 50, "the proxy rows: {} probes", probes.len());

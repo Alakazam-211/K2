@@ -27,8 +27,9 @@
 //! - a SOCKS handshake that fails is curl's 97, a proxy that refuses the
 //!   connection 7 (tried again as any refused connect is), one whose name
 //!   doesn't resolve 5, one that doesn't answer in time 28;
-//! - an `https://` proxy's certificate is checked with the roots every
-//!   `https://` call uses ([`super::tls`]): 60 when it fails, 35 for any
+//! - an `https://` proxy's certificate is checked with the system's
+//!   roots, as curl's built-in bundle: the CA variables are the target's
+//!   alone ([`super::tls::proxy_shared`]). 60 when it fails, 35 for any
 //!   other handshake failure.
 //!
 //! A proxy URL's user and password are the person's own credential for
@@ -187,7 +188,7 @@ pub fn through(
         .user_agent(user_agent)
         .deadline(limit);
     if p.scheme() == curl_proxy_env::Scheme::Https {
-        opts = opts.proxy_tls(super::tls::shared()?);
+        opts = opts.proxy_tls(super::tls::proxy_shared()?);
     }
     curl_proxy_env::connect(Some(p), host, port, &opts).map_err(failure)
 }

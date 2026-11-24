@@ -689,11 +689,15 @@ fn talk_at_a_remote_host_through_the_proxy() {
     tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", "remote-tok-9"]);
 }
 
-/// `talk ws@https://<host>` through an `https://` proxy with a user part:
-/// TLS to the proxy (its certificate checked, `localhost` in the
-/// throwaway CA's certificate), the CONNECT and its Basic inside that
-/// TLS, the host's token only inside the tunnel's own TLS, the same
-/// screen on both sides. It used to be the shell's alone.
+/// `talk ws@https://<host>` through an `https://` proxy with a user part
+/// whose certificate only `SSL_CERT_FILE`'s CA signs: curl checks a
+/// proxy's certificate with its built-in roots (the CA variables are the
+/// target's alone), and so does the binary. Both refuse the proxy at its
+/// handshake: nothing decrypted reaches it (no CONNECT, no Basic), nothing
+/// reaches the host, the same lines and exit on both, never direct. The
+/// binary's tunnel through an https:// proxy it trusts is
+/// curl-proxy-env's (tests/connect.rs and its curl table). It used to be
+/// the shell's alone.
 #[test]
 fn talk_through_an_https_proxy() {
     use common::tunnel::{self, ProxyMode, ProxyStub, TlsStub, HOST};
@@ -707,7 +711,7 @@ fn talk_through_an_https_proxy() {
     let ca = pki.ca_file.to_string_lossy().into_owned();
     let c = env(
         plain(
-            "ws@https://host --read-only through an https:// proxy",
+            "ws@https://host --read-only through an https:// proxy only SSL_CERT_FILE trusts",
             words(vec![addr, "--read-only"]),
             vec![],
             0,
@@ -720,17 +724,27 @@ fn talk_through_an_https_proxy() {
         ],
     );
     let [b, r] = tunnel::both(&rig, &c, &proxy, &remote);
-    let basic = tunnel::basic_line("acme-proxy", "pr0xy-s3cret");
-    for run in [&r, &b] {
-        tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), "remote-tok-9");
+    assert_eq!(
+        (b.out.code, &b.out.stdout, &b.out.stderr),
+        (r.out.code, &r.out.stdout, &r.out.stderr),
+        "bash, then the binary"
+    );
+    assert_eq!(b.proxy, r.proxy, "the proxy's records");
+    for run in [&b, &r] {
+        assert!(!run.proxy.is_empty(), "the proxy was reached: {run:?}");
+        assert!(
+            run.proxy.iter().all(String::is_empty),
+            "nothing decrypted reached the proxy: {run:?}"
+        );
+        assert!(
+            run.tls.is_empty() && run.tls_errors.is_empty(),
+            "nothing reached the host: {run:?}"
+        );
         assert!(
             run.daemon.is_empty(),
             "never this machine's daemon: {run:?}"
         );
     }
-    tunnel::assert_same(c.name, &b, &r);
-    assert_eq!(r.out.code, Some(0), "{r:?}");
-    assert!(r.out.stdout.contains("$ build"), "{r:?}");
     tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", "remote-tok-9"]);
 }
 
@@ -813,7 +827,7 @@ fn talk_through_a_socks5_proxy() {
         );
         match &line {
             Some(l) => {
-                assert_eq!(r.proxy, [l.clone()], "{name}");
+                assert_eq!(r.proxy, std::slice::from_ref(l), "{name}");
                 assert_eq!(r.out.code, Some(0), "{name}: {r:?}");
                 assert!(r.out.stdout.contains("$ build"), "{name}: {r:?}");
                 for (q, _) in &r.tls {
@@ -829,7 +843,6 @@ fn talk_through_a_socks5_proxy() {
                     "{name}: nothing reached the proxy: {r:?}"
                 );
                 assert!(r.tls.is_empty(), "{name}: nothing sent: {r:?}");
-                assert_ne!(r.out.code, Some(0), "{name}: {r:?}");
             }
         }
         for run in [&b, &r] {

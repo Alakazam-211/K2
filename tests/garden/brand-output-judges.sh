@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tests for scripts/brand/output-judges.py on small corpora: a planted
 # `k2 msg` fails judges a and b, a name out of its place fails judge c, a
-# keep pattern and a debt row let a line through, a stale debt row fails.
+# keep pattern and a debt row let a line through, a stale debt row fails,
+# an unfilled {cli} or {product} slot fails judge d with no way to allow it.
 # Text files only: no CLI, no daemon, no cargo.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,7 +33,7 @@ hits() { printf '%s\n' "$err" | sed -n "s/^judge $1 ([^)]*): \([0-9]*\) hit(s)$/
 
 run clean 'Run xy msg <addr> to send.' 'Globex Desk keeps your agents.' 'xy 0.46.17' 'Type `xy` alone.' 'See ~/.k2/inbox.'
 [ "$rc" = 0 ] || die "a clean corpus: rc $rc: $err"; ok
-case "$out" in *"the three judges pass on 1 files"*) ok ;; *) die "clean: $out" ;; esac
+case "$out" in *"the four judges pass on 1 files"*) ok ;; *) die "clean: $out" ;; esac
 
 run planted 'Run xy msg <addr>.' 'Run k2 msg k2 hi'
 [ "$rc" = 1 ] || die "a planted k2 msg passed: $err"; ok
@@ -57,6 +58,21 @@ for line in 'XY keeps your agents.' 'Xy is up.' 'Run Globex Desk msg <addr>.' 'G
     run c "$line"
     [ "$rc" = 1 ] && [ "$(hits c)" = 1 ] && [ "$(hits a)" = 0 ] || die "judge c on $line: $err"; ok
 done
+
+# Judge d: an unfilled slot fails, alone, wherever it stands, and no keep
+# pattern or debt row lets it through. A word that only starts like a slot
+# ({clients}) is not one.
+for line in 'Run {cli} app list' 'from a terminal outside {product}' '"hint": "{cli} x"' 'a {cli}{product} b'; do
+    run d "$line"
+    [ "$rc" = 1 ] && [ "$(hits d)" = 1 ] && [ "$(hits a)" = 0 ] && [ "$(hits b)" = 0 ] && [ "$(hits c)" = 0 ] || die "judge d on $line: $err"; ok
+    case "$err" in *"FAILED (d)"*"the slot {"*) ;; *"the slot {"*"FAILED (d)"*) ;; *) die "judge d's line on $line: $err" ;; esac; ok
+done
+printf 'keep\t\\{cli\\}\ta keep pattern is not read by judge d\ndebt\tb\tRun {cli} now\n' > "$T/keep-d"
+c="$T/corpus-d2"; rm -rf "$c"; mkdir -p "$c"; printf 'Run {cli} now\n' > "$c/form.out"
+rc=0; python3 "$J" --brand "$HERE/brand/xy" --keep "$T/keep-d" "$c" >/dev/null 2>"$T/err" || rc=$?
+[ "$rc" = 1 ] && grep -q 'judge d (a slot not filled): 1 hit(s)' "$T/err" || die "judge d took a keep or debt row: $(cat "$T/err")"; ok
+run d-text 'Run xy app list {id}, {clients} and {products} for {cli_path}.'
+[ "$rc" = 0 ] || die "not a slot: $err"; ok
 
 # A debt row lets its line through; a debt row that matches nothing fails.
 printf 'debt\tb\twhere k2 keeps it\n' >> "$keep"

@@ -3272,21 +3272,13 @@ mod tests {
         }
     }
 
-    /// The second judge: a test that names no brand. Every refusal row
-    /// (what happened, the fix, its explain line, its text), the
-    /// registry's index and study page, every wall's constant text, the
+    /// The text the brand-free tests read, with where each came from: every
+    /// refusal row (what happened, the fix, its explain line, its text),
+    /// the registry's index and study page, every wall's constant text, the
     /// Ask line of every action the walls map names, and every card's
-    /// constant text hold no command name but this build's own. Under the
-    /// default build it proves little; built with another brand
-    /// (K2_BRAND_DIR=brand/xy) it shows this text moved with the brand.
-    #[test]
-    fn brand_free_permission_and_refusal_text() {
-        use k2_core::brand::CLI_ALIASES;
+    /// constant text.
+    fn brand_texts() -> Vec<(String, String)> {
         use k2_core::refusals;
-
-        // Every command name a brand has, less this build's name and aliases.
-        let others: Vec<&str> = ["k2", "k5", "xy"].into_iter().filter(|n| *n != CLI_NAME && !CLI_ALIASES.contains(n)).collect();
-        assert_eq!(others.len(), 2, "this build's name is one of the known ones: {others:?}");
 
         let mut texts: Vec<(String, String)> = Vec::new();
         for r in refusals::all() {
@@ -3341,6 +3333,38 @@ mod tests {
             texts.push((format!("not a card {}: where", n.id), n.r#where.to_string()));
         }
 
+        texts
+    }
+
+    /// No slot is left unfilled (rebrand B7, trap 2): a template reaches a
+    /// person only through the code that fills it, so none of the text of
+    /// [`brand_texts`] holds `{cli}` or `{product}`. Brand-free: it holds
+    /// under every brand.
+    #[test]
+    fn brand_free_text_has_no_unfilled_slot() {
+        use k2_core::brand::{CLI_SLOT, PRODUCT_SLOT};
+
+        let left: Vec<String> = brand_texts()
+            .into_iter()
+            .filter(|(_, text)| text.contains(CLI_SLOT) || text.contains(PRODUCT_SLOT))
+            .map(|(at, text)| format!("{at}: {text}"))
+            .collect();
+        assert!(left.is_empty(), "text with a slot nobody fills:\n{}", left.join("\n"));
+    }
+
+    /// The second judge: a test that names no brand. Every text of
+    /// [`brand_texts`] holds no command name but this build's own. Under the
+    /// default build it proves little; built with another brand
+    /// (K2_BRAND_DIR=brand/xy) it shows this text moved with the brand.
+    #[test]
+    fn brand_free_permission_and_refusal_text() {
+        use k2_core::brand::CLI_ALIASES;
+
+        // Every command name a brand has, less this build's name and aliases.
+        let others: Vec<&str> = ["k2", "k5", "xy"].into_iter().filter(|n| *n != CLI_NAME && !CLI_ALIASES.contains(n)).collect();
+        assert_eq!(others.len(), 2, "this build's name is one of the known ones: {others:?}");
+
+        let texts = brand_texts();
         let found: Vec<String> =
             texts.iter().filter_map(|(at, text)| other_command(text, &others).map(|name| format!("{at} ({name}): {text}"))).collect();
         assert!(found.is_empty(), "text that names another command than this build's:\n{}", found.join("\n"));

@@ -6,7 +6,7 @@
 
 CORPUS is a folder of what the brand's build printed (one file per command
 line, as scripts/brand/collect-outputs.sh writes them). Every file is read
-as text, line by line. Three judges, each on its own:
+as text, line by line. Four judges, each on its own:
 
   a  the CLI name rule (scripts/garden/cli-name-flip.py's, the rewrite's
      own): no line uses another name as the command. "Another name" is
@@ -27,6 +27,10 @@ as text, line by line. Three judges, each on its own:
          it reads as the command by the CLI name rule, or is the program's
          name before its version (`xy 0.46.17`).
      A hit fails unless it is a `debt` row for judge c.
+  d  no slot is left unfilled: no line holds `{cli}` or `{product}` (rebrand
+     B7, trap 2). A template is filled by the CLI that prints it, or by the
+     server where it is made; a slot that reaches a person or an agent is
+     a command nobody can type. No allow list, no debt: one hit fails.
 
 Debt rows are lines found before the judges existed, each to be fixed and
 then dropped. A debt row that matches nothing any more fails (stale): the
@@ -124,6 +128,8 @@ def corpus_files(corpus):
     return out
 
 
+# The slots a template carries (k2_core::brand::CLI_SLOT, PRODUCT_SLOT).
+SLOTS = ("{cli}", "{product}")
 COMMAND_LEAD = re.compile(r"(^\s*|(Usage:|usage:|\brun|\bRun|\btry|\bTry|\$)\s+)[`'\"]?$")
 FLAG_AFTER = re.compile(r" (--?[a-z]|<|\[|…|\.\.\.)")
 
@@ -138,7 +144,7 @@ def judge(brand, corpus, keep_path, flip):
     product = re.compile(r"(?<![\w])" + re.escape(brand["product"]) + r"(?![\w])")
     keeps, debts = read_keep(keep_path)
     seen = set()
-    hits = {"a": [], "b": [], "c": []}
+    hits = {"a": [], "b": [], "c": [], "d": []}
     files = corpus_files(corpus)
     if not files:
         sys.exit(f"output-judges: {corpus} holds no files")
@@ -163,6 +169,10 @@ def judge(brand, corpus, keep_path, flip):
                     seen.add(key)
                 else:
                     hits["b"].append((rel, line, f"{at}: {line.strip()}"))
+            # d: an unfilled slot.
+            left = [slot for slot in SLOTS if slot in line]
+            if left:
+                hits["d"].append(f"{at}: the slot {' and '.join(left)} is not filled: {line.strip()}")
             # c: the names in their places.
             why = None
             for m in variants.finditer(line):
@@ -219,7 +229,7 @@ def main(argv):
         for j, line in rows:
             print(f"debt\t{j}\t{line}")
     failed = []
-    for j, title in (("a", "another name read as the command"), ("b", "a bare other name"), ("c", "a name out of its place")):
+    for j, title in (("a", "another name read as the command"), ("b", "a bare other name"), ("c", "a name out of its place"), ("d", "a slot not filled")):
         found = [h if isinstance(h, str) else h[2] for h in hits[j]]
         print(f"judge {j} ({title}): {len(found)} hit(s)", file=sys.stderr)
         for h in found[:50]:
@@ -233,7 +243,7 @@ def main(argv):
     if failed:
         print(f"output-judges: {brand['id']}: FAILED ({', '.join(failed)})", file=sys.stderr)
         return 1
-    print(f"output-judges: {brand['id']}: the three judges pass on {len(corpus_files(corpus))} files")
+    print(f"output-judges: {brand['id']}: the four judges pass on {len(corpus_files(corpus))} files")
     return 0
 
 

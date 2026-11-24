@@ -719,7 +719,7 @@ pub fn minisign_key_id(line: &str) -> Option<String> {
 /// Standard base64 with padding (no dependency at build time).
 fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let b = s.as_bytes();
-    if b.is_empty() || b.len() % 4 != 0 {
+    if b.is_empty() || !b.len().is_multiple_of(4) {
         return None;
     }
     let pad = b.iter().rev().take_while(|c| **c == b'=').count();

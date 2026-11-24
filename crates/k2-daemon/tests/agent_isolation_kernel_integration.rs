@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -1318,7 +1318,8 @@ def conn(path):
     try:
         s.connect(path); return "ok"
     except OSError as e:
-        return f"err {e.errno}"
+        # An error with no errno (a name too long for sun_path) says what it was.
+        return f"err {e.errno}" if e.errno is not None else f"err none: {e}"
     finally:
         s.close()
 tmp, bus, tmux, sup, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
@@ -1330,8 +1331,12 @@ l = os.path.join(tmp, "buslink")
 if os.path.lexists(l): os.unlink(l)
 os.symlink(bus, l)
 row("tmp_link", conn(l))
-up = tmp + "/.." * (tmp.strip("/").count("/") + 1) + bus
-row("tmp_dotdot", conn(up))
+# `..` out of the folder to a live socket beside it (the test made
+# ~/.k2/agents/<ws>/outside.sock): short enough for sun_path, unlike `..` all
+# the way to the bus from a test home.
+row("tmp_dotdot", conn(tmp + "/../outside.sock"))
+deep = tmp + "/.." * (tmp.strip("/").count("/") + 1) + bus
+row("tmp_dotdot_bus", conn(deep) if len(deep.encode()) <= 107 else f"too long for sun_path ({len(deep.encode())} bytes)")
 h = os.path.join(tmp, "hard")
 try:
     os.link(tmux, h); row("tmp_hardlink_made", "yes"); row("tmp_hardlink", conn(h))
@@ -1426,7 +1431,7 @@ systemd-run --user --quiet --scope -- true > {a}/o4 2>&1; echo "user_scope $? $(
 tmux -S {tmux} new-window -d "touch {a}/p7" > {a}/o5 2>&1; echo "tmux_new_window $? $(head -c 200 {a}/o5 | tr '\n' ' ')" >> $R
 sleep 2; test -e {a}/p7; echo "tmux_window_ran $?" >> $R
 code=$(curl -s -o {a}/o6 -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "hook $code" >> $R
-bash {cli} whoami --json > {a}/o7 2>&1; echo "whoami $? $(head -c 200 {a}/o7 | tr '\n' ' ')" >> $R
+bash {cli} capabilities --json > {a}/o7 2>&1; echo "own_cli $? $(head -c 200 {a}/o7 | tr '\n' ' ')" >> $R
 ( ( sleep 1; curl -s -o /dev/null -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities > {a}/df 2>&1 ) & )
 sleep 3; echo "doublefork $(cat {a}/df 2>/dev/null || echo none)" >> $R
 if command -v node > /dev/null; then
@@ -1459,6 +1464,12 @@ fn sockblock_session(d: &mut Daemon, name: &str, bus: &Path, tmux: &Path, prlimi
     let (id, ws) = d.workspace(name);
     d.set_fence(&id, true);
     std::fs::write(ws.join("probe.py"), SOCKBLOCK_PROBE).unwrap();
+    // A live socket beside the session's temp folder (outside it, not in
+    // the view to write): the `..` row's target. Kept for the test's life.
+    let beside = d.k2.join("agents").join(&id);
+    std::fs::create_dir_all(&beside).unwrap();
+    let _ = std::fs::remove_file(beside.join("outside.sock"));
+    std::mem::forget(UnixListener::bind(beside.join("outside.sock")).unwrap_or_else(|e| panic!("bind {}/outside.sock: {e}", beside.display())));
     let script = sockblock_script(&ws, &d.k2.join("bin/k2"), bus, tmux, d.port, prlimit);
     d.spawn(&format!("tab-{name}"), &ws, &script);
     let r = results(&ws.join("results"), "done");
@@ -1475,7 +1486,7 @@ fn rc_of(v: &str) -> &str {
 /// The block in ENFORCE mode (`K2_AGENT_SOCKBLOCK=enforce`), written
 /// fail-first from rows 4, P2 and P7: a fenced session can't reach the
 /// system or the user bus, can't `systemd-run --user`, can't drive the
-/// owner's tmux; it still reaches its own hook socket (curl, `k2 whoami`,
+/// owner's tmux; it still reaches its own hook socket (curl, `k2 capabilities`,
 /// node) and a socket it made in its own temp folder. Plus the review's
 /// section 7 rows a session can check: its own listener refused (S2),
 /// io_uring `ENOSYS`, the link / `..` / hard-link forms refused, datagram
@@ -1508,7 +1519,9 @@ fn sockblock_enforced_rows_4_p2_p7_and_section_7() {
     assert_ne!(r["tmux_window_ran"], "0", "the owner's tmux ran nothing");
     // What it still reaches.
     assert_eq!(r["hook"], "200", "its own hook socket");
-    assert!(r["whoami"].starts_with("0 ") || r["whoami"].contains("cannot determine identity"), "k2 whoami over its socket: {}", r["whoami"]);
+    // `k2 whoami` can't classify a /bin/sh test tab (400 in every mode), so
+    // the CLI row is `k2 capabilities --json`, which answers over the socket.
+    assert!(r["own_cli"].starts_with("0 {"), "k2 capabilities --json over its socket: {}", r["own_cli"]);
     assert_eq!(r["doublefork"], "200", "a double-forked child still connects (row 7)");
     assert_eq!(r["tmp_socket"], "ok", "a socket it made in its own temp folder (row 3; through /proc/self/fd, row 4)");
     assert_eq!(r["tcp"], "ok", "TCP");
@@ -1518,7 +1531,8 @@ fn sockblock_enforced_rows_4_p2_p7_and_section_7() {
     // Section 7.
     assert_eq!(rc_of(&r["probe_rc"]), "0", "the probes ran: {}", r["probe_rc"]);
     assert_eq!(r["tmp_link"], "err 111", "a link in its temp folder to the bus (row 3)");
-    assert_eq!(r["tmp_dotdot"], "err 111", ".. out of its temp folder (row 3)");
+    assert_eq!(r["tmp_dotdot"], "err 111", ".. out of its temp folder to a live socket (row 3)");
+    assert!(r["tmp_dotdot_bus"] == "err 111" || r["tmp_dotdot_bus"].starts_with("too long"), ".. to the bus: {}", r["tmp_dotdot_bus"]);
     if r["tmp_hardlink_made"] == "yes" {
         assert_eq!(r["tmp_hardlink"], "err 111", "a hard link of the owner's tmux socket");
     }
@@ -1578,6 +1592,7 @@ fn sockblock_record_logs_and_off_is_the_bite() {
     assert_eq!(rc_of(&r["user_bus"]), "0", "record lets the user bus through: {}", r["user_bus"]);
     assert_eq!(r["hook"], "200");
     assert_eq!(r["tmp_link"], "ok", "record lets the link through");
+    assert_eq!(r["tmp_dotdot"], "ok", "and the .. form (to the live socket beside the folder)");
     let logs = sockblock_logs(&d.k2);
     println!("──── sockblock.log ────\n{logs}");
     let lines: Vec<Value> = logs.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}"))).collect();
@@ -1597,6 +1612,7 @@ fn sockblock_record_logs_and_off_is_the_bite() {
     assert_eq!(rc_of(&r["user_bus"]), "0", "the bite: the user bus is reachable without the block");
     assert_eq!(r["s2_listener"], "ok", "the bite: its own listener goes in without the block");
     assert_eq!(r["dgram"], "ok");
+    assert_eq!(r["tmp_dotdot"], "ok", "the bite (row 3): the .. form connects without the block");
     assert_eq!(r["unix_raw"], "ok", "the bite (K1): a raw Unix socket can be made without the block");
     if Path::new("/dev/log").exists() {
         assert_eq!(r["raw_sendto_devlog"], "ok", "the bite (K1): and it sends to the log socket");

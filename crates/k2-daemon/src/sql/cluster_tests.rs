@@ -1140,3 +1140,44 @@ FROM pg_catalog.pg_stat_archiver"
     assert_eq!(ops.recorded().len(), n, "no SQL on a cluster that isn't running");
 }
 
+
+/// `k2 db clusters --health --json`: K2 Backups' ship script reads these
+/// four by path, so they stay where they are with the same types (more
+/// fields are fine; never a rename, a move or a removal):
+/// `clusters[].health.archiveMode` (a string), and under
+/// `clusters[].health.archiver`, `lastArchivedAt` and `lastFailedAt` (a
+/// timestamp string or null) and `currentLsn` (`0/…` text, or null).
+#[test]
+fn health_keeps_the_four_fields_backups_ship_reads() {
+    let _g = crate::sql::sql_server_test_lock();
+    reset(Some(16));
+    record(16, 5432, "k2");
+    let (pid, _) = insert_project("fb-ship");
+    let mut ops = akzm_ops();
+    let c = ensure_named_cluster(&ops, 17, "feedback", None, true, &pid).unwrap();
+    ops.query_answers.insert(
+        "helper clusters".into(),
+        format!(
+            r#"{{"clusters":[{{"major":16,"name":"main","port":5432,"dataDir":"/var/lib/postgresql/16/main","running":true,"startConf":"auto"}},
+            {{"major":17,"name":"feedback","port":{},"dataDir":"/var/lib/postgresql/17/feedback","running":true,"startConf":"auto","k2Named":true}}]}}"#,
+            c.port
+        ),
+    );
+    ops.query_answers.insert(
+        "helper health".into(),
+        r#"{"connections":1,"maxConnections":50,"archiveMode":"on","databases":[],"archiver":{"archivedCount":7,"lastArchivedAt":"2026-11-23T10:00:00.123456+00:00","failedCount":1,"lastFailedAt":null,"currentLsn":"0/1A2B3C4D"}}"#.into(),
+    );
+    let out = crate::sql::named_routes::list(&ops, true);
+    let i = out["clusters"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no clusters array: {out}"))
+        .iter()
+        .position(|r| r["name"] == "feedback")
+        .unwrap_or_else(|| panic!("no feedback row: {out}"));
+    let at = |p: &str| out.pointer(&format!("/clusters/{i}/health{p}")).cloned().unwrap_or_else(|| panic!("{p} is gone from the health block: {out}"));
+    assert_eq!(at("/online"), serde_json::json!(true), "{out}");
+    assert_eq!(at("/archiveMode"), serde_json::json!("on"), "archiveMode: a string at health.archiveMode");
+    assert_eq!(at("/archiver/lastArchivedAt"), serde_json::json!("2026-11-23T10:00:00.123456+00:00"), "lastArchivedAt: a string at health.archiver");
+    assert_eq!(at("/archiver/lastFailedAt"), serde_json::Value::Null, "lastFailedAt: null (or a string) at health.archiver");
+    assert_eq!(at("/archiver/currentLsn"), serde_json::json!("0/1A2B3C4D"), "currentLsn: text at health.archiver");
+}

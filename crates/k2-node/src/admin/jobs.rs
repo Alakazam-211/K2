@@ -1071,6 +1071,29 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
 pub const WALL_SELFTEST_SCRIPT: &str =
     "test ! -e /proc/1/cmdline && test -z \"$(ls -A /dev/shm)\" && command -v unshare >/dev/null && ! unshare -U true 2>/dev/null && echo k2-wall-ok";
 
+/// 0.46.18: a unit that ran (or would have run) under K2's AppArmor
+/// profile is gone: the last one unloads it and deletes its file.
+fn userns_unit_ended(unit: &str) {
+    let mut live = super::apparmor::live().lock().unwrap_or_else(|e| e.into_inner());
+    if live.end(unit) {
+        if let Err(e) = super::apparmor::unload_and_remove() {
+            crate::nlog!("job user namespaces: couldn't remove the AppArmor profile after {unit}: {e}");
+        }
+    }
+}
+
+/// 0.46.18: the job units running under K2's AppArmor profile (their
+/// `AppArmorProfile=`), for [`super::apparmor::sweep`].
+fn units_with_userns_profile() -> Vec<String> {
+    let list = systemctl(&["list-units", "--all", "--plain", "--no-legend", "k2job-*.service"]).unwrap_or_default();
+    list.lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|u| valid_unit(u))
+        .filter(|u| systemctl(&["show", "--property=AppArmorProfile", "--value", u]).is_ok_and(|v| v.contains(super::apparmor::PROFILE)))
+        .map(str::to_string)
+        .collect()
+}
+
 /// 0.46.18: `--userns` is the node owner's own server's (slot 0) alone,
 /// never a tenant's, whatever its trust.
 pub fn userns_slot_check(userns: bool, tenant: Slot) -> Result<(), AdminRefusal> {
@@ -1707,6 +1730,12 @@ impl Executor {
     pub fn handle_job(&self, op: &JobOp, fds: Vec<OwnedFd>) -> JobAnswer {
         let r = match op {
             JobOp::Ready => {
+                // 0.46.18: once per executor process, a profile an earlier
+                // executor left goes unless a --userns unit still runs.
+                static SWEPT: std::sync::Once = std::sync::Once::new();
+                if cfg!(target_os = "linux") && (Path::new(super::apparmor::PROFILE_PATH).exists() || super::apparmor::kernel_restricts()) {
+                    SWEPT.call_once(|| super::apparmor::sweep(&units_with_userns_profile()));
+                }
                 self.job_user().map(|(u, _)| JobAnswer::Ready {
                     job_user: u,
                     stdin: true,
@@ -1732,6 +1761,9 @@ impl Executor {
             JobOp::Release { unit } => self.with_unit(unit, |u| {
                 let stopped = systemctl(&["stop", "--no-block", u]);
                 let _ = systemctl(&["reset-failed", u]);
+                // 0.46.18: the last --userns unit takes K2's AppArmor
+                // profile with it (unloaded, its file deleted).
+                userns_unit_ended(u);
                 // 0.46.14: its own network namespace goes with it (the
                 // namespace itself lives until its last process ends).
                 let netns = super::netns::netns_name(u)
@@ -1911,8 +1943,16 @@ impl Executor {
         // that allows them (loaded now if it isn't); without it the start
         // is refused, never run without the namespace it was granted.
         let apparmor_profile = if cfg!(target_os = "linux") && super::apparmor::needs_profile(s.userns, super::apparmor::kernel_restricts()) {
-            super::apparmor::ensure_loaded()
-                .map_err(|e| refuse(k2_node_proto::userns::codes::USERNS_BLOCKED_BY_APPARMOR, super::apparmor::unavailable(&e)))?;
+            // Counted before it loads, so a release between the two never
+            // unloads it under this unit (one lock for all of it).
+            let mut live = super::apparmor::live().lock().unwrap_or_else(|e| e.into_inner());
+            live.start(&unit);
+            if let Err(e) = super::apparmor::ensure_loaded() {
+                if live.end(&unit) {
+                    let _ = super::apparmor::unload_and_remove();
+                }
+                return Err(refuse(k2_node_proto::userns::codes::USERNS_BLOCKED_BY_APPARMOR, super::apparmor::unavailable(&e)));
+            }
             Some(super::apparmor::PROFILE.to_string())
         } else {
             None
@@ -2002,6 +2042,10 @@ impl Executor {
             super::jobpool::lease_started(s.tenant, i);
         }
         let gpu = plan.gpu.as_ref().map(|g| g.pci.clone());
+        if r.is_err() && plan.apparmor_profile.is_some() {
+            // Never started: it holds no profile.
+            userns_unit_ended(&unit);
+        }
         if r.is_err() {
             if let Some(pci) = &gpu {
                 self.release_gpu_lease(pci, &unit);

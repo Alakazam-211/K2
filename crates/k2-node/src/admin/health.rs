@@ -376,7 +376,12 @@ pub fn pkg_health(node: &Node) -> Option<k2_node_proto::health::PkgHealth> {
 /// doctor's warnings. Readable without root (homes are listed, never read).
 pub fn security_fact(node: &Node, wall_restart_owed: bool) -> SecurityFact {
     let open: Vec<String> = crate::wall::open_homes_in(crate::wall::homes_root()).into_iter().map(|(p, m)| format!("{} ({m:o})", p.display())).collect();
-    security_fact_with(&node.wall, &node.opts.user, open, wall_restart_owed)
+    let mut f = security_fact_with(&node.wall, &node.opts.user, open, wall_restart_owed);
+    // 0.46.18: while K2's AppArmor profile for --userns units is loaded.
+    if cfg!(target_os = "linux") {
+        f.notes.extend(super::apparmor::doctor_line());
+    }
+    f
 }
 
 /// What the owner reads when root's owed-restart flag is set (round 5, item 7).

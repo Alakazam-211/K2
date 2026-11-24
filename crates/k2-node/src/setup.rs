@@ -192,6 +192,16 @@ mod tests {
         assert!(un.contains("dev.k2.simhost") && un.contains("_k2sim") && un.contains("k2simctl") && un.contains("/var/k2sim"), "uninstall removes the iPhone service too");
     }
 
+    /// 0.46.18 (Steward rev 3, 3): uninstalling takes K2's AppArmor profile
+    /// for --userns units away: unloaded while loaded, the file deleted.
+    #[test]
+    fn linux_uninstall_unloads_and_deletes_the_userns_profile() {
+        let un = script(Kind::Uninstall, "linux").unwrap();
+        assert!(un.contains("apparmor_parser -R /etc/apparmor.d/k2-job-userns"), "unloads it");
+        assert!(un.contains("rm -f /etc/apparmor.d/k2-job-userns"), "deletes the file");
+        assert_eq!(crate::admin::apparmor::PROFILE_PATH, "/etc/apparmor.d/k2-job-userns", "the path the uninstaller names");
+    }
+
     /// `sudo k2-node …` works on Linux (0.46.6): the installer links
     /// /usr/local/bin/k2-node to the libexec binary (never over a file that
     /// isn't a link), and the uninstaller removes only its own link.

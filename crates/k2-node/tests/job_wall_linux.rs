@@ -891,6 +891,18 @@ async fn a_job_makes_no_user_namespace_unless_userns_and_its_limit_is_its_own() 
             assert!(out.starts_with(&profile_sha256()), "{job}: the job ran under this build's profile file, not the tampered one: {out}");
             assert!(out.contains(r#""userns_mount_tmpfs":"ok""#), "{job}: {out}");
         }
+        // Removal (Steward rev 3, 3): the last --userns unit's release
+        // unloads the profile and deletes its file; the doctor's line goes.
+        let t0 = std::time::Instant::now();
+        loop {
+            let loaded = std::fs::read_to_string(k2_node::admin::apparmor::LOADED).unwrap_or_default();
+            if !k2_node::admin::apparmor::loaded_in(&loaded) && !Path::new(PROFILE_PATH).exists() {
+                break;
+            }
+            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the profile is still there after the last --userns unit was released");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        assert_eq!(k2_node::admin::apparmor::doctor_line(), None);
     } else {
         assert!(!Path::new(k2_node::admin::apparmor::PROFILE_PATH).exists(), "no profile where the kernel doesn't restrict");
     }

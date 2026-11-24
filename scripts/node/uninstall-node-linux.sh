@@ -62,6 +62,14 @@ fi
 getent group "$NODE_USER" >/dev/null && groupdel "$NODE_USER" 2>/dev/null || true
 safe_rm "$HOME_DIR"
 safe_rm "$BIN"
+# 0.46.18: K2's AppArmor profile for --userns job units (loaded only while
+# one runs): unloaded, its file deleted.
+if [ -e /etc/apparmor.d/k2-job-userns ] || [ -L /etc/apparmor.d/k2-job-userns ]; then
+    if command -v apparmor_parser >/dev/null && grep -q '^k2-job-userns ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+        apparmor_parser -R /etc/apparmor.d/k2-job-userns || echo "uninstall-node-linux: couldn't unload AppArmor profile k2-job-userns" >&2
+    fi
+    rm -f /etc/apparmor.d/k2-job-userns
+fi
 rm -f "$BIN.prev" "$BIN.bad" "$BIN.new"
 # The PATH link the installer made, only while it still points at $BIN.
 [ "$(readlink /usr/local/bin/k2-node 2>/dev/null)" = "$BIN" ] && rm -f /usr/local/bin/k2-node

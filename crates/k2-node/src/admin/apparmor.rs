@@ -188,6 +188,97 @@ fn parser(args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+/// Root: unload the profile (when loaded) and delete its file (a link is
+/// removed, never followed). An `Err` says what couldn't be done.
+pub fn unload_and_remove() -> Result<(), String> {
+    unload_and_remove_at(Path::new(PROFILE_PATH))
+}
+
+/// [`unload_and_remove`] for a profile file at `path` (tests).
+pub fn unload_and_remove_at(path: &Path) -> Result<(), String> {
+    let loaded = std::fs::read_to_string(LOADED).map(|t| loaded_in(&t)).unwrap_or(false);
+    if loaded {
+        parser(&["-R"])?;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("remove {}: {e}", path.display())),
+    }
+    if loaded {
+        crate::nlog!("job user namespaces: unloaded the AppArmor profile {PROFILE} (no --userns unit is left)");
+    }
+    Ok(())
+}
+
+/// The `--userns` units that run under the profile right now. The profile
+/// lives exactly as long as one does: loaded before the first starts,
+/// unloaded and its file deleted when the last one is released (so with
+/// no `--userns` job on the node, or `--userns` turned off, there's none).
+#[derive(Debug, Default)]
+pub struct Live {
+    units: std::collections::BTreeSet<String>,
+}
+
+impl Live {
+    /// A unit about to start under the profile.
+    pub fn start(&mut self, unit: &str) {
+        self.units.insert(unit.to_string());
+    }
+    /// A unit released (or that never started): true when it was one and
+    /// none is left, so the profile goes now.
+    pub fn end(&mut self, unit: &str) -> bool {
+        self.units.remove(unit) && self.units.is_empty()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.units.is_empty()
+    }
+}
+
+/// This executor's [`Live`] set (one per process; every load, unload and
+/// change of the set happens under it).
+pub fn live() -> &'static std::sync::Mutex<Live> {
+    static L: std::sync::OnceLock<std::sync::Mutex<Live>> = std::sync::OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// Root, once per executor process (its first `Ready`): a profile left
+/// loaded or on disk by an executor that ended (a crash, an update) goes
+/// unless a `--userns` unit still runs under it; those still running are
+/// counted again. `running` names the job units with this profile.
+pub fn sweep(running: &[String]) {
+    let mut l = live().lock().unwrap_or_else(|e| e.into_inner());
+    for u in running {
+        l.start(u);
+    }
+    if l.is_empty() {
+        let loaded = std::fs::read_to_string(LOADED).map(|t| loaded_in(&t)).unwrap_or(false);
+        if loaded || Path::new(PROFILE_PATH).exists() {
+            if let Err(e) = unload_and_remove() {
+                crate::nlog!("job user namespaces: couldn't remove the leftover AppArmor profile {PROFILE}: {e}");
+            }
+        }
+    }
+}
+
+/// The node doctor's line while the profile is loaded (or on disk), else
+/// none. Readable without root: the file is 0644 and the loaded list is
+/// world-readable where AppArmor runs.
+pub fn doctor_line() -> Option<String> {
+    let loaded = std::fs::read_to_string(LOADED).map(|t| loaded_in(&t)).unwrap_or(false);
+    let on_disk = Path::new(PROFILE_PATH).exists();
+    doctor_line_for(loaded, on_disk)
+}
+
+/// [`doctor_line`] from the two facts.
+pub fn doctor_line_for(loaded: bool, on_disk: bool) -> Option<String> {
+    match (loaded, on_disk) {
+        (true, _) => Some(format!("AppArmor profile {PROFILE} is loaded: this node's --userns job units may make user namespaces on this kernel ({PROFILE_PATH}; it goes when the last one ends)")),
+        (false, true) => Some(format!("AppArmor profile file {PROFILE_PATH} is on disk but not loaded (a --userns unit starting writes and loads it again; it goes when the last one ends)")),
+        (false, false) => None,
+    }
+}
+
 /// The refusal text when it can't be loaded: why, and the fix.
 pub fn unavailable(why: &str) -> String {
     format!(
@@ -229,6 +320,25 @@ mod tests {
             assert!(check_file(f, bytes).is_err(), "{why} must not pass as ours");
         }
         assert_eq!(profile_sha256().len(), 64);
+    }
+
+    /// Fail-first (Steward rev 3, 3): the profile lives as long as a
+    /// `--userns` unit: the last one's release takes it away, an earlier
+    /// one's doesn't, a unit that never had it changes nothing.
+    #[test]
+    fn the_last_userns_units_release_removes_the_profile() {
+        let mut l = Live::default();
+        l.start("k2job-a-g1.service");
+        l.start("k2job-b-g1.service");
+        assert!(!l.end("k2job-a-g1.service"), "one is left");
+        assert!(!l.end("k2job-plain-g1.service"), "never had it");
+        assert!(l.end("k2job-b-g1.service"), "the last one: unload now");
+        assert!(!l.end("k2job-b-g1.service"), "already gone");
+        assert!(l.is_empty());
+        let line = doctor_line_for(true, true).unwrap();
+        assert!(line.contains("k2-job-userns is loaded") && !line.contains('\n'), "{line}");
+        assert!(doctor_line_for(false, true).unwrap().contains("on disk but not loaded"));
+        assert_eq!(doctor_line_for(false, false), None, "no profile: no line");
     }
 
     /// Fail-first (Steward rev 3, 2): on demand only. A unit without

@@ -1,13 +1,18 @@
 //! The owner's switch for the new k5 command (Beta).
 //!
 //! ```text
-//! GET  /cli/k5-cli               {"on", "runs": "script"|"binary", "binary"?, "note"?}
+//! GET  /cli/k5-cli               {"on", "runs": "script"|"binary"|"none", "binary"?, "note"?, "fixed"?}
 //! POST /cli/k5-cli {"on": bool}  flips it, re-points the commands, answers as GET plus "links"
 //! ```
 //!
 //! `runs` is what the commands run now (`k2_core::cli_stage::current_choice`):
 //! the binary only when the switch is on and this release has it at its own
 //! version; `note` says why the script when the switch is on.
+//!
+//! A build with no shell CLI (`k2_core::cli_stage::NO_BASH`) has nothing
+//! to switch to: GET says `"on": true, "fixed": true` (and `runs` is the
+//! binary or `none`, never the script), and POST refuses and changes
+//! nothing. Our build's answers carry no `fixed` key.
 //!
 //! The switch is the `k5CliBeta` setting, off by default. Only this route
 //! changes it (a settings write refuses the key, `settings_routes`), because
@@ -42,10 +47,14 @@ fn refuse(status: &'static str, code: &str, hint: &str) -> CliResponse {
 }
 
 /// The switch as the commands see it (the client view of `settings.json`,
-/// the one the heal reads), and what they run.
-fn state() -> Value {
+/// the one the heal reads), and what they run. `fixed`: a build with no
+/// shell CLI, where the links are on by build.
+fn state(fixed: bool) -> Value {
     let mut v = serde_json::to_value(k2_core::cli_stage::current_choice()).unwrap_or_else(|_| json!({}));
-    v["on"] = json!(k2_core::app_settings::k5_cli_beta());
+    v["on"] = json!(fixed || k2_core::app_settings::k5_cli_beta());
+    if fixed {
+        v["fixed"] = json!(true);
+    }
     v
 }
 
@@ -81,15 +90,18 @@ pub(crate) async fn serve_tcp(stream: &mut tokio::net::TcpStream, buf: &mut [u8]
 }
 
 pub fn handle(by: Option<&str>, is_post: bool, body: &[u8]) -> CliResponse {
-    handle_with(by, is_post, body, relink, reteach)
+    handle_with(by, is_post, body, k2_core::cli_stage::NO_BASH, relink, reteach)
 }
 
-/// [`handle`] with the heal and the reteach passed in, so tests never
-/// touch a real bin folder or another test's workspaces.
+/// [`handle`] with the build kind (`fixed`: no shell CLI, so the switch is
+/// on by build), the heal and the reteach passed in, so tests prove either
+/// build's answers and never touch a real bin folder or another test's
+/// workspaces.
 pub(crate) fn handle_with(
     by: Option<&str>,
     is_post: bool,
     body: &[u8],
+    fixed: bool,
     relink: impl FnOnce() -> Value,
     reteach: impl FnOnce(),
 ) -> CliResponse {
@@ -101,7 +113,14 @@ pub(crate) fn handle_with(
         );
     };
     if !is_post {
-        return CliResponse::ok_json(state().to_string());
+        return CliResponse::ok_json(state(fixed).to_string());
+    }
+    if fixed {
+        return refuse(
+            "403 Forbidden",
+            "fixed_in_this_build",
+            "This build has no shell CLI, so the commands always run the k5 program: there is nothing to switch.",
+        );
     }
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -124,7 +143,7 @@ pub(crate) fn handle_with(
             "cli",
         ));
     }
-    let mut answer = state();
+    let mut answer = state(false);
     answer["links"] = relink();
     if was != on {
         // The links changed under the kept "runs k5" answer: drop it, then
@@ -242,17 +261,101 @@ mod tests {
         heals: &std::cell::Cell<u32>,
         reteaches: &std::cell::Cell<u32>,
     ) -> CliResponse {
+        call_in(false, query, is_post, payload, heals, reteaches)
+    }
+
+    /// [`call_counting`] in a build that carries the shell CLI or not
+    /// (`fixed`).
+    fn call_in(
+        fixed: bool,
+        query: &str,
+        is_post: bool,
+        payload: &str,
+        heals: &std::cell::Cell<u32>,
+        reteaches: &std::cell::Cell<u32>,
+    ) -> CliResponse {
         let by = crate::routes::http::owner_role_identity(query, OWNER);
         handle_with(
             by.as_deref(),
             is_post,
             payload.as_bytes(),
+            fixed,
             || {
                 heals.set(heals.get() + 1);
                 json!(["healed"])
             },
             || reteaches.set(reteaches.get() + 1),
         )
+    }
+
+    /// The live build's GET, as the route serves it: ours is byte for byte
+    /// today's (no `fixed` key); one with no shell CLI says on and fixed,
+    /// and never runs the script.
+    #[test]
+    fn get_in_this_build_has_its_shape() {
+        crate::test_support::with_temp_home(|| {
+            let r = handle(Some("owner-token"), false, b"");
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v = body(&r);
+            if k2_core::cli_stage::NO_BASH {
+                assert_eq!(
+                    (&v["on"], &v["fixed"]),
+                    (&json!(true), &json!(true)),
+                    "{}",
+                    r.body
+                );
+                assert_ne!(v["runs"], "script", "{}", r.body);
+            } else {
+                assert_eq!(r.body, r#"{"note":null,"on":false,"runs":"script"}"#);
+            }
+        });
+    }
+
+    /// A build with no shell CLI: GET says on and fixed (the switch's own
+    /// setting stays off), and POST refuses whatever it asks, saves
+    /// nothing, audits nothing and runs no heal and no reteach.
+    #[test]
+    fn no_bash_get_is_fixed_on_and_post_refuses() {
+        crate::test_support::with_temp_home(|| {
+            let heals = std::cell::Cell::new(0);
+            let reteaches = std::cell::Cell::new(0);
+            let q = format!("token={OWNER}");
+            let r = call_in(true, &q, false, "", &heals, &reteaches);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(body(&r)["on"], json!(true));
+            assert_eq!(body(&r)["fixed"], json!(true));
+            for payload in [r#"{"on": true}"#, r#"{"on": false}"#, "not json"] {
+                let r = call_in(true, &q, true, payload, &heals, &reteaches);
+                assert_eq!(r.status, "403 Forbidden", "{payload}: {}", r.body);
+                assert_eq!(body(&r)["error"], "fixed_in_this_build");
+                assert!(
+                    body(&r)["hint"]
+                        .as_str()
+                        .is_some_and(|h| h.contains("nothing to switch")),
+                    "{}",
+                    r.body
+                );
+            }
+            assert_eq!(heals.get(), 0, "a refusal never heals");
+            assert_eq!(reteaches.get(), 0, "nor reteaches");
+            assert!(
+                !k2_core::app_settings::load().k5_cli_beta,
+                "and never writes the setting"
+            );
+            let flips = k2_core::auth_audit::tail(1000).expect("audit tail");
+            assert!(
+                !flips.iter().any(|v| v["event"] == "k5_cli.switch"),
+                "{flips:?}"
+            );
+            // A non-owner is still refused as before, not told it is fixed.
+            let r = call_in(true, "", true, r#"{"on": true}"#, &heals, &reteaches);
+            assert_eq!(body(&r)["error"], "owner_only");
+            // Ours: no fixed key.
+            assert_eq!(
+                body(&call_in(false, &q, false, "", &heals, &reteaches)).get("fixed"),
+                None
+            );
+        });
     }
 
     #[test]

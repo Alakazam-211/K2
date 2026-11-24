@@ -231,7 +231,16 @@ mod tests {
                 if code.contains(concat!(".process", "_group(")) {
                     groups.push(at.clone());
                 }
-                if raw_spawns.iter().any(|r| code.contains(r)) && !rel.contains("k2-daemon/src/bin/k2-vmm-worker.rs") {
+                // Kept raw on purpose: the vmm worker; and the agent socket
+                // block's supervisor (agent_sockblock/supervisor.rs, Agent
+                // Isolation), which runs in the exec helper inside the
+                // agent's own session, never the daemon: it forks the program
+                // so the child installs its seccomp filter (no-new-privs,
+                // Landlock, the listener handed over by pidfd_getfd) and stays
+                // in that session's foreground while the parent, its first
+                // process and subreaper, answers the notifications.
+                let kept_raw = rel.contains("k2-daemon/src/bin/k2-vmm-worker.rs") || rel.ends_with("k2-core/src/agent_sockblock/supervisor.rs");
+                if raw_spawns.iter().any(|r| code.contains(r)) && !kept_raw {
                     raw.push(at);
                 }
             }

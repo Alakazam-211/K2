@@ -27,14 +27,16 @@ use crate::compute_ws;
 fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     let (online, route, live_offer) = compute_ws::live_view(&n.id);
     let offer = live_offer.or_else(|| n.last_offer.clone());
-    let (queued, running, pinned_only, health) = {
+    let (queued, held, running, pinned_only, health) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         // Node-queued jobs (a shared node's queue) count as queued, not
         // running: their rows stay `assigned` until the node starts them.
         let (node_queued, running): (Vec<_>, Vec<_>) = store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES).into_iter().partition(|r| r.node_queued);
+        let here = store::jobs_in_states(&conn, &n.id, &["queued"]);
         (
-            store::jobs_in_states(&conn, &n.id, &["queued"]).len() + node_queued.len(),
+            here.len() + node_queued.len(),
+            here.iter().filter(|j| planned(j)).count(),
             running,
             k2_core::compute::pinned_only::is_on(&conn, &n.id),
             compute::admin::health(&conn, &n.id),
@@ -54,6 +56,9 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     // offer (other servers included); `nodeQueued` = node-wide queued, null
     // until a node reports it in its offer.
     v["queued"] = queued.into();
+    // Of those, auto jobs held on this server that would go here now
+    // (planned, not bound: they start on whichever fitting node frees).
+    v["heldPlanned"] = held.into();
     v["running"] = active.into();
     v["nodeRunning"] = offer.as_ref().map(|o| o.running).into();
     v["nodeQueued"] = serde_json::Value::Null;
@@ -506,6 +511,12 @@ pub(crate) fn node_info(who: &Who, params: &HashMap<String, String>, mgr: Option
 
 // ── jobs ─────────────────────────────────────────────────────────────
 
+/// An auto job queued on this server (not in a node's own queue): its
+/// node is planned, not bound.
+pub(crate) fn planned(j: &store::JobRow) -> bool {
+    j.ctl.any.is_some() && j.state == "queued" && !j.node_queued && j.ctl.shards.is_empty()
+}
+
 pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     let node = k2_core::db::read(|conn| store::node_by_id(conn, &j.node_id).map(|n| n.name));
     let mut v = serde_json::to_value(j).unwrap_or_default();
@@ -557,6 +568,12 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     let secrets = crate::compute_secrets::job_secret_names(j);
     if !secrets.is_empty() {
         v["secrets"] = secrets.into();
+    }
+    // An auto job waiting on this server: `node` is only where it would go
+    // now (it starts on whichever fitting node frees first), never a
+    // binding. The CLIs say "planned: <node>" (the Gardener 11-24).
+    if planned(j) {
+        v["planned"] = true.into();
     }
     // Its expected run time and where it came from (design-compute-
     // duration-aware-queue-v1); a finished run: the time it took and the

@@ -179,6 +179,9 @@ pub struct Want {
 /// A job expected to run this long or more prefers a bigger node.
 pub const LONG_JOB_SECS: u64 = 30 * 60;
 
+/// The id of the job [`Cand::first_in_line`] asks a node's scheduler about.
+const PROBE_ID: &str = "\u{0}starts-now-probe";
+
 impl Want {
     /// GPU jobs S6: the job's memory on the node behind `offer`: its
     /// `--mem`, plus its GPU memory when the GPU it would get there is
@@ -236,6 +239,7 @@ impl Want {
             tier: self.tier, submitter: None,
             gpus: self.gpu.map_or(0, |g| g.count),
             est_secs: self.est_secs,
+            auto: self.auto,
         }
     }
 
@@ -401,6 +405,9 @@ pub struct Cand {
     pub load: scheduler::Load,
     /// Jobs queued on it (all workspaces).
     pub queued: usize,
+    /// Those jobs as its scheduler sees them (a solo node: whether a job
+    /// would start now ahead of them, [`Cand::first_in_line`]).
+    pub queue: Vec<scheduler::QueuedJob>,
     pub grant: Option<GrantRow>,
     /// Asks sent there that its last offer doesn't show yet (CP-A7).
     pub pending: Pending,
@@ -521,10 +528,46 @@ impl Cand {
             gpus: probe.gpus,
         };
         self.online
-            && self.queued == 0
             && refusal::offer_refusal(&self.offer, self.load.total() + self.pending.jobs, self.load.exclusive_running, &ask).is_none()
             && self.fits_free(w)
             && self.ws_running(w) < self.grant_cap()
+            && self.first_in_line(w)
+    }
+
+    /// A solo node with jobs queued: would its own scheduler start `w`
+    /// now, behind everything waiting there (the newest in its line)? A
+    /// queued job that can't start now (a Batch job on a busy node, one
+    /// too big for the free room, one at its grant's cap) no longer keeps
+    /// every other job off a node with free slots (the Gardener 11-24: 32
+    /// jobs held while k2n15–17 had free slots). One that starts now, or a
+    /// hold (CI or Priority, an hour-old job, an exclusive head), still
+    /// goes first. Queued jobs it can't see: as before, never.
+    fn first_in_line(&self, w: &Want) -> bool {
+        if self.queued == 0 {
+            return true;
+        }
+        if self.queue.len() != self.queued {
+            return false;
+        }
+        let mut load = self.load.clone();
+        // Sent here since its last offer: they hold slots too.
+        if self.pending.jobs > 0 {
+            *load.running_by_workspace.entry(String::new()).or_insert(0) += self.pending.jobs;
+            load.running_left.extend(std::iter::repeat_n(None, self.pending.jobs as usize));
+        }
+        let cap = self.grant_cap();
+        let ws = w.ws_id.clone();
+        let par = move |id: &str| if id == ws { cap } else { u32::MAX };
+        let caps = scheduler::Limits { grant_max_parallel: &par, submitter_max_running: &|_| 0 };
+        let now = compute::now();
+        let decide = |q: &[scheduler::QueuedJob]| scheduler::decide_with(now, q, &scheduler::Turns::default(), &load, &caps, Some(&self.offer), None).place;
+        // One of its own queued jobs starts now: that one goes first.
+        if decide(&self.queue).is_some() {
+            return false;
+        }
+        let mut q = self.queue.clone();
+        q.push(scheduler::QueuedJob { id: PROBE_ID.into(), submitter: Some(PROBE_ID.into()), ..w.probe_on(&self.offer) });
+        decide(&q).as_deref() == Some(PROBE_ID)
     }
 
     /// Online and only busy (no pause, window, lock, disk or upgrade refusal).
@@ -1254,7 +1297,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         let (online, _, live) = compute_ws::live_view(&n.id);
         let node_queued = by_node(&queued, &n.id);
         let node_active = by_node(&active, &n.id);
-        let (grant, queued_ws, queued_all, load) = {
+        let (grant, queued_ws, queue, load) = {
             let g = grants.remove(&n.id);
             let (q, load) = compute_ws::queued_view_of(&node_queued, &node_active, live.as_ref());
             // As `store::queued_count`: queued, or assigned and in the node's queue.
@@ -1263,7 +1306,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
                 .chain(node_active.iter())
                 .filter(|j| j.workspace_id == w.ws_id && (j.state == "queued" || (j.state == "assigned" && j.node_queued)))
                 .count() as i64;
-            (g, queued_ws, q.len(), load)
+            (g, queued_ws, q, load)
         };
         // F2 (D1): auto never crosses grants; the owner/Admin bypass is for
         // a node they name.
@@ -1389,7 +1432,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         let est_wait = online.then(|| backlog::est_wait(&waits, &n.id, &offer, grant.as_ref(), &load, &w.ws_id, node_queued.iter().chain(node_active.iter()), now)).flatten();
         let held_wait = if share::is_shared(&offer) { waits.held_eta(&n.id, offer.parallel_max) } else { 0 };
         let gen_heads = if online { crate::compute_ws::trusted_heads(&n.id) } else { Vec::new() };
-        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait, gen_heads, ws_id: w.ws_id.clone() });
+        out.cands.push(Cand { node: n, online, offer, load, queued: queue.len(), queue, grant, pending, recent, holds_cache, est_wait, held_wait, gen_heads, ws_id: w.ws_id.clone() });
     }
     out
 }

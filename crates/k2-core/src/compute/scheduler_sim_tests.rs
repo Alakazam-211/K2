@@ -94,6 +94,7 @@ fn mix(seed: u64, big28: usize, big16: usize, quick: usize, hours: i64) -> Vec<S
                     submitter: Some(sub),
                     gpus: 0,
                     est_secs: Some(est),
+                    auto: true,
                 },
                 class,
                 actual: actual.max(30),
@@ -263,7 +264,7 @@ fn run_fleet(jobs: &[SimJob], nodes: &[Node], after: bool) -> HashMap<&'static s
 #[test]
 fn solo_node_over_the_recorded_mix_quick_checks_wait_less_and_nothing_starves() {
     let jobs = mix(0x51ed_270b_a3c1_9e37, 8, 16, 60, 4);
-    let before = run_solo(&jobs, Opts { by_duration: false });
+    let before = run_solo(&jobs, Opts::today());
     let after = run_solo(&jobs, Opts::default());
     report("solo node (64 GB, 4 slots)", &before, &after);
     for w in [&before, &after] {

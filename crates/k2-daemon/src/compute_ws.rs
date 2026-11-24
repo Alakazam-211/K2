@@ -3213,6 +3213,7 @@ fn qjob_of(j: &store::JobRow, offer: Option<&Offer>) -> scheduler::QueuedJob {
         submitter: j.submitter.clone(),
         gpus: plan.as_ref().and_then(|p| p.gpu).map_or(0, |g| g.count),
         est_secs: j.est_secs.filter(|e| *e > 0).map(|e| e as u64),
+        auto: j.ctl.any.is_some(),
     }
 }
 
@@ -3312,6 +3313,7 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             tier: j.tier(), submitter: j.submitter.clone(),
             gpus: plan.gpu.map_or(0, |g| g.count),
             est_secs: j.est_secs.filter(|e| *e > 0).map(|e| e as u64),
+            auto: j.ctl.any.is_some(),
         };
         if let Some(r) = scheduler::never_fits(offer, &probe) {
             pass.fail.push((j.id.clone(), r));

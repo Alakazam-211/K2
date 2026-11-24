@@ -100,7 +100,7 @@ pub(super) fn cand(id: &str, free_gb: u64, caps_gb: u64, running: u32, parallel:
     if running > 0 {
         load.running_by_workspace.insert("ws-other-secret".into(), running);
     }
-    Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None, held_wait: 0, gen_heads: Vec::new(), ws_id: "ws-test".into() }
+    Cand { node: node_row(id), online: true, offer, load, queued: 0, queue: Vec::new(), grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None, held_wait: 0, gen_heads: Vec::new(), ws_id: "ws-test".into() }
 }
 
 /// Make `c` a node shared with another server (this server a tenant):
@@ -1581,4 +1581,45 @@ fn userns_plan(userns: bool) -> Plan {
     .expect("a plan");
     p.userns = userns;
     p
+
+/// The Gardener 11-24: a node with free slots took no moved job while
+/// anything was queued on it, even a Batch job waiting for idle or one too
+/// big for its free memory. Now it starts a job its own scheduler would
+/// start now; a hold there (a CI or Priority job waiting for room) still
+/// keeps it, and so do queued jobs it can't see.
+#[test]
+fn a_node_with_free_slots_takes_a_job_its_queue_would_start_now() {
+    use k2_core::compute::proto::tiers::Tier as JobTier;
+    let qj = |id: &str, tier: JobTier, gb: u64| scheduler::QueuedJob {
+        id: id.into(),
+        workspace_id: "ws-other".into(),
+        created_at: compute::now() - 60,
+        exclusive: false,
+        cpu_millis: None,
+        mem_bytes: Some(gb * GB),
+        disk_bytes: 0,
+        needs_git: true,
+        tier,
+        submitter: Some("other/s/x".into()),
+        gpus: 0,
+        est_secs: None,
+        auto: true,
+    };
+    let w = want(4);
+    let mut y = cand("y", 14, 24, 1, 2);
+    y.queue = vec![qj("batch", JobTier::Batch, 2), qj("big", JobTier::Normal, 20)];
+    y.queued = y.queue.len();
+    assert!(y.starts_now(&w), "a Batch job (idle only) and a too-big one don't keep it");
+    assert_eq!(y.tier(&w), Some(Tier::Now));
+    let mut held = y.clone();
+    held.queue.push(qj("ci", JobTier::Ci, 20));
+    held.queued = held.queue.len();
+    assert!(!held.starts_now(&w), "a CI job waiting for room holds the next slot");
+    let mut unseen = y.clone();
+    unseen.queued += 1;
+    assert!(!unseen.starts_now(&w), "a queued job it can't see: as before");
+    let mut fits = y.clone();
+    fits.queue = vec![qj("next", JobTier::Normal, 2)];
+    fits.queued = 1;
+    assert!(!fits.starts_now(&w), "a queued job that starts now goes first");
 }

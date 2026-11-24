@@ -3680,6 +3680,7 @@ fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes:
         tier: Tier::Normal, submitter: None,
         gpus: u32::from(v.get("gpu").is_some_and(|g| !g.is_null())),
         est_secs: None,
+        auto: false,
     }
 }
 

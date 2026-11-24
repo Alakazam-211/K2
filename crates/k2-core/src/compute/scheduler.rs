@@ -74,6 +74,10 @@ pub struct QueuedJob {
     /// the `--expect` it was sent with; `compute_jobs.est_secs`). `None`:
     /// unknown, ordered as [`AVG_EST_SECS`] and never backfilled.
     pub est_secs: Option<u64>,
+    /// Auto-placed (no node named): K2 may start it on another node, so
+    /// its submitter's younger auto jobs never wait behind it here while it
+    /// only waits for room ([`Opts::auto_passes_room_wait`]).
+    pub auto: bool,
 }
 
 /// What a job with no estimate counts as when jobs are ordered by expected
@@ -89,16 +93,28 @@ pub const AGED_IDLE_BOUND_SECS: u64 = 600;
 /// A job started ahead of a waiting one (backfill).
 pub const BACKFILLED: &str = "backfilled";
 
-/// The duration rules on or off (the simulation's "before" turns them off).
+/// The newer rules on or off ([`Opts::today`] = 0.46.17's, the
+/// simulations' "before").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Opts {
     /// Order by expected run time, backfill and the hour-old hold.
     pub by_duration: bool,
+    /// An auto job is never held behind its submitter's older auto job
+    /// that waits for room here (that one may start on another node; the
+    /// younger one fits now). Pinned jobs keep strict FIFO.
+    pub auto_passes_room_wait: bool,
 }
 
 impl Default for Opts {
     fn default() -> Self {
-        Self { by_duration: true }
+        Self { by_duration: true, auto_passes_room_wait: true }
+    }
+}
+
+impl Opts {
+    /// The rules as they were in 0.46.17.
+    pub fn today() -> Self {
+        Self { by_duration: false, auto_passes_room_wait: false }
     }
 }
 
@@ -510,8 +526,9 @@ pub fn decide_opts(
     let mut head_seen = false;
     // (workspace, submitter) pairs whose oldest Standard or Batch job was
     // already looked at (strict FIFO per submitter inside a workspace),
-    // and whether that one waits for room (then a newer one may backfill).
-    let mut seen: HashMap<(&str, &str, Line), bool> = HashMap::new();
+    // and whether that one waits for room (then a newer one may backfill)
+    // and is auto (then a newer auto one may start here now).
+    let mut seen: HashMap<(&str, &str, Line), (bool, bool)> = HashMap::new();
     for j in &jobs {
         let pos = position[j.id.as_str()];
         // A job over the node's caps can never start: report it (the
@@ -534,7 +551,7 @@ pub fn decide_opts(
             if !may_pass {
                 waiting.insert(j.id.clone(), (pos, h.clone()));
                 if fifo_line {
-                    seen.entry(key).or_insert(true);
+                    seen.entry(key).or_insert((true, j.auto));
                 }
                 continue;
             }
@@ -544,9 +561,15 @@ pub fn decide_opts(
         if fifo_line {
             match seen.get(&key) {
                 None => {
-                    seen.insert(key, false);
+                    seen.insert(key, (false, j.auto));
                 }
-                Some(&older_waits_for_room) if older_waits_for_room && may_pass => passing = true,
+                Some(&(older_waits_for_room, _)) if older_waits_for_room && may_pass => passing = true,
+                // Per node, not global (the Gardener 11-24): an auto job
+                // never waits here behind its submitter's older auto job
+                // that only waits for room here (that one may go to another
+                // node; this one fits now). Its wait stays bounded by the
+                // hour-old hold. A pinned job keeps strict FIFO.
+                Some(&(true, true)) if j.auto && opts.auto_passes_room_wait => {}
                 Some(_) => {
                     waiting.insert(j.id.clone(), (pos, Refusal::new("behind_older_job", "an older job from the same submitter goes first")));
                     continue;
@@ -578,7 +601,7 @@ pub fn decide_opts(
             Err(r) => {
                 let room = tiers::waits_for_room(&r.code);
                 if room && fifo_line && first_of_key {
-                    seen.insert(key, true);
+                    seen.insert(key, (true, j.auto));
                 }
                 // Next free slot: only while it waits for room, never for a
                 // refusal that could last (T3); CI and Priority, and an
@@ -715,7 +738,7 @@ mod tests {
     const T0: i64 = 0;
 
     fn job(id: &str, ws: &str, at: i64) -> QueuedJob {
-        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None, gpus: 0, est_secs: None }
+        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None, gpus: 0, est_secs: None, auto: false }
     }
 
     fn tiered(id: &str, ws: &str, at: i64, tier: Tier) -> QueuedJob {
@@ -1184,7 +1207,7 @@ mod tests {
         q2[0].est_secs = Some(7200);
         q2[1].est_secs = Some(120);
         assert_eq!(ids(&order_with(now, &q2, &Turns::default())), ["short", "long"]);
-        assert_eq!(ids(&order_opts(now, &q2, &Turns::default(), &Opts { by_duration: false })), ["long", "short"], "off: today's order");
+        assert_eq!(ids(&order_opts(now, &q2, &Turns::default(), &Opts::today())), ["long", "short"], "off: today's order");
         // A job expected to take 1000 s that has waited 950 s (key 50) goes
         // before a fresh 120 s one.
         q2[0].est_secs = Some(1000);
@@ -1239,7 +1262,7 @@ mod tests {
                 })
                 .collect();
             let turns = Turns { last_ws: Some(format!("w{}", rand() % 3)), ..Default::default() };
-            let off = Opts { by_duration: false };
+            let off = Opts::today();
             assert_eq!(ids(&order_with(now, &q, &turns)), ids(&order_opts(now, &q, &turns, &off)), "case {case}");
             let (o, mut load) = busy(&[Some(600), Some(900)]);
             if rand() % 2 == 0 {
@@ -1281,7 +1304,7 @@ mod tests {
         assert_eq!(decide_now(now, &[head.clone(), short(Some(60))], &o2, &load2).place, None);
         // The duration rules off: today's hold.
         let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
-        let off = decide_opts(now, &[head, short(Some(60))], &Turns::default(), &load, &caps, Some(&o), None, &Opts { by_duration: false });
+        let off = decide_opts(now, &[head, short(Some(60))], &Turns::default(), &load, &caps, Some(&o), None, &Opts::today());
         assert_eq!(off.place, None);
     }
 
@@ -1378,10 +1401,68 @@ mod tests {
             }
             None
         };
-        let today = run(Opts { by_duration: false }).expect("it starts once the stream stops");
+        let today = run(Opts::today()).expect("it starts once the stream stops");
         assert!(today >= 3 * 3600 + 1800, "today: the stream holds it off until it stops ({today}s)");
         let started = run(Opts::default()).expect("it starts");
         assert!(started <= 3600 + 300 + 60, "it started at {started}s: an hour plus the longest small job (5 min), plus a step");
+    }
+
+    // ── per-node submitter order (the Gardener 11-24) ───────────────────
+
+    /// One identity, several builders: a slow auto job waiting for room
+    /// here never holds its submitter's younger auto job that fits now.
+    /// A pinned job keeps strict FIFO, and 0.46.17's rules (off) don't.
+    #[test]
+    fn an_auto_job_never_waits_behind_its_submitters_auto_job_that_waits_for_room() {
+        let now = 10_000;
+        let auto = |j: QueuedJob| QueuedJob { auto: true, ..j };
+        let older = gb(by("a1", "W", now - 100, "w/s/a", Tier::Normal), 12);
+        let younger = gb(by("a2", "W", now - 50, "w/s/a", Tier::Normal), 2);
+        let (o, load) = busy(&[None, None]);
+        let d = decide_now(now, &[auto(older.clone()), auto(younger.clone())], &o, &load);
+        assert_eq!(d.place.as_deref(), Some("a2"), "it fits now: it starts");
+        assert_eq!(d.backfill, None, "not a backfill: the older one may start elsewhere");
+        assert_eq!(d.waiting["a1"].1.code, refusal::LOCAL_RESOURCE_LIMIT);
+        // Pinned on either side: strict FIFO, as before.
+        for (a, b) in [(older.clone(), auto(younger.clone())), (auto(older.clone()), younger.clone())] {
+            let d = decide_now(now, &[a, b], &o, &load);
+            assert_eq!(d.place, None);
+            assert_eq!(d.waiting["a2"].1.code, "behind_older_job");
+        }
+        // The older one waits for a lasting reason (its grant's cap): the
+        // younger one would too, and waits behind it.
+        let small_older = auto(QueuedJob { mem_bytes: Some(2 << 30), ..older.clone() });
+        let mut capped = load.clone();
+        capped.running_by_workspace.insert("W".into(), 1);
+        capped.running_left.push(None);
+        let caps = Limits { grant_max_parallel: &|_| 1, submitter_max_running: &|_| 0 };
+        let d = decide_with(now, &[small_older, auto(younger.clone())], &Turns::default(), &capped, &caps, Some(&o), None);
+        assert_eq!(d.waiting["a2"].1.code, "behind_older_job");
+        // 0.46.17's rules: strict FIFO for auto jobs too.
+        let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+        let d = decide_opts(now, &[auto(older), auto(younger)], &Turns::default(), &load, &caps, Some(&o), None, &Opts::today());
+        assert_eq!(d.place, None);
+    }
+
+    /// Fairness between submitters still holds: after A's start, B's job
+    /// goes first even though A's younger auto jobs fit now.
+    #[test]
+    fn submitters_still_take_turns_when_auto_jobs_pass_a_room_wait() {
+        let now = 10_000;
+        let auto = |id: &str, at: i64, sub: &str, mem: u64| QueuedJob { auto: true, ..gb(by(id, "W", now - at, sub, Tier::Normal), mem) };
+        let q = vec![auto("a1", 300, "w/s/a", 12), auto("a2", 200, "w/s/a", 2), auto("a3", 100, "w/s/a", 2), auto("b1", 50, "w/s/b", 2)];
+        let (o, load) = busy(&[None, None]);
+        let mut turns = Turns::ws(Some("W"));
+        turns.last_submitter.insert("W".into(), "w/s/a".into());
+        let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+        let d = decide_with(now, &q, &turns, &load, &caps, Some(&o), None);
+        assert_eq!(d.place.as_deref(), Some("b1"), "B's turn after A");
+        // B started: A's next job that fits goes, past A's waiting one.
+        let mut after_b = turns.clone();
+        after_b.last_submitter.insert("W".into(), "w/s/b".into());
+        let d = decide_with(now, &q[..3], &after_b, &load, &caps, Some(&o), None);
+        assert_eq!(d.place.as_deref(), Some("a2"));
+        assert_eq!(d.waiting["a3"].1.code, "next_in_turn");
     }
 }
 

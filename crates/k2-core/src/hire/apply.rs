@@ -132,6 +132,9 @@ pub struct HiredMember {
 pub struct LaunchJob {
     pub path: String,
     pub handle: String,
+    /// The workspace's id: its template hello (if any) is taken through
+    /// the lock's record by this id, never carried as the brief.
+    pub workspace_id: String,
     pub brief: Option<String>,
 }
 
@@ -359,11 +362,12 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
             Some(a) => Some(apply_app_login(a, &ws_id, instance_id, caller, undo)?),
             None => None,
         };
-        // A template's hello is the first brief unless the recipe has its
-        // own; `launch: false` keeps the agent asleep (and the hello unsent).
-        let brief = r.brief.clone().or_else(|| hello.filter(|_| r.launch != Some(false)));
-        if r.launch.unwrap_or(false) || brief.is_some() {
-            launches.push(LaunchJob { path: path_s.clone(), handle: m.handle.clone(), brief });
+        // The brief is the recipe's own. A template's hello stays in the
+        // lock and goes once, through the lock's record, when the agent
+        // starts (it still starts the agent unless `launch: false`).
+        let brief = r.brief.clone();
+        if r.launch.unwrap_or(false) || brief.is_some() || (hello.is_some() && r.launch != Some(false)) {
+            launches.push(LaunchJob { path: path_s.clone(), handle: m.handle.clone(), workspace_id: ws_id.clone(), brief });
         }
         hired.push(HiredMember {
             role: m.role.clone(),

@@ -238,8 +238,45 @@ pub(crate) fn ledger_single_hire(caller: &HireCaller, out: &ConvergeOutcome) {
 // ── launch + first brief ─────────────────────────────────────────────
 
 /// Start each launched member's chat session and deliver its first brief,
-/// off the request thread. Failures are ledgered; the hire stands.
+/// off the request thread. Failures are ledgered; the hire stands. A
+/// member's template hello is taken through the lock's record first (the
+/// step every first start takes, so it goes once) and goes before the
+/// brief, from the hirer.
 fn run_launches(jobs: Vec<apply::LaunchJob>, caller: HireCaller, instance: String, on_behalf_of: Option<String>) {
+    let from = match &caller {
+        HireCaller::ApiKey { label: Some(l), .. } => format!("app:{l}"),
+        HireCaller::ApiKey { id, .. } => format!("app:{}", &id[..id.len().min(8)]),
+        // 0.46.0 stamp rule: the linked username, else `owner`.
+        _ => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
+    };
+    let mut jobs = jobs;
+    jobs.retain(|job| match crate::template_hello::take(&job.workspace_id, &job.path) {
+        Some(hello) => {
+            crate::template_hello::send(
+                &job.path,
+                &job.handle,
+                hello,
+                job.brief.clone(),
+                from.clone(),
+                Sender::from_hire_caller(&caller, on_behalf_of.clone()),
+            );
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            ledger::event(
+                &conn,
+                "agent-launch",
+                &caller,
+                Some(&instance),
+                None,
+                on_behalf_of.as_deref(),
+                "ok",
+                None,
+                Some(&serde_json::json!({ "handle": job.handle, "brief": job.brief.is_some(), "hello": true })),
+            );
+            false
+        }
+        None => true,
+    });
     if jobs.is_empty() {
         return;
     }
@@ -252,12 +289,6 @@ fn run_launches(jobs: Vec<apply::LaunchJob>, caller: HireCaller, instance: Strin
                 (Err(e), _) => ("failed", Some(format!("launch {}: {e}", job.handle))),
                 (Ok(_), None) => ("ok", None),
                 (Ok(_), Some(brief)) => {
-                    let from = match &caller {
-                        HireCaller::ApiKey { label: Some(l), .. } => format!("app:{l}"),
-                        HireCaller::ApiKey { id, .. } => format!("app:{}", &id[..id.len().min(8)]),
-                        // 0.46.0 stamp rule: the linked username, else `owner`.
-                        _ => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
-                    };
                     let r = deliver_recorded(
                         &job.handle,
                         brief,

@@ -1648,8 +1648,8 @@ fn an_opened_workspace_with_planted_files_writes_nothing_outside_and_gets_no_hel
     let (id, handle) = workspace_at(&path);
     // In the registered folder: a persona and an active work item pointing
     // outside `.worktrees/`, as a clone's files would be.
-    std::fs::create_dir_all(ws.join(".k2so/agent")).unwrap();
-    std::fs::write(ws.join(".k2so/agent/AGENT.md"), "---\nname: scout\ntype: custom\nrole: test\n---\n\n# scout\n").unwrap();
+    std::fs::create_dir_all(ws.join(".k2/agent")).unwrap();
+    std::fs::write(ws.join(".k2/agent/ROLE.md"), "---\nname: scout\ntype: custom\nrole: test\n---\n\n# scout\n").unwrap();
     let active = k2_core::workspace::scheduler::agent_work_dir(&path, "scout", "active");
     std::fs::create_dir_all(&active).unwrap();
     std::fs::write(

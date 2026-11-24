@@ -65,6 +65,7 @@ use k2_core::workspace::agent_look::{self, LookError};
 
 use crate::cli_response::CliResponse;
 use crate::fs_routes::SkinWorkspace;
+use k2_core::cli_name;
 
 pub const IDENTITY_PATH: &str = "/cli/agent/identity";
 pub const HANDLE_PATH: &str = "/cli/agent/handle";
@@ -157,7 +158,7 @@ fn not_your_agent() -> CliResponse {
 pub fn agent_cannot_rename() -> CliResponse {
     forbidden(
         "agent_cannot_rename",
-        "agents can't rename themselves; ask your owner (k2 agent identity --name, from their terminal or Settings)",
+        concat!("agents can't rename themselves; ask your owner (", cli_name!(), " agent identity --name, from their terminal or Settings)"),
     )
 }
 

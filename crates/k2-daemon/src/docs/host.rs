@@ -39,6 +39,7 @@ use k2_mpc_base::session::{
     AuditEvent, ClaimEnd, ConnId, Host, LeaveReason, Participant, PurgedScope, ReservationEnd, Rights,
 };
 use k2_mpc_base::store::{DocKey, DocStore, PurgeCounts};
+use k2_core::brand::CLI_NAME;
 
 /// pid prefix for people.
 pub const PERSON_PREFIX: &str = "person:";
@@ -520,7 +521,7 @@ impl Host for K2Host {
                 super::indexer::changed(key, super::indexer::Change::IndexReady, Some(*version), None, None)
             }
             AuditEvent::IndexNotIndexed { key, version } => {
-                log_debug!("[docs] {} version {version} has no index (k2 doc status says why)", key_label(key));
+                log_debug!("[docs] {} version {version} has no index ({CLI_NAME} doc status says why)", key_label(key));
                 super::indexer::changed(key, super::indexer::Change::IndexNotIndexed, Some(*version), None, None)
             }
             // Comments (kit A4): never a body. The people and agents a

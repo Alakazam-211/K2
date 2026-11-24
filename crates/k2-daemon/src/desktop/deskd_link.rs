@@ -56,6 +56,7 @@ use k2_deskd_proto::wire::{self, Message};
 use k2_deskd_proto::{PROTOCOL_VERSION, ROLE};
 
 use super::launch_agent::{Output, Runner, SystemRunner};
+use k2_core::product_name;
 
 include!(concat!(env!("OUT_DIR"), "/deskd_embed.rs"));
 
@@ -112,11 +113,11 @@ impl DeskdState {
             DeskdState::Starting => "Starting K2 Screen…".into(),
             DeskdState::NeedsPermission { .. } => "Someone at this Mac has to allow K2 Screen once.".into(),
             DeskdState::Ready { .. } => "Ready.".into(),
-            DeskdState::NeedsUpdate { .. } => "K2 Screen and K2 don't match; restarting it.".into(),
-            DeskdState::NeedsApp => "Install the K2 app on this Mac to use Remote desktop.".into(),
+            DeskdState::NeedsUpdate { .. } => concat!("K2 Screen and ", product_name!(), " don't match; restarting it.").into(),
+            DeskdState::NeedsApp => concat!("Install the ", product_name!(), " app on this Mac to use Remote desktop.").into(),
             DeskdState::BlockedInLoginItems => "Turn K2 Screen on in System Settings → General → Login Items.".into(),
             DeskdState::NoSession => "No one is logged in on this computer's screen.".into(),
-            DeskdState::NoDisplay => "This computer has no screen K2 can show.".into(),
+            DeskdState::NoDisplay => concat!("This computer has no screen ", product_name!(), " can show.").into(),
             DeskdState::Failed { error } => format!("K2 Screen failed: {error}"),
         }
     }
@@ -895,7 +896,7 @@ pub fn open_socket(socket: &Path) -> Result<Opened, OpenError> {
         Ok(Some(Message::Json(v))) if v.get("event").and_then(J::as_str) == Some("hello") => v,
         Ok(None) => {
             return Err(OpenError::Refused(
-                "K2 Screen closed the link before hello: this daemon's code signature doesn't satisfy its check (a daemon not signed by K2?)".into(),
+                concat!("K2 Screen closed the link before hello: this daemon's code signature doesn't satisfy its check (a daemon not signed by ", product_name!(), "?)").into(),
             ))
         }
         Ok(Some(_)) => return Err(OpenError::Failed("K2 Screen's first message wasn't hello".into())),

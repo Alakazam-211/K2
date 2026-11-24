@@ -57,6 +57,8 @@ use k2_root_proto::sew::{
 
 use super::ops::CpError;
 use super::supervisor::{self as sup, no, Env, Fail, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Renew the TURN cert inside this window before `notAfter`.
 pub const RENEW_WINDOW_SECS: i64 = 30 * 86_400;
@@ -209,7 +211,7 @@ fn not_ours(url: &str, label: Option<&str>) -> Fail {
         "url_not_on_this_box",
         400,
         format!(
-            "{url} is not on this box: use a host under {} or a custom domain bound to this box (k2 domain attach)",
+            "{url} is not on this box: use a host under {} or a custom domain bound to this box ({CLI_NAME} domain attach)",
             label.map(|l| k2_core::hosts::box_host(&l)).unwrap_or_else(|| "<label>.k2.dev".into())
         ),
     )
@@ -275,8 +277,8 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     }
     match store_row() {
         Some(r) if matches!(r.status.as_str(), "running" | "degraded") => c.push(check("chat", "ok", format!("Chat and voice are {}", r.status), "")),
-        Some(r) => c.push(check("chat", "fail", format!("Chat and voice are {}", r.status), "voice needs chat and voice running: k2 hostchat enable")),
-        None => c.push(check("chat", "fail", "Chat and voice are not installed", "k2 hostchat enable first")),
+        Some(r) => c.push(check("chat", "fail", format!("Chat and voice are {}", r.status), concat!("voice needs chat and voice running: ", cli_name!(), " hostchat enable"))),
+        None => c.push(check("chat", "fail", "Chat and voice are not installed", concat!(cli_name!(), " hostchat enable first"))),
     }
     match sup::helper_check(env) {
         Ok(()) => c.push(check("helper", "ok", "k2-root-helper engine sew", "")),
@@ -284,7 +286,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     }
     match pinned_media_artifact(&env.ops.arch()) {
         Ok((v, _)) => c.push(check("pin", "ok", format!("sew-media {v}"), "")),
-        Err(e) => c.push(check("pin", "fail", e, "this K2 build pins no sew-media release for this CPU")),
+        Err(e) => c.push(check("pin", "fail", e, concat!("this ", product_name!(), " build pins no sew-media release for this CPU"))),
     }
     match env.ops.box_label() {
         Some(l) => c.push(check("label", "ok", format!("{l}.k2.dev; TURN host {}", turn_host(&l)), "")),
@@ -306,7 +308,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
             "ports",
             "ok",
             if media_up { "sew-media holds its ports".to_string() } else { "TCP 7880 (loopback), TCP 7881, UDP 7882, TCP 5349 free".to_string() },
-            "open TCP 7881, UDP 7882 and TCP 5349 in the host AND provider firewalls (K2 opens none)",
+            concat!("open TCP 7881, UDP 7882 and TCP 5349 in the host AND provider firewalls (", product_name!(), " opens none)"),
         ));
     } else {
         c.push(check("ports", "fail", format!("taken: {}", taken.join(", ")), "free them or stop what holds them"));
@@ -322,13 +324,13 @@ pub fn preflight(env: &Env) -> Vec<Value> {
         ));
     }
     if env.ops.front_serving() {
-        c.push(check("turn_443", "ok", "K2's :443 front serves this box", "TURN-TLS rides :443 (passthrough tier): networks that allow only 443 can join calls"));
+        c.push(check("turn_443", "ok", concat!(product_name!(), "'s :443 front serves this box"), "TURN-TLS rides :443 (passthrough tier): networks that allow only 443 can join calls"));
     } else if env.ops.port_taken("0.0.0.0", 443, false) {
         c.push(check(
             "turn_443",
             "info",
             ":443 is taken here",
-            "TURN-TLS uses 5349: people on networks that allow only 443 cannot join calls (k2 front enable puts TURN on 443)",
+            concat!("TURN-TLS uses 5349: people on networks that allow only 443 cannot join calls (", cli_name!(), " front enable puts TURN on 443)"),
         ));
     }
     c
@@ -362,7 +364,7 @@ pub(super) fn cp_fail(step: &str, e: &CpError) -> Fail {
     };
     let hint = match code {
         "turn_ip_unverified" => format!(
-            "{step}: K2 Connect could not verify this box's IP ({}). It learns it at the next tunnel login: K2 retries on its own; \
+            "{step}: K2 Connect could not verify this box's IP ({}). It learns it at the next tunnel login: {PRODUCT_NAME} retries on its own; \
              or run the install again in a minute",
             e.detail
         ),
@@ -440,7 +442,7 @@ pub fn chain_matches(chain: &str, host: &str, key: &rcgen::KeyPair) -> Result<i6
     let (pem, _) = Pem::read(std::io::Cursor::new(&mut reader)).map_err(|e| format!("chain PEM: {e}"))?;
     let cert = pem.parse_x509().map_err(|e| format!("leaf: {e}"))?;
     if cert.tbs_certificate.subject_pki.raw != key.public_key_der().as_slice() {
-        return Err("the TURN certificate is not for K2's TURN key".into());
+        return Err(concat!("the TURN certificate is not for ", product_name!(), "'s TURN key").into());
     }
     if !pin::turn_chain_pem_ok(chain) {
         return Err("the TURN chain is not 1–4 PEM certificates".into());
@@ -634,7 +636,7 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
             }
         });
     };
-    stage_media_bytes(env, req.tarball_path.as_deref(), "k2 hostchat media install --tarball", &note)?;
+    stage_media_bytes(env, req.tarball_path.as_deref(), concat!(cli_name!(), " hostchat media install --tarball"), &note)?;
 
     // 0.46.8 (S9a): with the voice tunnel preview on, voice goes through the
     // tunnel (the preflight already refused a box that can't).
@@ -749,7 +751,7 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
         "warnings": warnings,
         "next": format!(
             "open TCP 7881, UDP 7882 and TCP {turn_port} in the host and provider firewalls, test a call from outside, then \
-             k2 hostchat media probe --udp ok --tcp ok --turn-tls ok"
+             {CLI_NAME} hostchat media probe --udp ok --tcp ok --turn-tls ok"
         ),
     }))
 }
@@ -805,7 +807,7 @@ pub fn set_url(env: &Env, url: &str) -> R<Value> {
     if !st.installed {
         // Remembered: the next media install uses it.
         update(env, |s| s.public_url = Some(url.clone()));
-        return Ok(json!({"ok": true, "publicUrl": url, "applied": false, "hint": "voice is not installed yet: k2 hostchat media install uses this URL"}));
+        return Ok(json!({"ok": true, "publicUrl": url, "applied": false, "hint": concat!("voice is not installed yet: ", cli_name!(), " hostchat media install uses this URL")}));
     }
     if st.public_url.as_deref() == Some(url.as_str()) {
         return Ok(json!({"ok": true, "publicUrl": url, "applied": true, "changed": false}));
@@ -844,13 +846,13 @@ pub fn set_url(env: &Env, url: &str) -> R<Value> {
 /// tier move must not spend K2 Connect's turn budget).
 pub(super) fn held_material(env: &Env, st: &VoiceState) -> R<(String, String, String)> {
     let host = st.turn_host.clone().ok_or_else(|| no("voice_not_installed", 409, "no TURN host recorded"))?;
-    let chain = st.cert_pem.clone().ok_or_else(|| no("k2_turn_cert_missing", 409, "no TURN certificate recorded: k2 hostchat media renew"))?;
+    let chain = st.cert_pem.clone().ok_or_else(|| no("k2_turn_cert_missing", 409, concat!("no TURN certificate recorded: ", cli_name!(), " hostchat media renew")))?;
     let r = st.turn_key_ref.as_deref().ok_or_else(|| no("k2_turn_cert_missing", 409, "no TURN key recorded"))?;
     let key_pem = env
         .secrets
         .resolve(r)
         .map_err(|e| no("vault_closed", 503, e))?
-        .ok_or_else(|| no("k2_turn_cert_missing", 409, "the TURN key is gone from the vault: k2 hostchat media renew"))?;
+        .ok_or_else(|| no("k2_turn_cert_missing", 409, concat!("the TURN key is gone from the vault: ", cli_name!(), " hostchat media renew")))?;
     Ok((host, chain, key_pem))
 }
 
@@ -922,7 +924,7 @@ pub fn set_tier_named(env: &Env, want: &str) -> R<Value> {
     }
     let st = load(env);
     if !st.installed {
-        return Err(no("voice_not_installed", 409, "voice is not installed: k2 hostchat media install"));
+        return Err(no("voice_not_installed", 409, concat!("voice is not installed: ", cli_name!(), " hostchat media install")));
     }
     let have = tier(&st).to_string();
     match (have.as_str(), want) {
@@ -931,7 +933,7 @@ pub fn set_tier_named(env: &Env, want: &str) -> R<Value> {
         (TIER_TUNNEL, _) => super::voice_tunnel::move_out(env, st),
         _ => Ok(json!({
             "ok": true, "installed": true, "turnTier": have, "changed": false,
-            "hint": "TURN rides the :443 front (passthrough); k2 front disable moves it back to direct",
+            "hint": concat!("TURN rides the :443 front (passthrough); ", cli_name!(), " front disable moves it back to direct"),
         })),
     }
 }
@@ -965,7 +967,7 @@ pub fn renew_due(env: &Env, st: &VoiceState) -> bool {
 pub fn renew(env: &Env, force: bool) -> R<Value> {
     let st0 = load(env);
     if !st0.installed {
-        return Err(no("voice_not_installed", 409, "voice is not installed: k2 hostchat media install"));
+        return Err(no("voice_not_installed", 409, concat!("voice is not installed: ", cli_name!(), " hostchat media install")));
     }
     if !force && !renew_due(env, &st0) {
         return Ok(json!({"ok": true, "renewed": false, "certNotAfter": st0.cert_not_after}));
@@ -1033,7 +1035,7 @@ pub fn tick(env: &Env) {
 /// the box): `sew media probe-record … --from k2`.
 pub fn probe_record(env: &Env, udp: bool, tcp: bool, tls: bool) -> R<Value> {
     if !load(env).installed {
-        return Err(no("voice_not_installed", 409, "voice is not installed: k2 hostchat media install"));
+        return Err(no("voice_not_installed", 409, concat!("voice is not installed: ", cli_name!(), " hostchat media install")));
     }
     sup::helper_check(env)?;
     let r = |b: bool| if b { "ok" } else { "fail" };
@@ -1073,8 +1075,8 @@ fn probe_fail_hint(udp: bool, tcp: bool, tls: bool, port: u16) -> String {
         legs.push(format!("TURN-TLS on TCP {port}"));
     }
     format!(
-        "from outside, {} did not answer: open it in the host AND provider firewalls (K2 opens none), then test again \
-         and record it with k2 hostchat media probe",
+        "from outside, {} did not answer: open it in the host AND provider firewalls ({PRODUCT_NAME} opens none), then test again \
+         and record it with {CLI_NAME} hostchat media probe",
         legs.join(", ")
     )
 }
@@ -1136,7 +1138,7 @@ pub fn uninstall(env: &Env) -> R<Value> {
                 409,
                 format!(
                     "this root helper runs Sew's voice uninstall without -y, so Sew asked for a terminal: update the \
-                     helper (k2 root-helper update), then run k2 hostchat media uninstall --yes again ({e})"
+                     helper ({CLI_NAME} root-helper update), then run {CLI_NAME} hostchat media uninstall --yes again ({e})"
                 ),
             ));
         }
@@ -1144,7 +1146,7 @@ pub fn uninstall(env: &Env) -> R<Value> {
             return Err(no("media_uninstall_failed", 500, e));
         }
         engine = "already-gone";
-        warnings.push(format!("Sew had no voice engine to remove ({e}); K2's own voice records were cleaned up"));
+        warnings.push(format!("Sew had no voice engine to remove ({e}); {PRODUCT_NAME}'s own voice records were cleaned up"));
     }
     warnings.extend(forget(env, &st));
     sup::changed("voice-removed");
@@ -1274,10 +1276,10 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
         alarms.push("k2_turn_tls_mismatch".into());
     }
     match probe_verdict(&st, now) {
-        None => warnings.push(json!({"code": "voice_unprobed", "message": "no outside probe yet: test a call from another network, then k2 hostchat media probe"})),
+        None => warnings.push(json!({"code": "voice_unprobed", "message": concat!("no outside probe yet: test a call from another network, then ", cli_name!(), " hostchat media probe")})),
         Some("stale") => warnings.push(json!({
             "code": "voice_probe_stale",
-            "message": "the last outside probe is older than 30 days or tested another node IP or TURN tier: test a call from another network again, then k2 hostchat media probe",
+            "message": concat!("the last outside probe is older than 30 days or tested another node IP or TURN tier: test a call from another network again, then ", cli_name!(), " hostchat media probe"),
         })),
         Some("failed") => alarms.push(ALARM_PROBE_FAILED.into()),
         _ => {}

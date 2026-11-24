@@ -46,6 +46,8 @@ use crate::mail::routes_send;
 use crate::mail::secrets::{self, FileSecretStore};
 use crate::mail::send;
 use k2_core::db::schema::MailExternalInbox;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 // ── Response helpers (the shared error contract) ────────────────────────
 
@@ -226,7 +228,7 @@ pub fn handle_external_remove(body: &[u8]) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'address' — the connected account to remove ('k2 mail external list')",
+            concat!("missing 'address' — the connected account to remove ('", cli_name!(), " mail external list')"),
         );
     }
     // OA0: a linked inbox is always someone's own account, so only an Admin
@@ -237,7 +239,7 @@ pub fn handle_external_remove(body: &[u8]) -> CliResponse {
             && !crate::mail::mailbox_guard::check_address(None, &address)
         {
             return ext_error_response(ExtError::NotFound(format!(
-                "no external inbox '{address}' — 'k2 mail external list' shows what's connected"
+                "no external inbox '{address}' — '{CLI_NAME} mail external list' shows what's connected"
             )));
         }
         // Calendar S1 (§3.9): the unlink is a governance row, written first.
@@ -372,7 +374,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "--reply-all needs the message you're answering: k2 mail draft <message-id> --reply-all",
+            concat!("--reply-all needs the message you're answering: ", cli_name!(), " mail draft <message-id> --reply-all"),
         );
     }
     // A draft's caps (a person reviews and sends it): To + Cc at the send
@@ -392,8 +394,8 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             return error_response(
                 "400 Bad Request",
                 "usage",
-                "compose draft requires 'to' and 'subject' — or pass 'id' to draft a reply \
-                 (from 'k2 mail messages')",
+                concat!("compose draft requires 'to' and 'subject' — or pass 'id' to draft a reply \
+                 (from '", cli_name!(), " mail messages')"),
             );
         }
         if !has_subject {
@@ -431,7 +433,7 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
             return error_response(
                 "400 Bad Request",
                 "usage",
-                "invalid message id — use an id from 'k2 mail messages'",
+                concat!("invalid message id — use an id from '", cli_name!(), " mail messages'"),
             );
         };
         // `--reply-all` / `--cc` / `--bcc` / `--to`: checked like a send's
@@ -483,8 +485,8 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                     return error_response(
                         "400 Bad Request",
                         "usage",
-                        "a draft on a K2-hosted inbox takes no attachments yet — draft the text, or send \
-                         with 'k2 mail reply <id> --attach'",
+                        concat!("a draft on a K2-hosted inbox takes no attachments yet — draft the text, or send \
+                         with '", cli_name!(), " mail reply <id> --attach'"),
                     );
                 }
                 return crate::mail::drafts::save_hosted_reply(&project_id, &path, &ai, email_id, source_id, &b.body, ask, client_key);
@@ -758,8 +760,8 @@ fn resolve_reply_inbox(
             "400 Bad Request",
             "usage",
             &format!(
-                "'{address}' is an address on this K2 mail server — 'k2 mail draft' is for \
-                 EXTERNAL assistant inboxes. Reply to this message with 'k2 mail reply {source_id}'"
+                "'{address}' is an address on this {PRODUCT_NAME} mail server — '{CLI_NAME} mail draft' is for \
+                 EXTERNAL assistant inboxes. Reply to this message with '{CLI_NAME} mail reply {source_id}'"
             ),
         )
     };
@@ -800,8 +802,8 @@ fn resolve_compose_from(
                     "400 Bad Request",
                     "usage",
                     &format!(
-                        "'{addr}' is an address on this K2 mail server — compose drafts are \
-                         for linked inboxes. Pass --from with a linked address ('k2 mail inboxes')"
+                        "'{addr}' is an address on this {PRODUCT_NAME} mail server — compose drafts are \
+                         for linked inboxes. Pass --from with a linked address ('{CLI_NAME} mail inboxes')"
                     ),
                 )),
             },
@@ -820,8 +822,8 @@ fn resolve_compose_from(
         0 => Err(error_response(
             "400 Bad Request",
             "usage",
-            "this workspace has no linked inbox it can draft FROM — your human can connect \
-             one with 'k2 mail link add', or pass --from",
+            concat!("this workspace has no linked inbox it can draft FROM — your human can connect \
+             one with '", cli_name!(), " mail link add', or pass --from"),
         )),
         1 => match access::can_draft(project_id, &all[0].0) {
             Ok(ai) => ai.linked.ok_or_else(|| {
@@ -843,7 +845,7 @@ fn resolve_compose_from(
             "usage",
             &format!(
                 "this workspace can draft from {n} linked inboxes — pass --from to pick the \
-                 sender (see 'k2 mail inboxes')"
+                 sender (see '{CLI_NAME} mail inboxes')"
             ),
         )),
     }

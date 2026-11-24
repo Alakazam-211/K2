@@ -53,6 +53,7 @@ use tokio_tungstenite::WebSocketStream;
 use super::bff::Refusal;
 use crate::sew::gateway;
 use super::kit_door::{self, call_as, dec, KitCtx, KitPerson, Out, RETRY_SECS};
+use k2_core::product_name;
 
 /// Reconnect: Sew's socket ended, or a check failed. A fresh READY follows.
 pub const CLOSE_RESET: u16 = 4000;
@@ -309,7 +310,7 @@ async fn open_upstream(ctx: &KitCtx, p: &KitPerson, sew_addr: &str) -> Result<Up
     // K2's shared gateway client (`sew::gateway`, HP-37).
     let sa = kit_door::loopback(sew_addr).map_err(|e| sew_down(&e))?;
     let gateway::Socket { mut ws, beat } = gateway::connect(sa).await.map_err(|e| match e {
-        gateway::OpenError::Unreachable => sew_down("K2 could not reach this server's Sew"),
+        gateway::OpenError::Unreachable => sew_down(concat!(product_name!(), " could not reach this server's Sew")),
         gateway::OpenError::Refused => sew_down("Sew refused the event socket"),
         gateway::OpenError::Closed => sew_down("Sew closed the event socket"),
         gateway::OpenError::NoHello => sew_down("Sew's event socket didn't say hello"),

@@ -58,7 +58,7 @@ use serde_json::{json, Map, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::permission::{answer, limits, present, store};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use k2_core::cli_name;
 
 /// The card's id.
@@ -232,7 +232,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     let rec = crate::vault::get().ok().and_then(|v| delivery(&v, ctx, id));
     let Some(rec) = rec else {
         out.params.insert("accept".into(), json!(format!("Accept delivery {id} into {ws}'s vault")));
-        out.params.insert("effect".into(), json!(format!("K2 can't read delivery {id} now; nothing is applied until it can.")));
+        out.params.insert("effect".into(), json!(format!("{PRODUCT_NAME} can't read delivery {id} now; nothing is applied until it can.")));
         return Some(out);
     };
     let from = from_words(&rec.peer_addr);

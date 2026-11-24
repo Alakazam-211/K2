@@ -23,6 +23,8 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::ops::SewOps;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// The account Sew runs as. Sew's installer picks it; K2's install inputs
 /// carry no user name (`InstallRequest::sew_inputs`).
@@ -129,7 +131,7 @@ pub fn preflight_check(ops: &dyn SewOps) -> Value {
         Err(e) => {
             return check(
                 "fail",
-                format!("{PASSWD} is unreadable ({e}), so K2 cannot tell whether a login user named '{name}' exists"),
+                format!("{PASSWD} is unreadable ({e}), so {PRODUCT_NAME} cannot tell whether a login user named '{name}' exists"),
                 "fix the permissions on /etc/passwd, then run enable again",
             )
         }
@@ -161,7 +163,7 @@ pub fn preflight_check(ops: &dyn SewOps) -> Value {
     });
     detail.push_str(match acct.keys {
         Some(_) => ", no SSH keys",
-        None => ", SSH keys not checked: its home is not readable by K2",
+        None => concat!(", SSH keys not checked: its home is not readable by ", product_name!()),
     });
     detail.push_str("); Sew reuses it");
     check("ok", detail, "")

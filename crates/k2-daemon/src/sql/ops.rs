@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{brand::{CLI_NAME, PRODUCT_NAME}, cli_name};
 use sha2::{Digest, Sha256};
 
 use super::actor::GuestActor;
@@ -112,10 +112,10 @@ pub(crate) fn require_running() -> Result<(), OpsError> {
     match current_status().as_deref() {
         Some("running") => Ok(()),
         Some(s) => Err(OpsError::NotReady(format!(
-            "SQL sidecar is '{s}' — ask your human to run 'k2 db enable'"
+            "SQL sidecar is '{s}' — ask your human to run '{CLI_NAME} db enable'"
         ))),
         None => Err(OpsError::NotReady(
-            "SQL sidecar is not enabled — ask your human to run 'k2 db enable' (bake --with-db first)"
+            concat!("SQL sidecar is not enabled — ask your human to run '", cli_name!(), " db enable' (bake --with-db first)")
                 .into(),
         )),
     }
@@ -142,8 +142,8 @@ pub(crate) fn refuse_if_moving(db_name: &str) -> Result<(), OpsError> {
         return Err(OpsError::Refused(
             "db_dual_running",
             format!(
-                "{db_name} is being copied live to a newer Postgres; schema changes and K2's own grants wait. \
-                 k2 db upgrade {db_name} --switch (or --abort) first"
+                "{db_name} is being copied live to a newer Postgres; schema changes and {PRODUCT_NAME}'s own grants wait. \
+                 {CLI_NAME} db upgrade {db_name} --switch (or --abort) first"
             ),
         ));
     }
@@ -742,7 +742,7 @@ fn refuse_other_major(
         format!(
             "{matched} is database {name}, which is on Postgres {have}, not {want}. \
              For a new database on Postgres {want}, use a new --id (or --name); \
-             to move this one, 'k2 db upgrade {name} --to {want}'.",
+             to move this one, '{CLI_NAME} db upgrade {name} --to {want}'.",
             name = row.name
         ),
     ))
@@ -771,7 +771,7 @@ fn refuse_other_cluster(
     Err(OpsError::Refused(
         "cluster_mismatch",
         format!(
-            "{matched} is database {name}, which lives in {where_}, not {}. For a new database there, use a new --id (or --name); K2 doesn't move databases between clusters.",
+            "{matched} is database {name}, which lives in {where_}, not {}. For a new database there, use a new --id (or --name); {PRODUCT_NAME} doesn't move databases between clusters.",
             named.unwrap_or_default(),
             name = row.name
         ),
@@ -783,7 +783,7 @@ fn refuse_other_cluster(
 fn owned_row(project_id: &str, spec: &str) -> Result<DbRow, OpsError> {
     let spec = spec.trim();
     if spec.is_empty() {
-        return Err(OpsError::Usage("--db needs a database name or id (k2 db list)".into()));
+        return Err(OpsError::Usage(concat!("--db needs a database name or id (", cli_name!(), " db list)").into()));
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -798,7 +798,7 @@ fn owned_row(project_id: &str, spec: &str) -> Result<DbRow, OpsError> {
     )
     .map_err(|_| {
         OpsError::NotFound(format!(
-            "this workspace has no active database '{spec}' — see 'k2 db list'"
+            "this workspace has no active database '{spec}' — see '{CLI_NAME} db list'"
         ))
     })
 }
@@ -851,7 +851,7 @@ fn test_row(project_id: &str) -> Result<DbRow, OpsError> {
     let conn = db.lock();
     load_test_row(&conn, project_id).ok_or_else(|| {
         OpsError::NotFound(
-            "no test database for this workspace — run 'k2 db create --test' first".into(),
+            concat!("no test database for this workspace — run '", cli_name!(), " db create --test' first").into(),
         )
     })
 }
@@ -1140,7 +1140,7 @@ fn target_cluster(
             Ok((
                 p,
                 Some(format!(
-                    "Postgres {want} (K2's default) isn't on this box yet ({}); created on {on}. Move it later with `k2 db upgrade`.",
+                    "Postgres {want} ({PRODUCT_NAME}'s default) isn't on this box yet ({}); created on {on}. Move it later with `{CLI_NAME} db upgrade`.",
                     e.hint()
                 )),
             ))
@@ -1174,7 +1174,7 @@ fn create_database_inner(
     if test {
         if name_override.map(str::trim).is_some_and(|s| !s.is_empty()) {
             return Err(OpsError::Usage(
-                "k2 db create --test does not take --name (name is {workspace}_test)".into(),
+                concat!(cli_name!(), " db create --test does not take --name (name is {workspace}_test)").into(),
             ));
         }
     }
@@ -1225,7 +1225,7 @@ fn create_database_inner(
             }
             if load_test_row(&conn, project_id).is_some() {
                 return Err(OpsError::CapReached(
-                    "a test database already exists for this workspace — drop it with 'k2 db drop --test --yes'"
+                    concat!("a test database already exists for this workspace — drop it with '", cli_name!(), " db drop --test --yes'")
                         .into(),
                 ));
             }
@@ -1278,8 +1278,8 @@ fn create_database_inner(
             if cap != 0 && used >= cap {
                 return Err(OpsError::CapReached(format!(
                     "this workspace already has {used} active databases and its cap is {cap}, so no new one was made. \
-                     Drop one it no longer needs ('k2 db list', then 'k2 db drop --db <name> --yes') \
-                     or ask your human to raise the cap ('k2 db cap <n>', owner only)."
+                     Drop one it no longer needs ('{CLI_NAME} db list', then '{CLI_NAME} db drop --db <name> --yes') \
+                     or ask your human to raise the cap ('{CLI_NAME} db cap <n>', owner only)."
                 )));
             }
             (used, false)
@@ -1551,7 +1551,7 @@ pub fn dsn_for_project_opts(
     require_running()?;
     if migrator && !test {
         return Err(OpsError::Usage(
-            "migrator DSN is only available with k2 db dsn --test --actor migrator".into(),
+            concat!("migrator DSN is only available with ", cli_name!(), " db dsn --test --actor migrator").into(),
         ));
     }
     let used = {
@@ -1595,7 +1595,7 @@ fn active_resolved(project_id: &str) -> Result<(DbRow, ResolvedVia), OpsError> {
     resolve_unscoped(&conn, project_id)
         .map(|(row, via, _)| (row, via))
         .ok_or_else(|| {
-            OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
+            OpsError::NotFound(concat!("no database for this workspace — run '", cli_name!(), " db create' first").into())
         })
 }
 
@@ -2598,7 +2598,7 @@ pub fn rotate_database_for_handover(ops: &dyn SystemOps, name: &str) -> Result<(
     let clusters = cluster::k2_clusters();
     let mut lines = Vec::new();
     let agent_role = format!("{name}_agent");
-    let agent_ref = agent_ref.filter(|s| !s.is_empty()).ok_or_else(|| format!("{name} has no agent login K2 keeps"))?;
+    let agent_ref = agent_ref.filter(|s| !s.is_empty()).ok_or_else(|| format!("{name} has no agent login {PRODUCT_NAME} keeps"))?;
     match rotate_role_everywhere(ops, &clusters, &agent_role, &agent_ref, &store) {
         Some(line) if line.ends_with(": rotated") => lines.push(line),
         Some(line) => return Err(line),
@@ -2660,7 +2660,7 @@ fn rotate_role_everywhere(
                 return Some(format!("{role}: kept ({e:?})"));
             }
             return Some(format!(
-                "{role}: NOT ROTATED ON EVERY CLUSTER ({e:?}); Postgres {} kept the new password — run k2 db grant again",
+                "{role}: NOT ROTATED ON EVERY CLUSTER ({e:?}); Postgres {} kept the new password — run {CLI_NAME} db grant again",
                 stranded.join(", ")
             ));
         }
@@ -2668,7 +2668,7 @@ fn rotate_role_everywhere(
     }
     Some(match store.put_exact(sref, &pw) {
         Ok(()) => format!("{role}: rotated"),
-        Err(e) => format!("{role}: ROLE CHANGED BUT NOT SAVED ({e}); run k2 db grant again"),
+        Err(e) => format!("{role}: ROLE CHANGED BUT NOT SAVED ({e}); run {CLI_NAME} db grant again"),
     })
 }
 
@@ -2798,7 +2798,7 @@ fn find_database(spec: &str, prefer_project: Option<&str>) -> Result<DbRow, OpsE
     let spec = spec.trim();
     if spec.is_empty() {
         return Err(OpsError::Usage(
-            "missing 'db' — database id or name (k2 db list)".into(),
+            concat!("missing 'db' — database id or name (", cli_name!(), " db list)").into(),
         ));
     }
     let db = k2_core::db::shared();
@@ -2827,11 +2827,11 @@ fn find_database(spec: &str, prefer_project: Option<&str>) -> Result<DbRow, OpsE
         .collect();
     match rows.len() {
         0 => Err(OpsError::NotFound(format!(
-            "database not found: {spec} — see 'k2 db list'"
+            "database not found: {spec} — see '{CLI_NAME} db list'"
         ))),
         1 => Ok(rows.into_iter().next().unwrap()),
         _ => Err(OpsError::Usage(format!(
-            "name '{spec}' matches more than one database — pass the id from 'k2 db list'"
+            "name '{spec}' matches more than one database — pass the id from '{CLI_NAME} db list'"
         ))),
     }
 }
@@ -3266,11 +3266,11 @@ pub fn bind_role(
         let db = k2_core::db::shared();
         let conn = db.lock();
         load_active_default(&conn, pid).ok_or_else(|| {
-            OpsError::NotFound("no database for this workspace — run 'k2 db create' first".into())
+            OpsError::NotFound(concat!("no database for this workspace — run '", cli_name!(), " db create' first").into())
         })?
     } else {
         return Err(OpsError::Usage(
-            "bind requires --db or a workspace (k2 db bind --role <pg_role>)".into(),
+            concat!("bind requires --db or a workspace (", cli_name!(), " db bind --role <pg_role>)").into(),
         ));
     };
     refuse_if_moving(&row.name)?;
@@ -3527,8 +3527,8 @@ fn store_ddl_creds(
 ) -> Result<(String, String), OpsError> {
     if dml.via != ResolvedVia::Owned {
         return Err(OpsError::NotReady(
-            "_k2_store is missing — ask the owner to run 'k2 db migrate' or 'k2 store put' first \
-             (granted workspaces cannot CREATE TABLE)"
+            concat!("_k2_store is missing — ask the owner to run '", cli_name!(), " db migrate' or '", cli_name!(), " store put' first \
+             (granted workspaces cannot CREATE TABLE)")
                 .into(),
         ));
     }
@@ -4376,7 +4376,7 @@ pub(crate) fn app_db_target(workspace: &str, spec: &str) -> Result<AppDbTarget, 
         Err(OpsError::NotFound(_)) => {}
         Err(e) => return Err(e),
     }
-    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to the App's workspace — see 'k2 db list'", spec.trim()));
+    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to the App's workspace — see '{CLI_NAME} db list'", spec.trim()));
     let row = find_database(spec, None).map_err(|e| match e {
         OpsError::NotFound(_) => missing(),
         other => other,
@@ -4524,7 +4524,7 @@ pub(crate) fn active_row_by_name(db_name: &str) -> Result<DbRow, OpsError> {
         rusqlite::params![db_name],
         db_row_from,
     )
-    .map_err(|_| OpsError::NotFound(format!("no K2 database named {db_name}")))
+    .map_err(|_| OpsError::NotFound(format!("no {PRODUCT_NAME} database named {db_name}")))
 }
 
 /// K2's roles for a database (§6.1 Roles, V32): `{db}_migrator`,

@@ -33,6 +33,7 @@ use k2_core::published_services as ps;
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, b, db_err, json_body, need_build, no, s, Who, R};
+use k2_core::brand::CLI_NAME;
 
 pub const ROUTES: &[&str] = &["/cli/app/expose"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/expose"];
@@ -134,7 +135,7 @@ fn answer(app: &AppRow, tunnel: bool, changed: bool, left: Option<String>) -> J 
     );
     let next = if changed {
         format!(
-            "Chat's origin for the App follows within seconds. The App sees its new K2_APP_ORIGIN on its next start: k2 app restart {}",
+            "Chat's origin for the App follows within seconds. The App sees its new K2_APP_ORIGIN on its next start: {CLI_NAME} app restart {}",
             app.app_id
         )
     } else if tunnel {

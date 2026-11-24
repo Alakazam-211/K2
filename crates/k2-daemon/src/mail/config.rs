@@ -40,6 +40,7 @@
 use crate::mail::domains;
 use crate::mail::jmap::{RelayRoute, StalwartClient};
 use crate::mail::secrets::SecretStore;
+use k2_core::brand::CLI_NAME;
 
 // ── Errors (mapped onto the route layer's stable {code, hint}) ──────────
 
@@ -731,7 +732,7 @@ pub fn set_send_mode(
     };
     let Some(row) = row else {
         return Err(CfgError::NotFound(format!(
-            "domain '{domain}' is not hosted here — add it first (k2 hostmail domain add)"
+            "domain '{domain}' is not hosted here — add it first ({CLI_NAME} hostmail domain add)"
         )));
     };
     if row.status == "pending" && mode != "receive-only" {

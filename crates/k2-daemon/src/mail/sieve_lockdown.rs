@@ -68,6 +68,8 @@ use crate::mail::api_key_lockdown::{self, ApiKeyLockApi};
 use crate::mail::dav::{merge_permissions, protected_reason};
 use crate::mail::jmap::{SieveScriptInfo, StalwartClient};
 use crate::mail::sieve_user;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The Sieve write permissions a mailbox login loses: JMAP
 /// (`SieveScript/set`) and ManageSieve (PUTSCRIPT, SETACTIVE, DELETESCRIPT,
@@ -988,11 +990,11 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
         )
     };
     let mut body = String::from(
-        "Mailbox users can no longer create their own server-side filter (Sieve) scripts. \
-         K2 found scripts that users had written themselves and removed them. K2-managed \
+        concat!("Mailbox users can no longer create their own server-side filter (Sieve) scripts. \
+         ", product_name!(), " found scripts that users had written themselves and removed them. K2-managed \
          forwarding and out-of-office are unaffected.\n\n\
          A script that forwards or notifies to an outside domain may have sent copies of that \
-         mailbox's mail there. Check with the people below if that was expected.\n\n",
+         mailbox's mail there. Check with the people below if that was expected.\n\n"),
     );
     for (who, list) in &by_account {
         body.push_str(&format!("- {who}\n"));
@@ -1004,9 +1006,9 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
                 .map(|t| format!("{} → {}{}", t.action, t.domain, if t.external { " (outside)" } else { "" }))
                 .collect();
             let what = if f.is_removal() {
-                if f.removed { "removed" } else { "NOT removed yet (K2 retries at its next start)" }
+                if f.removed { "removed" } else { concat!("NOT removed yet (", product_name!(), " retries at its next start)") }
             } else {
-                "kept (K2's script name, but not content K2 wrote — check it: `k2 hostmail forward show` / `ooo show`, then set or unset it again)"
+                concat!("kept (", product_name!(), "'s script name, but not content ", product_name!(), " wrote — check it: `", cli_name!(), " hostmail forward show` / `ooo show`, then set or unset it again)")
             };
             body.push_str(&format!(
                 "  - script \"{}\"{}: {}; {what}\n",
@@ -1018,7 +1020,7 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
     }
     body.push_str(&format!(
         "\nEach one is recorded in the auth audit log (~/.k2/auth-audit.jsonl, events \
-         {AUDIT_EVENT} / {AUDIT_EVENT_UNRECOGNISED}). `k2 hostmail audit-sieve` lists what is left."
+         {AUDIT_EVENT} / {AUDIT_EVENT_UNRECOGNISED}). `{CLI_NAME} hostmail audit-sieve` lists what is left."
     ));
     Some((title, body))
 }

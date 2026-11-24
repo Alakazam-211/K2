@@ -274,7 +274,7 @@ pub fn too_large_for(path: &str) -> CliResponse {
         return refusal_response(&no(
             codes::BAD_REQUEST,
             413,
-            format!("k2 app exec carries {} MiB of stdin at most", k2_root_proto::engine::MAX_EXEC_STDIN >> 20),
+            format!("{CLI_NAME} app exec carries {} MiB of stdin at most", k2_root_proto::engine::MAX_EXEC_STDIN >> 20),
         ));
     }
     too_large()
@@ -711,7 +711,7 @@ fn stage_manifest(who: &Who, folder: &Path, v: &J) -> R<Option<Staged>> {
                 codes::MANIFEST_CONFLICT,
                 409,
                 format!(
-                    "{} has its own manifest.json that differs from --manifest {}: K2 reads manifest.json at the Seed's top as the App's \
+                    "{} has its own manifest.json that differs from --manifest {}: {PRODUCT_NAME} reads manifest.json at the Seed's top as the App's \
                      manifest. Remove or rename the folder's copy (a web app manifest belongs in manifest.webmanifest), or deploy without --manifest",
                     folder.display(),
                     file.display()
@@ -799,7 +799,7 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
             let conn = db.lock();
             deploy::store::find_seed(&conn, t).map_err(db_err)?
         }
-        .ok_or_else(|| no(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}' (k2 app build prints the hash)")))?;
+        .ok_or_else(|| no(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}' ({CLI_NAME} app build prints the hash)")))?;
         deploy::seed::verify(&row.hash).map_err(|e| no(e.code, 409, e.message))?;
         (deploy::seed::seed_path(&row.hash), Some(row.hash), None)
     } else {
@@ -855,11 +855,11 @@ pub(crate) fn app_for(who: &Who, app_id: Option<&str>) -> R<AppRow> {
     };
     let row = row
         .filter(|r| ws_part.as_deref().is_none_or(|w| ws_by_token(w).is_some_and(|ws| ws.id == r.owner_workspace)))
-        .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{raw}' on this box (k2 app list)")))?;
+        .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{raw}' on this box ({CLI_NAME} app list)")))?;
     let id = raw;
     if let Some(ws) = agent_ws(who) {
         if row.owner_workspace != ws && !(SHADOW_READ.with(|c| c.get()) && super::handover::shadows(ws, &row.app_id)) {
-            return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace (k2 app list)")));
+            return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace ({CLI_NAME} app list)")));
         }
     }
     Ok(row)
@@ -876,7 +876,7 @@ pub(crate) fn mirror(app_id: &str) {
     if let Some(r) = row {
         let p = deploy::app_dir(app_id).join("app.json");
         let mut v = serde_json::to_value(&r).unwrap_or(J::Null);
-        v["_note"] = json!("Read-only mirror of the App's row. Change it with `k2 app config`; editing this file does nothing.");
+        v["_note"] = json!(concat!("Read-only mirror of the App's row. Change it with `", cli_name!(), " app config`; editing this file does nothing."));
         let _ = std::fs::create_dir_all(deploy::app_dir(app_id));
         let _ = k2_core::fs_atomic::atomic_write_str(&p, &(serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"));
     }
@@ -948,7 +948,7 @@ pub(crate) fn install(who: &Who, body: &[u8]) -> R<J> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         if store::get_app(&conn, &app_id).map_err(db_err)?.is_some() {
-            return Err(no(codes::APP_EXISTS, 409, format!("App '{app_id}' already exists on this box (k2 app deploy {app_id} …)")));
+            return Err(no(codes::APP_EXISTS, 409, format!("App '{app_id}' already exists on this box ({CLI_NAME} app deploy {app_id} …)")));
         }
         let holders: Vec<String> = {
             let mut st = conn.prepare("SELECT project_id FROM published_services WHERE name = ?1").map_err(db_err)?;
@@ -959,7 +959,7 @@ pub(crate) fn install(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 codes::APP_EXISTS,
                 409,
-                format!("this workspace already publishes a service named '{app_id}'; pick another App id, then move its public label over once the App is live (k2 app label take <app-id> {app_id}; k2 study app-move)"),
+                format!("this workspace already publishes a service named '{app_id}'; pick another App id, then move its public label over once the App is live ({CLI_NAME} app label take <app-id> {app_id}; {CLI_NAME} study app-move)"),
             ));
         }
         if let Some(holder) = holders.first() {
@@ -968,7 +968,7 @@ pub(crate) fn install(who: &Who, body: &[u8]) -> R<J> {
             let mut r = no(
                 codes::LABEL_TAKEN,
                 409,
-                format!("'{app_id}' is already a published label on this box, {}; App ids are unique box-wide. Pick another id, or talk to that agent{}", m.phrase(), m.address.as_ref().map(|a| format!(": k2 msg {a} \"…\"")).unwrap_or_default()),
+                format!("'{app_id}' is already a published label on this box, {}; App ids are unique box-wide. Pick another id, or talk to that agent{}", m.phrase(), m.address.as_ref().map(|a| format!(": {CLI_NAME} msg {a} \"…\"")).unwrap_or_default()),
             );
             r.extra = Some(json!({ "owner": m.json() }));
             return Err(r);
@@ -1174,7 +1174,7 @@ fn install_isolation(who: &Who, v: &J) -> R<Result<&'static str, J>> {
                 label: &label,
                 workspace: ws,
                 body: json!({ "route": "/cli/app/install", "body": v }),
-                diff: json!({ "lines": [format!("k2 app install {label} --engine process")], "route": "/cli/app/install" }),
+                diff: json!({ "lines": [format!("{CLI_NAME} app install {label} --engine process")], "route": "/cli/app/install" }),
                 summary: format!("install {label} on the unwalled process engine"),
                 reasons: vec![super::access::WHY_LOOSEN.to_string()],
                 reason: s(v, "reason"),
@@ -1213,7 +1213,7 @@ fn seed_for_deploy(who: &Who, app: &AppRow, v: &J) -> R<String> {
         let conn = db.lock();
         store::find_seed(&conn, t).map_err(db_err)?
     }
-    .ok_or_else(|| no(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}' (k2 app build prints the hash)")))?;
+    .ok_or_else(|| no(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}' ({CLI_NAME} app build prints the hash)")))?;
     if row.report.get("ok").and_then(|x| x.as_bool()) != Some(true) {
         return Err(no(codes::SEED_INVALID, 422, "this Seed's validate report has errors; it can't be deployed"));
     }
@@ -1258,7 +1258,7 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
         return Err(no(
             codes::ENGINE_UNAVAILABLE,
             409,
-            format!("{} runs as the process exception; turn that off first (k2 app exception {} off), then pick an engine", app.app_id, app.app_id),
+            format!("{} runs as the process exception; turn that off first ({CLI_NAME} app exception {} off), then pick an engine", app.app_id, app.app_id),
         ));
     }
     let iso = match e {
@@ -1283,7 +1283,7 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
             codes::WIDENING_HELD,
             409,
             format!(
-                "moving {} from {} to {iso} lowers its wall: ask for it with k2 app config {} --isolation {iso} \
+                "moving {} from {} to {iso} lowers its wall: ask for it with {CLI_NAME} app config {} --isolation {iso} \
                  (held for the owner's approval)",
                 app.app_id, app.isolation, app.app_id
             ),
@@ -1518,8 +1518,8 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
                 409,
                 format!(
                     "db_switched: {} was re-hosted onto its database's new Postgres major (move {epoch}); the previous instance \
-                     used the old copy, which is closed. Roll the database back instead: k2 db upgrade {db} --rollback --yes \
-                     (it re-hosts the App again). To run an older Seed on the current database: k2 app rollback {} --to <seed>",
+                     used the old copy, which is closed. Roll the database back instead: {CLI_NAME} db upgrade {db} --rollback --yes \
+                     (it re-hosts the App again). To run an older Seed on the current database: {CLI_NAME} app rollback {} --to <seed>",
                     app.app_id, app.app_id
                 ),
             );
@@ -1533,13 +1533,13 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
             return Ok(out);
         }
         if super::supervisor::live_kind(&app).as_deref() == Some(store::KIND_REHOST) {
-            let on = super::supervisor::live_fingerprint(&app).map(|f| f.k2_version).unwrap_or_else(|| "this K2".into());
+            let on = super::supervisor::live_fingerprint(&app).map(|f| f.k2_version).unwrap_or_else(|| concat!("this ", product_name!()).into());
             return Err(no(
                 codes::NOTHING_TO_ROLL_BACK,
                 409,
                 format!(
-                    "nothing_to_roll_back: {} was re-hosted on K2 {on} and its previous instance is gone (the watch window \
-                     passed); roll K2 back, or deploy the Seed you want (k2 app deploy {} <seed>)",
+                    "nothing_to_roll_back: {} was re-hosted on {PRODUCT_NAME} {on} and its previous instance is gone (the watch window \
+                     passed); roll {PRODUCT_NAME} back, or deploy the Seed you want ({CLI_NAME} app deploy {} <seed>)",
                     app.app_id, app.app_id
                 ),
             ));
@@ -1580,7 +1580,7 @@ fn start(who: &Who, body: &[u8], kind: &'static str) -> R<J> {
     let seed = app
         .live_seed
         .clone()
-        .ok_or_else(|| no(codes::NOTHING_TO_ROLL_BACK, 409, format!("{} has no Seed deployed yet (k2 app deploy {} <folder|seed>)", app.app_id, app.app_id)))?;
+        .ok_or_else(|| no(codes::NOTHING_TO_ROLL_BACK, 409, format!("{} has no Seed deployed yet ({CLI_NAME} app deploy {} <folder|seed>)", app.app_id, app.app_id)))?;
     if kind == store::KIND_START && super::supervisor::live_instance(&app.app_id).is_some() {
         return Ok(json!({ "ok": true, "app": app.app_id, "already": "running" }));
     }
@@ -1630,6 +1630,8 @@ fn deployment(who: &Who, params: &HashMap<String, String>) -> R<J> {
 // owner-only switch (`k2 app exception`); config never enters or leaves it.
 
 use k2_core::app_grace::config::{self as appcfg, Class, Op};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The App's config as one state (columns + `config_json`).
 pub(crate) fn config_state(app: &AppRow) -> R<appcfg::State> {
@@ -1853,7 +1855,7 @@ fn exception_guard(app: &AppRow, after: &appcfg::State) -> R<()> {
         return Err(no(
             codes::ENGINE_UNAVAILABLE,
             409,
-            format!("{} runs as the process exception; turn that off first (k2 app exception {} off)", app.app_id, app.app_id),
+            format!("{} runs as the process exception; turn that off first ({CLI_NAME} app exception {} off)", app.app_id, app.app_id),
         ));
     }
     if !app.is_process_exception() && enters {
@@ -1862,7 +1864,7 @@ fn exception_guard(app: &AppRow, after: &appcfg::State) -> R<()> {
             409,
             format!(
                 "path open with isolation process is the process exception: the owner turns it on in person with \
-                 k2 app exception {} on (it is never a config change)",
+                 {CLI_NAME} app exception {} on (it is never a config change)",
                 app.app_id
             ),
         ));
@@ -2019,7 +2021,7 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
                 } else {
                     let h = ws_handle(ws);
                     let line = format!(
-                        "{}: the Database core isn't ticked for {h}: the owner ticks it (k2 app access {h} --core db=on) \
+                        "{}: the Database core isn't ticked for {h}: the owner ticks it ({CLI_NAME} app access {h} --core db=on) \
                          or approves this",
                         appcfg::describe(&op, &state)
                     );
@@ -2071,7 +2073,7 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
          machines) doesn't enforce memory limits; the walled engines do.",
     );
     if io_changed {
-        note.push_str(" Walled engines apply disk ceilings at the App's next deploy or restart (k2 app restart).");
+        note.push_str(concat!(" Walled engines apply disk ceilings at the App's next deploy or restart (", cli_name!(), " app restart)."));
     }
     let mut out = json!({
         "ok": true,
@@ -2188,7 +2190,7 @@ fn app_summary(app: &AppRow) -> J {
         "path": app.path,
         "source": app.source,
         "folder": app.folder_path,
-        "label": if is_static { "static: K2 serves the files (no App code runs)".to_string() } else { lab.text },
+        "label": if is_static { concat!("static: ", product_name!(), " serves the files (no App code runs)").to_string() } else { lab.text },
         "labelReason": lab.reason,
         "labelBack": lab.back,
         "io": k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref()),
@@ -2245,7 +2247,7 @@ pub fn upgrade_notices() -> Vec<J> {
                 out.push(json!({
                     "label": name,
                     "issue": "reserved",
-                    "hint": format!("'{name}' is a k2 app subcommand or k2 noun, so it can't become an App id; its App takes another id; the label can still move over (k2 app label take <app-id> {name}; k2 study app-move)"),
+                    "hint": format!("'{name}' is a {CLI_NAME} app subcommand or {CLI_NAME} noun, so it can't become an App id; its App takes another id; the label can still move over ({CLI_NAME} app label take <app-id> {name}; {CLI_NAME} study app-move)"),
                 }));
             }
         }
@@ -2254,7 +2256,7 @@ pub fn upgrade_notices() -> Vec<J> {
                 "label": name,
                 "issue": "duplicate",
                 "workspaces": owners.iter().map(|o| ws_handle(o)).collect::<Vec<_>>(),
-                "hint": format!("'{name}' is published by {} workspaces; App ids are unique on the box, so each workspace's App takes its own id and moves its own label over (k2 study app-move)", owners.len()),
+                "hint": format!("'{name}' is published by {} workspaces; App ids are unique on the box, so each workspace's App takes its own id and moves its own label over ({CLI_NAME} study app-move)", owners.len()),
             }));
         }
     }
@@ -2367,7 +2369,7 @@ fn history(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let limit = params.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(20).clamp(1, 200);
     if let Some(w) = params.get("widget").map(|s| s.trim()).filter(|s| !s.is_empty()) {
         if agent_ws(who).is_some() {
-            return Err(no(codes::OWNER_ONLY, 403, "Garden widget history is the desktop owner's (k2 zen history --widget)"));
+            return Err(no(codes::OWNER_ONLY, 403, concat!("Garden widget history is the desktop owner's (", cli_name!(), " zen history --widget)")));
         }
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2635,8 +2637,8 @@ fn refuse_if_access_would_drop(app: &AppRow) -> R<()> {
         409,
         format!(
             "uninstalling {a} would drop {}. A reinstall is a new App and gets none of it back. \
-             To add a public URL, use k2 app expose {a} --tunnel (no reinstall). \
-             To uninstall anyway: k2 app uninstall {a} --drop-access",
+             To add a public URL, use {CLI_NAME} app expose {a} --tunnel (no reinstall). \
+             To uninstall anyway: {CLI_NAME} app uninstall {a} --drop-access",
             parts.join(", "),
             a = app.app_id
         ),
@@ -2754,7 +2756,7 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::PublishServicesChanged { project_id: app.owner_workspace.clone() });
     let mut out = json!({ "ok": true, "app": app.app_id, "purged": purge });
     if requests_cleared.is_none() {
-        out["warnings"] = json!(["its request log (k2 app requests) could not be cleared: a reinstall under this id would show the old rows"]);
+        out["warnings"] = json!([concat!("its request log (", cli_name!(), " app requests) could not be cleared: a reinstall under this id would show the old rows")]);
     }
     Ok(out)
 }

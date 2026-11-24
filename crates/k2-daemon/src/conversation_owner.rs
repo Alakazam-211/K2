@@ -22,6 +22,7 @@
 use k2_core::log_debug;
 
 use crate::v2_session_map;
+use k2_core::brand::CLI_NAME;
 
 /// What holds a conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,7 +205,7 @@ pub fn spawn_refusal_text(r: &DuplicateRefusal) -> String {
         }
     };
     format!(
-        "{SPAWN_REFUSAL_PREFIX}conversation {} is already held by {who}; one conversation never runs twice (k2 sessions shows its address)",
+        "{SPAWN_REFUSAL_PREFIX}conversation {} is already held by {who}; one conversation never runs twice ({CLI_NAME} sessions shows its address)",
         r.conversation_id
     )
 }

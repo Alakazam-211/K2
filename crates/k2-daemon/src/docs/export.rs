@@ -52,7 +52,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Value};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_export::proto::{Header, Kind, Limits};
 use k2_mpc_base::blob::BlobError;
 use k2_mpc_base::errors::{ErrorReport, Refusal};
@@ -67,6 +67,7 @@ use super::host::{self, DocRights};
 use super::routes::{self, Call};
 use super::target::{self, Target, Tier};
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const EXPORT: &str = "/cli/docs/export";
 pub const TARGETS: &str = "/cli/docs/export/targets";
@@ -190,7 +191,7 @@ fn place_forbidden(rel: &str) -> CliResponse {
             "403 Forbidden",
             "export_place_forbidden",
             format!(
-                "you can't create {rel} there. Use --out with a path in your own workspace, or a local path (k2 doc export --out FILE)"
+                "you can't create {rel} there. Use --out with a path in your own workspace, or a local path ({CLI_NAME} doc export --out FILE)"
             ),
         ),
         exit::REFUSED,
@@ -390,7 +391,7 @@ pub fn deny_output(rel: &str) -> Result<(), target::Refusal> {
         return Err(declined("protected", format!("{rel} is in the vault folder")));
     }
     if target::is_generated(rel) {
-        return Err(declined("generated", format!("K2 writes {rel} itself")));
+        return Err(declined("generated", format!("{PRODUCT_NAME} writes {rel} itself")));
     }
     // As for mv: git's folder and the protected list under .k2/ (target::PROTECTED_IN_DOT_DIR).
     if target::is_git_internal(rel) || target::k2_protected(rel).is_some() {
@@ -647,7 +648,7 @@ pub fn sweep_leftovers() {
 /// `status`, `cancel`, `fetch`: the caller's own jobs (the box owner sees all).
 pub(super) fn job_route(path: &str, caller: &DocCaller, input: &routes::Input<'_>) -> CliResponse {
     let Some(id) = input.str("job").map(|j| j.trim().to_string()).filter(|j| !j.is_empty()) else {
-        return routes::bad("job is required: the id k2 doc export printed");
+        return routes::bad(concat!("job is required: the id ", cli_name!(), " doc export printed"));
     };
     if !valid_job_id(&id) {
         return job_not_found();
@@ -754,7 +755,7 @@ pub(super) fn doc_route(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliRe
     };
     let target_id = match c.input.str("target").map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
         Some(t) => t,
-        None => return routes::bad("target is required (k2 doc export --list <file> shows them)"),
+        None => return routes::bad(concat!("target is required (", cli_name!(), " doc export --list <file> shows them)")),
     };
     let version = match c.input.u64("version") {
         Ok(v) => v,
@@ -787,7 +788,7 @@ pub(super) fn doc_route(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliRe
         Err(r) => return audit_refusal(r, version, &target_id),
     };
     if options.iter().any(|(k, _)| k == k2_mpc_base::export::NODE_OPTION.name) {
-        return audit_refusal(routes::bad("name the node with node=<address> (K2 passes its key), not --option node=…"), version, &target_id);
+        return audit_refusal(routes::bad(concat!("name the node with node=<address> (", product_name!(), " passes its key), not --option node=…")), version, &target_id);
     }
     let kind = doc.kind(c.target);
     let (exporter, target_ext, in_worker) = match pick_target(&kind, &target_id, &options) {
@@ -944,7 +945,7 @@ fn resolve_node(doc: &Doc, c: &Call, addr: &str, version: Option<u64>) -> Result
         .map(|m| m.candidates.iter().map(|c| json!({ "address": c.address, "position": c.position })).collect())
         .unwrap_or_default();
     let mut hint = format!(
-        "{addr} names nothing in version {} of {}: nothing was exported. k2 doc outline {} lists the layers",
+        "{addr} names nothing in version {} of {}: nothing was exported. {CLI_NAME} doc outline {} lists the layers",
         read.version, c.target.rel, c.target.rel
     );
     for cand in &candidates {
@@ -988,7 +989,7 @@ fn no_node_exporter(rel: &str, target: &str, node_kind: &str) -> CliResponse {
         r.id(),
         r.exit(),
         &format!("{target} doesn't write one {node_kind} node of {rel}: no exporter on this server writes a single layer yet. Nothing was exported"),
-        &format!("Export the whole file instead: k2 doc export --to as-is {rel}"),
+        &format!("Export the whole file instead: {CLI_NAME} doc export --to as-is {rel}"),
         json!({ "kind": node_kind, "target": target }),
     )
 }

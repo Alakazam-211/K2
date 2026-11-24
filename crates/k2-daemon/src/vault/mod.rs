@@ -51,6 +51,8 @@ use std::sync::{Arc, OnceLock};
 use k2_vault::keystore::file::FileKeyStore;
 use k2_vault::{KeyStore, LocalVault, VaultError};
 use parking_lot::RwLock;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The open vault, or why it isn't open.
 static VAULT: OnceLock<RwLock<Result<Arc<LocalVault>, VaultError>>> = OnceLock::new();
@@ -305,14 +307,14 @@ pub fn retry_state() -> Option<RetryState> {
 }
 
 /// The one notice when a person cancelled the vault-key prompt.
-pub const CANCELLED_TITLE: &str = "K2 couldn't open the vault; unlock it";
-pub const CANCELLED_BODY: &str = "macOS asked for permission to read the K2 vault's key and the request was cancelled, so K2 stopped asking. \
+pub const CANCELLED_TITLE: &str = concat!(product_name!(), " couldn't open the vault; unlock it");
+pub const CANCELLED_BODY: &str = concat!("macOS asked for permission to read the ", product_name!(), " vault's key and the request was cancelled, so ", product_name!(), " stopped asking. \
 Until the vault opens, vault secrets and saved LLM logins that only the vault holds can't be used (the server default login keeps working). \
-To open it, run `k2 vault open` in a terminal on this Mac (allow the prompt), or restart K2.";
+To open it, run `", cli_name!(), " vault open` in a terminal on this Mac (allow the prompt), or restart ", product_name!(), ".");
 
 fn stopped_cancelled() {
     set_retry(RetryState::stopped("cancelled", "user_cancelled"));
-    k2_core::log_debug!("[vault] the vault-key prompt was cancelled; K2 won't ask again until `k2 vault open` or the next start");
+    k2_core::log_debug!("[vault] the vault-key prompt was cancelled; {PRODUCT_NAME} won't ask again until `{CLI_NAME} vault open` or the next start");
     file_owner_notice(CANCELLED_TITLE, CANCELLED_BODY);
 }
 

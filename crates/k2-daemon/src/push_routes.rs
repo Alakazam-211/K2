@@ -32,7 +32,7 @@ use std::time::Instant;
 use crate::cli_response::CliResponse;
 use k2_core::push::{K2Cloud, PushEvent, PushTarget};
 use k2_core::push::budget;
-use k2_core::push_devices;
+use k2_core::{cli_name, push_devices};
 
 // ── Route dispatch ────────────────────────────────────────────────────
 
@@ -680,7 +680,7 @@ fn handle_owner_remove(body: &[u8]) -> CliResponse {
             content_type: "application/json",
             body: serde_json::json!({
                 "ok": false,
-                "error": { "code": "not_found", "hint": "no such device (k2 push devices lists them)" },
+                "error": { "code": "not_found", "hint": concat!("no such device (", cli_name!(), " push devices lists them)") },
             })
             .to_string(),
         },

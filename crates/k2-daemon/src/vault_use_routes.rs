@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
 use crate::vault_routes::{refuse, selector, Sel};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const FETCH: &str = "/cli/vault/fetch";
 pub const ENV_FILE: &str = "/cli/vault/env-file";
@@ -280,7 +282,7 @@ fn fetch(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value,
 /// `deps`: where a refreshing sign-in gets its tokens (a stub in tests).
 pub(crate) fn fetch_with(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], deps: &crate::vault::oauth_refresh::Deps<'_>) -> Result<Value, VaultError> {
     let a = c.actor.agent().ok_or_else(|| {
-        VaultError::forbidden("use_fetch_as_agent", "k2 vault fetch runs for an agent session; people call the site themselves")
+        VaultError::forbidden("use_fetch_as_agent", concat!(cli_name!(), " vault fetch runs for an agent session; people call the site themselves"))
     })?;
     let b: FetchBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
     let key = format!("{}/{}", a.workspace_id, c.session_id.clone().unwrap_or_default());
@@ -474,7 +476,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     if let Some(done) = b.done.as_deref() {
         let p = Path::new(done);
         if p.parent() != Some(dir.as_path()) {
-            return Err(VaultError::bad_request("not_an_env_file", "that isn't an env file K2 made"));
+            return Err(VaultError::bad_request("not_an_env_file", concat!("that isn't an env file ", product_name!(), " made")));
         }
         let _ = crate::vault::adopt::remove_old_copy(p);
         return Ok(json!({ "ok": true, "removed": done }));
@@ -574,10 +576,10 @@ fn with_wait(
     }
     let who = c.requester()?;
     let Requester::Session { workspace_id, session_id: Some(sid) } = &who else {
-        return Err(VaultError::forbidden("wait_needs_session", "--wait is for a K2 session; run it in one"));
+        return Err(VaultError::forbidden("wait_needs_session", concat!("--wait is for a ", product_name!(), " session; run it in one")));
     };
     if sid.is_empty() {
-        return Err(VaultError::forbidden("wait_needs_session", "--wait is for a K2 session; run it in one"));
+        return Err(VaultError::forbidden("wait_needs_session", concat!("--wait is for a ", product_name!(), " session; run it in one")));
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(u64::try_from(wait_secs).unwrap_or(0).min(k2_vault::vault::CARD_WAIT_MAX_PER_CALL_SECS));
     let mut card: Option<String> = wait_card.map(str::to_string);
@@ -602,7 +604,7 @@ fn with_wait(
                 None if refusal.code == OUT_OF_REACH => return Err(refusal),
                 None => {
                     let list = names.join(", ");
-                    return Err(VaultError::new("no_card", 404, format!("no card asks for {list}; ask a person with k2 thread secret <addr> --name {list}")));
+                    return Err(VaultError::new("no_card", 404, format!("no card asks for {list}; ask a person with {CLI_NAME} thread secret <addr> --name {list}")));
                 }
             },
         };
@@ -677,7 +679,7 @@ pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::S
             let f = item.as_ref().and_then(|i| i.file_name.clone()).unwrap_or_else(|| name.to_string());
             let also = take.map(|t| format!(" To get it as {want} too: {t}.")).unwrap_or_default();
             return refuse(format!(
-                "{name} is delivered to you as a file, not {want}: read $K2_SECRETS_DIR/{f} (not there yet? run k2 vault sync; a session with no $K2_SECRETS_DIR: {}), or run k2 vault file --secret {name} (it prints the path of a short-lived 0600 copy; pass the file, e.g. tool --code - < \"$(k2 vault file --secret {name})\").{also}",
+                "{name} is delivered to you as a file, not {want}: read $K2_SECRETS_DIR/{f} (not there yet? run {CLI_NAME} vault sync; a session with no $K2_SECRETS_DIR: {}), or run {CLI_NAME} vault file --secret {name} (it prints the path of a short-lived 0600 copy; pass the file, e.g. tool --code - < \"$({CLI_NAME} vault file --secret {name})\").{also}",
                 crate::vault::spawn::RESTART_TO_RECEIVE
             ));
         }
@@ -697,14 +699,14 @@ pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::S
         Some(Reach::Shared(d)) if d.level() >= want.level() => {
             if vault.in_rollback() {
                 return refuse(format!(
-                    "{name} is shared with this workspace as {d}, but K2 holds every share while the vault looks rolled back: the owner confirms it in Settings → Vault"
+                    "{name} is shared with this workspace as {d}, but {PRODUCT_NAME} holds every share while the vault looks rolled back: the owner confirms it in Settings → Vault"
                 ));
             }
             return e;
         }
         Some(Reach::Shared(d)) => {
             let now = if matches!(d, Delivery::Fetch | Delivery::Proxy) && !m.hosts.is_empty() {
-                format!(" (k2 vault fetch --secret {name}{} <url> works now: K2 adds it)", scope_arg(&m))
+                format!(" ({CLI_NAME} vault fetch --secret {name}{} <url> works now: {PRODUCT_NAME} adds it)", scope_arg(&m))
             } else {
                 String::new()
             };
@@ -735,7 +737,7 @@ pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::S
     // (or a delivery below what was asked). Say how to use it, and who can
     // widen it.
     let how = if matches!(m.default_delivery, Delivery::Fetch | Delivery::Proxy) && !m.hosts.is_empty() {
-        format!("it is delivered to you for fetch only: k2 vault fetch --secret {name} <url> (K2 adds it; you never see it). ")
+        format!("it is delivered to you for fetch only: {CLI_NAME} vault fetch --secret {name} <url> ({PRODUCT_NAME} adds it; you never see it). ")
     } else {
         format!("it is delivered to you as {} only. ", m.default_delivery)
     };
@@ -743,7 +745,7 @@ pub(crate) fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::S
         return refuse(format!("{name}: {how}To read it as {want}: {t}"));
     }
     refuse(format!(
-        "{name}: {how}To read it as {want}, its delivery must be widened by a person: k2 vault delivery {name} {want} (Settings → Vault); an agent may only widen secrets its own workspace created"
+        "{name}: {how}To read it as {want}, its delivery must be widened by a person: {CLI_NAME} vault delivery {name} {want} (Settings → Vault); an agent may only widen secrets its own workspace created"
     ))
 }
 
@@ -812,7 +814,7 @@ fn scope_words(s: &Scope) -> String {
 /// The share a person runs so the caller's workspace gets `m` as `want`.
 pub(crate) fn share_command(c: &VaultCaller, m: &k2_vault::SecretMeta, want: k2_vault::Delivery) -> String {
     let ws = c.workspace_id().map(crate::vault::workspace_label).unwrap_or_else(|| "<name>".to_string());
-    format!("k2 vault grant {} --to ws:{ws} --as {want}{}", m.name, scope_arg(m))
+    format!("{CLI_NAME} vault grant {} --to ws:{ws} --as {want}{}", m.name, scope_arg(m))
 }
 
 /// ` --scope server` / ` --scope ws:<name>`: an agent's bare name means its
@@ -829,7 +831,7 @@ fn scope_arg(m: &k2_vault::SecretMeta) -> String {
 fn after_share(d: k2_vault::Delivery, m: &k2_vault::SecretMeta) -> String {
     match d {
         k2_vault::Delivery::Env => format!(
-            " (then k2 vault env-file --secret {}{} works at once; ${} in new sessions)",
+            " (then {CLI_NAME} vault env-file --secret {}{} works at once; ${} in new sessions)",
             m.name,
             scope_arg(m),
             k2_vault::delivery::default_env_name(&m.name)
@@ -852,7 +854,7 @@ pub(crate) fn take_yourself(vault: &LocalVault, c: &VaultCaller, m: &k2_vault::S
         return None;
     }
     Some(format!(
-        "a person accepted it into this workspace (at most {ceiling}), so take it yourself, no owner needed: k2 vault grant {} --to ws:{} --as {want}{}",
+        "a person accepted it into this workspace (at most {ceiling}), so take it yourself, no owner needed: {CLI_NAME} vault grant {} --to ws:{} --as {want}{}",
         m.name,
         crate::vault::workspace_label(ws),
         after_grant(want, &m.name)
@@ -864,10 +866,10 @@ pub(crate) fn take_yourself(vault: &LocalVault, c: &VaultCaller, m: &k2_vault::S
 pub(crate) fn after_grant(d: k2_vault::Delivery, name: &str) -> String {
     match d {
         k2_vault::Delivery::Env => format!(
-            " (then k2 vault env-file --secret {name} works at once; ${} in new sessions)",
+            " (then {CLI_NAME} vault env-file --secret {name} works at once; ${} in new sessions)",
             k2_vault::delivery::default_env_name(name)
         ),
-        k2_vault::Delivery::File => " (it arrives in $K2_SECRETS_DIR within a minute; k2 vault sync: now)".to_string(),
+        k2_vault::Delivery::File => concat!(" (it arrives in $K2_SECRETS_DIR within a minute; ", cli_name!(), " vault sync: now)").to_string(),
         _ => String::new(),
     }
 }
@@ -892,14 +894,14 @@ pub(crate) fn what_works(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Se
     let how = match have {
         Delivery::File => {
             let f = item.as_ref().and_then(|i| i.file_name.clone()).unwrap_or_else(|| name.clone());
-            format!("{name} is delivered to you as a file: $K2_SECRETS_DIR/{f} (run k2 vault sync if it isn't there yet; or k2 vault file --secret {name})")
+            format!("{name} is delivered to you as a file: $K2_SECRETS_DIR/{f} (run {CLI_NAME} vault sync if it isn't there yet; or {CLI_NAME} vault file --secret {name})")
         }
         Delivery::Env => {
             let n = item.as_ref().and_then(|i| i.env_name.clone()).unwrap_or_else(|| k2_vault::delivery::default_env_name(name));
-            format!("{name} is delivered to you as env: ${n} in new sessions, or now k2 vault env-file --secret {name} (or k2 vault file --secret {name})")
+            format!("{name} is delivered to you as env: ${n} in new sessions, or now {CLI_NAME} vault env-file --secret {name} (or {CLI_NAME} vault file --secret {name})")
         }
         Delivery::Agent => format!("{name} is an ssh key on $SSH_AUTH_SOCK: ssh and git sign with it"),
-        _ => format!("{name} is delivered to you for fetch: k2 vault fetch --secret {name} <url> (K2 adds it)"),
+        _ => format!("{name} is delivered to you for fetch: {CLI_NAME} vault fetch --secret {name} <url> ({PRODUCT_NAME} adds it)"),
     };
     let more = [Delivery::Env, Delivery::File]
         .into_iter()
@@ -949,14 +951,14 @@ fn use_files_dir() -> Result<PathBuf, VaultError> {
 /// as the session's spawn copy. Removed after `ttlSecs` (default 60, 5 to
 /// 3600) or on `done`. The answer names the path, never the value.
 fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
-    c.actor.agent().ok_or_else(|| VaultError::forbidden("use_file_as_agent", "k2 vault file runs for an agent session; people use k2 vault reveal"))?;
+    c.actor.agent().ok_or_else(|| VaultError::forbidden("use_file_as_agent", concat!(cli_name!(), " vault file runs for an agent session; people use ", cli_name!(), " vault reveal")))?;
     let b: FileBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
     let ttl = use_file_ttl(b.ttl.as_ref(), b.ttl_secs)?;
     let dir = use_files_dir()?;
     if let Some(done) = b.done.as_deref() {
         let p = Path::new(done);
         if p.parent() != Some(dir.as_path()) {
-            return Err(VaultError::bad_request("not_a_secret_file", "that isn't a secret file K2 made"));
+            return Err(VaultError::bad_request("not_a_secret_file", concat!("that isn't a secret file ", product_name!(), " made")));
         }
         let _ = crate::vault::adopt::remove_old_copy(p);
         return Ok(json!({ "ok": true, "removed": done }));
@@ -986,7 +988,7 @@ fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
             // GH#81: a not_found here is what the field report showed. Which
             // passport asked, by id, settles it next time.
             if e.status == 404 {
-                k2_core::log_debug!("[vault] k2 vault file {n}: not_found for passport session {:?}", c.session_id);
+                k2_core::log_debug!("[vault] {CLI_NAME} vault file {n}: not_found for passport session {:?}", c.session_id);
             }
             out_of_reach(vault, c, &sel, n, k2_vault::Delivery::File, use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File))
         })?;
@@ -1005,7 +1007,7 @@ fn sync(vault: &Arc<LocalVault>, c: &VaultCaller) -> Result<Value, VaultError> {
         _ => {
             return Err(VaultError::forbidden(
                 "sync_needs_session",
-                "k2 vault sync fills the secrets dir of the K2 session it runs in; run it there",
+                concat!(cli_name!(), " vault sync fills the secrets dir of the ", product_name!(), " session it runs in; run it there"),
             ))
         }
     };
@@ -1065,7 +1067,7 @@ fn import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value
     let text = std::fs::read_to_string(&p).map_err(|_| VaultError::not_found("that .env isn't readable"))?;
     let scope = crate::vault_routes::scope_for(c, b.scope.as_deref().or(Some("workspace")), Some(&ws_id), None)?;
     let delivery = b.delivery.as_deref().map(crate::vault_routes::request_delivery).transpose()?;
-    let mut out_lines = vec!["# Made by k2 vault import: references only, safe to commit.".to_string()];
+    let mut out_lines = vec![concat!("# Made by ", cli_name!(), " vault import: references only, safe to commit.").to_string()];
     let mut moved = vec![];
     let mut kept = vec![];
     for line in text.lines() {
@@ -1238,11 +1240,11 @@ pub(crate) fn agent_export_notice(
     let list = if names.is_empty() { "- (none)".to_string() } else { names.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
     let from = if workspaces.is_empty() { "server secrets only".to_string() } else { workspaces.join(", ") };
     let body = format!(
-        "Agent {agent}{} ran `k2 vault carry export`. It may, because \"Let this agent manage server-wide secrets\" is on for it.\n\n\
+        "Agent {agent}{} ran `{CLI_NAME} vault carry export`. It may, because \"Let this agent manage server-wide secrets\" is on for it.\n\n\
          Secrets (names only, never values):\n{list}\n\n\
          From: {from}\n\
          To: vault {target_vault_id} (key {target_fp})\n\n\
-         It is also in Settings → Logs → Access Audit and in `k2 vault audit`. \
+         It is also in Settings → Logs → Access Audit and in `{CLI_NAME} vault audit`. \
          Didn't expect it? Turn that switch off for {agent} (Settings → Workspaces / Agents → {agent} → Permissions) and rotate these secrets.",
         session.map(|s| format!(" (session {s})")).unwrap_or_default(),
     );
@@ -1299,7 +1301,7 @@ pub(crate) fn seal_carry(
 ) -> Result<SealedCarry, VaultError> {
     let target = k2_vault::agefmt::Recipient::parse(target_recipient)?;
     if target_vault_id.trim().is_empty() {
-        return Err(VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"));
+        return Err(VaultError::bad_request("target_required", concat!("the target vault id (", cli_name!(), " vault recipient on the target)")));
     }
     let all = vault.list(&k2_vault::ListFilter::default(), &k2_vault::Actor::System("carry".into()))?;
     let mut items = vec![];
@@ -1349,7 +1351,7 @@ pub(crate) fn seal_carry(
 fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     may_carry(c)?;
     let b: CarryExportBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
-    let target_id = b.target_vault_id.clone().ok_or_else(|| VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"))?;
+    let target_id = b.target_vault_id.clone().ok_or_else(|| VaultError::bad_request("target_required", concat!("the target vault id (", cli_name!(), " vault recipient on the target)")))?;
     let mut ws_ids: HashMap<String, String> = HashMap::new();
     for w in &b.workspaces {
         let id = crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?;
@@ -1655,7 +1657,7 @@ fn backup_caller(c: &VaultCaller, not_person: Option<&'static str>, what: &str) 
     if c.is_passport() {
         return Err(VaultError::forbidden(
             "owner_only",
-            format!("{what} is for a person with the owner role, from a terminal outside K2, with a confirm. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
+            format!("{what} is for a person with the owner role, from a terminal outside {PRODUCT_NAME}, with a confirm. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
         ));
     }
     if !matches!(c.actor, Actor::Owner | Actor::Login { role: Role::Owner, .. }) {
@@ -1667,10 +1669,10 @@ fn backup_caller(c: &VaultCaller, not_person: Option<&'static str>, what: &str) 
     if crate::vault_routes::is_app_owner(c, not_person) {
         return Ok(false);
     }
-    let why = not_person.unwrap_or("it came from a K2 token, not from a person");
+    let why = not_person.unwrap_or(concat!("it came from a ", product_name!(), " token, not from a person"));
     Err(VaultError::forbidden(
         "person_required",
-        format!("only a person can do this ({why}). Run it from your own SSH login or a terminal outside K2. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
+        format!("only a person can do this ({why}). Run it from your own SSH login or a terminal outside {PRODUCT_NAME}. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
     ))
 }
 
@@ -1686,7 +1688,7 @@ pub(crate) fn confirm_binding(vault: &LocalVault, action: &str, secret_id: Optio
         } else if let Some(fp) = sid.strip_prefix("remove:") {
             match backup_fingerprint(vault) {
                 Some(cur) if cur == fp.trim() => Ok((format!("remove:{cur}"), format!("remove the backup key ({cur})"))),
-                _ => Err(bad("that isn't the vault's backup key (k2 vault status lists it)")),
+                _ => Err(bad(concat!("that isn't the vault's backup key (", cli_name!(), " vault status lists it)"))),
             }
         } else {
             Err(bad("secretId is add:<age1…> or remove:<fingerprint>"))
@@ -1726,7 +1728,7 @@ fn backup(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ingress: &str, 
         let tok = b.confirm_token.as_deref().ok_or_else(|| {
             deny(VaultError::forbidden(
                 "person_required",
-                format!("a vault backup from the K2 app needs a person's confirm; or run k2 vault backup from your own terminal. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
+                format!("a vault backup from the {PRODUCT_NAME} app needs a person's confirm; or run {CLI_NAME} vault backup from your own terminal. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
             ))
         })?;
         crate::vault_routes::take_proof(vault, c, BACKUP_EXPORT_CONFIRM, Some(&d.display().to_string()), Some(tok)).map_err(deny)?;
@@ -1765,7 +1767,7 @@ fn backup_recipient(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ingre
             deny(VaultError::forbidden(
                 "vault_confirm_required",
                 format!(
-                    "adding or removing a backup key needs a person's confirm: run k2 vault backup key from your own SSH login or a terminal outside K2 (it asks you to confirm). Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"
+                    "adding or removing a backup key needs a person's confirm: run {CLI_NAME} vault backup key from your own SSH login or a terminal outside {PRODUCT_NAME} (it asks you to confirm). Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"
                 ),
             ))
         })?;
@@ -1806,7 +1808,7 @@ pub fn unconfirmed_holder_line(u: &k2_vault::vault::UnconfirmedHolder) -> String
     let when = u.holder.created_at.as_deref().unwrap_or("an unknown date");
     let by = u.added_by.as_deref().unwrap_or("an unknown caller");
     format!(
-        "A {} key ({fp}) can open the whole vault; it was added {when} by {by} without a person's confirm. If you didn't add it, remove it from your own terminal: k2 vault backup key remove (it asks you to confirm). Copies made while it was there still open with it, so change the secrets that matter.",
+        "A {} key ({fp}) can open the whole vault; it was added {when} by {by} without a person's confirm. If you didn't add it, remove it from your own terminal: {CLI_NAME} vault backup key remove (it asks you to confirm). Copies made while it was there still open with it, so change the secrets that matter.",
         u.holder.kind
     )
 }

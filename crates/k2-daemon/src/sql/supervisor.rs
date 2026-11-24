@@ -10,6 +10,8 @@ use super::sysops::{
     PG_RAM_DROPIN_PATH, PG_RAM_TEMPLATE_DROPIN_PATH, PG_UNIT, PG_UNIT_PATHS, PSQL_PATH,
     RAM_CPU_WEIGHT, RAM_MEMORY_HIGH, RAM_MEMORY_MAX,
 }; // used by spawn_health_loop
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 #[allow(dead_code)]
 pub const ENABLE_STEPS: &[&str] = &["baked", "ram", "start", "gucs", "catalog"];
@@ -564,7 +566,7 @@ pub fn majors_json() -> serde_json::Value {
                     "name": name,
                     "from": m,
                     "to": to,
-                    "check": format!("k2 db upgrade {name} --check"),
+                    "check": format!("{CLI_NAME} db upgrade {name} --check"),
                 })
             })
         })
@@ -612,7 +614,7 @@ pub fn listen_port(listen: Option<&str>) -> u16 {
 /// the already-listening port. Not a static-IP feature. Not `k2 db expose`.
 pub fn publish_hint(port: u16) -> String {
     format!(
-        "off-box *.k2.dev: k2 publish subdomain create <label> --target localhost:{port} (port already listening — do not publish run Postgres)"
+        "off-box *.k2.dev: {CLI_NAME} publish subdomain create <label> --target localhost:{port} (port already listening — do not publish run Postgres)"
     )
 }
 
@@ -933,39 +935,39 @@ pub fn doctor_with(ops: &dyn SystemOps) -> serde_json::Value {
         serde_json::Value::Null
     } else if major_mismatch {
         serde_json::Value::String(format!(
-            "the 5432 cluster answers Postgres {}, but K2 recorded {} — something outside K2 changed it; do not create or move databases until it is understood",
+            "the 5432 cluster answers Postgres {}, but {PRODUCT_NAME} recorded {} — something outside {PRODUCT_NAME} changed it; do not create or move databases until it is understood",
             live_major.unwrap_or_default(),
             if primary.synthesized { recorded_major.unwrap_or_default() } else { primary.major as i64 }
         ))
     } else if !clusters_ok {
         serde_json::Value::String(
-            "a Postgres cluster that serves databases is not running — see clusters[] (k2 db doctor --json)".into(),
+            concat!("a Postgres cluster that serves databases is not running — see clusters[] (", cli_name!(), " db doctor --json)").into(),
         )
     } else if !live_ok {
         serde_json::Value::String(format!(
-            "a live move left replication objects K2 can't tie to a run (an inactive slot holds WAL): {} — see liveMoves (k2 db doctor --json)",
+            "a live move left replication objects {PRODUCT_NAME} can't tie to a run (an inactive slot holds WAL): {} — see liveMoves ({CLI_NAME} db doctor --json)",
             live["failures"]
         ))
     } else if !baked {
         serde_json::Value::String(NOT_BAKED_HINT.into())
     } else if !ram_applied {
         serde_json::Value::String(
-            "Postgres RAM fence missing — re-run k2 db enable (MemoryHigh=25% MemoryMax=40% drop-in + GUC caps)"
+            concat!("Postgres RAM fence missing — re-run ", cli_name!(), " db enable (MemoryHigh=25% MemoryMax=40% drop-in + GUC caps)")
                 .into(),
         )
     } else if !gucs_ok {
         serde_json::Value::String(
-            "Postgres GUC caps are not pinned — re-run k2 db enable (work_mem/max_connections/timeouts)"
+            concat!("Postgres GUC caps are not pinned — re-run ", cli_name!(), " db enable (work_mem/max_connections/timeouts)")
                 .into(),
         )
     } else if !within_cap {
         serde_json::Value::String(
-            "Postgres RSS is at or above MemoryMax — OOM should kill Postgres only; check k2 db doctor --json"
+            concat!("Postgres RSS is at or above MemoryMax — OOM should kill Postgres only; check ", cli_name!(), " db doctor --json")
                 .into(),
         )
     } else {
         serde_json::Value::String(
-            "postgresql unit is not healthy — see k2 db status --health".into(),
+            concat!("postgresql unit is not healthy — see ", cli_name!(), " db status --health").into(),
         )
     };
     serde_json::json!({

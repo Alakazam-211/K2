@@ -39,6 +39,8 @@
 
 #![allow(dead_code)]
 
+use k2_core::brand::PRODUCT_NAME;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const HELPER_PATH: &str = "/Library/PrivilegedHelperTools/dev.k2.power-helper";
 pub const SUDOERS_PATH: &str = "/etc/sudoers.d/dev-k2-power";
@@ -144,7 +146,7 @@ pub fn install_script(user: &str, src: &str) -> Result<String, String> {
 pub fn install_applescript(script: &str) -> String {
     let escaped = script.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
-        "do shell script \"{escaped}\" with prompt \"K2 needs to install a small helper so it can wake this Mac for heartbeats and keep it awake with the lid closed.\" with administrator privileges"
+        "do shell script \"{escaped}\" with prompt \"{PRODUCT_NAME} needs to install a small helper so it can wake this Mac for heartbeats and keep it awake with the lid closed.\" with administrator privileges"
     )
 }
 

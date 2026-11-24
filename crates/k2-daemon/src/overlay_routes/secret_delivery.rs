@@ -9,9 +9,10 @@
 //!   (`k2 vault file NAME`); `--for` with no delivery stays fetch.
 //! - Fetch or proxy with no site would put up a card the person can't save,
 //!   so it is refused when the agent asks, while the agent can still fix it.
+use k2_core::{cli_name, product_name};
 
 /// The refusal for a card K2 would send to a site it was never told.
-pub(super) const CARD_NEEDS_SITE: &str = "K2 sends this secret to a site (fetch), and the card names none: add --for HOST (like api.example.com), or use --delivery file (or leave --delivery and --inject-* out) to read it yourself with k2 vault file NAME";
+pub(super) const CARD_NEEDS_SITE: &str = concat!(product_name!(), " sends this secret to a site (fetch), and the card names none: add --for HOST (like api.example.com), or use --delivery file (or leave --delivery and --inject-* out) to read it yourself with ", cli_name!(), " vault file NAME");
 
 /// The card's delivery: `delivery` is the agent's `--delivery` (checked to
 /// be a known word already), `has_inject` whether it named a sending, and
@@ -22,7 +23,7 @@ pub(super) fn card_delivery(delivery: Option<String>, has_inject: bool, hosts: &
         (true, Some(d)) if d != "fetch" && d != "proxy" => {
             return Err(k2_vault::VaultError::bad_request(
                 "inject_needs_fetch",
-                "--inject-* says how K2 sends the secret in its own calls, so it needs --delivery fetch (the default with --for)",
+                concat!("--inject-* says how ", product_name!(), " sends the secret in its own calls, so it needs --delivery fetch (the default with --for)"),
             ))
         }
         (_, d) => d,

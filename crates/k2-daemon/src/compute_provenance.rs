@@ -30,6 +30,8 @@ use k2_core::compute::{self as compute, codes, store, trust};
 use serde_json::{json, Value};
 
 use crate::compute_routes::{ci_gate, job_for, json_body, no, s, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// `GET /cli/compute/jobs/receipt?job=` (`k2 compute receipt`).
 pub const RECEIPT: &str = "/cli/compute/jobs/receipt";
@@ -139,7 +141,7 @@ pub(crate) fn secret_names(ws_id: &str, st: &Statement) -> Result<Vec<String>, S
     if env.is_empty() {
         return Ok(Vec::new());
     }
-    let vault = crate::vault::get().map_err(|e| format!("the vault isn't open ({}), so K2 can't check that no plain env name is a secret's; open it and try again", e.code))?;
+    let vault = crate::vault::get().map_err(|e| format!("the vault isn't open ({}), so {PRODUCT_NAME} can't check that no plain env name is a secret's; open it and try again", e.code))?;
     let ws = k2_vault::Scope::workspace(ws_id);
     Ok(env.keys().filter(|k| vault.user_secret_exists(&ws, k) || vault.user_secret_exists(&k2_vault::Scope::server(), k)).cloned().collect())
 }
@@ -175,7 +177,7 @@ pub(crate) fn stored(j: &store::JobRow) -> Result<Dsse, String> {
     if files == 0 {
         return Err("the job kept no files, and a statement names the files a job made (no files, no statement)".into());
     }
-    Err(format!("the node sent none with the receipt (its k2-node couldn't make one, e.g. for a job it adopted after an update; k2 compute get {short} shows its notes)"))
+    Err(format!("the node sent none with the receipt (its k2-node couldn't make one, e.g. for a job it adopted after an update; {CLI_NAME} compute get {short} shows its notes)"))
 }
 
 /// The statement to write out: [`stored`], then BA-39 again (a secret may
@@ -232,7 +234,7 @@ pub(crate) fn trust_files(jobs: &[&store::JobRow], statements: &[&Statement]) ->
 }
 
 fn job_provenance(who: &Who, params: &HashMap<String, String>) -> R<Value> {
-    ci_gate("k2 compute provenance")?;
+    ci_gate(concat!(cli_name!(), " compute provenance"))?;
     let j = job_for(who, params.get("job").map(String::as_str))?;
     let (env, st) = writable(&j)?;
     let node = {
@@ -288,7 +290,7 @@ fn short_fp(fp: &str) -> String {
 /// against the rosters held here. `verified` is the answer; a refusal is
 /// only for a bad question (no such job, a body that isn't a statement).
 fn verify(who: &Who, body: &[u8]) -> R<Value> {
-    ci_gate("k2 compute verify")?;
+    ci_gate(concat!(cli_name!(), " compute verify"))?;
     let v = json_body(body)?;
     let posted: Option<Dsse> = match v.get("envelope") {
         Some(e) => Some(serde_json::from_value(e.clone()).map_err(|e| {
@@ -302,13 +304,13 @@ fn verify(who: &Who, body: &[u8]) -> R<Value> {
             env.peek().map_err(|e| no(codes::BAD_REQUEST, 400, format!("that statement doesn't read: {e}")))?.predicate.build_definition.internal_parameters.job_id
         }
         (None, Some(t)) => t.to_string(),
-        (None, None) => return Err(no(codes::BAD_REQUEST, 400, "name a job or a statement file: k2 compute verify <job> | <file.intoto.jsonl>")),
+        (None, None) => return Err(no(codes::BAD_REQUEST, 400, concat!("name a job or a statement file: ", cli_name!(), " compute verify <job> | <file.intoto.jsonl>"))),
     };
     // The job the statement names, looked up here only to find its receipt
     // and node; nothing is taken on the statement's word.
     let j = job_for(who, Some(&token)).map_err(|mut e| {
         if posted.is_some() {
-            e.hint = format!("{}: the statement names job {token}, and k2 compute verify checks a statement against this server's own records (its receipt and node key)", e.hint);
+            e.hint = format!("{}: the statement names job {token}, and {CLI_NAME} compute verify checks a statement against this server's own records (its receipt and node key)", e.hint);
         }
         e
     })?;
@@ -319,7 +321,7 @@ fn verify(who: &Who, body: &[u8]) -> R<Value> {
     };
     let pin = s(&v, "ownerKey").map(str::to_ascii_lowercase);
     if pin.as_deref().is_some_and(|p| !k2_core::compute::proto::ci::is_fp(p)) {
-        return Err(no(codes::BAD_REQUEST, 400, "--owner-key is the owner's roster key fingerprint: 64 hex (k2 compute owners shows it)"));
+        return Err(no(codes::BAD_REQUEST, 400, concat!("--owner-key is the owner's roster key fingerprint: 64 hex (", cli_name!(), " compute owners shows it)")));
     }
     let want_sha = s(&v, "sha256").map(str::to_ascii_lowercase);
     let file = s(&v, "file").unwrap_or("the file").to_string();

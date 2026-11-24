@@ -58,6 +58,8 @@ use serde_json::{json, Value};
 
 use super::routes::{need_manage, Who};
 use super::supervisor::{no, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const HOME: &str = "/cli/sew/home";
 pub const HOME_CLIENT: &str = "/cli/sew/home/client";
@@ -81,7 +83,7 @@ pub fn is_post_route(p: &str) -> bool {
 pub fn resolve_app(token: &str) -> R<(String, String)> {
     let t = token.trim();
     if t.is_empty() {
-        return Err(no("bad_request", 400, "name the App (its id from k2 app list)"));
+        return Err(no("bad_request", 400, concat!("name the App (its id from ", cli_name!(), " app list)")));
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -97,8 +99,8 @@ pub fn resolve_app(token: &str) -> R<(String, String)> {
     let named: Vec<_> = k2_core::published_services::list_all(&conn).map_err(dbe)?.into_iter().filter(|r| r.name == t).collect();
     match named.as_slice() {
         [one] => Ok((one.id.clone(), one.name.clone())),
-        [] => Err(no("not_found", 404, format!("no App '{t}' on this box (its id: k2 app list)"))),
-        _ => Err(no("bad_request", 400, format!("more than one App is named '{t}': name it by id (k2 app list --json, serviceId)"))),
+        [] => Err(no("not_found", 404, format!("no App '{t}' on this box (its id: {CLI_NAME} app list)"))),
+        _ => Err(no("bad_request", 400, format!("more than one App is named '{t}': name it by id ({CLI_NAME} app list --json, serviceId)"))),
     }
 }
 
@@ -107,7 +109,7 @@ fn app(id: &str) -> R<(String, String)> {
 }
 
 /// Where a person does what an agent is refused here.
-const PERSON_WHERE: &str = "Settings → Cores → Chat / Voice, or k2 hostchat home from a terminal outside K2 or a K2 shell tab";
+const PERSON_WHERE: &str = concat!("Settings → Cores → Chat / Voice, or ", cli_name!(), " hostchat home from a terminal outside ", product_name!(), " or a ", product_name!(), " shell tab");
 
 /// Audit event of every home-client change and refusal.
 pub const AUDIT_HOME_CLIENT: &str = "sew-home-client";
@@ -217,21 +219,21 @@ pub fn sew_refusal(status: u16, reason: &str, app_id: Option<&str>, approved: bo
     match (status, reason) {
         (403, reasons::OWNER_APPROVAL_REQUIRED) if approved => Some((
             true,
-            "Sew refused the home-client change (owner_approval_required): it did not accept the owner's approval K2 sent. \
-             Sew's install owner must be this server's owner (k2:owner) and Sew must trust K2's chat-pass keys: \
-             check k2 hostchat status, then retry this row"
+            concat!("Sew refused the home-client change (owner_approval_required): it did not accept the owner's approval ", product_name!(), " sent. \
+             Sew's install owner must be this server's owner (k2:owner) and Sew must trust ", product_name!(), "'s chat-pass keys: \
+             check ", cli_name!(), " hostchat status, then retry this row")
                 .into(),
         )),
         (403, reasons::OWNER_APPROVAL_REQUIRED) => Some((
             false,
-            "Sew now asks for the owner's approval on the home client (owner_approval_required); K2 reads Sew's flags again and sends it"
+            concat!("Sew now asks for the owner's approval on the home client (owner_approval_required); ", product_name!(), " reads Sew's flags again and sends it")
                 .into(),
         )),
         (409, reasons::HOME_CLIENT_CANNOT_GOVERN) => Some((
             true,
             format!(
                 "Sew refused the home client (home_client_cannot_govern): App {} governs a Space, and the home client never governs one. \
-                 The owner picks another App (k2 hostchat home client <app>), or first switches that Space back to Sew-governed in Sew",
+                 The owner picks another App ({CLI_NAME} hostchat home client <app>), or first switches that Space back to Sew-governed in Sew",
                 app_id.unwrap_or("?")
             ),
         )),
@@ -363,7 +365,7 @@ fn set_client(who: &Who, v: &Value) -> R<Value> {
             return Err(no(
                 "home_client_cannot_govern",
                 409,
-                "this App holds a chat key (it can govern Spaces), so it can't be the home client; revoke its key first (k2 app grant <app> --kind chat-key --revoke)",
+                concat!("this App holds a chat key (it can govern Spaces), so it can't be the home client; revoke its key first (", cli_name!(), " app grant <app> --kind chat-key --revoke)"),
             ));
         }
     }

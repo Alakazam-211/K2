@@ -21,6 +21,8 @@ use k2_core::deploy::codes;
 use k2_core::deploy::manifest::Requires;
 use k2_core::deploy::validate::k2_range_ok;
 use serde_json::{json, Value as J};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The box's Sew, as the check sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +78,7 @@ pub struct Unmet {
 impl Unmet {
     pub fn message(&self, app: &str) -> String {
         format!(
-            "{app} needs {} on this box. The owner fixes it with: {}. K2 doesn't turn chat or voice hosting on by itself; \
+            "{app} needs {} on this box. The owner fixes it with: {}. {PRODUCT_NAME} doesn't turn chat or voice hosting on by itself; \
              then install or deploy again.",
             self.missing.join("; "),
             self.fix.join(", then ")
@@ -103,7 +105,7 @@ pub fn check(req: Option<&Requires>, st: &BoxSew) -> Result<(), Unmet> {
         if req.voice {
             missing.push("voice (Sew's media engine)".to_string());
         }
-        fix.push("install the App on a Linux K2 box".to_string());
+        fix.push(concat!("install the App on a Linux ", product_name!(), " box").to_string());
         return Err(Unmet { missing, fix });
     }
     if !st.sew_on() {
@@ -116,12 +118,12 @@ pub fn check(req: Option<&Requires>, st: &BoxSew) -> Result<(), Unmet> {
             missing.push("voice (Sew's media engine)".to_string());
         }
         match st.status.as_deref() {
-            Some("installing" | "upgrading") => fix.push("wait for it to finish (k2 hostchat status)".to_string()),
-            _ => fix.push(format!("k2 hostchat enable{voice_flag}")),
+            Some("installing" | "upgrading") => fix.push(concat!("wait for it to finish (", cli_name!(), " hostchat status)").to_string()),
+            _ => fix.push(format!("{CLI_NAME} hostchat enable{voice_flag}")),
         }
         if let Some(range) = &req.sew {
             if k2_range_ok(range, &st.pinned_version) != Ok(true) {
-                fix.insert(0, format!("update K2 first (this K2 pins Sew {}, which isn't {range}): k2 update", st.pinned_version));
+                fix.insert(0, format!("update {PRODUCT_NAME} first (this {PRODUCT_NAME} pins Sew {}, which isn't {range}): {CLI_NAME} update", st.pinned_version));
             }
         }
         return Err(Unmet { missing, fix });
@@ -133,20 +135,20 @@ pub fn check(req: Option<&Requires>, st: &BoxSew) -> Result<(), Unmet> {
             Ok(false) => {
                 missing.push(format!("Sew {range} (this box runs Sew {have})"));
                 if k2_range_ok(range, &st.pinned_version) == Ok(true) {
-                    fix.push(format!("k2 hostchat upgrade (to Sew {})", st.pinned_version));
+                    fix.push(format!("{CLI_NAME} hostchat upgrade (to Sew {})", st.pinned_version));
                 } else {
-                    fix.push(format!("update K2 (this K2 pins Sew {}, which isn't {range}): k2 update, then k2 hostchat upgrade", st.pinned_version));
+                    fix.push(format!("update {PRODUCT_NAME} (this {PRODUCT_NAME} pins Sew {}, which isn't {range}): {CLI_NAME} update, then {CLI_NAME} hostchat upgrade", st.pinned_version));
                 }
             }
             Err(e) => {
                 missing.push(format!("a valid requires.sew ({e})"));
-                fix.push("fix the manifest (k2 app validate)".to_string());
+                fix.push(concat!("fix the manifest (", cli_name!(), " app validate)").to_string());
             }
         }
     }
     if req.voice && !st.voice_installed {
         missing.push("voice (Sew's media engine is off)".to_string());
-        fix.push("k2 hostchat media install".to_string());
+        fix.push(concat!(cli_name!(), " hostchat media install").to_string());
     }
     if missing.is_empty() {
         Ok(())

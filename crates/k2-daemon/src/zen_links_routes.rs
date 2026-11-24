@@ -31,12 +31,13 @@ use k2_core::zen::{links, ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::{cli_name, product_name};
 
 pub const GET_ROUTES: &[&str] = &["/cli/zen/links"];
 pub const POST_ROUTES: &[&str] = &["/cli/zen/links/allow", "/cli/zen/links/forget"];
 
 /// What an agent hears on a write.
-pub const OWNER_ONLY: &str = "Only the person opens a site for a Garden: K2 asks them on its own card the first time a widget opens a link there. Agents can read the list (k2 zen links) but can't change it.";
+pub const OWNER_ONLY: &str = concat!("Only the person opens a site for a Garden: ", product_name!(), " asks them on its own card the first time a widget opens a link there. Agents can read the list (", cli_name!(), " zen links) but can't change it.");
 
 pub fn is_route(path: &str) -> bool {
     GET_ROUTES.contains(&path) || POST_ROUTES.contains(&path)

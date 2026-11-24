@@ -34,6 +34,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
 use crate::vault_handoff_routes::{self as routes, Prepared, SendError};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// The `Custom` kind of a signed unsend (§9, H5).
 pub const REVOKE_KIND: &str = "vault-handoff-revoke/1";
@@ -380,7 +382,7 @@ fn too_old(host: &str) -> VaultError {
     VaultError::new(
         "peer_too_old",
         422,
-        format!("{host} can't take secret handoffs yet (it needs K2 0.46.1 or later, with \"Connect agents across servers\" on); nothing was sent"),
+        format!("{host} can't take secret handoffs yet (it needs {PRODUCT_NAME} 0.46.1 or later, with \"Connect agents across servers\" on); nothing was sent"),
     )
 }
 
@@ -539,14 +541,14 @@ fn held_response(c: &VaultCaller, name: &str, agent: &str, host: &str, note: &st
     let cards = c.workspace_id().is_some_and(k2_core::permission::gate::enabled_for);
     let hint = match (&label, cards) {
         (Some(_), true) => format!(
-            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask them with the line below: K2 puts a card on your Thread, and an Owner or Admin sends it from there with their vault confirm, once, or they also let you send {name} to {to} yourself from now on, without a card. Several secrets for the same agent? Ask once with secret=A,B,C (one --why covers them)."
+            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask them with the line below: {PRODUCT_NAME} puts a card on your Thread, and an Owner or Admin sends it from there with their vault confirm, once, or they also let you send {name} to {to} yourself from now on, without a card. Several secrets for the same agent? Ask once with secret=A,B,C (one --why covers them)."
         ),
         (Some(ws), false) => format!(
-            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask your person (an Owner or Admin) to do one of these: in {path}, add {name} for {to} (that lets you send it there from now on), then run this again; or send it themselves from their own terminal (Terminal or iTerm, not a K2 terminal; it asks for their vault confirm): k2 vault send {name} --scope ws:{ws} --to {to}",
+            "a person gave {name}, so it goes to another server only when a person on this server says so. Ask your person (an Owner or Admin) to do one of these: in {path}, add {name} for {to} (that lets you send it there from now on), then run this again; or send it themselves from their own terminal (Terminal or iTerm, not a {PRODUCT_NAME} terminal; it asks for their vault confirm): {CLI_NAME} vault send {name} --scope ws:{ws} --to {to}",
             path = send_allow_settings_path(ws)
         ),
         (None, _) => format!(
-            "a person gave {name}, so an Owner or Admin on this server sends it to another server (Members can't): ask one of them to run k2 vault send {name} --to {to} from their own terminal (it asks for their vault confirm)"
+            "a person gave {name}, so an Owner or Admin on this server sends it to another server (Members can't): ask one of them to run {CLI_NAME} vault send {name} --to {to} from their own terminal (it asks for their vault confirm)"
         ),
     };
     let mut error = json!({ "code": "held", "hint": hint, "secret": name, "to": to });
@@ -588,7 +590,7 @@ pub(crate) fn send_remote(
         return Err(VaultError::new(
             "federation_off",
             422,
-            "\"Connect agents across servers\" is off on this server: turn it on in Settings → Network → Tunnel → Policies (or k2 fed enable), then pair with that server (k2 fed pair)",
+            concat!("\"Connect agents across servers\" is off on this server: turn it on in Settings → Network → Tunnel → Policies (or ", cli_name!(), " fed enable), then pair with that server (", cli_name!(), " fed pair)"),
         )
         .into());
     }
@@ -598,9 +600,9 @@ pub(crate) fn send_remote(
         .iter()
         .find(|p| crate::federation_routes::peer_matches_user_host(p, host))
         .cloned()
-        .ok_or_else(|| VaultError::not_found(format!("no paired server matches {host} (k2 fed peers)")))?;
+        .ok_or_else(|| VaultError::not_found(format!("no paired server matches {host} ({CLI_NAME} fed peers)")))?;
     if peer.trust != PeerTrust::Trusted {
-        return Err(VaultError::forbidden("not_connected", format!("{host} isn't trusted yet; confirm the pairing first (k2 fed confirm)")).into());
+        return Err(VaultError::forbidden("not_connected", format!("{host} isn't trusted yet; confirm the pairing first ({CLI_NAME} fed confirm)")).into());
     }
     let peer_host = crate::federation_routes::peer_host(&peer);
     let stamp = c.actor.stamp();
@@ -803,7 +805,7 @@ fn trusted_peer(host: &str) -> Result<FederationPeer, VaultError> {
         .iter()
         .find(|p| crate::federation_routes::peer_matches_user_host(p, host))
         .cloned()
-        .ok_or_else(|| VaultError::not_found(format!("no paired server matches {host} (k2 fed peers)")))?;
+        .ok_or_else(|| VaultError::not_found(format!("no paired server matches {host} ({CLI_NAME} fed peers)")))?;
     if peer.trust != PeerTrust::Trusted {
         return Err(VaultError::forbidden("not_connected", format!("{host} isn't trusted yet")));
     }
@@ -843,7 +845,7 @@ pub(crate) fn ask_remote(
         let v: Value = serde_json::from_str(&resp.body).unwrap_or(Value::Null);
         let code = v.get("error").and_then(|e| e.get("code")).and_then(Value::as_str).unwrap_or("");
         return Err(if code == "not_connected" || resp.status.starts_with("403") {
-            VaultError::forbidden("not_connected", format!("{handle}::{host} isn't one of your connections (k2 connections add)"))
+            VaultError::forbidden("not_connected", format!("{handle}::{host} isn't one of your connections ({CLI_NAME} connections add)"))
         } else {
             VaultError::new("peer_refused", 502, format!("{host} didn't take the ask ({})", resp.status))
         });
@@ -929,14 +931,14 @@ pub(crate) fn peer_missing_feature(item: &handoff::HandoffItem, features: &[Stri
         return Some(VaultError::new(
             "peer_too_old_for_signed",
             422,
-            format!("{host} can't take a signed secret yet (it needs K2 0.46.4 or later); nothing was sent"),
+            format!("{host} can't take a signed secret yet (it needs {PRODUCT_NAME} 0.46.4 or later); nothing was sent"),
         ));
     }
     if item.uses_agent() && !has(handoff::FEATURE_AGENT) {
         return Some(VaultError::new(
             "peer_too_old",
             422,
-            format!("{host} can't take an agent-delivery ssh key yet (it needs K2 0.46.4 or later); nothing was sent"),
+            format!("{host} can't take an agent-delivery ssh key yet (it needs {PRODUCT_NAME} 0.46.4 or later); nothing was sent"),
         ));
     }
     None

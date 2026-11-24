@@ -13,6 +13,7 @@
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use k2_core::cli_name;
 
 /// Constant-time equality for the OWNER token compare — the crown-jewel
 /// credential. A plain `==` on `&str` short-circuits on the first byte that
@@ -223,7 +224,7 @@ const WEB_APP_HOST_MARKER: &str = k2_core::hosts::WEB_APP_HOST_SUFFIX;
 
 /// Teaching hint when the web-client wall is OFF.
 pub(crate) const HINT_WEB_CLIENT_DISABLED: &str =
-    "Hosted web access is OFF on this device. Ask the owner to enable Settings → webClientEnabled (or: k2 settings update '{\"webClientEnabled\":true}').";
+    concat!("Hosted web access is OFF on this device. Ask the owner to enable Settings → webClientEnabled (or: ", cli_name!(), " settings update '{\"webClientEnabled\":true}').");
 
 /// First `Host:` header value (trim; may include port).
 pub(crate) fn extract_host(headers_blob: &str) -> Option<&str> {

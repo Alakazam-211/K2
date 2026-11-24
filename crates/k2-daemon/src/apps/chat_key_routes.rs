@@ -40,6 +40,8 @@ use serde_json::{json, Value as J};
 use super::grace::{target, Target};
 use super::routes::{actor, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use crate::app_push::owner_routes::{admin_human, app_agent_at, fresh_confirm};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const KEY: &str = "/cli/app/chat-key";
 pub const REVOKE: &str = "/cli/app/chat-key/revoke";
@@ -61,7 +63,7 @@ pub fn confirm_reason(action: &str, service_id: Option<&str>) -> Option<Result<S
     };
     let Some(row) = row else { return Some(Err("no published App by that service id")) };
     let name: String = row.name.chars().filter(|c| !c.is_control()).take(64).collect();
-    Some(Ok(format!("let K2 sign chat passes for the users of App {name} ({}): its chat key", row.id)))
+    Some(Ok(format!("let {PRODUCT_NAME} sign chat passes for the users of App {name} ({}): its chat key", row.id)))
 }
 
 fn store(e: String) -> Refusal {
@@ -159,7 +161,7 @@ fn want_of(v: &J, before: Option<&ChatKey>, approved: Option<&[String]>) -> R<Wa
             return Err(no(
                 "no_chat_caps",
                 409,
-                "this App's chat caps aren't approved yet (or it is suspended): approve its manifest's chat caps first (k2 app approve), then give it a chat key",
+                concat!("this App's chat caps aren't approved yet (or it is suspended): approve its manifest's chat caps first (", cli_name!(), " app approve), then give it a chat key"),
             ))
         }
         (None, None, None) => {
@@ -266,7 +268,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
     // refusal is today's plain `owner_only`).
     if !admin_human(who) && !app_agent_at(who, &t, super::access::Level::Build) {
         return Err(with_card_fields(
-            owner_only("gives an App a chat key (k2 app grant <app> --kind chat-key); an agent may only narrow or revoke its own App's key"),
+            owner_only(concat!("gives an App a chat key (", cli_name!(), " app grant <app> --kind chat-key); an agent may only narrow or revoke its own App's key")),
             who,
             &t,
             &v,
@@ -285,7 +287,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
             }
             _ => {
                 return Err(with_card_fields(
-                    owner_only("turns an App's chat key on or widens it (k2 app grant <app> --kind chat-key from a terminal outside K2)"),
+                    owner_only(concat!("turns an App's chat key on or widens it (", cli_name!(), " app grant <app> --kind chat-key from a terminal outside ", product_name!(), ")")),
                     who,
                     &t,
                     &v,
@@ -304,7 +306,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
     if widen {
         if let Some(row) = crate::sew::store::load() {
             if crate::sew::supervisor::row_provider(&row) != k2_root_proto::sew::PROVIDER_K2 {
-                return Err(no("provider_is_standalone", 409, "a standalone Sew install takes no K2 passes, so an App on it has no chat key"));
+                return Err(no("provider_is_standalone", 409, concat!("a standalone Sew install takes no ", product_name!(), " passes, so an App on it has no chat key")));
             }
         }
         let flag = k2_core::tool_hook::features::APP_GOVERNED_SPACES;
@@ -314,7 +316,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
                 ..no(
                     "sew_feature_missing",
                     409,
-                    format!("this server's Sew doesn't have App-governed Spaces yet (flag {flag}, Sew 0.6.0+): the owner upgrades Sew (k2 hostchat upgrade)"),
+                    format!("this server's Sew doesn't have App-governed Spaces yet (flag {flag}, Sew 0.6.0+): the owner upgrades Sew ({CLI_NAME} hostchat upgrade)"),
                 )
             });
         }
@@ -323,8 +325,8 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
             &t,
             &v,
             CONFIRM_ACTION,
-            "an App's chat key lets K2 sign chat passes for its users: it needs a fresh confirm (Touch ID, your login or the vault password); \
-             k2 app grant <app> --kind chat-key asks for it from a terminal outside K2",
+            concat!("an App's chat key lets ", product_name!(), " sign chat passes for its users: it needs a fresh confirm (Touch ID, your login or the vault password); \
+             ", cli_name!(), " app grant <app> --kind chat-key asks for it from a terminal outside ", product_name!()),
             "confirm again: a confirm works once, for this App's chat key, within 60 seconds",
         )?;
     }

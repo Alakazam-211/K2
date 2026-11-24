@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::mail::jmap::{CertificateInfo, DefaultCertificate};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub fn certs_root() -> PathBuf {
     k2_core::paths::k2_home()
@@ -198,7 +199,7 @@ fn jmap_plant_via_engine(hostname: &str, chain_pem: &str, key_pem: &str) -> Resu
             String::new()
         } else {
             format!(
-                "; removed earlier K2 certificates {:?}{}",
+                "; removed earlier {PRODUCT_NAME} certificates {:?}{}",
                 report.removed,
                 report
                     .cleanup_error
@@ -561,8 +562,8 @@ pub fn decide_default(
 pub fn no_live_primary_warning(primary: &str, current: Option<&str>) -> String {
     format!(
         "Stalwart has no live certificate for {primary}, so the default certificate stays {} \
-         until it has one. Get one with `k2 domain name add {primary} --role mail` (if it isn't \
-         attached yet), then `k2 cert issue {primary}`; it becomes the default then.",
+         until it has one. Get one with `{CLI_NAME} domain name add {primary} --role mail` (if it isn't \
+         attached yet), then `{CLI_NAME} cert issue {primary}`; it becomes the default then.",
         current.unwrap_or("unset")
     )
 }

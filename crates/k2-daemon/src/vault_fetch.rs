@@ -36,6 +36,7 @@ use k2_vault::{SecretBytes, VaultError};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::egress::{self, Destination, Purpose};
+use k2_core::product_name;
 
 /// Used when the caller passes a zero timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -570,7 +571,7 @@ fn read_response(
     let mut truncated = false;
     if !no_body {
         let coding = coding(&raw_headers)
-            .ok_or_else(|| upstream_error("the response used a compression K2 can't read", origin))?;
+            .ok_or_else(|| upstream_error(concat!("the response used a compression ", product_name!(), " can't read"), origin))?;
         let mut reader: Box<dyn Read> = match coding {
             Coding::Identity => Box::new(resp),
             Coding::Gzip => Box::new(flate2::read::GzDecoder::new(resp)),

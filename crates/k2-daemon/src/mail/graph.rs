@@ -61,6 +61,7 @@ use crate::mail::messages::{
 use crate::mail::oauth::{form_encode, OauthProvider, ReqwestHttp};
 use crate::mail::secrets::FileSecretStore;
 use k2_core::db::schema::MailExternalInbox;
+use k2_core::brand::PRODUCT_NAME;
 
 /// The Graph v1.0 base. Microsoft mail is HTTPS to graph.microsoft.com —
 /// the row's `host`/`tls` (IMAP-shaped) are UNUSED for graph rows. A
@@ -137,7 +138,7 @@ pub fn check_inline_attachments(atts: &[GraphAttachment], body_len: usize) -> Re
         if a.bytes.len() > GRAPH_INLINE_ATTACHMENT_MAX {
             return Err(GraphSendError::TooLarge(format!(
                 "attachment '{}' is {} bytes — Microsoft 365 inboxes take attachments up to 3 MB \
-                 each in this K2 version (larger files need an upload session, not built yet); \
+                 each in this {PRODUCT_NAME} version (larger files need an upload session, not built yet); \
                  share a link instead",
                 a.filename,
                 a.bytes.len()

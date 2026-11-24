@@ -32,6 +32,8 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use k2_core::log_debug;
 use serde_json::{Map, Value};
+#[cfg(unix)]
+use k2_core::brand::PRODUCT_NAME;
 
 /// Build the ptyd meta a spawn site records (PRD §7.5): `base` (workspace
 /// uuid, secrets dir) plus the session key and the rest of the identity a
@@ -464,7 +466,7 @@ fn say_passport_trouble(reminted: &[String], unusable: &[(String, String)]) {
     if !unusable.is_empty() {
         let list: Vec<String> = unusable.iter().map(|(s, why)| format!("{s} ({why})")).collect();
         log_debug!(
-            "[ptyd] ERROR adoption found {} live session(s) with no usable passport and no new one: their K2 calls get 403 until the tab restarts: {}",
+            "[ptyd] ERROR adoption found {} live session(s) with no usable passport and no new one: their {PRODUCT_NAME} calls get 403 until the tab restarts: {}",
             unusable.len(),
             list.join(", ")
         );

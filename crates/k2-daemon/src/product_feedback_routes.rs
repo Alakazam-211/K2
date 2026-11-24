@@ -80,6 +80,7 @@ use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::product_feedback_drain as drain;
 use crate::session_events::{emit, SessionEvent};
+use k2_core::brand::PRODUCT_NAME;
 
 /// A send carries the edited diagnostics (≤ 256 KB of text, escaped).
 pub const MAX_BODY: usize = 1024 * 1024;
@@ -201,7 +202,7 @@ pub(crate) fn caller(who: &Who) -> Result<Caller, CliResponse> {
             return Err(refuse(
                 "403 Forbidden",
                 "product_feedback_wrong_credential",
-                "App passes and API keys can't send feedback to K2. People use the button next to Help; agents use k2 send-feedback.",
+                concat!("App passes and API keys can't send feedback to ", product_name!(), ". People use the button next to Help; agents use ", cli_name!(), " send-feedback."),
             ))
         }
         Who::Invalid => return Err(refuse("401 Unauthorized", "unauthorized", "Sign in to this server first.")),
@@ -231,7 +232,7 @@ fn sender_label(sender: &str) -> String {
         return format!("agent in {}", project_name(p).unwrap_or_else(|| "a removed workspace".into()));
     }
     if let Some(p) = sender.strip_prefix("shell:") {
-        return format!("K2 terminal in {}", project_name(p).unwrap_or_else(|| "a removed workspace".into()));
+        return format!("{PRODUCT_NAME} terminal in {}", project_name(p).unwrap_or_else(|| "a removed workspace".into()));
     }
     sender.to_string()
 }
@@ -248,7 +249,7 @@ fn split_error(e: &str) -> (String, String) {
 pub fn reason_line(code: &str, detail: &str) -> String {
     match code {
         k2_core::product_feedback::wire::E_UNREACHABLE | k2_core::product_feedback::wire::E_RELAY_NOT_READY => {
-            "K2's feedback service isn't reachable yet. Your feedback is saved on this server and sends when it is.".into()
+            concat!(product_name!(), "'s feedback service isn't reachable yet. Your feedback is saved on this server and sends when it is.").into()
         }
         "" => detail.to_string(),
         _ => detail.to_string(),
@@ -318,7 +319,7 @@ fn service_json() -> J {
         None => json!({ "state": "unknown" }),
         Some(s) => {
             let message = match s.state {
-                "ok" => "K2's feedback service is reachable.".to_string(),
+                "ok" => concat!(product_name!(), "'s feedback service is reachable.").to_string(),
                 "unreachable" => reason_line(k2_core::product_feedback::wire::E_UNREACHABLE, ""),
                 "paused" => "Alakazam paused the feedback service for now. Your feedback is saved and sends when it opens.".into(),
                 "limited" => "The feedback service asked this server to wait. Your feedback is saved and sends later.".into(),
@@ -651,7 +652,7 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
                 return refuse(
                     "410 Gone",
                     "draft_expired",
-                    "That preview of the K2 details is gone (they are kept an hour). Open the preview again.",
+                    concat!("That preview of the ", product_name!(), " details is gone (they are kept an hour). Open the preview again."),
                 );
             };
             match pf::diagnostics::choose(&draft.sections, &choice.drop, &choice.edited) {
@@ -715,7 +716,7 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
             return refuse(
                 "413 Payload Too Large",
                 "submission_too_large",
-                "With the screenshot and the K2 details together this is over 3 MB. Leave out some details or attach a smaller picture.",
+                concat!("With the screenshot and the ", product_name!(), " details together this is over 3 MB. Leave out some details or attach a smaller picture."),
             );
         }
     }
@@ -838,7 +839,7 @@ fn people_only() -> CliResponse {
     refuse(
         "403 Forbidden",
         "screenshot_people_only",
-        "Only a person can attach a screenshot, in the Send feedback dialog. Agents and k2 send-feedback send text only.",
+        concat!("Only a person can attach a screenshot, in the Send feedback dialog. Agents and ", cli_name!(), " send-feedback send text only."),
     )
 }
 
@@ -870,14 +871,14 @@ fn screenshot_put(c: &Caller, body: &[u8]) -> CliResponse {
     };
     let source = b.source.as_deref().map(str::trim).unwrap_or("");
     if !pf::screenshot::SOURCES.contains(&source) {
-        return bad("bad_screenshot", "source is window (K2's window) or file (an image the person chose).");
+        return bad("bad_screenshot", concat!("source is window (", product_name!(), "'s window) or file (an image the person chose)."));
     }
     let capture = b.capture.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let capture = match (source, capture) {
         ("window", Some(x)) if pf::screenshot::CAPTURES.contains(&x) => Some(x),
         ("window", _) => return bad("bad_screenshot", "A window picture says how it was taken: capture is page or webview."),
         (_, None) => None,
-        (_, Some(_)) => return bad("bad_screenshot", "capture is only for a picture of K2's window; leave it out for a file."),
+        (_, Some(_)) => return bad("bad_screenshot", concat!("capture is only for a picture of ", product_name!(), "'s window; leave it out for a file.")),
     };
     let image = b.image.as_deref().unwrap_or("");
     if image.trim().is_empty() {

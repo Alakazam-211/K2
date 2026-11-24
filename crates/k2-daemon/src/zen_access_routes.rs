@@ -56,6 +56,7 @@ use crate::cli_response::CliResponse;
 use crate::zen_garden_cards::{self as cards, GardenAsk};
 use crate::sidecar_routes::Caller;
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `GET` the list (the person) or whether you're on it (a passport);
 /// `POST {garden, agent, allow}` changes it (the person).
@@ -510,11 +511,11 @@ pub(crate) fn access_needed(caller: &Caller, garden_id: &str, garden_name: &str,
     crate::zen_routes::audit_refusal("zen.garden.access_needed", caller, format!("{path}: garden {garden_id}"), ingress);
     let message = if !has_card(&card) {
         format!(
-            "You're not on the list of agents who may edit {garden_name}. Ask the person once: k2 zen garden access \"{garden_name}\" ask"
+            "You're not on the list of agents who may edit {garden_name}. Ask the person once: {CLI_NAME} zen garden access \"{garden_name}\" ask"
         )
     } else {
         format!(
-            "You're not on the list of agents who may edit {garden_name}, so K2 asked the person (a card on their Thread with you). After they Allow, run this again."
+            "You're not on the list of agents who may edit {garden_name}, so {PRODUCT_NAME} asked the person (a card on their Thread with you). After they Allow, run this again."
         )
     };
     resp(
@@ -535,7 +536,7 @@ fn look_needs_a_list(caller: &Caller, path: &str, ingress: &str) -> CliResponse 
             "garden": J::Null,
             "name": J::Null,
             "card": J::Null,
-            "message": "Changing the look of every Garden needs an agent that edits at least one Garden. Ask for access to a Garden first: k2 zen garden access <garden> ask",
+            "message": concat!("Changing the look of every Garden needs an agent that edits at least one Garden. Ask for access to a Garden first: ", cli_name!(), " zen garden access <garden> ask"),
         }),
     )
 }
@@ -550,7 +551,7 @@ fn delete_person(caller: &Caller, garden_id: &str, garden_name: &str, ingress: &
     let message = if !has_card(&card) {
         format!("Only the person deletes a Garden. Ask them to delete {garden_name} (Settings → Gardens), or wait for their answer to your last ask.")
     } else {
-        format!("Only the person deletes a Garden. K2 asked them to delete {garden_name} (a card on their Thread with you).")
+        format!("Only the person deletes a Garden. {PRODUCT_NAME} asked them to delete {garden_name} (a card on their Thread with you).")
     };
     resp(
         "403 Forbidden",
@@ -565,7 +566,7 @@ pub(crate) fn retired(what: &str) -> CliResponse {
         json!({
             "ok": false,
             "error": "retired",
-            "message": format!("{what} is retired: Gardens use access lists now. An agent on a Garden's list edits it (k2 zen garden access <garden>); others ask with k2 zen garden access <garden> ask."),
+            "message": format!("{what} is retired: Gardens use access lists now. An agent on a Garden's list edits it ({CLI_NAME} zen garden access <garden>); others ask with {CLI_NAME} zen garden access <garden> ask."),
         }),
     )
 }
@@ -851,7 +852,7 @@ pub(crate) fn garden_new(owner_token: bool, caller: &Caller, body: &[u8], ingres
         }
         if f.widget_status(&name).exists {
             return crate::zen_routes::error_response(ZenError::WidgetExists(format!(
-                "widgets/{name} already exists; a new Garden brings new widgets only (change that one with k2 zen widget put)"
+                "widgets/{name} already exists; a new Garden brings new widgets only (change that one with {CLI_NAME} zen widget put)"
             )));
         }
         staged.push((name, files_in));
@@ -926,7 +927,7 @@ pub(crate) fn garden_new(owner_token: bool, caller: &Caller, body: &[u8], ingres
     let file = ZenFile::Garden(g.id.clone());
     let message = match &maker {
         Some(_) => format!(
-            "Made {}. To change it after this, you need the person's OK: K2 asked them on your Thread. Until they Allow, its widgets run without their data.",
+            "Made {}. To change it after this, you need the person's OK: {PRODUCT_NAME} asked them on your Thread. Until they Allow, its widgets run without their data.",
             g.name
         ),
         None => format!("Made {}.", g.name),
@@ -1119,7 +1120,7 @@ fn sign_parsed(caller: &Caller, b: SignBody, ingress: &str) -> CliResponse {
     }
     if st.state != WidgetState::Ok || st.hash().is_empty() {
         return crate::zen_routes::error_response(ZenError::WidgetBroken(format!(
-            "{widget} has errors; fix them (k2 zen validate --widget {widget}) and sign again"
+            "{widget} has errors; fix them ({CLI_NAME} zen validate --widget {widget}) and sign again"
         )));
     }
     let Some((signer, _)) = signer_of(caller) else {
@@ -1170,7 +1171,7 @@ fn sign_parsed(caller: &Caller, b: SignBody, ingress: &str) -> CliResponse {
                 return resp("200 OK", out);
             }
             let message = format!(
-                "{widget}'s version {} runs without the person's data in {}: you aren't on {} list, so your signature doesn't cover it. K2 asked the person to sign it (a zen.sign card); until they answer it keeps its own data only. An agent on every placing Garden's list signs it with k2 zen widget sign {widget}.",
+                "{widget}'s version {} runs without the person's data in {}: you aren't on {} list, so your signature doesn't cover it. {PRODUCT_NAME} asked the person to sign it (a zen.sign card); until they answer it keeps its own data only. An agent on every placing Garden's list signs it with {CLI_NAME} zen widget sign {widget}.",
                 short(&hash),
                 failing.join(", "),
                 if failing.len() == 1 { "its" } else { "their" },
@@ -1247,7 +1248,7 @@ fn not_available() -> CliResponse {
 
 fn owner_only_list() -> CliResponse {
     crate::zen_routes::error_response(ZenError::OwnerOnly(
-        "Only the person changes who may edit a Garden (Settings → Gardens). An agent asks with k2 zen garden access <garden> ask.".into(),
+        concat!("Only the person changes who may edit a Garden (Settings → Gardens). An agent asks with ", cli_name!(), " zen garden access <garden> ask.").into(),
     ))
 }
 
@@ -1457,9 +1458,9 @@ fn ask_post(caller: &Caller, body: &[u8]) -> CliResponse {
     // when they're too long or secret-shaped).
     let card = cards::present_with_reason(GardenAsk::Access, &p, &id, false, true, reason);
     let message = if !has_card(&card) {
-        format!("K2 didn't ask again: the person has a card waiting, or said Not now in the last 24 hours. Check later with k2 zen garden access \"{name}\".")
+        format!("{PRODUCT_NAME} didn't ask again: the person has a card waiting, or said Not now in the last 24 hours. Check later with {CLI_NAME} zen garden access \"{name}\".")
     } else {
-        format!("K2 asked the person to let you edit {name} (a card on their Thread with you).")
+        format!("{PRODUCT_NAME} asked the person to let you edit {name} (a card on their Thread with you).")
     };
     resp(
         "200 OK",
@@ -1522,8 +1523,8 @@ pub(crate) fn actor_json(label: &str) -> J {
             v
         }
         Some(Actor::K2) => json!({ "kind": "k2", "name": "K2" }),
-        Some(Actor::Disk) => json!({ "kind": "disk", "name": "outside K2" }),
-        Some(Actor::Migration) => json!({ "kind": "migration", "name": "K2 (upgrade)" }),
+        Some(Actor::Disk) => json!({ "kind": "disk", "name": concat!("outside ", product_name!()) }),
+        Some(Actor::Migration) => json!({ "kind": "migration", "name": concat!(product_name!(), " (upgrade)") }),
         None => json!({ "kind": "unknown", "name": label }),
     }
 }

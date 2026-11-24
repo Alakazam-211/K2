@@ -595,6 +595,7 @@ pub fn handle_cli_status() -> CliResponse {
 // `crate::cli` (made `pub` for this extraction).
 
 use crate::cli::{need_project, opt_param, respond, respond_unit, str_param};
+use k2_core::cli_name;
 
 /// Agents-domain GET dispatch. Returns `Some(resp)` for a handled path,
 /// `None` if the path isn't an agents-domain route (caller falls through).
@@ -777,9 +778,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/agents/heartbeat"
         | "/cli/agents/heartbeat/noop"
         | "/cli/agents/heartbeat/action" => CliResponse::gone(
-            "per-agent heartbeat control deleted in 0.40.31; use the named workspace \
-             heartbeat schedules instead — `k2 heartbeat schedule list` / the \
-             `/cli/heartbeat/*` routes",
+            concat!("per-agent heartbeat control deleted in 0.40.31; use the named workspace \
+             heartbeat schedules instead — `", cli_name!(), " heartbeat schedule list` / the \
+             `/cli/heartbeat/*` routes"),
         ),
 
         // ── Sub-agent completion ────────────────────────────────────

@@ -19,6 +19,7 @@ use super::{inject, present, store};
 use k2_core::brand::CLI_NAME;
 
 pub(crate) use lim::CHECK_CACHE_SECS;
+use k2_core::product_name;
 
 /// A refused ask: HTTP status, code, hint and extra top-level fields.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,7 +106,7 @@ pub(crate) fn cached_check(req: &PermissionRequest) -> Check {
     }
     let c = match present::find_action(&req.action) {
         Some(r) => r.check_named(&present::ctx_of(req)),
-        None => Check::Moved("K2 no longer knows this action".to_string()),
+        None => Check::Moved(concat!(product_name!(), " no longer knows this action").to_string()),
     };
     if let Ok(mut g) = CACHE.lock() {
         let m = g.get_or_insert_with(HashMap::new);

@@ -44,6 +44,8 @@ use serde_json::Value;
 
 use crate::mail::dav::{merge_permissions, protected_reason};
 use crate::mail::jmap::StalwartClient;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The permission a mailbox login loses. Exact Stalwart `Permission`
 /// name, live-checked on 0.16.10 and 0.16.25: one unknown name fails a
@@ -235,11 +237,11 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
     }
     let title = format!("Hosted mail: {} mailbox(es) hold API keys their users created", holders.len());
     let mut body = String::from(
-        "Mailbox users can no longer create mail server API keys for their own mailbox. \
-         K2 never creates keys on a mailbox, so the keys below were created by someone \
+        concat!("Mailbox users can no longer create mail server API keys for their own mailbox. \
+         ", product_name!(), " never creates keys on a mailbox, so the keys below were created by someone \
          with that mailbox's password. A key keeps working until it is revoked.\n\n\
-         To revoke them, set a new password: `k2 hostmail password rotate <address>` \
-         revokes every API key on that mailbox.\n\n",
+         To revoke them, set a new password: `", cli_name!(), " hostmail password rotate <address>` \
+         revokes every API key on that mailbox.\n\n"),
     );
     for l in holders {
         let who = l.address.clone().unwrap_or_else(|| format!("account {}", l.account_id));
@@ -248,7 +250,7 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
     }
     body.push_str(&format!(
         "\nEach change is recorded in the auth audit log (~/.k2/auth-audit.jsonl, event \
-         {AUDIT_EVENT}). `k2 hostmail audit-sieve` lists the mailboxes that still hold keys."
+         {AUDIT_EVENT}). `{CLI_NAME} hostmail audit-sieve` lists the mailboxes that still hold keys."
     ));
     Some((title, body))
 }

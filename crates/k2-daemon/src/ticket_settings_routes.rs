@@ -23,6 +23,8 @@
 
 use crate::cli_response::CliResponse;
 use k2_core::feedback_brief::TicketRule;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The one path (GET + POST).
 pub const PATH: &str = "/cli/tickets/settings";
@@ -267,9 +269,9 @@ pub fn handle_post(body: &[u8], writer: &Writer) -> (CliResponse, String) {
                 refusal(
                     "403 Forbidden",
                     "owner_only",
-                    "Ticket rules are owner settings: an agent can't change them. Ask your \
-                     human to use Settings → Tickets, or to run `k2 tickets settings` from a \
-                     terminal outside K2 (ran as agent; run as owner).",
+                    concat!("Ticket rules are owner settings: an agent can't change them. Ask your \
+                     human to use Settings → Tickets, or to run `", cli_name!(), " tickets settings` from a \
+                     terminal outside ", product_name!(), " (ran as agent; run as owner)."),
                 ),
                 "refused:agent".to_string(),
             )
@@ -305,7 +307,7 @@ pub fn handle_post(body: &[u8], writer: &Writer) -> (CliResponse, String) {
                         "unknown_user",
                         format!(
                             "`{who}` is not a user on this server. The default assignee is \
-                             the owner (`owner`) or a Connect user: k2 connections list --users"
+                             the owner (`owner`) or a Connect user: {CLI_NAME} connections list --users"
                         ),
                     ),
                     "refused:unknown_user".to_string(),

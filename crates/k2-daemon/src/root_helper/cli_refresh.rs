@@ -28,6 +28,8 @@ use k2_root_proto::paths::CLI_PATH;
 use k2_root_proto::version::{Semver, CLI_REFRESH_MIN_PROTOCOL};
 
 use super::RootHelperState;
+use k2_core::brand::CLI_NAME;
+use k2_core::product_name;
 
 /// What is at `/usr/local/bin/k2`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -85,7 +87,7 @@ fn other_owner(version_json: &Value, own: &(String, String, String)) -> Option<S
     }
     let first = daemons.iter().find(|d| d["scope"] == "system");
     let mine = first.is_some_and(|d| d["user"] == user.as_str() && d["unit"] == unit.as_str());
-    (!mine).then(|| "another K2 daemon owns /usr/local/bin/k2 (the first system entry in daemon.toml)".into())
+    (!mine).then(|| concat!("another ", product_name!(), " daemon owns /usr/local/bin/k2 (the first system entry in daemon.toml)").into())
 }
 
 /// One decision + (at most) one root call.
@@ -102,7 +104,7 @@ pub fn refresh_with(ops: &dyn CliOps, want_cli: &DaemonCli) -> CliOutcome {
         return not_managed("not a regular file");
     }
     let Some(have) = f.version.as_deref().and_then(Semver::parse) else {
-        return not_managed("not the K2 CLI");
+        return not_managed(concat!("not the ", product_name!(), " CLI"));
     };
     let Some(want) = Semver::parse(&want_cli.version) else {
         return not_managed("the daemon's CLI version is not x.y.z");
@@ -128,7 +130,7 @@ pub fn refresh_with(ops: &dyn CliOps, want_cli: &DaemonCli) -> CliOutcome {
         return CliOutcome::NeedsHelper {
             reason: format!(
                 "the root helper must speak protocol {CLI_REFRESH_MIN_PROTOCOL} to refresh it \
-                 (k2 root-helper update)"
+                 ({CLI_NAME} root-helper update)"
             ),
         };
     }

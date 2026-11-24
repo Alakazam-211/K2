@@ -45,6 +45,8 @@ use k2_core::app_settings::{KeepAwakeMode, KeepAwakeSettings, WAKE_BATTERY_FLOOR
 use parking_lot::Mutex;
 
 use super::{AwakeHold, HelperCaller, LidAccess, LidFacts, LidRefusal, Power, PowerOs, PowerSource, NO_SESSION_PREFIX};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// Hold this long after the last working session goes idle.
 pub const WORKING_GRACE: Duration = Duration::from_secs(60);
@@ -226,7 +228,7 @@ pub fn describe(mode: KeepAwakeMode, p: &Plan, a: &Applied, src: PowerSource) ->
         return shown(
             "paused",
             format!("Paused: battery below {floor}%"),
-            format!("On battery below {floor}%, K2 lets this computer sleep."),
+            format!("On battery below {floor}%, {PRODUCT_NAME} lets this computer sleep."),
             false,
             false,
         );
@@ -364,7 +366,7 @@ impl KeepAwake {
             g.open = None;
         }
         if p.want_lid && g.lid.is_none() {
-            match os.hold_lid_closed("K2 keep awake") {
+            match os.hold_lid_closed(concat!(product_name!(), " keep awake")) {
                 Ok(guard) => {
                     g.lid = Some(guard);
                     g.lid_refusal = None;

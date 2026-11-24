@@ -27,6 +27,8 @@
 use k2_core::email_notify::{self as store, Bucket};
 
 use super::{fail, Fail, R};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 pub const HOUR: i64 = 3600;
 pub const DAY: i64 = 86_400;
@@ -67,7 +69,7 @@ fn limited(what: &str, used: i64, limit: i64, window: i64, oldest: Option<i64>, 
 
 fn check_one(conn: &rusqlite::Connection, b: &Bucket<'_>, what: &str, limit: i64, window: i64, n: i64, at: i64) -> R<()> {
     let (used, oldest) = store::sum_recipients(conn, b, at - window + 1, at + window - 1)
-        .map_err(|e| fail(503, "failed", format!("K2 couldn't read the send budget, so it didn't send (fail-closed): {e}")))?;
+        .map_err(|e| fail(503, "failed", format!("{PRODUCT_NAME} couldn't read the send budget, so it didn't send (fail-closed): {e}")))?;
     if used + n > limit {
         return Err(limited(what, used, limit, window, oldest, at));
     }
@@ -99,7 +101,7 @@ pub fn check(kind: &Kind<'_>, n: usize, at: i64) -> R<()> {
     let conn = db.lock();
     check_one(&conn, &Bucket::Box, "this server's notification budget", BOX_HOURLY, HOUR, n, at)?;
     match kind {
-        Kind::System => check_one(&conn, &Bucket::System, "K2's system mail budget", SYSTEM_HOURLY, HOUR, n, at),
+        Kind::System => check_one(&conn, &Bucket::System, concat!(product_name!(), "'s system mail budget"), SYSTEM_HOURLY, HOUR, n, at),
         Kind::App { app, scope_any, warmup_domain } => {
             check_one(&conn, &Bucket::App(app), "this App's email budget", APP_HOURLY, HOUR, n, at)?;
             check_one(&conn, &Bucket::App(app), "this App's email budget", APP_DAILY, DAY, n, at)?;
@@ -145,13 +147,13 @@ pub fn pending_cap(kind: &Kind<'_>) -> i64 {
 
 /// Would `n` more scheduled recipients fit what an App may keep waiting?
 pub fn check_pending(kind: &Kind<'_>, n: usize) -> R<()> {
-    let Kind::App { app, .. } = kind else { return Err(fail(400, "usage", "K2's own mail is never scheduled")) };
+    let Kind::App { app, .. } = kind else { return Err(fail(400, "usage", concat!(product_name!(), "'s own mail is never scheduled"))) };
     let cap = pending_cap(kind);
     let waiting = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::scheduled_pending(&conn, app)
-            .map_err(|e| fail(503, "failed", format!("K2 couldn't read the send budget, so it didn't send (fail-closed): {e}")))?
+            .map_err(|e| fail(503, "failed", format!("{PRODUCT_NAME} couldn't read the send budget, so it didn't send (fail-closed): {e}")))?
     };
     if waiting + n as i64 > cap {
         let mut f = fail(

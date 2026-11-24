@@ -14,6 +14,7 @@ use crate::cli_response::CliResponse;
 use crate::remote_session_sessions;
 use crate::session_events::{self, SessionEvent};
 use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
+use k2_core::cli_name;
 
 /// Stable 403 body for Layer 0 / grant denials.
 pub fn denied(code: &str, hint: &str) -> CliResponse {
@@ -267,7 +268,7 @@ pub fn handle_shell_spawn(
 
     // 1) Layer 0 first — always.
     if !k2_core::remote_sessions::is_enabled() {
-        let hint = "Remote Sessions are OFF on this device. Ask the owner to run: k2 remote-session enable";
+        let hint = concat!("Remote Sessions are OFF on this device. Ask the owner to run: ", cli_name!(), " remote-session enable");
         audit_denial(
             label,
             k2_core::remote_sessions::CODE_REMOTE_SESSIONS_DISABLED,
@@ -415,7 +416,7 @@ pub fn gate_remote_session_io(
     // (bound PTY and/or grant credential), including post-disable
     // unbind so write still reports REMOTE_SESSIONS_DISABLED.
     if (bound_grant_id.is_some() || is_grant) && !k2_core::remote_sessions::is_enabled() {
-        let hint = "Remote Sessions are OFF on this device. Ask the owner to run: k2 remote-session enable";
+        let hint = concat!("Remote Sessions are OFF on this device. Ask the owner to run: ", cli_name!(), " remote-session enable");
         audit_denial(
             &label,
             k2_core::remote_sessions::CODE_REMOTE_SESSIONS_DISABLED,

@@ -20,6 +20,8 @@ use rusqlite::Connection;
 use serde_json::{json, Value as J};
 
 use super::routes::{db_err, need_credential, no, Who, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// A port another App already opens.
 pub const PORT_OWNED: &str = "port_owned";
@@ -63,7 +65,7 @@ impl Maintainer {
             "handle": self.handle,
             "address": self.address,
             "kind": self.kind,
-            "msg": self.handle.as_ref().map(|h| format!("k2 msg {h} \"…\"")),
+            "msg": self.handle.as_ref().map(|h| format!("{CLI_NAME} msg {h} \"…\"")),
         })
     }
 
@@ -132,7 +134,7 @@ pub(crate) fn port_clash(app_id: &str, port: &appcfg::PortSpec) -> R<()> {
     let Some(other) = holder else { return Ok(()) };
     let m = maintainer_of(&other.owner_workspace);
     let ask = match &m.address {
-        Some(addr) if m.kind == "agent" => format!(" Ask it: k2 msg {addr} \"…\""),
+        Some(addr) if m.kind == "agent" => format!(" Ask it: {CLI_NAME} msg {addr} \"…\""),
         _ => " Ask the server's owner.".to_string(),
     };
     let mut r = no(
@@ -266,8 +268,8 @@ pub(crate) fn box_view(who: &Who) -> R<J> {
             "usedBytes": used,
             "freeBytes": pool.size.saturating_sub(used).max(0),
         },
-        "note": "Every App on this box with the agent that maintains it. Talk to that agent (k2 msg <address>) before \
-                 you take a hostname, a port or memory it holds. Logs, data and settings stay with the App's own agent.",
+        "note": concat!("Every App on this box with the agent that maintains it. Talk to that agent (", cli_name!(), " msg <address>) before \
+                 you take a hostname, a port or memory it holds. Logs, data and settings stay with the App's own agent."),
     }))
 }
 

@@ -45,7 +45,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 
 pub(crate) const ACTION: &str = "chat.account";
 /// The grants route the owner uses (`k2 app grant add`).
@@ -78,7 +78,7 @@ pub(crate) static CHAT_ACCOUNT: ActionSpec = ActionSpec {
     undo: Undo::None,
     settings: SettingsRef {
         page: "people",
-        path: concat!(cli_name!(), " app grant add --kind chat --subject-kind workspace --subject {ws} --scope coworker (a terminal outside K2)"),
+        path: concat!(cli_name!(), " app grant add --kind chat --subject-kind workspace --subject {ws} --scope coworker (a terminal outside ", product_name!(), ")"),
     },
     walls: &[
         Wall {

@@ -5,13 +5,14 @@
 //! ([`gpu_node_refusal`]) and for auto-placement with no node left
 //! ([`gpu_refusal`]). `compute_place` re-exports the placement half.
 
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use k2_core::compute::codes;
 use k2_core::compute::proto::frames::Offer;
 use k2_core::compute::store::GrantRow;
 
 use crate::compute_place::{skip, CandReport, Want};
 use crate::compute_routes::{no, Refusal, R};
+use k2_core::cli_name;
 
 /// `gpu` from a run request (`--gpu [any|amd|intel]`): `{"vendor": "any",
 /// "count": 1}`. NVIDIA is refused until tested on real hardware.
@@ -58,7 +59,7 @@ pub(crate) fn gpu_mem_from(v: &serde_json::Value, gpu: bool) -> R<Option<u64>> {
         })?,
     };
     if !gpu {
-        return Err(no(codes::BAD_REQUEST, 400, "--gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (k2 compute run --gpu --gpu-mem 4G --mem 8G -- <command>)"));
+        return Err(no(codes::BAD_REQUEST, 400, concat!("--gpu-mem needs --gpu: it is the GPU memory budget of a GPU job (", cli_name!(), " compute run --gpu --gpu-mem 4G --mem 8G -- <command>)")));
     }
     k2_core::compute::proto::gpu::check_gpu_mem(b).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
     Ok(Some(b))
@@ -79,7 +80,7 @@ pub(crate) fn gpu_node_refusal(code: &str, node: &str, ws: &str) -> Refusal {
         return no(
             g::GPU_NEEDS_GRANT,
             403,
-            format!("--gpu: '{node}' runs GPU jobs for this server, but workspace {ws}'s grant there doesn't allow them. The owner or an Admin: k2 compute grant {node} --workspace {ws} --gpu"),
+            format!("--gpu: '{node}' runs GPU jobs for this server, but workspace {ws}'s grant there doesn't allow them. The owner or an Admin: {CLI_NAME} compute grant {node} --workspace {ws} --gpu"),
         )
         .with("node", node.to_string());
     }
@@ -87,7 +88,7 @@ pub(crate) fn gpu_node_refusal(code: &str, node: &str, ws: &str) -> Refusal {
         g::NO_GPU_NODE,
         404,
         format!(
-            "--gpu: '{node}' runs no GPU jobs for this server (or none of that vendor). Its owner turns them on at the machine: sudo k2-node admin gpu on --server <this server>; then: k2 compute grant {node} --workspace {ws} --gpu. Or leave the node off and {PRODUCT_NAME} picks one that has a GPU for you"
+            "--gpu: '{node}' runs no GPU jobs for this server (or none of that vendor). Its owner turns them on at the machine: sudo k2-node admin gpu on --server <this server>; then: {CLI_NAME} compute grant {node} --workspace {ws} --gpu. Or leave the node off and {PRODUCT_NAME} picks one that has a GPU for you"
         ),
     )
 }
@@ -154,7 +155,7 @@ pub fn gpu_refusal(
             codes::GPU_NEEDS_GRANT,
             403,
             format!(
-                "--gpu: {node} runs GPU jobs for this server, but workspace {ws_handle}'s grant there doesn't allow them. The owner or an Admin: k2 compute grant {node} --workspace {ws_handle} --gpu"
+                "--gpu: {node} runs GPU jobs for this server, but workspace {ws_handle}'s grant there doesn't allow them. The owner or an Admin: {CLI_NAME} compute grant {node} --workspace {ws_handle} --gpu"
             ),
             Some(node.clone()),
         ));

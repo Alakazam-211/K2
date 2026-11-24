@@ -19,6 +19,7 @@ use k2_core::db;
 use k2_core::db::schema::Workspace;
 use k2_core::git;
 use k2_core::git_changes;
+use k2_core::brand::PRODUCT_NAME;
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -153,7 +154,7 @@ pub fn handle_git_init(is_post: bool, body: &[u8]) -> CliResponse {
         None => {
             return changes_error(git_changes::ChangesError::new(
                 git_changes::codes::NOT_FOUND,
-                format!("{ws} is not a K2 workspace on this server"),
+                format!("{ws} is not a {PRODUCT_NAME} workspace on this server"),
             ))
         }
     };
@@ -388,7 +389,7 @@ fn registered_workspace(path: &str) -> Result<String, CliResponse> {
     let not_found = || {
         changes_error(git_changes::ChangesError::new(
             git_changes::codes::NOT_FOUND,
-            format!("{path} is not a K2 workspace on this server"),
+            format!("{path} is not a {PRODUCT_NAME} workspace on this server"),
         ))
     };
     let want = dunce::canonicalize(path.trim()).map_err(|_| not_found())?;

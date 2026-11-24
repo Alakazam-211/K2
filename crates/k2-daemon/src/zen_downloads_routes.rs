@@ -36,11 +36,12 @@ use k2_core::zen::{downloads, ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::product_name;
 
 pub const GET_ROUTES: &[&str] = &["/cli/zen/downloads"];
 pub const POST_ROUTES: &[&str] = &["/cli/zen/downloads/allow", "/cli/zen/downloads/forget", "/cli/zen/downloads/spend"];
 
-pub const OWNER_ONLY: &str = "Only the person decides which widgets save files to Downloads without asking (K2's card, the first time). Agents can't read or change that list.";
+pub const OWNER_ONLY: &str = concat!("Only the person decides which widgets save files to Downloads without asking (", product_name!(), "'s card, the first time). Agents can't read or change that list.");
 
 pub fn is_route(path: &str) -> bool {
     GET_ROUTES.contains(&path) || POST_ROUTES.contains(&path)

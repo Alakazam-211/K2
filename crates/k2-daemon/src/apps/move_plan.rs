@@ -46,6 +46,8 @@ use k2_core::published_services as ps;
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTES: &[&str] = &["/cli/app/move-plan", "/cli/app/move-plan/request"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/move-plan/request"];
@@ -116,7 +118,7 @@ impl Plan {
             "steps": self.steps,
             "next": next,
             "ownerStepsTodo": owner,
-            "request": if owner.is_empty() { J::Null } else { json!(format!("k2 app move-plan {} --app {} --request", self.service.name, self.app_id)) },
+            "request": if owner.is_empty() { J::Null } else { json!(format!("{CLI_NAME} app move-plan {} --app {} --request", self.service.name, self.app_id)) },
             "done": self.steps.iter().all(|s| s["state"] == DONE || s["state"] == NA),
         })
     }
@@ -188,7 +190,7 @@ fn target_app(who: &Who, svc: &ps::PublishedService, app: Option<&str>) -> R<(St
             Some(r) if r.owner_workspace == svc.project_id => Ok((r.app_id.clone(), Some(r))),
             // Another workspace's App: the same answer as no App (no leak
             // to a passport), and never a plan across workspaces.
-            Some(_) if super::routes::agent_ws(who).is_some() => Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace (k2 app list)"))),
+            Some(_) if super::routes::agent_ws(who).is_some() => Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{id}' in your workspace ({CLI_NAME} app list)"))),
             Some(_) => Err(no(codes::BAD_REQUEST, 409, format!("App '{id}' belongs to another workspace: a move stays inside the service's workspace"))),
             None => {
                 if let Some((code, msg)) = deploy::app_id_problem(&id) {
@@ -278,7 +280,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         steps.push(step("engine", OWNER, NA, "Install the App engine", why, None));
     } else if !may_run_box_checks(who) {
         // A Member's look never runs the box probes.
-        let why = "an Owner or Admin sees the box checks (k2 app doctor)";
+        let why = concat!("an Owner or Admin sees the box checks (", cli_name!(), " app doctor)");
         steps.push(step("box_prep", OWNER, BLOCKED, "Prepare the box for Apps", why, None));
         steps.push(step("engine", OWNER, BLOCKED, "Install the App engine", why, None));
     } else {
@@ -293,8 +295,8 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
             OWNER,
             if ready { DONE } else { TODO },
             "Prepare the box for Apps",
-            if ready { "k2 app doctor: ready".to_string() } else { format!("k2 app doctor: not ready ({})", failing.join(", ")) },
-            (!ready).then(|| "k2 app box prepare".to_string()),
+            if ready { concat!(cli_name!(), " app doctor: ready").to_string() } else { format!("{CLI_NAME} app doctor: not ready ({})", failing.join(", ")) },
+            (!ready).then(|| concat!(cli_name!(), " app box prepare").to_string()),
         ));
         let engine_ok = doc["checks"].as_array().is_some_and(|a| a.iter().any(|c| c["id"] == "engine" && c["status"] == "ok"));
         steps.push(step(
@@ -303,7 +305,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
             if engine_ok { DONE } else { TODO },
             "Install the App engine",
             if engine_ok { "k2-app-engine answers" } else { "k2-app-engine isn't installed or doesn't answer" },
-            (!engine_ok).then(|| "k2 app engine install".to_string()),
+            (!engine_ok).then(|| concat!(cli_name!(), " app engine install").to_string()),
         ));
     }
 
@@ -314,7 +316,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         if build_on { DONE } else { TODO },
         "Turn on \"Build and run Apps\" for the workspace",
         if build_on { "on".to_string() } else { format!("off for {}: every App change its agent makes waits for the owner", ws_handle(&ws)) },
-        (!build_on).then(|| format!("k2 app access {} --build on", ws_handle(&ws))),
+        (!build_on).then(|| format!("{CLI_NAME} app access {} --build on", ws_handle(&ws))),
     ));
 
     let installed = app_row.is_some();
@@ -324,7 +326,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         if installed { DONE } else { TODO },
         "Install the App",
         if installed { format!("App {app_id} exists") } else { format!("no App yet; '{app_id}' is a suggestion (any free App id; --app to pick)") },
-        (!installed).then(|| format!("k2 app install {app_id}")),
+        (!installed).then(|| format!("{CLI_NAME} app install {app_id}")),
     ));
 
     let live = app_row.as_ref().is_some_and(|a| a.live_seed.is_some() && a.state == store::STATE_RUNNING);
@@ -338,7 +340,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
             Some(a) => format!("{} is {}", a.app_id, a.state),
             None => "after install".to_string(),
         },
-        Some(format!("k2 app deploy {app_id} <folder>")),
+        Some(format!("{CLI_NAME} app deploy {app_id} <folder>")),
     ));
 
     // 0.46.16: a --skin site. Its guests are copied in label take (no
@@ -361,7 +363,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
                     if users.is_empty() { DONE } else { TODO },
                     "Give box-login users the same access on the App",
                     if users.is_empty() { "every box-login user already has it".to_string() } else { format!("{} user(s) would be copied", users.len()) },
-                    (!users.is_empty()).then(|| format!("k2 app grant copy-host {}", a.app_id)),
+                    (!users.is_empty()).then(|| format!("{CLI_NAME} app grant copy-host {}", a.app_id)),
                 );
                 st["userCount"] = json!(users.len());
                 st["usersHash"] = json!(users_hash(&users));
@@ -388,7 +390,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
                 OWNER,
                 NA,
                 "Let the App set its guests' rooms (guests-rooms grant)",
-                "the old service hands its guests no rooms K2 can see: not needed (k2 app grant <app> --kind guests-rooms if the App sets rooms)",
+                concat!("the old service hands its guests no rooms ", product_name!(), " can see: not needed (", cli_name!(), " app grant <app> --kind guests-rooms if the App sets rooms)"),
                 None,
             );
             st["rooms"] = json!(rooms);
@@ -410,7 +412,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
                 },
                 (!covered).then(|| {
                     let r: String = handles.iter().map(|h| format!(" --room {h}")).collect();
-                    format!("k2 app grant {} --kind {}{r}", a.app_id, k2_core::skin::guest_rooms::GRANT_KIND)
+                    format!("{CLI_NAME} app grant {} --kind {}{r}", a.app_id, k2_core::skin::guest_rooms::GRANT_KIND)
                 }),
             );
             st["rooms"] = json!(rooms);
@@ -441,7 +443,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
             None if live => format!("nothing copied yet: the service's folder is {}", svc.cwd),
             None => "after the App is live".to_string(),
         },
-        Some(format!("k2 app data put {app_id} <your-data-folder>")),
+        Some(format!("{CLI_NAME} app data put {app_id} <your-data-folder>")),
     ));
 
     // The labels.
@@ -461,7 +463,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         } else {
             "after the App is live".to_string()
         },
-        (public && !took).then(|| format!("k2 app label take {app_id} {name}")),
+        (public && !took).then(|| format!("{CLI_NAME} app label take {app_id} {name}")),
     ));
     let attached: Vec<String> = app_row
         .as_ref()
@@ -476,7 +478,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
             if done { DONE } else if live { TODO } else { BLOCKED },
             "Move another hostname pointing at the service's port",
             if done { format!("{label} serves {app_id}") } else { format!("{label} points at port {}", svc.port) },
-            (!done).then(|| format!("k2 app domain add {app_id} {label}")),
+            (!done).then(|| format!("{CLI_NAME} app domain add {app_id} {label}")),
         );
         st["label"] = json!(label);
         steps.push(st);
@@ -489,7 +491,7 @@ fn plan(who: &Who, service: Option<&str>, app: Option<&str>) -> R<Plan> {
         if stopped { DONE } else if took || !public { TODO } else { BLOCKED },
         "Stop the old service (the move is done after this)",
         if stopped { format!("{name} is stopped") } else { format!("{name} still runs (unrouted once its label moved)") },
-        (!stopped).then(|| format!("k2 publish stop {name}")),
+        (!stopped).then(|| format!("{CLI_NAME} publish stop {name}")),
     ));
 
     Ok(Plan { service: svc, app_id, app: app_row, steps })
@@ -503,7 +505,7 @@ fn site_steps(who: &Who, svc: &ps::PublishedService, app_id: &str, app: Option<&
     if let Some(d) = steps.iter_mut().find(|s| s["id"] == "deploy") {
         if d["state"] != DONE {
             d["detail"] = json!(format!(
-                "{}; a --skin site is static files: deploy {folder} as a static App (manifest.json host.mode \"static\", host.root; k2 study app-move)",
+                "{}; a --skin site is static files: deploy {folder} as a static App (manifest.json host.mode \"static\", host.root; {CLI_NAME} study app-move)",
                 d["detail"].as_str().unwrap_or_default()
             ));
         }
@@ -516,7 +518,7 @@ fn site_steps(who: &Who, svc: &ps::PublishedService, app_id: &str, app: Option<&
         if took { DONE } else if live { TODO } else { BLOCKED },
         "Give the site's guests the same access on the App",
         "",
-        (!took).then(|| format!("k2 app label take {app_id} {name}")),
+        (!took).then(|| format!("{CLI_NAME} app label take {app_id} {name}")),
     );
     match app {
         Some(a) => match k2_core::skin::handover::app_move::copy_site_grants_to_app(&svc.id, &a.service_id, &a.app_id, Some(&a.owner_workspace), &actor(who), true) {
@@ -555,16 +557,16 @@ fn site_steps(who: &Who, svc: &ps::PublishedService, app_id: &str, app: Option<&
         } else {
             "after the App is live".to_string()
         },
-        (public && !took).then(|| format!("k2 app label take {app_id} {name}")),
+        (public && !took).then(|| format!("{CLI_NAME} app label take {app_id} {name}")),
     ));
     let stopped = svc.desired != "running";
     steps.push(step(
         "stop_old",
         AGENT,
         if stopped { DONE } else if took || !public { TODO } else { BLOCKED },
-        "Stop the --skin site (the move is done after this; k2 app label return undoes the move until then)",
+        concat!("Stop the --skin site (the move is done after this; ", cli_name!(), " app label return undoes the move until then)"),
         if stopped { format!("{name} is stopped") } else { format!("{name} still runs (unrouted once its label moved)") },
-        (!stopped).then(|| format!("k2 publish stop {name}")),
+        (!stopped).then(|| format!("{CLI_NAME} publish stop {name}")),
     ));
 }
 
@@ -600,7 +602,7 @@ fn request(who: &Who, body: &[u8]) -> R<J> {
             let extra = match s["id"].as_str() {
                 Some("copy_host") => match s["users"].as_array() {
                     Some(u) => format!(": {}", u.iter().filter_map(J::as_str).collect::<Vec<_>>().join(", ")),
-                    None => format!(": {} user(s) (k2 app move-plan {} names them)", s["userCount"], p.service.name),
+                    None => format!(": {} user(s) ({CLI_NAME} app move-plan {} names them)", s["userCount"], p.service.name),
                 },
                 Some("guest_rooms") => {
                     let h: Vec<&str> = s["roomHandles"].as_array().map(|a| a.iter().filter_map(J::as_str).collect()).unwrap_or_default();
@@ -631,14 +633,14 @@ fn request(who: &Who, body: &[u8]) -> R<J> {
         }),
         diff: json!({ "lines": lines, "route": APPLY_ROUTE }),
         summary,
-        reasons: vec!["the owner's steps of a move to the App runtime (k2 app move-plan)".into()],
+        reasons: vec![concat!("the owner's steps of a move to the App runtime (", cli_name!(), " app move-plan)").into()],
         reason: s(&v, "reason"),
     })?;
     let mut out = super::approvals::held_answer(&r);
     out["plan"] = p.answer();
     out["hint"] = json!(format!(
-        "one request for {} owner step(s): the owner approves it once, in person (k2 app approve {} from a terminal outside K2, \
-         or Settings → App Approvals); the steps then run in order, each audited. Check with k2 app approvals.",
+        "one request for {} owner step(s): the owner approves it once, in person ({CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}, \
+         or Settings → App Approvals); the steps then run in order, each audited. Check with {CLI_NAME} app approvals.",
         steps.len(),
         r.id
     ));

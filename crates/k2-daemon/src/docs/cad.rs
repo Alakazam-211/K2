@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use k2_core::{docs_cores, product_name};
+use k2_core::{cli_name, docs_cores, product_name};
 use k2_mpc_base::blob::BlobId;
 use k2_mpc_base::session::SessionError;
 use k2_mpc_base::store::{DocKey, VersionId};
@@ -594,7 +594,7 @@ pub(super) fn av_route(caller: &DocCaller, input: &Input<'_>) -> CliResponse {
                     return cad_refusal(&CadError::new(
                         k2_mpc_av::SHEET_UNREADABLE,
                         format!("{}: {}", t.rel, e.summary()),
-                        "`k2 doc cad check` on that drawing names what doesn't read",
+                        concat!("`", cli_name!(), " doc cad check` on that drawing names what doesn't read"),
                     ))
                 }
             },

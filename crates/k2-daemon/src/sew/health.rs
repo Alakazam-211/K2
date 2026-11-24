@@ -26,6 +26,8 @@
 use serde_json::{json, Value};
 
 use super::supervisor::{no, Env, Fail};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// Reasons K2 waits through (Sew is coming back by itself).
 pub const WAIT_REASONS: &[&str] = &["upgrading"];
@@ -121,13 +123,13 @@ pub fn wait_ready(env: &Env, max_ms: u64) -> Health {
 pub fn hint(reason: &str) -> String {
     match reason {
         "upgrading" => "Sew is upgrading; it comes back by itself — try again in a moment".into(),
-        "stopping" => "Sew is stopping (a stop, disable or restart is under way); K2 won't wait — try again once \
-                       k2 hostchat status says running, or run k2 hostchat restart"
+        "stopping" => concat!("Sew is stopping (a stop, disable or restart is under way); ", product_name!(), " won't wait — try again once \
+                       ", cli_name!(), " hostchat status says running, or run ", cli_name!(), " hostchat restart")
             .into(),
-        "db" => "Sew can't reach its database (sew-db); k2 hostchat restart brings the units back in order".into(),
-        "migrations" => "Sew is applying database migrations; try again shortly (k2 hostchat status)".into(),
-        "down" => "Sew is not answering on this box (k2 hostchat status; k2 hostchat restart)".into(),
-        other => format!("Sew is not ready ({other}); k2 hostchat status shows why"),
+        "db" => concat!("Sew can't reach its database (sew-db); ", cli_name!(), " hostchat restart brings the units back in order").into(),
+        "migrations" => concat!("Sew is applying database migrations; try again shortly (", cli_name!(), " hostchat status)").into(),
+        "down" => concat!("Sew is not answering on this box (", cli_name!(), " hostchat status; ", cli_name!(), " hostchat restart)").into(),
+        other => format!("Sew is not ready ({other}); {CLI_NAME} hostchat status shows why"),
     }
 }
 

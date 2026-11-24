@@ -37,6 +37,8 @@ use k2_root_proto::engine::{self as wire, ProcessSpec, Request};
 use serde_json::Value;
 
 use super::guarded;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::cli_name;
 
 /// `engine_ref` prefix for the process exception's handles.
 pub const REF_PREFIX: &str = "procx:";
@@ -54,7 +56,7 @@ fn app_id(a: &str) -> Result<AppId> {
 fn helper(argv: &[&str]) -> Result<String> {
     let st = crate::root_helper::state();
     if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
-        return Err(err(codes::ENGINE_UNAVAILABLE, "the process exception needs the root helper (protocol 6): k2 app doctor"));
+        return Err(err(codes::ENGINE_UNAVAILABLE, concat!("the process exception needs the root helper (protocol 6): ", cli_name!(), " app doctor")));
     }
     let v: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
     crate::root_helper::call_text(&v, None).map_err(|e| err(codes::ENGINE_UNAVAILABLE, format!("root helper `{}`: {e}", argv.join(" "))))
@@ -137,7 +139,7 @@ impl RuntimeEngine for ProcessException {
     fn start(&self, spec: &AppSpec, p: &Prepared, port: u16) -> Result<RunHandle> {
         let app = app_id(&spec.app_id)?;
         if !wire::app_port_ok(port) {
-            return Err(err(codes::ENGINE_UNAVAILABLE, format!("port {port} is in K2's reserved range")));
+            return Err(err(codes::ENGINE_UNAVAILABLE, format!("port {port} is in {PRODUCT_NAME}'s reserved range")));
         }
         let seed = self
             .prepared
@@ -268,7 +270,7 @@ impl RuntimeEngine for ProcessException {
     fn exec(&self, _h: &RunHandle, _argv: &[String], _tty: bool) -> Result<ExecStream> {
         Err(err(
             codes::ENGINE_UNAVAILABLE,
-            "k2 app exec and shell don't reach the process exception in this release; use k2 app logs, or move the App back to the guarded container",
+            concat!(cli_name!(), " app exec and shell don't reach the process exception in this release; use ", cli_name!(), " app logs, or move the App back to the guarded container"),
         ))
     }
 

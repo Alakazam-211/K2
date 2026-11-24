@@ -49,6 +49,8 @@ use crate::mail::messages::{
     self, ListError, MailBackend, MailFolder, ManageBackend, ReadBackend, ReadError, WatchAddress,
 };
 use crate::mail::{access, domains, external, external_imap, graph};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 // ── Response helpers (the S2/S3 error contract) ─────────────────────────
 
@@ -189,7 +191,7 @@ fn resolve_linked_password(
             "not_ready",
             &format!(
                 "credentials for '{address}' are missing from the vault — your \
-                 human can reconnect it with 'k2 mail link add'"
+                 human can reconnect it with '{CLI_NAME} mail link add'"
             ),
         )),
         Err(_) => Err(error_response(
@@ -197,7 +199,7 @@ fn resolve_linked_password(
             "not_ready",
             &format!(
                 "credentials for '{address}' could not be read from the vault — \
-                 your human can reconnect it with 'k2 mail link add'"
+                 your human can reconnect it with '{CLI_NAME} mail link add'"
             ),
         )),
     }
@@ -369,7 +371,7 @@ fn owned_message(
         return Err(error_response(
             "400 Bad Request",
             "usage",
-            "invalid message id — use an id from 'k2 mail messages'",
+            concat!("invalid message id — use an id from '", cli_name!(), " mail messages'"),
         ));
     };
     let masked = || {
@@ -649,7 +651,7 @@ pub fn handle_read(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'id' — a message id from 'k2 mail messages'",
+            concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"),
         );
     };
     let (_path, project_id) = match resolve_caller(&project) {
@@ -746,7 +748,7 @@ pub fn handle_attachments(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'id' — a message id from 'k2 mail messages'",
+            concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"),
         );
     };
     // Validate the get/out pair BEFORE any identity/engine work.
@@ -1077,8 +1079,8 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "404 Not Found",
             "not_found",
-            "this workspace has no active mail addresses — mint one with 'k2 hostmail create' \
-             before waiting",
+            concat!("this workspace has no active mail addresses — mint one with '", cli_name!(), " hostmail create' \
+             before waiting"),
         );
     }
     let Some(_slot) = WaitSlot::try_acquire(&project_id) else {
@@ -1087,7 +1089,7 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
             "rate_limited",
             &format!(
                 "this workspace already has {MAX_CONCURRENT_WAITS} wait calls open — \
-                 loop ONE 'k2 mail wait', don't fan out"
+                 loop ONE '{CLI_NAME} mail wait', don't fan out"
             ),
         );
     };
@@ -1204,7 +1206,7 @@ fn managed_message(
         return Err(error_response(
             "400 Bad Request",
             "usage",
-            "invalid message id — use an id from 'k2 mail messages'",
+            concat!("invalid message id — use an id from '", cli_name!(), " mail messages'"),
         ));
     };
     let masked = || {
@@ -1294,7 +1296,7 @@ pub fn handle_move(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.id.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+        return error_response("400 Bad Request", "usage", concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"));
     }
     if b.folder.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'folder' — the destination folder name");
@@ -1334,7 +1336,7 @@ pub fn handle_flag(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.id.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+        return error_response("400 Bad Request", "usage", concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"));
     }
     if b.read.is_none() && b.flagged.is_none() {
         return error_response(
@@ -1378,7 +1380,7 @@ pub fn handle_archive(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.id.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+        return error_response("400 Bad Request", "usage", concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"));
     }
     let (_path, project_id) = match need_project_body(&b.project) {
         Ok(v) => v,
@@ -1406,7 +1408,7 @@ pub fn handle_delete(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.id.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+        return error_response("400 Bad Request", "usage", concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"));
     }
     let (_path, project_id) = match need_project_body(&b.project) {
         Ok(v) => v,
@@ -1444,7 +1446,7 @@ pub fn handle_folder_create(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox ('", cli_name!(), " mail inboxes')"));
     }
     if b.name.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'name' — the folder to create");
@@ -1485,7 +1487,7 @@ pub fn handle_folder_rename(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox ('", cli_name!(), " mail inboxes')"));
     }
     if b.from.trim().is_empty() || b.to.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "rename needs 'from' and 'to' folder names");
@@ -1527,7 +1529,7 @@ pub fn handle_folder_list(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'address' — the inbox to list folders for ('k2 mail inboxes')",
+            concat!("missing 'address' — the inbox to list folders for ('", cli_name!(), " mail inboxes')"),
         );
     };
     let (_path, project_id) = match resolve_caller(&project) {

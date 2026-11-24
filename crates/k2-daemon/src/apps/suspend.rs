@@ -32,6 +32,7 @@ use rusqlite::params;
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ROUTES: &[&str] =
     &["/cli/app/suspend", "/cli/app/resume", "/cli/app/remote-pass", "/cli/app/remote-pass/rotate", "/cli/app/remote-pass/revoke"];
@@ -58,7 +59,7 @@ fn owner_only(what: &str) -> super::routes::Refusal {
     no(
         super::egress_routes::codes::OWNER_ONLY,
         403,
-        format!("only the server's owner {what} (the owner token or an Owner login; never an agent or a K2 terminal tab)"),
+        format!("only the server's owner {what} (the owner token or an Owner login; never an agent or a {PRODUCT_NAME} terminal tab)"),
     )
 }
 
@@ -76,7 +77,7 @@ pub(crate) fn refuse_if_suspended(app_id: &str) -> R<()> {
             APP_SUSPENDED,
             409,
             format!(
-                "{app_id} is suspended: deploys and starts are frozen until it is resumed (k2 app resume {app_id}: the owner; or \
+                "{app_id} is suspended: deploys and starts are frozen until it is resumed ({CLI_NAME} app resume {app_id}: the owner; or \
                  the App's own agent, with \"Manage its Apps end to end\", when it suspended it itself)"
             ),
         ));
@@ -175,9 +176,9 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
         "stopped": stopped,
         "suspension": suspension(&app.app_id)?,
         "hint": if agent && !already {
-            format!("you suspended it: you resume it with \"Manage its Apps end to end\" on (k2 app resume {}), else the owner does", app.app_id)
+            format!("you suspended it: you resume it with \"Manage its Apps end to end\" on ({CLI_NAME} app resume {}), else the owner does", app.app_id)
         } else {
-            format!("only the owner resumes it: k2 app resume {}", app.app_id)
+            format!("only the owner resumes it: {CLI_NAME} app resume {}", app.app_id)
         },
     }))
 }
@@ -259,7 +260,7 @@ fn resume(who: &Who, body: &[u8]) -> R<J> {
             None => out["note"] = json!("no Seed deployed yet; nothing to start"),
         }
     } else {
-        out["hint"] = json!(format!("start it with k2 app start {}", app.app_id));
+        out["hint"] = json!(format!("start it with {CLI_NAME} app start {}", app.app_id));
     }
     Ok(out)
 }

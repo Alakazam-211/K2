@@ -44,6 +44,8 @@ use k2_core::sew_chat::{self as core, person, store, ApprovalMode, Level};
 use super::routes::{backend, credential, internal, now, parse_body, sew_err, usage, ChatErr, R};
 use super::sew::ActAs;
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The routes this module serves.
 pub const ROUTES: &[&str] = &[
@@ -115,8 +117,8 @@ fn chat_manage_off() -> ChatErr {
     ChatErr::new(
         "chat_manage_off",
         403,
-        "managing chat needs the Manage chat and voice switch on your workspace — your owner or an admin turns it on \
-         (k2 agent access set <workspace> chat_manage on)",
+        concat!("managing chat needs the Manage chat and voice switch on your workspace — your owner or an admin turns it on \
+         (", cli_name!(), " agent access set <workspace> chat_manage on)"),
     )
 }
 
@@ -333,7 +335,7 @@ fn resolve_space_as(ws_id: &str, slug: &str, a: &Admin, fresh_account: bool) -> 
             "not_found",
             404,
             format!(
-                "that workspace isn't in a Space '{}' — add it first (k2 chat space members add {} <workspace>), \
+                "that workspace isn't in a Space '{}' — add it first ({CLI_NAME} chat space members add {} <workspace>), \
                  or check the slug",
                 slug.trim(),
                 slug.trim()
@@ -481,7 +483,7 @@ struct PersonSubject {
 fn person_subject(user: &str) -> R<PersonSubject> {
     let u = user.trim().trim_start_matches('@');
     if u.is_empty() {
-        return Err(usage("name a person: a K2 username"));
+        return Err(usage(concat!("name a person: a ", product_name!(), " username")));
     }
     let principals = k2_core::skin::list_principals().map_err(internal)?;
     if let Some(p) = principals.into_iter().find(|p| p.username.eq_ignore_ascii_case(u)) {
@@ -497,7 +499,7 @@ fn person_subject(user: &str) -> R<PersonSubject> {
         }
         return Ok(PersonSubject { kind: "connect", id, user: u.to_string() });
     }
-    Err(ChatErr::new("not_found", 404, format!("no person '{u}' on this box (App users: k2 app users; logins: k2 users)")))
+    Err(ChatErr::new("not_found", 404, format!("no person '{u}' on this box (App users: {CLI_NAME} app users; logins: {CLI_NAME} users)")))
 }
 
 fn people_list() -> R<Value> {

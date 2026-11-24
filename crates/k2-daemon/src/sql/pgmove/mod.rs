@@ -42,6 +42,8 @@ use serde_json::{json, Value};
 
 use k2_root_proto::pg_major::{in_band, role_name_ok, ClusterRow, BAND};
 pub use k2_root_proto::verbs::ConnMode;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 pub type Major = u32;
 
@@ -360,7 +362,7 @@ pub fn roles_to_copy(ops: &dyn ClusterOps, from: Major, rec: &DbRecord) -> Resul
     v.dedup();
     if let Some(bad) = v.iter().find(|r| !ok_name(r)) {
         return Err(format!(
-            "role_name_unsupported: the database uses a role K2 can't carry ({} chars, not [a-z0-9_])",
+            "role_name_unsupported: the database uses a role {PRODUCT_NAME} can't carry ({} chars, not [a-z0-9_])",
             bad.len()
         ));
     }
@@ -511,7 +513,7 @@ impl Run<'_> {
             &format!("Database {} {} failed", self.p.db, self.p.kind),
             &format!(
                 "The {} {} → {} of {} stopped: {msg}. The record points at Postgres {}. Re-pointed: [{}]. \
-                 New moves are blocked until the owner fixes this and runs `k2 db upgrade --acknowledge-failed`.",
+                 New moves are blocked until the owner fixes this and runs `{CLI_NAME} db upgrade --acknowledge-failed`.",
                 self.p.kind,
                 self.p.from,
                 self.p.to,
@@ -715,7 +717,7 @@ fn steps(run: &mut Run, rec: &DbRecord, report: &check::Report, opts: &MoveOpts)
         .iter()
         .find(|(r, _)| *r == owner)
         .map(|(_, p)| p.clone())
-        .ok_or("the database's owner is not K2's migrator: K2 restores only as the owner")?;
+        .ok_or(concat!("the database's owner is not ", product_name!(), "'s migrator: ", product_name!(), " restores only as the owner"))?;
     let tag = run.p.tag.clone();
     run.p.dump_bytes = Some(0);
     run.save()?;
@@ -818,10 +820,10 @@ fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result
     // K2's idempotent setup through the resolver, now pointing at `to`
     // (V34; what it sets rode the dump and was verified above).
     if let Err(e) = run.env.rerun_k2_setup(to, &db) {
-        run.p.warnings.push(format!("K2 setup on {to}: {e}"));
+        run.p.warnings.push(format!("{PRODUCT_NAME} setup on {to}: {e}"));
     }
     if let Err(e) = run.env.verify_k2(to, &db) {
-        run.p.warnings.push(format!("K2 check through the guest door: {e}"));
+        run.p.warnings.push(format!("{PRODUCT_NAME} check through the guest door: {e}"));
     }
     // 10. record: the source stays, closed to everyone.
     run.at(Step::Record, MoveState::Switching)?;
@@ -840,7 +842,7 @@ fn finish_forward(run: &mut Run, from: Major, to: Major, to_port: u16) -> Result
         &format!("Database {db} moved {from} → {to}"),
         &format!(
             "Database {db} moved {from} → {to} by {}. The {from} copy is kept (closed) until a rollback window ends in 14 days: \
-             `k2 db upgrade {db} --rollback --yes` (writes made on {to} since the move are not carried back).",
+             `{CLI_NAME} db upgrade {db} --rollback --yes` (writes made on {to} since the move are not carried back).",
             run.p.actor
         ),
     );
@@ -911,7 +913,7 @@ fn moved_cleanly(rec: &DbRecord) -> Result<Major, String> {
     let from = rec.moved_from.ok_or("not_moved: this database has no move")?;
     if from >= rec.major {
         return Err(format!(
-            "inconsistent_record: {} says it moved from {from} but lives on {}; nothing done — the owner checks `k2 db upgrade {} --check` and the inbox",
+            "inconsistent_record: {} says it moved from {from} but lives on {}; nothing done — the owner checks `{CLI_NAME} db upgrade {} --check` and the inbox",
             rec.name, rec.major, rec.name
         ));
     }
@@ -928,7 +930,7 @@ pub fn rollback(ops: &dyn ClusterOps, env: &dyn MoveEnv, db: &str, o: &RollbackO
     // Security review B8: a live run of this database owns it (its
     // freeze, slot and target copy): no rollback under it.
     if env.dual_running(db) {
-        return Err(format!("{}: a live move of {db} is open; switch or abort it first (k2 db upgrade {db} --abort)", dual::DUAL_RUNNING));
+        return Err(format!("{}: a live move of {db} is open; switch or abort it first ({CLI_NAME} db upgrade {db} --abort)", dual::DUAL_RUNNING));
     }
     let rec = env.record(db)?;
     let back_to = moved_cleanly(&rec)?;
@@ -1248,9 +1250,9 @@ pub fn tidy_plan(rows: &[ClusterRow], roles: &dyn Fn(Major) -> ClusterRole, dbs_
     let mut keep = Vec::new();
     for r in rows.iter().filter(|r| r.name == "main") {
         let why = if roles(r.major) != ClusterRole::K2 {
-            Some("not K2's cluster".to_string())
+            Some(concat!("not ", product_name!(), "'s cluster").to_string())
         } else if dbs_on(r.major) > 0 {
-            Some(format!("{} K2 database(s)", dbs_on(r.major)))
+            Some(format!("{} {PRODUCT_NAME} database(s)", dbs_on(r.major)))
         } else if kept_on(r.major) > 0 {
             Some("a kept source for a rollback".to_string())
         } else {
@@ -1262,7 +1264,7 @@ pub fn tidy_plan(rows: &[ClusterRow], roles: &dyn Fn(Major) -> ClusterRole, dbs_
             None => {}
         }
     }
-    let mut note = "Clusters are stopped and set manual, never dropped; K2 never removes Postgres packages.".to_string();
+    let mut note = concat!("Clusters are stopped and set manual, never dropped; ", product_name!(), " never removes Postgres packages.").to_string();
     if let Some(m) = sew_major {
         note.push_str(&format!(" Sew's own Postgres runs postgresql-{m}."));
     }

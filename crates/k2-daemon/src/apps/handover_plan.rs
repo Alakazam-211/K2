@@ -22,6 +22,8 @@ use serde::Serialize;
 use serde_json::{json, Value as J};
 
 use super::routes::{db_err, ws_handle, Ws, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 // What this build can move (the slices that lift each refusal). Until a
 // part moves, a plan that needs it is refused naming what (S1: 0.46.4 never
@@ -281,14 +283,14 @@ impl Plan {
         for (role, n) in &self.rooms.switched_off_roles {
             let (who, hold) = if *n == 1 { (format!("1 of {app}'s logins is switched off and"), "holds") } else { (format!("{n} of {app}'s logins are switched off and"), "hold") };
             out.push(format!(
-                "{who} {hold} {role}, a role for the whole server that includes {a}'s room. If you turn them on, they reach {a}, not {b}. Before you do, give them a role of {app} (k2 app grant role <grant-id> --role <name>; k2 app grant list shows the ids)."
+                "{who} {hold} {role}, a role for the whole server that includes {a}'s room. If you turn them on, they reach {a}, not {b}. Before you do, give them a role of {app} ({CLI_NAME} app grant role <grant-id> --role <name>; {CLI_NAME} app grant list shows the ids)."
             ));
         }
         let retired = self.guests.iter().filter(|g| (g.class == sh::CLASS_GIVER_TIED || g.class == sh::CLASS_APP_KEY_TIED) && g.has_password).count();
         if retired > 0 {
             out.push(format!(
                 "Passwords {a} set: {retired} guest(s)' passwords were set by {a}. They are cleared so {a} can't sign in as them. Each sets a new one \
-                 to sign in again; {b} can send the link (k2 app user reset), or you can."
+                 to sign in again; {b} can send the link ({CLI_NAME} app user reset), or you can."
             ));
         }
         let shared = self.names(sh::CLASS_SHARED);
@@ -323,7 +325,7 @@ impl Plan {
         }
         let readable: Vec<&str> = self.secrets.iter().filter(|s| s.case != "untouched").map(|s| s.name.as_str()).collect();
         if !readable.is_empty() {
-            out.push(format!("Rotate after the handover: {a} could have read {} (K2 can't take back what was seen).", readable.join(", ")));
+            out.push(format!("Rotate after the handover: {a} could have read {} ({PRODUCT_NAME} can't take back what was seen).", readable.join(", ")));
         }
         match self.db.case {
             "sole" => out.push(format!("Database {} moves to {b}, and its passwords change.", self.db.name.clone().unwrap_or_default())),
@@ -381,7 +383,7 @@ impl Plan {
                 out.push(format!("Its source is copied into {b}'s folder (apps/{app}; never .k2/ or .env files)."));
             }
         }
-        out.push(format!("Undo: you can undo this for {} hours (Settings → Cores → Apps, or k2 app handover undo {app}).", k2_core::deploy::handover::WINDOW_SECS / 3600));
+        out.push(format!("Undo: you can undo this for {} hours (Settings → Cores → Apps, or {CLI_NAME} app handover undo {app}).", k2_core::deploy::handover::WINDOW_SECS / 3600));
         out
     }
 
@@ -581,8 +583,8 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
             out.push(Blocker {
                 code: NEEDS_TIE_MOVE,
                 hint: format!(
-                    "{} guest(s) of {app} are tied to {a} (its agent or the App's key set or could know their password): this K2 can't move them \
-                     without signing them out. Reset them first (k2 app user reset, owner), or wait for the full handover",
+                    "{} guest(s) of {app} are tied to {a} (its agent or the App's key set or could know their password): this {PRODUCT_NAME} can't move them \
+                     without signing them out. Reset them first ({CLI_NAME} app user reset, owner), or wait for the full handover",
                     tied.len()
                 ),
                 names: tied,
@@ -596,7 +598,7 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
         out.push(Blocker {
             code: SHARED_ROLES,
             hint: format!(
-                "{app}'s guests hold box-wide roles that name {a}'s room ({}): after a handover they would keep talking to {a}, not the new agent. Give them a role of this App instead (k2 app role create <name> --app {app}, then k2 app grant role <grant-id> --role <name>; k2 app grant list shows the ids), or take {a}'s room off those roles (k2 app role room <role> {a} --clear), then ask again",
+                "{app}'s guests hold box-wide roles that name {a}'s room ({}): after a handover they would keep talking to {a}, not the new agent. Give them a role of this App instead ({CLI_NAME} app role create <name> --app {app}, then {CLI_NAME} app grant role <grant-id> --role <name>; {CLI_NAME} app grant list shows the ids), or take {a}'s room off those roles ({CLI_NAME} app role room <role> {a} --clear), then ask again",
                 p.rooms.shared_roles.join(", ")
             ),
             names: p.rooms.shared_roles.clone(),
@@ -605,7 +607,7 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
     if !vault_ok {
         out.push(Blocker {
             code: VAULT_CLOSED,
-            hint: "the vault isn't open: K2 can't see which secrets the App uses. Open it (k2 vault status), then ask again".into(),
+            hint: concat!("the vault isn't open: ", product_name!(), " can't see which secrets the App uses. Open it (", cli_name!(), " vault status), then ask again").into(),
             names: Vec::new(),
         });
     }
@@ -617,7 +619,7 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
         if !names.is_empty() {
             out.push(Blocker {
                 code: NEEDS_SECRET_MOVE,
-                hint: format!("{app} uses {a}'s own secrets ({}): this K2 can't move them yet; they would stop resolving at its next start", names.join(", ")),
+                hint: format!("{app} uses {a}'s own secrets ({}): this {PRODUCT_NAME} can't move them yet; they would stop resolving at its next start", names.join(", ")),
                 names,
             });
         }
@@ -626,7 +628,7 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
         "sole" if !DB_MOVE => out.push(Blocker {
             code: NEEDS_DB_MOVE,
             hint: format!(
-                "{app} uses {a}'s database {}: this K2 can't move a database yet; at its next start the App would lose it",
+                "{app} uses {a}'s database {}: this {PRODUCT_NAME} can't move a database yet; at its next start the App would lose it",
                 p.db.name.clone().unwrap_or_default()
             ),
             names: p.db.name.iter().cloned().collect(),
@@ -637,7 +639,7 @@ fn blockers(p: &Plan, vault_ok: bool) -> Vec<Blocker> {
                 "{app}'s database {} is also used by {}: {}",
                 p.db.name.clone().unwrap_or_default(),
                 p.db.other_apps.iter().chain(p.db.grantees.iter()).cloned().collect::<Vec<_>>().join(", "),
-                if DB_MOVE { "choose share (A keeps access to this App's data; --db share) or wait for per-App databases" } else { "this K2 can't move a database yet" }
+                if DB_MOVE { "choose share (A keeps access to this App's data; --db share) or wait for per-App databases" } else { concat!("this ", product_name!(), " can't move a database yet") }
             ),
             names: p.db.other_apps.clone(),
         }),

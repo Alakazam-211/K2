@@ -39,6 +39,8 @@ use k2_core::email_outcomes as oc;
 use serde_json::{json, Value as J};
 
 use super::{db_fail, fail, Fail, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The report pass's cadence.
 pub const PASS_SECS: u64 = 300;
@@ -336,7 +338,7 @@ pub fn evaluate(s: &Sender, now: i64) -> Option<&'static str> {
             &format!("Warning: {}'s email is bouncing", s.address),
             &format!(
                 "The system sender {} isn't paused (it carries every password reset on this server), but {what} in the last 24 hours. \
-                 Check what is sending through it: k2 notifications email log.",
+                 Check what is sending through it: {CLI_NAME} notifications email log.",
                 s.address
             ),
         );
@@ -355,8 +357,8 @@ pub fn evaluate(s: &Sender, now: i64) -> Option<&'static str> {
                 &format!("{label}'s email is paused"),
                 &format!(
                     "{label}'s email from {} is paused: {what} in 24 hours. Its sends now answer email_paused. \
-                     Fix the list, then resume it from your own terminal: k2 notifications email sender resume {} \
-                     (it asks you to confirm). Stopped addresses: k2 notifications email suppressions.",
+                     Fix the list, then resume it from your own terminal: {CLI_NAME} notifications email sender resume {} \
+                     (it asks you to confirm). Stopped addresses: {CLI_NAME} notifications email suppressions.",
                     s.address, s.address
                 ),
             );
@@ -402,7 +404,7 @@ pub fn refuse_if_paused(s: &Sender) -> R<()> {
         return Err(fail(
             423,
             "email_paused",
-            "this sender is paused because too many recipients bounced or complained; the owner resumes it (k2 notifications email sender resume)",
+            concat!("this sender is paused because too many recipients bounced or complained; the owner resumes it (", cli_name!(), " notifications email sender resume)"),
         ));
     }
     Ok(())

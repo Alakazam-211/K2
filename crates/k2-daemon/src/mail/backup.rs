@@ -37,7 +37,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use serde::{Deserialize, Serialize};
 
 use crate::cli_response::CliResponse;
@@ -45,6 +45,7 @@ use crate::mail::doctor::{DoctorCheck, ST_INFO, ST_WARN};
 use crate::mail::supervisor::{
     self, mail_supported, STALWART_CONFIG_DIR, STALWART_DATA_DIR,
 };
+use k2_core::brand::CLI_NAME;
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -96,8 +97,8 @@ const MAX_REASON_CHARS: usize = 500;
 /// The modes, in the order `plan` prints them.
 pub const MODES: [&str; 4] = ["local", "offsite-only", "both", "none"];
 
-pub const UNCONFIGURED_NOTE: &str = "Backup not chosen — the box's it-email agent should run \
-     `k2 hostmail backup plan` and agree a mode with the client";
+pub const UNCONFIGURED_NOTE: &str = concat!("Backup not chosen — the box's it-email agent should run \
+     `", cli_name!(), " hostmail backup plan` and agree a mode with the client");
 pub const NOT_RUNNING_NOTE: &str = "mode chosen; backups start in a later release (B2: local \
      frozen views, B3: offsite) — nothing runs yet and Stalwart is never stopped for it";
 pub const OFFSITE_UNSET_HINT: &str = "offsite destination not set — the owner sets it in a later \
@@ -803,8 +804,8 @@ pub fn build_plan(inp: &PlanInputs, opts: &PlanOpts) -> serde_json::Value {
         STOP_START_OVERHEAD_SECS + ceil_div(raw, copy)
     };
     let downtime_label = if same_fs {
-        "conservative estimate, not measured (B0): stop + hard links + copy of the mutable files, \
-         /etc/stalwart and the K2 half + start and health check"
+        concat!("conservative estimate, not measured (B0): stop + hard links + copy of the mutable files, \
+         /etc/stalwart and the ", product_name!(), " half + start and health check")
     } else {
         "conservative estimate, not measured (B0): the view root is not on the store's \
          filesystem, so a view is a FULL copy while Stalwart is stopped"
@@ -849,8 +850,8 @@ pub fn build_plan(inp: &PlanInputs, opts: &PlanOpts) -> serde_json::Value {
         "nightlyUploadSecs": nightly_secs,
         "firstTempBytes": first_temp,
         "nightlyTempBytes": nightly_temp,
-        "label": "first upload ≈ the whole store (restic compression/dedup not measured: shown \
-                  as a range); nightly ≈ new immutable files + the mutable files + K2 half",
+        "label": concat!("first upload ≈ the whole store (restic compression/dedup not measured: shown \
+                  as a range); nightly ≈ new immutable files + the mutable files + ", product_name!(), " half"),
     });
     let unavailable = serde_json::json!(OFFSITE_UNSET_HINT);
     let free_after = |need: u64| free as i128 - need as i128;
@@ -1602,7 +1603,7 @@ pub fn handle_set_with(
 ) -> CliResponse {
     let req = match parse_set_body(body) {
         Ok(r) => r,
-        Err(e) => return usage(format!("{e} — usage: k2 hostmail backup set --mode local|none … --confirm-plan <hash>")),
+        Err(e) => return usage(format!("{e} — usage: {CLI_NAME} hostmail backup set --mode local|none … --confirm-plan <hash>")),
     };
     if !MODES.contains(&req.mode.as_str()) {
         return usage(format!(
@@ -1639,8 +1640,8 @@ pub fn handle_set_with(
     }
     let Some(confirm) = req.confirm_plan.clone() else {
         return usage(
-            "--confirm-plan <hash> is required: run `k2 hostmail backup plan` (with the same \
-             --keep-daily/--keep-weekly/--max-local-gb) and pass its planHash",
+            concat!("--confirm-plan <hash> is required: run `", cli_name!(), " hostmail backup plan` (with the same \
+             --keep-daily/--keep-weekly/--max-local-gb) and pass its planHash"),
         );
     };
     let inp = match inputs() {
@@ -1660,7 +1661,7 @@ pub fn handle_set_with(
             "409 Conflict",
             "plan_changed",
             format!(
-                "--confirm-plan {confirm} is not the current plan (now {hash}) — run `k2 hostmail \
+                "--confirm-plan {confirm} is not the current plan (now {hash}) — run `{CLI_NAME} hostmail \
                  backup plan` again with the same retention flags, read it, then pass the new hash"
             ),
         );

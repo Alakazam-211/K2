@@ -26,6 +26,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as J};
 
 use k2_core::deploy::health::{self, ProbeAs};
+use k2_core::brand::CLI_NAME;
 
 /// At most this many checks per App.
 pub const MAX_CHECKS: usize = 10;
@@ -347,7 +348,7 @@ pub fn wake_text(app_id: &str, deployment: &str, failed: &[&Outcome]) -> String 
         }
         s.push('\n');
     }
-    s.push_str(&format!("The App stays live (checks never gate a deploy). Look: k2 app status {app_id}"));
+    s.push_str(&format!("The App stays live (checks never gate a deploy). Look: {CLI_NAME} app status {app_id}"));
     s
 }
 

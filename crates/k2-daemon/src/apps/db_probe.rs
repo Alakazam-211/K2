@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use serde_json::{json, Value as J};
 use sha2::{Digest, Sha256};
+use k2_core::{cli_name, product_name};
 
 /// The line prefix [`PROBE_JS`] prints its JSON result after.
 pub const PROBE_MARK: &str = "K2PROBE ";
@@ -43,7 +44,7 @@ pub const PROBE_JS: &str = concat!(
     r#"const done=o=>{o.ms=Date.now()-t0;process.stdout.write('K2PROBE '+JSON.stringify(o)+'\n');process.exit(0)};"#,
     r#"let s=process.env[N];"#,
     r#"if(!s){try{const e=fs.readFileSync('/proc/1/environ','latin1').split('\0').find(x=>x.startsWith(N+'='));if(e)s=e.slice(N.length+1)}catch(_){}}"#,
-    r#"if(!s)done({ok:false,step:'no_url',error:N+' is not in the App environment: re-host it (k2 app rehost)'});"#,
+    r#"if(!s)done({ok:false,step:'no_url',error:N+' is not in the App environment: re-host it ("#, cli_name!(), r#" app rehost)'});"#,
     r#"let u;try{u=new URL(s)}catch(_){done({ok:false,step:'bad_url',error:N+' is not a URL'})}"#,
     r#"const dc=x=>decodeURIComponent(x||'');const user=dc(u.username),pw=dc(u.password),db=dc(u.pathname.slice(1))||user;"#,
     r#"const so=net.connect(+(u.port||5432),u.hostname.replace(/^\[|\]$/g,''));"#,
@@ -267,7 +268,7 @@ pub fn probe(t: &Target, timeout: Duration) -> Probe {
 pub fn probe_url(url: &str, timeout: Duration) -> Probe {
     match parse_url(url) {
         Some(t) => probe(&t, timeout),
-        None => Probe::fail("bad_url", "the App's URL isn't a Postgres URL K2 can read"),
+        None => Probe::fail("bad_url", concat!("the App's URL isn't a Postgres URL ", product_name!(), " can read")),
     }
 }
 

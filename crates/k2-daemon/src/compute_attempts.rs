@@ -13,6 +13,8 @@ use k2_core::compute::{self as compute, codes, logs, store};
 use crate::compute_routes::{job_for, no, Who, R};
 use crate::compute_views::{job_summary, queue_view};
 use crate::compute_ws;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The job's attempts, oldest first (the current one last).
 pub(crate) fn list(j: &store::JobRow) -> serde_json::Value {
@@ -29,7 +31,7 @@ pub(crate) fn picked(j: &store::JobRow, params: &HashMap<String, String>) -> R<P
     };
     attempts::pick(j, n).ok_or_else(|| {
         let short = compute::message::short(&j.id);
-        no("attempt_not_found", 404, format!("job {short} has {} (k2 compute get {short} lists them)", attempts::range_words(j)))
+        no("attempt_not_found", 404, format!("job {short} has {} ({CLI_NAME} compute get {short} lists them)", attempts::range_words(j)))
     })
 }
 
@@ -63,7 +65,7 @@ pub(crate) fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_j
             "chunks": [],
             "end": j.is_terminal(),
             "shards": shards,
-            "hint": "a split run: each shard has its own log (k2 compute logs <run> reads them all)",
+            "hint": concat!("a split run: each shard has its own log (", cli_name!(), " compute logs <run> reads them all)"),
         }));
     }
     // `generation=` (a follower that keeps to one attempt) wins over `attempt=`.

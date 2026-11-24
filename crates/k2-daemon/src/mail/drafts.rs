@@ -25,6 +25,7 @@
 
 use crate::cli_response::CliResponse;
 use crate::mail::access::{AccessInbox, Source};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A draft K2 tracks (one `mail_drafts` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,8 +427,8 @@ pub fn saved_answer(address: &str, folder: &str, source_token: &str, draft_id: O
         "folder": folder,
         "id": source_token,
         "hint": format!(
-            "draft saved to '{folder}' in {address} — it shows at the top of its thread in K2's Mail page, \
-             where a person can edit and send it; 'k2 mail drafts' shows what became of it"
+            "draft saved to '{folder}' in {address} — it shows at the top of its thread in {PRODUCT_NAME}'s Mail page, \
+             where a person can edit and send it; '{CLI_NAME} mail drafts' shows what became of it"
         ),
     });
     if let Some(d) = draft_id {
@@ -490,8 +491,8 @@ pub fn record(d: NewDraft<'_>) -> Result<String, CliResponse> {
             "503 Service Unavailable",
             "not_ready",
             &format!(
-                "the draft was saved to the Drafts folder of {address}, but K2 couldn't record it ({e}), so it \
-                 won't show at the top of its thread and 'k2 mail draft delete' can't find it; 'k2 doctor' \
+                "the draft was saved to the Drafts folder of {address}, but {PRODUCT_NAME} couldn't record it ({e}), so it \
+                 won't show at the top of its thread and '{CLI_NAME} mail draft delete' can't find it; '{CLI_NAME} doctor' \
                  checks the daemon's database"
             ),
         )
@@ -710,7 +711,7 @@ pub fn not_editable(row: &DraftRow) -> CliResponse {
         "409 Conflict",
         "not_editable",
         &format!(
-            "K2 can show this draft but can't change it: {}'s mail server didn't say where it saved it. \
+            "{PRODUCT_NAME} can show this draft but can't change it: {}'s mail server didn't say where it saved it. \
              Edit or send it from that mailbox's own mail app",
             row.address
         ),
@@ -767,7 +768,7 @@ pub fn tell_agent(row: &DraftRow, what: &str, by: &str) {
         other => other.to_string(),
     };
     let text = format!(
-        "Your draft reply {} in {} was {did} by {by}. 'k2 mail drafts' shows your drafts and what became of them.",
+        "Your draft reply {} in {} was {did} by {by}. '{CLI_NAME} mail drafts' shows your drafts and what became of them.",
         row.id, row.address
     );
     if deliver(&row.author, &text) {

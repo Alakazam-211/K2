@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use crate::cli_response::CliResponse;
 use crate::mail::dns_verify;
 use crate::mail::domains::{self, OpError};
+use k2_core::brand::CLI_NAME;
 
 // ── Response helpers ────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ pub(crate) fn k2_dns_commands(apex: &str, rows: &[serde_json::Value]) -> Vec<Str
             continue;
         }
         let Ok(rel) = crate::dns::relative_record_name(&name, apex) else { continue };
-        let mut line = format!("k2 dns record add {apex} {rtype} {} ", quote(&rel));
+        let mut line = format!("{CLI_NAME} dns record add {apex} {rtype} {} ", quote(&rel));
         if rtype == "MX" || rtype == "SRV" {
             let Some((prio, rest)) = value.split_once(char::is_whitespace) else { continue };
             if prio.parse::<u16>().is_err() {

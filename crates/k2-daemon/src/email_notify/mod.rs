@@ -64,6 +64,7 @@ pub(crate) mod tests;
 use serde_json::{json, Value as J};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
 
 /// The box switch (Rosson's switch rule): `off`/`0`/`false`/`no` stops
 /// every notification send.
@@ -136,16 +137,16 @@ pub fn confirm_reason(action: &str, secret_id: Option<&str>) -> Option<Result<St
     Some(Ok(match action {
         CONFIRM_SENDER => match sender_binding_parts(id) {
             Some((address, Some(via))) => format!(
-                "add {} as a notification sender through {} (K2 creates a send-only account no agent can read on {}; \
-                 its envelope sender and DKIM signature are there, and K2 stamps From: {})",
+                "add {} as a notification sender through {} ({PRODUCT_NAME} creates a send-only account no agent can read on {}; \
+                 its envelope sender and DKIM signature are there, and {PRODUCT_NAME} stamps From: {})",
                 clean(address),
                 clean(via),
                 clean(via),
                 clean(address)
             ),
-            _ => format!("add {} as a notification sender (K2 creates a send-only account no agent can read)", clean(id)),
+            _ => format!("add {} as a notification sender ({PRODUCT_NAME} creates a send-only account no agent can read)", clean(id)),
         },
-        CONFIRM_SYSTEM_SENDER => format!("make {} the system sender: K2's own password resets and codes come from it", clean(id)),
+        CONFIRM_SYSTEM_SENDER => format!("make {} the system sender: {PRODUCT_NAME}'s own password resets and codes come from it", clean(id)),
         CONFIRM_RELAY => {
             let Some((host, from_domain, username)) = relay_binding_parts(id) else {
                 return Some(Err("secretId for a relay confirm is host|fromDomain|username"));

@@ -13,6 +13,7 @@ use k2_vault::keystore::{Anchor, KeyHome, KeyStore};
 use k2_vault::{Key32, VaultError};
 use security_framework::passwords::{delete_generic_password, get_generic_password, set_generic_password};
 use zeroize::Zeroize;
+use k2_core::brand::CLI_NAME;
 
 pub const SERVICE: &str = "dev.k2.vault";
 const KEK: &str = "kek";
@@ -41,7 +42,7 @@ impl KeychainKeyStore {
             Err(e) if USER_SAID_NO.contains(&e.code()) => Err(VaultError::new(
                 "user_cancelled",
                 500,
-                format!("the Keychain prompt for the vault key was cancelled ({}); the vault stays closed until `k2 vault open`", e.code()),
+                format!("the Keychain prompt for the vault key was cancelled ({}); the vault stays closed until `{CLI_NAME} vault open`", e.code()),
             )),
             Err(e) => Err(VaultError::new(
                 "keychain_error",

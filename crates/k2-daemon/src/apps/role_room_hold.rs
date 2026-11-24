@@ -22,7 +22,7 @@ use serde_json::{json, Value as J};
 use super::agent_grants::{hold, Step, SWITCH_NAME};
 use super::routes::{no, respond, ws_handle, Who, R};
 use crate::cli_response::CliResponse;
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The route this answers for.
 pub const PATH: &str = "/cli/skin/roles/room";
@@ -136,8 +136,8 @@ fn not_cardable(role: &skin::SkinRole, v: &J, refusal: CliResponse) -> CliRespon
     let room = text(v, &["handle", "id"]).unwrap_or("<room>");
     let what = format!("role '{}' belongs to another workspace's App: only that App's agent or the owner changes it", role.name);
     let hint = format!(
-        "{what}: it reaches outside your workspace. Instead, make a role of your own App with that room (k2 app role create <name> --app <your app>, then k2 app role \
-         room <name> {room} --caps …), or ask your human to run k2 app role room {} {room} from a terminal outside K2",
+        "{what}: it reaches outside your workspace. Instead, make a role of your own App with that room ({CLI_NAME} app role create <name> --app <your app>, then {CLI_NAME} app role \
+         room <name> {room} --caps …), or ask your human to run {CLI_NAME} app role room {} {room} from a terminal outside {PRODUCT_NAME}",
         role.name
     );
     super::routes::refusal_response(&no(codes::OWNER_ONLY, 403, hint))
@@ -274,7 +274,7 @@ fn hold_for_owner(who: &Who, ws: &str, a: &Ask, reason: Option<&str>) -> R<J> {
             lines: vec![
                 change,
                 format!(
-                    "everyone with the role {} on {app} gets this at their next request; nothing else on the role changes. Undo: k2 app role room {} {room} {}",
+                    "everyone with the role {} on {app} gets this at their next request; nothing else on the role changes. Undo: {CLI_NAME} app role room {} {room} {}",
                     a.role.name,
                     a.role.name,
                     match now {

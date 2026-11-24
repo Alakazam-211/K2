@@ -42,6 +42,8 @@ use k2_root_proto::engine::{self as wire, Request, SecretItem, StartSpec, Wall};
 #[cfg(unix)]
 use k2_root_proto::engine::Answer;
 use serde_json::{json, Value};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// `engine_ref` prefix that marks a handle as the guarded engine's.
 pub const REF_PREFIX: &str = "podman:";
@@ -124,7 +126,7 @@ pub fn call_at(socket: &Path, req: &Request, body: Option<(&mut dyn Read, u64)>,
         eng_err(
             codes::ENGINE_NOT_ANSWERING,
             format!(
-                "the App engine isn't answering at {} ({e}); install it as the owner: k2 app engine install",
+                "the App engine isn't answering at {} ({e}); install it as the owner: {CLI_NAME} app engine install",
                 socket.display()
             ),
         )
@@ -195,7 +197,7 @@ pub fn require_protocol() -> Result<Value> {
     if v["protocol"].as_u64() != Some(wire::ENGINE_PROTOCOL as u64) {
         return Err(eng_err(
             codes::ENGINE_PROTOCOL_MISMATCH,
-            format!("the App engine speaks protocol {} and this daemon {}: k2 app engine install", v["protocol"], wire::ENGINE_PROTOCOL),
+            format!("the App engine speaks protocol {} and this daemon {}: {CLI_NAME} app engine install", v["protocol"], wire::ENGINE_PROTOCOL),
         ));
     }
     Ok(v)
@@ -505,7 +507,7 @@ pub fn ensure_base(base: &BaseImage) -> Result<String> {
             ));
         }
         if !Path::new(SKOPEO).exists() {
-            return Err(eng_err(codes::ENGINE_UNAVAILABLE, "skopeo is missing (box prep installs it: k2 app box prepare)"));
+            return Err(eng_err(codes::ENGINE_UNAVAILABLE, concat!("skopeo is missing (box prep installs it: ", cli_name!(), " app box prepare)")));
         }
         let tmp = dir.join(format!(".fetch-{}.oci.tar", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
@@ -722,7 +724,7 @@ pub fn proxy_port_of(answer: &Value, gw: Option<u16>) -> Option<u16> {
 pub fn ensure_proxy(app: &str, px: Option<u16>) -> std::result::Result<u16, String> {
     let px = px.ok_or_else(|| "no proxy port for this App's slot".to_string())?;
     if k2_root_proto::apps::PROXY_PORTS.lo > px || px > k2_root_proto::apps::PROXY_PORTS.hi {
-        return Err(format!("proxy port {px} is outside K2's proxy range"));
+        return Err(format!("proxy port {px} is outside {PRODUCT_NAME}'s proxy range"));
     }
     super::egress_proxy::ensure(app, px).map(|_| px)
 }
@@ -763,7 +765,7 @@ impl GuardedEngine {
         let app = app_id(&spec.app_id)?;
         let word = wall_word(wall);
         if !wire::app_port_ok(port) {
-            return Err(eng_err(codes::ENGINE_UNAVAILABLE, format!("port {port} is in K2's reserved range")));
+            return Err(eng_err(codes::ENGINE_UNAVAILABLE, format!("port {port} is in {PRODUCT_NAME}'s reserved range")));
         }
         let (_, gw) = self
             .prepared
@@ -800,7 +802,7 @@ impl GuardedEngine {
             log_line(
                 spec,
                 &format!(
-                    "{word}: box services in the wall: {} (k2 app box-service {})",
+                    "{word}: box services in the wall: {} ({CLI_NAME} app box-service {})",
                     box_forwards.iter().map(|f| format!("127.0.0.1:{} -> host {}", f.app_port, f.host_port)).collect::<Vec<_>>().join(", "),
                     spec.app_id
                 ),
@@ -848,8 +850,8 @@ impl GuardedEngine {
             log_line(spec, &format!("{word}: granted secrets not delivered (names the wall refuses): {}", dropped.join(", ")));
         }
         match db_port {
-            Some(d) => log_line(spec, &format!("{word}: database door on 127.0.0.1:{} in the wall (host {d}; k2 app doctor {})", wire::IN_WALL_DB_PORT, spec.app_id)),
-            None => log_line(spec, &format!("{word}: no database door (this box's App engine predates it: k2 app engine install)")),
+            Some(d) => log_line(spec, &format!("{word}: database door on 127.0.0.1:{} in the wall (host {d}; {CLI_NAME} app doctor {})", wire::IN_WALL_DB_PORT, spec.app_id)),
+            None => log_line(spec, &format!("{word}: no database door (this box's App engine predates it: {CLI_NAME} app engine install)")),
         }
         let base = match wall {
             Wall::Guarded => base_image_for(std::env::consts::ARCH),
@@ -883,7 +885,7 @@ impl GuardedEngine {
         // request at boot finds it (same slot offset as the gateway port).
         // It is the database door's listener too (S21).
         match ensure_proxy(app.as_str(), px_planned) {
-            Ok(px) => log_line(spec, &format!("{word}: egress proxy on 127.0.0.1:{px} (k2 app egress {})", spec.app_id)),
+            Ok(px) => log_line(spec, &format!("{word}: egress proxy on 127.0.0.1:{px} ({CLI_NAME} app egress {})", spec.app_id)),
             Err(e) => log_line(spec, &format!("{word}: egress proxy not listening ({e}); the App has no egress until it is")),
         }
         let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(1200)) {
@@ -906,13 +908,13 @@ impl GuardedEngine {
         super::db_door::record_live(app.as_str(), &v);
         log_line(
             spec,
-            &format!("{word} container {unit} started on 127.0.0.1:{port}{}; its output: k2 app logs {}", match app_port {
+            &format!("{word} container {unit} started on 127.0.0.1:{port}{}; its output: {CLI_NAME} app logs {}", match app_port {
                 Some(ap) if ap != port => format!(" (the App's port {ap} inside)"),
                 _ => String::new(),
             }, spec.app_id),
         );
         if let Err(e) = install_gateway_rule(app.as_str(), gw) {
-            log_line(spec, &format!("{word}: gateway rule not installed ({e}); the App can't reach K2 until it is"));
+            log_line(spec, &format!("{word}: gateway rule not installed ({e}); the App can't reach {PRODUCT_NAME} until it is"));
         }
         // The engine's answer is the truth for the forward it rendered.
         if let Some(px) = proxy_port_of(&v, Some(gw)).filter(|p| Some(*p) != px_planned) {
@@ -992,7 +994,7 @@ impl RuntimeEngine for GuardedEngine {
 
     fn exec(&self, h: &RunHandle, argv: &[String], tty: bool) -> Result<ExecStream> {
         if tty {
-            return Err(eng_err(codes::ENGINE_UNAVAILABLE, "a terminal goes through exec_tty (k2 app shell)"));
+            return Err(eng_err(codes::ENGINE_UNAVAILABLE, concat!("a terminal goes through exec_tty (", cli_name!(), " app shell)")));
         }
         let v = exec_once(&h.app_id, &h.deployment_id, argv, wire::EXEC_TIMEOUT_DEFAULT, None)?;
         Ok(ExecStream {

@@ -22,6 +22,8 @@ use serde_json::{json, Value as J};
 use k2_core::email_notify::{self as store, Sender};
 
 use super::{db_fail, fail, sender_json, Fail, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// What `sender add` takes.
 #[derive(Debug, Clone, Default)]
@@ -77,13 +79,13 @@ fn k2_side_free(conn: &rusqlite::Connection, address: &str) -> R<()> {
     }
     // N7: a send-only apex sender's bounce account is taken too.
     if store::is_reserved(conn, address).map_err(db_fail)? {
-        return Err(fail(409, "exists", format!("{address} is already a sender's mail-server account (k2 notifications email sender list)")));
+        return Err(fail(409, "exists", format!("{address} is already a sender's mail-server account ({CLI_NAME} notifications email sender list)")));
     }
     if crate::mail::addresses::load_address(conn, address).is_some() {
         return Err(fail(
             409,
             "exists",
-            format!("{address} is a mailbox (k2 hostmail list): a sender is never a mailbox. Pick another address (e.g. noreply@…)"),
+            format!("{address} is a mailbox ({CLI_NAME} hostmail list): a sender is never a mailbox. Pick another address (e.g. noreply@…)"),
         ));
     }
     Ok(())
@@ -116,7 +118,7 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
         Some(id) => {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            Some(store::get_relay(&conn, id).map_err(db_fail)?.ok_or_else(|| fail(404, "not_found", format!("no relay {id} (k2 notifications email relay list)")))?)
+            Some(store::get_relay(&conn, id).map_err(db_fail)?.ok_or_else(|| fail(404, "not_found", format!("no relay {id} ({CLI_NAME} notifications email relay list)")))?)
         }
         None => None,
     };
@@ -147,7 +149,7 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
         drop(conn);
         super::audit_line("email-sender-add", actor, &format!("sender={} path=relay relay={}", s.id, r.id));
         let mut v = sender_json(&s);
-        v["next"] = json!(format!("k2 notifications email relay test {} --from {address} (sends one test to your own address)", r.id));
+        v["next"] = json!(format!("{CLI_NAME} notifications email relay test {} --from {address} (sends one test to your own address)", r.id));
         return Ok(json!({ "ok": true, "sender": v }));
     }
     // Hosted.
@@ -155,8 +157,8 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
         return Err(fail(
             409,
             "no_mail_path",
-            "this server has no hosted mail (a Mac, or Linux without it): add an SMTP relay first \
-             (k2 notifications email relay add) and pass --relay <id>",
+            concat!("this server has no hosted mail (a Mac, or Linux without it): add an SMTP relay first \
+             (", cli_name!(), " notifications email relay add) and pass --relay <id>"),
         ));
     }
     let (row, rua) = {
@@ -167,13 +169,13 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
             fail(
                 409,
                 "domain_not_ready",
-                format!("{domain} isn't a hosted domain here: k2 hostmail domain add {domain}, publish its records, then k2 hostmail domain check {domain}"),
+                format!("{domain} isn't a hosted domain here: {CLI_NAME} hostmail domain add {domain}, publish its records, then {CLI_NAME} hostmail domain check {domain}"),
             )
         })?;
         (row, rua_for(&conn, &domain))
     };
     if row.status != "verified" {
-        return Err(fail(409, "domain_not_ready", format!("{domain} isn't Verified yet (k2 hostmail domain check {domain})")));
+        return Err(fail(409, "domain_not_ready", format!("{domain} isn't Verified yet ({CLI_NAME} hostmail domain check {domain})")));
     }
     let Some(stw_domain) = row.stalwart_domain_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
         return Err(fail(409, "domain_not_ready", format!("{domain} has no mail-server id; remove and re-add it")));
@@ -237,9 +239,9 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
     if state == store::STATE_NEEDS_DMARC {
         v["dmarcPlanted"] = json!(planted);
         v["next"] = json!(if planted {
-            format!("K2 published _dmarc.{domain} \"v=DMARC1; p=none\"; once it is visible: k2 notifications email sender check {address}")
+            format!("{PRODUCT_NAME} published _dmarc.{domain} \"v=DMARC1; p=none\"; once it is visible: {CLI_NAME} notifications email sender check {address}")
         } else {
-            format!("publish a DMARC record (any policy), e.g. _dmarc.{domain} TXT \"v=DMARC1; p=none\", then k2 notifications email sender check {address}")
+            format!("publish a DMARC record (any policy), e.g. _dmarc.{domain} TXT \"v=DMARC1; p=none\", then {CLI_NAME} notifications email sender check {address}")
         });
     }
     Ok(json!({ "ok": true, "sender": v }))
@@ -271,7 +273,7 @@ fn add_send_only(address: &str, local: &str, apex: &str, via: &str, name: &str, 
             return Err(fail(
                 409,
                 "apex_hosted",
-                format!("{apex} is hosted here, so its senders don't need --via: k2 notifications email sender add {address}"),
+                format!("{apex} is hosted here, so its senders don't need --via: {CLI_NAME} notifications email sender add {address}"),
             ));
         }
         k2_side_free(&conn, address)?;
@@ -280,12 +282,12 @@ fn add_send_only(address: &str, local: &str, apex: &str, via: &str, name: &str, 
             fail(
                 409,
                 "domain_not_ready",
-                format!("{via} isn't a hosted domain here: k2 hostmail domain add {via}, publish its records (MX, SPF, DKIM), then k2 hostmail domain check {via}"),
+                format!("{via} isn't a hosted domain here: {CLI_NAME} hostmail domain add {via}, publish its records (MX, SPF, DKIM), then {CLI_NAME} hostmail domain check {via}"),
             )
         })?
     };
     if row.status != "verified" {
-        return Err(fail(409, "domain_not_ready", format!("{via} isn't Verified yet (k2 hostmail domain check {via})")));
+        return Err(fail(409, "domain_not_ready", format!("{via} isn't Verified yet ({CLI_NAME} hostmail domain check {via})")));
     }
     let Some(stw_domain) = row.stalwart_domain_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
         return Err(fail(409, "domain_not_ready", format!("{via} has no mail-server id; remove and re-add it")));
@@ -343,8 +345,8 @@ fn add_send_only(address: &str, local: &str, apex: &str, via: &str, name: &str, 
     let mut v = sender_json(&s);
     if state == store::STATE_NEEDS_DMARC {
         v["next"] = json!(format!(
-            "publish a DMARC record at {apex}'s DNS (K2 never writes it), e.g. _dmarc.{apex} TXT \"v=DMARC1; p=none\" (adkim and aspf not both s), \
-             then k2 notifications email sender check {address}"
+            "publish a DMARC record at {apex}'s DNS ({PRODUCT_NAME} never writes it), e.g. _dmarc.{apex} TXT \"v=DMARC1; p=none\" (adkim and aspf not both s), \
+             then {CLI_NAME} notifications email sender check {address}"
         ));
     }
     Ok(json!({ "ok": true, "sender": v }))
@@ -367,7 +369,7 @@ pub fn find_live(id_or_address: &str) -> R<Sender> {
     let conn = db.lock();
     match store::find_sender(&conn, id_or_address).map_err(db_fail)? {
         Some(s) if s.is_live() => Ok(s),
-        _ => Err(fail(404, "not_found", format!("no sender {} (k2 notifications email sender list)", id_or_address.trim()))),
+        _ => Err(fail(404, "not_found", format!("no sender {} ({CLI_NAME} notifications email sender list)", id_or_address.trim()))),
     }
 }
 
@@ -453,7 +455,7 @@ pub fn ready(s: &Sender, now: i64) -> R<()> {
     }
     if s.path == store::PATH_RELAY {
         if s.state == store::STATE_NEEDS_TEST {
-            return Err(fail(409, "relay_not_ready", format!("{} hasn't passed a relay test yet (k2 notifications email relay test)", s.address)));
+            return Err(fail(409, "relay_not_ready", format!("{} hasn't passed a relay test yet ({CLI_NAME} notifications email relay test)", s.address)));
         }
         let relay = {
             let db = k2_core::db::shared();
@@ -462,7 +464,7 @@ pub fn ready(s: &Sender, now: i64) -> R<()> {
         };
         let Some(relay) = relay else { return Err(fail(409, "relay_not_ready", "the sender's relay was removed")) };
         if relay.last_test_ok != Some(true) {
-            return Err(fail(409, "relay_not_ready", format!("relay {}'s last test didn't pass (k2 notifications email relay test {})", relay.id, relay.id)));
+            return Err(fail(409, "relay_not_ready", format!("relay {}'s last test didn't pass ({CLI_NAME} notifications email relay test {})", relay.id, relay.id)));
         }
         match super::engine::relay_creds().get(&relay.id) {
             Ok(Some(_)) => {}
@@ -487,7 +489,7 @@ pub fn ready(s: &Sender, now: i64) -> R<()> {
     };
     let Some(row) = row else { return Err(fail(409, "domain_not_ready", format!("{hosted} isn't hosted here any more"))) };
     if row.status != "verified" {
-        return Err(fail(409, "domain_not_ready", format!("{hosted} isn't Verified (k2 hostmail domain check {hosted})")));
+        return Err(fail(409, "domain_not_ready", format!("{hosted} isn't Verified ({CLI_NAME} hostmail domain check {hosted})")));
     }
     #[cfg(not(test))]
     {

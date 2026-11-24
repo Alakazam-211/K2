@@ -29,6 +29,8 @@
 //! caller get nothing.
 
 use serde_json::{json, Value as J};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Who is asking, as far as this switch cares.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,7 +216,7 @@ fn owner_only(act: VersionsAct) -> Refusal {
         OWNER_ONLY,
         403,
         format!(
-            "only the server's owner may run `{}` (from a terminal outside K2, or Settings → Cores → Database)",
+            "only the server's owner may run `{}` (from a terminal outside {PRODUCT_NAME}, or Settings → Cores → Database)",
             act.as_str()
         ),
     )
@@ -238,7 +240,7 @@ pub fn decide(
         Who::Admin { .. } => Err(no(
             OWNER_ONLY,
             403,
-            format!("an Admin login may only check (`k2 db upgrade --check`); `{}` is the owner's", act.as_str()),
+            format!("an Admin login may only check (`{CLI_NAME} db upgrade --check`); `{}` is the owner's", act.as_str()),
         )),
         Who::Member { .. } | Who::Other => Err(owner_only(act)),
         Who::Agent { project_id, local, sandboxed, .. } => {
@@ -305,8 +307,8 @@ pub fn set_switch(ws_id: &str, value: bool, caller_is_owner: bool, by: &str) -> 
         return Err(no(
             OWNER_ONLY,
             403,
-            "only the server's owner turns \"Let this agent manage Postgres versions\" on (an Admin may turn it off): \
-             Settings → Workspaces / Agents → <agent> → Permissions → Database, or k2 db versions-access on --workspace <ws> from a terminal outside K2",
+            concat!("only the server's owner turns \"Let this agent manage Postgres versions\" on (an Admin may turn it off): \
+             Settings → Workspaces / Agents → <agent> → Permissions → Database, or ", cli_name!(), " db versions-access on --workspace <ws> from a terminal outside ", product_name!()),
         ));
     }
     if value != before {
@@ -341,10 +343,10 @@ fn changed(path: &str, handle: &str, on: bool, by: &str) {
         format!(
             "\"Let this agent manage Postgres versions\" is on (by {by}).\n\n\
              You may check, move and roll back your own databases and your Apps' databases to a newer Postgres \
-             (k2 db upgrade <db> --check, then k2 db upgrade <db>), create a database on a chosen version \
-             (k2 db create --major <M>) and tidy empty clusters (k2 db clusters tidy). Every act is in the Access \
+             ({CLI_NAME} db upgrade <db> --check, then {CLI_NAME} db upgrade <db>), create a database on a chosen version \
+             ({CLI_NAME} db create --major <M>) and tidy empty clusters ({CLI_NAME} db clusters tidy). Every act is in the Access \
              Audit and the owner gets a note for each move. Deleting the old copy (--forget-old), other workspaces' \
-             databases and --all stay with the owner. Check with k2 db status."
+             databases and --all stay with the owner. Check with {CLI_NAME} db status."
         )
     } else {
         format!(

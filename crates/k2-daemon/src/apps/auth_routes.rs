@@ -30,6 +30,8 @@ use serde_json::{json, Value as J};
 use super::grace::{target, Target};
 use super::routes::{audit_human, json_body, need_credential, no, Refusal, Who, R};
 use crate::app_push::owner_routes::{admin_human, app_agent_at, owner_in_person};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/app/auth";
 pub const SET: &str = "/cli/app/auth/set";
@@ -163,10 +165,10 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     let mut out = json!({ "ok": true, "box": box_json(), "app": app_json(&t)? });
     let mut warnings: Vec<String> = Vec::new();
     if !super::auth_door::box_on() {
-        warnings.push("the box's sign-in door is off, so this App has none yet: the owner turns it on with k2 app auth door on".into());
+        warnings.push(concat!("the box's sign-in door is off, so this App has none yet: the owner turns it on with ", cli_name!(), " app auth door on").into());
     }
     if t.app_id.is_none() {
-        warnings.push("this is not a runtime App: K2 only answers /.k2/auth/* in front of a runtime App (k2 app deploy)".into());
+        warnings.push(concat!("this is not a runtime App: ", product_name!(), " only answers /.k2/auth/* in front of a runtime App (", cli_name!(), " app deploy)").into());
     }
     if !warnings.is_empty() {
         out["warnings"] = json!(warnings);
@@ -177,7 +179,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
 /// Why the server's switch was refused: it is the owner's. An agent also
 /// gets the form that changes its own App's door, with its Apps' names.
 fn box_switch_refusal(who: &Who) -> String {
-    let base = "the server's sign-in door (k2 app auth door on|off with no App) covers every App on this server, so it is the owner's alone: they run k2 app auth door on";
+    let base = concat!("the server's sign-in door (", cli_name!(), " app auth door on|off with no App) covers every App on this server, so it is the owner's alone: they run ", cli_name!(), " app auth door on");
     let Who::Agent { project_id, .. } = who else { return base.to_string() };
     let names: Vec<String> = {
         let db = k2_core::db::shared();
@@ -185,7 +187,7 @@ fn box_switch_refusal(who: &Who) -> String {
         k2_core::published_services::list_all(&conn).unwrap_or_default().into_iter().filter(|r| &r.project_id == project_id).map(|r| r.name).collect()
     };
     let yours = if names.is_empty() { "<app>".to_string() } else { names.join(" | ") };
-    format!("{base}. Your own App's door is yours to change (\"Build and run Apps\"): k2 app auth door on {yours}")
+    format!("{base}. Your own App's door is yours to change (\"Build and run Apps\"): {CLI_NAME} app auth door on {yours}")
 }
 
 /// Dispatch one call (blocking).

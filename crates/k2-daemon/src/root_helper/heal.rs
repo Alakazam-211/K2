@@ -26,6 +26,7 @@ use k2_root_proto::sig::{asset_name, encode_payload, verify_signed_build};
 use k2_root_proto::version::{Semver, SELF_UPDATE_MIN_PROTOCOL};
 
 use super::{Kind, RootHelperState};
+use k2_core::{cli_name, product_name};
 
 /// A failed fetch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +132,7 @@ pub fn heal_with(ops: &dyn HealOps, plan: &Plan) -> Outcome {
     }
     if plan.airgap {
         return Outcome::Skipped {
-            reason: "older than K2 (air-gapped; run k2 root-helper update --from <dir>)".into(),
+            reason: concat!("older than ", product_name!(), " (air-gapped; run ", cli_name!(), " root-helper update --from <dir>)").into(),
         };
     }
     let asset = asset_name(&plan.arch);

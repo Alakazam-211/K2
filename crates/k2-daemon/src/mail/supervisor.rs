@@ -62,6 +62,8 @@ pub use k2_root_proto::stalwart::{
     STALWART_OLDER_SHA256, STALWART_OLDER_VERSION, STALWART_PINNED_VERSION,
     STALWART_PREVIOUS_SHA256, STALWART_PREVIOUS_VERSION, STALWART_SHA256, STALWART_UPGRADE_FROM,
 };
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// Enable fetches the pin from the Alakazam fork release (a mirror of
 /// the upstream tarball); K2 does not rebuild Stalwart.
@@ -1215,16 +1217,16 @@ pub fn upgrade_running() -> &'static AtomicBool {
 }
 
 /// The refusal every Stalwart-touching mutation gives mid-upgrade.
-pub const UPGRADE_RUNNING_HINT: &str = "a Stalwart upgrade is running (k2 hostmail upgrade) — \
-     wait for it to finish (k2 hostmail status shows its progress), then retry";
+pub const UPGRADE_RUNNING_HINT: &str = concat!("a Stalwart upgrade is running (", cli_name!(), " hostmail upgrade) — \
+     wait for it to finish (", cli_name!(), " hostmail status shows its progress), then retry");
 
 /// CAL15: enable never replaces an installed binary of another version.
 /// The refusal names the one verb that does.
 pub fn enable_version_mismatch_message(installed: &str) -> String {
     format!(
         "installed Stalwart {installed} does not match this daemon's pin \
-         {STALWART_PINNED_VERSION} — refusing to manage it. Run `k2 hostmail upgrade` \
-         (try `k2 hostmail upgrade --dry-run` first): it stops Stalwart, snapshots the \
+         {STALWART_PINNED_VERSION} — refusing to manage it. Run `{CLI_NAME} hostmail upgrade` \
+         (try `{CLI_NAME} hostmail upgrade --dry-run` first): it stops Stalwart, snapshots the \
          data, installs {STALWART_PINNED_VERSION}, health-checks, and rolls back on \
          failure. Enable never replaces an installed version."
     )

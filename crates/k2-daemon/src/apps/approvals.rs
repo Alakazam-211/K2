@@ -37,6 +37,7 @@ use super::egress_routes::codes;
 use crate::cli_response::CliResponse;
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTES: &[&str] = &["/cli/app/approvals", "/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/approvals/revoke", "/cli/app/approve", "/cli/app/deny"];
@@ -139,7 +140,7 @@ pub(crate) fn held_answer(r: &reqs::AppRequest) -> J {
         "expiresAt": r.expires_at,
         "hint": format!(
             "held for the owner: an owner or admin approves it in person (its permission card, Settings → Cores → App Approvals, or \
-             {CLI_NAME} app approve {} from a terminal outside K2), or denies it. Check with {CLI_NAME} app approvals {}.",
+             {CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}), or denies it. Check with {CLI_NAME} app approvals {}.",
             r.id, r.id
         ),
     })
@@ -392,8 +393,8 @@ pub(crate) fn vault() -> R<std::sync::Arc<k2_vault::LocalVault>> {
 }
 
 fn find(token: Option<&str>) -> R<reqs::AppRequest> {
-    let t = token.map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| no(dcodes::BAD_REQUEST, 400, "name the request (its w_… id; k2 app approvals)"))?;
-    db(|c| reqs::find(c, t))?.ok_or_else(|| no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{t}' (k2 app approvals)")))
+    let t = token.map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| no(dcodes::BAD_REQUEST, 400, concat!("name the request (its w_… id; ", cli_name!(), " app approvals)")))?;
+    db(|c| reqs::find(c, t))?.ok_or_else(|| no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{t}' ({CLI_NAME} app approvals)")))
 }
 
 fn decide_err(code: &'static str) -> Refusal {
@@ -514,7 +515,7 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
             codes::OWNER_ONLY,
             403,
             format!(
-                "only {APPROVERS} approves App requests, in person: k2 app approve <id> from a terminal outside K2, \
+                "only {APPROVERS} approves App requests, in person: {CLI_NAME} app approve <id> from a terminal outside {PRODUCT_NAME}, \
                  or Settings → App Approvals. An agent can propose, never approve."
             ),
         ));
@@ -538,7 +539,7 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             codes::VAULT_CONFIRM_REQUIRED,
             403,
-            "approving needs a fresh owner confirm (Touch ID, your login or vault password): k2 app approve <id> asks for it",
+            concat!("approving needs a fresh owner confirm (Touch ID, your login or vault password): ", cli_name!(), " app approve <id> asks for it"),
         ));
     };
     let proof = vault()?
@@ -648,7 +649,7 @@ fn revoke(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner revokes an approval (k2 app approvals revoke <id> from a terminal outside K2)",
+            concat!("only the server's owner revokes an approval (", cli_name!(), " app approvals revoke <id> from a terminal outside ", product_name!(), ")"),
         ));
     }
     let v = json_body(body)?;
@@ -668,12 +669,12 @@ fn revoke(who: &Who, body: &[u8]) -> R<J> {
         (None, None) => return Err(no(dcodes::BAD_REQUEST, 400, "name the approval (request: its w_… id) or the App (app)")),
     };
     if targets.is_empty() {
-        return Err(no(codes::REQUEST_NOT_FOUND, 404, "no standing run approval for that App (k2 app approvals --state approved)"));
+        return Err(no(codes::REQUEST_NOT_FOUND, 404, concat!("no standing run approval for that App (", cli_name!(), " app approvals --state approved)")));
     }
     let mut revoked = Vec::new();
     for r in &targets {
         let done = db(|c| Ok(reqs::revoke_standing(c, &r.id, &by, now)))?.map_err(|e| match e {
-            "not_standing" => no(codes::NOT_PENDING, 409, format!("{} is not an approved k2 publish run: only those stand for re-runs", r.id)),
+            "not_standing" => no(codes::NOT_PENDING, 409, format!("{} is not an approved {CLI_NAME} publish run: only those stand for re-runs", r.id)),
             "already_revoked" => no(codes::NOT_PENDING, 409, format!("{} was revoked already", r.id)),
             _ => no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{}'", r.id)),
         })?;
@@ -692,7 +693,7 @@ fn revoke(who: &Who, body: &[u8]) -> R<J> {
     Ok(json!({
         "ok": true,
         "revoked": revoked,
-        "note": "the next identical k2 publish run of this App asks the owner again",
+        "note": concat!("the next identical ", cli_name!(), " publish run of this App asks the owner again"),
     }))
 }
 
@@ -716,7 +717,7 @@ fn deny(who: &Who, body: &[u8]) -> R<J> {
         reqs::STATUS_WITHDRAWN
     } else if who.passport().is_some() {
         // Another workspace's request, or one this passport didn't file.
-        return Err(no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{}' you can withdraw (k2 app approvals)", r.id)));
+        return Err(no(codes::REQUEST_NOT_FOUND, 404, format!("no App request '{}' you can withdraw ({CLI_NAME} app approvals)", r.id)));
     } else {
         return Err(no(codes::OWNER_ONLY, 403, "only the owner or an admin denies a request (the requester withdraws it)"));
     };
@@ -923,7 +924,7 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
                     if o.remove("password").is_some() {
                         o.insert(
                             "passwordNote".into(),
-                            json!("not kept: the agent sets it once, k2 app user password <name> --test --password-stdin"),
+                            json!(concat!("not kept: the agent sets it once, ", cli_name!(), " app user password <name> --test --password-stdin")),
                         );
                     }
                 }
@@ -1034,9 +1035,9 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
             return Err(no(
                 dcodes::APPS_MANAGE_OFF,
                 403,
-                "\"Build and run Apps\" is off for this agent, and an exec with piped input isn't kept on a held request: \
-                 ask your owner to turn the switch on (k2 app access <workspace> --build on from a terminal outside K2), \
-                 or run the command without input (k2 app exec --no-stdin …) to file it for approval",
+                concat!("\"Build and run Apps\" is off for this agent, and an exec with piped input isn't kept on a held request: \
+                 ask your owner to turn the switch on (", cli_name!(), " app access <workspace> --build on from a terminal outside ", product_name!(), "), \
+                 or run the command without input (", cli_name!(), " app exec --no-stdin …) to file it for approval"),
             ));
         }
         let label = s(&v, "app")
@@ -1071,8 +1072,8 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
             _ => "",
         };
         let summary = match &host {
-            Some(h) => format!("k2 app {verb} {label} {h}{flag}"),
-            None => format!("k2 app {verb} {label}"),
+            Some(h) => format!("{CLI_NAME} app {verb} {label} {h}{flag}"),
+            None => format!("{CLI_NAME} app {verb} {label}"),
         };
         let mut lines = vec![summary.clone()];
         if let Some(h) = &host {
@@ -1100,7 +1101,7 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
         let mut out = held_answer(&r);
         out["hint"] = json!(format!(
             "held for the owner: \"Build and run Apps\" is off for this workspace, so every App change waits for \
-             the owner (k2 app approve {} outside K2, or Settings → App Approvals). To stop a misbehaving App now: k2 app suspend <app>.",
+             the owner ({CLI_NAME} app approve {} outside {PRODUCT_NAME}, or Settings → App Approvals). To stop a misbehaving App now: {CLI_NAME} app suspend <app>.",
             r.id
         ));
         Ok(out)
@@ -1151,7 +1152,7 @@ pub(crate) fn owner_confirm_status() -> J {
     let mut v = json!({ "available": vault_pw || owner_login, "methods": methods });
     if !vault_pw && !owner_login {
         v["hint"] = json!(
-            "no vault password and no Owner Connect login on this box: App approvals stay held until one is set (k2 vault password set)"
+            concat!("no vault password and no Owner Connect login on this box: App approvals stay held until one is set (", cli_name!(), " vault password set)")
         );
     }
     v

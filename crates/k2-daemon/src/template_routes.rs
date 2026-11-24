@@ -27,6 +27,7 @@ use k2_core::hire::template::save::{self, TemplateError};
 
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
 
 pub const CLI_SAVE: &str = "/cli/agent-templates/save";
 pub const CLI_ADD: &str = "/cli/agent-templates/add";
@@ -121,7 +122,7 @@ pub(crate) fn workspace_for(c: &Caller, token: Option<&str>) -> Result<k2_core::
         return Err(fail(400, "usage", "missing 'workspace' (a path or handle)"));
     };
     let Some(ws) = resolve_workspace(token) else {
-        return Err(fail(404, "no_workspace", format!("no registered workspace '{token}' (see: k2 agent list)")));
+        return Err(fail(404, "no_workspace", format!("no registered workspace '{token}' (see: {CLI_NAME} agent list)")));
     };
     if let Caller::Agent { workspace_id, .. } = c {
         if &ws.id != workspace_id {

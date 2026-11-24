@@ -37,6 +37,7 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
 use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/migrate/secrets/status";
 pub const BEGIN: &str = "/cli/migrate/secrets/begin";
@@ -212,9 +213,9 @@ fn hold(home: &Path, step: &str, params: Value, c: &VaultCaller) -> Result<Value
         "request": { "id": id, "step": step, "what": step_words(step), "expiresAt": rfc(h.expires_at) },
         "hint": format!(
             "held for the box owner as {id} ({}). The owner approves it as a person, with the vault confirm: \
-             k2 migrate approve {id} from their own terminal or SSH login, or the Thread card \
+             {CLI_NAME} migrate approve {id} from their own terminal or SSH login, or the Thread card \
              (an agent asks with: {CLI_NAME} permission request vault.move-approve request={id}). \
-             Check with: k2 migrate status",
+             Check with: {CLI_NAME} migrate status",
             step_words(step)
         ),
     }))
@@ -273,7 +274,7 @@ fn gate(
             Err(err(
                 "person_required",
                 403,
-                "only the box owner, as a person, approves this: from your own terminal or SSH login (not a K2 terminal), or a K2 Connect owner login, with the vault confirm. Agents: don't run it; tell your owner.",
+                concat!("only the box owner, as a person, approves this: from your own terminal or SSH login (not a ", product_name!(), " terminal), or a K2 Connect owner login, with the vault confirm. Agents: don't run it; tell your owner."),
             )
             .into())
         }
@@ -312,7 +313,7 @@ fn confirm_needed(binding: &str, label: &str) -> CliResponse {
         status: "403 Forbidden",
         content_type: "application/json",
         body: json!({
-            "error": { "code": "vault_confirm_required", "hint": "this needs your vault confirm first (k2 migrate asks for it)" },
+            "error": { "code": "vault_confirm_required", "hint": concat!("this needs your vault confirm first (", cli_name!(), " migrate asks for it)") },
             "confirm": { "action": CONFIRM_ACTION, "secretId": binding, "label": label },
         })
         .to_string(),
@@ -520,7 +521,7 @@ fn begin(home: &Path, c: &VaultCaller, b: &Body) -> Result<Reply, Stop> {
 
 fn read_move_file(home: &Path, b: &Body) -> Result<(Identity, MoveKeyFile, MoveFile), Stop> {
     let (id, kf) = load_move_key(home).ok_or_else(|| {
-        err("no_move_key", 409, "this box has no move key (or it expired after 24 h): run k2 migrate import-secrets begin first, then export again on the old box")
+        err("no_move_key", 409, concat!("this box has no move key (or it expired after 24 h): run ", cli_name!(), " migrate import-secrets begin first, then export again on the old box"))
     })?;
     let path = abs_path(b.file.as_deref(), "move file")?;
     let meta = std::fs::metadata(&path).map_err(|_| VaultError::not_found(format!("no file at {}", path.display())))?;
@@ -562,7 +563,7 @@ fn dry_run(env: &dyn MoveEnv, home: &Path, c: &VaultCaller, b: &Body) -> Result<
         Ok(v) => json!({ "open": true, "vaultId": v.vault_id(), "userSecrets": v.user_secret_count() }),
         Err(e) => json!({ "open": false, "error": e.code }),
     };
-    out["next"] = json!("nothing changed. To import: k2 migrate import-secrets <file> --apply (you confirm)");
+    out["next"] = json!(concat!("nothing changed. To import: ", cli_name!(), " migrate import-secrets <file> --apply (you confirm)"));
     Ok(Reply::Ok(out))
 }
 
@@ -589,7 +590,7 @@ fn step(
             let v = vault.as_ref().ok_or_else(|| closed.clone().unwrap_or_else(|| err("vault_not_open", 503, "the vault isn't open")))?;
             if step == "export" {
                 let to = b.to.as_deref().map(str::trim).unwrap_or("");
-                let r = Recipient::parse(to).map_err(|_| err("bad_move_key", 400, "--to takes the new box's move key (age1…, from k2 migrate import-secrets begin)"))?;
+                let r = Recipient::parse(to).map_err(|_| err("bad_move_key", 400, concat!("--to takes the new box's move key (age1…, from ", cli_name!(), " migrate import-secrets begin)")))?;
                 let out = abs_path(b.out.as_deref(), "output file (--out)")?;
                 if out.exists() {
                     return Err(err("out_exists", 409, format!("{} already exists; pick a new name", out.display())).into());
@@ -614,7 +615,7 @@ fn step(
         }
         _ => {
             if boxmove::last_import(&crate::vault::vault_dir(home)).is_none() {
-                return Err(err("no_import", 409, "no import to undo on this box (k2 migrate status)").into());
+                return Err(err("no_import", 409, concat!("no import to undo on this box (", cli_name!(), " migrate status)")).into());
             }
             (json!({}), "undo".into(), "undo the last vault import".into(), vault.is_some())
         }
@@ -714,7 +715,7 @@ fn run_step(env: &dyn MoveEnv, home: &Path, step: &str, c: &VaultCaller, b: &Bod
                 "gen": m.gen,
                 "secrets": { "user": m.user_secrets, "system": m.system_secrets },
                 "frozen": true,
-                "next": "This vault is now frozen: reads work, writes wait. Copy the file to the new box (scp), then there: k2 migrate import-secrets <file> (a dry run), then --apply. Called off? k2 migrate export-secrets --unfreeze",
+                "next": concat!("This vault is now frozen: reads work, writes wait. Copy the file to the new box (scp), then there: ", cli_name!(), " migrate import-secrets <file> (a dry run), then --apply. Called off? ", cli_name!(), " migrate export-secrets --unfreeze"),
             })))
         }
         "unfreeze" => {
@@ -741,11 +742,11 @@ fn run_step(env: &dyn MoveEnv, home: &Path, step: &str, c: &VaultCaller, b: &Bod
                 "replaced": crate::vault::vault_dir(home).join(&rec.aside),
                 "moveKey": key_json(&kf),
                 "next": [
-                    "Check: k2 vault status (open, rollback: false, the key home and secret count above).",
-                    "Re-place each systemd credential listed: k2 vault systemd-cred NAME --replace.",
+                    concat!("Check: ", cli_name!(), " vault status (open, rollback: false, the key home and secret count above)."),
+                    concat!("Re-place each systemd credential listed: ", cli_name!(), " vault systemd-cred NAME --replace."),
                     "The tunnel isn't started; hand it over as your runbook says.",
-                    "Optional clean break: k2 vault rekey (a new data key; old copies of the vault can't read secrets added after).",
-                    "Undo before the cut-over: k2 migrate import-secrets --undo.",
+                    concat!("Optional clean break: ", cli_name!(), " vault rekey (a new data key; old copies of the vault can't read secrets added after)."),
+                    concat!("Undo before the cut-over: ", cli_name!(), " migrate import-secrets --undo."),
                 ],
             })))
         }
@@ -764,7 +765,7 @@ fn run_step(env: &dyn MoveEnv, home: &Path, step: &str, c: &VaultCaller, b: &Bod
 
 fn approve(env: &dyn MoveEnv, home: &Path, c: &VaultCaller, b: &Body, ingress: &str, not_person: Option<&'static str>) -> Result<Reply, Stop> {
     let id = b.request.as_deref().map(str::trim).unwrap_or("");
-    let h = held_get(home, id).ok_or_else(|| VaultError::not_found(format!("no held move step {id} (k2 migrate status)")))?;
+    let h = held_get(home, id).ok_or_else(|| VaultError::not_found(format!("no held move step {id} ({CLI_NAME} migrate status)")))?;
     if h.status != "pending" {
         return Err(err("already_decided", 409, format!("{id} is {} already", h.status)).into());
     }

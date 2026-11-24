@@ -40,6 +40,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use k2_core::firewall::{merge, FirewallConfig, PortEntry, Proto, UpstreamAck, VIEW_VERSION};
+use k2_core::{cli_name, product_name};
 
 /// Everything the view is computed from (gathered by [`gather`]; tests
 /// build it by hand).
@@ -182,7 +183,7 @@ pub fn compute(i: &Inputs) -> View {
     }
 
     if let Some(p) = i.lan_port {
-        closed.push(PortEntry::closed(p, Tcp, "daemon", "K2 API (LAN listen on: LAN only)"));
+        closed.push(PortEntry::closed(p, Tcp, "daemon", concat!(product_name!(), " API (LAN listen on: LAN only)")));
     }
 
     for o in &i.cfg.open {
@@ -286,9 +287,9 @@ pub fn status_json(daemon_port: u16) -> Result<Value, String> {
     let v = view(daemon_port)?;
     let cfg = k2_core::firewall::load_checked()?;
     let applies = if v.upstream.managed_by == "k2" {
-        "K2 applies this list at your provider's firewall."
+        concat!(product_name!(), " applies this list at your provider's firewall.")
     } else {
-        "Nobody applies this list for you: copy the rules (k2 firewall rules --format nft|ufw)."
+        concat!("Nobody applies this list for you: copy the rules (", cli_name!(), " firewall rules --format nft|ufw).")
     };
     Ok(json!({
         "ok": true,
@@ -352,7 +353,7 @@ fn status_text_in(s: &Value, zone_suffix: &str) -> String {
     }
     let closed = v["knownNotPublic"].as_array().cloned().unwrap_or_default();
     if !closed.is_empty() {
-        out.push_str("K2 listens, keep closed upstream\n");
+        out.push_str(concat!(product_name!(), " listens, keep closed upstream\n"));
         for r in closed {
             out.push_str(&format!("  {:>5}/{:<3}  {:<11}  {}\n", r["port"], r["proto"].as_str().unwrap_or(""), r["source"].as_str().unwrap_or(""), r["why"].as_str().unwrap_or("")));
         }

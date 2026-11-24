@@ -44,6 +44,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 // The update keys live in `k2_release_keys::UPDATER_KEYS` (SS4): U2 and
 // the offline backup U3. The daemon never trusts the retired key U1, and
@@ -641,15 +643,15 @@ fn decide_after_restart(
             return (Phase::Restarting, None, target);
         }
         let msg = if rec.target_known {
-            format!("K2 came back on v{running}; the update to v{target} did not install")
+            format!("{PRODUCT_NAME} came back on v{running}; the update to v{target} did not install")
         } else {
-            format!("K2 came back on v{running}; the update did not install")
+            format!("{PRODUCT_NAME} came back on v{running}; the update did not install")
         };
         return (Phase::Failed, Some(msg), target);
     }
     (
         Phase::Failed,
-        Some(format!("K2 came back on v{running}, not v{target}")),
+        Some(format!("{PRODUCT_NAME} came back on v{running}, not v{target}")),
         target,
     )
 }
@@ -1715,7 +1717,7 @@ fn undo_swap_after_failed_handoff(plan: &ApplyPlan, why: &str) {
             if let Err(e) = clear_pending_update() {
                 k2_core::log_debug!("[daemon] P3 update/apply — could not disarm the update verifier: {e}");
             }
-            format!("v{target} did not start ({why}); K2 stays on v{from}")
+            format!("v{target} did not start ({why}); {PRODUCT_NAME} stays on v{from}")
         }
         Err(e) => format!(
             "v{target} did not start ({why}), and v{from} could not be put back ({e}); \
@@ -2022,9 +2024,9 @@ fn package_install_refusal() -> CliResponse {
         status: "409 Conflict",
         content_type: "application/json",
         body: serde_json::json!({
-            "error": "This K2 was installed by a package manager, so it can't update itself. \
+            "error": concat!("This ", product_name!(), " was installed by a package manager, so it can't update itself. \
                       Update it with the package manager on that machine (for example \
-                      `sudo pacman -Syu k2` on Arch, or `sudo apt upgrade` for a .deb).",
+                      `sudo pacman -Syu k2` on Arch, or `sudo apt upgrade` for a .deb)."),
             "code": "package_install",
             "installKind": crate::boot_status::INSTALL_KIND_PACKAGE,
         })

@@ -37,6 +37,8 @@ use super::routes::{no, Refusal, Who, R};
 pub const CONFIRM_ACTION: &str = "app-handover";
 pub const NEEDS_V1: &str = "handoff_needs_v1";
 pub use super::egress_routes::codes::VAULT_CONFIRM_REQUIRED;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// One reason the move isn't safe yet.
 #[derive(Debug, Clone)]
@@ -70,7 +72,7 @@ pub fn release_confirm_id(ws_id: &str) -> String {
 /// the id the CLI and Settings mint it for.
 pub(crate) fn take_confirm(who: &Who, bound: &str, token: Option<&str>, what: &str) -> R<()> {
     let Some(stamp) = confirm_stamp(who) else {
-        return Err(no(codes::OWNER_ONLY, 403, format!("{what} is the server owner's, in person, from Settings or a terminal outside K2")));
+        return Err(no(codes::OWNER_ONLY, 403, format!("{what} is the server owner's, in person, from Settings or a terminal outside {PRODUCT_NAME}")));
     };
     let Some(token) = token.map(str::trim).filter(|t| !t.is_empty()) else {
         return Err(Refusal {
@@ -78,7 +80,7 @@ pub(crate) fn take_confirm(who: &Who, bound: &str, token: Option<&str>, what: &s
             ..no(
                 VAULT_CONFIRM_REQUIRED,
                 403,
-                format!("{what} needs a fresh owner confirm (Touch ID, your login or the vault password), not the owner token alone: k2 app handover asks for it"),
+                format!("{what} needs a fresh owner confirm (Touch ID, your login or the vault password), not the owner token alone: {CLI_NAME} app handover asks for it"),
             )
         });
     };
@@ -119,7 +121,7 @@ pub(crate) fn blockers(app: &AppRow, from: &str, to: &str) -> R<Vec<Blocker>> {
     if ![store::STATE_STOPPED, store::STATE_FAILED, store::STATE_PARKED].contains(&app.state.as_str()) {
         out.push(Blocker {
             code: "handoff_app_running",
-            what: format!("it is {}: a running App keeps posting into {}'s Thread until it restarts; stop it first (k2 app stop {})", app.state, handle(from), app.app_id),
+            what: format!("it is {}: a running App keeps posting into {}'s Thread until it restarts; stop it first ({CLI_NAME} app stop {})", app.state, handle(from), app.app_id),
             items: vec![],
         });
     }
@@ -133,7 +135,7 @@ pub(crate) fn blockers(app: &AppRow, from: &str, to: &str) -> R<Vec<Blocker>> {
                 items: g,
             }),
             Ok(_) => {}
-            Err(e) => out.push(Blocker { code: "handoff_needs_tie_move", what: format!("K2 couldn't read the App's guests: {e}"), items: vec![] }),
+            Err(e) => out.push(Blocker { code: "handoff_needs_tie_move", what: format!("{PRODUCT_NAME} couldn't read the App's guests: {e}"), items: vec![] }),
         }
     }
 
@@ -177,7 +179,7 @@ pub(crate) fn blockers(app: &AppRow, from: &str, to: &str) -> R<Vec<Blocker>> {
     if !keys.is_empty() {
         out.push(Blocker {
             code: "handoff_needs_key_move",
-            what: format!("live App keys: their rooms are {}'s; revoke them (k2 app key revoke <key-id>) and mint new ones after", handle(from)),
+            what: format!("live App keys: their rooms are {}'s; revoke them ({CLI_NAME} app key revoke <key-id>) and mint new ones after", handle(from)),
             items: keys,
         });
     }
@@ -189,14 +191,14 @@ pub(crate) fn blockers(app: &AppRow, from: &str, to: &str) -> R<Vec<Blocker>> {
             what: format!("its Postgres database is {}'s{}", handle(&d.project_id), if d.source == super::pg_choice::Source::Default { " (the workspace's default)" } else { "" }),
             items: vec![d.name],
         }),
-        super::pg_choice::DbOf::Unknown(why) => out.push(Blocker { code: "handoff_needs_db_move", what: format!("K2 can't tell which database it uses: {why}"), items: vec![] }),
+        super::pg_choice::DbOf::Unknown(why) => out.push(Blocker { code: "handoff_needs_db_move", what: format!("{PRODUCT_NAME} can't tell which database it uses: {why}"), items: vec![] }),
     }
 
     // Push.
     match k2_core::skin::app_push::is_configured(svc) {
         Ok(false) => {}
-        Ok(true) => out.push(Blocker { code: "handoff_needs_push_move", what: "push is set up for it (k2 app push)".into(), items: vec![] }),
-        Err(e) => out.push(Blocker { code: "handoff_needs_push_move", what: format!("K2 couldn't read its push settings: {e}"), items: vec![] }),
+        Ok(true) => out.push(Blocker { code: "handoff_needs_push_move", what: concat!("push is set up for it (", cli_name!(), " app push)").into(), items: vec![] }),
+        Err(e) => out.push(Blocker { code: "handoff_needs_push_move", what: format!("{PRODUCT_NAME} couldn't read its push settings: {e}"), items: vec![] }),
     }
     Ok(out)
 }
@@ -253,10 +255,10 @@ pub(crate) fn refusal(app: &AppRow, to: &str, blockers: &[Blocker]) -> Refusal {
     let to_h = handle(to);
     let id = &app.app_id;
     let manual = vec![
-        format!("install a new App under a new id in {to_h} and deploy the same code (k2 app install <new-id> --workspace {to_h}; k2 app deploy <new-id> <folder>)"),
-        format!("copy its data (k2 app data get {id} <path> --to <dir>, then k2 app data put <new-id> <dir>)"),
-        format!("with the owner, return each label and take it for the new App (k2 app label return {id} <label>; k2 app label take <new-id> <label>)"),
-        format!("repoint each domain (k2 app domain rm {id} <sub> / add <new-id> <sub>; k2 domain name add <host> --role app:<new-id>), then uninstall {id}"),
+        format!("install a new App under a new id in {to_h} and deploy the same code ({CLI_NAME} app install <new-id> --workspace {to_h}; {CLI_NAME} app deploy <new-id> <folder>)"),
+        format!("copy its data ({CLI_NAME} app data get {id} <path> --to <dir>, then {CLI_NAME} app data put <new-id> <dir>)"),
+        format!("with the owner, return each label and take it for the new App ({CLI_NAME} app label return {id} <label>; {CLI_NAME} app label take <new-id> <label>)"),
+        format!("repoint each domain ({CLI_NAME} app domain rm {id} <sub> / add <new-id> <sub>; {CLI_NAME} domain name add <host> --role app:<new-id>), then uninstall {id}"),
     ];
     let reasons: Vec<String> = blockers
         .iter()

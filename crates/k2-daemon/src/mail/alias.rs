@@ -11,6 +11,7 @@ use crate::mail::addresses::{self, AddrError};
 use crate::mail::domains;
 use crate::mail::hostmail_auth::{account_id_of, authorize_mailbox, engine, err_json};
 use crate::mail::jmap::{alias_collides, AccountUser, EmailAlias};
+use k2_core::cli_name;
 
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default)]
@@ -123,7 +124,7 @@ pub fn handle_alias_add(body: &[u8]) -> CliResponse {
         return err_json(
             "400 Bad Request",
             "usage",
-            "need 'mailbox' and 'alias' (full addresses). Alias is not a mint — use k2 hostmail create for a mailbox."
+            concat!("need 'mailbox' and 'alias' (full addresses). Alias is not a mint — use ", cli_name!(), " hostmail create for a mailbox.")
                 .to_string(),
         );
     }
@@ -264,7 +265,7 @@ pub fn handle_alias_remove(body: &[u8]) -> CliResponse {
         return err_json(
             "400 Bad Request",
             "usage",
-            "cannot remove the mailbox's primary mint address this way — use k2 hostmail delete"
+            concat!("cannot remove the mailbox's primary mint address this way — use ", cli_name!(), " hostmail delete")
                 .to_string(),
         );
     }

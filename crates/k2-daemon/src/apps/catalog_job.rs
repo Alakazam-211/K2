@@ -57,6 +57,8 @@ use serde_json::{json, Value as J};
 use super::routes::{actor, no, Refusal, Who, R};
 use crate::sew::fetch::{FetchError, ReleaseFile};
 use crate::sew::ops::MgmtError;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// `POST /mgmt/v1/meet/init {app_id}` (Sew 0.3.0+): the hidden Meetings
 /// Space, bound to that App. Idempotent: the same `space_id` again.
@@ -531,7 +533,7 @@ fn step_check(j: &mut JobRow, pin: &Pin) -> Out {
 
 fn check_unpacked(tarball: &std::path::Path, tmp: &std::path::Path, j: &mut JobRow, pin: &Pin) -> Out {
     if let Err(e) = suite::unpack::unpack_tar_gz(tarball, tmp, suite::unpack::Limits::seed()) {
-        return fail(sc::UNPACK_REFUSED, format!("K2 refused to unpack {}: {e}. Nothing was installed", pin.seed.file));
+        return fail(sc::UNPACK_REFUSED, format!("{PRODUCT_NAME} refused to unpack {}: {e}. Nothing was installed", pin.seed.file));
     }
     if let Err((f, d)) = suite::unpack::verify_sums(tmp) {
         return fail(sc::CATALOG_MISMATCH, suite::Mismatch::new("SHA256SUMS", format!("{f}: {d}")).text());
@@ -553,7 +555,7 @@ fn check_unpacked(tarball: &std::path::Path, tmp: &std::path::Path, j: &mut JobR
     };
     let built = match built {
         Ok(b) => b,
-        Err(f) => return fail(f.code, format!("K2's checks refused the downloaded App: {}", f.message)),
+        Err(f) => return fail(f.code, format!("{PRODUCT_NAME}'s checks refused the downloaded App: {}", f.message)),
     };
     if built.seed.hash != pin.seed.seed_hash {
         return fail(
@@ -641,7 +643,7 @@ pub(crate) fn sew_rights_wait(what: &str, workspace: &str) -> (String, String) {
         format!(
             "Setting up {what} on this server's chat needs the \"Manage chat and voice\" permission. The owner can give it to the agent that looks after this App, or deploy it from Settings → Cores → Apps → Add an App; the deploy goes on by itself then"
         ),
-        format!("k2 agent access set {workspace} chat_manage on"),
+        format!("{CLI_NAME} agent access set {workspace} chat_manage on"),
     )
 }
 
@@ -845,7 +847,7 @@ fn meet_init(h: &dyn Hooks, j: &JobRow, app_id: &str) -> Result<String, Out> {
                     return Err(fail(
                         "meet_space_bound",
                         format!(
-                            "The chat server's Meetings space still belongs to a removed Meet, which keeps it read-only. K2 never moves it on its own: only the owner can, by deploying Meet again and choosing to release it (it said: {b})"
+                            "The chat server's Meetings space still belongs to a removed Meet, which keeps it read-only. {PRODUCT_NAME} never moves it on its own: only the owner can, by deploying Meet again and choosing to release it (it said: {b})"
                         ),
                     ))
                 }
@@ -891,7 +893,7 @@ fn step_ready(h: &dyn Hooks, j: &mut JobRow, pin: &Pin, now: i64) -> Out {
     match h.readyz(port, &pin.health.ready) {
         Ok((200, v)) => match suite::health_mismatch(pin, &v) {
             None => Out::Next(Some(format!("{} answers {}", pin.health.ready, pin.version))),
-            Some(m) => fail("version_mismatch", format!("The App answered, but the version running isn't the one K2 installed ({m})")),
+            Some(m) => fail("version_mismatch", format!("The App answered, but the version running isn't the one {PRODUCT_NAME} installed ({m})")),
         },
         Ok((code, _)) if late => fail(
             "not_ready",
@@ -978,19 +980,19 @@ pub(crate) fn next_steps(j: &JobRow) -> Vec<NextStep> {
     let app = app_words(j);
     let mut out = vec![];
     if j.variant == suite::VARIANT_K2 {
-        let cmd = format!("k2 app user invite {} <email>", j.app_id);
+        let cmd = format!("{CLI_NAME} app user invite {} <email>", j.app_id);
         out.push(NextStep { text: format!("Invite people to {app} from Settings → Cores → Apps → {app} → People."), line: format!("Invite people: {cmd}"), hint: cmd });
         // TODO(Q14): offer "Let this App give chat to its users"
         // (guests-chat) at deploy, and the default member role (A10). Until
         // that is decided, each person also needs chat and a role by hand.
-        let cmd = format!("k2 app user chat {} <user> member --app", j.app_id);
+        let cmd = format!("{CLI_NAME} app user chat {} <user> member --app", j.app_id);
         out.push(NextStep {
             text: format!("Each person also needs chat turned on in {app}, with a role that includes chat. The agent that looks after {app} can do this for you."),
             line: format!("Give each person chat: {cmd} (and a role whose room line has the chat caps)"),
             hint: cmd,
         });
     } else {
-        let cmd = "k2 hostchat users invite <email>".to_string();
+        let cmd = concat!(cli_name!(), " hostchat users invite <email>").to_string();
         out.push(NextStep {
             text: "Invite people to this server's chat: it signs people in itself. The agent that looks after chat hosting can send the invites.".into(),
             line: format!("Invite people: {cmd} (this Sew signs people in itself)"),
@@ -1000,7 +1002,7 @@ pub(crate) fn next_steps(j: &JobRow) -> Vec<NextStep> {
     if j.entry == "sew/hearth" {
         // TODO(Q6): an owner-only card "Make Hearth this box's home client"
         // for deploys the owner didn't click. Today: by hand.
-        let cmd = format!("k2 hostchat home client {}", j.app_id);
+        let cmd = format!("{CLI_NAME} hostchat home client {}", j.app_id);
         out.push(NextStep {
             text: format!("The owner can make {app} this server's main chat app, so it shows every chat space a person is in."),
             line: format!("The owner can make it this box's home client: {cmd}"),
@@ -1014,7 +1016,7 @@ pub(crate) fn next_steps(j: &JobRow) -> Vec<NextStep> {
 /// wait's `text`).
 pub(crate) fn wait_command(j: &JobRow) -> Option<String> {
     match j.wait_reason.as_deref()? {
-        jobs::WAIT_APPROVAL => j.wait_requests.first().map(|r| format!("k2 app approve {r}")),
+        jobs::WAIT_APPROVAL => j.wait_requests.first().map(|r| format!("{CLI_NAME} app approve {r}")),
         jobs::WAIT_SEW_RIGHTS => Some(sew_rights_wait("", &j.workspace_id).1),
         _ => None,
     }
@@ -1025,16 +1027,16 @@ pub(crate) fn wait_command(j: &JobRow) -> Option<String> {
 pub(crate) fn error_command(j: &JobRow) -> Option<String> {
     let code = j.error_code.as_deref()?;
     if RETRYABLE.contains(&code) {
-        return Some(format!("k2 app catalog retry {}", j.id));
+        return Some(format!("{CLI_NAME} app catalog retry {}", j.id));
     }
     match code {
-        "approval_denied" => Some(format!("k2 app install --catalog {}", j.entry)),
-        "approval_missing" => Some("k2 app approvals".into()),
-        "app_exists" => Some(format!("k2 app install --catalog {} --id <another-id>", j.entry)),
-        "version_mismatch" => Some(format!("k2 app logs {}", j.app_id)),
-        "meet_space_bound" => Some(format!("k2 app install --catalog {} --rebind-meet", j.entry)),
-        "deploy_not_replayed" => j.seed_hash.as_ref().map(|seed| format!("k2 app deploy {} {seed}", j.app_id)),
-        "sew_not_running" | "sew_unreachable" => Some("k2 hostchat status".into()),
+        "approval_denied" => Some(format!("{CLI_NAME} app install --catalog {}", j.entry)),
+        "approval_missing" => Some(concat!(cli_name!(), " app approvals").into()),
+        "app_exists" => Some(format!("{CLI_NAME} app install --catalog {} --id <another-id>", j.entry)),
+        "version_mismatch" => Some(format!("{CLI_NAME} app logs {}", j.app_id)),
+        "meet_space_bound" => Some(format!("{CLI_NAME} app install --catalog {} --rebind-meet", j.entry)),
+        "deploy_not_replayed" => j.seed_hash.as_ref().map(|seed| format!("{CLI_NAME} app deploy {} {seed}", j.app_id)),
+        "sew_not_running" | "sew_unreachable" => Some(concat!(cli_name!(), " hostchat status").into()),
         _ => None,
     }
 }

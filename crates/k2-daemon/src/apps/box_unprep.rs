@@ -25,6 +25,8 @@ use crate::compute_routes::Who;
 use crate::root_helper::busy::Held;
 use k2_core::connect_users::Role;
 use k2_core::deploy::store;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// What `apps unprep` undoes, in its order.
 pub const UNDOES: &[&str] = &[
@@ -47,11 +49,11 @@ pub const KEPT: &[&str] = &[
     "/var/lib/k2app (App data)",
     "the distro packages box prep installed",
     "the k2-app-engine binary",
-    "K2's Podman in /opt/k2/podman (k2 app box podman uninstall removes it)",
+    concat!(product_name!(), "'s Podman in /opt/k2/podman (", cli_name!(), " app box podman uninstall removes it)"),
 ];
 
-const NOTE: &str = "Automatic box prep is paused until you press Retry (Settings → Cores → Apps → This server, or k2 app box auto-prepare retry). \
-                    K2's Podman stays: k2 app box podman uninstall removes it.";
+const NOTE: &str = concat!("Automatic box prep is paused until you press Retry (Settings → Cores → Apps → This server, or ", cli_name!(), " app box auto-prepare retry). \
+                    ", product_name!(), "'s Podman stays: ", cli_name!(), " app box podman uninstall removes it.");
 
 /// The box as unprep sees it (tests drive a fake).
 pub trait UnprepOps {
@@ -93,7 +95,7 @@ pub(crate) fn route_with(ops: &dyn UnprepOps, who: &Who, body: &J) -> R<J> {
         return Err(no(
             "owner_only",
             403,
-            "undoing the box setup is the owner's: Settings → Cores → Apps → This server → Undo the setup, or k2 app box unprep from a terminal outside K2",
+            concat!("undoing the box setup is the owner's: Settings → Cores → Apps → This server → Undo the setup, or ", cli_name!(), " app box unprep from a terminal outside ", product_name!()),
         ));
     }
     let dry = flag(body, "dryRun")?;
@@ -111,7 +113,7 @@ pub(crate) fn route_with(ops: &dyn UnprepOps, who: &Who, body: &J) -> R<J> {
     ops.helper_usable().map_err(|e| no("helper_needed", 409, e))?;
     if !confirm {
         return Err(with_plan(
-            no("confirm_needed", 409, "undoing the box setup needs your confirm: send confirm: true (k2 app box unprep --yes); --dry-run lists what it undoes"),
+            no("confirm_needed", 409, concat!("undoing the box setup needs your confirm: send confirm: true (", cli_name!(), " app box unprep --yes); --dry-run lists what it undoes")),
             &running,
         ));
     }
@@ -120,7 +122,7 @@ pub(crate) fn route_with(ops: &dyn UnprepOps, who: &Who, body: &J) -> R<J> {
             no(
                 "apps_running",
                 409,
-                format!("{} App(s) still run: {}. Stop every App first (k2 app stop <app>), then undo the box setup", running.len(), running.join(", ")),
+                format!("{} App(s) still run: {}. Stop every App first ({CLI_NAME} app stop <app>), then undo the box setup", running.len(), running.join(", ")),
             ),
             &running,
         ));

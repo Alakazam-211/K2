@@ -26,6 +26,7 @@ use super::payload::{self, Notification, Refused, Stamps};
 use super::sendlog::{self, SendRecord, Skipped};
 use super::sender::Target;
 use super::worker::{self, Job};
+use k2_core::{cli_name, product_name};
 
 /// Recipients one call may name or resolve (CP25, CP33).
 pub const MAX_RECIPIENTS: usize = 1_000;
@@ -178,18 +179,18 @@ fn recipients(app: &str, to: &To) -> Result<(Vec<String>, usize), SendErr> {
 pub fn send(app: &str, caller: &Caller, to: &To, n: Notification) -> Result<J, SendErr> {
     super::state(app).map_err(|off| match off {
         super::Off::Host => err(400, "not_for_host", "push is for a published App's own users, never the box login (host)"),
-        _ => err(403, "push_off", "this App doesn't send notifications (the owner turns them on: k2 app push on <app>)"),
+        _ => err(403, "push_off", concat!("this App doesn't send notifications (the owner turns them on: ", cli_name!(), " app push on <app>)")),
     })?;
     if crate::push_routes::airgap_blocks() {
         crate::push_routes::note_airgap_drop();
         return Err(err(503, "airgap", "air-gap is on: no notification leaves this server"));
     }
     if crate::vault::get().is_err() {
-        return Err(err(503, "vault_closed", "the vault isn't open yet; try again when K2 has finished starting"));
+        return Err(err(503, "vault_closed", concat!("the vault isn't open yet; try again when ", product_name!(), " has finished starting")));
     }
     let cfg = store::config(app).map_err(|e| err(500, "failed", e))?;
     if cfg.apns.is_none() && cfg.fcm.is_none() {
-        return Err(err(409, "push_not_configured", "this App has no Apple or Google push key yet (the owner runs k2 app push setup)"));
+        return Err(err(409, "push_not_configured", concat!("this App has no Apple or Google push key yet (the owner runs ", cli_name!(), " app push setup)")));
     }
     calls().take(app, SENDS_PER_HOUR).map_err(|w| rate_limited(w, SENDS_PER_HOUR, "push.send calls an hour"))?;
     let (guests, not_a_guest) = recipients(app, to)?;

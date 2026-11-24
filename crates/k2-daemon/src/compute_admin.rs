@@ -45,13 +45,14 @@ use k2_core::compute::proto::crypto;
 use k2_core::compute::proto::frames::{self, Frame, Offer};
 use k2_core::compute::proto::health::Health;
 use k2_core::compute::{self as compute, codes, store};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use serde_json::{json, Value};
 
 use crate::compute_manage::Manager;
 use crate::compute_routes::{json_body, no, node_or_404, owner_only, s, ws_by_token, Who, R};
 use k2_core::compute::proto::share as pshare;
 use k2_core::compute::share;
+use k2_core::brand::CLI_NAME;
 
 pub const APPROVAL_KEY: &str = "/cli/compute/admin/approval-key";
 pub const APPROVE: &str = "/cli/compute/admin/approve";
@@ -270,8 +271,8 @@ fn operate_off() -> crate::compute_routes::Refusal {
     no(
         acodes::OPERATE_OFF,
         403,
-        "this agent can't operate compute nodes: ask your owner to turn on \"Let this agent operate compute nodes\" \
-         in Settings → Workspaces / Agents → <agent> → Permissions → Compute (k2 compute operate on --workspace <ws>)",
+        concat!("this agent can't operate compute nodes: ask your owner to turn on \"Let this agent operate compute nodes\" \
+         in Settings → Workspaces / Agents → <agent> → Permissions → Compute (", cli_name!(), " compute operate on --workspace <ws>)"),
     )
 }
 
@@ -336,7 +337,7 @@ fn node_admin_ready(node: &store::NodeRow, feature: &str) -> R<()> {
     }
     not_tenant(node)?;
     if !online(&node.id) {
-        return Err(no(codes::NODE_OFFLINE, 409, format!("{} is offline; try again when it's back (k2 compute node health {})", node.name, node.name)));
+        return Err(no(codes::NODE_OFFLINE, 409, format!("{} is offline; try again when it's back ({CLI_NAME} compute node health {})", node.name, node.name)));
     }
     if !features(&node.id).iter().any(|f| f == feature) {
         return Err(no(
@@ -607,7 +608,7 @@ fn classify_body(node_name: &str, kind: &str, body: &Value) -> R<(Class, String)
             return Err(no(
                 codes::OWNER_ONLY,
                 403,
-                "servers.owner is never proposed: the server's owner asks for it in Settings → Cores → Compute or with k2 compute node servers <node> owner <server>",
+                concat!("servers.owner is never proposed: the server's owner asks for it in Settings → Cores → Compute or with ", cli_name!(), " compute node servers <node> owner <server>"),
             ));
         }
         // Protocol 9's CI steps (a node's lanes file, the owner's node
@@ -670,7 +671,7 @@ fn file_request(op: &Operator, node: &store::NodeRow, kind: &str, class: Class, 
     Ok(json!({
         "held": true,
         "request": request_json(&r, Some(&node.name)),
-        "hint": format!("held for the owner: they approve it in Settings → Cores → Compute → Machine settings → Waiting for you (or k2 compute node admin approve {})", r.id),
+        "hint": format!("held for the owner: they approve it in Settings → Cores → Compute → Machine settings → Waiting for you (or {CLI_NAME} compute node admin approve {})", r.id),
     }))
 }
 
@@ -723,7 +724,7 @@ fn request_or_404(token: Option<&str>) -> R<RequestRow> {
     let t = token.ok_or_else(|| no(acodes::BAD_ARGS, 400, "name a request (car_…)"))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    admin::find_request(&conn, t).ok_or_else(|| no(acodes::REQUEST_NOT_FOUND, 404, format!("no admin request '{t}' (k2 compute node admin list)")))
+    admin::find_request(&conn, t).ok_or_else(|| no(acodes::REQUEST_NOT_FOUND, 404, format!("no admin request '{t}' ({CLI_NAME} compute node admin list)")))
 }
 
 fn decide_err(code: &'static str) -> crate::compute_routes::Refusal {
@@ -741,8 +742,8 @@ fn approve(who: &Who, body: &[u8]) -> R<Value> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner approves node admin requests, in person: Settings → Cores → Compute → Machine settings → Waiting for you, or \
-             k2 compute node admin approve <id> from a terminal outside K2. An agent can never approve.",
+            concat!("only the server's owner approves node admin requests, in person: Settings → Cores → Compute → Machine settings → Waiting for you, or \
+             ", cli_name!(), " compute node admin approve <id> from a terminal outside ", product_name!(), ". An agent can never approve."),
         ));
     }
     let v = json_body(body)?;
@@ -751,7 +752,7 @@ fn approve(who: &Who, body: &[u8]) -> R<Value> {
         return Err(no(
             acodes::VAULT_CONFIRM_REQUIRED,
             403,
-            "approving needs a fresh owner confirm (Touch ID, your login or vault password): k2 compute node admin approve <id> asks for it",
+            concat!("approving needs a fresh owner confirm (Touch ID, your login or vault password): ", cli_name!(), " compute node admin approve <id> asks for it"),
         ));
     };
     let stamp = confirm_stamp(who).ok_or_else(owner_only)?;
@@ -1716,7 +1717,7 @@ fn wall(who: &Who, body: &[u8]) -> R<Value> {
             let note = wall_note(&r.result, restart);
             Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "result": r.result, "note": note}))
         }
-        None => Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "note": "sent; the node hasn't answered yet (k2 compute node health)"})),
+        None => Ok(json!({"ok": true, "node": node.name, "cmdId": cmd_id, "note": concat!("sent; the node hasn't answered yet (", cli_name!(), " compute node health)")})),
     }
 }
 
@@ -1729,7 +1730,7 @@ fn wall_note(result: &Value, restart: bool) -> String {
         return "the wall is set up; k2-node restarted to use it (no job was running)".into();
     }
     if restart {
-        return "the wall is set up; k2-node restarts to use it once its running jobs end (if any still run after 30 min it gives up and restarts nothing; asking again, k2 compute node wall <node>, finishes it)".into();
+        return concat!("the wall is set up; k2-node restarts to use it once its running jobs end (if any still run after 30 min it gives up and restarts nothing; asking again, ", cli_name!(), " compute node wall <node>, finishes it)").into();
     }
     "the wall is set up; it takes effect when k2-node restarts".into()
 }
@@ -1926,7 +1927,7 @@ fn not_tenant(node: &store::NodeRow) -> R<()> {
             pshare::codes::NOT_NODE_OWNER,
             403,
             format!(
-                "{} is shared with this server by {}: its admin, updates and servers are that server's (k2 compute node servers {} shows this server's share)",
+                "{} is shared with this server by {}: its admin, updates and servers are that server's ({CLI_NAME} compute node servers {} shows this server's share)",
                 node.name,
                 node.owner_label.as_deref().unwrap_or("its owner"),
                 node.name
@@ -2007,7 +2008,7 @@ pub fn on_owner_claim(node: &store::NodeRow) {
             "{} (key {}) says this server is its owner now (an owner change from {owner}). It stays {owner}'s here: no admin, no secrets. \
              Only the node says so: take it over only if you changed its owner yourself and that key is the node you know. Taking it over \
              makes this server its admin (root admin on that machine), and every compute:<workspace>/* secret grant starts sending its \
-             secrets to it: {}. To take it over in person: k2 compute node take-owner {} (it shows all this again, asks you to type \
+             secrets to it: {}. To take it over in person: {CLI_NAME} compute node take-owner {} (it shows all this again, asks you to type \
              the node's name, then Touch ID or your vault password). If you didn't change its owner, leave it: nothing changes.",
             node.name,
             node.fingerprint,
@@ -2047,7 +2048,7 @@ fn take_owner(who: &Who, body: &[u8]) -> R<Value> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner takes over a node, in person: k2 compute node take-owner <node> from a terminal outside K2. An agent never can.",
+            concat!("only the server's owner takes over a node, in person: ", cli_name!(), " compute node take-owner <node> from a terminal outside ", product_name!(), ". An agent never can."),
         ));
     }
     let v = json_body(body)?;
@@ -2064,7 +2065,7 @@ fn take_owner(who: &Who, body: &[u8]) -> R<Value> {
             NO_OWNER_CLAIM,
             409,
             format!(
-                "{} doesn't say this server owns it: {owner} changes its owner first (k2 compute node servers {} owner <this server>, approved there); then {} shows the swap done and you can take it over here",
+                "{} doesn't say this server owns it: {owner} changes its owner first ({CLI_NAME} compute node servers {} owner <this server>, approved there); then {} shows the swap done and you can take it over here",
                 node.name, node.name, node.name
             ),
         ));
@@ -2088,7 +2089,7 @@ fn take_owner(who: &Who, body: &[u8]) -> R<Value> {
         }));
     }
     let Some(token) = s(&v, "confirmToken") else {
-        return Err(no(acodes::VAULT_CONFIRM_REQUIRED, 403, "taking over a node needs a fresh owner confirm (Touch ID, your login or vault password): k2 compute node take-owner <node> asks for it"));
+        return Err(no(acodes::VAULT_CONFIRM_REQUIRED, 403, concat!("taking over a node needs a fresh owner confirm (Touch ID, your login or vault password): ", cli_name!(), " compute node take-owner <node> asks for it")));
     };
     let stamp = confirm_stamp(who).ok_or_else(owner_only)?;
     let vault = vault()?;
@@ -2107,7 +2108,7 @@ fn take_owner(who: &Who, body: &[u8]) -> R<Value> {
         // still an active tenant whose node says this server owns it.
         let now = store::node_by_id(&conn, &node.id).filter(|n| n.state == "active" && n.owner_claim());
         if now.is_none() {
-            return Err(no(acodes::BAD_ARGS, 409, format!("{} changed while you confirmed; look again (k2 compute nodes)", node.name)));
+            return Err(no(acodes::BAD_ARGS, 409, format!("{} changed while you confirmed; look again ({CLI_NAME} compute nodes)", node.name)));
         }
         store::mark_node_owned(&conn, &node.id).map_err(|e| no("store", 500, e))?;
         store::record_event(&conn, &who.label(), "owner_taken", Some(&node.id), None, None, json!({"from": node.owner_label, "via": via}));
@@ -2138,7 +2139,7 @@ fn servers_ready(node: &store::NodeRow) -> R<()> {
         return Err(no(
             pshare::codes::NODE_TOO_OLD,
             409,
-            format!("{} runs a k2-node older than 0.46.3 and can't take a second server: update {} first (k2 compute node update {})", node.name, node.name, node.name),
+            format!("{} runs a k2-node older than 0.46.3 and can't take a second server: update {} first ({CLI_NAME} compute node update {})", node.name, node.name, node.name),
         ));
     }
     Ok(())
@@ -2428,7 +2429,7 @@ fn servers_add(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
         return Err(no(
             pshare::codes::TENANT_NEEDS_JOB_WALL,
             409,
-            format!("{} has no job wall: turn it on first (k2 compute node admin propose {} wall.enable), then add the server", node.name, node.name),
+            format!("{} has no job wall: turn it on first ({CLI_NAME} compute node admin propose {} wall.enable), then add the server", node.name, node.name),
         ));
     }
     let trust = match s(&v, "trust").unwrap_or("own") {
@@ -2465,7 +2466,7 @@ fn servers_add(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
         ));
     }
     let url = s(&v, "url").ok_or_else(|| no(acodes::BAD_ARGS, 400, "--url is the new server's address (https://baden.k2.dev)"))?;
-    let code = s(&v, "code").ok_or_else(|| no(acodes::BAD_ARGS, 400, "--code is the CODE.FP the new server's `k2 compute node add` printed"))?;
+    let code = s(&v, "code").ok_or_else(|| no(acodes::BAD_ARGS, 400, concat!("--code is the CODE.FP the new server's `", cli_name!(), " compute node add` printed")))?;
     let (binding, fp_prefix) = share::split_add_code(code).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
     let for_secs = match crate::compute_routes::n(&v, "forSecs") {
         // `--for none`: no end date (Rosson, Q8). The node reads 0 as none
@@ -2476,7 +2477,7 @@ fn servers_add(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
                 acodes::BAD_ARGS,
                 409,
                 format!(
-                    "{}'s k2-node is too old to add a server with no end date: update k2-node (k2 compute node update {}), or add it now and clear the end date later with k2 compute node servers {} limits <server> --for none",
+                    "{}'s k2-node is too old to add a server with no end date: update k2-node ({CLI_NAME} compute node update {}), or add it now and clear the end date later with {CLI_NAME} compute node servers {} limits <server> --for none",
                     node.name, node.name, node.name
                 ),
             ))
@@ -2502,7 +2503,7 @@ fn servers_add(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
             return Err(no(
                 pshare::codes::SERVER_ADD_PENDING,
                 409,
-                format!("{} already has a server being added: confirm its code, or wait for its 10 minutes to pass (k2 compute node servers {})", node.name, node.name),
+                format!("{} already has a server being added: confirm its code, or wait for its 10 minutes to pass ({CLI_NAME} compute node servers {})", node.name, node.name),
             ));
         }
     }
@@ -2540,7 +2541,7 @@ fn server_row(node: &store::NodeRow, server: &str) -> R<share::ServerRow> {
     let slot = server.strip_prefix("slot:").and_then(|n| n.parse::<u8>().ok());
     rows.into_iter()
         .find(|r| slot.map_or(r.label == server && r.state != "revoked", |n| r.slot == n))
-        .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no server '{server}' on {} (k2 compute node servers {})", node.name, node.name)))
+        .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no server '{server}' on {} ({CLI_NAME} compute node servers {})", node.name, node.name)))
 }
 
 /// The `server` argument. `owner_ok`: `limits` may name this server
@@ -2586,7 +2587,7 @@ fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
         return Err(no(
             pshare::codes::NODE_TOO_OLD,
             409,
-            format!("{} runs a k2-node older than 0.46.5: it has no Priority setting per server yet (k2 compute node update {})", node.name, node.name),
+            format!("{} runs a k2-node older than 0.46.5: it has no Priority setting per server yet ({CLI_NAME} compute node update {})", node.name, node.name),
         ));
     }
     let largs = pshare::LimitsArgs { server: server.clone(), set: limits_from(&v)?, for_secs: crate::compute_routes::n(&v, "forSecs"), priority };
@@ -2680,7 +2681,7 @@ fn servers_revoke(who: &Who, body: &[u8]) -> R<Value> {
 fn servers_owner(who: &Who, body: &[u8]) -> R<Value> {
     if who.passport().is_some() || !who.is_owner() {
         crate::compute_routes::need_credential(who)?;
-        return Err(no(codes::OWNER_ONLY, 403, "only the server's owner changes a node's owner server (Settings → Cores → Compute, or k2 compute node servers <node> owner <server> from a terminal outside K2)"));
+        return Err(no(codes::OWNER_ONLY, 403, concat!("only the server's owner changes a node's owner server (Settings → Cores → Compute, or ", cli_name!(), " compute node servers <node> owner <server> from a terminal outside ", product_name!(), ")")));
     }
     let op = operator(who)?;
     let v = json_body(body)?;
@@ -2690,7 +2691,7 @@ fn servers_owner(who: &Who, body: &[u8]) -> R<Value> {
         return Err(no(
             pshare::codes::NODE_TOO_OLD,
             409,
-            format!("{} runs a k2-node older than 0.46.4, which can't change its owner remotely: update it (k2 compute node update {}), or at the machine run sudo k2-node servers owner <server>", node.name, node.name),
+            format!("{} runs a k2-node older than 0.46.4, which can't change its owner remotely: update it ({CLI_NAME} compute node update {}), or at the machine run sudo k2-node servers owner <server>", node.name, node.name),
         ));
     }
     let cols = {

@@ -23,6 +23,8 @@
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The health loop's cadence (a few forks per server: cheap).
 pub const EVERY_SECS: u64 = 15 * 60;
@@ -156,7 +158,7 @@ pub fn check(ops: &dyn StaleOps, name: &str, unit: &str, fix: &str) -> Option<Fi
 
 /// The person's fix for a stale sew-db (the root helper has no verb that
 /// restarts sew-db alone, so a person with root runs it).
-pub const SEW_DB_FIX: &str = "Restart it, then Sew: sudo systemctl restart sew-db.service, then k2 hostchat restart.";
+pub const SEW_DB_FIX: &str = concat!("Restart it, then Sew: sudo systemctl restart sew-db.service, then ", cli_name!(), " hostchat restart.");
 
 /// Sew's `sew-db`, when K2 has a Sew install record.
 pub fn check_sew_db(ops: &dyn StaleOps) -> Option<Finding> {
@@ -173,7 +175,7 @@ pub fn check_sql_clusters(ops: &dyn StaleOps) -> Vec<Finding> {
             let fix = if c.name == k2_root_proto::pg_major::CLUSTER_NAME {
                 format!("Restart it: sudo systemctl restart {}.", c.unit)
             } else {
-                format!("Restart it: k2 db cluster restart {label}.")
+                format!("Restart it: {CLI_NAME} db cluster restart {label}.")
             };
             check(ops, &label, &c.unit, &fix)
         })

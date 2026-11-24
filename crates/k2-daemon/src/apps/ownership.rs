@@ -37,6 +37,8 @@ use crate::cli_response::CliResponse;
 
 use super::handover_guard;
 use super::routes::{actor, app_for, b, db_err, json_body, need_credential, no, s, ws_by_token, Who, Ws, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const WORKSPACE_HAS_APPS: &str = "workspace_has_apps";
 pub const APP_PARKED: &str = "app_parked";
@@ -68,8 +70,8 @@ fn refuse_if_any_access_would_drop(ws_id: &str, apps: &[AppRow]) -> R<()> {
         409,
         format!(
             "nothing was released: uninstalling {} of {} App{} would drop people's access ({}). A reinstall is a new App and \
-             gets none of it back. To uninstall anyway: k2 app release {handle} --apps uninstall --drop-access \
-             (k2 workspace remove … --apps uninstall --drop-access)",
+             gets none of it back. To uninstall anyway: {CLI_NAME} app release {handle} --apps uninstall --drop-access \
+             ({CLI_NAME} workspace remove … --apps uninstall --drop-access)",
             losing.len(),
             apps.len(),
             if apps.len() == 1 { "" } else { "s" },
@@ -97,7 +99,7 @@ pub(crate) fn need_owner(who: &Who, what: &str) -> R<()> {
     if owner(who) {
         return Ok(());
     }
-    Err(no(codes::OWNER_ONLY, 403, format!("{what} is the server owner's, from Settings or a terminal outside K2")))
+    Err(no(codes::OWNER_ONLY, 403, format!("{what} is the server owner's, from Settings or a terminal outside {PRODUCT_NAME}")))
 }
 
 fn need_owner_or_admin(who: &Who, what: &str) -> R<()> {
@@ -105,7 +107,7 @@ fn need_owner_or_admin(who: &Who, what: &str) -> R<()> {
     if owner_or_admin(who) {
         return Ok(());
     }
-    Err(no(codes::OWNER_ONLY, 403, format!("{what} is for the server's owner or an admin, from Settings or a terminal outside K2")))
+    Err(no(codes::OWNER_ONLY, 403, format!("{what} is for the server's owner or an admin, from Settings or a terminal outside {PRODUCT_NAME}")))
 }
 
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8]) -> R<J> {
@@ -136,7 +138,7 @@ pub(crate) fn refuse_if_parked(app: &AppRow) -> R<()> {
         return Err(no(
             APP_PARKED,
             409,
-            format!("{} is parked (held by the server's owner): give it to a workspace first (k2 app unpark {} --to <workspace>)", app.app_id, app.app_id),
+            format!("{} is parked (held by the server's owner): give it to a workspace first ({CLI_NAME} app unpark {} --to <workspace>)", app.app_id, app.app_id),
         ));
     }
     Ok(())
@@ -203,8 +205,8 @@ pub fn removal_block(project_id: &str, display_name: &str) -> Option<CliResponse
     let names: Vec<&str> = apps.iter().map(|a| a.app_id.as_str()).collect();
     let hint = format!(
         "{display_name} maintains {} {}: removing it would leave {} serving with no agent. First hand {} over \
-         (k2 app release {handle} --apps handover:<workspace>, owner only), uninstall {} (--apps uninstall; the data stays) \
-         or park {} for the owner (--apps park). k2 workspace remove {handle} --apps … does both steps.",
+         ({CLI_NAME} app release {handle} --apps handover:<workspace>, owner only), uninstall {} (--apps uninstall; the data stays) \
+         or park {} for the owner (--apps park). {CLI_NAME} workspace remove {handle} --apps … does both steps.",
         if apps.len() == 1 { "an App" } else { "Apps" },
         names.join(", "),
         if apps.len() == 1 { "it" } else { "them" },
@@ -222,9 +224,9 @@ pub fn removal_block(project_id: &str, display_name: &str) -> Option<CliResponse
                 "hint": hint,
                 "apps": apps.iter().map(|a| json!({ "app": a.app_id, "state": a.state })).collect::<Vec<_>>(),
                 "ways": [
-                    { "way": "handover", "who": "owner", "command": format!("k2 app release {handle} --apps handover:<workspace>") },
-                    { "way": "uninstall", "who": "owner or admin", "command": format!("k2 app release {handle} --apps uninstall") },
-                    { "way": "park", "who": "owner or admin", "command": format!("k2 app release {handle} --apps park") },
+                    { "way": "handover", "who": "owner", "command": format!("{CLI_NAME} app release {handle} --apps handover:<workspace>") },
+                    { "way": "uninstall", "who": "owner or admin", "command": format!("{CLI_NAME} app release {handle} --apps uninstall") },
+                    { "way": "park", "who": "owner or admin", "command": format!("{CLI_NAME} app release {handle} --apps park") },
                 ],
             },
         })
@@ -324,12 +326,12 @@ fn assign(app: &AppRow, to: &Ws, by: &str) -> R<()> {
         return Err(no(
             codes::APP_EXISTS,
             409,
-            format!("that workspace already publishes a service named '{}'; remove it there first (k2 publish rm)", app.app_id),
+            format!("that workspace already publishes a service named '{}'; remove it there first ({CLI_NAME} publish rm)", app.app_id),
         ));
     }
     let tx = conn.unchecked_transaction().map_err(db_err)?;
     let (state, reason) = if app.state == store::STATE_PARKED {
-        (store::STATE_STOPPED, Some(format!("unparked by {by}; start it with k2 app start {}", app.app_id)))
+        (store::STATE_STOPPED, Some(format!("unparked by {by}; start it with {CLI_NAME} app start {}", app.app_id)))
     } else {
         (app.state.as_str(), app.state_reason.clone())
     };
@@ -391,7 +393,7 @@ fn give(who: &Who, v: &J, unpark: bool, confirm: Confirm<'_>) -> R<J> {
     let to_raw = s(v, "to").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace that takes it (to)"))?;
     let to = ws_by_token(to_raw).ok_or_else(|| no(codes::BAD_REQUEST, 404, format!("no workspace '{to_raw}'")))?;
     if unpark && app.state != store::STATE_PARKED {
-        return Err(no(NOT_PARKED, 409, format!("{} isn't parked; hand it over instead (k2 app handover {} --to <workspace>)", app.app_id, app.app_id)));
+        return Err(no(NOT_PARKED, 409, format!("{} isn't parked; hand it over instead ({CLI_NAME} app handover {} --to <workspace>)", app.app_id, app.app_id)));
     }
     if app.owner_workspace == to.id {
         return Ok(json!({ "ok": true, "app": app.app_id, "workspace": super::routes::ws_handle(&to.id), "already": true }));
@@ -414,11 +416,11 @@ fn give(who: &Who, v: &J, unpark: bool, confirm: Confirm<'_>) -> R<J> {
         &to.id,
         &format!("You now maintain App {}", app.app_id),
         &format!(
-            "{by} gave you App {}{}. It is yours now: k2 app inspect {}{}",
+            "{by} gave you App {}{}. It is yours now: {CLI_NAME} app inspect {}{}",
             app.app_id,
             if from.is_empty() { String::new() } else { format!(" (it was {}'s)", super::routes::ws_handle(&from)) },
             app.app_id,
-            if app.state == store::STATE_PARKED { format!(". It is stopped: k2 app start {}", app.app_id) } else { String::new() },
+            if app.state == store::STATE_PARKED { format!(". It is stopped: {CLI_NAME} app start {}", app.app_id) } else { String::new() },
         ),
     );
     if !from.is_empty() && super::routes::ws_by_id(&from).is_some() {
@@ -431,7 +433,7 @@ fn give(who: &Who, v: &J, unpark: bool, confirm: Confirm<'_>) -> R<J> {
         "app": app.app_id,
         "workspace": to_h,
         "state": after.state,
-        "note": "the App's own data, Seeds and settings moved with it; it isn't running: its new agent starts it (k2 app start)",
+        "note": concat!("the App's own data, Seeds and settings moved with it; it isn't running: its new agent starts it (", cli_name!(), " app start)"),
     }))
 }
 
@@ -553,7 +555,7 @@ fn release_route(who: &Who, body: &[u8]) -> R<J> {
             "way": way,
             "results": results,
             "hint": format!(
-                "{held} handover card(s) wait for the owner's approval (k2 app approve <request> from a terminal outside K2, or Settings → Cores → \
+                "{held} handover card(s) wait for the owner's approval ({CLI_NAME} app approve <request> from a terminal outside {PRODUCT_NAME}, or Settings → Cores → \
                  App Approvals); the workspace keeps its Apps until then"
             ),
         }));
@@ -590,7 +592,7 @@ pub fn sweep_orphans() -> Vec<String> {
     };
     let mut parked = Vec::new();
     for app in &orphans {
-        let reason = "its workspace was removed: parked for the owner by the boot sweep (k2 app unpark <app> --to <workspace>, or k2 app uninstall)";
+        let reason = concat!("its workspace was removed: parked for the owner by the boot sweep (", cli_name!(), " app unpark <app> --to <workspace>, or ", cli_name!(), " app uninstall)");
         match park_row(app, "system", reason) {
             Ok(()) => parked.push(app.app_id.clone()),
             Err(e) => k2_core::log_debug!("[apps] orphan sweep: {} not parked: {}", app.app_id, e.hint),
@@ -605,8 +607,8 @@ pub fn sweep_orphans() -> Vec<String> {
         );
         let body = format!(
             "These Apps kept running after the workspace that maintained them was removed, with no agent looking after them. \
-             K2 stopped them and holds them for you; nothing was deleted.\n\n{}\n\nGive one to an agent: k2 app unpark <app> --to <workspace>\n\
-             Or remove it: k2 app uninstall <app> (its data stays unless you add --purge).",
+             {PRODUCT_NAME} stopped them and holds them for you; nothing was deleted.\n\n{}\n\nGive one to an agent: {CLI_NAME} app unpark <app> --to <workspace>\n\
+             Or remove it: {CLI_NAME} app uninstall <app> (its data stays unless you add --purge).",
             parked.iter().map(|a| format!("- {a}")).collect::<Vec<_>>().join("\n")
         );
         if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-apps", &title, &body) {

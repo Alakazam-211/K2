@@ -31,6 +31,8 @@ use k2_core::skin::{self, app_login, invites};
 
 use crate::cli_response::CliResponse;
 use crate::mail::send::{self, DbOutboundStore, Gate, OutboundMessage, OutboundRequest, SendError, SendOutcome, SubmitBackend};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// An App's reset refused while the owner's reset is live (§5.4).
 pub const OWNER_RESET_PENDING: &str = "owner_reset_pending";
@@ -99,15 +101,15 @@ fn send_error(e: SendError) -> CliResponse {
     }
 }
 
-pub const NO_MAIL_HINT: &str = "Can't send the invite: this workspace has no address it can send from (k2 hostmail create). K2 never gives an invite link to an agent.";
+pub const NO_MAIL_HINT: &str = concat!("Can't send the invite: this workspace has no address it can send from (", cli_name!(), " hostmail create). ", product_name!(), " never gives an invite link to an agent.");
 
 fn gated_hint() -> String {
-    "can't send the invite: outbound email is off for this workspace. Your human can turn it on (k2 mail sending <ws> on) or send it themselves (k2 app user invite <u> --app <app>).".to_string()
+    concat!("can't send the invite: outbound email is off for this workspace. Your human can turn it on (", cli_name!(), " mail sending <ws> on) or send it themselves (", cli_name!(), " app user invite <u> --app <app>).").to_string()
 }
 
 fn no_page_hint(app_label: &str) -> String {
     format!(
-        "{app_label} has no set-password page: set one with k2 app login settings {app_label} --set-password-url <url> (or turn on the box front door, whose /reset page works for every App)"
+        "{app_label} has no set-password page: set one with {CLI_NAME} app login settings {app_label} --set-password-url <url> (or turn on the box front door, whose /reset page works for every App)"
     )
 }
 
@@ -211,7 +213,7 @@ pub fn invite_sender(app: &str, app_ws: Option<&str>, by: &By, from: Option<&str
         Some(addr) => match crate::mail::access::can_send(ws, addr) {
             Ok(inbox) if inbox.source == crate::mail::access::Source::Hosted => inbox,
             Ok(_) => return Err(usage("invites leave through this box's own mail (a hosted address), never a linked inbox")),
-            Err(_) => return Err(usage("from must be a hosted address the App's workspace sends from (k2 mail inboxes)")),
+            Err(_) => return Err(usage(concat!("from must be a hosted address the App's workspace sends from (", cli_name!(), " mail inboxes)"))),
         },
         None => {
             let all = crate::mail::access::sendable_hosted(ws);
@@ -226,7 +228,7 @@ pub fn invite_sender(app: &str, app_ws: Option<&str>, by: &By, from: Option<&str
                         "409 Conflict",
                         "several_senders",
                         &format!(
-                            "this workspace can send from {n} addresses; the owner picks one (k2 app user invite … --from <address>)"
+                            "this workspace can send from {n} addresses; the owner picks one ({CLI_NAME} app user invite … --from <address>)"
                         ),
                     ))
                 }
@@ -315,7 +317,7 @@ fn front_door_base(door: &str, app_hosts: &[String]) -> Result<String, String> {
     invites::check_set_password_url(&door, std::slice::from_ref(&host))
         .map_err(|_| format!("the front door ({door}) is not https:// (only http://localhost or http://127.0.0.1 may be plain)"))?;
     if app_hosts.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
-        return Err(format!("the front door's host {host} is an App's domain or label: that App would get K2's own pages (set-password, email confirm)"));
+        return Err(format!("the front door's host {host} is an App's domain or label: that App would get {PRODUCT_NAME}'s own pages (set-password, email confirm)"));
     }
     Ok(door)
 }
@@ -437,7 +439,7 @@ pub(crate) fn box_label() -> String {
         .or_else(box_public_url)
         .and_then(|u| u.split("://").nth(1).map(|h| h.split('/').next().unwrap_or(h).to_string()))
         .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "this K2 server".to_string())
+        .unwrap_or_else(|| concat!("this ", product_name!(), " server").to_string())
 }
 
 /// The App's set-password page (App invite and reset mails): its own
@@ -455,7 +457,7 @@ pub fn set_password_page(app: &str, settings: &invites::InviteSettings) -> Optio
     let own = settings.set_password_url.as_deref().filter(|u| match invites::check_set_password_url(u, &page_hosts(app)) {
         Ok(_) => true,
         Err(_) => {
-            k2_core::log_debug!("[skin] {app}: its set-password page isn't on one of its hosts any more; using K2's");
+            k2_core::log_debug!("[skin] {app}: its set-password page isn't on one of its hosts any more; using {PRODUCT_NAME}'s");
             false
         }
     });
@@ -688,7 +690,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
         Err(r) => return r,
     };
     let Some(username) = text(&v, &["username", "name"]) else { return usage("missing username") };
-    let Some(raw_app) = text(&v, &["app", "appId"]) else { return usage("missing app: invites are for one App (k2 app user invite <u> --app <app>)") };
+    let Some(raw_app) = text(&v, &["app", "appId"]) else { return usage(concat!("missing app: invites are for one App (", cli_name!(), " app user invite <u> --app <app>)")) };
     let by = match agent_ws {
         Some(ws) => By::Agent { ws: ws.to_string(), actor: actor.to_string() },
         None if crate::skin_routes::actor_is_agent(actor) => return owner_only("an agent invites through its workspace's \"manage Apps\" switch"),
@@ -738,7 +740,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
                     ));
                 }
             } else if !matches!(holds_app(&p.id, &app), Ok(true)) {
-                return refusal("409 Conflict", "no_access", &format!("'{}' has no access to that App yet: add it first (k2 app user rooms {} --app {raw_app} …)", p.username, p.username));
+                return refusal("409 Conflict", "no_access", &format!("'{}' has no access to that App yet: add it first ({CLI_NAME} app user rooms {} --app {raw_app} …)", p.username, p.username));
             }
             match p.email.clone() {
                 Some(e) => e,
@@ -746,7 +748,7 @@ pub fn handle_invite(body: &[u8], actor: &str, agent_ws: Option<&str>, is_post: 
                     return refusal(
                         "409 Conflict",
                         "no_email",
-                        &format!("'{}' has no email: set one with k2 app user email {} --email <e>, then invite.", p.username, p.username),
+                        &format!("'{}' has no email: set one with {CLI_NAME} app user email {} --email <e>, then invite.", p.username, p.username),
                     )
                 }
             }
@@ -983,7 +985,7 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         return refusal(
             "409 Conflict",
             "no_front_door",
-            "this box has no front door, so K2 has no set-password page of its own to send: use --code and give the person the code yourself",
+            concat!("this box has no front door, so ", product_name!(), " has no set-password page of its own to send: use --code and give the person the code yourself"),
         );
     }
     // The stored email is never the default for anyone an agent or App
@@ -999,7 +1001,7 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
             let because = if why == skin::ties::EMAIL_TIED {
                 format!("an agent or App key set {} up and could have chosen the stored email", person.username)
             } else {
-                format!("{}'s stored email is from before K2 recorded who sets emails (an agent could have set it)", person.username)
+                format!("{}'s stored email is from before {PRODUCT_NAME} recorded who sets emails (an agent could have set it)", person.username)
             };
             return refusal(
                 "409 Conflict",
@@ -1140,7 +1142,7 @@ pub fn handle_agent_reset(body: &[u8], actor: &str, ws: &str, is_post: bool) -> 
         return crate::skin_routes::box_login_refused(Some(ws), &person.username);
     }
     if skin::test_guests::get(&person.id).ok().flatten().is_some() {
-        return owner_only("a test guest has no reset: set its password with k2 app test-guest");
+        return owner_only(concat!("a test guest has no reset: set its password with ", cli_name!(), " app test-guest"));
     }
     let own: Vec<&str> = grants
         .iter()
@@ -1217,7 +1219,7 @@ pub fn app_key_reset(app: &str, username: &str, actor: &str) -> Result<Value, (u
     let sender = match invite_sender(app, Some(&ws), &by, None) {
         Ok(Some(s)) if s.gate != Gate::Off => s,
         Ok(Some(_)) => return Err((403, "gated", gated_hint())),
-        Ok(None) => return Err((409, "no_mail", "the App's workspace has no address it can send from (k2 hostmail create); the key never gets the link".to_string())),
+        Ok(None) => return Err((409, "no_mail", concat!("the App's workspace has no address it can send from (", cli_name!(), " hostmail create); the key never gets the link").to_string())),
         Err(r) => return Err((409, "no_mail", r.body)),
     };
     // A person tied to another workspace is never reset through this
@@ -1389,7 +1391,7 @@ fn text_field(v: &Value, key: &str) -> Result<Option<Option<String>>, CliRespons
         None => Ok(None),
         Some(Value::Null) => Ok(Some(None)),
         Some(Value::String(s)) => Ok(Some(Some(s.clone()))),
-        _ => Err(usage(&format!("{key}: text, or null for K2's own"))),
+        _ => Err(usage(&format!("{key}: text, or null for {PRODUCT_NAME}'s own"))),
     }
 }
 
@@ -1417,7 +1419,7 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
     let app_ws = skin::ties::app_workspace(&app);
     let allowed = may_set_invite_settings(who, &app, app_ws.as_deref());
     if !allowed {
-        return owner_only("only the owner, or this App's own agent with \"…and manage them end to end\" on (k2 app access), sets an App's login settings");
+        return owner_only(concat!("only the owner, or this App's own agent with \"…and manage them end to end\" on (", cli_name!(), " app access), sets an App's login settings"));
     }
     let patch = (|| -> Result<invites::InviteSettingsPatch, CliResponse> {
         Ok(invites::InviteSettingsPatch {
@@ -1442,7 +1444,7 @@ pub fn handle_settings(body: &[u8], who: &crate::compute_routes::Who, is_post: b
         Some(x) => match x.as_i64().map(|n| app_login::check_max_devices(n).map(|()| n)) {
             Some(Ok(n)) => Some(Some(n)),
             Some(Err(e)) => return usage(&e),
-            None => return usage("maxDevices: a whole number from 1 to 20, or null for K2's default (20)"),
+            None => return usage(concat!("maxDevices: a whole number from 1 to 20, or null for ", product_name!(), "'s default (20)")),
         },
     };
     let actor = who.label();
@@ -1680,7 +1682,7 @@ fn post_card(t: &crate::skin_routes::TieDisplay, p: &skin::SkinPrincipal, grants
         crate::overlay_routes::Presented::Card { .. } | crate::overlay_routes::Presented::Waiting { .. } => Ok(()),
         crate::overlay_routes::Presented::NoThread => {
             let body = format!(
-                "{prompt}\n\nFrom a terminal outside K2: k2 app user reset {u} --code (a one-time link to hand them), or --to <email> --from <an address no agent reads>. Or Settings → User Access → {u}.",
+                "{prompt}\n\nFrom a terminal outside {PRODUCT_NAME}: {CLI_NAME} app user reset {u} --code (a one-time link to hand them), or --to <email> --from <an address no agent reads>. Or Settings → User Access → {u}.",
                 u = p.username
             );
             crate::feedback_routes::file_owners_only_notice(&t.tie.workspace_id, &t.handle, &title, &body).map(|_| ())
@@ -1695,10 +1697,10 @@ pub fn run_card(params: &Value, answer: &str, _by: &str) -> Result<Value, String
     let u = params["username"].as_str().filter(|s| !s.is_empty()).ok_or("the card names nobody")?;
     match answer {
         CARD_SHOW_LINK | CARD_SEND => Ok(json!({
-            "message": format!("Get the one-time link where the agent can't see it: k2 app user reset {u} --code from a terminal outside K2, or Settings → User Access → {u} → Show a one-time link. Hand it to {u} yourself.")
+            "message": format!("Get the one-time link where the agent can't see it: {CLI_NAME} app user reset {u} --code from a terminal outside {PRODUCT_NAME}, or Settings → User Access → {u} → Show a one-time link. Hand it to {u} yourself.")
         })),
         CARD_OTHER_EMAIL => Ok(json!({
-            "message": format!("Mail it to an address you know is theirs: k2 app user reset {u} --to <email> --from <an address no agent reads> from a terminal outside K2, or Settings → User Access → {u}.")
+            "message": format!("Mail it to an address you know is theirs: {CLI_NAME} app user reset {u} --to <email> --from <an address no agent reads> from a terminal outside {PRODUCT_NAME}, or Settings → User Access → {u}.")
         })),
         _ => Ok(json!({ "message": "Not now. Settings → User Access shows who is waiting." })),
     }

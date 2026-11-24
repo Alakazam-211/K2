@@ -44,6 +44,7 @@ use serde_json::{json, Map, Value as J};
 use crate::cli_response::CliResponse;
 use crate::permission::{answer, limits, present, store};
 use crate::sidecar_routes::Caller;
+use k2_core::brand::PRODUCT_NAME;
 
 /// The catalog actions K2's cards carry.
 pub(crate) const ACCESS: &str = "garden.access";
@@ -313,7 +314,7 @@ pub(crate) fn prompt(kind: GardenAsk, made: bool, agent: &str, garden: &str) -> 
         (GardenAsk::Access, false) => {
             format!("Let {agent} edit {garden}? {agent} can change its layout and widgets, and use their data.")
         }
-        (GardenAsk::Delete, _) => format!("{agent} asks to delete {garden}. It leaves your Gardens. K2 keeps a copy in history."),
+        (GardenAsk::Delete, _) => format!("{agent} asks to delete {garden}. It leaves your Gardens. {PRODUCT_NAME} keeps a copy in history."),
     }
 }
 

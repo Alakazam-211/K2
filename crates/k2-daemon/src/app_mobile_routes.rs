@@ -38,6 +38,8 @@ use k2_core::skin::{self, access, app_login, SkinPass};
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const REFRESH: &str = "/cli/skin/refresh";
 pub const DEVICES: &str = "/cli/skin/devices";
@@ -354,7 +356,7 @@ pub fn handle_access_listed(body: &[u8], who: &crate::compute_routes::Who) -> Cl
         record_audit("app_discovery", &actor, &format!("app={app} name={} listed={listed}", row.name));
         let text = if listed {
             format!(
-                "{} is now listed for sign-in discovery (by {actor}): GET /cli/skin/app-info?app={} answers with its name, kind and how to sign in. Nothing else about this server is shown. Turn it off with k2 app discovery {} off.",
+                "{} is now listed for sign-in discovery (by {actor}): GET /cli/skin/app-info?app={} answers with its name, kind and how to sign in. Nothing else about this server is shown. Turn it off with {CLI_NAME} app discovery {} off.",
                 row.name, row.id, row.name
             )
         } else {
@@ -400,7 +402,7 @@ pub fn handle_roles_from_template(body: &[u8], actor: &str) -> CliResponse {
         Err(r) => return r,
     };
     let Some(template) = text(&v, &["template", "from"]) else {
-        return usage("send {template, app} (k2 app roles suggest lists the templates)");
+        return usage(concat!("send {template, app} (", cli_name!(), " app roles suggest lists the templates)"));
     };
     let app = match resolve_app(text(&v, &["app", "appId"]).or(Some(skin::HOST_APP_ID))) {
         Ok(a) => a,

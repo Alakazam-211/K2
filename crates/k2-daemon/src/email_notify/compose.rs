@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value as J};
 
 use super::{fail, R};
+use k2_core::brand::PRODUCT_NAME;
 
 pub const MAX_RECIPIENTS: usize = 50;
 pub const MAX_SUBJECT_BYTES: usize = 998;
@@ -342,7 +343,7 @@ pub fn parse(v: &J, now: i64) -> R<Request> {
                     return Err(header_refused(format!(
                         "header {} isn't allowed: only your App's own X-App-… headers (letters, digits and -) and \
                          X-Entity-Ref-ID. From, To, Reply-To (use replyTo), Bcc (use bcc), DKIM, Content-* and the like \
-                         are K2's, and mail providers' control headers (X-SMTPAPI, X-Mailgun-…) are never passed on",
+                         are {PRODUCT_NAME}'s, and mail providers' control headers (X-SMTPAPI, X-Mailgun-…) are never passed on",
                         name.chars().filter(|c| !c.is_control()).take(80).collect::<String>()
                     )));
                 }

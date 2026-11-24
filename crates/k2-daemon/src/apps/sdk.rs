@@ -24,6 +24,8 @@ use k2_core::deploy::codes;
 use serde_json::{json, Value as J};
 
 use super::routes::{json_body, need_build, no, resolve_folder, s, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const ROUTES: &[&str] = &["/cli/app/sdk/add", "/cli/app/sdk/status", "/cli/app/sdk/kit"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/sdk/add", "/cli/app/sdk/kit"];
@@ -62,8 +64,8 @@ fn box_kit() -> R<SewKit> {
             sdk_codes::SEW_KIT_UNAVAILABLE,
             409,
             format!(
-                "--sew needs Sew {}+ (its release carries the App kit); this K2 pins Sew {pin}, which has none. \
-                 Vendor K2's SDK alone: k2 app sdk add <folder> (without --sew)",
+                "--sew needs Sew {}+ (its release carries the App kit); this {PRODUCT_NAME} pins Sew {pin}, which has none. \
+                 Vendor {PRODUCT_NAME}'s SDK alone: {CLI_NAME} app sdk add <folder> (without --sew)",
                 app_sdk::sew_kit::MIN_SEW
             ),
         ));
@@ -74,9 +76,9 @@ fn box_kit() -> R<SewKit> {
             sdk_codes::SEW_KIT_MISSING,
             409,
             format!(
-                "Sew's App kit {v} isn't on this box yet. k2 hostchat enable and upgrade fetch it with Sew's release \
+                "Sew's App kit {v} isn't on this box yet. {CLI_NAME} hostchat enable and upgrade fetch it with Sew's release \
                  (or take it from beside --tarball). To add it now: {}",
-                crate::sew::fetch::ReleaseFile::app_kit(pin, k).by_hand("k2 app sdk kit"),
+                crate::sew::fetch::ReleaseFile::app_kit(pin, k).by_hand(concat!(cli_name!(), " app sdk kit")),
                 v = k.version,
             ),
         )),
@@ -138,7 +140,7 @@ fn kit(who: &Who, body: &[u8]) -> R<J> {
         no(
             sdk_codes::SEW_KIT_UNAVAILABLE,
             409,
-            format!("this K2 pins Sew {pin}, whose release has no App kit (kits start with Sew {})", app_sdk::sew_kit::MIN_SEW),
+            format!("this {PRODUCT_NAME} pins Sew {pin}, whose release has no App kit (kits start with Sew {})", app_sdk::sew_kit::MIN_SEW),
         )
     })?;
     let meta = std::fs::metadata(&path).map_err(|e| no(codes::BAD_REQUEST, 400, format!("{}: {e}", path.display())))?;

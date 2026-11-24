@@ -51,6 +51,8 @@ use k2_vault::{Actor, Delivery, Kind, Namespace, PutMode, PutRequest, Requester,
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, json_body, need_build, need_credential, no, s, ws_by_id, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const LIST: &str = "/cli/app/updates";
 pub const KEY: &str = "/cli/app/updates/key";
@@ -143,10 +145,10 @@ fn need_front(app: &AppRow) -> R<()> {
     if let Err(why) = crate::app_pairing::front_rewrites(&app.service_id) {
         let hint = match why {
             crate::app_pairing::NotServed::Raw => {
-                "this App's manifest says host.clientIp: false (a raw splice), so K2 can't answer /_k2/updates/ on its host; turn the client-IP front back on (host.clientIp: true) and deploy"
+                concat!("this App's manifest says host.clientIp: false (a raw splice), so ", product_name!(), " can't answer /_k2/updates/ on its host; turn the client-IP front back on (host.clientIp: true) and deploy")
             }
             crate::app_pairing::NotServed::NotRuntime => {
-                "the update feed needs an App that K2 runs (k2 app install, then k2 app deploy), static or server; a k2 publish --cmd service has no feed"
+                concat!("the update feed needs an App that ", product_name!(), " runs (", cli_name!(), " app install, then ", cli_name!(), " app deploy), static or server; a ", cli_name!(), " publish --cmd service has no feed")
             }
         };
         return Err(no(uc::NEEDS_K2_FRONT, 409, hint));
@@ -164,7 +166,7 @@ fn the_key(app: &AppRow) -> R<au::PubKey> {
             uc::NO_UPDATE_KEY,
             409,
             format!(
-                "{} has no updater key yet: k2 app updates key {} --set \"<the .pub file's base64, as tauri.conf.json plugins.updater.pubkey>\"",
+                "{} has no updater key yet: {CLI_NAME} app updates key {} --set \"<the .pub file's base64, as tauri.conf.json plugins.updater.pubkey>\"",
                 app.app_id, app.app_id
             ),
         )
@@ -264,8 +266,8 @@ fn client(app: &AppRow) -> R<dl_client::Client> {
             uc::DL_TOKEN_MISSING,
             409,
             format!(
-                "{} has no download-host token yet. K2 Web mints one per App id ({}); keep it with \
-                 k2 app updates token {} --file <file> (or --stdin), never on the command line",
+                "{} has no download-host token yet. {PRODUCT_NAME} Web mints one per App id ({}); keep it with \
+                 {CLI_NAME} app updates token {} --file <file> (or --stdin), never on the command line",
                 app.app_id,
                 dl_id_of(app).unwrap_or_else(|_| "dev.k2.<box>.<app>".into()),
                 app.app_id
@@ -288,7 +290,7 @@ fn host_refusal(e: &dl_client::DlError) -> Refusal {
         dl_client::DlError::Unavailable(_) => no(uc::UPDATES_HOST_UNAVAILABLE, 503, e.line()),
         dl_client::DlError::Refused { status: 401, .. } | dl_client::DlError::Refused { status: 403, .. } => Refusal {
             extra: Some(json!({ "host": e.line() })),
-            ..no(uc::DL_TOKEN_INVALID, 409, "the download host refused this App's token: ask K2 Web for a new one, then k2 app updates token <app> --file <file>")
+            ..no(uc::DL_TOKEN_INVALID, 409, concat!("the download host refused this App's token: ask ", product_name!(), " Web for a new one, then ", cli_name!(), " app updates token <app> --file <file>"))
         },
         _ => no(uc::UPDATES_HOST_REFUSED, 502, e.line()),
     }
@@ -442,11 +444,11 @@ fn key_set(who: &Who, body: &[u8]) -> R<J> {
             workspace: &ws,
             body: json!({ "route": KEY_SET, "body": { "app": app.app_id, "pubkey": key.wrapped } }),
             diff: json!({ "lines": [
-                format!("k2 app updates key {} --set <new key>", app.app_id),
+                format!("{CLI_NAME} app updates key {} --set <new key>", app.app_id),
                 format!("updater key: {old_id} → {}", key.key_id),
                 "every installed copy of the App will trust archives signed by the new key".to_string(),
             ], "route": KEY_SET }),
-            summary: format!("k2 app updates key {} (change {old_id} → {})", app.app_id, key.key_id),
+            summary: format!("{CLI_NAME} app updates key {} (change {old_id} → {})", app.app_id, key.key_id),
             reasons: vec!["changing an App's updater key after it has releases is the owner's call: every installed client trusts the new key".into()],
             reason: s(&v, "reason"),
         })?;
@@ -485,7 +487,7 @@ fn token_set(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             uc::DL_TOKEN_INVALID,
             400,
-            "that isn't a download-host App token (k2dl_ followed by 32 lowercase hex). A k2dlr_ stats token is K2 Web's, never an App's",
+            concat!("that isn't a download-host App token (k2dl_ followed by 32 lowercase hex). A k2dlr_ stats token is ", product_name!(), " Web's, never an App's"),
         ));
     }
     token_put(&app, t)?;
@@ -623,7 +625,7 @@ fn push(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 uc::VERSION_NOT_NEWER,
                 409,
-                format!("{ch} is at {}; a push must be newer. To point {ch} back at an older release, use k2 app updates rollback", cur.version),
+                format!("{ch} is at {}; a push must be newer. To point {ch} back at an older release, use {CLI_NAME} app updates rollback", cur.version),
             ));
         }
         let new_keys: BTreeSet<String> = plan.iter().map(|p| p.0.key()).collect();
@@ -741,7 +743,7 @@ fn push(who: &Who, body: &[u8]) -> R<J> {
         "channel": ch,
         "state": store::STATE_UPLOADING,
         "files": files,
-        "next": format!("k2 app updates ls {} --release {}", app.app_id, rel.id),
+        "next": format!("{CLI_NAME} app updates ls {} --release {}", app.app_id, rel.id),
     }))
 }
 
@@ -906,9 +908,9 @@ fn need_channel(raw: Option<&str>, what: &str) -> R<String> {
 
 fn live_release(app: &AppRow, version: &str) -> R<store::ReleaseRow> {
     let r = db(|c| store::release_by_version(c, &app.app_id, version))?
-        .ok_or_else(|| no(uc::RELEASE_NOT_FOUND, 404, format!("{} has no release {version} (k2 app updates ls {})", app.app_id, app.app_id)))?;
+        .ok_or_else(|| no(uc::RELEASE_NOT_FOUND, 404, format!("{} has no release {version} ({CLI_NAME} app updates ls {})", app.app_id, app.app_id)))?;
     if r.state == store::STATE_UPLOADING {
-        return Err(no(uc::UPLOAD_PENDING, 409, format!("{version} is still uploading: wait for it (k2 app updates ls {} --release {})", app.app_id, r.id)));
+        return Err(no(uc::UPLOAD_PENDING, 409, format!("{version} is still uploading: wait for it ({CLI_NAME} app updates ls {} --release {})", app.app_id, r.id)));
     }
     if r.state != store::STATE_LIVE {
         return Err(no(uc::RELEASE_NOT_LIVE, 409, format!("{version} is {}: only an uploaded, live release can be pointed at", r.state)));
@@ -929,7 +931,7 @@ fn move_channel(app: &AppRow, ch: &str, rel: Option<&store::ReleaseRow>, action:
     let handle = k2_core::db::shared();
     refresh_with(&handle, &app.app_id);
     let fallback = match (rel, dl_id_of(app), client(app)) {
-        (None, _, _) => "skipped: the channel is empty (ask K2 Web to unset it on the download host)".to_string(),
+        (None, _, _) => concat!("skipped: the channel is empty (ask ", product_name!(), " Web to unset it on the download host)").to_string(),
         (Some(_), Ok(id), Ok(c)) => publish_fallback(&handle, &c, &app.app_id, &id, ch),
         (_, Err(e), _) | (_, _, Err(e)) => format!("skipped: {}", e.hint),
     };
@@ -963,7 +965,7 @@ fn promote(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 uc::VERSION_NOT_NEWER,
                 409,
-                format!("{to} is at {}; promote moves a channel forward only. To go back, k2 app updates rollback {} --channel {to} --to {version}", cur.version, app.app_id),
+                format!("{to} is at {}; promote moves a channel forward only. To go back, {CLI_NAME} app updates rollback {} --channel {to} --to {version}", cur.version, app.app_id),
             ));
         }
         // The platform guard holds for a promote too.
@@ -1002,7 +1004,7 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             uc::RELEASE_NOT_LIVE,
             409,
-            format!("{to} was never on {ch}; a rollback goes back to a release the channel served (k2 app updates ls {} --channel {ch})", app.app_id),
+            format!("{to} was never on {ch}; a rollback goes back to a release the channel served ({CLI_NAME} app updates ls {} --channel {ch})", app.app_id),
         ));
     }
     let by = actor(who);
@@ -1052,7 +1054,7 @@ fn pull(who: &Who, body: &[u8]) -> R<J> {
     let mut out_ch = Vec::new();
     for (ch, best) in &moved {
         let fallback = match (best, dl_id_of(&app), client(&app)) {
-            (None, _, _) => "skipped: the channel is empty (ask K2 Web to unset it on the download host)".to_string(),
+            (None, _, _) => concat!("skipped: the channel is empty (ask ", product_name!(), " Web to unset it on the download host)").to_string(),
             (Some(_), Ok(id), Ok(c)) => publish_fallback(&handle, &c, &app.app_id, &id, ch),
             (_, Err(e), _) | (_, _, Err(e)) => format!("skipped: {}", e.hint),
         };
@@ -1070,9 +1072,9 @@ fn pull(who: &Who, body: &[u8]) -> R<J> {
     };
     audit(&app, "updates_pull", &by, json!({ "version": version, "release": rel.id, "channels": out_ch, "host": host }));
     let note = if host == "pulled" {
-        "K2's answers no longer offer it, and the download host stopped serving its files."
+        concat!(product_name!(), "'s answers no longer offer it, and the download host stopped serving its files.")
     } else {
-        "K2's answers no longer offer it. Its files stay at their download-host URLs (this host can't pull them; an installer someone saved keeps working); ask K2 Web to quarantine them if they must stop."
+        concat!(product_name!(), "'s answers no longer offer it. Its files stay at their download-host URLs (this host can't pull them; an installer someone saved keeps working); ask ", product_name!(), " Web to quarantine them if they must stop.")
     };
     Ok(json!({
         "ok": true,
@@ -1159,7 +1161,7 @@ pub fn status_summary(app_id: &str) -> J {
 fn fleet(who: &Who) -> R<J> {
     need_credential(who)?;
     if !who.is_admin() {
-        return Err(no(codes::FORBIDDEN, 403, "the fleet view is the owner's and Admins' (an agent reads its own App with k2 app updates ls)"));
+        return Err(no(codes::FORBIDDEN, 403, concat!("the fleet view is the owner's and Admins' (an agent reads its own App with ", cli_name!(), " app updates ls)")));
     }
     super::updates_serve::flush();
     let from = au::day_of(deploy::now() - 29 * 86_400);

@@ -54,6 +54,7 @@ use k2_core::notify_prefs::People;
 use k2_core::read_state::{self, Person, ReadError, ReadItem, Totals, KIND_PROJECT, KIND_THREAD};
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 pub const UNREAD_PATH: &str = "/cli/thread/unread";
 pub const READ_PATH: &str = "/cli/thread/read";
@@ -166,7 +167,7 @@ pub fn not_a_person() -> CliResponse {
     error_json(
         "403 Forbidden",
         "forbidden",
-        "read state belongs to a person: use the owner token or a K2 login (agents and app passes have none)",
+        concat!("read state belongs to a person: use the owner token or a ", product_name!(), " login (agents and app passes have none)"),
     )
 }
 

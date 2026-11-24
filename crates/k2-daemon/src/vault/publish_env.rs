@@ -20,6 +20,7 @@ use std::process::Command;
 use k2_vault::{Delivery, Requester, SecretStore, Selector, Use};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -122,12 +123,12 @@ pub const LEGACY_ENV_REMOVED_IN: Option<&str> = k2_core::app_grace::CUTOVER_RELE
 /// The notice for one service (`name` = its publish name).
 pub fn legacy_env_notice(name: &str) -> String {
     format!(
-        "This service still inherits the K2 daemon's whole environment because it existed \
+        "This service still inherits the {PRODUCT_NAME} daemon's whole environment because it existed \
          before 0.45.4. It keeps it while it runs as a --cmd service; nothing ends that. \
-         To start it clean (only the secrets granted to it): `k2 publish env {name} clean` \
-         (grant what it needs with `k2 publish secret add {name} …`); see what would break with \
-         `k2 app warnings {name}`, or try how an App runs first with `k2 app clean-mode {name} on`. \
-         Move it to an App when ready: `k2 study app-move`."
+         To start it clean (only the secrets granted to it): `{CLI_NAME} publish env {name} clean` \
+         (grant what it needs with `{CLI_NAME} publish secret add {name} …`); see what would break with \
+         `{CLI_NAME} app warnings {name}`, or try how an App runs first with `{CLI_NAME} app clean-mode {name} on`. \
+         Move it to an App when ready: `{CLI_NAME} study app-move`."
     )
 }
 

@@ -40,6 +40,7 @@ use std::collections::HashMap;
 
 use k2_core::deploy::store::{self, AppRow};
 use serde_json::{json, Value as J};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub mod codes {
     /// A container App asked for something its database door can't give
@@ -49,14 +50,14 @@ pub mod codes {
 
 /// The re-host line every "only a start delivers it" answer carries.
 pub fn rehost_line(app: &str) -> String {
-    format!("Takes effect after a re-host: k2 app rehost {app}")
+    format!("Takes effect after a re-host: {CLI_NAME} app rehost {app}")
 }
 
 /// How a container App reaches box Postgres (S21).
 pub fn door_line(app: &str) -> String {
     format!(
         "{app} reaches its workspace's databases (and ones granted to it) through its database door: 127.0.0.1:5432 inside its \
-         wall, checked per connection (k2 app doctor {app})"
+         wall, checked per connection ({CLI_NAME} app doctor {app})"
     )
 }
 
@@ -65,7 +66,7 @@ pub fn door_line(app: &str) -> String {
 pub fn engine_no_door(app: &str) -> String {
     format!(
         "{app} runs in a container, and this box's App engine predates the database door, so nothing answers on 127.0.0.1:5432 \
-         in its wall: the owner updates it (k2 app engine install), then k2 app rehost {app}"
+         in its wall: the owner updates it ({CLI_NAME} app engine install), then {CLI_NAME} app rehost {app}"
     )
 }
 
@@ -73,7 +74,7 @@ pub fn engine_no_door(app: &str) -> String {
 /// change nothing.
 pub fn db_raw_refusal(app: &str) -> String {
     format!(
-        "--db-raw is the raw connection to an App's private database, which K2 doesn't make yet, so approving it would change \
+        "--db-raw is the raw connection to an App's private database, which {PRODUCT_NAME} doesn't make yet, so approving it would change \
          nothing. {}; no widening needed",
         door_line(app)
     )
@@ -328,7 +329,7 @@ fn kick_rehost(app: &AppRow, what: &str) {
                 super::rehost::Turn::Failed(_, why) => why,
                 super::rehost::Turn::Deferred(code, detail) => format!("{code}: {detail}"),
             };
-            tell_agent(&row, &format!("App {}: {granted} was granted to it, and K2's re-host didn't finish ({why}). {}", row.app_id, rehost_line(&row.app_id)));
+            tell_agent(&row, &format!("App {}: {granted} was granted to it, and {PRODUCT_NAME}'s re-host didn't finish ({why}). {}", row.app_id, rehost_line(&row.app_id)));
         });
         if let Err(e) = spawned {
             tell_agent(app, &format!("App {}: {what} was granted to it ({e}). {}", app.app_id, rehost_line(&app.app_id)));
@@ -370,7 +371,7 @@ pub(crate) fn after_service_grant(service_id: &str, env_name: Option<&str>) -> O
         return Some(json!({
             "app": a,
             "rehost": "started",
-            "note": format!("{line}. {a} was idle, so K2 is re-hosting it now (k2 app rehost status {a})"),
+            "note": format!("{line}. {a} was idle, so {PRODUCT_NAME} is re-hosting it now ({CLI_NAME} app rehost status {a})"),
         }));
     }
     let t = format!("App {a}: {what} was granted to it; the running App keeps what it started with. {line}");
@@ -450,7 +451,7 @@ pub(crate) fn doctor_json(app: &AppRow) -> J {
                             "id": "database_not_admitted",
                             "detail": format!(
                                 "{a}'s DATABASE_URL names {}, which its database door refuses: its workspace doesn't own it and wasn't \
-                                 granted it (k2 db grant <its workspace> --db {} --level read|write)",
+                                 granted it ({CLI_NAME} db grant <its workspace> --db {} --level read|write)",
                                 r.name, r.name
                             ),
                         }));

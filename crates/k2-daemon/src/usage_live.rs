@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 use k2_core::llm_accounts::{self as wallet, store, Tool};
 
 use crate::subscription_usage::{self as su, HarnessUsage, UsageWindow};
+use k2_core::brand::CLI_NAME;
 
 pub const SOURCE_STATUSLINE: &str = "live_statusline";
 pub const SOURCE_ROLLOUT: &str = "live_rollout";
@@ -703,7 +704,7 @@ pub fn refresh(tool: Option<&str>, account_id: Option<&str>) -> Result<Value, (u
             let conn = db.lock();
             wallet::get(&conn, id).ok().flatten().filter(|e| e.removed_at.is_none())
         };
-        let Some(e) = entry else { return Err((404, format!("no login {id} (k2 llm tokens list)"))) };
+        let Some(e) = entry else { return Err((404, format!("no login {id} ({CLI_NAME} llm tokens list)"))) };
         let t = e.tool().ok_or((400, "unknown tool".to_string()))?;
         if live_owner(t).as_deref() == Some(id) {
             su::refresh_shared(Some(t.as_str())).map_err(|e| (500, e))?;
@@ -736,7 +737,7 @@ fn refresh_single(tool: Option<&str>, account_id: Option<&str>) -> Result<Value,
             wallet::get(&conn, id).ok().flatten().filter(|e| e.removed_at.is_none())
         };
         if known.is_none() {
-            return Err((404, format!("no login {id} (k2 llm tokens list)")));
+            return Err((404, format!("no login {id} ({CLI_NAME} llm tokens list)")));
         }
         vec![request(id, Why::Person, Wait::For(PERSON_WAIT))]
     } else {

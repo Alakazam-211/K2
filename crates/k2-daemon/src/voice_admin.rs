@@ -17,12 +17,13 @@
 //! Called from the grant-hook sweep (`tool_hook_worker::sweep_target`),
 //! inside its blocking section. Does nothing with the preview off.
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_core::sew_chat::store;
 use k2_core::tool_hook::admin_space::{self, Facts};
 use k2_core::tool_hook::{self as hook, sew_wire};
 use k2_core::voice_rooms::{self, Hosting};
 use serde_json::json;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// This box's hosting state, from the daemon's cached plan tier (fresh 5 min,
 /// a stale reading counts up to 1 h). No reading at all is `Unknown`, never
@@ -203,7 +204,7 @@ pub fn suspect(why: &str) {
         return;
     }
     match hook::admin_space_check(admin_space::VERIFY_SPACE, why, false) {
-        Ok(true) => log_debug!("[voice-rooms] {why}: K2 is checking the K5 Space with Sew (k2 voice repair runs it now)"),
+        Ok(true) => log_debug!("[voice-rooms] {why}: {PRODUCT_NAME} is checking the K5 Space with Sew ({CLI_NAME} voice repair runs it now)"),
         Ok(false) => {}
         Err(e) => log_debug!("[voice-rooms] asking for a K5 Space check: {e}"),
     }
@@ -304,23 +305,23 @@ pub fn repair_report(start: &RepairStart, after: &admin_space::View, settled: bo
         .collect();
     let moved_now: Vec<String> = start.install.as_ref().map(|r| r.stale.iter().map(|s| s.slug.clone()).collect()).unwrap_or_default();
     let space_line = match (after_space.as_ref(), outcome.as_deref()) {
-        (None, _) => "no K5 Space to check: voice rooms haven't made one on this server (k2 voice status says why)".to_string(),
+        (None, _) => concat!("no K5 Space to check: voice rooms haven't made one on this server (", cli_name!(), " voice status says why)").to_string(),
         (Some(s), _) if s.state == admin_space::SPACE_BLOCKED => {
-            format!("the K5 Space is blocked: {} (fix that, then run k2 voice repair again)", s.why.as_deref().unwrap_or("Sew refused it"))
+            format!("the K5 Space is blocked: {} (fix that, then run {CLI_NAME} voice repair again)", s.why.as_deref().unwrap_or("Sew refused it"))
         }
-        (Some(_), Some("same")) => "the K5 Space is there; K2 retried what Sew had refused and re-sent every member".to_string(),
+        (Some(_), Some("same")) => concat!("the K5 Space is there; ", product_name!(), " retried what Sew had refused and re-sent every member").to_string(),
         (Some(s), Some("remade")) => format!(
             "the K5 Space was gone from Sew; Sew made it again as {} (was {})",
             s.space_id.as_deref().unwrap_or("?"),
             check.as_ref().and_then(|c| c["from"].as_str()).unwrap_or("?")
         ),
         (Some(s), Some("relinked")) => format!(
-            "K2 held a stale id; the K5 Space Sew holds is {} (was {})",
+            "{PRODUCT_NAME} held a stale id; the K5 Space Sew holds is {} (was {})",
             s.space_id.as_deref().unwrap_or("?"),
             check.as_ref().and_then(|c| c["from"].as_str()).unwrap_or("?")
         ),
         (Some(_), _) if !start.checking => "no K5 Space to check".to_string(),
-        (Some(_), _) => "the check hasn't answered yet: K2 keeps at it (k2 voice status shows progress)".to_string(),
+        (Some(_), _) => concat!("the check hasn't answered yet: ", product_name!(), " keeps at it (", cli_name!(), " voice status shows progress)").to_string(),
     };
     let mut fixes: Vec<String> = Vec::new();
     if !rooms.is_empty() {
@@ -350,13 +351,13 @@ pub fn repair_report(start: &RepairStart, after: &admin_space::View, settled: bo
         "fixed": fixes,
         "staleSpaces": stale,
         "staleHint": (!stale.is_empty()).then_some(
-            "these agent Spaces were on a Sew install that is gone, and Sew can't give a Space its id back. \
-             One of the agents listed (the one at level manage made it) makes it again with k2 chat space create <slug> --name \"<Name>\"; \
-             then the owner or an Admin gives the others back the level shown: k2 chat access grant <slug> <workspace> --level <level>."
+            concat!("these agent Spaces were on a Sew install that is gone, and Sew can't give a Space its id back. \
+             One of the agents listed (the one at level manage made it) makes it again with ", cli_name!(), " chat space create <slug> --name \"<Name>\"; \
+             then the owner or an Admin gives the others back the level shown: ", cli_name!(), " chat access grant <slug> <workspace> --level <level>.")
         ),
         "notRestored": (outcome.as_deref() == Some("remade")).then_some(NOT_RESTORED),
         "holds": after.holds,
-        "next": if settled { serde_json::Value::Null } else { json!("still working: k2 voice status shows progress") },
+        "next": if settled { serde_json::Value::Null } else { json!(concat!("still working: ", cli_name!(), " voice status shows progress")) },
     }))
 }
 

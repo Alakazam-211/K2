@@ -12,6 +12,8 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::root_helper::RootHelperState;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// What `systemctl show` says about one unit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -57,7 +59,7 @@ impl std::fmt::Display for MgmtError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MgmtError::Unreachable(e) => write!(f, "Sew's mgmt socket is unreachable: {e}"),
-            MgmtError::Unauthorized => write!(f, "Sew refused K2's mgmt token (401)"),
+            MgmtError::Unauthorized => write!(f, "Sew refused {PRODUCT_NAME}'s mgmt token (401)"),
             MgmtError::Status(c, b) => write!(f, "Sew mgmt answered {c}: {b}"),
         }
     }
@@ -295,7 +297,7 @@ pub trait SewOps: Send + Sync {
 /// What [`SewOps::mirror_dir`] answers while the root helper is older than
 /// protocol 12. K2 retries the tie on its own.
 pub const MIRROR_DIR_PENDING: &str =
-    "this K2's root helper can't make Sew's keyring mirror folder yet (it needs root helper protocol 12)";
+    concat!("this ", product_name!(), "'s root helper can't make Sew's keyring mirror folder yet (it needs root helper protocol 12)");
 
 /// `engine sew mirror-dir` for the mirror folder `path` (`<ship>/sew-keyring-
 /// <install id>`), when the helper serves it (protocol 12 AND
@@ -585,7 +587,7 @@ impl SewOps for RealOps {
             k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).map_err(|e| e.to_string())?
         };
         if owner.is_some() {
-            return Err(format!("'{label}' is attributed to a workspace on this server; release it first (k2 publish subdomain unclaim {label})"));
+            return Err(format!("'{label}' is attributed to a workspace on this server; release it first ({CLI_NAME} publish subdomain unclaim {label})"));
         }
         match target {
             Some(t) => match k2_core::tunnel::subdomains::create_subdomain(token, label, t) {
@@ -694,7 +696,7 @@ pub fn api_health_call(addr: &str) -> Result<(u16, Value), String> {
         .next()
         .ok_or_else(|| format!("{addr}: no address"))?;
     if !sa.ip().is_loopback() {
-        return Err(format!("{addr} is not loopback; K2 probes Sew on this box only"));
+        return Err(format!("{addr} is not loopback; {PRODUCT_NAME} probes Sew on this box only"));
     }
     let mut s = TcpStream::connect_timeout(&sa, t).map_err(|e| e.to_string())?;
     s.set_read_timeout(Some(t)).map_err(|e| e.to_string())?;

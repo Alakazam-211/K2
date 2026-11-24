@@ -33,6 +33,8 @@ use std::sync::Mutex;
 
 use base64::Engine;
 use k2_vault::{Actor, HumanProof};
+#[cfg(not(test))]
+use k2_core::brand::PRODUCT_NAME;
 
 /// The launch key's vault name (scope `engine:sew`, `system`).
 pub const LAUNCH_NAME: &str = "sew-launch-key";
@@ -69,7 +71,7 @@ fn vault() -> Result<std::sync::Arc<k2_vault::LocalVault>, String> {
     #[cfg(test)]
     let v = crate::vault::ensure_test_vault();
     #[cfg(not(test))]
-    let v = crate::vault::get().map_err(|e| format!("the K2 vault isn't open ({}): {}", e.code, e.hint))?;
+    let v = crate::vault::get().map_err(|e| format!("the {PRODUCT_NAME} vault isn't open ({}): {}", e.code, e.hint))?;
     Ok(v)
 }
 

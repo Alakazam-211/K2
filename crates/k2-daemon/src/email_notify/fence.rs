@@ -26,6 +26,7 @@
 use rusqlite::Connection;
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 fn err_json(status: &'static str, code: &str, hint: String) -> CliResponse {
     CliResponse {
@@ -54,7 +55,7 @@ pub fn reserved(address: &str) -> bool {
 
 pub fn reserved_hint(address: &str) -> String {
     format!(
-        "{} is a notification sender's address (k2 notifications email sender list): it can't also be a mailbox, \
+        "{} is a notification sender's address ({CLI_NAME} notifications email sender list): it can't also be a mailbox, \
          an alias, a list, a group or a catch-all. A removed sender's address stays reserved for 30 days.",
         address.trim().to_ascii_lowercase()
     )
@@ -71,8 +72,8 @@ pub fn owner_only(what: &str) -> CliResponse {
         "403 Forbidden",
         "owner_only",
         format!(
-            "Notification mail (K2's own password resets and the Apps' email) depends on this, so only the owner or an \
-             Admin can {what} (k2 notifications email sender list shows what it carries). Ask your human."
+            "Notification mail ({PRODUCT_NAME}'s own password resets and the Apps' email) depends on this, so only the owner or an \
+             Admin can {what} ({CLI_NAME} notifications email sender list shows what it carries). Ask your human."
         ),
     )
 }

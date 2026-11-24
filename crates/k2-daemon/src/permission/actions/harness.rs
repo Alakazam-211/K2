@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::agent_harness::{CARD_ACTION, NEEDS_PERSON, ROUTE};
+use k2_core::product_name;
 
 const SWAP_ROUTE: &str = "/cli/workspace/swap-canonical";
 
@@ -36,7 +37,7 @@ pub(crate) static SWITCH: ActionSpec = ActionSpec {
     words: Words {
         setting: "Pinned chat on {harness}",
         what_changes: "Move {ws}'s pinned chat to {harness}",
-        consequences: "K2 ends {ws}'s current pinned chat and starts a new {harness} chat with a summary of the recent conversation. The old chat stays in Chat history. Heartbeats, Threads and messages go to the new chat.",
+        consequences: concat!(product_name!(), " ends {ws}'s current pinned chat and starts a new {harness} chat with a summary of the recent conversation. The old chat stays in Chat history. Heartbeats, Threads and messages go to the new chat."),
         scope: "{ws}",
         duration: "once",
         retry: "",

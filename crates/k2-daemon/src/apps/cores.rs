@@ -38,13 +38,14 @@
 
 use std::collections::BTreeSet;
 
-use k2_core::deploy;
+use k2_core::{cli_name, deploy, product_name};
 use k2_core::workspace::settings::{agents_app_cores, app_core_of_cap, normalize_app_cores, set_agents_app_cores, APP_CORES};
 use rusqlite::Connection;
 use serde_json::{json, Value as J};
 
 use super::access::{self, core_name, Level};
 use super::routes::{no, ws_by_id, ws_handle, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Cores whose tick is enforced (Database, Files and Thread since 0.46.3;
 /// Sew since Sew for Apps A1, 0.46.6).
@@ -168,7 +169,7 @@ pub fn hold_detail(app_ws: &str, add: &[String]) -> (Vec<String>, J) {
         let flags: Vec<String> = n.cores.iter().map(|c| format!("{c}=on")).collect();
         reasons.push(format!(
             "tick {} for {handle} to let its Apps use {} without asking (the owner: Settings → Workspaces / Agents → {handle} → \
-             Permissions → Apps, or k2 app access {handle} --core {} from a terminal outside K2)",
+             Permissions → Apps, or {CLI_NAME} app access {handle} --core {} from a terminal outside {PRODUCT_NAME})",
             names.join(" and "),
             if n.cores.len() == 1 { "it" } else { "them" },
             flags.join(","),
@@ -205,7 +206,7 @@ pub fn tick_hint(app_ws: &str, add: &[String]) -> Option<String> {
     let names: Vec<&str> = n.cores.iter().map(|c| core_name(c)).collect();
     let flags: Vec<String> = n.cores.iter().map(|c| format!("{c}=on")).collect();
     Some(format!(
-        "Tick {} for {handle} (k2 app access {handle} --core {}, the owner, from a terminal outside K2) and deploy again, or",
+        "Tick {} for {handle} ({CLI_NAME} app access {handle} --core {}, the owner, from a terminal outside {PRODUCT_NAME}) and deploy again, or",
         names.join(" and "),
         flags.join(","),
     ))
@@ -244,8 +245,8 @@ pub(crate) fn set_cores(ws_id: &str, changes: &[(String, bool)], caller_is_owner
         return Err(no(
             deploy::codes::OWNER_ONLY,
             403,
-            "only the server's owner ticks an App core for an agent (an Admin may untick one): Settings → Workspaces / Agents → \
-             <agent> → Permissions → Apps, or k2 app access <ws> --core <core>=on from a terminal outside K2",
+            concat!("only the server's owner ticks an App core for an agent (an Admin may untick one): Settings → Workspaces / Agents → \
+             <agent> → Permissions → Apps, or ", cli_name!(), " app access <ws> --core <core>=on from a terminal outside ", product_name!()),
         ));
     }
     let handle = ws_handle(&ws.id);

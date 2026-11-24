@@ -32,6 +32,8 @@ use super::{
     catalog, fingerprint, free_band_port, new_progress, ok_name, row_counts, ClusterOps, ConnMode, DbRecord, Major, MoveEnv,
     MoveOpts, MoveProgress, MoveState, MovedInfo, Run, SourceState, Step, StepFail, NOTICE_SECS, ROLLBACK_WINDOW_SECS,
 };
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// §13: `--live`, `--switch` and `--abort` are the owner's until the first
 /// owner-run moves are clean; then this flips (no migration).
@@ -326,11 +328,11 @@ pub fn check_live(ops: &dyn ClusterOps, env: &dyn MoveEnv, store: &dyn RunStore,
             "helper",
             Level::Refuse,
             "helper_old: the root helper doesn't speak live moves (protocol 10, pgdual)",
-            Some("update the root helper (k2 root-helper update); a move by copy still works"),
+            Some(concat!("update the root helper (", cli_name!(), " root-helper update); a move by copy still works")),
         ));
     }
     if store.open_run(db).is_some() {
-        l.push(line(DUAL_RUNNING, Level::Refuse, format!("a live move of {db} is already running"), Some("k2 db upgrade <db> --switch or --abort it")));
+        l.push(line(DUAL_RUNNING, Level::Refuse, format!("a live move of {db} is already running"), Some(concat!(cli_name!(), " db upgrade <db> --switch or --abort it"))));
     }
     let online = ops.clusters()?.iter().any(|c| c.major == from && c.name == "main" && c.online());
     let mut no_pk = Vec::new();
@@ -343,7 +345,7 @@ pub fn check_live(ops: &dyn ClusterOps, env: &dyn MoveEnv, store: &dyn RunStore,
                 SOURCE_NOT_LOGICAL,
                 Level::Refuse,
                 format!("Postgres {from} runs with wal_level = {}; live moves need logical", wal.trim()),
-                Some("the owner prepares it once: k2 db upgrade --prepare-live <major> (every database on it pauses about 5-15 s)"),
+                Some(concat!("the owner prepares it once: ", cli_name!(), " db upgrade --prepare-live <major> (every database on it pauses about 5-15 s)")),
             ));
         }
         let facts: Value = serde_json::from_str(&ops.sql(from, db, &catalog::live_facts_sql())?).map_err(|_| "live facts are not JSON".to_string())?;
@@ -472,7 +474,7 @@ pub fn start(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store:
                 &format!("Database {db} live move started"),
                 &format!(
                     "{} started copying {db} to Postgres {} while it keeps serving. Schema changes are refused on {db} until the switch \
-                     or an abort (at most 7 days). Watch: k2 db upgrade {db}; then k2 db upgrade {db} --switch (or --abort).",
+                     or an abort (at most 7 days). Watch: {CLI_NAME} db upgrade {db}; then {CLI_NAME} db upgrade {db} --switch (or --abort).",
                     run.actor, run.to
                 ),
             );
@@ -528,7 +530,7 @@ fn setup(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dy
     let settings = ops.sql(from, &db, catalog::db_settings_sql())?;
     let owner = props["owner"].as_str().ok_or("the database has no owner")?.to_string();
     let logins = env.logins(&db)?;
-    let owner_pw = logins.iter().find(|(r, _)| *r == owner).map(|(_, p)| p.clone()).ok_or("the database's owner is not K2's migrator")?;
+    let owner_pw = logins.iter().find(|(r, _)| *r == owner).map(|(_, p)| p.clone()).ok_or(concat!("the database's owner is not ", product_name!(), "'s migrator"))?;
     let tag = run.objects.tag.clone();
     dops.dump_schema(from, to, &db, &tag).map_err(|e| format!("schema dump: {e}"))?;
     let create = catalog::create_db_sql(&db, &props, ok_name).ok_or("the database's owner or locale can't be carried")?;
@@ -664,7 +666,7 @@ pub fn abort_run(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, st
             run.state.as_str(),
             run.last_error.clone().unwrap_or_default(),
             run.from,
-            if errs.is_empty() { "; nothing of the run is left" } else { "; the doctor lists what is left (k2 db doctor)" }
+            if errs.is_empty() { "; nothing of the run is left" } else { concat!("; the doctor lists what is left (", cli_name!(), " db doctor)") }
         ),
     );
     run
@@ -688,7 +690,7 @@ fn park(env: &dyn MoveEnv, store: &dyn RunStore, mut run: DualRun, why: &str, en
         &format!(
             "The live move of {db} ended ({why}), but the root helper couldn't drop its replication slot and schema-change freeze ({}). \
              {db} keeps serving on Postgres {}; schema changes stay refused and the slot holds WAL until then. Update the root helper \
-             (k2 doctor shows it); K2 finishes the cleanup by itself, or run k2 db upgrade {db} --abort again.",
+             ({CLI_NAME} doctor shows it); {PRODUCT_NAME} finishes the cleanup by itself, or run {CLI_NAME} db upgrade {db} --abort again.",
             errs.join("; "),
             run.from
         ),
@@ -739,7 +741,7 @@ pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: 
     }
     for d in WARN_AT_DAYS {
         if age >= d * 86_400 {
-            tell(env, &format!("day{d}"), &format!("Database {db} live move: day {d} of 7"), &format!("The live move of {db} has run {d} days; schema changes stay refused. Switch (k2 db upgrade {db} --switch) or abort; it is aborted on day 7."), &mut run);
+            tell(env, &format!("day{d}"), &format!("Database {db} live move: day {d} of 7"), &format!("The live move of {db} has run {d} days; schema changes stay refused. Switch ({CLI_NAME} db upgrade {db} --switch) or abort; it is aborted on day 7."), &mut run);
         }
     }
     let st = match dops.dual(DualOp::Status, run.from, run.to, &db, &run.objects.object_id.clone(), None) {
@@ -802,14 +804,14 @@ pub fn tick(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: 
     if run.lag.enabled == Some(false) || subscription_gone {
         run.state = RunState::Stalled;
         tell(env, "stalled", &format!("Database {db} live move stalled"), &format!(
-                "The live move of {db} stopped copying (apply errors {}, first-copy errors {}). See journalctl -u postgresql@{}-main on the box; then k2 db upgrade {db} --abort, fix, and run it again. The database keeps serving on Postgres {}.",
+                "The live move of {db} stopped copying (apply errors {}, first-copy errors {}). See journalctl -u postgresql@{}-main on the box; then {CLI_NAME} db upgrade {db} --abort, fix, and run it again. The database keeps serving on Postgres {}.",
                 run.lag.apply_errors, run.lag.sync_errors, run.to, run.from
             ), &mut run);
     } else if run.lag.tables_total > 0 && run.lag.tables_ready == run.lag.tables_total {
         if run.state != RunState::Streaming {
             run.state = RunState::Streaming;
             run.streaming_at.get_or_insert(now);
-            tell(env, "streaming", &format!("Database {db} is ready to switch"), &format!("Every table of {db} is copied and streaming to Postgres {}. Switch when ready: k2 db upgrade {db} --switch (writes pause a few seconds).", run.to), &mut run);
+            tell(env, "streaming", &format!("Database {db} is ready to switch"), &format!("Every table of {db} is copied and streaming to Postgres {}. Switch when ready: {CLI_NAME} db upgrade {db} --switch (writes pause a few seconds).", run.to), &mut run);
         }
     } else if run.state == RunState::Streaming && run.lag.tables_ready < run.lag.tables_total {
         run.state = RunState::Syncing;
@@ -908,7 +910,7 @@ fn ready_to_switch(dops: &dyn DualOps, env: &dyn MoveEnv, run: &DualRun) -> Resu
 
 /// The route's synchronous refusal before it spawns the cut-over.
 pub fn switch_ready(dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore, db: &str) -> Result<(), String> {
-    let run = store.open_run(db).ok_or_else(|| format!("no_live_move: {db} has no live move (k2 db upgrade {db} --live starts one)"))?;
+    let run = store.open_run(db).ok_or_else(|| format!("no_live_move: {db} has no live move ({CLI_NAME} db upgrade {db} --live starts one)"))?;
     ready_to_switch(dops, env, &run)
 }
 
@@ -917,7 +919,7 @@ pub fn switch_ready(dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore,
 /// aborted (undone; the run streams on or was dropped), rolled back or
 /// failed. `Err` = refused before anything changed.
 pub fn switch(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv, store: &dyn RunStore, db: &str, o: &SwitchOpts) -> Result<(MoveProgress, DualRun), String> {
-    let mut dr = store.open_run(db).ok_or_else(|| format!("no_live_move: {db} has no live move (k2 db upgrade {db} --live starts one)"))?;
+    let mut dr = store.open_run(db).ok_or_else(|| format!("no_live_move: {db} has no live move ({CLI_NAME} db upgrade {db} --live starts one)"))?;
     ready_to_switch(dops, env, &dr)?;
     let rec = env.record(db)?;
     if rec.major != dr.from {
@@ -1052,7 +1054,7 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
         Ok(0) => {}
         Ok(n) => {
             return Err(format!(
-                "large_objects: {db} gained {n} large object(s) during the live move; logical replication can't copy them. The switch is undone; abort (k2 db upgrade {db} --abort) and move by copy"
+                "large_objects: {db} gained {n} large object(s) during the live move; logical replication can't copy them. The switch is undone; abort ({CLI_NAME} db upgrade {db} --abort) and move by copy"
             )
             .into())
         }
@@ -1069,7 +1071,7 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
     // since setup; the owner's refresh (6) and the logins (7) need it open.
     // No App reaches it before the re-point (8); an undo quiesces it again
     // before the drop.
-    run.ops.allow_conn(to, &db, ConnMode::On).map_err(|e| format!("open the new copy to K2's roles: {e}"))?;
+    run.ops.allow_conn(to, &db, ConnMode::On).map_err(|e| format!("open the new copy to {PRODUCT_NAME}'s roles: {e}"))?;
     // 5. sequences, exact (L21).
     let seqs = run.ops.sql(from, &db, catalog::sequences_sql())?;
     let script = catalog::setval_script(&seqs).ok_or("sequences: unexpected answer")?;
@@ -1081,7 +1083,7 @@ fn switch_steps(run: &mut Run, dops: &dyn DualOps, store: &dyn RunStore, dr: &mu
     let props: Value = serde_json::from_str(&run.ops.sql(from, &db, catalog::db_props_sql())?).map_err(|_| "database properties are not JSON")?;
     let owner = props["owner"].as_str().ok_or("the database has no owner")?.to_string();
     let logins = run.env.logins(&db)?;
-    let owner_pw = logins.iter().find(|(r, _)| *r == owner).map(|(_, p)| p.clone()).ok_or("the database's owner is not K2's migrator")?;
+    let owner_pw = logins.iter().find(|(r, _)| *r == owner).map(|(_, p)| p.clone()).ok_or(concat!("the database's owner is not ", product_name!(), "'s migrator"))?;
     dops.refresh_matviews(to, to_port, &db, &owner, &owner_pw, refresh_secs).map_err(|e| format!("refresh materialized views: {e}"))?;
     // 7. verify: every row counted, the catalog fingerprint, sequences.
     run.at(Step::Verify, MoveState::Verifying)?;
@@ -1172,10 +1174,10 @@ fn finish_forward(run: &mut Run, dops: &dyn DualOps, dr: &mut DualRun, from: Maj
         run.p.warnings.push(format!("ANALYZE on {to}: {e}"));
     }
     if let Err(e) = run.env.rerun_k2_setup(to, &db) {
-        run.p.warnings.push(format!("K2 setup on {to}: {e}"));
+        run.p.warnings.push(format!("{PRODUCT_NAME} setup on {to}: {e}"));
     }
     if let Err(e) = run.env.verify_k2(to, &db) {
-        run.p.warnings.push(format!("K2 check through the guest door: {e}"));
+        run.p.warnings.push(format!("{PRODUCT_NAME} check through the guest door: {e}"));
     }
     // 10. record: the replication role goes while the source is still
     // reachable by the helper (security review A-M1: closed first, the
@@ -1186,7 +1188,7 @@ fn finish_forward(run: &mut Run, dops: &dyn DualOps, dr: &mut DualRun, from: Maj
         Ok(_) => {
             dr.objects.source_setup = false;
         }
-        Err(e) => run.p.warnings.push(format!("drop the replication role: {e} (the doctor lists it; k2 db doctor)")),
+        Err(e) => run.p.warnings.push(format!("drop the replication role: {e} (the doctor lists it; {CLI_NAME} db doctor)")),
     }
     if let Err(e) = run.ops.allow_conn(from, &db, ConnMode::Off) {
         run.p.warnings.push(format!("close the kept source: {e}"));
@@ -1203,7 +1205,7 @@ fn finish_forward(run: &mut Run, dops: &dyn DualOps, dr: &mut DualRun, from: Maj
         &format!("Database {db} moved {from} → {to}"),
         &format!(
             "Database {db} moved {from} → {to} live by {}; writes paused for {} s. The {from} copy is kept (closed) for 14 days: \
-             `k2 db upgrade {db} --rollback --yes` (writes made on {to} since the switch are not carried back).",
+             `{CLI_NAME} db upgrade {db} --rollback --yes` (writes made on {to} since the switch are not carried back).",
             run.p.actor,
             paused.map(|s| s.to_string()).unwrap_or_else(|| "a few".into())
         ),
@@ -1348,7 +1350,7 @@ pub fn sweep_orphans(ops: &dyn ClusterOps, dops: &dyn DualOps, store: &dyn RunSt
                         Err(e) => failures.push(format!("{}/{id}: {e}", c.major)),
                     }
                 }
-                _ if active == Some(false) => failures.push(format!("{}/k2_dual_{id}: an inactive slot holding WAL that K2 can't tie to a run", c.major)),
+                _ if active == Some(false) => failures.push(format!("{}/k2_dual_{id}: an inactive slot holding WAL that {PRODUCT_NAME} can't tie to a run", c.major)),
                 _ => {}
             }
         }
@@ -1372,7 +1374,7 @@ pub fn prepare_live(ops: &dyn ClusterOps, dops: &dyn DualOps, env: &dyn MoveEnv,
     dops.restart_cluster(m)?;
     let after = ops.sql(m, "postgres", "SHOW wal_level;\n")?;
     if after.trim() != "logical" {
-        return Err(format!("restarted, but Postgres {m} still runs with wal_level = {}; see k2 db doctor", after.trim()));
+        return Err(format!("restarted, but Postgres {m} still runs with wal_level = {}; see {CLI_NAME} db doctor", after.trim()));
     }
     env.audit("db-upgrade-prepare-live", json!({"major": m, "walLevel": "logical"}));
     Ok(json!({"major": m, "restarted": true, "walLevel": "logical"}))

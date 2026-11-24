@@ -16,6 +16,7 @@
 //! floor (Member) and its scoped-inbox gate.
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 /// Every desktop mirror route (all POST).
 pub const ROUTES: &[&str] = &[
@@ -44,7 +45,7 @@ pub fn local_only() -> CliResponse {
         "403 Forbidden",
         serde_json::json!({
             "error": "desktop_local_only",
-            "message": "This route belongs to this computer's own K2 app. Only this computer's owner token may call it.",
+            "message": concat!("This route belongs to this computer's own ", product_name!(), " app. Only this computer's owner token may call it."),
         }),
     )
 }

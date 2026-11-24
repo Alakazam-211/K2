@@ -34,6 +34,7 @@ use serde_json::{json, Value as J};
 use k2_core::deploy::{self, store};
 
 use super::routes::{db_err, no, Refusal};
+use k2_core::brand::CLI_NAME;
 
 /// The refusal code.
 pub const BOX_BUDGET_FULL: &str = "box_budget_full";
@@ -223,7 +224,7 @@ pub(crate) fn check_memory(app_id: &str, new_limit_bytes: Option<i64>) -> Result
         409,
         format!(
             "this box's App memory is full: {} MiB asked, {} MiB free of {} MiB (Apps hold {} MiB). The biggest: {}. \
-             Ask an agent to lower its App (k2 msg <address> …), lower one of yours, or ask the owner to size the pool \
+             Ask an agent to lower its App ({CLI_NAME} msg <address> …), lower one of yours, or ask the owner to size the pool \
              (K2_APPS_MEMORY_POOL).",
             mib(asked),
             mib(pool.size.saturating_sub(used).max(0)),

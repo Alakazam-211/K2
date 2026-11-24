@@ -47,6 +47,8 @@ use serde::Serialize;
 use serde_json::{json, Value as J};
 
 use super::routes::{app_for, json_body, need_build, need_credential, no, s, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// Pause between Apps (R11).
 pub const GAP: Duration = Duration::from_secs(10);
@@ -253,8 +255,8 @@ fn defer_app(ops: &dyn WaveOps, app: &AppRow, code: &'static str, detail: String
         defer::SESSIONS_IN_MEMORY => Some((
             format!("App {} waits for you to update it", app.app_id),
             format!(
-                "K2 updated, and the App {} keeps its sign-ins in memory: moving it to a fresh instance signs everyone \
-                 out. Choose one: re-host now (everyone signs in again): k2 app rehost {} --yes ; or deploy the newer \
+                "{PRODUCT_NAME} updated, and the App {} keeps its sign-ins in memory: moving it to a fresh instance signs everyone \
+                 out. Choose one: re-host now (everyone signs in again): {CLI_NAME} app rehost {} --yes ; or deploy the newer \
                  template first (its sessions survive); or leave it on the current instance (it keeps running).",
                 app.app_id, app.app_id
             ),
@@ -262,8 +264,8 @@ fn defer_app(ops: &dyn WaveOps, app: &AppRow, code: &'static str, detail: String
         defer::NEEDS_HANDOVER | defer::NO_HEADROOM => Some((
             format!("App {} waits for you to update it", app.app_id),
             format!(
-                "K2 updated, and the App {} can't run two copies at once ({detail}). Its setting is \"skip and let me \
-                 update it myself\". Choose one: update now with a short pause: k2 app rehost {} --pause ; or leave it on \
+                "{PRODUCT_NAME} updated, and the App {} can't run two copies at once ({detail}). Its setting is \"skip and let me \
+                 update it myself\". Choose one: update now with a short pause: {CLI_NAME} app rehost {} --pause ; or leave it on \
                  the current instance (it keeps running). The App panel's update setting changes the default.",
                 app.app_id, app.app_id
             ),
@@ -281,8 +283,8 @@ fn defer_app(ops: &dyn WaveOps, app: &AppRow, code: &'static str, detail: String
         ops.agent_note(
             app,
             &format!(
-                "[k2 apps] App {}: K2 updated to {} but hasn't moved the App to the new runtime for over an hour ({code}: {detail}). \
-                 It keeps running on its current instance. k2 app rehost status {}",
+                "[k2 apps] App {}: {PRODUCT_NAME} updated to {} but hasn't moved the App to the new runtime for over an hour ({code}: {detail}). \
+                 It keeps running on its current instance. {CLI_NAME} app rehost status {}",
                 app.app_id,
                 ops.k2_version(),
                 app.app_id
@@ -326,7 +328,7 @@ pub fn turn(ops: &dyn WaveOps, app: &AppRow, forced: Option<Forced>) -> Turn {
     };
     if forced.is_none() {
         if ops.held_failed(app) {
-            return defer_app(ops, app, defer::REHOST_FAILED, format!("its re-host on K2 {} failed; k2 app rehost {} tries again", ops.k2_version(), app.app_id));
+            return defer_app(ops, app, defer::REHOST_FAILED, format!("its re-host on {PRODUCT_NAME} {} failed; {CLI_NAME} app rehost {} tries again", ops.k2_version(), app.app_id));
         }
         if ops.rehost_off() {
             return defer_app(ops, app, defer::POLICY_OFF, format!("{} is off on this box", rh::REHOST_ENV));
@@ -363,7 +365,7 @@ pub fn turn(ops: &dyn WaveOps, app: &AppRow, forced: Option<Forced>) -> Turn {
     ops.audit(&app.app_id, "rehost_due", json!({ "why": why, "pause": pause, "k2Version": ops.k2_version() }));
     set_app(&app.app_id, "running", None, Some(format!("due: {why}{}", if pause { "; a short pause" } else { "" })), None);
     set_run(&app.app_id, pause, forced.is_some());
-    let reason = format!("K2 updated to {}", ops.k2_version());
+    let reason = format!("{PRODUCT_NAME} updated to {}", ops.k2_version());
     match ops.rehost(app, pause, &reason) {
         Outcome::Live(dep) => {
             set_app(&app.app_id, "done", None, None, Some(&dep));
@@ -386,8 +388,8 @@ fn mark_failed(ops: &dyn WaveOps, app: &AppRow, dep: &str, why: &str) {
         ops.agent_note(
             app,
             &format!(
-                "[k2 apps] App {}: K2 updated to {} and its re-host onto the new runtime failed ({why}); it keeps running on its \
-                 previous instance. K2 won't try again on this version; k2 app rehost {} does. Read why: k2 app history {}",
+                "[k2 apps] App {}: {PRODUCT_NAME} updated to {} and its re-host onto the new runtime failed ({why}); it keeps running on its \
+                 previous instance. {PRODUCT_NAME} won't try again on this version; {CLI_NAME} app rehost {} does. Read why: {CLI_NAME} app history {}",
                 app.app_id,
                 ops.k2_version(),
                 app.app_id,
@@ -508,10 +510,10 @@ fn breaker(ops: &dyn WaveOps) {
     set_wave("stopped", Some(why.clone()));
     ops.audit("-", "rehost_breaker", json!({ "why": why, "k2Version": ops.k2_version() }));
     ops.owner_notice(
-        "K2 stopped moving Apps to its new runtime",
+        concat!(product_name!(), " stopped moving Apps to its new runtime"),
         &format!(
-            "After the update to K2 {}, {why}, so K2 stopped the re-host wave. Every App keeps running on its current instance. \
-             See k2 app rehost status; each App can be moved by hand with k2 app rehost <app>.",
+            "After the update to {PRODUCT_NAME} {}, {why}, so {PRODUCT_NAME} stopped the re-host wave. Every App keeps running on its current instance. \
+             See {CLI_NAME} app rehost status; each App can be moved by hand with {CLI_NAME} app rehost <app>.",
             ops.k2_version()
         ),
     );
@@ -823,7 +825,7 @@ pub fn engine_label(has_live: bool, fp: Option<&rh::Fingerprint>) -> String {
         None => "unknown".into(),
         Some(f) => match f.engine_version.as_deref().filter(|v| !v.is_empty()) {
             Some(v) => v.to_string(),
-            None => format!("{}, K2 {}", if f.wall.is_empty() { "no engine" } else { f.wall.as_str() }, f.k2_version),
+            None => format!("{}, {PRODUCT_NAME} {}", if f.wall.is_empty() { "no engine" } else { f.wall.as_str() }, f.k2_version),
         },
     }
 }

@@ -85,7 +85,7 @@
 //! skip, dismiss and finish; to everyone when Kessel or the Chief of Staff is
 //! made (with `projects_changed`).
 
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 use k2_core::first_run::{self, Action, Viewer};
 use k2_core::notify_prefs::People;
 use serde_json::{json, Value};
@@ -94,6 +94,7 @@ use crate::cli_response::CliResponse;
 use crate::homes_routes::PersonRefusal;
 use crate::notify_routes::Actor;
 use crate::session_events::SessionEvent;
+use k2_core::brand::CLI_NAME;
 
 pub const STATUS_PATH: &str = "/cli/first-run/status";
 pub const HIDE_PATH: &str = "/cli/first-run/hide";
@@ -190,7 +191,7 @@ fn person_for(actor: &Actor) -> Result<String, CliResponse> {
         PersonRefusal::Reserved => error(
             "403 Forbidden",
             "first_run_person_only",
-            "this login's name is one K2 uses for the server's owner and its agents, so it has no setup list; the owner can remove it in Settings → Admin Access and add the person under another name",
+            concat!("this login's name is one ", product_name!(), " uses for the server's owner and its agents, so it has no setup list; the owner can remove it in Settings → Admin Access and add the person under another name"),
         ),
     })
 }
@@ -355,7 +356,7 @@ fn status_answer(person: String, viewer: Viewer, action: Option<Action>, text: b
             return error(
                 "400 Bad Request",
                 "unknown_row",
-                format!("{row:?} is not a row on your setup list (k2 setup shows them)"),
+                format!("{row:?} is not a row on your setup list ({CLI_NAME} setup shows them)"),
             )
         }
         Err(first_run::Error::Store(e)) => return error("500 Internal Server Error", "store", e),
@@ -767,7 +768,7 @@ fn signed_in_tool(asked: Option<String>) -> Result<String, CliResponse> {
         return Err(error(
             "400 Bad Request",
             "tool_not_signed_in",
-            format!("{tool} isn't signed in on this server: sign in first (Settings → Language Models → Subs / Tokens → Add a token, or k2 llm tokens add {tool} <label>)"),
+            format!("{tool} isn't signed in on this server: sign in first (Settings → Language Models → Subs / Tokens → Add a token, or {CLI_NAME} llm tokens add {tool} <label>)"),
         ));
     }
     Ok(tool)
@@ -846,7 +847,7 @@ fn kessel_handle(asked: Option<String>) -> Result<String, CliResponse> {
             "kessel_handle_taken",
             format!(
                 "the handles {DEFAULT_HANDLE} and {FALLBACK_HANDLE} are both taken by other agents: \
-                 pass another with --handle (k2 setup kessel --handle <h>), or free one of them"
+                 pass another with --handle ({CLI_NAME} setup kessel --handle <h>), or free one of them"
             ),
         )),
     }
@@ -1062,7 +1063,7 @@ fn handle_kessel(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
         // `<hire root>/<handle>` is already there and isn't a Kessel the
         // template made: Kessel's folder is taken, so another handle.
         Err(e) => {
-            return apply_error(&e, format!("{path} is already there and isn't Kessel's: pick another handle (k2 setup kessel --handle <h>)"))
+            return apply_error(&e, format!("{path} is already there and isn't Kessel's: pick another handle ({CLI_NAME} setup kessel --handle <h>)"))
         }
     };
     {
@@ -1100,7 +1101,7 @@ fn after_make(report: &k2_core::hire::template::ApplyReport) {
 fn handle_cos_start(actor: &Actor) -> CliResponse {
     let kessel = match seat_kessel() {
         Ok(Some(k)) => k,
-        Ok(None) => return error("409 Conflict", "needs_kessel", "there's no Kessel yet: make Kessel first (k2 setup kessel)"),
+        Ok(None) => return error("409 Conflict", "needs_kessel", concat!("there's no Kessel yet: make Kessel first (", cli_name!(), " setup kessel)")),
         Err(r) => return r,
     };
     #[cfg(not(test))]
@@ -1144,12 +1145,12 @@ pub fn handle_chief_of_staff_as(body: &[u8], caller: &crate::sidecar_routes::Cal
         Ok(k) => k,
         Err(r) => return r,
     };
-    let only = "only Kessel's own pinned chat can hire the Chief of Staff (k2 setup chief-of-staff); ask Kessel on its Thread";
+    let only = concat!("only Kessel's own pinned chat can hire the Chief of Staff (", cli_name!(), " setup chief-of-staff); ask Kessel on its Thread");
     let kessel = match (caller, kessel) {
         (Caller::Agent(a), Some(kessel)) if a.project_id == kessel.workspace_id => {
             if a.map_key.as_deref() != Some(kessel.workspace_id.as_str()) || a.sandboxed {
                 return kessel_session_only(
-                    "a sidecar can't hire the Chief of Staff: ask Kessel's pinned chat (k2 msg <Kessel's handle>) to run k2 setup chief-of-staff",
+                    concat!("a sidecar can't hire the Chief of Staff: ask Kessel's pinned chat (", cli_name!(), " msg <Kessel's handle>) to run ", cli_name!(), " setup chief-of-staff"),
                 );
             }
             kessel

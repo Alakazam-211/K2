@@ -85,10 +85,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::session::{BlobSession, Config, Demotion, PoolStats, Session, SessionError, SessionManager};
 use k2_mpc_base::store::{CommitDurability, DocKey, DocStore, StoreSettings, StoreSettingsError};
+use k2_core::brand::PRODUCT_NAME;
 
 /// The vendored kit writes docs back to their files (its C4, base
 /// `e7c1fd6`). `docs-md-v1` is advertised while the runtime is up.
@@ -203,8 +204,8 @@ impl Unavailable {
     pub fn message(&self) -> String {
         match self {
             // Lazy start (MC-6): with every core off the runtime never starts.
-            Unavailable::NotStarted if !cores::any_on() => "live docs are off on this server: every multiplayer core is off. \
-                 The owner or an Admin turns one on in Settings → Cores → Multiplayer (k2 doc cores)"
+            Unavailable::NotStarted if !cores::any_on() => concat!("live docs are off on this server: every multiplayer core is off. \
+                 The owner or an Admin turns one on in Settings → Cores → Multiplayer (", cli_name!(), " doc cores)")
                 .to_string(),
             Unavailable::NotStarted => "live docs are still starting".to_string(),
             Unavailable::Failed(f) if f.newer_k2 => f.why.clone(),
@@ -420,8 +421,8 @@ pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
     use k2_mpc_base::store::StoreError;
     match e {
         StoreError::Newer { found } => format!(
-            "the docs store was written by a newer K2 (store format {found}; this K2 reads up to {}). \
-             A box that opened documents with a newer K2 can't go back to an older K2: update K2 again",
+            "the docs store was written by a newer {PRODUCT_NAME} (store format {found}; this {PRODUCT_NAME} reads up to {}). \
+             A box that opened documents with a newer {PRODUCT_NAME} can't go back to an older {PRODUCT_NAME}: update {PRODUCT_NAME} again",
             k2_mpc_base::store::STORE_FORMAT_READ
         ),
         StoreError::NativeWithoutEngine | StoreError::UnknownFeatures { .. } => NATIVE_STORE_FROM_NEWER_K2.to_string(),
@@ -430,9 +431,9 @@ pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
 }
 
 /// What a store a newer K2 wrote with native-engine documents says.
-const NATIVE_STORE_FROM_NEWER_K2: &str = "This box's document store was written by a newer K2 \
-     (it has native-engine documents, a Beta). This K2 can't open it: update K2 to open live documents again. \
-     Nothing in the store was changed, and the files on disk hold their latest text.";
+const NATIVE_STORE_FROM_NEWER_K2: &str = concat!("This box's document store was written by a newer ", product_name!(), " \
+     (it has native-engine documents, a Beta). This ", product_name!(), " can't open it: update ", product_name!(), " to open live documents again. \
+     Nothing in the store was changed, and the files on disk hold their latest text.");
 
 /// Whether a newer K2 wrote the store (its line stands alone).
 fn store_is_newer_k2s(e: &k2_mpc_base::store::StoreError) -> bool {

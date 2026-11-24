@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
 
 use super::{MoveProgress, MoveState};
+use k2_core::brand::CLI_NAME;
+use k2_core::product_name;
 
 /// What `--acknowledge-failed` writes in front of a failed row's error.
 pub const ACK_PREFIX: &str = "acknowledged: ";
@@ -100,8 +102,8 @@ pub fn expire_recovery(now: i64) -> Option<String> {
     }
     let dbs = pending().join(", ");
     let msg = format!(
-        "boot recovery of {} did not finish within {} minutes; see the daemon log ([db] upgrade) and `k2 db upgrade <db> --check`, \
-         then `k2 db upgrade --acknowledge-failed` (restarting the daemon tries the recovery again)",
+        "boot recovery of {} did not finish within {} minutes; see the daemon log ([db] upgrade) and `{CLI_NAME} db upgrade <db> --check`, \
+         then `{CLI_NAME} db upgrade --acknowledge-failed` (restarting the daemon tries the recovery again)",
         if dbs.is_empty() { "a move" } else { &dbs },
         RECOVERY_TIMEOUT_SECS / 60
     );
@@ -131,12 +133,12 @@ pub fn refusal_code(e: &str) -> &'static str {
 fn take(db: &str, during_recovery: bool) -> Result<Busy, String> {
     let mut w = lock();
     if !during_recovery && recovering() {
-        return Err("recovering: K2 is finishing or undoing a move the last daemon was in".into());
+        return Err(concat!("recovering: ", product_name!(), " is finishing or undoing a move the last daemon was in").into());
     }
     if let Some(f) = &w.failed {
         if !during_recovery {
             return Err(format!(
-                "failed_latched: an earlier move failed and needs the owner ({f}); `k2 db upgrade --acknowledge-failed` after fixing it"
+                "failed_latched: an earlier move failed and needs the owner ({f}); `{CLI_NAME} db upgrade --acknowledge-failed` after fixing it"
             ));
         }
     }

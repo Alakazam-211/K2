@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use crate::mail::dns_verify::{join_chunks, DnsError, DnsResolver};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A found policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +143,7 @@ pub fn check(domain: &str, now: i64) -> super::R<Found> {
         }
     }
     let r = super::engine::dns()?;
-    let d = lookup(r.as_ref(), &key).map_err(|e| super::fail(409, "dmarc_missing", format!("K2 couldn't look up _dmarc for {key} ({e}); try again shortly")))?;
+    let d = lookup(r.as_ref(), &key).map_err(|e| super::fail(409, "dmarc_missing", format!("{PRODUCT_NAME} couldn't look up _dmarc for {key} ({e}); try again shortly")))?;
     with_cache(|c| c.insert(key.clone(), (d.clone(), now)));
     found_or_missing(d, &key)
 }
@@ -155,7 +156,7 @@ fn found_or_missing(d: Dmarc, domain: &str) -> super::R<Found> {
             "dmarc_missing",
             format!(
                 "{domain} has no DMARC record (nor its parent domain). Publish one before sending, for example \
-                 _dmarc.{domain} TXT \"v=DMARC1; p=none\" (any policy works); k2 notifications email sender list shows the state"
+                 _dmarc.{domain} TXT \"v=DMARC1; p=none\" (any policy works); {CLI_NAME} notifications email sender list shows the state"
             ),
         )),
     }

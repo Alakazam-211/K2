@@ -55,6 +55,7 @@ use k2_core::skin::SkinPass;
 use serde_json::{json, Value as J};
 
 use crate::cli_response::CliResponse;
+use k2_core::{cli_name, product_name};
 
 pub const ROUTE: &str = "/cli/skin/guests/rooms";
 /// `app.rooms` (AC1).
@@ -105,7 +106,7 @@ pub fn app_pass_required() -> CliResponse {
 }
 
 pub fn pass_invalid() -> CliResponse {
-    error(401, "pass_invalid", "the pass is expired or revoked: read K2_PASS_FILE again (K2 rotates it)", None)
+    error(401, "pass_invalid", concat!("the pass is expired or revoked: read K2_PASS_FILE again (", product_name!(), " rotates it)"), None)
 }
 
 /// The gateway link a request came in on (the dispatcher reads the
@@ -187,7 +188,7 @@ pub fn handle(pass: Option<SkinPass>, link: Option<&OnLink>, is_post: bool, body
             return error(
                 403,
                 "grant_required",
-                "the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)",
+                concat!("the owner hasn't granted this App guests:rooms (", cli_name!(), " app grant <app> --kind guests-rooms)"),
                 None,
             )
         }
@@ -214,7 +215,7 @@ fn grant_required() -> CliResponse {
     error(
         403,
         "grant_required",
-        "the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)",
+        concat!("the owner hasn't granted this App guests:rooms (", cli_name!(), " app grant <app> --kind guests-rooms)"),
         None,
     )
 }

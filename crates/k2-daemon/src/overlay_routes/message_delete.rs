@@ -34,6 +34,8 @@
 //! against the login that posted there.
 
 use super::*;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) const ROUTE: &str = "/cli/thread/message/delete";
 /// `/boot-status` feature key: a client offers Delete message only with it.
@@ -62,7 +64,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, session_author: &str) -> 
     };
     // An agent's passport never deletes a person's message.
     if principal_is_bound(params) || crate::caller_workspace::principal_from_params(params).is_some() {
-        return error_json("403 Forbidden", "person_only", format!("{ONLY_THE_SENDER}; an agent can't delete a person's message (k2 thread withdraw closes its own cards)"));
+        return error_json("403 Forbidden", "person_only", format!("{ONLY_THE_SENDER}; an agent can't delete a person's message ({CLI_NAME} thread withdraw closes its own cards)"));
     }
     let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
@@ -124,7 +126,7 @@ fn message_ref(params: &HashMap<String, String>) -> Result<overlay::MessageRef, 
         (Some(id), None) => Ok(overlay::MessageRef::Id(id)),
         (None, Some(s)) => match s.parse::<i64>() {
             Ok(n) if n >= 1 => Ok(overlay::MessageRef::Seq(n)),
-            _ => Err(usage("seq is a whole number >= 1 (the [N] in k2 thread <addr>)")),
+            _ => Err(usage(concat!("seq is a whole number >= 1 (the [N] in ", cli_name!(), " thread <addr>)"))),
         },
         (None, None) => Err(usage("missing id or seq (which message to delete)")),
     }

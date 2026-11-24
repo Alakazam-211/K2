@@ -48,6 +48,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::apps::gateway::LinkCtx;
 use crate::cli_response::CliResponse;
 use crate::socket_access::RoomAccess;
+use k2_core::product_name;
 
 /// The daemon environment switch; `off` (or `0`/`false`/`no`) = no hub, no
 /// `me.events`, no `live-access-v1` feature key.
@@ -761,7 +762,7 @@ async fn refuse(stream: &mut TcpStream, r: CliResponse) {
 
 /// The database couldn't say. An App's pass gets no detail: the log has it.
 fn unreadable_refusal() -> CliResponse {
-    refusal("500 Internal Server Error", "failed", "K2 couldn't read this just now; try again")
+    refusal("500 Internal Server Error", "failed", concat!(product_name!(), " couldn't read this just now; try again"))
 }
 
 /// A credential that isn't an App pass: never an owner or login socket.

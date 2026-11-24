@@ -29,6 +29,7 @@ use serde_json::{json, Map, Value as J};
 
 use crate::permission::actions::Ctx;
 use crate::permission::{answer, limits, present, store};
+use k2_core::brand::PRODUCT_NAME;
 
 /// The catalog actions.
 pub(crate) const SIGN: &str = "zen.sign";
@@ -55,7 +56,7 @@ pub(crate) fn changes_for(widget: &str, version: &str) -> String {
         Ok(None) => format!("This version of {widget} is no longer live."),
         Err(e) => {
             k2_core::log_debug!("[zen-sign] changes for {widget}: {e}");
-            format!("K2 couldn't read {widget}'s signatures just now.")
+            format!("{PRODUCT_NAME} couldn't read {widget}'s signatures just now.")
         }
     }
 }

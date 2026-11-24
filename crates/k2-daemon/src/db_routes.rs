@@ -24,6 +24,7 @@ use crate::cli_response::CliResponse;
 
 use k2_core::db_ops as dops;
 use k2_core::projects_ops as pops;
+use k2_core::brand::CLI_NAME;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -273,7 +274,7 @@ fn lint_preset_env(env: Option<&str>) -> Result<(), CliResponse> {
                 status: "400 Bad Request",
                 content_type: "application/json",
                 body: serde_json::json!({ "error": { "code": "use_a_vault_ref", "hint": format!(
-                    "{k} looks like a secret; save it with `k2 vault set {k} --scope server < value` and put k2v://server/{k} here"
+                    "{k} looks like a secret; save it with `{CLI_NAME} vault set {k} --scope server < value` and put k2v://server/{k} here"
                 ) } })
                 .to_string(),
             });

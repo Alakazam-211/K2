@@ -52,6 +52,8 @@ use crate::cli_response::CliResponse;
 use crate::label_owner;
 use crate::session_token::HookPrincipal;
 use crate::splice_guard;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// Agent creates + deletes allowed per workspace per rolling hour.
 pub const AGENT_WRITES_PER_HOUR: usize = 20;
@@ -220,7 +222,7 @@ fn agent_gate(
                         "label_not_claimed",
                         format!(
                             "'{label}' is not claimed by this workspace; an agent may only change \
-                             or remove its own labels (k2 publish subdomain claim {label})"
+                             or remove its own labels ({CLI_NAME} publish subdomain claim {label})"
                         ),
                     ))
                 }
@@ -401,15 +403,15 @@ pub fn handle(body: &[u8], principal: Option<&HookPrincipal>) -> CliResponse {
             "503 Service Unavailable",
             "token_unreadable",
             format!(
-                "the K2 Connect tunnel token is in the K2 vault, which could not be read \
+                "the K2 Connect tunnel token is in the {PRODUCT_NAME} vault, which could not be read \
                  right now ({e}); nothing was sent — try again once the vault is readable"
             ),
         ),
         Err(ProxyError::NoToken) => err(
             "400 Bad Request",
             "no_token",
-            "no tunnel token on this device — pick your subdomain under Address in \
-             Settings → Network → Tunnel (or run 'k2 tunnel start') first",
+            concat!("no tunnel token on this device — pick your subdomain under Address in \
+             Settings → Network → Tunnel (or run '", cli_name!(), " tunnel start') first"),
         ),
         Err(ProxyError::Unreachable(m)) => err("502 Bad Gateway", "unreachable", m),
     }

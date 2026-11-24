@@ -36,6 +36,8 @@ use serde_json::{json, Value as J};
 
 use super::catalog_job::{self as job, Hooks};
 use super::routes::{b, db_err, json_body, need_build, need_credential, no, s, target_ws, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const LIST: &str = "/cli/app/catalog";
 pub const SHOW: &str = "/cli/app/catalog/show";
@@ -110,12 +112,12 @@ impl Why {
 impl Facts {
     pub(crate) fn live() -> Facts {
         let sew = match crate::sew::store::load() {
-            None => Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Cores → Chat / Voice", Some("k2 hostchat enable"))),
+            None => Err(Why::new("sew_not_installed", "Needs chat hosting on this server: turn it on in Settings → Cores → Chat / Voice", Some(concat!(cli_name!(), " hostchat enable")))),
             Some(r) if r.status == "removed" => {
-                Err(Why::new("sew_not_installed", "Chat hosting was removed from this server: turn it on again in Settings → Cores → Chat / Voice", Some("k2 hostchat enable")))
+                Err(Why::new("sew_not_installed", "Chat hosting was removed from this server: turn it on again in Settings → Cores → Chat / Voice", Some(concat!(cli_name!(), " hostchat enable"))))
             }
             Some(r) if !matches!(r.status.as_str(), "running" | "degraded") => {
-                Err(Why::new("sew_not_running", format!("Chat hosting isn't running on this server (it is {})", r.status.replace('_', " ")), Some("k2 hostchat status")))
+                Err(Why::new("sew_not_running", format!("Chat hosting isn't running on this server (it is {})", r.status.replace('_', " ")), Some(concat!(cli_name!(), " hostchat status"))))
             }
             Some(r) => Ok((crate::sew::supervisor::row_provider(&r), r.installed_version.clone())),
         };
@@ -258,14 +260,14 @@ fn entry_json(e: &Entry, f: &Facts) -> R<J> {
 fn list(who: &Who, cat: &Catalog, f: &Facts) -> R<J> {
     need_credential(who)?;
     let entries: Vec<J> = cat.entries.iter().map(|e| entry_json(e, f)).collect::<R<_>>()?;
-    Ok(json!({ "ok": true, "schema": cat.schema, "entries": entries, "trust": "compiled into this K2 release (sha256 pins)" }))
+    Ok(json!({ "ok": true, "schema": cat.schema, "entries": entries, "trust": concat!("compiled into this ", product_name!(), " release (sha256 pins)") }))
 }
 
 fn entry_of<'a>(cat: &'a Catalog, raw: Option<&str>) -> R<&'a Entry> {
-    let id = raw.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the catalog entry (like sew/hearth; k2 app catalog lists them)"))?;
+    let id = raw.ok_or_else(|| no(codes::BAD_REQUEST, 400, concat!("name the catalog entry (like sew/hearth; ", cli_name!(), " app catalog lists them)")))?;
     cat.entry(id).ok_or_else(|| {
         let have: Vec<&str> = cat.entries.iter().map(|e| e.entry.as_str()).collect();
-        no(sc::ENTRY_NOT_FOUND, 404, format!("no catalog entry '{id}' (this K2 has: {})", have.join(", ")))
+        no(sc::ENTRY_NOT_FOUND, 404, format!("no catalog entry '{id}' (this {PRODUCT_NAME} has: {})", have.join(", ")))
     })
 }
 
@@ -330,7 +332,7 @@ fn taken_refusal(e: &Entry, label: &str, holder: String, install_id: &str, ws: &
         sc::ADDRESS_TAKEN,
         409,
         format!(
-            "'{label}' is used by {holder}. Pick another address (suggested: {sug}): k2 app install --catalog {} --address {sug}, or --address auto to take the suggestion",
+            "'{label}' is used by {holder}. Pick another address (suggested: {sug}): {CLI_NAME} app install --catalog {} --address {sug}, or --address auto to take the suggestion",
             e.entry
         ),
     );
@@ -403,7 +405,7 @@ fn install_id(e: &Entry, asked: Option<&str>) -> R<String> {
                 return Err(no(codes::APP_ID_INVALID, 400, format!("App id '{id}' is too long or has '--' in it: at most 32 characters")));
             }
             if busy(&id) {
-                return Err(no(codes::APP_EXISTS, 409, format!("App id '{id}' is taken on this box (k2 app list)")));
+                return Err(no(codes::APP_EXISTS, 409, format!("App id '{id}' is taken on this box ({CLI_NAME} app list)")));
             }
             Ok(id)
         }
@@ -445,7 +447,7 @@ pub(crate) fn install_with(who: &Who, v: &J, cat: &Catalog, f: &Facts, h: &dyn H
         return Err(no(
             "custom_domain_later",
             400,
-            "a custom domain at deploy comes in a later K2: deploy with a K2 address, then add yours with k2 app domain add <app> <host>",
+            concat!("a custom domain at deploy comes in a later ", product_name!(), ": deploy with a K2 address, then add yours with ", cli_name!(), " app domain add <app> <host>"),
         ));
     }
     if !f.linux {
@@ -464,7 +466,7 @@ pub(crate) fn install_with(who: &Who, v: &J, cat: &Catalog, f: &Facts, h: &dyn H
             active_jobs().ok().and_then(|v| v.into_iter().find(|j| j.entry == e.entry)).map(|j| format!("{} (installing now)", j.app_id))
         });
         if let Some(app) = existing {
-            let mut r = no(sc::ONE_PER_BOX, 409, format!("{} is one per box and is already deployed as {app} (k2 app status {app})", e.name));
+            let mut r = no(sc::ONE_PER_BOX, 409, format!("{} is one per box and is already deployed as {app} ({CLI_NAME} app status {app})", e.name));
             r.extra = Some(json!({ "existing": app }));
             return Err(r);
         }
@@ -473,7 +475,7 @@ pub(crate) fn install_with(who: &Who, v: &J, cat: &Catalog, f: &Facts, h: &dyn H
     let addr = resolve_address(e, &app_id, &ws.id, s(v, "address"))?;
     let rebind = b(v, "rebindMeet");
     if rebind && !job::is_person(who) {
-        return Err(no(codes::FORBIDDEN, 403, "releasing Sew's Meetings Space from a removed install is a person's call (the owner runs it from a terminal outside K2 or Settings)"));
+        return Err(no(codes::FORBIDDEN, 403, concat!("releasing Sew's Meetings Space from a removed install is a person's call (the owner runs it from a terminal outside ", product_name!(), " or Settings)")));
     }
     let dry = b(v, "dryRun");
     let (lines, approves) = will_do(e, Some(&pin));
@@ -570,7 +572,7 @@ fn job_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     };
     let rows: Vec<JobRow> = rows.into_iter().filter(|j| may_see(who, j)).collect();
     if let Some(id) = param(params, "id") {
-        let j = rows.first().ok_or_else(|| no("job_not_found", 404, format!("no install job '{id}' (k2 app catalog job)")))?;
+        let j = rows.first().ok_or_else(|| no("job_not_found", 404, format!("no install job '{id}' ({CLI_NAME} app catalog job)")))?;
         return Ok(json!({ "ok": true, "job": job::job_view(j) }));
     }
     Ok(json!({ "ok": true, "jobs": rows.iter().map(job::job_view).collect::<Vec<_>>() }))
@@ -578,7 +580,7 @@ fn job_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
 
 fn retry(who: &Who, v: &J) -> R<J> {
     need_build(who)?;
-    let id = s(v, "job").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the job (k2 app catalog job)"))?;
+    let id = s(v, "job").ok_or_else(|| no(codes::BAD_REQUEST, 400, concat!("name the job (", cli_name!(), " app catalog job)")))?;
     let db = k2_core::db::shared();
     let mut j = {
         let conn = db.lock();

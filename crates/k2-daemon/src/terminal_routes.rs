@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use k2_core::log_debug;
 
 use k2_core::session::{registry, Frame, SessionId};
@@ -391,7 +391,7 @@ fn resolve_screen(params: &HashMap<String, String>) -> Result<Screen, CliRespons
                 }
             }
             return Err(CliResponse::bad_request(format!(
-                "no live session for sidecar '{ws}' — it may be asleep (see `k2 sessions --all`; `k2 msg <address>` wakes it)"
+                "no live session for sidecar '{ws}' — it may be asleep (see `{CLI_NAME} sessions --all`; `{CLI_NAME} msg <address>` wakes it)"
             )));
         }
         if let Some(crate::workspace_msg::MsgTarget::Session { session_id }) =
@@ -407,7 +407,7 @@ fn resolve_screen(params: &HashMap<String, String>) -> Result<Screen, CliRespons
             Some(p) => p,
             None => {
                 return Err(CliResponse::bad_request(format!(
-                    "unknown workspace '{ws}' (pass a name, path, or id — see `k2 connections list`)"
+                    "unknown workspace '{ws}' (pass a name, path, or id — see `{CLI_NAME} connections list`)"
                 )))
             }
         };
@@ -428,7 +428,7 @@ fn resolve_screen(params: &HashMap<String, String>) -> Result<Screen, CliRespons
             Some(session) => Ok(Screen::V2(session)),
             None => Err(CliResponse::bad_request(format!(
                 "no live session for workspace '{ws}'{} — it may be asleep \
-                 (see who is there with `k2 sessions`)",
+                 (see who is there with `{CLI_NAME} sessions`)",
                 agent
                     .map(|a| format!(" agent '{a}'"))
                     .unwrap_or_default(),

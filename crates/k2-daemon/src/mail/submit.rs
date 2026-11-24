@@ -18,6 +18,7 @@ use crate::mail::external_smtp::{self, OutAttachment, RealSmtpOps};
 use crate::mail::graph::{self, GraphAttachment, GraphSendError};
 use crate::mail::send::OutboundMessage;
 use k2_core::db::schema::MailExternalInbox;
+use k2_core::brand::CLI_NAME;
 
 /// What a submission handed to the provider (the outbox trail). Never the
 /// body.
@@ -397,7 +398,7 @@ pub fn linked_password(inbox: &MailExternalInbox) -> Result<String, String> {
         Ok(Some(p)) => Ok(p),
         Ok(None) => Err(format!(
             "credentials for '{}' are missing from the vault — your human can reconnect it with \
-             'k2 mail link add'",
+             '{CLI_NAME} mail link add'",
             inbox.email_address
         )),
         Err(e) => Err(e),

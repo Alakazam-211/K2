@@ -26,6 +26,8 @@ pub const CONFIRM_ACTION: &str = "app-process-exception";
 /// One confirm code for everything that needs the person's confirm (Rosson
 /// 2026-10-16): the vault's `vault_confirm_required`, hint unchanged.
 pub use super::egress_routes::codes::VAULT_CONFIRM_REQUIRED;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 fn confirm_stamp(who: &Who) -> Option<String> {
     match who {
@@ -47,7 +49,7 @@ pub(crate) fn devices_of(v: &J) -> R<Vec<String>> {
             return Err(no(
                 codes::BAD_REQUEST,
                 400,
-                format!("'{t}' isn't a device K2 grants (dri-render128..191, dri-card0..15, nvidia0..15, nvidiactl, nvidia-uvm, nvidia-uvm-tools, nvidia-modeset)"),
+                format!("'{t}' isn't a device {PRODUCT_NAME} grants (dri-render128..191, dri-card0..15, nvidia0..15, nvidiactl, nvidia-uvm, nvidia-uvm-tools, nvidia-modeset)"),
             ));
         }
         if !out.iter().any(|x| x == t) {
@@ -79,13 +81,13 @@ fn audit(app: &str, event: &str, who: &Who, payload: J) {
 }
 
 /// The exception's warning, shown on the way in.
-pub const WARNING: &str = "This App leaves the guarded container. Runs as a plain process, with less isolation from your other process Apps than a containerised App. \
+pub const WARNING: &str = concat!("This App leaves the guarded container. Runs as a plain process, with less isolation from your other process Apps than a containerised App. \
 It runs as a sandboxed system process (user k2appx): \
 read-only system, no homes, no capabilities, loopback only, its own caps, the k2-app AppArmor profile where AppArmor is on, \
 and only the devices you granted. Weaker than the container: process Apps run under one shared App user, so they're less \
 isolated from each other; approve it only for Apps you'd trust with each other's data; \
-a deploy is a restart (no warm previous version); k2 app exec and shell don't reach it yet. \
-Use it only for a device a container can't reach. Undo: k2 app exception <app> off.";
+a deploy is a restart (no warm previous version); ", cli_name!(), " app exec and shell don't reach it yet. \
+Use it only for a device a container can't reach. Undo: ", cli_name!(), " app exception <app> off.");
 
 pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
@@ -110,7 +112,7 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
             "app": app.app_id,
             "changed": true,
             "label": super::routes::label(&row),
-            "next": format!("its next deploy or restart runs it in the guarded container: k2 app restart {}", app.app_id),
+            "next": format!("its next deploy or restart runs it in the guarded container: {CLI_NAME} app restart {}", app.app_id),
         }));
     }
     // On: the owner, in person.
@@ -118,8 +120,8 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "moving an App out of its guarded container is the server owner's call, in person: ask your owner to run \
-             `k2 app exception <app> on [--device …]` from a terminal outside K2 (it asks for an owner confirm)",
+            concat!("moving an App out of its guarded container is the server owner's call, in person: ask your owner to run \
+             `", cli_name!(), " app exception <app> on [--device …]` from a terminal outside ", product_name!(), " (it asks for an owner confirm)"),
         ));
     }
     let app = app_for(who, s(&v, "app"))?;
@@ -134,7 +136,7 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             VAULT_CONFIRM_REQUIRED,
             403,
-            "this needs a fresh owner confirm (Touch ID, your login or the vault password): k2 app exception <app> on asks for it",
+            concat!("this needs a fresh owner confirm (Touch ID, your login or the vault password): ", cli_name!(), " app exception <app> on asks for it"),
         ));
     };
     let stamp = confirm_stamp(who).ok_or_else(|| no(codes::OWNER_ONLY, 403, "owner only"))?;
@@ -169,7 +171,7 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
         "label": super::routes::label(&row),
         "devices": devices,
         "warning": WARNING,
-        "next": format!("its next deploy or restart runs it as the process exception: k2 app restart {}", app.app_id),
+        "next": format!("its next deploy or restart runs it as the process exception: {CLI_NAME} app restart {}", app.app_id),
     }))
 }
 

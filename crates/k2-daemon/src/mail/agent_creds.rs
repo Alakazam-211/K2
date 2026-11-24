@@ -38,6 +38,8 @@ use crate::cli_response::CliResponse;
 use crate::mail::app_password::AppPasswordEngine;
 use crate::mail::doctor::{DoctorCheck, ST_INFO, ST_PASS, ST_UNKNOWN, ST_WARN};
 use k2_core::db::schema::MailAddress;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Refusal code for an agent without mail-manage.
 pub const AGENT_SEND_PATH_ONLY: &str = "agent_send_path_only";
@@ -148,7 +150,7 @@ pub fn refuse_needs_mail_manage(what: &str) -> CliResponse {
         "403 Forbidden",
         AGENT_SEND_PATH_ONLY,
         format!(
-            "Agents send mail with `k2 mail send` (and `k2 mail reply`), where the owner's \
+            "Agents send mail with `{CLI_NAME} mail send` (and `{CLI_NAME} mail reply`), where the owner's \
              rules apply. Only the owner, or an agent whose workspace may manage hosted mail, \
              can {what}. Ask your human."
         ),
@@ -163,7 +165,7 @@ pub fn refuse_self_elevation(what: &str) -> CliResponse {
         format!(
             "An agent can't loosen mail rules on its own sends: {what} for this agent's own \
              workspace needs the owner. Ask your human (the owner runs it from a terminal \
-             outside a K2 agent session)."
+             outside a {PRODUCT_NAME} agent session)."
         ),
     )
 }
@@ -180,7 +182,7 @@ pub fn refuse_self_widening(what: &str) -> CliResponse {
         "owner_only",
         format!(
             "An agent can't widen its own access: {what} needs the owner. Ask your human \
-             (the owner runs it from a terminal outside a K2 agent session)."
+             (the owner runs it from a terminal outside a {PRODUCT_NAME} agent session)."
         ),
     )
 }
@@ -278,9 +280,9 @@ pub fn address_cap_gate(caller: &MailCaller, target_path: &str) -> Result<(), Cl
 
 /// The note a mint gets in place of the password when it is withheld.
 pub const MINT_WITHHELD_HINT: &str =
-    "password withheld: agents send mail with `k2 mail send` and read it with `k2 mail \
+    concat!("password withheld: agents send mail with `", cli_name!(), " mail send` and read it with `", cli_name!(), " mail \
      messages`, so they never need it. The owner can set one for Mail.app or IMAP with `k2 \
-     hostmail password rotate <addr>` (from a terminal outside a K2 agent session).";
+     hostmail password rotate <addr>` (from a terminal outside a ", product_name!(), " agent session).");
 
 /// Strip the once password out of a mint response. Returns whether a
 /// password was removed (a fresh mint, not an idempotent hit).
@@ -456,8 +458,8 @@ pub fn credential_check_for(
         };
         if let Some(why) = review_reason(row, mark_of(&row.id, KIND_MAILBOX, "").as_ref()) {
             items.push(format!(
-                "mailbox password of {} — {why} (rotate: k2 hostmail password rotate {}; keep: \
-                 k2 hostmail password keep {})",
+                "mailbox password of {} — {why} (rotate: {CLI_NAME} hostmail password rotate {}; keep: \
+                 {CLI_NAME} hostmail password keep {})",
                 row.address, row.address, row.address
             ));
         }
@@ -468,8 +470,8 @@ pub fn credential_check_for(
                     let m = mark_of(&row.id, KIND_APP_PASSWORD, &ap.id);
                     if let Some(why) = review_reason(row, m.as_ref()) {
                         items.push(format!(
-                            "app password {} '{}' on {} — {why} (revoke: k2 hostmail \
-                             app-password revoke {} {}; keep: k2 hostmail app-password keep {} \
+                            "app password {} '{}' on {} — {why} (revoke: {CLI_NAME} hostmail \
+                             app-password revoke {} {}; keep: {CLI_NAME} hostmail app-password keep {} \
                              {})",
                             ap.id,
                             ap.description,
@@ -486,16 +488,16 @@ pub fn credential_check_for(
         }
     }
 
-    let preamble = "If you know who has every password that existed before this update, \
-                    mark them all reviewed in one go: `k2 hostmail password keep \
-                    --all-existing` and `k2 hostmail app-password keep --all-existing` (newer \
+    let preamble = concat!("If you know who has every password that existed before this update, \
+                    mark them all reviewed in one go: `", cli_name!(), " hostmail password keep \
+                    --all-existing` and `", cli_name!(), " hostmail app-password keep --all-existing` (newer \
                     ones are never covered). Why: agents without mail-manage can no longer get \
-                    mail passwords (they send only with `k2 mail send`), and an IT agent can't \
+                    mail passwords (they send only with `", cli_name!(), " mail send`), and an IT agent can't \
                     get one for its own mailbox; but before 0.45.0 minting a mailbox showed \
                     an agent its password and a mail-manage agent could add app passwords \
-                    anywhere, and K2 can't tell who holds these. Nothing was revoked. \
+                    anywhere, and ", product_name!(), " can't tell who holds these. Nothing was revoked. \
                     Otherwise, one by one, revoke or rotate any you didn't hand out and keep \
-                    the ones you did";
+                    the ones you did");
     let status;
     let mut detail;
     if items.is_empty() {
@@ -1145,7 +1147,7 @@ pub fn person_check_for(workspaces: &[(String, String)]) -> DoctorCheck {
         if !eligible.is_empty() {
             parts.push(format!(
                 "{} mailbox(es) in '{name}' ({}) — if they are people's mailboxes (e.g. \
-                 imported staff), run once as the owner: k2 hostmail person --all \
+                 imported staff), run once as the owner: {CLI_NAME} hostmail person --all \
                  --workspace {name} on (its agent's send identities are left out)",
                 eligible.len(),
                 eligible

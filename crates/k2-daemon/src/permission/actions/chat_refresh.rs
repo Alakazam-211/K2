@@ -35,7 +35,7 @@ use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::chat_refresh::{CARD_ACTION as ACTION, NEEDS_PERSON, ROUTE};
 use crate::cli_response::CliResponse;
 use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 
 const SWAP_ROUTE: &str = "/cli/workspace/swap-canonical";
 const NOTE_PARAMS: &[(&str, ParamFrom)] = &[("notes", ParamFrom::Response("/error/notes")), ("mode", ParamFrom::Response("/error/mode"))];
@@ -55,7 +55,7 @@ pub(crate) static REFRESH: ActionSpec = ActionSpec {
     words: Words {
         setting: "Refresh pinned chat",
         what_changes: "Start a new {harness} pinned chat for {ws} that carries on from this one",
-        consequences: "K2 ends {ws}'s current chat and starts a new one that gets only a summary of it and {ws}'s note. Anything it's doing right now stops, and secrets kept for that session end. Files aren't touched. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new chat. Sidecars keep running. \"From now on\" lets it do this without asking, until someone turns off \"Let this agent refresh its pinned chat\" in Settings → Workspaces / Agents → {ws} → Permissions. {note}",
+        consequences: concat!(product_name!(), " ends {ws}'s current chat and starts a new one that gets only a summary of it and {ws}'s note. Anything it's doing right now stops, and secrets kept for that session end. Files aren't touched. The old chat stays in Chat history; the Thread, messages and heartbeats on the pinned chat carry on in the new chat. Sidecars keep running. \"From now on\" lets it do this without asking, until someone turns off \"Let this agent refresh its pinned chat\" in Settings → Workspaces / Agents → {ws} → Permissions. {note}"),
         scope: "{ws}",
         duration: "once, unless you choose from now on",
         retry: "",

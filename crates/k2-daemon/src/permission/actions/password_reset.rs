@@ -42,13 +42,13 @@ use k2_core::permission::catalog::{
 };
 use k2_core::permission::card::RevealView;
 use k2_core::permission::request::PermissionRequest;
-use k2_core::skin;
+use k2_core::{product_name, skin};
 use serde_json::{json, Value};
 
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::cli_response::CliResponse;
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The card's id (PR-A1: the catalog allows only `a-z 0-9 . -`).
 pub(crate) const ACTION: &str = "apps.user-password-reset";
@@ -63,7 +63,7 @@ pub(crate) const FLOOR: Floor = Floor::Admin;
 pub(crate) const REVEAL_NEEDS_SCREEN: &str = "reveal_needs_screen";
 
 /// What that refusal says.
-pub(crate) const REVEAL_HINT: &str = "From here you can only email them a link (when the card offers it). To see a new password or link, open this card in K2 on your computer or the web: it is shown there once, only to you.";
+pub(crate) const REVEAL_HINT: &str = concat!("From here you can only email them a link (when the card offers it). To see a new password or link, open this card in ", product_name!(), " on your computer or the web: it is shown there once, only to you.");
 
 /// How long the card shows the secret before wiping it.
 pub(crate) const REVEAL_SECS: i64 = 60;
@@ -217,7 +217,7 @@ fn email_blocker(t: &Target) -> Option<(&'static str, String)> {
     let u = &t.person.username;
     match crate::app_user_invites::k2_set_password_page() {
         Ok(Some(_)) => {}
-        Ok(None) => return Some(("no_front_door", "this box has no front door, so K2 has no set-password page to email: ask again with mode=password or mode=link".into())),
+        Ok(None) => return Some(("no_front_door", concat!("this box has no front door, so ", product_name!(), " has no set-password page to email: ask again with mode=password or mode=link").into())),
         Err(why) => return Some(("front_door_unsafe", format!("{why}: ask again with mode=password or mode=link"))),
     }
     match skin::ties::stored_email_refused(&t.person.id) {
@@ -225,7 +225,7 @@ fn email_blocker(t: &Target) -> Option<(&'static str, String)> {
         Ok(Some(_)) => {
             return Some((
                 "email_unconfirmed",
-                format!("{u}'s stored email isn't one the owner confirmed (an agent could have chosen it), so K2 won't mail a reset there: ask again with mode=password or mode=link"),
+                format!("{u}'s stored email isn't one the owner confirmed (an agent could have chosen it), so {PRODUCT_NAME} won't mail a reset there: ask again with mode=password or mode=link"),
             ))
         }
         Err(e) => return Some(("failed", e)),
@@ -266,17 +266,17 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     out.params.insert("app".into(), Value::String(shown.unwrap_or_else(|| "their App".into())));
     let (made, effects) = match mode_of(ctx) {
         "link" => (
-            format!("K2 makes a one-time link for {who} to choose a new password and shows it to you once"),
+            format!("{PRODUCT_NAME} makes a one-time link for {who} to choose a new password and shows it to you once"),
             format!("Give {who} the link yourself. When they use it (once, within 24 hours) they choose their own password, are signed out everywhere and their sign-in lock is cleared."),
         ),
         "email" => (
-            format!("K2 emails {who} a one-time link to choose a new password, at their address on file"),
+            format!("{PRODUCT_NAME} emails {who} a one-time link to choose a new password, at their address on file"),
             format!("When {who} uses the link (once, within 24 hours) they choose their own password, are signed out everywhere and their sign-in lock is cleared."),
         ),
         // password (the default)
         _ => (
-            format!("K2 makes a new password for {who} and shows it to you once"),
-            format!("{who} is signed out everywhere and their sign-in lock is cleared. Their old password stops working at once. Tell or send {who} the new one yourself. The next time they sign in, K2 asks them to choose a new password."),
+            format!("{PRODUCT_NAME} makes a new password for {who} and shows it to you once"),
+            format!("{who} is signed out everywhere and their sign-in lock is cleared. Their old password stops working at once. Tell or send {who} the new one yourself. The next time they sign in, {PRODUCT_NAME} asks them to choose a new password."),
         ),
     };
     // Whether this reset ends an agent tie (Rosson 2026-11-03): it ends when the
@@ -436,7 +436,7 @@ fn apply(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
             }
             let v = parsed(&r);
             let Some(secret) = v["generatedPassword"].as_str().filter(|s| !s.is_empty()) else {
-                return Applied::Refused { code: "failed".into(), message: "K2 set no password".into() };
+                return Applied::Refused { code: "failed".into(), message: concat!(product_name!(), " set no password").into() };
             };
             let unlock = crate::skin_routes::handle_users_unlock(json!({ "username": u }).to_string().as_bytes(), &actor);
             let lock = if unlock.status.starts_with("200") {
@@ -476,7 +476,7 @@ fn apply(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
             match (v["link"].as_str(), v["code"].as_str()) {
                 (Some(link), _) => for_you["link"] = json!(link),
                 (None, Some(code)) => for_you["code"] = json!(code),
-                (None, None) => return Applied::Refused { code: "failed".into(), message: "K2 made no link".into() },
+                (None, None) => return Applied::Refused { code: "failed".into(), message: concat!(product_name!(), " made no link").into() },
             }
             super::super::answer::set_for_answerer(for_you);
             format!(

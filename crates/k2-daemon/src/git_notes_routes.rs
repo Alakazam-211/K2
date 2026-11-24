@@ -23,6 +23,7 @@ use serde::Deserialize;
 use crate::cli_response::CliResponse;
 use k2_core::git_changes;
 use k2_core::git_notes::{self, ReviewNote, Status};
+use k2_core::brand::PRODUCT_NAME;
 
 pub const LIST_ROUTE: &str = "/cli/git/notes";
 pub const POST_ROUTES: &[&str] = &[
@@ -363,7 +364,7 @@ fn handle_add(body: &[u8], caller: &Caller) -> CliResponse {
         return bad_request("Missing 'path'");
     }
     let Some((project_id, _)) = owning_project(&ws) else {
-        return not_found(format!("no K2 workspace holds {ws}"));
+        return not_found(format!("no {PRODUCT_NAME} workspace holds {ws}"));
     };
     let Some((rev_key, root)) = git_changes::repo_key_and_root(&ws) else {
         return err("400 Bad Request", git_changes::codes::NOT_A_REPO, format!("{ws} is not in a git repository"));
@@ -661,7 +662,7 @@ fn handle_send(body: &[u8], caller: &Caller, deliver: &Deliver) -> CliResponse {
         return bad_request("Missing 'path'");
     }
     let Some((project_id, project_root)) = owning_project(&ws) else {
-        return not_found(format!("no K2 workspace holds {ws}"));
+        return not_found(format!("no {PRODUCT_NAME} workspace holds {ws}"));
     };
     let target = match b.to.as_deref().filter(|t| !t.trim().is_empty()) {
         Some(to) => match send_target(to, &project_id) {

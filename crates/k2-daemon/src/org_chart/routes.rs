@@ -28,6 +28,8 @@ use serde_json::{json, Map, Value};
 
 use super::caller::{refusal, OrgCaller};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const PREFIX: &str = "/cli/organization/";
 
@@ -168,7 +170,7 @@ fn need<'a>(m: &'a Map<String, Value>, k: &str, what: &str) -> Result<&'a str, C
 pub(crate) fn resolve_agent(token: &str) -> Result<String, CliResponse> {
     let t = token.trim().strip_prefix("agent:").unwrap_or(token.trim());
     let not_found = || {
-        fail(&OrgError::not_found("agent", t, "k2 organization list shows the agents on this server."))
+        fail(&OrgError::not_found("agent", t, concat!(cli_name!(), " organization list shows the agents on this server.")))
     };
     if t.is_empty() {
         return Err(usage("name the agent"));
@@ -220,7 +222,7 @@ fn resolve_end(token: &str) -> Result<NodeRef, CliResponse> {
         )),
         (Some(o), None) => Ok(NodeRef::org(&o.id)),
         (None, Some(a)) => Ok(NodeRef::agent(&a)),
-        (None, None) => Err(fail(&OrgError::not_found("org or agent", t, "k2 organization list shows the orgs and their agents."))),
+        (None, None) => Err(fail(&OrgError::not_found("org or agent", t, concat!(cli_name!(), " organization list shows the orgs and their agents.")))),
     }
 }
 
@@ -330,7 +332,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             OrgCaller::Person { .. } => Err(refusal(
                 "403 Forbidden",
                 "agent_only",
-                "reach is an agent's ask to be connected to a head; a person connects agents in Settings → Workspaces / Agents → <agent> → Connections (or k2 connections add).",
+                concat!("reach is an agent's ask to be connected to a head; a person connects agents in Settings → Workspaces / Agents → <agent> → Connections (or ", cli_name!(), " connections add)."),
             )),
         },
         "/cli/organization/create" => create(caller, &m, now.timestamp()),
@@ -393,14 +395,14 @@ fn show(m: &Map<String, Value>) -> R {
 
 fn mine(caller: &OrgCaller) -> R {
     let OrgCaller::Agent { project_id, .. } = caller else {
-        return Err(refusal("403 Forbidden", "agent_only", "mine is an agent's own org; a person reads k2 organization list."));
+        return Err(refusal("403 Forbidden", "agent_only", concat!("mine is an agent's own org; a person reads ", cli_name!(), " organization list.")));
     };
     db!(conn, {
         let orgs = or_fail(store::orgs_of(&conn, project_id))?;
         let Some(org) = orgs.first() else {
             return Ok(ok(json!({
                 "ok": true, "org": null, "isHead": false, "head": null, "connectedToHead": false,
-                "next": "You're in no org. k2 organization bulletin shows every org and its head."
+                "next": concat!("You're in no org. ", cli_name!(), " organization bulletin shows every org and its head.")
             })));
         };
         let head = org.head.clone();
@@ -459,7 +461,7 @@ fn bulletin_status(caller: &OrgCaller, now: chrono::DateTime<chrono::Utc>) -> R 
 
 fn bulletin_read(caller: &OrgCaller, now: chrono::DateTime<chrono::Utc>) -> R {
     let OrgCaller::Agent { project_id, agent_address, .. } = caller else {
-        return Err(refusal("403 Forbidden", "agent_only", "The read marker is an agent's; people just read k2 organization bulletin."));
+        return Err(refusal("403 Forbidden", "agent_only", concat!("The read marker is an agent's; people just read ", cli_name!(), " organization bulletin.")));
     };
     let day_key = today(now);
     or_fail(db!(conn, store::mark_read(&conn, project_id, agent_address, &day_key, now.timestamp())))?;
@@ -480,7 +482,7 @@ fn bulletin_set(caller: &OrgCaller, m: &Map<String, Value>, now: i64) -> R {
                 refusal(
                     "403 Forbidden",
                     "not_org_head",
-                    "You aren't an org's head, so you have no bulletin to write. k2 organization mine shows your org and its head.",
+                    concat!("You aren't an org's head, so you have no bulletin to write. ", cli_name!(), " organization mine shows your org and its head."),
                 )
             })?
         }
@@ -502,7 +504,7 @@ fn updates(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chr
         (None, OrgCaller::Agent { project_id, .. }) => or_fail(db!(conn, store::headed_by(&conn, project_id)))?
             .into_iter()
             .next()
-            .ok_or_else(|| refusal("403 Forbidden", "not_org_head", "updates are for an org's head; you aren't one (k2 organization mine)."))?,
+            .ok_or_else(|| refusal("403 Forbidden", "not_org_head", concat!("updates are for an org's head; you aren't one (", cli_name!(), " organization mine).")))?,
         (None, OrgCaller::Person { .. }) => return Err(usage("name the org: --org <org>")),
     };
     if let OrgCaller::Agent { project_id, .. } = caller {
@@ -551,7 +553,7 @@ fn ask(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chrono:
     };
     let q = or_fail(text::capped(s(m, "question").or_else(|| s(m, "text")).unwrap_or(""), text::ASK_MAX_CHARS, "The question", "usage"))?;
     let org = or_fail(db!(conn, store::headed_by(&conn, project_id)))?.into_iter().next().ok_or_else(|| {
-        refusal("403 Forbidden", "not_org_head", "Only an org's head asks its members; you aren't one (k2 organization mine).")
+        refusal("403 Forbidden", "not_org_head", concat!("Only an org's head asks its members; you aren't one (", cli_name!(), " organization mine)."))
     })?;
     let members: Vec<String> = or_fail(db!(conn, store::members(&conn, &org.id)))?.into_iter().filter(|x| x != project_id).collect();
     let targets: Vec<String> = match s(m, "member") {
@@ -589,7 +591,7 @@ fn ask(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chrono:
         return Err(refusal(
             "409 Conflict",
             "ask_limit",
-            &format!("A head sends at most {} asks a night and {} a day; you've sent yours. Read the answers with k2 organization updates.", oc::ASKS_PER_NIGHT, oc::ASKS_PER_DAY),
+            &format!("A head sends at most {} asks a night and {} a day; you've sent yours. Read the answers with {CLI_NAME} organization updates.", oc::ASKS_PER_NIGHT, oc::ASKS_PER_DAY),
         ));
     }
     // The fan-out goes one member at a time through the server's wake
@@ -632,13 +634,13 @@ fn update(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chro
     };
     let body = or_fail(text::capped(s(m, "text").unwrap_or(""), text::UPDATE_MAX_CHARS, "An update", "usage"))?;
     let org = own_org(project_id, s(m, "org"))?.ok_or_else(|| {
-        refusal("403 Forbidden", "not_org_member", "You're in no org, so there's no head to send news to. k2 organization bulletin shows every org.")
+        refusal("403 Forbidden", "not_org_member", concat!("You're in no org, so there's no head to send news to. ", cli_name!(), " organization bulletin shows every org."))
     })?;
     let Some(head) = org.head.clone() else {
         return Err(refusal("409 Conflict", "no_head", &format!("{} has no head yet, so the update has nowhere to go.", org.name)));
     };
     if head == *project_id {
-        return Err(refusal("400 Bad Request", "own_head", &format!("You are {}'s head: write the bulletin itself (k2 organization bulletin set).", org.name)));
+        return Err(refusal("400 Bad Request", "own_head", &format!("You are {}'s head: write the bulletin itself ({CLI_NAME} organization bulletin set).", org.name)));
     }
     let ts = now.timestamp();
     // "Bulletins would run at night, not during the day": stored always,
@@ -649,7 +651,7 @@ fn update(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chro
     let mut why = Value::Null;
     if night.is_some() {
         let me = super::caller_handle(project_id);
-        let line = format!("Update from {me} for {}: {body} (all of them: k2 organization updates)", org.name);
+        let line = format!("Update from {me} for {}: {body} (all of them: {CLI_NAME} organization updates)", org.name);
         match super::wake(super::waker().as_ref(), &head, store::WAKE_UPDATE, &format!("org:{}", org.name), &line, ts) {
             super::WakeOutcome::Delivered => {
                 let _ = db!(conn, store::set_update_woke(&conn, &u.id));
@@ -797,7 +799,7 @@ fn line_remove(caller: &OrgCaller, m: &Map<String, Value>) -> R {
         }
     };
     if n == 0 {
-        return Err(refusal("404 Not Found", "no_line", "There's no line between those two cards (k2 organization show <org> lists its lines)."));
+        return Err(refusal("404 Not Found", "no_line", concat!("There's no line between those two cards (", cli_name!(), " organization show <org> lists its lines).")));
     }
     Ok(wrote(caller, "line_remove", format!("{n} line(s)"), json!({ "removed": n })))
 }

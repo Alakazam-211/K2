@@ -51,13 +51,14 @@ use std::time::Duration;
 use parking_lot::Mutex as PlMutex;
 
 use k2_core::db::schema::{Project, WorkspaceSession};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_core::session::SessionId;
 use k2_core::workspace::agent_identity::resolve_project_id;
 use serde::Serialize;
 
 use crate::session_lookup;
 use crate::spawn::{spawn_agent_session_v2_blocking, SpawnWorkspaceSessionRequest};
+use k2_core::brand::CLI_NAME;
 
 // ─────────────────────────────────────────────────────────────────────
 // Failure reason classification
@@ -131,16 +132,16 @@ impl MsgReason {
     fn hint(self) -> &'static str {
         match self {
             Self::WorkspaceNotFound => {
-                "Run `k2 connections list` to see available workspaces."
+                concat!("Run `", cli_name!(), " connections list` to see available workspaces.")
             }
             Self::NoAgentMode => {
-                "Workspace has no agent. Use `k2 msg <workspace> --inbox-silent <file>` to queue, or `k2 settings --mode custom` to set up an agent."
+                concat!("Workspace has no agent. Use `", cli_name!(), " msg <workspace> --inbox-silent <file>` to queue, or `", cli_name!(), " settings --mode custom` to set up an agent.")
             }
             Self::SpawnFailed => {
                 "Spawn failed. Verify the workspace's agent CLI (e.g. `claude`) is on PATH for the daemon."
             }
             Self::MainChatMissing => {
-                "This workspace's main chat can't be found on disk, so K2 started nothing. A person chooses a chat with `k2 sessions main set <id>` (list them with `k2 sessions --past`) or from the chat's menu."
+                concat!("This workspace's main chat can't be found on disk, so ", product_name!(), " started nothing. A person chooses a chat with `", cli_name!(), " sessions main set <id>` (list them with `", cli_name!(), " sessions --past`) or from the chat's menu.")
             }
             Self::PtyDied => {
                 "Target session crashed during delivery. Check `~/.k2/daemon.stderr.log`."
@@ -149,16 +150,16 @@ impl MsgReason {
                 "Target session's injection lock did not free within the deadline (a prior send is still in flight, or the child is wedged). Retry shortly."
             }
             Self::DormantNoWake => {
-                "Peer's canonical session is asleep. Re-run with `--wake` (or use `k2 talk`, which auto-wakes) to wake it and deliver."
+                concat!("Peer's canonical session is asleep. Re-run with `--wake` (or use `", cli_name!(), " talk`, which auto-wakes) to wake it and deliver.")
             }
             Self::HitlGateOpen => {
-                "Recipient is sitting on an open permission gate (grok `⚠ Action Required` — its default answer is always-approve, so K2 held the message rather than risk auto-approving). Resolve the gate in the terminal, then re-send."
+                concat!("Recipient is sitting on an open permission gate (grok `⚠ Action Required` — its default answer is always-approve, so ", product_name!(), " held the message rather than risk auto-approving). Resolve the gate in the terminal, then re-send.")
             }
             Self::FolderTrustPending => {
-                "Waiting for the owner to trust the recipient's folder (it has settings that run commands when AI tools start). K2 starts the session and delivers this message when they answer Trust on Thread (or: k2 workspace trust <folder> --yes)."
+                concat!("Waiting for the owner to trust the recipient's folder (it has settings that run commands when AI tools start). ", product_name!(), " starts the session and delivers this message when they answer Trust on Thread (or: ", cli_name!(), " workspace trust <folder> --yes).")
             }
             Self::FolderTrustDenied => {
-                "The owner chose \"Don't trust\" for the recipient's folder, so K2 starts no program there. They can change it in Settings → Workspaces → Folder trust."
+                concat!("The owner chose \"Don't trust\" for the recipient's folder, so ", product_name!(), " starts no program there. They can change it in Settings → Workspaces → Folder trust.")
             }
         }
     }
@@ -1153,7 +1154,7 @@ fn deliver_live_inner(
                 WorkspaceResolve::Retired { handle } => {
                     let mut resp = MsgResponse::fail(MsgReason::WorkspaceNotFound);
                     resp.hint = Some(format!(
-                        "{} Run `k2 connections list` to see current workspaces.",
+                        "{} Run `{CLI_NAME} connections list` to see current workspaces.",
                         k2_core::workspace::handle::retired_handle_message(&handle)
                     ));
                     return resp;
@@ -1171,18 +1172,18 @@ fn deliver_live_inner(
                 // in this server's workspace list — say so instead of
                 // pointing at the local connections list.
                 resp.hint = Some(format!(
-                    "'{workspace_token}' is an address on another server; this call only reaches workspaces on this server. Use `k2 msg {workspace_token} \"text\"` for a live message, or `k2 msg {workspace_token} --inbox-wake ...` to deliver a package and wake the agent there."
+                    "'{workspace_token}' is an address on another server; this call only reaches workspaces on this server. Use `{CLI_NAME} msg {workspace_token} \"text\"` for a live message, or `{CLI_NAME} msg {workspace_token} --inbox-wake ...` to deliver a package and wake the agent there."
                 ));
             } else if workspace_token.contains('/') && !k2_core::paths::is_path_token(workspace_token) {
                 resp.hint = Some(match explain_unresolved_sidecar(workspace_token) {
-                    Some(why) => format!("{why}. Use `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions` lists the addresses)."),
+                    Some(why) => format!("{why}. Use `{CLI_NAME} msg <workspace>/<handle>` for a sidecar (`{CLI_NAME} sessions` lists the addresses)."),
                     None => format!(
-                        "Unknown workspace/handle '{workspace_token}'. Use `k2 msg <workspace>` for the primary or `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions` lists the addresses). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
+                        "Unknown workspace/handle '{workspace_token}'. Use `{CLI_NAME} msg <workspace>` for the primary or `{CLI_NAME} msg <workspace>/<handle>` for a sidecar (`{CLI_NAME} sessions` lists the addresses). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
                     ),
                 });
             } else if let Some(s) = suggestion {
                 resp.hint = Some(format!(
-                    "Unknown workspace '{workspace_token}' — did you mean '{s}'? Run `k2 connections list` to see available workspaces."
+                    "Unknown workspace '{workspace_token}' — did you mean '{s}'? Run `{CLI_NAME} connections list` to see available workspaces."
                 ));
             }
             return resp;

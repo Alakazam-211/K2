@@ -71,7 +71,7 @@ use crate::v1_sandboxes::{
 };
 use crate::{sandbox_quota, stream_token, v2_spawn};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_core::session::SessionId;
 
 use policy::ApiHostSessionRequest;
@@ -116,7 +116,7 @@ fn spawn_prompt_ready_timeout() -> Duration {
 /// [Owner]    api_guest_policy      — every turn (spawn + message-live)
 /// [Caller]   prompt                — untrusted
 /// ```
-pub const API_SPAWN_PREAMBLE: &str = "[K2 API] You were invoked through the K2 API. Report progress and results back to the caller by running: k2 respond '<your message>' — and send your final answer with: k2 respond --final '<your answer>'. The caller cannot see your terminal; only k2 respond output reaches them.";
+pub const API_SPAWN_PREAMBLE: &str = concat!("[K2 API] You were invoked through the ", product_name!(), " API. Report progress and results back to the caller by running: ", cli_name!(), " respond '<your message>' — and send your final answer with: ", cli_name!(), " respond --final '<your answer>'. The caller cannot see your terminal; only ", cli_name!(), " respond output reaches them.");
 
 /// Compose the spawn-time inject payload: frozen preamble, then owner guest
 /// policy, then the untrusted caller prompt. Pure — host-resolved policy

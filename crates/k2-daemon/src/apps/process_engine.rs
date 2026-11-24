@@ -50,6 +50,7 @@ use k2_core::deploy::engine::{
 };
 use k2_core::deploy::{self, codes};
 use serde::{Deserialize, Serialize};
+use k2_core::cli_name;
 
 pub struct ProcessEngine;
 
@@ -601,7 +602,7 @@ impl RuntimeEngine for ProcessEngine {
     fn exec(&self, _h: &RunHandle, _argv: &[String], _tty: bool) -> Result<ExecStream> {
         Err(EngineError::new(
             codes::ENGINE_UNAVAILABLE,
-            "k2 app exec runs through the walled engines (k2-app-engine, a later 0.46 release)",
+            concat!(cli_name!(), " app exec runs through the walled engines (k2-app-engine, a later 0.46 release)"),
         ))
     }
 

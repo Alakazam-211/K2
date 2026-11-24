@@ -30,6 +30,7 @@ use tokio::net::UnixStream;
 
 #[cfg(unix)]
 use super::actor::{Channel, VaultCaller};
+use k2_core::product_name;
 
 pub const SOCKET_NAME: &str = "vault.sock";
 #[cfg(unix)]
@@ -80,18 +81,18 @@ pub fn judge_with(
     daemon_cgroup: Option<&str>,
 ) -> PeerVerdict {
     if ancestry.iter().any(|a| k2_pids.contains(a)) || ptyd_ancestor {
-        return verdict(false, "runs inside K2 (a K2 terminal or agent)");
+        return verdict(false, concat!("runs inside ", product_name!(), " (a ", product_name!(), " terminal or agent)"));
     }
     if env.iter().any(|e| K2_SESSION_MARKERS.iter().any(|m| e.starts_with(m))) {
-        return verdict(false, "carries a K2 session (a K2 terminal or agent)");
+        return verdict(false, concat!("carries a ", product_name!(), " session (a ", product_name!(), " terminal or agent)"));
     }
     if let (Some(p), Some(d)) = (peer_cgroup, daemon_cgroup) {
         let d = d.trim_end_matches('/');
         if !d.is_empty() && d != "/" && (p == d || p.starts_with(&format!("{d}/"))) {
-            return verdict(false, "runs in K2's own service group");
+            return verdict(false, concat!("runs in ", product_name!(), "'s own service group"));
         }
     }
-    verdict(true, "a terminal outside K2")
+    verdict(true, concat!("a terminal outside ", product_name!()))
 }
 
 #[cfg(target_os = "linux")]

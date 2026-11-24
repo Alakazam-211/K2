@@ -32,6 +32,8 @@ use super::notes::{target, CardCtx};
 use super::present::{self, CardClose};
 use super::store;
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// The result message an undone request carries (the marker [`is_undone`]
 /// reads).
@@ -57,7 +59,7 @@ fn who_name(who: &Answerer) -> String {
 /// undone yet. `Err` = the `undo_expired` hint.
 pub(crate) fn undoable(req: &PermissionRequest, now: i64) -> Result<&'static str, String> {
     let Some(reg) = present::find_action(&req.action) else {
-        return Err("K2 no longer offers this action; use Settings".to_string());
+        return Err(concat!(product_name!(), " no longer offers this action; use Settings").to_string());
     };
     let path = present::words(reg.spec, &present::ctx_of(req)).settings_path;
     let twin = match (req.state, reg.spec.grant, reg.spec.undo) {
@@ -128,7 +130,7 @@ pub(crate) fn handle(params: &HashMap<String, String>, card: &CardCtx<'_>, who: 
         Err(hint) => return expired(hint),
     };
     let Some(twin) = present::find_action(twin_id) else {
-        return expired(format!("K2 no longer offers {twin_id}; use Settings"));
+        return expired(format!("{PRODUCT_NAME} no longer offers {twin_id}; use Settings"));
     };
     let by = who_name(who);
     let marker = format!("{UNDONE_PREFIX}{by}.");

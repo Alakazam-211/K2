@@ -50,8 +50,8 @@ use serde_json::{json, Value};
 
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
-use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 // ── shared with compute.rs ──────────────────────────────────────────
 
@@ -160,7 +160,7 @@ pub(crate) static APPS_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "App Approvals",
         what_changes: "Approve {ws}'s held App request {request}",
-        consequences: "The change K2 held runs now, exactly as listed in Settings → Cores → App Approvals; open it there to see what it does.",
+        consequences: concat!("The change ", product_name!(), " held runs now, exactly as listed in Settings → Cores → App Approvals; open it there to see what it does."),
         scope: "request {request}",
         duration: ONE_TIME,
         retry: "",
@@ -389,7 +389,7 @@ pub(crate) static SOURCES_APPROVE: ActionSpec = ActionSpec {
     words: Words {
         setting: "External Data",
         what_changes: "Approve {ws}'s data source {source}",
-        consequences: "K2 starts fetching it on its schedule, from the public addresses it was proposed with, as proposed. No secret is bound. Review it first in Settings → Gardens → External Data.",
+        consequences: concat!(product_name!(), " starts fetching it on its schedule, from the public addresses it was proposed with, as proposed. No secret is bound. Review it first in Settings → Gardens → External Data."),
         scope: "data source {source}",
         duration: ONE_TIME,
         retry: "",
@@ -511,8 +511,8 @@ fn apply_sources(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
         return refused;
     }
     match crate::sources::approve_routes::handle(path, &who_of(who), body.to_string().as_bytes(), &HashMap::new()) {
-        Ok(_) if pairs.len() == 1 => Applied::Done { message: "K2 starts fetching it now.".into() },
-        Ok(_) => Applied::Done { message: format!("K2 starts fetching all {} now.", pairs.len()) },
+        Ok(_) if pairs.len() == 1 => Applied::Done { message: concat!(product_name!(), " starts fetching it now.").into() },
+        Ok(_) => Applied::Done { message: format!("{PRODUCT_NAME} starts fetching all {} now.", pairs.len()) },
         Err(e) => Applied::Refused { code: e.code.to_string(), message: e.hint },
     }
 }

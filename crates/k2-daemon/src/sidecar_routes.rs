@@ -24,13 +24,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_core::sidecar::{self as core, SidecarError};
 use parking_lot::Mutex;
 
 use crate::cli_response::CliResponse;
 use crate::session_token::ValidatedHook;
 use crate::v2_session_map;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Who is calling a sidecar route (§7.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,7 +475,7 @@ pub(crate) fn require_credential(caller: &Caller) -> Result<(), SidecarError> {
     }
 }
 
-pub(crate) const GATED_HINT: &str = "Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → {ws} → Permissions (or run k2 sidecar access on --workspace {ws} as the owner).";
+pub(crate) const GATED_HINT: &str = concat!("Ask your human to turn on 'Let this agent manage its sidecars' in Settings → Workspaces / Agents → {ws} → Permissions (or run ", cli_name!(), " sidecar access on --workspace {ws} as the owner).");
 
 /// The interim agent gate (§7.3 rules 1–3). Rule 5 (no more power) is
 /// checked once the preset is known.
@@ -721,7 +722,7 @@ fn handle_new(
                         "name_reserved",
                         409,
                         format!(
-                            "{slug} was {was}'s name (now {}/{now}); pick another name, or resume it with `k2 sidecar new {now}`",
+                            "{slug} was {was}'s name (now {}/{now}); pick another name, or resume it with `{CLI_NAME} sidecar new {now}`",
                             ws.handle
                         ),
                     ));
@@ -746,7 +747,7 @@ fn handle_new(
                         return Err(err(
                             "sidecar_live",
                             409,
-                            format!("{address} is already running; message it with: k2 msg {address} \"…\""),
+                            format!("{address} is already running; message it with: {CLI_NAME} msg {address} \"…\""),
                         ));
                     }
                     let row_provider = row
@@ -833,7 +834,7 @@ fn handle_new(
         return Err(err(
             "name_taken",
             409,
-            format!("'{slug}' is a sidecar without a worktree; K2 does not move a sidecar into a worktree. Pick another name"),
+            format!("'{slug}' is a sidecar without a worktree; {PRODUCT_NAME} does not move a sidecar into a worktree. Pick another name"),
         ));
     }
     let make_worktree = want_worktree && matches!(plan, Plan::New);
@@ -849,7 +850,7 @@ fn handle_new(
                 "worktree_cap",
                 409,
                 format!(
-                    "{} already has {open} worktree sidecars (the cap is {cap}; stopped ones count until retired); retire one first (k2 sidecar retire <name>)",
+                    "{} already has {open} worktree sidecars (the cap is {cap}; stopped ones count until retired); retire one first ({CLI_NAME} sidecar retire <name>)",
                     ws.handle
                 ),
             ));
@@ -863,7 +864,7 @@ fn handle_new(
             "sidecar_cap",
             409,
             format!(
-                "{} already has {cap} live sidecars; stop one first (k2 sidecar stop <name>)",
+                "{} already has {cap} live sidecars; stop one first ({CLI_NAME} sidecar stop <name>)",
                 ws.handle
             ),
         ));
@@ -895,7 +896,7 @@ fn handle_new(
                 return Err(err(
                     "worktree_missing",
                     409,
-                    format!("{address}'s worktree {dir} is gone; retire it (k2 sidecar retire {slug} --discard)"),
+                    format!("{address}'s worktree {dir} is gone; retire it ({CLI_NAME} sidecar retire {slug} --discard)"),
                 ));
             }
             dir
@@ -1559,11 +1560,11 @@ fn handle_archive(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, St
     }
     .map_err(|_| err("no_such_sidecar", 404, format!("no sidecar '{raw}' in {}", ws.handle)))?;
     let Some(row) = rows.iter().find(|r| r.conversation_key == key) else {
-        return Err(err("no_such_sidecar", 404, format!("no sidecar '{raw}' in {}: nothing to archive (k2 sidecar list)", ws.handle)));
+        return Err(err("no_such_sidecar", 404, format!("no sidecar '{raw}' in {}: nothing to archive ({CLI_NAME} sidecar list)", ws.handle)));
     };
     let address = sidecar_address(&ws, row);
     if conversation_live(&ws.id, &key) {
-        return Err(err("sidecar_live", 409, format!("{address} is running; stop it first: k2 sidecar stop {token}")));
+        return Err(err("sidecar_live", 409, format!("{address} is running; stop it first: {CLI_NAME} sidecar stop {token}")));
     }
     archive_row(caller, &ws, row, &address)?;
     Ok((serde_json::json!({ "ok": true, "address": address, "archived": true }), format!("ok {address}")))
@@ -1591,7 +1592,7 @@ fn sidecar_token(ws: &Workspace, raw: &str, verb: &str) -> Result<String, Sideca
         return Err(err(
             "forbidden",
             403,
-            format!("{raw} is the main session; {verb} only sidecars (k2 sessions shows them)"),
+            format!("{raw} is the main session; {verb} only sidecars ({CLI_NAME} sessions shows them)"),
         ));
     }
     Ok(k2_core::workspace_session_handles::slugify_custom_name(&raw).unwrap_or_else(|_| raw.to_lowercase()))
@@ -1630,7 +1631,7 @@ fn archive_row(caller: &Caller, ws: &Workspace, row: &core::SidecarRow, address:
         return Err(err(
             "worktree_sidecar",
             409,
-            format!("{address} has its own git worktree, so it wasn't archived. Nothing more is needed unless you want it gone: retiring it removes the worktree, so a person does that (k2 sidecar review {address}, then k2 sidecar retire {address}; an agent that runs retire is refused and gets the line to ask with)."),
+            format!("{address} has its own git worktree, so it wasn't archived. Nothing more is needed unless you want it gone: retiring it removes the worktree, so a person does that ({CLI_NAME} sidecar review {address}, then {CLI_NAME} sidecar retire {address}; an agent that runs retire is refused and gets the line to ask with)."),
         ));
     }
     crate::v2_spawn::record_closed_tab(&row.agent_name);
@@ -1865,7 +1866,7 @@ fn handle_access(
         return Err(err(
             "owner_only",
             403,
-            "only the server's owner may turn \"Let this agent manage compute nodes\" on or off (Settings → Workspaces / Agents → <agent> → Permissions → Compute, or k2 compute manage on|off --workspace <ws> from a terminal outside K2)",
+            concat!("only the server's owner may turn \"Let this agent manage compute nodes\" on or off (Settings → Workspaces / Agents → <agent> → Permissions → Compute, or ", cli_name!(), " compute manage on|off --workspace <ws> from a terminal outside ", product_name!(), ")"),
         ));
     }
     let value = match v.get("value") {
@@ -2120,8 +2121,8 @@ fn handle_access(
             return Err(err(
                 crate::apps::access::OPEN_RETIRED,
                 410,
-                "\"…and publish open Apps\" is retired: each open-path move is held for the owner, who approves it in \
-                 person (k2 app approvals, then k2 app approve <id> from a terminal outside K2)",
+                concat!("\"…and publish open Apps\" is retired: each open-path move is held for the owner, who approves it in \
+                 person (", cli_name!(), " app approvals, then ", cli_name!(), " app approve <id> from a terminal outside ", product_name!(), ")"),
             ));
         }
         k2_core::workspace::settings::set_agents_can_publish_open_apps(&ws.id, false)

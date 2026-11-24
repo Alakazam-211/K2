@@ -273,7 +273,7 @@ pub fn parse_acme_tasks(args: &Value) -> Result<Vec<AcmeTask>, String> {
             "Failed" => ("Failed", s("failureReason"), s("failedAt").or(s("createdAt")), None),
             other => {
                 return Err(format!(
-                    "x:Task/get: AcmeRenewal {id} has status '@type' '{other}' — K2 knows \
+                    "x:Task/get: AcmeRenewal {id} has status '@type' '{other}' — {PRODUCT_NAME} knows \
                      Pending/Retry/Failed only"
                 ))
             }
@@ -757,7 +757,7 @@ pub fn cert_step(api: &dyn DefaultsApi, inp: &CertInputs<'_>) -> Result<CertStep
     let host = inp.host.trim().trim_end_matches('.').to_ascii_lowercase();
     if inp.owner != CertOwner::StalwartAcme {
         return Ok(CertStep::Skipped(format!(
-            "owner {} — K2 locks names only where Stalwart's own ACME issues the mail cert",
+            "owner {} — {PRODUCT_NAME} locks names only where Stalwart's own ACME issues the mail cert",
             inp.owner.as_str()
         )));
     }
@@ -835,12 +835,12 @@ fn queue_guarded(
         PointsHere::Yes => {}
         PointsHere::No(d) => {
             return Guarded::Blocked(format!(
-                "{d} — add the A record for {host}, then `k2 hostmail cert renew`"
+                "{d} — add the A record for {host}, then `{CLI_NAME} hostmail cert renew`"
             ))
         }
         PointsHere::Unknown(d) => {
             return Guarded::Blocked(format!(
-                "could not tell whether {host} points here ({d}) — `k2 hostmail cert renew` \
+                "could not tell whether {host} points here ({d}) — `{CLI_NAME} hostmail cert renew` \
                  once it does"
             ))
         }
@@ -1050,7 +1050,7 @@ pub fn reconcile(
                 RoutePlan::Write { id, body, from } => match api.mta_route_set(&id, body) {
                     Ok(()) => {
                         written += 1;
-                        lines.push(format!("{P} mx route: {from} → v4Only (K2 sends over IPv4 only)"));
+                        lines.push(format!("{P} mx route: {from} → v4Only ({PRODUCT_NAME} sends over IPv4 only)"));
                         m.mx_route = Some(RouteMark { id, from, to: Some("v4Only".into()), at: ctx.now });
                     }
                     Err(e) => lines.push(format!("{P} mx route: FAILED (retried next boot): {e}")),
@@ -1076,7 +1076,7 @@ pub fn reconcile(
                                 lines.push(if w.to == "disable" {
                                     format!(
                                         "{P} DANE: '{}' optional → disable (Stalwart {} can't check \
-                                         DNSSEC reliably; K2 turns it back on after the upgrade to \
+                                         DNSSEC reliably; {PRODUCT_NAME} turns it back on after the upgrade to \
                                          0.16.20)",
                                         w.name,
                                         ver_str(v)
@@ -1299,7 +1299,7 @@ pub fn reconcile_forward_throttles(api: &dyn ThrottleApi, per_mailbox: i64) -> T
         Err(e) => {
             return ThrottleReport {
                 lines: vec![format!("{P} forward throttles: could not read them (retried within the hour): {e}")],
-                problem: Some(format!("K2 couldn't read the mail server's throttles: {e}")),
+                problem: Some(format!("{PRODUCT_NAME} couldn't read the mail server's throttles: {e}")),
             }
         }
     };
@@ -1379,7 +1379,7 @@ pub fn apply_configured_throttles() -> Option<String> {
         }
         match super::supervisor::mgmt_client_from_row() {
             Ok(client) => reconcile_configured_throttles(&client).problem,
-            Err(e) => Some(format!("K2 can't reach the mail server: {e}")),
+            Err(e) => Some(format!("{PRODUCT_NAME} can't reach the mail server: {e}")),
         }
     }
 }
@@ -1588,7 +1588,7 @@ fn run_live(reason: &'static str) {
     }
     if readable {
         if let Err(e) = save_markers(&out.markers) {
-            k2_core::log_debug!("{P} FAILED to record what K2 changed: {e}");
+            k2_core::log_debug!("{P} FAILED to record what {PRODUCT_NAME} changed: {e}");
         }
     }
     for line in out.lines {
@@ -1696,7 +1696,7 @@ pub fn outbound_status(
                 v.dedup();
                 v.join("/")
             } else if off.iter().all(|r| r["setBy"] == "k2") {
-                "off (K2, until 0.16.20)".into()
+                concat!("off (", product_name!(), ", until 0.16.20)").into()
             } else if off.len() == rows.len() {
                 "off (set by hand)".into()
             } else {
@@ -2002,6 +2002,8 @@ pub fn fill_status(body: &mut Value, host: Option<&str>) {
 // ── Doctor checks (pure over the seams) ─────────────────────────────────
 
 use super::doctor::{DoctorCheck, ST_INFO, ST_PASS, ST_UNKNOWN, ST_WARN};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 pub const DNSSEC_ID: &str = "dnssec-resolver";
 
@@ -2043,20 +2045,20 @@ pub fn dane_disabled_check(
     )];
     if !by_k2.is_empty() {
         parts.push(format!(
-            "K2 turned it off on {} because Stalwart before 0.16.20 can't check DNSSEC \
-             reliably; `k2 hostmail upgrade` (to 0.16.25) and K2 turns it back on",
+            "{PRODUCT_NAME} turned it off on {} because Stalwart before 0.16.20 can't check DNSSEC \
+             reliably; `{CLI_NAME} hostmail upgrade` (to 0.16.25) and {PRODUCT_NAME} turns it back on",
             by_k2.join(", ")
         ));
     }
     if !by_hand.is_empty() {
         parts.push(if old {
             format!(
-                "set by hand on {}; after `k2 hostmail upgrade` (to 0.16.25) turn it back on: \
-                 `k2 hostmail outbound dane on`",
+                "set by hand on {}; after `{CLI_NAME} hostmail upgrade` (to 0.16.25) turn it back on: \
+                 `{CLI_NAME} hostmail outbound dane on`",
                 by_hand.join(", ")
             )
         } else {
-            format!("set by hand on {}; turn it back on: `k2 hostmail outbound dane on`", by_hand.join(", "))
+            format!("set by hand on {}; turn it back on: `{CLI_NAME} hostmail outbound dane on`", by_hand.join(", "))
         });
     }
     check(ID, LABEL, ST_WARN, parts.join(". "))
@@ -2083,7 +2085,7 @@ pub fn outbound_route_check(routes: &Result<Vec<Value>, String>, installed: Opti
             ST_WARN,
             format!(
                 "the mx route is {s}: Stalwart before 0.16.20 drops good IPv4 answers when an \
-                 IPv6 (AAAA) lookup errors, so mail to MX hosts without IPv6 can stall. K2 sends \
+                 IPv6 (AAAA) lookup errors, so mail to MX hosts without IPv6 can stall. {PRODUCT_NAME} sends \
                  over IPv4 only (PTR and SPF are IPv4)"
             ),
         ),
@@ -2091,7 +2093,7 @@ pub fn outbound_route_check(routes: &Result<Vec<Value>, String>, installed: Opti
             ID,
             LABEL,
             ST_INFO,
-            format!("the mx route is {s} (set by hand) — K2's PTR and SPF cover IPv4 only"),
+            format!("the mx route is {s} (set by hand) — {PRODUCT_NAME}'s PTR and SPF cover IPv4 only"),
         ),
     }
 }
@@ -2118,7 +2120,7 @@ pub fn queue_dnssec_check(queue: &Result<Vec<crate::mail::jmap::QueuedMessageInf
         ST_WARN,
         format!(
             "{} queued message(s) last failed on a DNSSEC lookup ({}). They keep their own retry \
-             time; once the outbound fix is live retry each: `k2 hostmail queue retry <id>`",
+             time; once the outbound fix is live retry each: `{CLI_NAME} hostmail queue retry <id>`",
             stuck.len(),
             stuck.join(", ")
         ),
@@ -2161,7 +2163,7 @@ pub fn spam_rules_load_check(
         ST_WARN,
         format!(
             "{} use functions Stalwart {} does not have, so they never load and Stalwart refuses \
-             every settings reload: {}. K2 repairs the 3 known DNSBL rules at boot",
+             every settings reload: {}. {PRODUCT_NAME} repairs the 3 known DNSBL rules at boot",
             bad.len(),
             ver_str(v),
             bad.join("; ")
@@ -2298,7 +2300,7 @@ pub fn mail_host_address_check(
             ST_FAIL,
             format!(
                 "{host} has no A record. Add `{host} A {want}` at the DNS host of its zone — MX \
-                 points here and the certificate needs it — then `k2 hostmail cert renew`"
+                 points here and the certificate needs it — then `{CLI_NAME} hostmail cert renew`"
             ),
         ),
         "wrong" => check(
@@ -2501,7 +2503,7 @@ pub fn dnssec_resolver_check(
             format!(
                 "{count}, each serves DNSSEC over TCP, but Stalwart before 0.16.23 can falsely \
                  fail DNSSEC when more than one nameserver is listed. If mail stalls on \
-                 'DNSSEC … Bogus', DANE off is the workaround (K2 does it below 0.16.20)"
+                 'DNSSEC … Bogus', DANE off is the workaround ({PRODUCT_NAME} does it below 0.16.20)"
             ),
         );
     }
@@ -2524,8 +2526,8 @@ pub fn dane_on(
     })?;
     if v < V_DANE_SELF_OFF {
         return Err(format!(
-            "Stalwart {} can't check DNSSEC reliably, so DANE stays off. Run `k2 hostmail \
-             upgrade` first (0.16.20 turns DANE off by itself when it can't validate); K2 turns \
+            "Stalwart {} can't check DNSSEC reliably, so DANE stays off. Run `{CLI_NAME} hostmail \
+             upgrade` first (0.16.20 turns DANE off by itself when it can't validate); {PRODUCT_NAME} turns \
              back on what it turned off, then run this for the rest",
             ver_str(v)
         ));
@@ -2592,7 +2594,7 @@ pub fn handle_post(body: &[u8]) -> crate::cli_response::CliResponse {
         return err_json(
             "400 Bad Request",
             "usage",
-            "body must be {\"dane\":\"on\"} — the only outbound setting K2 changes on request".into(),
+            concat!("body must be {\"dane\":\"on\"} — the only outbound setting ", product_name!(), " changes on request").into(),
         );
     }
     if let Some(resp) = super::routes_server::upgrade_running_response() {

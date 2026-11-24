@@ -32,9 +32,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use k2_core::domains::{DomainBinding, ROLE_MAIL};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 
 use crate::domains::status::LeafInfo;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A K2-issued certificate with less than this left is re-ordered (Let's
 /// Encrypt's own advice: renew at 1/3 of the 90-day lifetime).
@@ -881,9 +882,9 @@ pub struct DoctorEntry {
 }
 
 /// The remedy when the planted certificate is not the one being served.
-pub const NOT_LOADED_REMEDY: &str = "the hot reload did not land — restart Stalwart: \
+pub const NOT_LOADED_REMEDY: &str = concat!("the hot reload did not land — restart Stalwart: \
      `sudo systemctl restart stalwart` (on boxes without the mail helper that is the way; \
-     never `k2 hostmail disable/enable`)";
+     never `", cli_name!(), " hostmail disable/enable`)");
 
 /// Warn (never gates direct send) when a K2-issued certificate is within
 /// [`WARN_WITHIN_SECS`] of expiry, its last renewal attempt failed (at
@@ -913,8 +914,8 @@ pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::D
         {
             if planted != served {
                 problems.push(format!(
-                    "{}: the certificate K2 planted (sha256 {}…) is not what Stalwart serves \
-                     on :{} (sha256 {}…) — if `k2 hostmail cert renew` succeeded but tls-cert \
+                    "{}: the certificate {PRODUCT_NAME} planted (sha256 {}…) is not what Stalwart serves \
+                     on :{} (sha256 {}…) — if `{CLI_NAME} hostmail cert renew` succeeded but tls-cert \
                      still shows the old leaf, {NOT_LOADED_REMEDY}",
                     e.name,
                     &planted[..planted.len().min(16)],
@@ -951,13 +952,13 @@ pub fn doctor_check(entries: &[DoctorEntry], now: i64) -> crate::mail::doctor::D
         return mk(
             ST_WARN,
             format!(
-                "{}. Retry now: k2 cert renew <hostname> (or k2 hostmail cert renew)",
+                "{}. Retry now: {CLI_NAME} cert renew <hostname> (or {CLI_NAME} hostmail cert renew)",
                 problems.join(". ")
             ),
         );
     }
     if ok.is_empty() {
-        return mk(ST_INFO, "no certificate on this box was issued by K2".into());
+        return mk(ST_INFO, concat!("no certificate on this box was issued by ", product_name!()).into());
     }
     mk(
         ST_PASS,

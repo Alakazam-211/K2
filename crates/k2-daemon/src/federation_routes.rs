@@ -789,7 +789,8 @@ pub(crate) fn bad_sender_response() -> CliResponse {
 /// The peer free-text rule, one definition in k2-core (the roster heal
 /// uses it too).
 pub(crate) use k2_core::federation::{escape_capped, PEER_TEXT_CAP};
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// A peer's raw `reason` for this daemon's log only: the first 200
 /// characters, every character outside printable ASCII escaped.
@@ -1451,7 +1452,7 @@ pub(crate) fn handle_send_until(body: &[u8], deadline: std::time::Instant) -> Cl
         None => {
             if req.text.trim().is_empty() {
                 return CliResponse::bad_request(
-                    "text required — or pass tray for k2 msg --inbox-wake",
+                    concat!("text required — or pass tray for ", cli_name!(), " msg --inbox-wake"),
                 );
             }
             SignalKind::Msg {
@@ -1840,7 +1841,7 @@ pub fn handle_send_user_tray(
 ) -> CliResponse {
     if !federation::enabled() {
         return CliResponse::bad_request(
-            "\"Connect agents across servers\" is off on this server — turn it on (Settings → Network → Tunnel → Policies, or k2 fed enable) and pair first (k2 fed pair-request)",
+            concat!("\"Connect agents across servers\" is off on this server — turn it on (Settings → Network → Tunnel → Policies, or ", cli_name!(), " fed enable) and pair first (", cli_name!(), " fed pair-request)"),
         );
     }
     if agent.trim().is_empty() || host.trim().is_empty() {
@@ -1863,7 +1864,7 @@ pub fn handle_send_user_tray(
         None => {
             return json_err(
                 "404 Not Found",
-                format!("no paired peer matching {host} — pair it first (k2 fed peers)"),
+                format!("no paired peer matching {host} — pair it first ({CLI_NAME} fed peers)"),
             )
         }
     };
@@ -1871,7 +1872,7 @@ pub fn handle_send_user_tray(
         return json_err(
             "403 Forbidden",
             format!(
-                "peer {host} is not trusted yet (state={:?}) — confirm the pairing (k2 fed confirm)",
+                "peer {host} is not trusted yet (state={:?}) — confirm the pairing ({CLI_NAME} fed confirm)",
                 peer.trust
             ),
         );
@@ -2736,7 +2737,7 @@ fn not_connected_response(
         .map(|e| e.handle.clone())
         .unwrap_or_else(|| typed_name.to_string());
     let add_hint = format!(
-        "add it with `k2 connections add {target_handle}::{host}` (or ask your human: \
+        "add it with `{CLI_NAME} connections add {target_handle}::{host}` (or ask your human: \
          Settings → Workspaces / Agents → <workspace> → Connections)"
     );
 
@@ -2781,7 +2782,7 @@ fn not_connected_response(
         format!(
             "your connection {agent}::{host} matches {} workspaces on {host} ({}), so it can't \
              tell which one you mean — add the one you want by its handle: \
-             `k2 connections add <handle>::{host}`.",
+             `{CLI_NAME} connections add <handle>::{host}`.",
             hits.len(),
             names.join(", ")
         )
@@ -2813,7 +2814,7 @@ fn remote_workspace_gone_response(
          removed, re-created, or hidden there). A connection never moves to a different \
          workspace that has the name {name} now. If {host} lists that workspace again, this \
          connection works again. To reach a different workspace there, ask your human to \
-         check it and add it again: `k2 connections add <handle>::{host}`.",
+         check it and add it again: `{CLI_NAME} connections add <handle>::{host}`.",
         agent = row.agent,
     );
     CliResponse {
@@ -2959,8 +2960,8 @@ pub(crate) fn connections_resolve(target: &str, full: bool) -> CliResponse {
             "404 Not Found",
             "not_found",
             format!(
-                "{address}: {why}, so nothing would reach {host}. Pair that server first (k2 fed pair-start on one \
-                 side, k2 fed pair-join on the other), then connect"
+                "{address}: {why}, so nothing would reach {host}. Pair that server first ({CLI_NAME} fed pair-start on one \
+                 side, {CLI_NAME} fed pair-join on the other), then connect"
             ),
         )
     };

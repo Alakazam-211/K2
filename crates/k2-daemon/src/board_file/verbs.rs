@@ -25,6 +25,7 @@ use k2_mpc_board::{verbs, Limits};
 use k2_mpc_board_bridge::kit::errors::{lookup, ErrorReport, Value as KValue};
 use k2_mpc_board_bridge::parse::{self, Call, Names};
 use k2_mpc_board_bridge::{HostBug, Why};
+use k2_core::product_name;
 
 /// The verbs `k2 board` answers on K2's own routes, with K2's output: `list`,
 /// `read` and `search` (`/read`), `fields` (`/fields`) and `apply` (`/save`:
@@ -47,7 +48,7 @@ pub fn names() -> &'static Names {
         Names::default()
             .anchor("connect", "fromAnchor", "from")
             .and_then(|n| n.anchor("connect", "toAnchor", "to"))
-            .expect("K2's names for the board bridge hold")
+            .expect(concat!(product_name!(), "'s names for the board bridge hold"))
     })
 }
 

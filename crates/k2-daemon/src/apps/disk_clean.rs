@@ -43,6 +43,7 @@ use serde_json::{json, Value as J};
 
 use super::disk_watch::EngineSeeds;
 use super::routes::{actor, agent_ws, db_err, json_body, need_build, R, Who};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTE: &str = "/cli/app/resources/clean";
 
@@ -55,7 +56,7 @@ const LOG_MAX_AGE_SECS: i64 = 30 * 86_400;
 
 /// What `clean` never touches (said in every answer).
 pub const NEVER: &str =
-    "Never touched: App data, databases, mail, uploads, workspace folders, transcripts, backups, the K2 Trash and the current base images.";
+    concat!("Never touched: App data, databases, mail, uploads, workspace folders, transcripts, backups, the ", product_name!(), " Trash and the current base images.");
 
 /// One thing `clean` frees (or would).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -459,7 +460,7 @@ pub(crate) fn run(scope: &Scope, dry_run: bool, now: i64, engine: &dyn EngineCle
         *by_kind.entry(i.kind).or_insert(0) += i.bytes.unwrap_or(0);
     }
     let engine_note = match engine_status.as_str() {
-        Some("old") => Some("the walled engine predates clean: images and its leftovers were not looked at (k2 app engine install)"),
+        Some("old") => Some(concat!("the walled engine predates clean: images and its leftovers were not looked at (", cli_name!(), " app engine install)")),
         _ => None,
     };
     if !dry_run {
@@ -471,7 +472,7 @@ pub(crate) fn run(scope: &Scope, dry_run: bool, now: i64, engine: &dyn EngineCle
         let _ = super::disk_scan::refresh_live_if_older(Duration::ZERO);
     }
     let hint = if items.is_empty() {
-        "Nothing to clean: K2 found nothing it made and can make again.".to_string()
+        concat!("Nothing to clean: ", product_name!(), " found nothing it made and can make again.").to_string()
     } else if dry_run {
         format!("{} item(s), about {}. Run without --dry-run to free them.", items.iter().filter(|i| i.error.is_none()).count(), dg::human_gb(total))
     } else {

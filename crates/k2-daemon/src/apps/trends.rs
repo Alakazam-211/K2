@@ -30,6 +30,7 @@ use k2_core::resource_samples::{self as rs, Kind, Point, Sample};
 use serde_json::{json, Value as J};
 
 use super::routes::{db_err, no, R, Who};
+use k2_core::brand::CLI_NAME;
 
 pub const ROUTE: &str = "/cli/app/resources/trends";
 pub const TICK: Duration = Duration::from_secs(60);
@@ -243,7 +244,7 @@ pub(crate) fn route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let apps = store::list_apps(&conn, None).map_err(db_err)?;
     if let Some(a) = &app {
         if !apps.iter().any(|r| &r.app_id == a) {
-            return Err(no(k2_core::deploy::codes::APP_NOT_FOUND, 404, format!("no App '{a}' on this box (k2 app list)")));
+            return Err(no(k2_core::deploy::codes::APP_NOT_FOUND, 404, format!("no App '{a}' on this box ({CLI_NAME} app list)")));
         }
     }
     let all = rs::series(&conn, res, now - secs, None).map_err(db_err)?;

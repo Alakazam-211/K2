@@ -33,6 +33,8 @@ use serde_json::Value as J;
 
 use super::creds;
 use super::payload::{self, Notification, Stamps};
+use k2_core::brand::CLI_NAME;
+use k2_core::product_name;
 
 pub const APNS_PRODUCTION: &str = "https://api.push.apple.com";
 pub const APNS_SANDBOX: &str = "https://api.sandbox.push.apple.com";
@@ -783,7 +785,7 @@ impl Sender {
                     &row.project_id,
                     "App push keys refused",
                     &format!(
-                        "{} refused {}'s push key ({code}). Sends to {} devices are paused for {} minutes. The owner checks the key with k2 app push check {} and replaces it with k2 app push setup.",
+                        "{} refused {}'s push key ({code}). Sends to {} devices are paused for {} minutes. The owner checks the key with {CLI_NAME} app push check {} and replaces it with {CLI_NAME} app push setup.",
                         if platform == store::PLATFORM_APNS { "Apple" } else { "Google" },
                         row.name,
                         platform,
@@ -810,8 +812,8 @@ impl Sender {
             token: if platform == store::PLATFORM_APNS { "0".repeat(64) } else { "k2-check-not-a-real-token".into() },
         };
         let n = Notification {
-            title: Some("K2 key check".into()),
-            body: Some("K2 key check".into()),
+            title: Some(concat!(product_name!(), " key check").into()),
+            body: Some(concat!(product_name!(), " key check").into()),
             data: Default::default(),
             topic: None,
             collapse_id: None,

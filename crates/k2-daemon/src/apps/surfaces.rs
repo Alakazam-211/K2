@@ -46,6 +46,7 @@ use super::routes::{agent_ws, db_err, json_body, need_credential, no, respond, s
 use crate::cli_response::CliResponse;
 use crate::garden_data::refused;
 use k2_core::garden_data::DataError;
+use k2_core::brand::CLI_NAME;
 
 /// `room.members` on the App transport.
 pub const MEMBERS_ROUTE: &str = "/cli/skin/members";
@@ -451,7 +452,7 @@ fn members_route(who: &Who, workspace: Option<&str>, app: Option<&str>) -> R<J> 
     let ws = super::routes::target_ws(who, workspace)?;
     let handle = ws_handle(&ws.id);
     let target = match app.map(str::trim).filter(|a| !a.is_empty() && *a != "all") {
-        Some(a) => Some(target_for_app_id(a).ok_or_else(|| no(k2_core::deploy::codes::APP_NOT_FOUND, 404, format!("no App '{a}' on this box (k2 app list; host = the box login)")))?),
+        Some(a) => Some(target_for_app_id(a).ok_or_else(|| no(k2_core::deploy::codes::APP_NOT_FOUND, 404, format!("no App '{a}' on this box ({CLI_NAME} app list; host = the box login)")))?),
         None => None,
     };
     let mut v = members_view(&ws.id, &handle, target.as_deref(), false).map_err(db_err)?;

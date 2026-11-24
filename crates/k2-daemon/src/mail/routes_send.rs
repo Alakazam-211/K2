@@ -46,6 +46,8 @@ use crate::mail::send::{
     SendOutcome, SubmitBackend,
 };
 use k2_core::db::schema::MailExternalInbox;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 // ── Response helpers (the S2/S3/S4 error contract + the S5 codes) ───────
 
@@ -119,13 +121,13 @@ fn not_sendable_response(project_id: &str, address: &str) -> CliResponse {
     match access::can_read(project_id, address) {
         Ok(inbox) => {
             let draft_hint = if inbox.source == Source::Linked {
-                ", or save a reply draft with 'k2 mail draft'"
+                concat!(", or save a reply draft with '", cli_name!(), " mail draft'")
             } else {
                 ""
             };
             send_error_response(SendError::Gated(format!(
                 "this inbox is read/draft-only for your workspace — ask the primary workspace \
-                 for 'send' access (k2 mail access set-level){draft_hint}."
+                 for 'send' access ({CLI_NAME} mail access set-level){draft_hint}."
             )))
         }
         Err(e) => read_error_response(e),
@@ -157,9 +159,9 @@ fn resolve_from_inbox(
         0 => Err(error_response(
             "404 Not Found",
             "not_found",
-            "this workspace has no address it can send FROM — mint one with 'k2 hostmail create', \
-             ask the primary for 'send' access (k2 mail inboxes shows yourLevel), or pass \
-             'from' with a linked address you can send from",
+            concat!("this workspace has no address it can send FROM — mint one with '", cli_name!(), " hostmail create', \
+             ask the primary for 'send' access (", cli_name!(), " mail inboxes shows yourLevel), or pass \
+             'from' with a linked address you can send from"),
         )),
         1 => match access::can_send(project_id, &all[0].0) {
             Ok(inbox) => Ok(inbox),
@@ -170,7 +172,7 @@ fn resolve_from_inbox(
             "usage",
             &format!(
                 "this workspace can send from {n} addresses — pass 'from' to pick the sender \
-                 (see 'k2 mail inboxes')"
+                 (see '{CLI_NAME} mail inboxes')"
             ),
         )),
     }
@@ -257,8 +259,8 @@ fn dispatch_and_respond(
         return error_response(
             "400 Bad Request",
             "usage",
-            "--wait cannot combine with --at/--in — schedule the send, then poll \
-             'k2 mail outbox <id>' (or cancel with 'k2 mail outbox cancel <id>')",
+            concat!("--wait cannot combine with --at/--in — schedule the send, then poll \
+             '", cli_name!(), " mail outbox <id>' (or cancel with '", cli_name!(), " mail outbox cancel <id>')"),
         );
     }
     let _slot = match wait_slot(project_id, gate, wait_timeout) {
@@ -297,8 +299,8 @@ fn wait_slot(
                 "ok": false,
                 "error": {
                     "code": "rate_limited",
-                    "hint": "this workspace already has the maximum wait calls open — \
-                             retry without 'wait', then poll 'k2 mail outbox'",
+                    "hint": concat!("this workspace already has the maximum wait calls open — \
+                             retry without 'wait', then poll '", cli_name!(), " mail outbox'"),
                 },
             })
             .to_string(),
@@ -328,7 +330,7 @@ fn respond_outcome(
                 "sendAfterRfc3339": when,
                 "hint": format!(
                     "scheduled ({id}) — will leave after {when}; track with \
-                     'k2 mail outbox {id}', cancel with 'k2 mail outbox cancel {id}'"
+                     '{CLI_NAME} mail outbox {id}', cancel with '{CLI_NAME} mail outbox cancel {id}'"
                 ),
             }))
         }
@@ -349,7 +351,7 @@ fn respond_outcome(
                     "status": "pending_approval",
                     "hint": format!(
                         "queued for approval ({id}) — your human decides in Settings → \
-                         Cores → Email Hosting → Approvals; track with 'k2 mail outbox {id}'"
+                         Cores → Email Hosting → Approvals; track with '{CLI_NAME} mail outbox {id}'"
                     ),
                 });
                 if let Some(after) = send_after {
@@ -358,7 +360,7 @@ fn respond_outcome(
                         serde_json::json!(crate::mail::schedule::format_send_after(after));
                     body["hint"] = serde_json::json!(format!(
                         "queued for approval ({id}) — after approve, sends after {}; \
-                         track with 'k2 mail outbox {id}'",
+                         track with '{CLI_NAME} mail outbox {id}'",
                         crate::mail::schedule::format_send_after(after)
                     ));
                 }
@@ -394,7 +396,7 @@ fn respond_outcome(
                     "status": "pending_approval",
                     "hint": format!(
                         "not decided within {timeout_secs}s — the message is still queued; \
-                         check 'k2 mail outbox {id}'"
+                         check '{CLI_NAME} mail outbox {id}'"
                     ),
                 })),
                 Err(hint) => error_response("502 Bad Gateway", "engine", &hint),
@@ -406,7 +408,7 @@ fn respond_outcome(
             "status": "submitted",
             "hint": format!(
                 "accepted-for-delivery — final delivery is the receiving server's \
-                 business; track with 'k2 mail outbox {id}'"
+                 business; track with '{CLI_NAME} mail outbox {id}'"
             ),
         })),
         SendOutcome::SubmitFailed { id, error } => CliResponse {
@@ -512,8 +514,8 @@ fn dispatch_linked(
                 "from": inbox.email_address,
                 "via": submit.backend(),
                 "hint": format!(
-                    "submitted from {} via {via} — accepted by the provider (K2 doesn't confirm \
-                     final delivery); see it in 'k2 mail outbox {id}'",
+                    "submitted from {} via {via} — accepted by the provider ({PRODUCT_NAME} doesn't confirm \
+                     final delivery); see it in '{CLI_NAME} mail outbox {id}'",
                     inbox.email_address
                 ),
             });
@@ -548,7 +550,7 @@ pub(crate) fn linked_password(inbox: &MailExternalInbox) -> Result<String, CliRe
             "not_ready",
             &format!(
                 "credentials for '{}' are missing from the vault — your human can reconnect \
-                 it with 'k2 mail link add'",
+                 it with '{CLI_NAME} mail link add'",
                 inbox.email_address
             ),
         )),
@@ -685,10 +687,10 @@ fn attachment_path_refusal(rel: &str) -> Option<&'static str> {
         .split(['/', '\\'])
         .any(|p| p.eq_ignore_ascii_case(".k2") || p.eq_ignore_ascii_case(".k2so"));
     if in_k2 {
-        return Some("it is in K2's private .k2 folder. Copy what you mean to send out of .k2/ first");
+        return Some(concat!("it is in ", product_name!(), "'s private .k2 folder. Copy what you mean to send out of .k2/ first"));
     }
     if k2_core::secret_paths::is_secret_rel(rel) {
-        return Some("it looks like a secret. Secrets travel through the vault (k2 vault), not email");
+        return Some(concat!("it looks like a secret. Secrets travel through the vault (", cli_name!(), " vault), not email"));
     }
     None
 }
@@ -769,9 +771,9 @@ fn read_one_attachment(
     if scan.hit.is_some() {
         return Err(attachment_refused(
             spec,
-            "its content looks like it holds a credential (a private key, a token, or a `password=` \
-             style line). If it does, secrets travel through the vault (k2 vault), not email. If it \
-             doesn't, reword that line, or ask your human to send the file",
+            concat!("its content looks like it holds a credential (a private key, a token, or a `password=` \
+             style line). If it does, secrets travel through the vault (", cli_name!(), " vault), not email. If it \
+             doesn't, reword that line, or ask your human to send the file"),
         ));
     }
     let filename = safe_attachment_name(path.file_name().and_then(|n| n.to_str()).unwrap_or(""));
@@ -992,16 +994,16 @@ fn handle_send_with(body: &[u8], thread: Option<&ReplyThread>) -> CliResponse {
                 return error_response(
                     "400 Bad Request",
                     "usage",
-                    "--reply-to works on hosted K2 mailboxes only — a linked inbox is your human's \
-                     own account, and answers go to it. Nothing was sent",
+                    concat!("--reply-to works on hosted ", product_name!(), " mailboxes only — a linked inbox is your human's \
+                     own account, and answers go to it. Nothing was sent"),
                 );
             }
             if schedule_requested {
                 return error_response(
                     "400 Bad Request",
                     "usage",
-                    "--at/--in scheduling is for hosted K2 mailboxes; a linked inbox sends \
-                     now or queues for approval (no schedule queue)",
+                    concat!("--at/--in scheduling is for hosted ", product_name!(), " mailboxes; a linked inbox sends \
+                     now or queues for approval (no schedule queue)"),
                 );
             }
             let gate = match linked_send_gate(&path) {
@@ -1116,9 +1118,9 @@ fn linked_from_name_refused() -> CliResponse {
     error_response(
         "400 Bad Request",
         "usage",
-        "--from-name works on hosted K2 mailboxes only — a linked inbox is your \
+        concat!("--from-name works on hosted ", product_name!(), " mailboxes only — a linked inbox is your \
          human's own account and sends under the display name set on that \
-         account",
+         account"),
     )
 }
 
@@ -1167,7 +1169,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'id' — a message id from 'k2 mail messages'",
+            concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"),
         );
     };
     let Some(body_text) = v["body"].as_str().filter(|s| !s.trim().is_empty()) else {
@@ -1183,8 +1185,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "k2 mail reply goes back to the original sender and takes no --reply-to — send a new \
-             message with k2 mail send if answers should go elsewhere",
+            concat!(cli_name!(), " mail reply goes back to the original sender and takes no --reply-to — send a new \
+             message with ", cli_name!(), " mail send if answers should go elsewhere"),
         );
     }
     // `--reply-all` / `--cc` / `--bcc`: checked before any identity work.
@@ -1224,7 +1226,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "invalid message id — use an id from 'k2 mail messages'",
+            concat!("invalid message id — use an id from '", cli_name!(), " mail messages'"),
         );
     };
     let masked = || {
@@ -1563,8 +1565,8 @@ fn name_new_recipients(resp: CliResponse, outside: &[String]) -> CliResponse {
     let was = v["error"]["hint"].as_str().unwrap_or_default().to_string();
     v["error"]["hint"] = serde_json::json!(format!(
         "{} {} not on the message you're answering, so the reply would be a new send to {} and \
-         needs what 'k2 mail send' needs. Nothing was sent. Drop those --cc/--bcc, save a draft \
-         for a person to send ('k2 mail draft <id> --cc …'), or get the send right: {was}",
+         needs what '{CLI_NAME} mail send' needs. Nothing was sent. Drop those --cc/--bcc, save a draft \
+         for a person to send ('{CLI_NAME} mail draft <id> --cc …'), or get the send right: {was}",
         outside.join(", "),
         if outside.len() == 1 { "is" } else { "are" },
         if outside.len() == 1 { "it" } else { "them" },
@@ -1594,9 +1596,9 @@ fn forward_linked_refused(which: &str) -> CliResponse {
         "400 Bad Request",
         "usage",
         &format!(
-            "k2 mail forward-message works on hosted K2 mailboxes only for now, and {which} is a \
-             linked inbox. Nothing was sent. Read the message with k2 mail read and send what \
-             matters with k2 mail send, or ask your human to forward it from that account"
+            "{CLI_NAME} mail forward-message works on hosted {PRODUCT_NAME} mailboxes only for now, and {which} is a \
+             linked inbox. Nothing was sent. Read the message with {CLI_NAME} mail read and send what \
+             matters with {CLI_NAME} mail send, or ask your human to forward it from that account"
         ),
     )
 }
@@ -1620,7 +1622,7 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
         return error_response("400 Bad Request", "usage", "missing 'project' (workspace name | path | UUID)");
     };
     let Some(token) = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty()) else {
-        return error_response("400 Bad Request", "usage", "missing 'id' — a message id from 'k2 mail messages'");
+        return error_response("400 Bad Request", "usage", concat!("missing 'id' — a message id from '", cli_name!(), " mail messages'"));
     };
     let to_raw = match string_list(&v["to"], "to") {
         Ok(l) if !l.is_empty() => l,
@@ -1673,7 +1675,7 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
     // The read gate, as `k2 mail read`: the address inside the id must be one
     // this workspace can read. Every miss answers alike.
     let Some((address, email_id)) = messages::decode_message_id(token) else {
-        return error_response("400 Bad Request", "usage", "invalid message id — use an id from 'k2 mail messages'");
+        return error_response("400 Bad Request", "usage", concat!("invalid message id — use an id from '", cli_name!(), " mail messages'"));
     };
     let masked = || error_response("404 Not Found", "not_found", &format!("no message '{token}' in this workspace"));
     let source = match access::can_read(&project_id, &address) {
@@ -1701,7 +1703,7 @@ pub fn handle_forward_message(body: &[u8]) -> CliResponse {
             Err(_) => {
                 return send_error_response(SendError::Gated(format!(
                     "you can read {address} but not send from it — pass --from with a mailbox of \
-                     yours, or ask the primary workspace for 'send' access (k2 mail access set-level)"
+                     yours, or ask the primary workspace for 'send' access ({CLI_NAME} mail access set-level)"
                 )))
             }
         },
@@ -1894,7 +1896,7 @@ fn forward_sender_gate(
         messages::SenderCheck::NeedsPerson(why) => Err(SendError::Guardrail(format!(
             "the original message {why}, so its sender may be forged — forwarding it is blocked \
              unless send gating is 'approval' (your human reviews it). Ask your human via \
-             'k2 tickets ask' with an HTML brief (k2 study ticket-brief)"
+             '{CLI_NAME} tickets ask' with an HTML brief ({CLI_NAME} study ticket-brief)"
         ))),
     }
 }

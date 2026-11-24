@@ -68,6 +68,8 @@ use crate::mail::oauth::{EgressHttp, HttpClient};
 use crate::vault::actor::VaultCaller;
 use crate::vault::oauth_refresh;
 use crate::vault_fetch::{follow_target, ovh_time, send_kind, set_query_param, Allowlist, Injection, RateLimiter};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Holds the listener's port, next to `vault.db`.
 pub const PORT_FILE: &str = "proxy.port";
@@ -150,7 +152,7 @@ fn single_origin(hosts: &[String]) -> Result<Origin, VaultError> {
     let pats = parse_stored(hosts);
     match (hosts.len(), pats.as_slice()) {
         (1, [p]) if !p.is_wildcard() => Ok(Origin::parse_url(&p.render())?.1),
-        _ => Err(VaultError::bad_request("proxy_needs_one_host", "proxy-url needs a secret bound to one host; use k2 vault fetch")),
+        _ => Err(VaultError::bad_request("proxy_needs_one_host", concat!("proxy-url needs a secret bound to one host; use ", cli_name!(), " vault fetch"))),
     }
 }
 
@@ -182,10 +184,10 @@ pub fn status_json() -> Value {
         Some(l) if l.moved => json!({
             "port": l.port,
             "moved": true,
-            "hint": "proxy moved: re-run k2 vault proxy-url",
+            "hint": concat!("proxy moved: re-run ", cli_name!(), " vault proxy-url"),
         }),
         Some(l) => json!({ "port": l.port, "moved": false }),
-        None => json!({ "port": null, "moved": false, "hint": "the proxy isn't listening; k2 vault proxy-url can't be used" }),
+        None => json!({ "port": null, "moved": false, "hint": concat!("the proxy isn't listening; ", cli_name!(), " vault proxy-url can't be used") }),
     }
 }
 
@@ -436,7 +438,7 @@ fn authorize(deps: &Deps, token: &str, provider: &str) -> Result<Authorized, Vau
     if p.provider != provider {
         return Err(VaultError::bad_request(
             "provider_mismatch",
-            format!("this placeholder is for {}; use the base URL k2 vault proxy-url printed", p.provider),
+            format!("this placeholder is for {}; use the base URL {CLI_NAME} vault proxy-url printed", p.provider),
         ));
     }
     if !(deps.live)(&p.session_id) {
@@ -447,7 +449,7 @@ fn authorize(deps: &Deps, token: &str, provider: &str) -> Result<Authorized, Vau
     let sel = Selector::Id(p.secret_id.clone());
     let target = vault.proxy_target(&sel, &who)?;
     // The site the placeholder was minted for must still be its one site.
-    let changed = || VaultError::forbidden("proxy_site_changed", "this secret's sites changed; run k2 vault proxy-url again");
+    let changed = || VaultError::forbidden("proxy_site_changed", concat!("this secret's sites changed; run ", cli_name!(), " vault proxy-url again"));
     let origin = single_origin(&target.hosts).map_err(|_| changed())?;
     if provider_id(&origin) != p.provider {
         return Err(changed());
@@ -469,7 +471,7 @@ fn authorize(deps: &Deps, token: &str, provider: &str) -> Result<Authorized, Vau
 fn misplaced(where_: &str) -> VaultError {
     VaultError::bad_request(
         "placeholder_misplaced",
-        format!("the placeholder is in the {where_}; K2 never forwards it. Send it only as the API key, or remove it from the {where_}"),
+        format!("the placeholder is in the {where_}; {PRODUCT_NAME} never forwards it. Send it only as the API key, or remove it from the {where_}"),
     )
 }
 
@@ -518,7 +520,7 @@ where
     }
     let (parts, body) = req.into_parts();
     let (token, provider, rest) =
-        parse_path(parts.uri.path()).ok_or_else(|| VaultError::not_found("this isn't a vault proxy path; use the base URL k2 vault proxy-url printed"))?;
+        parse_path(parts.uri.path()).ok_or_else(|| VaultError::not_found(concat!("this isn't a vault proxy path; use the base URL ", cli_name!(), " vault proxy-url printed")))?;
     let mut method = Method::from_bytes(validate_method(parts.method.as_str())?.as_bytes())
         .map_err(|_| VaultError::bad_request("bad_method", "method isn't supported"))?;
 
@@ -695,7 +697,7 @@ where
     let status = resp.status();
     let no_body = method == Method::HEAD || matches!(status.as_u16(), 204 | 304);
     if !no_body && !is_identity(resp.headers()) {
-        return Err(upstream_error("the response used a compression K2 can't redact", &origin));
+        return Err(upstream_error(concat!("the response used a compression ", product_name!(), " can't redact"), &origin));
     }
     let mut answer = Response::new(empty());
     *answer.status_mut() = status;
@@ -823,17 +825,17 @@ pub(crate) fn mint_checked(
     live: &dyn Fn(&str) -> bool,
     before_mint: &dyn Fn(&str) -> Result<(), VaultError>,
 ) -> Result<Value, VaultError> {
-    let a = c.actor.agent().ok_or_else(|| VaultError::forbidden("use_as_agent", "k2 vault proxy-url runs for an agent session; people call the site themselves"))?;
+    let a = c.actor.agent().ok_or_else(|| VaultError::forbidden("use_as_agent", concat!(cli_name!(), " vault proxy-url runs for an agent session; people call the site themselves")))?;
     let who = c.requester()?;
     let session_id = match &who {
         Requester::Session { session_id: Some(s), .. } if !s.trim().is_empty() => s.clone(),
-        _ => return Err(VaultError::forbidden("use_as_agent", "k2 vault proxy-url runs for an agent session")),
+        _ => return Err(VaultError::forbidden("use_as_agent", concat!(cli_name!(), " vault proxy-url runs for an agent session"))),
     };
     if !live(&session_id) {
         return Err(VaultError::conflict("session_ended", "this session isn't running, so a placeholder would be dead on arrival"));
     }
     let Some(on) = listening() else {
-        return Err(VaultError::new("proxy_unavailable", 503, "the vault proxy isn't listening; check k2 vault status, or use k2 vault fetch"));
+        return Err(VaultError::new("proxy_unavailable", 503, concat!("the vault proxy isn't listening; check ", cli_name!(), " vault status, or use ", cli_name!(), " vault fetch")));
     };
     let target = vault.proxy_target(sel, &who)?;
     let origin = single_origin(&target.hosts)?;

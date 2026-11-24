@@ -40,6 +40,8 @@ use crate::mail::messages::{
 use crate::mail::secrets::SecretStore;
 use k2_core::db::schema::MailExternalInbox;
 use mail_parser::{MessageParser, MimeHeaders as _};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const TLS_IMPLICIT: &str = "implicit-tls";
 pub const TLS_STARTTLS: &str = "starttls";
@@ -175,7 +177,7 @@ pub fn parse_uid_token(s: &str) -> Option<(u32, u32)> {
 pub fn unmatched_uidvalidity_hint(validity: u32) -> String {
     format!(
         "id was listed from another folder / UIDVALIDITY {validity} matches no mailbox; \
-         re-list with 'k2 mail messages'"
+         re-list with '{CLI_NAME} mail messages'"
     )
 }
 
@@ -184,7 +186,7 @@ pub fn unmatched_uidvalidity_hint(validity: u32) -> String {
 pub fn colliding_uidvalidity_hint(validity: u32, folders: &[String]) -> String {
     format!(
         "UIDVALIDITY {validity} matches more than one mailbox ({}) — refusing to guess; \
-         re-list with 'k2 mail messages'",
+         re-list with '{CLI_NAME} mail messages'",
         folders.join(", ")
     )
 }
@@ -1296,7 +1298,7 @@ pub fn validate_new_inbox(
         Some(t) => {
             return Err(ExtError::Usage(format!(
                 "invalid tls '{t}' — 'implicit-tls' (port 993) or 'starttls' (port 143); \
-                 plaintext IMAP is not a thing K2 will speak"
+                 plaintext IMAP is not a thing {PRODUCT_NAME} will speak"
             )))
         }
     };
@@ -1350,7 +1352,7 @@ pub fn validate_new_inbox(
         Some(t) => {
             return Err(ExtError::Usage(format!(
                 "invalid smtp-tls '{t}' — 'implicit-tls' (usually port 465) or 'starttls' \
-                 (usually port 587); plaintext SMTP is not a thing K2 will speak"
+                 (usually port 587); plaintext SMTP is not a thing {PRODUCT_NAME} will speak"
             )))
         }
     };
@@ -1421,8 +1423,8 @@ pub fn add_inbox(
             .unwrap_or(false);
         if minted {
             return Err(ExtError::Exists(format!(
-                "'{}' is an address on THIS K2 mail server — external inboxes are for accounts \
-                 hosted elsewhere (agents already read it via 'k2 mail messages')",
+                "'{}' is an address on THIS {PRODUCT_NAME} mail server — external inboxes are for accounts \
+                 hosted elsewhere (agents already read it via '{CLI_NAME} mail messages')",
                 spec.email_address
             )));
         }
@@ -1436,7 +1438,7 @@ pub fn add_inbox(
         if taken {
             return Err(ExtError::Exists(format!(
                 "external inbox '{}' is already connected — remove it first with \
-                 'k2 mail external remove {}'",
+                 '{CLI_NAME} mail external remove {}'",
                 spec.email_address, spec.email_address
             )));
         }
@@ -1521,7 +1523,7 @@ pub fn add_inbox(
         "hint": format!(
             "connected — agents in the bound workspace can read '{}' and save reply drafts. \
              Sending is OFF by default (draft-only); raise it to 'send' with \
-             'k2 mail access set-level {}' to let agents send via SMTP",
+             '{CLI_NAME} mail access set-level {}' to let agents send via SMTP",
             candidate.email_address, candidate.email_address
         ),
     }))
@@ -1585,7 +1587,7 @@ pub fn add_oauth_inbox(
             .unwrap_or(false);
         if minted {
             return Err(ExtError::Exists(format!(
-                "'{email_address}' is an address on THIS K2 mail server — external inboxes are \
+                "'{email_address}' is an address on THIS {PRODUCT_NAME} mail server — external inboxes are \
                  for accounts hosted elsewhere"
             )));
         }
@@ -1599,7 +1601,7 @@ pub fn add_oauth_inbox(
         if taken {
             return Err(ExtError::Exists(format!(
                 "external inbox '{email_address}' is already connected — remove it first with \
-                 'k2 mail link remove {email_address}'"
+                 '{CLI_NAME} mail link remove {email_address}'"
             )));
         }
     }
@@ -1671,12 +1673,12 @@ pub fn add_oauth_inbox(
 /// What the owner does next to let agents SEND from an OAuth inbox.
 pub fn oauth_send_hint(provider: crate::mail::oauth::OauthProvider) -> &'static str {
     if provider == crate::mail::oauth::OauthProvider::Gmail {
-        "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' to let \
-         agents also send via SMTP (XOAUTH2), governed by the workspace's Email sending mode."
+        concat!("Drafting is always on; raise it to 'send' with '", cli_name!(), " mail access set-level' to let \
+         agents also send via SMTP (XOAUTH2), governed by the workspace's Email sending mode.")
     } else {
-        "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' to let \
+        concat!("Drafting is always on; raise it to 'send' with '", cli_name!(), " mail access set-level' to let \
          agents also send over Microsoft Graph, governed by the workspace's Email sending \
-         mode (off / approval / on)."
+         mode (off / approval / on).")
     }
 }
 
@@ -1770,7 +1772,7 @@ pub fn remove_inbox_with(
     })?;
     let row = inbox_for_address(&address).ok_or_else(|| {
         ExtError::NotFound(format!(
-            "no external inbox '{address}' — 'k2 mail external list' shows what's connected"
+            "no external inbox '{address}' — '{CLI_NAME} mail external list' shows what's connected"
         ))
     })?;
     // Revoke at the provider first (needs the vaulted bundle), never fatal.
@@ -1787,7 +1789,7 @@ pub fn remove_inbox_with(
                 match crate::mail::oauth::revoke_report(OauthProvider::Gmail, &token, http) {
                     RevokeOutcome::Revoked => (
                         Some(true),
-                        Some("K2's access was revoked at Google".to_string()),
+                        Some(concat!(product_name!(), "'s access was revoked at Google").to_string()),
                     ),
                     RevokeOutcome::Unsupported => (Some(false), None),
                     RevokeOutcome::Failed(why) => {
@@ -1798,7 +1800,7 @@ pub fn remove_inbox_with(
                         (
                             Some(false),
                             Some(format!(
-                                "Google did not confirm the revoke ({why}) — remove K2 at \
+                                "Google did not confirm the revoke ({why}) — remove {PRODUCT_NAME} at \
                                  https://myaccount.google.com/permissions to be sure"
                             )),
                         )
@@ -1808,7 +1810,7 @@ pub fn remove_inbox_with(
             Err(e) => (
                 Some(false),
                 Some(format!(
-                    "the stored Google token could not be read ({e}) — remove K2 at \
+                    "the stored Google token could not be read ({e}) — remove {PRODUCT_NAME} at \
                      https://myaccount.google.com/permissions"
                 )),
             ),
@@ -1816,9 +1818,9 @@ pub fn remove_inbox_with(
         Some(OauthProvider::Microsoft) => (
             Some(false),
             Some(
-                "Microsoft has no per-token revoke — remove K2's consent at \
+                concat!("Microsoft has no per-token revoke — remove ", product_name!(), "'s consent at \
                  https://myaccount.microsoft.com (personal accounts: https://account.live.com/consent/Manage) \
-                 or https://myapps.microsoft.com"
+                 or https://myapps.microsoft.com")
                     .to_string(),
             ),
         ),

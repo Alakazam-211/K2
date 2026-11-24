@@ -26,6 +26,7 @@ use k2_vault::{Actor, LocalVault, ScopeKind, SecretBytes, SecretMeta, SecretStor
 use parking_lot::Mutex;
 
 use crate::mail::oauth::{refresh_lock_for, refresh_with, HttpClient, OauthError, Tokens};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Refresh when the token has less than this left (the mail engine uses 60 s).
 pub const REFRESH_WINDOW_SECS: i64 = 300;
@@ -94,7 +95,7 @@ fn log(name: &str, what: &str) {
 fn expired_error(name: &str) -> VaultError {
     VaultError::forbidden(
         "oauth_expired",
-        format!("{name}: expired: sign in again. A person saves a new sign-in on the reconnect card in this Thread, or runs k2 vault rotate {name} < sign-in.json"),
+        format!("{name}: expired: sign in again. A person saves a new sign-in on the reconnect card in this Thread, or runs {CLI_NAME} vault rotate {name} < sign-in.json"),
     )
 }
 
@@ -204,7 +205,7 @@ fn store_new(vault: &LocalVault, cur: &OauthCurrent, t: Tokens, now: i64) -> Ref
             None => Refreshed::Failed(e),
         }
     };
-    let bad_response = || VaultError::new("oauth_refresh_failed", 502, format!("{}: the token endpoint's answer can't be used (bad_response); K2 tries again in a moment", cur.name));
+    let bad_response = || VaultError::new("oauth_refresh_failed", 502, format!("{}: the token endpoint's answer can't be used (bad_response); {PRODUCT_NAME} tries again in a moment", cur.name));
     let refresh = match t.refresh_token.as_deref().filter(|r| !r.is_empty()) {
         Some(r) if oauth_token_ok(r.as_bytes()) => SecretBytes::from_slice(r.as_bytes()),
         Some(_) => return failed(bad_response(), word("bad_response")),
@@ -227,7 +228,7 @@ fn store_new(vault: &LocalVault, cur: &OauthCurrent, t: Tokens, now: i64) -> Ref
             Refreshed::New(access)
         }
         // A person saved a new sign-in while this one refreshed: theirs wins.
-        Ok(false) => Refreshed::Failed(VaultError::conflict("oauth_changed", format!("{}'s sign-in changed while K2 refreshed it; try again", cur.name))),
+        Ok(false) => Refreshed::Failed(VaultError::conflict("oauth_changed", format!("{}'s sign-in changed while {PRODUCT_NAME} refreshed it; try again", cur.name))),
         Err(e) => failed(e, word("store")),
     }
 }
@@ -262,7 +263,7 @@ fn refresh_locked(vault: &LocalVault, cur: &OauthCurrent, deps: &Deps<'_>) -> Re
                     ask_to_sign_in_again(vault, &cur.secret_id, deps);
                     Refreshed::Expired(expired_error(&cur.name))
                 }
-                Ok(false) => Refreshed::Failed(VaultError::conflict("oauth_changed", format!("{}'s sign-in changed while K2 refreshed it; try again", cur.name))),
+                Ok(false) => Refreshed::Failed(VaultError::conflict("oauth_changed", format!("{}'s sign-in changed while {PRODUCT_NAME} refreshed it; try again", cur.name))),
                 Err(err) => Refreshed::Failed(err),
             }
         }
@@ -272,7 +273,7 @@ fn refresh_locked(vault: &LocalVault, cur: &OauthCurrent, deps: &Deps<'_>) -> Re
             log(&cur.name, &format!("refresh error:{word}"));
             let err = match e {
                 OauthError::Egress { code, status, hint } => VaultError::new(code, status, format!("{}'s token endpoint: {hint}", cur.name)),
-                _ => VaultError::new("oauth_refresh_failed", 502, format!("{}: the token endpoint didn't refresh it ({word}); K2 tries again in a moment", cur.name)),
+                _ => VaultError::new("oauth_refresh_failed", 502, format!("{}: the token endpoint didn't refresh it ({word}); {PRODUCT_NAME} tries again in a moment", cur.name)),
             };
             remember_failure(&cur.secret_id, &err);
             hold(err)

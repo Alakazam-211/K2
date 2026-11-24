@@ -14,6 +14,8 @@ use k2_core::tool_hook::{self as hook, members};
 
 use crate::compute_routes::Who;
 use crate::voice::bff::{self, Refusal};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// A person calling Home chat from their own login.
 #[derive(Debug, Clone)]
@@ -58,7 +60,7 @@ pub fn caller_of(who: Who, presented: &str, owner_token: &str) -> Result<Caller,
         Who::Agent { .. } | Who::Shell { .. } => Err(Refusal::new(
             403,
             "agents_use_k2_chat",
-            "Home chat is for this server's people; agents read channels they are granted with k2 chat",
+            concat!("Home chat is for this server's people; agents read channels they are granted with ", cli_name!(), " chat"),
         )),
         Who::Wrong => Err(Refusal::new(403, "app_session_not_allowed", "Home chat takes this server's own logins, never an App's session")),
         Who::Invalid if k2_core::connect_users::token_state(presented) == k2_core::connect_users::TokenState::DeviceEnded => {
@@ -178,7 +180,7 @@ pub fn check_target(ext: &str) -> Result<(), Refusal> {
         ));
     }
     let Some(id) = ext.strip_prefix("k2:connect:") else { return Ok(()) };
-    let all = logins().map_err(|e| Refusal::new(503, "chat_unavailable", format!("K2's user store is unavailable: {e}")))?;
+    let all = logins().map_err(|e| Refusal::new(503, "chat_unavailable", format!("{PRODUCT_NAME}'s user store is unavailable: {e}")))?;
     match all.iter().find(|l| l.id == id) {
         None => Err(Refusal::new(404, "person_not_found", "no such person on this server")),
         Some(l) if l.disabled => Err(Refusal::new(403, "target_disabled", "that login is disabled on this server")),
@@ -203,7 +205,7 @@ pub fn name_of_member(member_id: &str) -> String {
 pub fn member_id(ext: &str) -> Result<String, Refusal> {
     match hook::chat_member(ext) {
         Ok(Some(m)) if m.state == members::ACTIVE => Ok(m.member_id),
-        Ok(_) => Err(Refusal::new(503, "chat_member_pending", "K2 is still setting up that person's chat; try again shortly").retry(bff::RETRY_SECS)),
+        Ok(_) => Err(Refusal::new(503, "chat_member_pending", concat!(product_name!(), " is still setting up that person's chat; try again shortly")).retry(bff::RETRY_SECS)),
         Err(e) => Err(Refusal::new(503, "chat_unavailable", e)),
     }
 }

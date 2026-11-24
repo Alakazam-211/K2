@@ -46,6 +46,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, RwLock};
+use k2_core::product_name;
 
 /// W3 — the wake fires this long before the heartbeat it is for.
 pub const WAKE_LEAD_SECS: i64 = 60;
@@ -179,8 +180,8 @@ impl HelperCaller {
     /// What to tell a caller who may not set it up.
     pub fn refusal(self) -> &'static str {
         match (self.local, self.admin) {
-            (_, false) => "An admin sets up the power helper, in K2 on the host Mac.",
-            (false, true) => "Set up runs on the host Mac. Open K2 on that Mac to set it up.",
+            (_, false) => concat!("An admin sets up the power helper, in ", product_name!(), " on the host Mac."),
+            (false, true) => concat!("Set up runs on the host Mac. Open ", product_name!(), " on that Mac to set it up."),
             (true, true) => "",
         }
     }
@@ -370,7 +371,7 @@ impl Power {
         h.next_id += 1;
         h.active.insert(id, reason.to_string());
         if h.os_guard.is_none() {
-            match self.os.hold_awake("K2 keep awake") {
+            match self.os.hold_awake(concat!(product_name!(), " keep awake")) {
                 Ok(g) => {
                     h.os_guard = Some(g);
                     h.last_error = None;

@@ -15,6 +15,7 @@ use k2_core::workspace_session_handles::{
 
 use crate::cli_response::CliResponse;
 use crate::session_lookup;
+use k2_core::cli_name;
 
 /// Kind of cell we are about to spawn. Blank shells / file tabs are
 /// `None` — do not set identity env.
@@ -88,7 +89,7 @@ pub fn identity_system_brief(identity: &CellIdentity) -> String {
 }
 
 /// One line in a sidecar's identity brief (prd-thread-survives-tab-rename S5).
-pub const SIDECAR_ADDRESS_NOTE: &str = "This address can change if the chat is renamed. Old addresses keep working. `k2 whoami` prints the current one.";
+pub const SIDECAR_ADDRESS_NOTE: &str = concat!("This address can change if the chat is renamed. Old addresses keep working. `", cli_name!(), " whoami` prints the current one.");
 
 /// Flag that can carry the brief. Claude / Pi: `--append-system-prompt`.
 /// Grok: `--rules`. Everyone else: None (env + whoami only).
@@ -300,7 +301,7 @@ fn resolve_whoami(params: &HashMap<String, String>) -> Result<WhoamiInfo, String
             });
         }
         return Err(
-            "run this inside a workspace session (`k2 whoami` needs a scoped cell or K2_SESSION_ID)"
+            concat!("run this inside a workspace session (`", cli_name!(), " whoami` needs a scoped cell or K2_SESSION_ID)")
                 .to_string(),
         );
     };

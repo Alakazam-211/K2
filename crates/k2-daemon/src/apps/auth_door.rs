@@ -84,6 +84,7 @@ use sha2::{Digest, Sha256};
 
 use crate::cli_response::CliResponse;
 use crate::client_ip::{DoorBody, DoorCall, DoorHook};
+use k2_core::{cli_name, product_name};
 
 /// The door's namespace on an App's hosts.
 pub const PREFIX: &str = "/.k2/auth";
@@ -946,7 +947,7 @@ async fn answer_inner(app_id: &str, call: &DoorCall, verb: DoorVerb) -> (Out, Op
                 o.extra = "Access-Control-Allow-Methods: POST\r\nAccess-Control-Allow-Headers: content-type\r\nAccess-Control-Max-Age: 600\r\n".into();
                 (o, cors)
             }
-            _ => (refuse(403, "bad_origin", "this page's origin isn't one the App lists (k2 app auth origins)"), None),
+            _ => (refuse(403, "bad_origin", concat!("this page's origin isn't one the App lists (", cli_name!(), " app auth origins)")), None),
         };
     }
     if method != "POST" {
@@ -962,7 +963,7 @@ async fn answer_inner(app_id: &str, call: &DoorCall, verb: DoorVerb) -> (Out, Op
         DoorBody::Cut | DoorBody::Upgrade => return (refuse(400, "bad_request", "a sign-in is one JSON POST"), cors),
     };
     if matches!(origin, OriginIs::Foreign) {
-        return (refuse(403, "bad_origin", "this page's origin isn't this host or one the App lists (k2 app auth origins)"), None);
+        return (refuse(403, "bad_origin", concat!("this page's origin isn't this host or one the App lists (", cli_name!(), " app auth origins)")), None);
     }
     let json_ct = call.content_type.as_deref().map(|c| c.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json")).unwrap_or(false);
     if !json_ct {
@@ -970,7 +971,7 @@ async fn answer_inner(app_id: &str, call: &DoorCall, verb: DoorVerb) -> (Out, Op
     }
     // V8: mid hand-off this process's codes would be stranded.
     if crate::handoff::is_quiesced() {
-        return (refuse_after(503, "retry", "K2 is restarting: try again in a second", 1), cors);
+        return (refuse_after(503, "retry", concat!(product_name!(), " is restarting: try again in a second"), 1), cors);
     }
     if suspended {
         return (refuse(403, "app_suspended", "this App is suspended: its owner resumes it"), cors);

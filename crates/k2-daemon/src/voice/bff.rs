@@ -56,6 +56,8 @@ use k2_core::tool_hook::ConnectChatGate;
 
 use super::occupancy::{self, Occupant};
 use crate::chat_pass::identity::{PassIdentity, Provenance, Refusal as IdRefusal};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Sew's client routes the BFF calls (Sew 0.6.0 `sew-proto::routes`).
 pub mod paths {
@@ -172,7 +174,7 @@ impl Refusal {
 }
 
 fn unreachable(e: String) -> Refusal {
-    Refusal::new(503, "voice_unavailable", format!("K2 could not reach this server's Sew: {e}"))
+    Refusal::new(503, "voice_unavailable", format!("{PRODUCT_NAME} could not reach this server's Sew: {e}"))
         .details(json!({ "engine": "unreachable" }))
         .retry(RETRY_SECS)
 }
@@ -221,7 +223,7 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
         return Refusal::new(503, "voice_unavailable", h).details(details).retry(RETRY_SECS);
     }
     if is("not_space_member") || is("not_provisioned") {
-        return Refusal::new(503, "voice_member_pending", "K2 is adding this login to the K2 Admin Space; retry shortly")
+        return Refusal::new(503, "voice_member_pending", concat!(product_name!(), " is adding this login to the ", product_name!(), " Admin Space; retry shortly"))
             .retry(RETRY_SECS);
     }
     if is("agents_not_in_voice") {
@@ -243,7 +245,7 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
         return Refusal::new(
             403,
             "app_user_not_allowed",
-            "App users are never in the K2 Admin Space: voice rooms are for this server's owner, Admins and Members",
+            concat!("App users are never in the ", product_name!(), " Admin Space: voice rooms are for this server's owner, Admins and Members"),
         )
         .details(json!({ "sew": a.body.get("error").cloned().unwrap_or(Value::Null) }));
     }
@@ -252,7 +254,7 @@ pub fn sew_refusal(a: &SewAnswer) -> Refusal {
         return Refusal::new(
             403,
             "missing_permission",
-            format!("Sew refused: this login's level in the K2 Admin Space doesn't allow that ({why})"),
+            format!("Sew refused: this login's level in the {PRODUCT_NAME} Admin Space doesn't allow that ({why})"),
         )
         .details(json!({ "sew": a.body.get("error").cloned().unwrap_or(Value::Null) }));
     }
@@ -564,7 +566,7 @@ pub fn person_of_login(token: &str, login: &str, role: Role, owner_token: &str) 
     let ident = match crate::chat_pass::identity::classify(token, owner_token) {
         Ok(i) => i,
         Err(IdRefusal::Unavailable(e)) => {
-            return Err(Refusal::new(503, "voice_unavailable", format!("K2's user store is unavailable: {e}")).retry(RETRY_SECS))
+            return Err(Refusal::new(503, "voice_unavailable", format!("{PRODUCT_NAME}'s user store is unavailable: {e}")).retry(RETRY_SECS))
         }
         Err(_) if k2_core::connect_users::token_state(token) == k2_core::connect_users::TokenState::DeviceEnded => {
             return Err(device_session_ended())
@@ -697,10 +699,10 @@ fn member_gate(p: &Person, d: &Deps) -> Result<(), Refusal> {
         last = (d.connect_gate)(uuid, &p.login)?;
         Ok(matches!(last, ConnectChatGate::Pending))
     })
-    .map_err(|e| Refusal::new(503, "chat_unavailable", format!("K2 could not check this login's chat account: {e}")))?;
+    .map_err(|e| Refusal::new(503, "chat_unavailable", format!("{PRODUCT_NAME} could not check this login's chat account: {e}")))?;
     match last {
         ConnectChatGate::Ready => Ok(()),
-        ConnectChatGate::Pending if !ready => Err(Refusal::new(503, "chat_member_pending", "K2 is adding this login to chat; retry shortly").retry(RETRY_SECS)),
+        ConnectChatGate::Pending if !ready => Err(Refusal::new(503, "chat_member_pending", concat!(product_name!(), " is adding this login to chat; retry shortly")).retry(RETRY_SECS)),
         ConnectChatGate::Pending => Ok(()),
         ConnectChatGate::Blocked(why) => Err(Refusal::new(503, "chat_member_blocked", format!("this login's chat account is stuck: {why}"))),
         ConnectChatGate::Disabled => Err(Refusal::new(403, "no_chat_grant", "this login's chat access is switched off (grant kind chat)")),
@@ -787,7 +789,7 @@ fn as_person(p: &Person, d: &Deps, path: &str, body: &Value) -> Result<SewAnswer
 /// A room by `3`, `room-3`, its channel id, or its name.
 pub fn find_room<'a>(rooms: &'a [RoomRow], key: &str) -> Result<&'a RoomRow, Refusal> {
     let k = key.trim();
-    let not_found = || Refusal::new(404, "room_not_found", format!("no room '{k}' on this server (k2 voice rooms lists them)"));
+    let not_found = || Refusal::new(404, "room_not_found", format!("no room '{k}' on this server ({CLI_NAME} voice rooms lists them)"));
     if k.is_empty() {
         return Err(Refusal::new(400, "usage", "name a room: 1, room-1, its channel id or its name"));
     }
@@ -847,9 +849,9 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
         }
     };
     let synced = wait_until_clear(d.member_wait, || (d.level_pending)(&p.ext))
-        .map_err(|e| Refusal::new(503, "voice_unavailable", format!("K2 could not check this login's room level: {e}")))?;
+        .map_err(|e| Refusal::new(503, "voice_unavailable", format!("{PRODUCT_NAME} could not check this login's room level: {e}")))?;
     if !synced {
-        return Err(Refusal::new(503, "voice_member_pending", "K2 is still updating this login's level in the K2 Admin Space; retry shortly")
+        return Err(Refusal::new(503, "voice_member_pending", concat!(product_name!(), " is still updating this login's level in the ", product_name!(), " Admin Space; retry shortly"))
             .retry(RETRY_SECS));
     }
     let a = as_person(p, d, &paths::channel_join(&channel), join_body)?;
@@ -861,8 +863,8 @@ pub fn join(p: &Person, room_key: &str, join_body: &Value, rooms: &[RoomRow], d:
         return Err(Refusal::new(
             503,
             "voice_unavailable",
-            "Sew doesn't know this room right now: K2 is checking the K5 Space and makes the room again if it's gone. \
-             Try again in a minute (the owner can run k2 voice repair to do it now)",
+            concat!("Sew doesn't know this room right now: ", product_name!(), " is checking the K5 Space and makes the room again if it's gone. \
+             Try again in a minute (the owner can run ", cli_name!(), " voice repair to do it now)"),
         )
         .retry(RETRY_SECS));
     }
@@ -1248,7 +1250,7 @@ pub(crate) fn recording_act_refusal(a: &SewAnswer) -> Refusal {
         "recording_active" => ("recording_active", "this room is already being recorded"),
         "recording_not_active" => ("recording_not_active", "that recording isn't running any more"),
         "not_in_voice" => ("not_in_voice", "you aren't in that room's call: Record and Stop are pressed from inside the call"),
-        "recording_disabled" => ("recording_disabled", "recording is off on this server (k2 hostchat recording enable)"),
+        "recording_disabled" => ("recording_disabled", concat!("recording is off on this server (", cli_name!(), " hostchat recording enable)")),
         // Sew 0.11.3: `recording.dm_enabled` is off (its own reason, a 403).
         "dm_recording_disabled" => (
             "dm_recording_disabled",
@@ -1384,7 +1386,7 @@ pub fn moderate(
         return Err(Refusal::new(404, "room_not_open", format!("{} isn't open on this server right now", room.desired_name())));
     };
     let Some(o) = find_occupant(occupants, channel, who) else {
-        return Err(Refusal::new(404, "not_in_room", format!("{who} isn't in {} (k2 voice rooms shows who is)", room.desired_name())));
+        return Err(Refusal::new(404, "not_in_room", format!("{who} isn't in {} ({CLI_NAME} voice rooms shows who is)", room.desired_name())));
     };
     let (path, body) = match action {
         "kick" => (paths::member_move(space_id, &o.member_id), json!({ "channel_id": null })),

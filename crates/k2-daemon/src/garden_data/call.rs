@@ -36,6 +36,8 @@ use crate::garden_data::budget::{self, BudgetKey, Spend};
 use crate::garden_data::tx_routes;
 use crate::garden_data::{refused, response, store};
 use crate::zen_data_routes::DataWho;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The request body (≤ 64 KiB).
 #[derive(Debug, Clone, Deserialize)]
@@ -91,7 +93,7 @@ pub fn origin_gate(head: &str) -> Result<Ingress, DataError> {
     match origin_values(head).as_slice() {
         [] => Ok(Ingress::LocalProcess),
         [one] if origin_ok(one) => Ok(Ingress::App),
-        [_] => Err(refused("origin_refused", 403, "this door answers only the K2 app on this computer")),
+        [_] => Err(refused("origin_refused", 403, concat!("this door answers only the ", product_name!(), " app on this computer"))),
         _ => Err(refused("origin_refused", 403, "one Origin header, please")),
     }
 }
@@ -102,7 +104,7 @@ pub fn handle(who: &DataWho, headers: &str, body: &[u8]) -> CliResponse {
         return response(&refused(
             "owner_only",
             403,
-            "only the K2 app on this computer calls widget data; agents use `k2 store --widget`",
+            concat!("only the ", product_name!(), " app on this computer calls widget data; agents use `", cli_name!(), " store --widget`"),
         ));
     }
     let ingress = match origin_gate(headers) {
@@ -204,7 +206,7 @@ impl Placed {
 }
 
 fn stale(why: &str) -> DataError {
-    refused("stale_widget", 409, format!("{why}; K2 reloads the widget"))
+    refused("stale_widget", 409, format!("{why}; {PRODUCT_NAME} reloads the widget"))
 }
 
 /// Placement → widget → live hash (a locked Garden's frozen copy) → caps.
@@ -433,7 +435,7 @@ fn author_unknown(w: &Placed) -> DataError {
         "author_unknown",
         403,
         format!(
-            "nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine in Settings \u{2192} Gardens \u{2192} Local Data",
+            "nobody signed this version of {0}. Run `{CLI_NAME} zen validate --widget {0}`, or click It's mine in Settings \u{2192} Gardens \u{2192} Local Data",
             w.widget
         ),
     )

@@ -48,6 +48,8 @@ use k2_root_proto::engine::BoxForward;
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 pub const ROUTES: &[&str] = &["/cli/app/box-service", "/cli/app/box-service/request", "/cli/app/box-service/revoke"];
 pub const POST_ROUTES: &[&str] = &["/cli/app/box-service/request", "/cli/app/box-service/revoke"];
@@ -125,7 +127,7 @@ pub(crate) fn port_refusal(port: u16, daemon: &[u16]) -> Option<String> {
         return Some(why.to_string());
     }
     if daemon.contains(&port) {
-        return Some("this K2 daemon's own port (an App reaches K2 through its gateway link, K2_GATEWAY_URL)".into());
+        return Some(concat!("this ", product_name!(), " daemon's own port (an App reaches ", product_name!(), " through its gateway link, K2_GATEWAY_URL)").into());
     }
     None
 }
@@ -303,9 +305,9 @@ pub(crate) fn applied_note(r: &k2_core::app_grace::requests::AppRequest) -> J {
         None => Vec::new(),
     };
     let note = match (&nft, live.is_some(), missing.is_empty()) {
-        (Err(e), _, _) => format!("approved, but the App's door didn't reload ({e}); restart it (k2 app restart {app})"),
+        (Err(e), _, _) => format!("approved, but the App's door didn't reload ({e}); restart it ({CLI_NAME} app restart {app})"),
         (Ok(_), true, false) => format!(
-            "approved; the running App was started before {} was asked for: restart it once to open the forward (k2 app restart {app})",
+            "approved; the running App was started before {} was asked for: restart it once to open the forward ({CLI_NAME} app restart {app})",
             missing.join(", ")
         ),
         (Ok(Some(_)), _, _) => "approved; the door opens now (no restart)".into(),
@@ -472,7 +474,7 @@ fn held_answer(w: &k2_core::app_grace::requests::AppRequest, already: &[String],
     v["alreadyAllowed"] = json!(already);
     v["services"] = json!(w.box_services());
     v["hint"] = json!(format!(
-        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Cores → App \
+        "held for the owner: they approve it in person ({CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}, or Settings → Cores → App \
          Approvals). Until then the door stays shut{}.",
         w.id,
         if wall == "container" { " (the forward is in the wall from the next start; approving opens it without a restart)" } else { "" }
@@ -593,7 +595,7 @@ fn revoke(who: &Who, body: &[u8]) -> R<J> {
         return Err(Refusal {
             code: dcodes::ENGINE_UNAVAILABLE,
             status: 503,
-            hint: format!("{name} is revoked, but the App's door didn't reload ({e}); stop the App (k2 app stop {}) to be sure", app.app_id),
+            hint: format!("{name} is revoked, but the App's door didn't reload ({e}); stop the App ({CLI_NAME} app stop {}) to be sure", app.app_id),
             extra: Some(json!({ "revoked": true })),
         });
     }

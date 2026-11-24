@@ -59,6 +59,8 @@ use super::person_rows::{args_of, no, passthrough, project};
 use super::workbench_sessions as sessions;
 use super::workbench_w1 as w1;
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// The rows this file answers, in catalog order.
 pub const VERBS: [&str; 12] = [
@@ -614,7 +616,7 @@ fn ask(w: &Placed, verb: &str, args: &Map<String, J>, change: J, bound: J) -> Cl
         content_type: "application/json",
         body: json!({ "error": {
             "code": "confirm_required",
-            "hint": "K2 asks the person on its own sheet first",
+            "hint": concat!(product_name!(), " asks the person on its own sheet first"),
             "change": change,
             "secretId": id,
         }})
@@ -626,13 +628,13 @@ fn ask(w: &Placed, verb: &str, args: &Map<String, J>, change: J, bound: J) -> Cl
 fn confirmed(w: &Placed, verb: &str, args: &Map<String, J>, token: &str) -> Result<J, CliResponse> {
     let mut p = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     let Some(x) = p.remove(token) else {
-        return Err(no(403, "declined", "that answer from K2's sheet is unknown, used or too old: press the button again"));
+        return Err(no(403, "declined", concat!("that answer from ", product_name!(), "'s sheet is unknown, used or too old: press the button again")));
     };
     if x.garden != w.garden || x.placement != w.placement || x.verb != verb || x.args != args_key(args) {
-        return Err(no(403, "declined", "that answer from K2's sheet was for another change"));
+        return Err(no(403, "declined", concat!("that answer from ", product_name!(), "'s sheet was for another change")));
     }
     if x.at.elapsed() >= CONFIRM_TTL {
-        return Err(no(403, "declined", "K2's sheet was open too long: press the button again"));
+        return Err(no(403, "declined", concat!(product_name!(), "'s sheet was open too long: press the button again")));
     }
     Ok(x.bound)
 }
@@ -647,7 +649,7 @@ pub(crate) fn not_a_sidecar(verb: &str, address: &str, role: &str) -> Option<Cli
     match role {
         "sidecar" | "worktree" => None,
         "heartbeat" => Some(bad_args(format!(
-            "{verb} is for a sidecar, and {address} is a heartbeat session: K2 runs those on their schedule (k2 heartbeat)"
+            "{verb} is for a sidecar, and {address} is a heartbeat session: {PRODUCT_NAME} runs those on their schedule ({CLI_NAME} heartbeat)"
         ))),
         "main" => Some(bad_args(format!("{verb} is for a sidecar (ws/name), not a workspace's main agent"))),
         other => Some(bad_args(format!("{verb} is for a sidecar, and {address} is a {other} session"))),

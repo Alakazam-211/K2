@@ -51,7 +51,8 @@ use k2_vault::{Kind, Namespace, Scope, SecretStore as _};
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, json_body, need_credential, no, Who, R};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const CONNECT: &str = "/cli/app/db/connect";
 pub const STATUS: &str = "/cli/app/db/status";
@@ -149,7 +150,7 @@ pub(crate) fn parse_ask(v: &J) -> R<Ask> {
     let mut a: Ask = serde_json::from_value(v.clone()).map_err(|e| usage(format!("unreadable connect request: {e}")))?;
     a.app = a.app.trim().to_ascii_lowercase();
     if a.app.is_empty() {
-        return Err(usage("name the App: k2 app db connect <app> --new | --db <name>"));
+        return Err(usage(concat!("name the App: ", cli_name!(), " app db connect <app> --new | --db <name>")));
     }
     let trim = |o: &mut Option<String>| *o = o.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     trim(&mut a.db);
@@ -206,7 +207,7 @@ pub(crate) fn plan(app: &AppRow, ask: &Ask) -> R<Plan> {
         return Err(no(
             codes::NO_POSTGRES,
             409,
-            format!("this box runs no Postgres for Apps: K2 runs Postgres on Linux boxes only ({}); use SQLite in $K2_APP_DATA", std::env::consts::OS),
+            format!("this box runs no Postgres for Apps: {PRODUCT_NAME} runs Postgres on Linux boxes only ({}); use SQLite in $K2_APP_DATA", std::env::consts::OS),
         ));
     }
     let ws = app.owner_workspace.as_str();
@@ -222,11 +223,11 @@ pub(crate) fn plan(app: &AppRow, ask: &Ask) -> R<Plan> {
             no(
                 codes::CLUSTER_MISSING,
                 409,
-                format!("this box has no Postgres cluster named {c}: make it first (k2 db cluster create <major> --name {c}), then connect again"),
+                format!("this box has no Postgres cluster named {c}: make it first ({CLI_NAME} db cluster create <major> --name {c}), then connect again"),
             )
         })?;
         if cl.role != "k2" || cl.origin != "created" {
-            return Err(no(codes::CLUSTER_MISSING, 409, format!("{} isn't a cluster K2 made, so K2 never puts an App's database in it", cl.label())));
+            return Err(no(codes::CLUSTER_MISSING, 409, format!("{} isn't a cluster {PRODUCT_NAME} made, so {PRODUCT_NAME} never puts an App's database in it", cl.label())));
         }
         if cl.owner_project.as_deref().is_some_and(|o| o != ws) {
             return Err(no(
@@ -251,7 +252,7 @@ pub(crate) fn plan(app: &AppRow, ask: &Ask) -> R<Plan> {
         return Err(no(
             codes::MAJOR_UNSUPPORTED,
             409,
-            format!("Postgres {m} isn't one K2 runs: K2 creates databases on Postgres {} (k2 db status lists them)", supported_list()),
+            format!("Postgres {m} isn't one {PRODUCT_NAME} runs: {PRODUCT_NAME} creates databases on Postgres {} ({CLI_NAME} db status lists them)", supported_list()),
         ));
     }
     let cl = crate::sql::cluster::for_major(m).filter(|c| c.role == "k2" && c.major > 0).ok_or_else(|| {
@@ -260,7 +261,7 @@ pub(crate) fn plan(app: &AppRow, ask: &Ask) -> R<Plan> {
             codes::CLUSTER_MISSING,
             409,
             format!(
-                "Postgres {m} isn't running on this box yet{}: connect never installs a Postgres server. Make it first (k2 db create --major {m}; an agent needs \"Let this agent manage Postgres versions\"), or connect with --major on one this box runs",
+                "Postgres {m} isn't running on this box yet{}: connect never installs a Postgres server. Make it first ({CLI_NAME} db create --major {m}; an agent needs \"Let this agent manage Postgres versions\"), or connect with --major on one this box runs",
                 if here.is_empty() { String::new() } else { format!(" (it runs {})", here.join(", ")) }
             ),
         )
@@ -688,8 +689,8 @@ fn connect_route(who: &Who, body: &[u8]) -> R<J> {
                 codes::MAJOR_MISMATCH,
                 409,
                 format!(
-                    "{}'s own database {own} (an earlier --new made it) is on {label}, not {}: connect it as it is (k2 app db connect {} --db {own}), \
-                     or move it (k2 db upgrade {own} --to {})",
+                    "{}'s own database {own} (an earlier --new made it) is on {label}, not {}: connect it as it is ({CLI_NAME} app db connect {} --db {own}), \
+                     or move it ({CLI_NAME} db upgrade {own} --to {})",
                     app.app_id, plan.cluster, app.app_id, plan.major
                 ),
             ));
@@ -708,7 +709,7 @@ fn connect_route(who: &Who, body: &[u8]) -> R<J> {
                 codes::ALREADY_CONNECTED,
                 409,
                 format!(
-                    "{} already has {} on {}: disconnect it first (k2 app db disconnect {} --as {}), or connect another name with --as",
+                    "{} already has {} on {}: disconnect it first ({CLI_NAME} app db disconnect {} --as {}), or connect another name with --as",
                     app.app_id, c.as_name, c.database, app.app_id, c.as_name
                 ),
             ));
@@ -756,11 +757,11 @@ fn hold(who: &Who, app: &AppRow, ask: &Ask, plan: &Plan, needs: &[Switch], reaso
         }
     }
     lines.push(format!(
-        "then K2 makes the App's own login, grants {} to it (never printed), re-hosts it and checks it from inside",
+        "then {PRODUCT_NAME} makes the App's own login, grants {} to it (never printed), re-hosts it and checks it from inside",
         if plan.owned && !ask.no_migrate_url { format!("{} and {}", ask.as_name(), migrate_name(ask.as_name())) } else { ask.as_name().to_string() }
     ));
     let summary = format!(
-        "k2 app db connect {} → {}{}",
+        "{CLI_NAME} app db connect {} → {}{}",
         app.app_id,
         plan.label,
         if off.is_empty() { String::new() } else { format!(": turn on {}", off.iter().map(|s| format!("\"{}\"", s.name)).collect::<Vec<_>>().join(", ")) }
@@ -782,7 +783,7 @@ fn hold(who: &Who, app: &AppRow, ask: &Ask, plan: &Plan, needs: &[Switch], reaso
     out["switches"] = json!(needs);
     out["hint"] = json!(format!(
         "one card for everything connecting needs: an owner or admin approves it once (its permission card, Settings → App \
-         Approvals, or {CLI_NAME} app approve {} from a terminal outside K2); then K2 turns those switches on, connects {} and checks \
+         Approvals, or {CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}); then {PRODUCT_NAME} turns those switches on, connects {} and checks \
          it. Wait for it: {CLI_NAME} app db connect {} … --wait, or {CLI_NAME} app db status {}",
         r.id, app.app_id, app.app_id, app.app_id
     ));
@@ -836,7 +837,7 @@ fn perform(by: &str, app: &AppRow, ask: &Ask, plan: &Plan) -> R<J> {
     // 3. The App's secrets (never printed).
     let url = crate::sql::ops::app_login_url(&target.name, &login, &password).map_err(ops_refusal)?;
     let mut secrets = vec![secret_name(&app.app_id, &as_name)];
-    let mut replaced = keep_and_grant(app, &as_name, &url, &format!("App {}'s database URL ({}, its own login; k2 app db connect)", app.app_id, target.name))?;
+    let mut replaced = keep_and_grant(app, &as_name, &url, &format!("App {}'s database URL ({}, its own login; {CLI_NAME} app db connect)", app.app_id, target.name))?;
     let migrate = target.owned && !ask.no_migrate_url;
     let mig_name = migrate_name(&as_name);
     if migrate {
@@ -845,7 +846,7 @@ fn perform(by: &str, app: &AppRow, ask: &Ask, plan: &Plan) -> R<J> {
             app,
             &mig_name,
             &murl,
-            &format!("App {}'s migration URL ({}'s migrator; k2 app db connect)", app.app_id, target.name),
+            &format!("App {}'s migration URL ({}'s migrator; {CLI_NAME} app db connect)", app.app_id, target.name),
         )?);
         secrets.push(secret_name(&app.app_id, &mig_name));
     } else if prev.as_ref().is_some_and(|c| c.migrate_url) {
@@ -994,12 +995,12 @@ fn check_now(app: &AppRow, c: &Conn, rehost: Option<&Rehost>) -> J {
         if matches!(rehost, Some(Rehost::NotRunning)) {
             let v = json!({
                 "ok": null, "skipped": "not_running", "at": now, "from": null,
-                "note": format!("{} isn't running: it gets {} at its next start; check it then with k2 app db check {}", app.app_id, c.as_name, app.app_id),
+                "note": format!("{} isn't running: it gets {} at its next start; check it then with {CLI_NAME} app db check {}", app.app_id, c.as_name, app.app_id),
             });
             let _ = save_check(&app.app_id, &c.as_name, now, &v);
             return v;
         }
-        (super::db_probe::Probe::fail("app_not_running", format!("{} isn't running (k2 app start {})", app.app_id, app.app_id)), "none")
+        (super::db_probe::Probe::fail("app_not_running", format!("{} isn't running ({CLI_NAME} app start {})", app.app_id, app.app_id)), "none")
     } else if let Some(Rehost::Failed(why)) = rehost {
         (super::db_probe::Probe::fail("rehost_failed", format!("the re-host that brings it the URL didn't finish: {why}")), "none")
     } else if super::reach::in_container(&app) {
@@ -1072,15 +1073,15 @@ fn fix_for(p: &super::db_probe::Probe, app: &AppRow, c: &Conn) -> String {
     let a = &app.app_id;
     match p.step.as_deref().unwrap_or("") {
         "no_door" if super::reach::in_container(app) && !super::reach::door_serves(a) => super::reach::engine_no_door(a),
-        "no_door" => format!("nothing answered for {a}'s database: k2 app doctor {a} shows its door"),
-        "door_refused" => format!("the database door refused {}: k2 app doctor {a}", c.login_role),
-        "auth_failed" => format!("the login was refused: connect it again (k2 app db connect {a} --db {})", c.database),
-        "db_missing" => format!("{} is gone: k2 db list, then connect another (k2 app db disconnect {a} first)", c.database),
-        "no_url" => format!("{a} doesn't have {} yet: re-host it (k2 app rehost {a}), then k2 app db check {a}", c.as_name),
-        "app_not_running" => format!("start it (k2 app start {a}), then k2 app db check {a}"),
-        "rehost_failed" => format!("re-host it (k2 app rehost {a} --yes), then k2 app db check {a}"),
-        "exec_failed" => format!("k2 app exec {a} -- node --version shows whether the App can run the check"),
-        _ => format!("k2 app logs {a} and k2 app doctor {a}"),
+        "no_door" => format!("nothing answered for {a}'s database: {CLI_NAME} app doctor {a} shows its door"),
+        "door_refused" => format!("the database door refused {}: {CLI_NAME} app doctor {a}", c.login_role),
+        "auth_failed" => format!("the login was refused: connect it again ({CLI_NAME} app db connect {a} --db {})", c.database),
+        "db_missing" => format!("{} is gone: {CLI_NAME} db list, then connect another ({CLI_NAME} app db disconnect {a} first)", c.database),
+        "no_url" => format!("{a} doesn't have {} yet: re-host it ({CLI_NAME} app rehost {a}), then {CLI_NAME} app db check {a}", c.as_name),
+        "app_not_running" => format!("start it ({CLI_NAME} app start {a}), then {CLI_NAME} app db check {a}"),
+        "rehost_failed" => format!("re-host it ({CLI_NAME} app rehost {a} --yes), then {CLI_NAME} app db check {a}"),
+        "exec_failed" => format!("{CLI_NAME} app exec {a} -- node --version shows whether the App can run the check"),
+        _ => format!("{CLI_NAME} app logs {a} and {CLI_NAME} app doctor {a}"),
     }
 }
 
@@ -1097,7 +1098,7 @@ fn check_route(who: &Who, body: &[u8]) -> R<J> {
 }
 
 fn not_connected(app: &str, as_name: &str) -> super::routes::Refusal {
-    no(codes::NOT_CONNECTED, 404, format!("{app} has no database connected as {as_name} (k2 app db status {app}; connect: k2 app db connect {app} --new | --db <name>)"))
+    no(codes::NOT_CONNECTED, 404, format!("{app} has no database connected as {as_name} ({CLI_NAME} app db status {app}; connect: {CLI_NAME} app db connect {app} --new | --db <name>)"))
 }
 
 /// GET `/cli/app/db/status?app=[&request=]`: the App's connections, its
@@ -1177,7 +1178,7 @@ fn disconnect_route(who: &Who, body: &[u8]) -> R<J> {
         "doorOpen": door_open_for(&app.app_id, &c.database) && still_used,
         "sessionsCut": cut.iter().filter(|x| x.app == app.app_id).count(),
         "rehost": rehost.to_json(),
-        "note": format!("{} kept: K2 never drops a database here (k2 db drop --db {} is the owner's)", c.database, c.database),
+        "note": format!("{} kept: {PRODUCT_NAME} never drops a database here ({CLI_NAME} db drop --db {} is the owner's)", c.database, c.database),
     });
     if let Err(e) = pg {
         out["error"] = json!({ "code": codes::FAILED, "hint": format!("Postgres didn't take the App's access away: {}", e.hint()) });

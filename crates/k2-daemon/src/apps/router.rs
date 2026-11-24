@@ -29,6 +29,7 @@ use arc_swap::ArcSwap;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
+use k2_core::product_name;
 
 /// One instance's backend: its port, the connections spliced to it, and
 /// the signal that cuts them at the end of a drain.
@@ -315,7 +316,7 @@ pub fn rewrite_mode(be: &Backend, label: &str, mode: crate::client_ip::Mode) -> 
 }
 
 const UNAVAILABLE_BODY: &str = "This App is not running now.\r\n";
-const BAD_GATEWAY_BODY: &str = "This App did not answer K2.\r\n";
+const BAD_GATEWAY_BODY: &str = concat!("This App did not answer ", product_name!(), ".\r\n");
 
 /// K2's own answer on an App's front port (no backend, or it didn't
 /// answer). It carries the daemon's framing headers like every other

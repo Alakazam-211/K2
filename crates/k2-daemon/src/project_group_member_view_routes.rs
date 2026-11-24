@@ -18,6 +18,7 @@ use crate::project_group_routes::{
     core_error, emit, error_response, parse_member_body, resolve_error_response, usage_error,
 };
 use k2_core::project_groups::{self, ResolveError};
+use k2_core::product_name;
 
 /// `POST /cli/project-group/set-member-default-view` (0302): the view one
 /// agent's tile opens in on the project's dashboards, for everyone.
@@ -52,8 +53,8 @@ pub fn refusal_or(path: &str, otherwise: CliResponse) -> CliResponse {
     error_response(
         "403 Forbidden",
         "forbidden",
-        "only the owner, an admin, or an agent with 'Let this agent manage K2 projects' on can change \
-         the view an agent opens in on a project (it changes it for everyone)",
+        concat!("only the owner, an admin, or an agent with 'Let this agent manage ", product_name!(), " projects' on can change \
+         the view an agent opens in on a project (it changes it for everyone)"),
     )
 }
 

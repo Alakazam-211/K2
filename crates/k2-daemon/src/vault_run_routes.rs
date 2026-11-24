@@ -24,6 +24,8 @@ use crate::vault::oauth_refresh;
 use crate::vault::proxy::{self, ReconnectCard};
 use crate::vault_routes::{not_found_elsewhere, refuse, Sel};
 use crate::vault_use_routes::{jailed_path, use_refusal, use_selector};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const RUN: &str = "/cli/vault/run";
 /// Where this daemon's binary is, for the CLI to exec as the helper.
@@ -104,7 +106,7 @@ fn run_helper() -> Result<Value, VaultError> {
     let exe = std::env::current_exe().map_err(|e| VaultError::internal(format!("run helper: {}", e.kind())))?;
     let exe = installed_exe(exe);
     if !exe.is_file() {
-        return Err(VaultError::new("run_helper_missing", 409, "the k2-daemon binary isn't where it started; restart the K2 daemon"));
+        return Err(VaultError::new("run_helper_missing", 409, concat!("the k2-daemon binary isn't where it started; restart the ", product_name!(), " daemon")));
     }
     // tokenFd: this helper takes the passport on --token-fd and clears K2's
     // credential variables from the command's environment.
@@ -235,15 +237,15 @@ fn once_refusal(name: &str, e: VaultError) -> VaultError {
     VaultError::forbidden(
         "once_only",
         format!(
-            "{name} is a one-time code, so k2 vault run won't read it: it would be gone after this run. Hand the file to your command yourself, once: tool --code-file \"$(k2 vault file {name})\" (add --wait 10m if a person hasn't saved it yet). That read deletes it"
+            "{name} is a one-time code, so {CLI_NAME} vault run won't read it: it would be gone after this run. Hand the file to your command yourself, once: tool --code-file \"$({CLI_NAME} vault file {name})\" (add --wait 10m if a person hasn't saved it yet). That read deletes it"
         ),
     )
 }
 
 fn run(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ctx: &RunCtx) -> Result<Value, VaultError> {
-    c.actor.agent().ok_or_else(|| VaultError::forbidden("use_run_as_agent", "k2 vault run runs for an agent session; people use k2 vault reveal"))?;
+    c.actor.agent().ok_or_else(|| VaultError::forbidden("use_run_as_agent", concat!(cli_name!(), " vault run runs for an agent session; people use ", cli_name!(), " vault reveal")))?;
     if ctx.sandboxed {
-        return Err(VaultError::forbidden("run_not_in_sandbox", "k2 vault run isn't available in a sandboxed session; use k2 vault fetch"));
+        return Err(VaultError::forbidden("run_not_in_sandbox", concat!(cli_name!(), " vault run isn't available in a sandboxed session; use ", cli_name!(), " vault fetch")));
     }
     let b: RunBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
     if b.secrets.is_empty() && b.env_file.is_none() {
@@ -272,7 +274,7 @@ fn run(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ctx: &RunCtx) -> R
             }
             let r = k2_vault::refs::VaultRef::parse(&v)?;
             if r.version.is_some() {
-                return Err(VaultError::bad_request("run_pinned_ref", format!("{k}: k2 vault run uses the secret's current version; remove the @version")));
+                return Err(VaultError::bad_request("run_pinned_ref", format!("{k}: {CLI_NAME} vault run uses the secret's current version; remove the @version")));
             }
             let asked = Sel { reference: Some(v.clone()), ..Default::default() };
             wants.push(Want { sel: use_selector(vault, c, &asked)?, asked, name: r.name, env: Some(k) });

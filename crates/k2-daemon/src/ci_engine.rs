@@ -43,6 +43,7 @@ use k2_core::compute::proto::ci_config::{CheckJob, CiConfig, CI_CONFIG_PATH};
 use k2_core::log_debug;
 
 use crate::compute_routes::Ws;
+use k2_core::brand::CLI_NAME;
 
 /// How often the loop runs.
 pub const TICK: Duration = Duration::from_secs(15);
@@ -445,19 +446,19 @@ pub(crate) fn ci_cache(o: &dyn Ops, root: &Path, s: &Start<'_>, trusted: &ci::Tr
     }
     let scratch = |why: String| Some(CiCache { commit: CacheCommit::Scratch, cache_ref: Some(b.to_string()), why, remote: None });
     if !trusted.branches.iter().any(|t| t == b) {
-        return scratch(format!("{b} isn't a trusted branch (k2 ci cache trust): saves only scratch/{b}"));
+        return scratch(format!("{b} isn't a trusted branch ({CLI_NAME} ci cache trust): saves only scratch/{b}"));
     }
     // The remote is pinned (BK-1, review item 1): a person's trust or watch
     // change recorded the URL git fetches from; an agent repointing the
     // remote (its URL or an insteadOf) gets no trusted save.
     let Some(pinned) = trusted.remote.clone() else {
-        return scratch(format!("no remote recorded for the trusted cache yet: a person runs k2 ci cache trust --set {b} (it records {}'s URL); saves only scratch/{b}", s.remote));
+        return scratch(format!("no remote recorded for the trusted cache yet: a person runs {CLI_NAME} ci cache trust --set {b} (it records {}'s URL); saves only scratch/{b}", s.remote));
     };
     match o.remote_url(root, s.remote) {
         Some(now) if now == pinned => {}
         now => {
             return scratch(format!(
-                "{}'s URL is {} but a person recorded {pinned} for the trusted cache: saves only scratch/{b} (a person re-runs k2 ci cache trust --set … to record the new one)",
+                "{}'s URL is {} but a person recorded {pinned} for the trusted cache: saves only scratch/{b} (a person re-runs {CLI_NAME} ci cache trust --set … to record the new one)",
                 s.remote,
                 now.as_deref().unwrap_or("unknown")
             ))
@@ -506,13 +507,13 @@ pub(crate) fn prepare(o: &dyn Ops, _ws: &Ws, root: &Path, s: &Start<'_>) -> Resu
             problem(
                 codes::NO_CONFIG,
                 404,
-                format!("commit {} has no {CI_CONFIG_PATH}: write one (k2 ci init), commit it, then run again (k2 study ci)", &s.sha[..12]),
+                format!("commit {} has no {CI_CONFIG_PATH}: write one ({CLI_NAME} ci init), commit it, then run again ({CLI_NAME} study ci)", &s.sha[..12]),
             )
         })?;
     let cfg = CiConfig::parse(&text).map_err(|e| problem(codes::BAD_CONFIG, 400, format!("at {}: {e}", &s.sha[..12])))?;
     let picked = ci::pick_checks(&cfg, s.only).map_err(|e| problem(codes::NO_CHECK, 404, e))?;
     if picked.is_empty() {
-        return Err(problem(codes::NO_CONFIG, 404, format!("{CI_CONFIG_PATH} at {} has no [checks.<name>]: add one (k2 study ci)", &s.sha[..12])));
+        return Err(problem(codes::NO_CONFIG, 404, format!("{CI_CONFIG_PATH} at {} has no [checks.<name>]: add one ({CLI_NAME} study ci)", &s.sha[..12])));
     }
     let checks = picked.into_iter().map(|(n, c)| (n.clone(), c.clone())).collect();
     let slug = cfg.statuses.as_ref().and_then(|_| o.remote_slug(root, s.remote));
@@ -1007,9 +1008,9 @@ impl Ops for Real {
         });
         let r = resolved.map_err(|e| match e.code {
             "no_allowed_hosts" | "host_not_allowed" => {
-                format!("{name} may not be sent to {host}: a person runs k2 vault hosts {name} --add {host} (or sets it with --preset github)")
+                format!("{name} may not be sent to {host}: a person runs {CLI_NAME} vault hosts {name} --add {host} (or sets it with --preset github)")
             }
-            _ if e.status == 404 => format!("no secret {name} in this workspace's vault: a person stores it (k2 study ci, STATUSES)"),
+            _ if e.status == 404 => format!("no secret {name} in this workspace's vault: a person stores it ({CLI_NAME} study ci, STATUSES)"),
             c => format!("the vault refused {name} ({c}): {}", e.hint),
         })?;
         let token = r.value.expose_str().map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| format!("{name} is empty or not text"))?;

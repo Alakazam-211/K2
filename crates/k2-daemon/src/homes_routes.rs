@@ -47,6 +47,7 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::notify_routes::Actor;
 use crate::session_events::SessionEvent;
+use k2_core::product_name;
 
 pub const HOMES_PATH: &str = "/cli/me/homes";
 pub const PUSH_PATH: &str = "/cli/me/homes/push";
@@ -120,7 +121,7 @@ pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
         PersonRefusal::Reserved => error(
             "403 Forbidden",
             "homes_person_only",
-            "this login's name is one K2 uses for the server's owner and its agents, so it has no Home groups; the owner can remove it in Settings → Admin Access and add the person under another name",
+            concat!("this login's name is one ", product_name!(), " uses for the server's owner and its agents, so it has no Home groups; the owner can remove it in Settings → Admin Access and add the person under another name"),
         ),
     })
 }

@@ -33,6 +33,8 @@ use serde_json::{json, Value as J};
 
 use super::{db_fail, fail, Fail, R};
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const SEND: &str = "/cli/notify/email";
 pub const OFF: &str = "/cli/notify/email/off";
@@ -59,7 +61,7 @@ fn agent_workspace(who: &Who) -> R<String> {
         Who::Owner | Who::Login { .. } => Err(fail(
             403,
             "agent_only",
-            "k2 notify email is an agent's way to email a person here; people use their own mail",
+            concat!(cli_name!(), " notify email is an agent's way to email a person here; people use their own mail"),
         )),
         _ => Err(fail(403, "forbidden", "invalid or missing token")),
     }
@@ -68,7 +70,7 @@ fn agent_workspace(who: &Who) -> R<String> {
 fn off_hint(project: &str) -> String {
     format!(
         "email notices are off for this workspace. Only the owner turns them on, with a sender for it: \
-         k2 notifications email agent on {project} --sender <address> (from their own terminal). Ask with a permission card."
+         {CLI_NAME} notifications email agent on {project} --sender <address> (from their own terminal). Ask with a permission card."
     )
 }
 
@@ -117,7 +119,7 @@ fn workspace_sender(project: &str, now: i64) -> R<Sender> {
 /// The fixed footer every notice carries.
 pub fn footer(agent: &str, box_label: &str, stop_url: &str) -> String {
     format!(
-        "\n\n--\nSent by {agent}, an AI agent on {box_label}, through K2. Replies aren't read.\n\
+        "\n\n--\nSent by {agent}, an AI agent on {box_label}, through {PRODUCT_NAME}. Replies aren't read.\n\
          Stop {agent}'s emails to this address: {stop_url}\n"
     )
 }
@@ -159,7 +161,7 @@ pub fn send(who: &Who, v: &J, now: i64) -> R<J> {
                 return Err(fail(
                     409,
                     "no_notice_address",
-                    format!("{label} hasn't confirmed a notice address yet (they run k2 notifications email address set <address> themselves)"),
+                    format!("{label} hasn't confirmed a notice address yet (they run {CLI_NAME} notifications email address set <address> themselves)"),
                 ))
             }
         }
@@ -271,7 +273,7 @@ pub fn on_binding(project_id: &str, sender_address: &str) -> String {
 /// route checked the person and the confirm.
 pub fn agent_on(project_id: &str, sender: &Sender, by: &str, now: i64) -> R<J> {
     if sender.is_system() {
-        return Err(fail(409, "system_sender", "the system sender is K2's own; a workspace gets its own sender"));
+        return Err(fail(409, "system_sender", concat!("the system sender is ", product_name!(), "'s own; a workspace gets its own sender")));
     }
     if let Some(app) = sender.app() {
         return Err(fail(409, "sender_in_use", format!("{} is App {app}'s sender (one owner per address)", sender.address)));
@@ -290,7 +292,7 @@ pub fn agent_on(project_id: &str, sender: &Sender, by: &str, now: i64) -> R<J> {
             "Email notices on",
             &format!(
                 "The owner turned email notices on for this workspace from {}. Email a person here: \
-                 k2 notify email <their login, or owner> --subject \"…\" --text \"…\" (text only; they must have confirmed a notice address).",
+                 {CLI_NAME} notify email <their login, or owner> --subject \"…\" --text \"…\" (text only; they must have confirmed a notice address).",
                 sender.address
             ),
         );

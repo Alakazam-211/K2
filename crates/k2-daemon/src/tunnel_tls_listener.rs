@@ -40,6 +40,7 @@ use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
 
 use k2_core::log_debug;
+use k2_core::brand::CLI_NAME;
 
 /// The live E2E listener: its port, the subdomain its certificate names,
 /// and the tasks that serve it (accept loop + cert renewer).
@@ -318,7 +319,7 @@ pub fn visitor_cap_json() -> serde_json::Value {
 /// The refusal for a visitor over a per-visitor cap.
 fn over_visitor_cap(ip: Option<std::net::IpAddr>) -> String {
     format!(
-        "{} is over the per-visitor connection cap (k2 firewall guard)",
+        "{} is over the per-visitor connection cap ({CLI_NAME} firewall guard)",
         ip.map(|i| i.to_string()).unwrap_or_default()
     )
 }

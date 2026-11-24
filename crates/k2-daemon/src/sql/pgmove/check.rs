@@ -9,6 +9,8 @@ use k2_root_proto::pg_major::{check_move, k2_layout, NEW_INSTALL};
 
 use super::catalog;
 use super::{free_band_port, port_of, roles_to_copy, ClusterOps, ClusterRole, DbRecord, Major, MoveEnv, MoveOpts, SourceState, Users};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The refusal line's id when an App on the database excludes the target
 /// major (PA6).
@@ -98,7 +100,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     if opts.helper_ok {
         l.ok("helper", "root helper speaks protocol 9 (pgmajor)");
     } else {
-        l.refuse("helper", "the root helper is older than protocol 9", "update the root helper: k2 root-helper update");
+        l.refuse("helper", "the root helper is older than protocol 9", concat!("update the root helper: ", cli_name!(), " root-helper update"));
     }
 
     // Majors.
@@ -110,12 +112,12 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
         Some(mf) if mf >= rec.major => l.refuse(
             "record",
             format!("the record says {db} moved from {mf} but lives on {}", rec.major),
-            "inconsistent_record: nothing is deleted or moved until the owner reviews it (inbox, k2 db upgrade --check)",
+            concat!("inconsistent_record: nothing is deleted or moved until the owner reviews it (inbox, ", cli_name!(), " db upgrade --check)"),
         ),
         Some(mf) if rec.source_state == SourceState::Kept => l.refuse(
             "kept",
             format!("an earlier move's {mf} copy is still kept for its 14-day rollback"),
-            "once the database is healthy on its new major, the owner may delete the old copy: k2 db upgrade <db> --forget-old",
+            concat!("once the database is healthy on its new major, the owner may delete the old copy: ", cli_name!(), " db upgrade <db> --forget-old"),
         ),
         _ => {}
     }
@@ -125,14 +127,14 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     let src = rows.iter().find(|r| r.major == from && r.name == "main");
     let from_port = src.map(|r| r.port);
     match src {
-        None => l.refuse("source", format!("no {from}/main cluster on this box"), "k2 db doctor"),
-        Some(r) if !k2_layout(r) => l.refuse("source", "the source cluster lives outside /var/lib/postgresql/<M>/main", "K2 never moves out of a foreign layout"),
-        Some(r) if !r.online() => l.refuse("source", format!("{from}/main is not running"), "k2 db doctor"),
+        None => l.refuse("source", format!("no {from}/main cluster on this box"), concat!(cli_name!(), " db doctor")),
+        Some(r) if !k2_layout(r) => l.refuse("source", "the source cluster lives outside /var/lib/postgresql/<M>/main", concat!(product_name!(), " never moves out of a foreign layout")),
+        Some(r) if !r.online() => l.refuse("source", format!("{from}/main is not running"), concat!(cli_name!(), " db doctor")),
         Some(r) => match env.cluster_role(from) {
             ClusterRole::K2 => l.ok("source", format!("{from}/main on port {}", r.port)),
             ClusterRole::Adopted if opts.allow_adopted => l.warn("source", format!("{from}/main is an adopted cluster"), "the owner passed --allow-adopted"),
-            ClusterRole::Adopted => l.refuse("source", format!("{from}/main is a cluster set up outside K2"), "owner only: --allow-adopted"),
-            ClusterRole::Foreign => l.refuse("source", format!("{from}/main is not K2's cluster"), "K2 never moves a foreign cluster's databases"),
+            ClusterRole::Adopted => l.refuse("source", format!("{from}/main is a cluster set up outside {PRODUCT_NAME}"), "owner only: --allow-adopted"),
+            ClusterRole::Foreign => l.refuse("source", format!("{from}/main is not {PRODUCT_NAME}'s cluster"), concat!(product_name!(), " never moves a foreign cluster's databases")),
         },
     }
 
@@ -143,14 +145,14 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
     match to_port {
         Some(p) => {
             if env.cluster_role(to) == ClusterRole::Adopted && !opts.allow_adopted {
-                l.refuse("target", format!("{to}/main is a cluster set up outside K2"), "owner only: --allow-adopted");
+                l.refuse("target", format!("{to}/main is a cluster set up outside {PRODUCT_NAME}"), "owner only: --allow-adopted");
             } else {
                 l.ok("target", format!("{to}/main exists on port {p}"));
             }
             if rows.iter().any(|r| r.major == to && r.online()) {
                 let have = ops.sql(to, "postgres", &format!("SELECT count(*) FROM pg_database WHERE datname = {};\n", catalog::quote_lit(db)))?;
                 if have.trim() != "0" {
-                    l.refuse("target", format!("a database named {db} already exists on {to}"), "an earlier failed move? k2 db doctor");
+                    l.refuse("target", format!("a database named {db} already exists on {to}"), concat!("an earlier failed move? ", cli_name!(), " db doctor"));
                 }
             }
         }
@@ -161,7 +163,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
                     new_port = Some(p);
                     l.ok("target", format!("{to}/main will be created on port {p}"));
                 }
-                None => l.refuse("target", "no free port in 5432–5449", "free a port in K2's band"),
+                None => l.refuse("target", "no free port in 5432–5449", concat!("free a port in ", product_name!(), "'s band")),
             }
         }
     }
@@ -177,7 +179,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
                 l.warn(
                     "memory",
                     format!("the {to} cluster starts as a second Postgres with {} MiB of RAM outside the Apps' pool", spare >> 20),
-                    "both clusters share k2-postgres.slice (40% of RAM at most); k2 db doctor shows each cluster's memory",
+                    concat!("both clusters share k2-postgres.slice (40% of RAM at most); ", cli_name!(), " db doctor shows each cluster's memory"),
                 );
             }
         }
@@ -189,7 +191,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
         l.refuse(
             super::dual::DUAL_RUNNING,
             format!("a live move of {db} is running"),
-            "k2 db upgrade <db> --switch or --abort it first",
+            concat!(cli_name!(), " db upgrade <db> --switch or --abort it first"),
         );
     }
 
@@ -199,7 +201,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
         l.refuse(
             REHOST_RUNNING,
             format!("{app} (on this database) is being re-hosted right now"),
-            "wait for it to finish (k2 app rehost status), then run this again",
+            concat!("wait for it to finish (", cli_name!(), " app rehost status), then run this again"),
         );
     }
 
@@ -224,7 +226,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
             l.refuse(
                 "kept",
                 format!("a rolled-back copy is kept: {}", copies.iter().map(|(m, n)| format!("{m}/{n}")).collect::<Vec<_>>().join(", ")),
-                "the owner deletes it first: k2 db upgrade <db> --forget-old",
+                concat!("the owner deletes it first: ", cli_name!(), " db upgrade <db> --forget-old"),
             );
         }
     }
@@ -300,10 +302,10 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
                     l.refuse("roles", format!("{r}: in target with another password"), "one login can't hold two passwords; rotate it on both clusters first");
                 }
                 for r in list("refused") {
-                    l.refuse("roles", format!("{r}: superuser/replication/BYPASSRLS or an unsafe stored password"), "K2 never copies such a role");
+                    l.refuse("roles", format!("{r}: superuser/replication/BYPASSRLS or an unsafe stored password"), concat!(product_name!(), " never copies such a role"));
                 }
                 for r in list("missing") {
-                    l.refuse("roles", format!("{r}: not in the source cluster"), "k2 db doctor");
+                    l.refuse("roles", format!("{r}: not in the source cluster"), concat!(cli_name!(), " db doctor"));
                 }
             } else {
                 l.ok("roles", format!("{} role(s) created in the new cluster with the same verifiers", roles.len()));
@@ -311,7 +313,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
             let md5 = ops.sql(from, "postgres", &catalog::md5_roles_sql(&roles))?;
             let md5: Vec<String> = serde_json::from_str(&md5).unwrap_or_default();
             if !md5.is_empty() {
-                l.warn("roles", format!("MD5 passwords: {}", md5.join(", ")), "carried as they are; rotate to SCRAM (k2 db rotate)");
+                l.warn("roles", format!("MD5 passwords: {}", md5.join(", ")), concat!("carried as they are; rotate to SCRAM (", cli_name!(), " db rotate)"));
             }
         }
     }
@@ -335,7 +337,7 @@ pub fn run(ops: &dyn ClusterOps, env: &dyn MoveEnv, rec: &DbRecord, opts: &MoveO
         l.ok("users", format!("Apps stopped and restarted on the new port: {}", users.apps.join(", ")));
     }
     for d in &users.literal_dsns {
-        l.warn("users", format!("a literal DSN K2 can't rewrite: {d}"), "point it at `k2 db dsn --ref` before the move, or fix it after");
+        l.warn("users", format!("a literal DSN {PRODUCT_NAME} can't rewrite: {d}"), concat!("point it at `", cli_name!(), " db dsn --ref` before the move, or fix it after"));
     }
     let shared = env.shared_with(db);
     if !shared.is_empty() {

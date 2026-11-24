@@ -46,6 +46,8 @@ use crate::cli_response::CliResponse;
 use crate::mail::domains;
 use crate::mail::hosted::err_json;
 use crate::mail::jmap::StalwartClient;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// CalDAV + CardDAV + their JMAP twins + calendar scheduling/alarms.
 /// Denied when the owner runs `k2 hostmail calendar disable`.
@@ -156,9 +158,9 @@ const LOG_PREFIX: &str = "[mail-dav]";
 
 /// The paths a foreign :443 proxy must forward for CalDAV/CardDAV.
 pub const FOREIGN_PROXY_REASON: &str =
-    "something other than K2 or Stalwart owns :443 on this box, so K2 cannot route \
+    concat!("something other than ", product_name!(), " or Stalwart owns :443 on this box, so ", product_name!(), " cannot route \
      CalDAV/CardDAV: your proxy must forward /.well-known/caldav, /.well-known/carddav \
-     and /dav/ to https://127.0.0.1:8443";
+     and /dav/ to https://127.0.0.1:8443");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -588,9 +590,9 @@ pub fn calendar_reach(
         return (
             false,
             Some(format!(
-                "{host} resolves to the K2 control plane, not this box — calendar \
-                 clients need a mail hostname on your own domain (k2 hostmail ptr set \
-                 / k2 domain)"
+                "{host} resolves to the {PRODUCT_NAME} control plane, not this box — calendar \
+                 clients need a mail hostname on your own domain ({CLI_NAME} hostmail ptr set \
+                 / {CLI_NAME} domain)"
             )),
         );
     }

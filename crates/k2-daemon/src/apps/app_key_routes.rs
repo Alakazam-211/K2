@@ -43,6 +43,7 @@ use k2_core::skin;
 use serde_json::{json, Value as J};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 pub const PREFIX: &str = "/v1/apps/";
 pub const MAX_BODY: usize = 96 * 1024;
@@ -567,7 +568,7 @@ fn fetch(c: &Ctx, v: &J) -> R {
         let (g, _) = granted
             .iter()
             .find(|(_, name)| name == n)
-            .ok_or_else(|| err(403, "not_granted", format!("{n} isn't granted to this App (the owner: k2 publish secret add <app> {n} --as fetch)")))?;
+            .ok_or_else(|| err(403, "not_granted", format!("{n} isn't granted to this App (the owner: {CLI_NAME} publish secret add <app> {n} --as fetch)")))?;
         let r = vault.resolve(&Selector::Id(g.secret_id.clone()), Use::Fetch(&origin), &who).map_err(|e| err(e.status, &e.code, e.hint))?;
         let (dst, fmt) = r.inject.choose(None, None).map_err(|e| err(e.status, &e.code, e.hint))?;
         let allowed: Vec<OriginPattern> = k2_vault::hosts::parse_stored(&r.meta.hosts);

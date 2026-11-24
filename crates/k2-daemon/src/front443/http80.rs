@@ -36,6 +36,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 
 use k2_core::log_debug;
+use k2_core::brand::CLI_NAME;
 
 /// One request's head, at most.
 const MAX_HEAD: usize = 8 * 1024;
@@ -236,7 +237,7 @@ pub async fn start() {
         },
     };
     if !k2_core::front443::load().http_on() {
-        log_debug!("[front80] the :80 front is off (k2 front http off): not serving the socket systemd passed");
+        log_debug!("[front80] the :80 front is off ({CLI_NAME} front http off): not serving the socket systemd passed");
         return;
     }
     if let Err(e) = std_l.set_nonblocking(true) {

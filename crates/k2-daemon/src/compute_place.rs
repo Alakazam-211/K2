@@ -44,6 +44,7 @@ use k2_core::compute::{self as compute, scheduler};
 
 pub use crate::compute_gpu_ask::{gpu_mem_needs_update_hint, gpu_refusal, gpu_skip};
 use crate::compute_ws;
+use k2_core::{cli_name, product_name};
 
 /// The native tools' need states (android-ndk, cargo-ndk).
 #[path = "compute_place_native.rs"]
@@ -1908,7 +1909,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::NOT_ALLOWED => "off this workspace's node list".to_string(),
         skip::AVOIDED => "you avoid (--avoid)".to_string(),
         skip::DISTRO => format!("of another --distro{}", w.filter.distro.as_deref().map(|d| format!(" than {d}")).unwrap_or_default()),
-        skip::NO_PACKAGE_MAPPING => "that can't install a sys: package you need (no name for their distro, or K2 never installs it)".to_string(),
+        skip::NO_PACKAGE_MAPPING => concat!("that can't install a sys: package you need (no name for their distro, or ", product_name!(), " never installs it)").to_string(),
         skip::PACKAGE_ASK => "that need their owner's approval for a sys: package".to_string(),
         skip::UNSUPPORTED_ON_OS => "Macs (no system packages)".to_string(),
         skip::NOT_ONLY => "off your --only list".to_string(),
@@ -2910,7 +2911,7 @@ pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
     // `k2 compute move` asked its node for it back (0.46.17).
     let pulling = j.reason.as_deref() == Some(pending::PULL);
     if j.ctl.any.is_none() && !pulling {
-        return Some(serde_json::json!({"auto": false, "note": "pinned: it waits for the node it was named on (k2 compute move <job> --auto lets K2 move it)"}));
+        return Some(serde_json::json!({"auto": false, "note": concat!("pinned: it waits for the node it was named on (", cli_name!(), " compute move <job> --auto lets ", product_name!(), " move it)")}));
     }
     let wait = share::withdraw_wait(j.withdraws, j.withdrawn_at, now);
     let moving = pulling || j.reason.as_deref() == Some(pending::WITHDRAW);
@@ -2929,7 +2930,7 @@ pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
     } else if j.withdraws > 0 && wait > 0 {
         format!("tried to move it {} time(s) in a row; the node it was meant for filled first; next try in {wait}s", j.withdraws)
     } else {
-        "K2 moves it when another node can start it now".to_string()
+        concat!(product_name!(), " moves it when another node can start it now").to_string()
     };
     Some(serde_json::json!({
         "auto": j.ctl.any.is_some(),

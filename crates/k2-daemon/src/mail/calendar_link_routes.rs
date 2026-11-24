@@ -24,6 +24,8 @@ use crate::mail::calendar_link::{self as store, PRIMARY};
 use crate::mail::calendar_provider::{self as linked, CalendarProvider, LinkedCalInbox};
 use crate::mail::mailbox_guard;
 use crate::mail::oauth::CalAccess;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 fn owner_only(what: &str) -> CliResponse {
     error_response(
@@ -49,7 +51,7 @@ pub fn owner_target(address: &str) -> Result<LinkedCalInbox, CliResponse> {
         return Err(error_response(
             "404 Not Found",
             "not_found",
-            &format!("no linked calendar '{addr}' — 'k2 mail link list' shows what's connected"),
+            &format!("no linked calendar '{addr}' — '{CLI_NAME} mail link list' shows what's connected"),
         ));
     };
     let owner = row.owner_project_id.clone();
@@ -94,7 +96,7 @@ fn access_word(g: &LinkedCalInbox) -> &'static str {
 /// GET `/cli/mail/calendar/calendars?address=`.
 pub fn handle_calendars_get(params: &HashMap<String, String>) -> CliResponse {
     let Some(address) = crate::cli::opt_param(params, "address") else {
-        return usage("missing 'address' — the linked calendar's account (k2 cal calendars <address>)");
+        return usage(concat!("missing 'address' — the linked calendar's account (", cli_name!(), " cal calendars <address>)"));
     };
     if is_owner_or_admin() {
         // The person's own read is logged like any mailbox read (OA0).
@@ -129,7 +131,7 @@ pub fn handle_calendars_get(params: &HashMap<String, String>) -> CliResponse {
             }
             calendars_get_with(linked::real(&g).as_ref(), &g, false)
         }
-        Ok(CalTarget::Hosted(_)) => usage("this is a hosted inbox — 'k2 cal list' shows its calendars"),
+        Ok(CalTarget::Hosted(_)) => usage(concat!("this is a hosted inbox — '", cli_name!(), " cal list' shows its calendars")),
         Err(r) => r,
     }
 }
@@ -153,7 +155,7 @@ pub fn calendars_get_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, owner: b
         "access": access_word(g),
         "calendars": cals,
         "hint": if g.cal == CalAccess::Read {
-            "a read-only link shows its primary calendar and the ones the owner added (k2 cal calendars <address> --add <id|name>)"
+            concat!("a read-only link shows its primary calendar and the ones the owner added (", cli_name!(), " cal calendars <address> --add <id|name>)")
         } else {
             "a read-write link (made before 0.46.16) shows every calendar on the account"
         },
@@ -203,7 +205,7 @@ fn pick<'a>(p: &dyn CalendarProvider, g: &LinkedCalInbox, all: &'a [Value], aske
         [] => Err(error_response(
             "404 Not Found",
             "not_found",
-            &format!("no calendar '{asked}' on {} — 'k2 cal calendars {}' lists them", g.address, g.address),
+            &format!("no calendar '{asked}' on {} — '{CLI_NAME} cal calendars {}' lists them", g.address, g.address),
         )),
         many => Err(usage(format!(
             "{} calendars are named '{asked}' — pass an id: {}",
@@ -244,7 +246,7 @@ pub fn calendars_post_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, add: &V
             "usage",
             &format!(
                 "'{}' is a read-write link (made before 0.46.16): it already shows every calendar. \
-                 To pick calendars, unlink it and link it again read-only with 'k2 cal link'",
+                 To pick calendars, unlink it and link it again read-only with '{CLI_NAME} cal link'",
                 g.address
             ),
         );
@@ -281,7 +283,7 @@ pub fn calendars_post_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, add: &V
     for r in &remove {
         if r.eq_ignore_ascii_case(PRIMARY) || r.eq_ignore_ascii_case(&g.address) {
             return usage(format!(
-                "the primary calendar is always on for a read-only link — to stop it, unlink {} ('k2 mail link remove')",
+                "the primary calendar is always on for a read-only link — to stop it, unlink {} ('{CLI_NAME} mail link remove')",
                 g.address
             ));
         }
@@ -293,7 +295,7 @@ pub fn calendars_post_with(p: &dyn CalendarProvider, g: &LinkedCalInbox, add: &V
             return error_response(
                 "404 Not Found",
                 "not_found",
-                &format!("'{r}' isn't one of the calendars added to {} — 'k2 cal calendars {}' lists them", g.address, g.address),
+                &format!("'{r}' isn't one of the calendars added to {} — '{CLI_NAME} cal calendars {}' lists them", g.address, g.address),
             );
         };
         if let Err(resp) = mailbox_guard::log_governance(Source::Linked, &g.row.id, &g.address, None, "calendar_remove") {

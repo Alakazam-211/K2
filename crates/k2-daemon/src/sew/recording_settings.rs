@@ -31,6 +31,8 @@ use serde_json::{json, Value};
 
 use super::routes::{need_person, PersonFloor, Who};
 use super::supervisor::{no, Fail, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 pub const SPACE: &str = "/cli/sew/app-spaces/recording";
 pub const LOCK: &str = "/cli/sew/app-spaces/recording-lock";
@@ -82,7 +84,7 @@ pub(crate) fn feature_missing(flag: &str, what: &str) -> Fail {
     let mut f = no(
         "sew_feature_missing",
         409,
-        format!("this server's chat can't {what} yet (it needs Sew 0.9.0: {flag}); the owner upgrades it with k2 hostchat upgrade"),
+        format!("this server's chat can't {what} yet (it needs Sew 0.9.0: {flag}); the owner upgrades it with {CLI_NAME} hostchat upgrade"),
     );
     f.extra = Some(json!({ "feature": flag }));
     f
@@ -92,7 +94,7 @@ fn person_only(what: &str) -> Fail {
     no(
         "person_only",
         403,
-        format!("nothing changed: a person does this, never an agent or a K2 terminal ({what}). Ask the server's owner or an admin to run it from a terminal outside K2"),
+        format!("nothing changed: a person does this, never an agent or a {PRODUCT_NAME} terminal ({what}). Ask the server's owner or an admin to run it from a terminal outside {PRODUCT_NAME}"),
     )
 }
 
@@ -121,7 +123,7 @@ fn space_override(who: &Who, v: &Value) -> R<Value> {
     }
     let app = super::home::resolve_app(app_in).map(|r| r.0).unwrap_or_else(|_| app_in.to_ascii_lowercase());
     match k2_core::tool_hook::recording_bound_app(&space).map_err(store)? {
-        None => return Err(no("space_unbound", 409, format!("Space {space} is bound to no App here: k2 hostchat app-space bind <app> {space} first"))),
+        None => return Err(no("space_unbound", 409, format!("Space {space} is bound to no App here: {CLI_NAME} hostchat app-space bind <app> {space} first"))),
         Some(a) if a != app => return Err(no("app_mismatch", 409, format!("Space {space} belongs to another App ({a}), not '{app}'"))),
         Some(_) => {}
     }
@@ -139,7 +141,7 @@ fn space_override(who: &Who, v: &Value) -> R<Value> {
         return Err(no(
             "space_locked",
             409,
-            format!("Space {space} is locked against recording (CUI/FCI): only the server's owner lifts it, in person (k2 hostchat app-space recording-lock {space} off)"),
+            format!("Space {space} is locked against recording (CUI/FCI): only the server's owner lifts it, in person ({CLI_NAME} hostchat app-space recording-lock {space} off)"),
         ));
     }
     if level_up || required_on {
@@ -187,7 +189,7 @@ fn lock(who: &Who, v: &Value) -> R<Value> {
             403,
             format!(
                 "nothing changed: only the server's owner sets or lifts a Space's CUI/FCI recording lock, in person with a confirm. \
-                 Ask them to run, from a terminal outside K2: k2 hostchat app-space recording-lock {space} {side}"
+                 Ask them to run, from a terminal outside {PRODUCT_NAME}: {CLI_NAME} hostchat app-space recording-lock {space} {side}"
             ),
         ));
     }
@@ -196,7 +198,7 @@ fn lock(who: &Who, v: &Value) -> R<Value> {
     crate::vault::auth_audit(CONFIRM_LOCK, &who.label(), &format!("space={space} lock={on} method={method}"), "cli");
     super::s32::emit("app-space");
     let hint = if on {
-        "No one records in this Space now: K2 tells Sew start_level none and required off for it, whatever its App asks, and keeps doing so after an unbind."
+        concat!("No one records in this Space now: ", product_name!(), " tells Sew start_level none and required off for it, whatever its App asks, and keeps doing so after an unbind.")
     } else {
         "Lifted: the Space follows its App's and the org's recording rules again."
     };

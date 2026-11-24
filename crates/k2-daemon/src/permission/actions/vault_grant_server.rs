@@ -39,7 +39,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{caller_of, SHARE_CONFIRM};
 use super::{Answerer, Applied, Check, Ctx, Registered};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.grant-server";
@@ -120,8 +120,8 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
         None => "the way it is set up (its own delivery)".to_string(),
     };
     let reads = match text_param(ctx, "as") {
-        Some("fetch") => format!("{ws} can't read the value: K2 adds it to {ws}'s calls."),
-        Some("agent") => format!("{ws} can't read the value: K2's ssh agent signs with it."),
+        Some("fetch") => format!("{ws} can't read the value: {PRODUCT_NAME} adds it to {ws}'s calls."),
+        Some("agent") => format!("{ws} can't read the value: {PRODUCT_NAME}'s ssh agent signs with it."),
         _ => format!("{ws} can read the value from then on, and so can anything it runs."),
     };
     out.params.insert("how".into(), json!(how));
@@ -152,7 +152,7 @@ fn target(vault: &k2_vault::LocalVault, name: &str) -> Result<k2_vault::SecretMe
     match vault.meta(&selector(name), &Actor::System("permission-card".into())) {
         Ok(m) if m.status == SecretStatus::Active => Ok(m),
         Ok(_) => Err(Some(format!("{name} is disabled; nothing to allow."))),
-        Err(e) if e.code == "not_found" => Err(Some(format!("K2 has no server secret {name}; nothing to allow."))),
+        Err(e) if e.code == "not_found" => Err(Some(format!("{PRODUCT_NAME} has no server secret {name}; nothing to allow."))),
         Err(_) => Err(None),
     }
 }
@@ -172,7 +172,7 @@ pub(crate) fn missing(action: &str, request_id: &str) -> Option<String> {
 /// How the agent uses it, for its turn.
 fn use_words(name: &str, how: Delivery) -> String {
     match how {
-        Delivery::Fetch => format!("{CLI_NAME} vault fetch --secret {name} --scope server <url> (K2 adds it; you never see it)."),
+        Delivery::Fetch => format!("{CLI_NAME} vault fetch --secret {name} --scope server <url> ({PRODUCT_NAME} adds it; you never see it)."),
         Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK in new sessions.".to_string(),
         Delivery::File => format!("{CLI_NAME} vault file {name} --scope server for a short-lived 0600 file, or {CLI_NAME} vault sync to put it in $K2_SECRETS_DIR now."),
         _ => {
@@ -222,7 +222,7 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
         None
     };
     if crate::vault::workspace_id(&ctx.workspace_handle).as_deref() != Some(ctx.workspace_id.as_str()) {
-        return refused("not_found", format!("K2 can't find the workspace {} any more", ctx.workspace_handle));
+        return refused("not_found", format!("{PRODUCT_NAME} can't find the workspace {} any more", ctx.workspace_handle));
     }
     let system = Actor::System("permission-card".into());
     let existing = match vault.grants(&Selector::Id(m.id.clone()), &system) {

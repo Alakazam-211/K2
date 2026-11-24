@@ -28,6 +28,7 @@ use k2_core::compute::share::{self, pending};
 use k2_core::compute::store::JobRow;
 
 use super::{candidates_report, mem_words, movable, skip_words, Cand, Want};
+use k2_core::product_name;
 
 /// A node where every slot runs a job (any server's).
 pub const NODE_FULL: &str = "node_full";
@@ -206,7 +207,7 @@ pub fn not_now(j: &JobRow, now: i64) -> Elsewhere {
         .cands
         .iter()
         .map(|c| {
-            let (code, words) = reason(c, &w).unwrap_or_else(|| (STARTS_NOW, "can start it now; K2 moves it on a coming pass".into()));
+            let (code, words) = reason(c, &w).unwrap_or_else(|| (STARTS_NOW, concat!("can start it now; ", product_name!(), " moves it on a coming pass").into()));
             NotNow { node: c.node.name.clone(), code, words }
         })
         .collect();

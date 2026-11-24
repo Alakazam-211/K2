@@ -62,6 +62,8 @@ use serde_json::{json, Value as J};
 use super::grace::{target, Target};
 use super::routes::{actor, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const ROUTES: &[&str] = &[
     "/cli/app/grants",
@@ -215,7 +217,7 @@ fn give(who: &Who, body: &[u8]) -> R<J> {
     }
     let agent = super::routes::agent_ws(who).map(str::to_string);
     if agent.is_none() && !owner_rights(who) {
-        return Err(owner_only("grants an App guests:rooms (k2 app grant <app> --kind guests-rooms)"));
+        return Err(owner_only(concat!("grants an App guests:rooms (", cli_name!(), " app grant <app> --kind guests-rooms)")));
     }
     let t = target(who, s(&v, "app"))?;
     let rooms = rooms_arg(&v)?;
@@ -266,7 +268,7 @@ fn ceiling_for(who: &Who, t: &Target) -> R<Ceiling> {
                 "grant_required",
                 403,
                 format!(
-                    "\"Let this agent manage its Apps' users\" is off for this agent and {} has no guests:rooms grant: ask for the switch, or run k2 app grant {} --kind guests-rooms (the owner gets a card on your Thread)",
+                    "\"Let this agent manage its Apps' users\" is off for this agent and {} has no guests:rooms grant: ask for the switch, or run {CLI_NAME} app grant {} --kind guests-rooms (the owner gets a card on your Thread)",
                     t.name, t.name
                 ),
             )),
@@ -400,7 +402,7 @@ fn chat_grant_json(g: &ac::ChatGrant) -> J {
 /// `k2 app grant <app> --kind guests-chat`).
 fn give_chat(who: &Who, v: &J) -> R<J> {
     if !owner_rights(who) {
-        return Err(owner_only("grants an App guests:chat (k2 app grant <app> --kind guests-chat [--max N])"));
+        return Err(owner_only(concat!("grants an App guests:chat (", cli_name!(), " app grant <app> --kind guests-chat [--max N])")));
     }
     let t = target(who, s(v, "app"))?;
     let max = match v.get("maxMembers") {
@@ -463,7 +465,7 @@ fn chat_caller(who: &Who, app: Option<&str>, write: bool) -> R<(ac::Caller, Opti
                 return Err(no(
                     "grant_required",
                     403,
-                    format!("{} has no guests:chat grant: the owner runs k2 app grant {} --kind guests-chat", t.name, t.name),
+                    format!("{} has no guests:chat grant: the owner runs {CLI_NAME} app grant {} --kind guests-chat", t.name, t.name),
                 ));
             }
             Ok((ac::Caller::App, Some(t)))

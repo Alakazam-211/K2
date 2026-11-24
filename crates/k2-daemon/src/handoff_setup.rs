@@ -42,9 +42,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug};
 use k2_root_proto::templates::handoff_dropin;
 use k2_root_proto::version::HANDOFF_MIN_PROTOCOL;
+use k2_core::brand::CLI_NAME;
 
 /// Opt-out for the boot-time convergence.
 pub const OPT_OUT_ENV: &str = "K2_HANDOFF_DROPIN";
@@ -98,9 +99,9 @@ pub fn restart_needed() -> bool {
 /// The command that restarts this daemon's unit.
 fn restart_hint(unit: &str, scope: &str) -> String {
     if scope == "user" {
-        format!("k2 daemon restart (or: systemctl --user restart {unit})")
+        format!("{CLI_NAME} daemon restart (or: systemctl --user restart {unit})")
     } else {
-        format!("k2 daemon restart from a root shell (or: sudo systemctl restart {unit})")
+        format!("{CLI_NAME} daemon restart from a root shell (or: sudo systemctl restart {unit})")
     }
 }
 
@@ -226,8 +227,8 @@ pub fn converge_value(c: &Converge, restart_needed: bool, unit: &str, scope: &st
             "result": "stale",
             "unit": unit,
             "scope": scope,
-            "reason": "the root helper wrote an older drop-in than this daemon's: update the \
-                       helper (k2 root-helper update); the daemon converges it right after",
+            "reason": concat!("the root helper wrote an older drop-in than this daemon's: update the \
+                       helper (", cli_name!(), " root-helper update); the daemon converges it right after"),
         }),
         Converge::Failed(e) => {
             json!({"result": "failed", "unit": unit, "scope": scope, "reason": e})
@@ -357,7 +358,7 @@ pub fn ensure_on_boot() {
                     Converge::Stale => log_debug!(
                         "[daemon/handoff] unit drop-in differs from this build's \
                          (older root helper?); retrying after the helper updates \
-                         (k2 root-helper update converges it at once)"
+                         ({CLI_NAME} root-helper update converges it at once)"
                     ),
                     Converge::Failed(e) => {
                         log_debug!("[daemon/handoff] unit drop-in not installed (yet): {e}")

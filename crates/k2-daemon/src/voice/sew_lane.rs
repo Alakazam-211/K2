@@ -50,6 +50,7 @@ use tokio::net::TcpStream;
 
 use super::bff;
 use super::kit_door::{self, Door, KitCtx};
+use k2_core::{cli_name, product_name};
 
 /// The lane's path prefix (with its slash, so `/_k2/voice/sewx` isn't it).
 pub const PREFIX: &str = "/_k2/voice/sew/";
@@ -278,8 +279,8 @@ pub(super) async fn serve_box<S: AsyncRead + AsyncWrite + Unpin>(
 
 /// The 404 code on an App's address whose door is shut.
 pub const APP_DOOR_OFF: &str = "voice_door_off";
-const APP_DOOR_OFF_HINT: &str = "no call door on this App's address: the App needs Sew's client API approved (box service sew-api), \
-     voice:join approved if it asks for chat caps, and voice installed on this server (k2 study chat-voice)";
+const APP_DOOR_OFF_HINT: &str = concat!("no call door on this App's address: the App needs Sew's client API approved (box service sew-api), \
+     voice:join approved if it asks for chat caps, and voice installed on this server (", cli_name!(), " study chat-voice)");
 
 /// An App address's door (`apps::voice_door`): this lane, open only when
 /// `open` (that App's gate). The allowlist, the credential rule and the limits
@@ -333,7 +334,7 @@ async fn serve_door<S: AsyncRead + AsyncWrite + Unpin>(
             return match crate::routes::http::extract_bearer(head) {
                 Some(b) => kit_door::serve(client, method, sew_path, query, head, b, kit, sew_addr).await,
                 None => {
-                    let r = bff::Refusal::new(401, "unauthenticated", "send the person's own K2 login session (or a call credential on the engine's routes)");
+                    let r = bff::Refusal::new(401, "unauthenticated", concat!("send the person's own ", product_name!(), " login session (or a call credential on the engine's routes)"));
                     kit_door::refuse(client, &r).await
                 }
             };
@@ -392,7 +393,7 @@ async fn connect_sew(addr: &str) -> Option<TcpStream> {
 }
 
 async fn relay_http<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &str, head: &[u8], body: &[u8]) {
-    let unreachable = "K2 could not reach this server's Sew";
+    let unreachable = concat!(product_name!(), " could not reach this server's Sew");
     let Some(mut up) = connect_sew(addr).await else {
         return answer(client, "502 Bad Gateway", "voice_unavailable", unreachable, Some(2)).await;
     };
@@ -408,7 +409,7 @@ async fn relay_http<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &st
 }
 
 pub(super) async fn relay_gateway<S: AsyncRead + AsyncWrite + Unpin>(client: &mut S, addr: &str, head: &[u8]) {
-    let unreachable = "K2 could not reach this server's Sew";
+    let unreachable = concat!(product_name!(), " could not reach this server's Sew");
     let Some(mut up) = connect_sew(addr).await else {
         return answer(client, "502 Bad Gateway", "voice_unavailable", unreachable, Some(2)).await;
     };

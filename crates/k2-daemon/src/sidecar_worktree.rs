@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug};
 use k2_core::sidecar::{self as core, SidecarError};
 use k2_core::worktree_task::{self as wt, store, WtError};
 use serde_json::{json, Value};
@@ -42,6 +42,7 @@ use crate::sidecar_routes::{
     agent_gate, audit, err, json_body, live_session, require_credential, status_line, str_field, tab_row_for_key,
     target_workspace, workspace_lock, Caller, Workspace,
 };
+use k2_core::brand::CLI_NAME;
 
 /// An agent's Land refusal (the `git.land` card's wall).
 pub(crate) const LAND_NEEDS_PERSON: &str = "land_needs_person";
@@ -526,9 +527,9 @@ pub(crate) fn ensure_tab_row(ws: &Workspace, pane_group_id: &str, agent_name: &s
     Ok(())
 }
 
-const ASK_A_PERSON: &str = "only a person lands work on the workspace's main branch. Ask your human: they press Land in \
-     Workbench or run `k2 sidecar land {address}` (it shows the commits first). With permission cards on, ask with the \
-     command below; otherwise ask on your Thread (k2 thread ask).";
+const ASK_A_PERSON: &str = concat!("only a person lands work on the workspace's main branch. Ask your human: they press Land in \
+     Workbench or run `", cli_name!(), " sidecar land {address}` (it shows the commits first). With permission cards on, ask with the \
+     command below; otherwise ask on your Thread (", cli_name!(), " thread ask).");
 
 fn bool_field(v: &Value, key: &str, default: bool) -> Result<bool, Refused> {
     match v.get(key) {
@@ -557,7 +558,7 @@ fn handle_land(caller: &Caller, body: &[u8]) -> Result<Value, Refused> {
         Refused::new(
             "bad_request",
             400,
-            format!("pass expectTip: the branch tip you reviewed (k2 sidecar review {})", s.address),
+            format!("pass expectTip: the branch tip you reviewed ({CLI_NAME} sidecar review {})", s.address),
         )
     })?;
     let expect_onto = str_field(&v, "expectOnto");
@@ -644,7 +645,7 @@ fn handle_retire(caller: &Caller, body: &[u8]) -> Result<Value, Refused> {
             RETIRE_NEEDS_PERSON,
             403,
             format!(
-                "only a person retires a worktree sidecar. Ask your human: they press Retire (or Discard) in Workbench or run `k2 sidecar retire {}{}`. With permission cards on, ask with the command below; otherwise ask on your Thread (k2 thread ask).",
+                "only a person retires a worktree sidecar. Ask your human: they press Retire (or Discard) in Workbench or run `{CLI_NAME} sidecar retire {}{}`. With permission cards on, ask with the command below; otherwise ask on your Thread ({CLI_NAME} thread ask).",
                 s.address,
                 if discard { " --discard" } else { "" }
             ),
@@ -690,7 +691,7 @@ fn retire_locked(ws: &Workspace, s: &Sidecar, discard: bool, keep_branch: bool) 
             wt::codes::UNLANDED_WORK,
             409,
             format!(
-                "{} has {}; land it first (k2 sidecar land {}), or pass --discard to throw it away (the worktree goes to the Trash, the branch is deleted)",
+                "{} has {}; land it first ({CLI_NAME} sidecar land {}), or pass --discard to throw it away (the worktree goes to the Trash, the branch is deleted)",
                 s.address,
                 why.join(" and "),
                 s.address

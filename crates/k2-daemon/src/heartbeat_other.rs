@@ -32,6 +32,7 @@ use serde_json::json;
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The route (pause and resume are `enabled=false|true`).
 pub const ROUTE: &str = "/cli/heartbeat/enable";
@@ -220,8 +221,8 @@ fn other_workspace(own_id: &str, target: &Target, name: &str, enabled: bool) -> 
     let what = if enabled { "resume" } else { "pause" };
     let hint = format!(
         "'{name}' is a heartbeat of workspace {ws}, not of yours ({own}): an agent can {what} only its own \
-         workspace's heartbeats. A person runs `k2 heartbeat {verb} {name} --workspace {ws}` (the owner, an \
-         Admin, or someone in a K2 shell tab), or {what}s it in the app.",
+         workspace's heartbeats. A person runs `{CLI_NAME} heartbeat {verb} {name} --workspace {ws}` (the owner, an \
+         Admin, or someone in a {PRODUCT_NAME} shell tab), or {what}s it in the app.",
         ws = target.handle,
         own = handle_of(own_id),
         verb = verb(enabled),
@@ -330,7 +331,7 @@ pub(crate) fn handle(
         // A person can list that workspace's heartbeats; an agent can't.
         let hint = match caller {
             Caller::Agent(_) => String::new(),
-            _ => format!(" (list them: k2 heartbeat schedule list --workspace {})", target.handle),
+            _ => format!(" (list them: {CLI_NAME} heartbeat schedule list --workspace {})", target.handle),
         };
         return no_such(&target, name, hint);
     }
@@ -411,11 +412,11 @@ fn own_workspace(own: &str, own_id: Option<&str>, name: &str, enabled: bool) -> 
             let hint = match others.as_slice() {
                 [] => String::new(),
                 [one] => format!(
-                    ". Workspace {one} has one: k2 heartbeat {} {name} --workspace {one}",
+                    ". Workspace {one} has one: {CLI_NAME} heartbeat {} {name} --workspace {one}",
                     verb(enabled)
                 ),
                 many => format!(
-                    ". These workspaces have one: {}. Name it: k2 heartbeat {} {name} --workspace <workspace>",
+                    ". These workspaces have one: {}. Name it: {CLI_NAME} heartbeat {} {name} --workspace <workspace>",
                     many.join(", "),
                     verb(enabled)
                 ),

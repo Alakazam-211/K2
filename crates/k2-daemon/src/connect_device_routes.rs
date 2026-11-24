@@ -70,10 +70,11 @@
 //! token with 403 `device_session_ended`.
 
 use k2_core::connect_device_pairing as pairing;
-use k2_core::connect_users;
+use k2_core::{cli_name, connect_users};
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 pub const PAIR_CODE: &str = "/cli/auth/device/pair-code";
 pub const PAIR: &str = "/cli/auth/device/pair";
@@ -278,7 +279,7 @@ pub fn browser_refused() -> CliResponse {
     refusal(
         "403 Forbidden",
         "device_pairing_not_from_browser",
-        "pairing codes can't be made from a browser or through <label>.app.k2.dev. From the Companion, call https://<label>.k2.dev directly; or ask the server's owner for a code (Settings → Network → Companion → Pair a phone, or k2 users pair-phone).",
+        concat!("pairing codes can't be made from a browser or through <label>.app.k2.dev. From the Companion, call https://<label>.k2.dev directly; or ask the server's owner for a code (Settings → Network → Companion → Pair a phone, or ", cli_name!(), " users pair-phone)."),
     )
 }
 
@@ -360,8 +361,8 @@ pub enum LinkedMiss {
 
 fn not_linked(miss: LinkedMiss) -> CliResponse {
     let hint = match miss {
-        LinkedMiss::None => "the owner token has no login of its own to pair a phone as. Link your admin Connect login (an Owner or Admin role; Settings → General → Your account), or name one: k2 users pair-phone --user <login>",
-        LinkedMiss::MemberOnly => "the login linked to the owner is a Member; a phone paired from the owner token needs an admin login (an Owner or Admin role). Link your admin Connect login (Settings → General → Your account), or name one: k2 users pair-phone --user <login>",
+        LinkedMiss::None => concat!("the owner token has no login of its own to pair a phone as. Link your admin Connect login (an Owner or Admin role; Settings → General → Your account), or name one: ", cli_name!(), " users pair-phone --user <login>"),
+        LinkedMiss::MemberOnly => concat!("the login linked to the owner is a Member; a phone paired from the owner token needs an admin login (an Owner or Admin role). Link your admin Connect login (Settings → General → Your account), or name one: ", cli_name!(), " users pair-phone --user <login>"),
     };
     refusal("409 Conflict", "owner_login_not_linked", hint)
 }
@@ -396,7 +397,7 @@ pub fn pair_target(caller: &Caller, asked: Option<&str>) -> Result<String, CliRe
             _ => Err(refusal(
                 "403 Forbidden",
                 "owner_token_required",
-                "only the owner token (the desktop app or the k2 CLI on the server) can make a pairing code for another login",
+                concat!("only the owner token (the desktop app or the ", cli_name!(), " CLI on the server) can make a pairing code for another login"),
             )),
         },
     }
@@ -702,7 +703,7 @@ pub fn notify_paired(username: &str, device_name: &str, minted_by: &str) {
     let name = notice_safe(device_name);
     let body = format!(
         "A phone named \"{name}\" was paired to the login **{username}** (code made by {minted_by}).\n\n\
-         Not you? Revoke it: Settings → Network → Companion → Paired phones, or `k2 users phones` then `k2 users unpair-phone <id>`. \
+         Not you? Revoke it: Settings → Network → Companion → Paired phones, or `{CLI_NAME} users phones` then `{CLI_NAME} users unpair-phone <id>`. \
          Changing the login's password also ends every phone paired to it."
     );
     if let Err(e) = crate::feedback_routes::file_people_notice(

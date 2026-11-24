@@ -17,7 +17,7 @@ use k2_core::skin::{
     CAP_STORE_WRITE, CAP_THREAD_POST, CAP_THREAD_READ, CAP_TICKETS_POST, CAP_TICKETS_READ,
     CAP_WIKI_READ,
 };
-use k2_core::skin_door;
+use k2_core::{cli_name, product_name, skin_door};
 
 pub(crate) fn json_body(body: &[u8]) -> Result<serde_json::Value, CliResponse> {
     match serde_json::from_slice(body) {
@@ -496,7 +496,7 @@ pub fn app_users_off_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": APP_USERS_OFF,
-                "hint": "managing your Apps' users needs \"Let this agent manage its Apps' users\" for this agent (off). Ask your owner to turn it on: Settings → Workspaces / Agents → <this agent> → Permissions → Apps (or k2 app access <ws> --users on from a terminal outside K2); with permission cards on, run the Ask with: line below. A test guest (k2 app user add <app> <name> --test) is one held request the owner approves from a card on your Thread.",
+                "hint": concat!("managing your Apps' users needs \"Let this agent manage its Apps' users\" for this agent (off). Ask your owner to turn it on: Settings → Workspaces / Agents → <this agent> → Permissions → Apps (or ", cli_name!(), " app access <ws> --users on from a terminal outside ", product_name!(), "); with permission cards on, run the Ask with: line below. A test guest (", cli_name!(), " app user add <app> <name> --test) is one held request the owner approves from a card on your Thread."),
             }
         })
         .to_string(),
@@ -638,7 +638,7 @@ fn agent_unlock_limit_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "unlock_limit",
-                "hint": format!("you've cleared this login's lockout {AGENT_UNLOCKS_PER_HOUR} times in the last hour: it's being guessed, or the person needs a reset (k2 app user reset). It ends by itself after 15 minutes; the owner can still clear it."),
+                "hint": format!("you've cleared this login's lockout {AGENT_UNLOCKS_PER_HOUR} times in the last hour: it's being guessed, or the person needs a reset ({CLI_NAME} app user reset). It ends by itself after 15 minutes; the owner can still clear it."),
             }
         })
         .to_string(),
@@ -1257,7 +1257,7 @@ pub(crate) fn agent_test_guest_refused(actor: &str, username: &str) -> Option<Cl
                     return None;
                 }
                 Some(owner_only_with_hint(&format!(
-                    "'{}' is a test guest the owner made: it stays the owner's (ask your human: k2 app user … {} --test from a terminal outside K2). Make your own: k2 app user add <app> <name> --test",
+                    "'{}' is a test guest the owner made: it stays the owner's (ask your human: {CLI_NAME} app user … {} --test from a terminal outside {PRODUCT_NAME}). Make your own: {CLI_NAME} app user add <app> <name> --test",
                     p.username, p.username
                 )))
             }
@@ -1299,7 +1299,7 @@ pub(crate) fn password_sets_must_change(actor: &str, username: &str) -> bool {
 /// 2026-11-03).
 fn agent_config_refused() -> CliResponse {
     owner_only_with_hint(
-        "files:agentconfig on a platform pass or a box-wide role is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:write,files:agentconfig",
+        concat!("files:agentconfig on a platform pass or a box-wide role is the owner's: ask your human. A role of your own App may name it: ", cli_name!(), " app role room <role> <handle> --caps …,files:write,files:agentconfig"),
     )
 }
 
@@ -1307,7 +1307,7 @@ fn agent_config_refused() -> CliResponse {
 /// same way.
 fn files_download_refused() -> CliResponse {
     owner_only_with_hint(
-        "files:download on a platform pass or a box-wide role is the owner's: ask your human. A role of your own App may name it: k2 app role room <role> <handle> --caps …,files:download",
+        concat!("files:download on a platform pass or a box-wide role is the owner's: ask your human. A role of your own App may name it: ", cli_name!(), " app role room <role> <handle> --caps …,files:download"),
     )
 }
 
@@ -1335,12 +1335,12 @@ fn app_field(v: &serde_json::Value) -> Option<&str> {
 /// (no workspace known): never an agent's.
 fn agent_app_refused() -> CliResponse {
     owner_only_with_hint(
-        "naming an App (app) on an app user needs your workspace's \"manage Apps\" switch — ask your human (k2 app user add <username> --app <app> [--role R])",
+        concat!("naming an App (app) on an app user needs your workspace's \"manage Apps\" switch — ask your human (", cli_name!(), " app user add <username> --app <app> [--role R])"),
     )
 }
 
 /// agent-app-users §9: an agent add without an App.
-pub const AGENT_ADD_NEEDS_APP_HINT: &str = "Agents add App users only: name one of your workspace's Apps (k2 app user add <u> --app <app>). Box logins are the owner's (ask your human).";
+pub const AGENT_ADD_NEEDS_APP_HINT: &str = concat!("Agents add App users only: name one of your workspace's Apps (", cli_name!(), " app user add <u> --app <app>). Box logins are the owner's (ask your human).");
 
 /// agent-app-users §9: an agent naming another workspace's App.
 fn not_your_app(app: &str) -> CliResponse {
@@ -1534,7 +1534,7 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
             None => {
                 if role.is_some() {
                     return CliResponse::bad_request(
-                        "role on user add needs app (box-login roles: k2 app user role <username> <role>)",
+                        concat!("role on user add needs app (box-login roles: ", cli_name!(), " app user role <username> <role>)"),
                     );
                 }
                 skin::add_principal_with_email(username, email)
@@ -1789,7 +1789,7 @@ pub(crate) fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -
                 generated.is_some()
             );
             if let Some(a) = &admin {
-                notify_owner_of_admin_reset(a, &p.username, if generated.is_some() { "a password K2 made" } else { "a password they typed" });
+                notify_owner_of_admin_reset(a, &p.username, if generated.is_some() { concat!("a password ", product_name!(), " made") } else { "a password they typed" });
             }
             principal_json_with_generated(&p, generated.as_deref())
         }
@@ -2291,7 +2291,7 @@ pub fn handle_grant_hooks_log(query: &str) -> CliResponse {
         Ok(rows) => CliResponse::ok_json(
             serde_json::json!({
                 "rows": rows,
-                "actorNote": "actor is reported by K2; it is not proof a person acted",
+                "actorNote": concat!("actor is reported by ", product_name!(), "; it is not proof a person acted"),
             })
             .to_string(),
         ),
@@ -2860,7 +2860,7 @@ pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
 }
 
 pub use crate::skin_role_paths_routes::handle_roles_paths;
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub fn handle_roles_remove(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
@@ -3174,7 +3174,7 @@ fn tied_room_hint(raw: &str) -> Option<String> {
         ));
     }
     Some(format!(
-        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up, so {} stays held back. What clears it: the person chooses their own password: first sign-in with a temporary password, an invite or reset link, or the App's forgot-password flow (an agent: k2 app user invite {user} --app {app}). Approving the room for the App doesn't clear it.",
+        "this pass cannot use that agent. Waiting for reset (agent-tied): an agent set this login up, so {} stays held back. What clears it: the person chooses their own password: first sign-in with a temporary password, an invite or reset link, or the App's forgot-password flow (an agent: {CLI_NAME} app user invite {user} --app {app}). Approving the room for the App doesn't clear it.",
         held.join(", "),
         user = pass.username,
         app = app_name_of(&pass.app),
@@ -3258,9 +3258,9 @@ pub const WIKI_READ: &str = CAP_WIKI_READ;
 pub const STORE_READ: &str = CAP_STORE_READ;
 pub const STORE_WRITE: &str = CAP_STORE_WRITE;
 
-const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app.";
+const OWNER_ONLY_HINT: &str = concat!("requires owner/admin — ask your human (", cli_name!(), " app user add/remove/password, ", cli_name!(), " app role create/update/remove, ", cli_name!(), " app user role/unassign, ", cli_name!(), " app token create/revoke/rooms; leftover ", cli_name!(), " skin / ", cli_name!(), " skin-token; use ", cli_name!(), " app user list / ", cli_name!(), " app role list / ", cli_name!(), " app token list to read the roster). Host the UI with ", cli_name!(), " publish, not ", cli_name!(), " app.");
 
-const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 app user add/remove/password, k2 app role create/update/remove, k2 app user role/unassign, k2 app token create/revoke/rooms; leftover k2 skin / k2 skin-token; use k2 app user list / k2 app role list / k2 app token list to read the roster). Host the UI with k2 publish, not k2 app. To let this workspace's agent manage Apps: Settings → Workspaces / Agents → (this workspace) → Permissions → Apps → \"Build and run Apps\".";
+const OWNER_ONLY_MANAGE_HINT: &str = concat!("requires owner/admin — ask your human (", cli_name!(), " app user add/remove/password, ", cli_name!(), " app role create/update/remove, ", cli_name!(), " app user role/unassign, ", cli_name!(), " app token create/revoke/rooms; leftover ", cli_name!(), " skin / ", cli_name!(), " skin-token; use ", cli_name!(), " app user list / ", cli_name!(), " app role list / ", cli_name!(), " app token list to read the roster). Host the UI with ", cli_name!(), " publish, not ", cli_name!(), " app. To let this workspace's agent manage Apps: Settings → Workspaces / Agents → (this workspace) → Permissions → Apps → \"Build and run Apps\".");
 
 fn owner_only_with_hint(hint: &str) -> CliResponse {
     CliResponse {
@@ -3926,10 +3926,10 @@ fn app_has_url(app: &str) -> bool {
 }
 
 /// The hint on [`PASSWORD_CHANGE_REQUIRED`]: what the App's server does.
-pub const PASSWORD_CHANGE_REQUIRED_HINT: &str = "this person must choose a new password before signing in (someone else set this one): \
+pub const PASSWORD_CHANGE_REQUIRED_HINT: &str = concat!("this person must choose a new password before signing in (someone else set this one): \
 send their browser to changeUrl; with no changeUrl, your own form posts {token: changeToken, password} to POST changePath (/cli/skin/password/reset). \
 Then they sign in with the new password (the token works once, for 15 minutes; signing in again gets a new one). \
-An App on an older @k2/server sees a failed login: update it (k2 app sdk add <app-folder>, then npm install).";
+An App on an older @k2/server sees a failed login: update it (", cli_name!(), " app sdk add <app-folder>, then npm install).");
 
 /// Session `k2skn_` only. Static partner key → 403, not revoked.
 pub fn handle_logout(presented: Option<&str>) -> CliResponse {

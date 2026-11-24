@@ -42,6 +42,7 @@ use tokio::task::JoinHandle;
 use super::domains::{
     self, DnsStatus, RecordRow, CAT_REQUIRED, ST_MISSING, ST_UNKNOWN, ST_VALID, ST_WRONG,
 };
+use k2_core::brand::PRODUCT_NAME;
 
 // ── Resolver seam ───────────────────────────────────────────────────────
 
@@ -699,7 +700,7 @@ pub fn grade_mail_host(
             if box_addrs.v6.is_empty() {
                 live.push(format!("AAAA {ip}"));
                 aaaa_note = Some(format!(
-                    "{host} has AAAA {ip}, but this box has no global IPv6 — K2 sends over \
+                    "{host} has AAAA {ip}, but this box has no global IPv6 — {PRODUCT_NAME} sends over \
                      IPv4 only; this AAAA sends IPv6 clients to {ip}"
                 ));
             } else if !box_addrs.v6.contains(&ip) {

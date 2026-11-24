@@ -38,6 +38,7 @@ use crate::compute_routes::Who;
 
 use super::SourceErr;
 use util::*;
+use k2_core::product_name;
 
 /// Helpers every B2 handler shares (caller stamps, body parsing, source
 /// lookup, the `viewers` floor).
@@ -87,7 +88,7 @@ pub(crate) mod util {
         SourceErr::new(
             "person_only",
             403,
-            "This needs a person (run it outside K2, or use Settings → Gardens → External Data), or turn on \"Let this agent manage Gardens and data sources\" for this agent (Settings → Workspaces / Agents → <agent> → Permissions → Projects and Gardens).",
+            concat!("This needs a person (run it outside ", product_name!(), ", or use Settings → Gardens → External Data), or turn on \"Let this agent manage Gardens and data sources\" for this agent (Settings → Workspaces / Agents → <agent> → Permissions → Projects and Gardens)."),
         )
     }
 

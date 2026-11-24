@@ -64,6 +64,8 @@ use serde_json::{json, Value};
 use super::deskd;
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const ROUTES: &[&str] = &[
     "/cli/desktop/ask",
@@ -175,7 +177,7 @@ pub fn people_only() -> CliResponse {
     refuse_with(
         403,
         PEOPLE_ONLY,
-        "Remote desktop is for people only: the owner and the logins they allow. Agents can't see or drive this computer's screen with K2 in v1.",
+        concat!("Remote desktop is for people only: the owner and the logins they allow. Agents can't see or drive this computer's screen with ", product_name!(), " in v1."),
         k2_core::permission::request::feedback_fields(),
     )
 }
@@ -184,7 +186,7 @@ fn owner_only(what: &str) -> CliResponse {
     refuse(
         403,
         "owner_only",
-        format!("{what} is the Owner's: an Owner login, or the owner at this computer (k2 desktop, or Settings → Remote Desktop)"),
+        format!("{what} is the Owner's: an Owner login, or the owner at this computer ({CLI_NAME} desktop, or Settings → Remote Desktop)"),
     )
 }
 
@@ -223,7 +225,7 @@ pub(crate) fn may_start(p: &Principal) -> bool {
 pub(crate) fn person(p: &Principal) -> String {
     match p {
         Principal::OwnerToken => "the owner at this computer".into(),
-        Principal::Shell => "a K2 terminal on this computer".into(),
+        Principal::Shell => concat!("a ", product_name!(), " terminal on this computer").into(),
         Principal::Login { username, .. } => username.clone(),
     }
 }
@@ -240,7 +242,7 @@ pub(crate) fn line(event: Event, desktop: &str, p: &Principal, req: &Req<'_>) ->
 pub(crate) fn audit_first(l: &AuditLine) -> Result<(), CliResponse> {
     audit::write(l).map_err(|e| {
         k2_core::log_debug!("[desktop] audit write failed: {e}");
-        refuse(503, "audit_unavailable", "K2 couldn't write the remote desktop access log (~/.k2/desktop-audit.jsonl), so nothing changed")
+        refuse(503, "audit_unavailable", concat!(product_name!(), " couldn't write the remote desktop access log (~/.k2/desktop-audit.jsonl), so nothing changed"))
     })
 }
 
@@ -464,7 +466,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
         "/cli/desktop/status" => status(&p, &a, &desktop),
         "/cli/desktop/displays" => {
             if !a.may_view && !a.may_manage {
-                return refuse(403, "not_allowed", "you don't have access to this computer's screen (the owner grants it: k2 desktop grant)");
+                return refuse(403, "not_allowed", concat!("you don't have access to this computer's screen (the owner grants it: ", cli_name!(), " desktop grant)"));
             }
             ok(json!({"displays": deskd::for_desktop(&desktop).displays()}))
         }
@@ -643,7 +645,7 @@ fn ask(p: &Principal, body: &Value, req: &Req<'_>, desktop: &str) -> CliResponse
             return refuse(
                 409,
                 "desktop_off",
-                "Remote desktop is off on this computer, so there's nothing to ask. Turn it on at that computer: Settings → Access → Remote Desktop, or k2 desktop enable there.",
+                concat!("Remote desktop is off on this computer, so there's nothing to ask. Turn it on at that computer: Settings → Access → Remote Desktop, or ", cli_name!(), " desktop enable there."),
             )
         }
         Err(e) => return refuse(500, "store_error", e),
@@ -751,7 +753,7 @@ fn revoke(p: &Principal, body: &Value, req: &Req<'_>, desktop: &str) -> CliRespo
 fn kick(p: &Principal, body: &Value, req: &Req<'_>, desktop: &str) -> CliResponse {
     let (viewer, user) = (str_field(body, "viewer"), str_field(body, "user"));
     if viewer.is_none() && user.is_none() {
-        return refuse(400, "bad_request", "send {\"viewer\": \"dv_…\"} or {\"user\": \"<login>\"} (k2 desktop viewers lists them)");
+        return refuse(400, "bad_request", concat!("send {\"viewer\": \"dv_…\"} or {\"user\": \"<login>\"} (", cli_name!(), " desktop viewers lists them)"));
     }
     if let Err(r) = audit_first(&line(Event::Kick, desktop, p, req).viewer(viewer.unwrap_or("")).target(user.unwrap_or(""))) {
         return r;
@@ -789,7 +791,7 @@ fn read_audit(req: &Req<'_>) -> CliResponse {
 
 fn open(p: &Principal, a: &Access, body: &Value, req: &Req<'_>, desktop: &str) -> CliResponse {
     if !a.may_view && !a.may_manage {
-        return refuse(403, "not_allowed", "you don't have access to this computer's screen (the owner grants it: k2 desktop grant)");
+        return refuse(403, "not_allowed", concat!("you don't have access to this computer's screen (the owner grants it: ", cli_name!(), " desktop grant)"));
     }
     let display = str_field(body, "display").map(str::to_string);
     if let Err(r) = audit_first(&line(Event::Open, desktop, p, req).display(display.as_deref().unwrap_or(""))) {
@@ -815,14 +817,14 @@ fn mint_ticket(p: &Principal, a: &Access, body: &Value, req: &Req<'_>, desktop: 
         return refuse(
             403,
             "desktop_logins_only",
-            "the desktop stream takes a Connect login (sign in from another device); the owner token and K2 terminals manage it but never watch",
+            concat!("the desktop stream takes a Connect login (sign in from another device); the owner token and ", product_name!(), " terminals manage it but never watch"),
         );
     };
     if a.same_machine {
         return refuse(403, "same_machine", "You're on this computer: there's no use watching its own screen");
     }
     if !a.may_view {
-        return refuse(403, "not_allowed", "you don't have access to this computer's screen (the owner grants it: k2 desktop grant)");
+        return refuse(403, "not_allowed", concat!("you don't have access to this computer's screen (the owner grants it: ", cli_name!(), " desktop grant)"));
     }
     match store::is_enabled(vd::switch_id(desktop)) {
         Ok(true) => {}

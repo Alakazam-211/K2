@@ -20,6 +20,8 @@ use super::deskd;
 use super::routes::{audit_first, current_desktop, line, linux_here, linux_only, may_start, ok, person, refuse, refuse_with, Req};
 use super::virtual_desktop::{manager, Screen};
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// "This desktop no longer exists." (its agent's workspace was removed).
 pub const GONE: &str = "This desktop no longer exists.";
@@ -191,7 +193,7 @@ fn may_run(p: &Principal, id: &str, what: &str) -> Result<(), CliResponse> {
         return Err(refuse(403, "owner_or_admin", format!("{what} a desktop is for Owners and Admins. You can watch one an Owner or Admin started.")));
     }
     if !vd::is_virtual(id) {
-        return Err(refuse(409, "not_virtual", "This server's desktop is a real screen session (console): K2 doesn't start or close it."));
+        return Err(refuse(409, "not_virtual", concat!("This server's desktop is a real screen session (console): ", product_name!(), " doesn't start or close it.")));
     }
     Ok(())
 }
@@ -202,7 +204,7 @@ pub fn start(p: &Principal, body: &Value, req: &Req<'_>, id: &str) -> CliRespons
         return r;
     }
     if setting_up() {
-        return refuse(409, "setting_up", "The desktop packages are being installed: start it when that ends (k2 desktop status).");
+        return refuse(409, "setting_up", concat!("The desktop packages are being installed: start it when that ends (", cli_name!(), " desktop status)."));
     }
     let size = match size_of(body) {
         Ok(s) => s,
@@ -210,7 +212,7 @@ pub fn start(p: &Principal, body: &Value, req: &Req<'_>, id: &str) -> CliRespons
     };
     match store::is_enabled(vd::VIRTUAL) {
         Ok(true) => {}
-        Ok(false) => return refuse(409, "desktop_off", "Remote desktop is off on this server: an Owner turns it on (k2 desktop enable)"),
+        Ok(false) => return refuse(409, "desktop_off", concat!("Remote desktop is off on this server: an Owner turns it on (", cli_name!(), " desktop enable)")),
         Err(e) => return refuse(500, "store_error", e),
     }
     let m = manager();
@@ -366,7 +368,7 @@ pub fn setup(p: &Principal, req: &Req<'_>) -> CliResponse {
             409,
             "setup_manual",
             format!(
-                "K2 can't install packages on this server itself (no root helper, or one older than protocol {}). Run this, then try again: {}",
+                "{PRODUCT_NAME} can't install packages on this server itself (no root helper, or one older than protocol {}). Run this, then try again: {}",
                 k2_root_proto::version::DESKTOP_MIN_PROTOCOL,
                 manual.as_deref().unwrap_or("")
             ),
@@ -404,7 +406,7 @@ pub fn setup(p: &Principal, req: &Req<'_>) -> CliResponse {
     if let Err(e) = spawned {
         SETTING_UP.store(false, Ordering::SeqCst);
         emit_every_virtual();
-        return refuse_with(500, "setup_failed", format!("K2 couldn't start the install: {e}"), json!({"manual": manual}));
+        return refuse_with(500, "setup_failed", format!("{PRODUCT_NAME} couldn't start the install: {e}"), json!({"manual": manual}));
     }
     ok(json!({"ok": true, "state": "setting_up", "message": SETTING_UP_MESSAGE}))
 }

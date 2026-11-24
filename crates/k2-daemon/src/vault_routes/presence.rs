@@ -38,6 +38,8 @@ use serde_json::{json, Value};
 use super::{confirm_identity, err};
 use crate::vault::actor::{Channel, VaultCaller};
 use crate::vault::request_peer;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// Setting the vault password while none is set.
 pub const PASSWORD_SET: &str = "vault-password-set";
@@ -138,13 +140,13 @@ fn step(action: &str) -> &'static str {
 
 fn command(action: &str) -> &'static str {
     match action {
-        PASSWORD_SET => "k2 vault confirm-password set",
-        RECOVERY_SETUP => "k2 vault recovery show-once (or Settings → Vault → Set up recovery key)",
-        BACKUP_EXPORT_INITIAL => "k2 vault backup <folder>",
-        BOX_MOVE_EXPORT => "k2 migrate export-secrets",
-        BACKUP_KEY_ADD => "k2 vault backup key <age1…>",
+        PASSWORD_SET => concat!(cli_name!(), " vault confirm-password set"),
+        RECOVERY_SETUP => concat!(cli_name!(), " vault recovery show-once (or Settings → Vault → Set up recovery key)"),
+        BACKUP_EXPORT_INITIAL => concat!(cli_name!(), " vault backup <folder>"),
+        BOX_MOVE_EXPORT => concat!(cli_name!(), " migrate export-secrets"),
+        BACKUP_KEY_ADD => concat!(cli_name!(), " vault backup key <age1…>"),
         ISOLATION_LAYOUT => concat!(k2_core::cli_name!(), " agent isolation layout on"),
-        _ => "the k2 users command",
+        _ => concat!("the ", cli_name!(), " users command"),
     }
 }
 
@@ -502,7 +504,7 @@ pub(super) fn owner_login_check(vault: &LocalVault, action: &str, username: Opti
         Some(u) => {
             let u = k2_core::connect_users::normalize_username(u).unwrap_or_else(|_| u.to_lowercase());
             if !owners.contains(&u) {
-                return Err(err("confirm_failed", 403, format!("{u} isn't an owner login on this server (k2 users list)")));
+                return Err(err("confirm_failed", 403, format!("{u} isn't an owner login on this server ({CLI_NAME} users list)")));
             }
             u
         }

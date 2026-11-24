@@ -70,6 +70,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::mail::agent_creds::{self, MailCaller};
 use crate::mail::jmap::{self, StalwartClient};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 // ── Errors ──────────────────────────────────────────────────────────────
 
@@ -559,7 +561,7 @@ fn resolve_grantee(ctx: &Ctx<'_>, dir: &Directory, raw: &str) -> Result<Grantee,
         Err(r) if r.status.starts_with("400") => Err(r),
         Err(_) => Err(not_found(format!(
             "'{raw}' is not a hosted address or a group on this server — share with \
-             'k2 hostmail create' addresses or 'k2 hostmail group' groups only"
+             '{CLI_NAME} hostmail create' addresses or '{CLI_NAME} hostmail group' groups only"
         ))),
     }
 }
@@ -615,7 +617,7 @@ fn pick_calendar<'v>(cals: &'v [Value], raw: Option<&str>, owner: &str) -> Resul
                     "409 Conflict",
                     "no_calendar",
                     format!(
-                        "{owner} has no calendar yet — create one with 'k2 hostmail calendar \
+                        "{owner} has no calendar yet — create one with '{CLI_NAME} hostmail calendar \
                          create {owner} <name>'"
                     ),
                 )
@@ -663,8 +665,8 @@ pub fn per_user_props_ok(installed: Option<&str>) -> Result<(), CliResponse> {
             "409 Conflict",
             "upgrade_required",
             format!(
-                "this server runs Stalwart {v}; before 0.16.19 a calendar name set by K2 lands \
-                 on the admin account, not the mailbox — run `k2 hostmail upgrade` first"
+                "this server runs Stalwart {v}; before 0.16.19 a calendar name set by {PRODUCT_NAME} lands \
+                 on the admin account, not the mailbox — run `{CLI_NAME} hostmail upgrade` first"
             ),
         )
     };
@@ -749,7 +751,7 @@ fn group_target(ctx: &Ctx<'_>, b: &GroupBody) -> Result<(String, String, String)
         (None, Some(f)) => f,
         (None, None) => match ctx.domains.len() {
             1 => ctx.domains[0].1.clone(),
-            0 => return Err(not_found("no hosted mail domain on this server — 'k2 hostmail domain add' first")),
+            0 => return Err(not_found(concat!("no hosted mail domain on this server — '", cli_name!(), " hostmail domain add' first"))),
             _ => {
                 return Err(usage(format!(
                     "this server hosts several domains — pass --domain: {}",
@@ -826,7 +828,7 @@ pub fn group_permissions(mail: bool) -> Option<Value> {
 /// POST /cli/mail/group `{name, domain?, mail?}`.
 pub fn group_create_with(ctx: &Ctx<'_>, b: &GroupBody) -> CliResponse {
     if b.group.is_some() || b.add.is_some() || b.remove.is_some() {
-        return usage("create takes name, domain and mail — add members with 'k2 hostmail group add'");
+        return usage(concat!("create takes name, domain and mail — add members with '", cli_name!(), " hostmail group add'"));
     }
     let (local, domain, domain_id) = match group_target(ctx, b) {
         Ok(v) => v,
@@ -887,7 +889,7 @@ pub fn group_members_with(ctx: &Ctx<'_>, b: &GroupBody) -> CliResponse {
     let resolve = |raw: &String| -> Result<HostedAddr, CliResponse> {
         ctx.hosted_by_address(raw).cloned().ok_or_else(|| {
             usage(format!(
-                "member '{}' must be a hosted address on this server ('k2 hostmail create')",
+                "member '{}' must be a hosted address on this server ('{CLI_NAME} hostmail create')",
                 raw.trim()
             ))
         })
@@ -1158,7 +1160,7 @@ fn max_shares_refusal(max: u64, cal: &str, owner: &str) -> CliResponse {
         format!(
             "calendar '{cal}' of {owner} already has {max} share(s), the server's limit — \
              unshare someone, share with a group instead, or raise it with \
-             'k2 hostmail calendar sharing --max-shares N'"
+             '{CLI_NAME} hostmail calendar sharing --max-shares N'"
         ),
     )
 }

@@ -11,6 +11,8 @@ use super::supervisor::{
     begin, box_status, changed, helper_check, mgmt, need_row, no, on_disk, on_disk_upgrade_only, status_body, unsupported,
     Env, R,
 };
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `POST /cli/sew/server/adopt` (the owner): take a Sew that systemd and
 /// Sew itself report healthy back from an `error` record. Only an enable
@@ -30,7 +32,7 @@ pub fn adopt(env: &Env) -> R<Value> {
             "not_in_error",
             409,
             format!(
-                "nothing changed: adopt only clears an error record, and this one says '{}' (k2 hostchat status)",
+                "nothing changed: adopt only clears an error record, and this one says '{}' ({CLI_NAME} hostchat status)",
                 row.status
             ),
         ));
@@ -49,8 +51,8 @@ pub fn adopt(env: &Env) -> R<Value> {
             "units_not_active",
             409,
             format!(
-                "nothing changed: systemd reports {}. Bring Sew back first (k2 hostchat restart), or run \
-                 k2 hostchat enable to repair the install",
+                "nothing changed: systemd reports {}. Bring Sew back first ({CLI_NAME} hostchat restart), or run \
+                 {CLI_NAME} hostchat enable to repair the install",
                 down.join(" and ")
             ),
         ));
@@ -59,8 +61,8 @@ pub fn adopt(env: &Env) -> R<Value> {
         return Err(no(
             "sew_unhealthy",
             409,
-            "nothing changed: Sew's units run, but its mgmt health check does not answer OK. \
-             k2 hostchat doctor shows why; k2 hostchat restart, then adopt again",
+            concat!("nothing changed: Sew's units run, but its mgmt health check does not answer OK. \
+             ", cli_name!(), " hostchat doctor shows why; ", cli_name!(), " hostchat restart, then adopt again"),
         ));
     }
     let st = box_status(env).ok_or_else(|| no("helper_error", 500, "engine sew status failed"))?;
@@ -70,15 +72,15 @@ pub fn adopt(env: &Env) -> R<Value> {
             no(
                 "binary_unreadable",
                 409,
-                "nothing changed: K2 can't read the version of /usr/local/bin/sew (not a build K2 knows, or not \
-                 root-owned). k2 hostchat upgrade names it; enable or upgrade repairs it",
+                concat!("nothing changed: ", product_name!(), " can't read the version of /usr/local/bin/sew (not a build ", product_name!(), " knows, or not \
+                 root-owned). ", cli_name!(), " hostchat upgrade names it; enable or upgrade repairs it"),
             )
         })?,
         (false, ..) => {
             return Err(no(
                 "binary_unreadable",
                 409,
-                "nothing changed: /usr/local/bin/sew is missing, so there is nothing to adopt (k2 hostchat enable)",
+                concat!("nothing changed: /usr/local/bin/sew is missing, so there is nothing to adopt (", cli_name!(), " hostchat enable)"),
             ))
         }
     };
@@ -103,7 +105,7 @@ pub fn adopt(env: &Env) -> R<Value> {
         return Err(no(
             "units_not_active",
             409,
-            format!("nothing changed: Sew stopped while K2 checked it ({state}). k2 hostchat status"),
+            format!("nothing changed: Sew stopped while {PRODUCT_NAME} checked it ({state}). {CLI_NAME} hostchat status"),
         ));
     }
     store::update(env.ops.now(), |r| r.status = state.clone()).map_err(|e| no("db_error", 500, e))?;

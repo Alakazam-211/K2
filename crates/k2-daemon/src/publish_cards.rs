@@ -13,7 +13,7 @@
 //! The two permission cards are standard ones K2 presents itself (like
 //! `zen.sign`), whether or not the owner turned on the Beta.
 
-use k2_core::overlay;
+use k2_core::{overlay, product_name};
 use k2_core::permission::request::{params_hash, PermissionRequest, RequestId, RequestState};
 use k2_core::site_visibility as sv;
 use serde_json::{json, Map, Value as J};
@@ -21,6 +21,7 @@ use serde_json::{json, Map, Value as J};
 use crate::cli_response::CliResponse;
 use crate::permission::actions::Ctx;
 use crate::permission::{answer, limits, present, store};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The catalog actions (`permission/actions/publish.rs`).
 pub(crate) const PUBLIC: &str = "publish.public";
@@ -60,7 +61,7 @@ pub(crate) fn present_public(ws: &str, label: &str, reason: &str) -> CliResponse
     held(
         PUBLIC_NEEDS_PERSON,
         label,
-        format!("Making {label} public is a person's choice: K2 put a card on your Thread. Wait for its answer."),
+        format!("Making {label} public is a person's choice: {PRODUCT_NAME} put a card on your Thread. Wait for its answer."),
         card,
     )
 }
@@ -70,12 +71,12 @@ pub(crate) fn present_pin(ws: &str, label: &str) -> CliResponse {
     let mut params = Map::new();
     params.insert("label".to_string(), J::String(label.to_string()));
     let handle = present::workspace_handle(ws);
-    let text = format!("{handle} asks you to put {label} behind a PIN. You type the PIN into K2's own form; {handle} never sees it.");
+    let text = format!("{handle} asks you to put {label} behind a PIN. You type the PIN into {PRODUCT_NAME}'s own form; {handle} never sees it.");
     let card = present(ws, PIN, params, "I need this site behind a PIN.", &text, &handle, label);
     held(
         PIN_NEEDS_PERSON,
         label,
-        format!("An agent can't set a PIN, because it would then know it: K2 put a card on your Thread, and the person types the PIN into K2's own form. Wait for its answer."),
+        format!("An agent can't set a PIN, because it would then know it: {PRODUCT_NAME} put a card on your Thread, and the person types the PIN into {PRODUCT_NAME}'s own form. Wait for its answer."),
         card,
     )
 }
@@ -171,7 +172,7 @@ fn inbox_note(ws: &str, agent: &str, label: &str, text: &str) -> J {
     let title = format!("{agent} asks about who may open {label}");
     let open = k2_core::feedback::list_for_project(ws, &k2_core::feedback::ListFilter::Open).unwrap_or_default();
     if !open.iter().any(|i| i.title == title) {
-        let body = format!("{text}\n\nTo do it, from a terminal outside K2: k2 publish visibility {label} <pin|public>. To say no, do nothing.");
+        let body = format!("{text}\n\nTo do it, from a terminal outside {PRODUCT_NAME}: {CLI_NAME} publish visibility {label} <pin|public>. To say no, do nothing.");
         if let Err(e) = crate::feedback_routes::file_owners_only_notice(ws, agent, &title, &body) {
             k2_core::log_debug!("[publish-cards] inbox note for {label}: {e}");
         }
@@ -204,7 +205,7 @@ fn upgrade_card(sites: &[String]) -> (String, Vec<String>) {
     let list = sites.join(", ");
     let n = sites.len();
     let prompt = format!(
-        "K2 now lets you choose who may open a published site: private, behind a PIN, or public. {} from before this update stay{} public, so nothing stopped working: {list}. New sites start private.",
+        "{PRODUCT_NAME} now lets you choose who may open a published site: private, behind a PIN, or public. {} from before this update stay{} public, so nothing stopped working: {list}. New sites start private.",
         if n == 1 { "1 site".to_string() } else { format!("{n} sites") },
         if n == 1 { "s" } else { "" },
     );
@@ -297,9 +298,9 @@ pub(crate) fn run_upgrade_card(answer: &str, by: &str) -> Result<J, String> {
         for s in &sites {
             keep_public(s)?;
         }
-        json!({ "message": format!("Kept {} public. Change any time: k2 publish visibility <name>.", sites.join(", ")) })
+        json!({ "message": format!("Kept {} public. Change any time: {CLI_NAME} publish visibility <name>.", sites.join(", ")) })
     } else {
-        let (site, what) = answer.split_once(": ").ok_or_else(|| "K2 doesn't know that answer".to_string())?;
+        let (site, what) = answer.split_once(": ").ok_or_else(|| concat!(product_name!(), " doesn't know that answer").to_string())?;
         match what {
             MAKE_PRIVATE => {
                 let mut params = std::collections::HashMap::new();
@@ -309,21 +310,21 @@ pub(crate) fn run_upgrade_card(answer: &str, by: &str) -> Result<J, String> {
                 let r = crate::publish_site_routes::handle_set(&params, &who);
                 if !r.status.starts_with("200") {
                     let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
-                    return Err(v["error"].as_str().unwrap_or("K2 couldn't change it").to_string());
+                    return Err(v["error"].as_str().unwrap_or(concat!(product_name!(), " couldn't change it")).to_string());
                 }
-                json!({ "message": format!("{site} is private now. Open it from K2, or with k2 publish open {site}.") })
+                json!({ "message": format!("{site} is private now. Open it from {PRODUCT_NAME}, or with {CLI_NAME} publish open {site}.") })
             }
             ADD_PIN => json!({
                 // The PIN form is K2's own and the client's: the PIN goes
                 // straight to the route, never through this card.
                 "openPinForm": site,
-                "message": format!("Set {site}'s PIN in K2's form. From a terminal outside K2: k2 publish visibility {site} pin"),
+                "message": format!("Set {site}'s PIN in {PRODUCT_NAME}'s form. From a terminal outside {PRODUCT_NAME}: {CLI_NAME} publish visibility {site} pin"),
             }),
             KEEP_PUBLIC => {
                 keep_public(site)?;
-                json!({ "message": format!("{site} stays public. Change any time: k2 publish visibility {site}.") })
+                json!({ "message": format!("{site} stays public. Change any time: {CLI_NAME} publish visibility {site}.") })
             }
-            _ => return Err("K2 doesn't know that answer".to_string()),
+            _ => return Err(concat!(product_name!(), " doesn't know that answer").to_string()),
         }
     };
     // The rest of the list, on a new card. Not on this thread: the answer route

@@ -52,6 +52,7 @@ const CAP_CEILING: usize = 16_384;
 // The name table and the challenge registry live in `apps::custom_names`
 // (0.46.8, PB-A3): the K2 Connect E2E listener reads them too (Path B).
 pub use super::custom_names::{app_for_host, certified_key, challenge_pending, reload, Challenge};
+use k2_core::brand::CLI_NAME;
 
 /// The door's certificate pick: a challenge hello gets the challenge
 /// certificate (or nothing); any other hello gets the live name's own.
@@ -101,7 +102,7 @@ pub async fn serve_conn(mut tcp: TcpStream, cfg: Arc<ServerConfig>) -> Result<()
     // handshake; no visitor (a local caller) is not counted. Released when
     // the connection ends.
     let Some(_visitor_slot) = crate::apps::guard::door_conn(client_ip) else {
-        return Err(format!("{} is over the per-visitor connection cap (k2 firewall guard)", client_ip.map(|i| i.to_string()).unwrap_or_default()));
+        return Err(format!("{} is over the per-visitor connection cap ({CLI_NAME} firewall guard)", client_ip.map(|i| i.to_string()).unwrap_or_default()));
     };
     let mut tls = match tokio::time::timeout_at(deadline, TlsAcceptor::from(cfg).accept(tcp)).await {
         Ok(Ok(t)) => t,

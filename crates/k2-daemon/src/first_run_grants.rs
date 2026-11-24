@@ -26,6 +26,7 @@ use k2_core::hire::starter_permissions::{owner_floor, standing_switch};
 use serde_json::json;
 
 use crate::permission::actions::Answerer;
+use k2_core::brand::PRODUCT_NAME;
 
 /// Standing switches an agent never passes on, even one it holds
 /// `compute.use` would hand the hire every machine with default limits, wider than the hirer's own
@@ -131,7 +132,7 @@ pub(crate) fn write_on(t: &Target, switch: &str, by: &str) -> Result<(), String>
             ws::set_agents_can_request_permissions(&t.id, true)?;
             k2_core::workspace::skill_regen::sync_permission_teaching(&t.path);
         }
-        other => return Err(format!("K2 doesn't grant {other} this way")),
+        other => return Err(format!("{PRODUCT_NAME} doesn't grant {other} this way")),
     }
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
     Ok(())

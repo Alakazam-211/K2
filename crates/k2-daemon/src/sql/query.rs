@@ -10,6 +10,7 @@
 //! (prd-pg17-and-db-upgrade-v1 §8, V14/V15/V41).
 
 use super::ops::OpsError;
+use k2_core::product_name;
 
 /// Fail the HTTP request at this many returned rows. The user text is not
 /// given a LIMIT; a wrapper may fetch one past the cap to notice it.
@@ -175,12 +176,12 @@ pub fn classify_guest_sql(sql: &str) -> Result<GuestStmt, OpsError> {
     }
     if touches_k2_internal(&names) {
         return Err(OpsError::Usage(
-            "K2's own tables (_k2_*) are not available to apps".into(),
+            concat!(product_name!(), "'s own tables (_k2_*) are not available to apps").into(),
         ));
     }
     if touches_session_lock(&names) {
         return Err(OpsError::Usage(
-            "the session locks are K2's; read them with k2.skin_uid() and k2.actor_info()".into(),
+            concat!("the session locks are ", product_name!(), "'s; read them with k2.skin_uid() and k2.actor_info()").into(),
         ));
     }
     let node = parsed

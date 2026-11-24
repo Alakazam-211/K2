@@ -1,6 +1,8 @@
 //! K2's own answers on a gated site (`/_k2/site/…` and the refusals). They
 //! load nothing from the site or anywhere else, and end the connection, so
 //! the next request starts over at the gate.
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// One K2 answer. `dev` marks a dev site's answers (DM-4); `head` drops the
 /// body of a `HEAD`.
@@ -77,7 +79,7 @@ fn doc(title: &str, dev: bool, body: &str) -> String {
 pub fn private_page(label: &str, dev: bool, head: bool) -> Vec<u8> {
     let l = esc(label);
     let body = format!(
-        "<h1>This site is private.</h1><p>Open it from K2: Published → Open, or <code>k2 publish open {l}</code>.</p>"
+        "<h1>This site is private.</h1><p>Open it from {PRODUCT_NAME}: Published → Open, or <code>{CLI_NAME} publish open {l}</code>.</p>"
     );
     Page { referrer: NO_REFERRER, status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("Private site", dev, &body) }.bytes()
 }
@@ -86,7 +88,7 @@ pub fn private_page(label: &str, dev: bool, head: bool) -> Vec<u8> {
 pub fn link_dead_page(label: &str, dev: bool, head: bool) -> Vec<u8> {
     let l = esc(label);
     let body = format!(
-        "<h1>This link has expired or was already used.</h1><p>A link works once, for a minute. Get a new one from K2: Published → Open, or <code>k2 publish open {l}</code>. If someone shared it with you, ask them.</p>"
+        "<h1>This link has expired or was already used.</h1><p>A link works once, for a minute. Get a new one from {PRODUCT_NAME}: Published → Open, or <code>{CLI_NAME} publish open {l}</code>. If someone shared it with you, ask them.</p>"
     );
     Page { referrer: NO_REFERRER, status: "401 Unauthorized", dev, head, extra: String::new(), html: doc("Private site", dev, &body) }.bytes()
 }
@@ -142,7 +144,7 @@ pub fn starting_page(head: bool) -> Vec<u8> {
 
 /// A dev server that couldn't start. Why stays in the log and `k2 publish ps`.
 pub fn dev_failed_page(head: bool) -> Vec<u8> {
-    let body = "<h1>The dev server didn't start.</h1><p>Ask the site's owner to check <code>k2 publish logs</code> on the server.</p>";
+    let body = concat!("<h1>The dev server didn't start.</h1><p>Ask the site's owner to check <code>", cli_name!(), " publish logs</code> on the server.</p>");
     Page { referrer: NO_REFERRER, status: "502 Bad Gateway", dev: true, head, extra: String::new(), html: doc("Starting", true, body) }.bytes()
 }
 

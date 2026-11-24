@@ -79,13 +79,15 @@ use k2_core::skin::SkinPass;
 use serde_json::{json, Value};
 
 use crate::routes::dispatcher::Ingress;
+use k2_core::brand::CLI_NAME;
+use k2_core::product_name;
 
 /// `pass_required` on the link: every call carries the App pass, the
 /// guest login included (a BFF that logs a guest in without it got a bare
 /// 401, 0.46.4 field report #5).
-pub const PASS_REQUIRED_HINT: &str = "every call on the gateway link carries this App's pass, POST /cli/skin/login included: \
-     send the contents of the file $K2_PASS_FILE names (/run/k2/pass in a wall; K2 rotates it hourly, so read it per call) \
-     as Authorization: Bearer <pass>. A guest's own calls carry the session pass its login returned instead.";
+pub const PASS_REQUIRED_HINT: &str = concat!("every call on the gateway link carries this App's pass, POST /cli/skin/login included: \
+     send the contents of the file $K2_PASS_FILE names (/run/k2/pass in a wall; ", product_name!(), " rotates it hourly, so read it per call) \
+     as Authorization: Bearer <pass>. A guest's own calls carry the session pass its login returned instead.");
 
 /// Connections a link serves at once by default (§5.4: 64 sockets per
 /// App; the owner's override is `super::quotas`).
@@ -355,7 +357,7 @@ pub fn open(mut spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, Stri
     // The door: a suspended App gets no link; the pass carries the
     // manifest ceiling narrowed to the App's approved set (§5.3).
     if super::suspend::is_suspended(&spec.app_id) {
-        return Err(format!("{} is suspended (k2 app resume {}, the owner)", spec.app_id, spec.app_id));
+        return Err(format!("{} is suspended ({CLI_NAME} app resume {}, the owner)", spec.app_id, spec.app_id));
     }
     let eff = super::grants::narrow_for_link(&spec.app_id, &spec.caps, &spec.workspace_id);
     spec.caps = eff.caps;
@@ -919,7 +921,7 @@ struct Seen {
 /// admitted or refused, opens its audit row here.
 pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
     let Some(ctx) = current() else {
-        return deny(None, 500, "link_context_missing", "a link request outside its link (a K2 bug)");
+        return deny(None, 500, "link_context_missing", concat!("a link request outside its link (a ", product_name!(), " bug)"));
     };
     let c = ctx.as_ref();
     c.stats.requests.fetch_add(1, Ordering::SeqCst);
@@ -1069,7 +1071,7 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             Some(c),
             404,
             "not_on_link",
-            &format!("{method} {path} isn't open to Apps (the App-facing routes are in k2 study app-api; GET /gw/me names this link)"),
+            &format!("{method} {path} isn't open to Apps (the App-facing routes are in {CLI_NAME} study app-api; GET /gw/me names this link)"),
         );
     }
     // The body's encoding is checked once the caller is known (below), so a
@@ -1141,7 +1143,7 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             }
         }
         return match passes::classify_presented(raw) {
-            PresentedPass::Unknown => deny(Some(c), 401, "pass_invalid", "the pass is expired or revoked: read K2_PASS_FILE again (K2 rotates it)"),
+            PresentedPass::Unknown => deny(Some(c), 401, "pass_invalid", concat!("the pass is expired or revoked: read K2_PASS_FILE again (", product_name!(), " rotates it)")),
             other => {
                 c.stats.wrong_link.fetch_add(1, Ordering::SeqCst);
                 let what = match other {
@@ -1190,7 +1192,7 @@ fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in
             "rooms": pass.rooms,
             "as": if pass.session { "guest" } else { "app" },
             "passFile": k2_root_proto::engine::PASS_TARGET,
-            "rotation": "K2 rotates the pass at 80% of its hour; read the file again on pass_invalid",
+            "rotation": concat!(product_name!(), " rotates the pass at 80% of its hour; read the file again on pass_invalid"),
         });
         return Gate::Answer { status: status_text(200), body: body.to_string() };
     }

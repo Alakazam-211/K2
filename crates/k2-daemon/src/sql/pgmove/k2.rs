@@ -18,6 +18,8 @@ use crate::cli_response::CliResponse;
 use crate::sql::cluster;
 use crate::sql::versions_access::{self, VersionsAct, Who};
 use super::dual::RunStore as _;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 // ── the guest-door pause and the per-database move lock ─────────────────
 
@@ -350,7 +352,7 @@ impl MoveEnv for K2Env {
                 continue;
             };
             crate::apps::supervisor::reset_backoff(id);
-            if crate::apps::supervisor::begin(&app, &seed, k2_core::deploy::store::KIND_START, &self.actor, Some("k2 db upgrade")).is_err() {
+            if crate::apps::supervisor::begin(&app, &seed, k2_core::deploy::store::KIND_START, &self.actor, Some(concat!(cli_name!(), " db upgrade"))).is_err() {
                 failed.push(id.clone());
             }
         }
@@ -479,7 +481,7 @@ pub fn sidecar_refusal(state: Option<&str>, detail: Option<&str>, pending: &[Str
         String::new()
     } else {
         format!(
-            "; once it runs, K2 first finishes or undoes the move of {} the last daemon was in",
+            "; once it runs, {PRODUCT_NAME} first finishes or undoes the move of {} the last daemon was in",
             pending.join(", ")
         )
     };
@@ -487,23 +489,23 @@ pub fn sidecar_refusal(state: Option<&str>, detail: Option<&str>, pending: &[Str
         Some("running") => return None,
         None | Some("not-installed") => (
             "postgres_not_enabled",
-            "Postgres isn't enabled on this server: `k2 db enable` (the owner or an Admin) first".to_string(),
+            concat!("Postgres isn't enabled on this server: `", cli_name!(), " db enable` (the owner or an Admin) first").to_string(),
         ),
         Some("stopped") | Some("disabled") => (
             "postgres_stopped",
-            format!("Postgres is stopped{why}: start it with `k2 db enable` (the owner or an Admin), then run this again{then}"),
+            format!("Postgres is stopped{why}: start it with `{CLI_NAME} db enable` (the owner or an Admin), then run this again{then}"),
         ),
         Some("installing") => (
             "postgres_starting",
-            format!("Postgres is being enabled right now: run this again when `k2 db status` says running{then}"),
+            format!("Postgres is being enabled right now: run this again when `{CLI_NAME} db status` says running{then}"),
         ),
         Some("degraded") => (
             "postgres_unhealthy",
-            format!("Postgres is up but doesn't answer{why}: `k2 db doctor` shows why; run this again when `k2 db status --health` says running{then}"),
+            format!("Postgres is up but doesn't answer{why}: `{CLI_NAME} db doctor` shows why; run this again when `{CLI_NAME} db status --health` says running{then}"),
         ),
         Some(other) => (
             "postgres_unhealthy",
-            format!("Postgres is {other}{why}: fix it, then `k2 db enable` (the owner or an Admin) and run this again{then}"),
+            format!("Postgres is {other}{why}: fix it, then `{CLI_NAME} db enable` (the owner or an Admin) and run this again{then}"),
         ),
     };
     Some((409, code, hint))
@@ -516,7 +518,7 @@ pub fn recovering_hint(pending: &[String], since: Option<i64>, now: i64) -> Stri
         Some(at) => format!(" (working for {} s; it gives up after {} minutes and leaves the owner a failure to look at)", (now - at).max(0), worker::RECOVERY_TIMEOUT_SECS / 60),
         None => String::new(),
     };
-    format!("K2 is finishing or undoing {what} the last daemon was in{took}; try again in a minute")
+    format!("{PRODUCT_NAME} is finishing or undoing {what} the last daemon was in{took}; try again in a minute")
 }
 
 /// The `versions_access` acts a request needs (every one must pass).
@@ -571,8 +573,8 @@ fn databases_for(scope: &Scope, to: Major, all_workspace_dbs: bool, check: bool)
                     409,
                     "app_db_unknown",
                     format!(
-                        "K2 can't tell which database App {id} uses ({why}). `k2 db upgrade --app {id} --check` lists its workspace's databases; \
-                         name one (k2 db upgrade <db>) or move them all with --all-workspace-dbs"
+                        "{PRODUCT_NAME} can't tell which database App {id} uses ({why}). `{CLI_NAME} db upgrade --app {id} --check` lists its workspace's databases; \
+                         name one ({CLI_NAME} db upgrade <db>) or move them all with --all-workspace-dbs"
                     ),
                 ))
             }
@@ -603,7 +605,7 @@ fn databases_for(scope: &Scope, to: Major, all_workspace_dbs: bool, check: bool)
         ),
     };
     if v.is_empty() {
-        return Err(err(404, "not_found", "no K2 database in that scope"));
+        return Err(err(404, "not_found", concat!("no ", product_name!(), " database in that scope")));
     }
     Ok(v)
 }
@@ -686,7 +688,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
             return err(
                 409,
                 "named_cluster_fixed",
-                format!("{db} lives in the named cluster {n}, which keeps its major: K2 doesn't move databases out of a named cluster"),
+                format!("{db} lives in the named cluster {n}, which keeps its major: {PRODUCT_NAME} doesn't move databases out of a named cluster"),
             );
         }
     }
@@ -742,7 +744,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
     let live_act = matches!(req.act, Act::Live | Act::Switch | Act::Abort) || (req.act == Act::Check && req.live);
     if live_act {
         if dbs.len() != 1 {
-            return err(409, "app_db_unknown", "a live move is one database: name it (k2 db upgrade <db> --live)");
+            return err(409, "app_db_unknown", concat!("a live move is one database: name it (", cli_name!(), " db upgrade <db> --live)"));
         }
         // PA18: a database shared with other workspaces is the owner's
         // (their Apps would pause too); an Admin may still check.
@@ -767,7 +769,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
             409,
             "helper_old",
             crate::sql::sysops::pgdual_gate().err().unwrap_or_else(|| "the root helper doesn't speak live moves (protocol 10, pgdual)".into())
-                + "; a move by copy still works (k2 db upgrade <db>)",
+                + concat!("; a move by copy still works (", cli_name!(), " db upgrade <db>)"),
         );
     }
     let live_opts = super::dual::LiveOpts { base: opts.clone(), replica_identity_full: req.replica_identity_full, dual_ok };
@@ -845,7 +847,7 @@ pub fn handle(who: Who, is_post: bool, body: &[u8], params: &HashMap<String, Str
                 return err(404, "no_live_move", format!("{db} has no live move to abort"));
             };
             if run.state == super::dual::RunState::Switching {
-                return err(409, "switching", format!("{db} is switching right now; it ends by itself (k2 db upgrade {db})"));
+                return err(409, "switching", format!("{db} is switching right now; it ends by itself ({CLI_NAME} db upgrade {db})"));
             }
             let ops = super::helper_ops::HelperOps { door: &helper };
             let dops = super::dual_k2::HelperDualOps { door: &helper };
@@ -955,7 +957,7 @@ fn prepare_live_route(who: &Who, req: &UpgradeRequest, label: String) -> CliResp
         }
     }
     if k2_root_proto::pg_major::PgMajor::new(m).is_none() {
-        return err(400, "usage", format!("prepareLive: {m} is not a Postgres major K2 knows"));
+        return err(400, "usage", format!("prepareLive: {m} is not a Postgres major {PRODUCT_NAME} knows"));
     }
     if let Some((status, code, hint)) = sidecar_refusal(
         crate::sql::supervisor::current_status().as_deref(),
@@ -1163,8 +1165,8 @@ pub(crate) fn boot_recovery_with(open: Vec<MoveProgress>, s: &BootSteps<'_>) {
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (s.recover)(open))).is_err() {
             eprintln!("[db] upgrade: boot recovery panicked; moves wait for the owner (failed_latched)");
             worker::recovery_failed(
-                "boot recovery panicked; see the daemon log ([db] upgrade), then `k2 db upgrade --acknowledge-failed` \
-                 (restarting the daemon tries the recovery again)",
+                concat!("boot recovery panicked; see the daemon log ([db] upgrade), then `", cli_name!(), " db upgrade --acknowledge-failed` \
+                 (restarting the daemon tries the recovery again)"),
             );
             return;
         }

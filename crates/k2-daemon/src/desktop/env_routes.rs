@@ -37,6 +37,8 @@ use super::virtual_desktop::{manager, StartError};
 use super::virtual_routes::{hold_name, setting_up};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTE: &str = "/cli/desktop/env";
 
@@ -162,7 +164,7 @@ fn agents_only() -> CliResponse {
     refuse(
         403,
         "desktop_env_agents_only",
-        "k2 desktop env is for agents: it gives an agent DISPLAY and XAUTHORITY for a desktop of its own. People open a Desktop tab, or run k2 desktop start.",
+        concat!(cli_name!(), " desktop env is for agents: it gives an agent DISPLAY and XAUTHORITY for a desktop of its own. People open a Desktop tab, or run ", cli_name!(), " desktop start."),
     )
 }
 
@@ -201,7 +203,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
             return refuse(
                 403,
                 "not_your_desktop",
-                format!("k2 desktop env gives you your own workspace's desktop ({id}) and no other: run it without --desktop"),
+                format!("{CLI_NAME} desktop env gives you your own workspace's desktop ({id}) and no other: run it without --desktop"),
             );
         }
     }
@@ -227,7 +229,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
     match store::is_enabled(vd::VIRTUAL) {
         Ok(true) => {}
         Ok(false) => {
-            return refuse(403, "desktop_off", "Virtual desktops are off on this server: the owner turns them on (Settings → Remote Desktop, or k2 desktop enable outside K2).")
+            return refuse(403, "desktop_off", concat!("Virtual desktops are off on this server: the owner turns them on (Settings → Remote Desktop, or ", cli_name!(), " desktop enable outside ", product_name!(), ")."))
         }
         Err(e) => return refuse(500, "store_error", e),
     }
@@ -235,7 +237,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
         return refuse(
             403,
             "desktop_switch_off",
-            format!("{name}'s \"Allow a virtual desktop\" switch is off: an Owner or Admin turns it on (Settings → Workspaces / Agents → {name} → Permissions → Desktop, or k2 desktop allow on --workspace {name})."),
+            format!("{name}'s \"Allow a virtual desktop\" switch is off: an Owner or Admin turns it on (Settings → Workspaces / Agents → {name} → Permissions → Desktop, or {CLI_NAME} desktop allow on --workspace {name})."),
         );
     }
     if setting_up() {
@@ -252,7 +254,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
             403,
             "desktop_in_use",
             format!(
-                "{} is using {name}'s desktop until {}. It frees when that session runs k2 desktop env --release or the hold ends.",
+                "{} is using {name}'s desktop until {}. It frees when that session runs {CLI_NAME} desktop env --release or the hold ends.",
                 holder_words(&h.by),
                 until_words(h.until, now)
             ),
@@ -303,7 +305,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
     }
     let profile = match m.profile_dir(&id) {
         Ok(p) => p.display().to_string(),
-        Err(e) => return refuse(500, "profile_failed", format!("K2 couldn't make the desktop's browser profile folder: {e}")),
+        Err(e) => return refuse(500, "profile_failed", format!("{PRODUCT_NAME} couldn't make the desktop's browser profile folder: {e}")),
     };
     let st = m.status(&id);
     let screen: HashMap<String, String> = m.screen_env(&id).unwrap_or_default().into_iter().collect();

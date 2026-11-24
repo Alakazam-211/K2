@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use k2_core::db::schema::SubdomainWorkspace;
 use k2_core::frame_policy::{self, FramePolicy};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 
 use k2_core::published_services::{
     self as ps, ServiceJson, CMD_SKIN_SENTINEL, DESIRED_RUNNING, DESIRED_STOPPED, EXPOSE_LOCAL,
@@ -30,6 +30,7 @@ use k2_core::site_visibility as sv;
 use k2_core::terminal::login_path;
 use k2_core::tunnel::config as tunnel_config;
 use k2_core::tunnel::subdomains;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 const LOG_CAP: u64 = 2 * 1024 * 1024;
 #[cfg(unix)]
@@ -233,7 +234,7 @@ pub fn fmt_duration(d: Duration) -> String {
 fn grace_miss_message(port: u16, grace: Duration) -> String {
     format!(
         "probe failed: process started but 127.0.0.1:{port} never accepted within {}; \
-         raise --probe-timeout (k2 publish run <name> ... --probe-timeout 10m, at most 15m)",
+         raise --probe-timeout ({CLI_NAME} publish run <name> ... --probe-timeout 10m, at most 15m)",
         fmt_duration(grace)
     )
 }
@@ -768,7 +769,7 @@ fn spawn_skin_helper(
     // A stored value this daemon would never write: refuse to start rather
     // than serve the App unguarded.
     let frame = FramePolicy::from_stored(&row.frame_ancestors)
-        .map_err(|e| format!("frame policy: {e} (k2 publish frame {name} --reset)"))?;
+        .map_err(|e| format!("frame policy: {e} ({CLI_NAME} publish frame {name} --reset)"))?;
     let args = crate::skin_gateway::helper_argv(
         row.port as u16,
         daemon_port,
@@ -1017,7 +1018,7 @@ pub(crate) fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String)
     // 0.45.7: a vault that can't be read right now is not "no token".
     if let Some(e) = cfg.token_read_error.as_deref() {
         return Err(PublishError::fail(format!(
-            "token_unreadable: the K2 Connect tunnel token is in the K2 vault, which could not be \
+            "token_unreadable: the K2 Connect tunnel token is in the {PRODUCT_NAME} vault, which could not be \
              read right now ({e}); nothing was published — try again once the vault is readable"
         )));
     }
@@ -1043,7 +1044,7 @@ pub(crate) fn nested_preflight() -> Result<(tunnel_config::TunnelConfig, String)
 fn gate_hint(kind: &str) -> String {
     format!(
         "{kind}: nested subdomains need a Pro plan (https://k2.dev/dashboard). \
-         To host on this machine without a public URL: k2 publish run <name> --cmd \"…\" --port <n> --no-tunnel"
+         To host on this machine without a public URL: {CLI_NAME} publish run <name> --cmd \"…\" --port <n> --no-tunnel"
     )
 }
 
@@ -1086,7 +1087,7 @@ pub(crate) fn attach_hostname(
             if caller == crate::label_owner::Caller::Agent && !agent_holds_label(project_id, name) {
                 return Err(format!(
                     "{AGENT_LABEL_EXISTS}: '{name}' already exists on this box and isn't your workspace's: an agent never repoints it. \
-                     Pick a new label, or ask your owner to move it deliberately (--transfer, from a terminal outside K2)"
+                     Pick a new label, or ask your owner to move it deliberately (--transfer, from a terminal outside {PRODUCT_NAME})"
                 ));
             }
             subdomains::point_subdomain(token, name, &target)?;
@@ -1347,7 +1348,7 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
         if spec.no_tunnel {
             return Err(PublishError::coded(
                 "dev_needs_tunnel",
-                "--dev puts a dev server behind K2's check at its address, so it can't use --no-tunnel. To run one for yourself only, run the command in a terminal",
+                concat!("--dev puts a dev server behind ", product_name!(), "'s check at its address, so it can't use --no-tunnel. To run one for yourself only, run the command in a terminal"),
             ));
         }
         // PV-4 / G8: where K2's check can't see the traffic, a dev server would
@@ -1491,7 +1492,7 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
 fn refuse_app_row(row: &ps::PublishedService) -> Result<(), PublishError> {
     if row.cmd == ps::CMD_APP_SENTINEL {
         return Err(PublishError::bad(format!(
-            "{}: '{}' is an App; use k2 app start|stop|deploy|uninstall {}",
+            "{}: '{}' is an App; use {CLI_NAME} app start|stop|deploy|uninstall {}",
             k2_core::deploy::codes::IS_AN_APP,
             row.name,
             row.name
@@ -1603,7 +1604,7 @@ fn start_inner(
                 grace_miss_message(row.port as u16, grace)
             } else {
                 format!(
-                    "probe failed: the process exited before 127.0.0.1:{} accepted (k2 publish logs {name})",
+                    "probe failed: the process exited before 127.0.0.1:{} accepted ({CLI_NAME} publish logs {name})",
                     row.port
                 )
             };
@@ -1732,7 +1733,7 @@ fn grace_wait(entry: Arc<LiveChild>, want_tunnel: bool, transfer: bool) {
                             &project_id,
                             &name,
                             &format!(
-                                "probe failed: the process exited before 127.0.0.1:{} accepted (k2 publish logs {name})",
+                                "probe failed: the process exited before 127.0.0.1:{} accepted ({CLI_NAME} publish logs {name})",
                                 entry.port
                             ),
                         );
@@ -1851,7 +1852,7 @@ fn sync_site_visibility(label: &str, tunnel: bool, dev: Option<&crate::publish_d
     if !tunnel {
         return Ok(());
     }
-    const BY: &str = "k2 publish run";
+    const BY: &str = concat!(cli_name!(), " publish run");
     let db = k2_core::db::shared();
     let conn = db.lock();
     let fail = |e: String| PublishError::fail(e);
@@ -2028,9 +2029,9 @@ pub fn dev_wake(label: &str) -> DevWake {
         }
         let why = row.error.clone().unwrap_or_else(|| {
             if row.desired == DESIRED_STOPPED {
-                "This dev server is stopped. Its owner can start it: k2 publish start".to_string()
+                concat!("This dev server is stopped. Its owner can start it: ", cli_name!(), " publish start").to_string()
             } else {
-                "This dev server exited. Its owner can see why: k2 publish logs".to_string()
+                concat!("This dev server exited. Its owner can see why: ", cli_name!(), " publish logs").to_string()
             }
         });
         return DevWake::Failed(why);
@@ -2056,7 +2057,7 @@ pub fn dev_wake(label: &str) -> DevWake {
     });
     if let Err(e) = spawned {
         waking().lock().unwrap_or_else(|p| p.into_inner()).remove(&label);
-        return DevWake::Failed(format!("K2 couldn't start the dev server: {e}"));
+        return DevWake::Failed(format!("{PRODUCT_NAME} couldn't start the dev server: {e}"));
     }
     DevWake::Starting
 }
@@ -2299,7 +2300,7 @@ pub fn list(project_id: &str) -> Result<Vec<ServiceJson>, PublishError> {
 /// Shown on a running `--cmd` App whose own `GET /` is HTML with neither
 /// `frame-ancestors` nor `X-Frame-Options` (FA4, FA21). K2 byte-splices
 /// those responses and cannot add the header itself.
-pub const CMD_FRAME_WARNING: &str = "This App's own server sends no frame-ancestors header on GET /, so any site can put it in a frame. K2 does not change a --cmd App's responses. Add `Content-Security-Policy: frame-ancestors 'self'` in the App (see `k2 study publish-framing`).";
+pub const CMD_FRAME_WARNING: &str = concat!("This App's own server sends no frame-ancestors header on GET /, so any site can put it in a frame. ", product_name!(), " does not change a --cmd App's responses. Add `Content-Security-Policy: frame-ancestors 'self'` in the App (see `", cli_name!(), " study publish-framing`).");
 
 /// The framing headers one loopback `GET`/`HEAD` returned.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -2544,7 +2545,7 @@ pub fn set_frame(
     })?;
     if row.kind != KIND_SKIN {
         return Err(FrameSetError::Publish(PublishError::bad(
-            "frame policy is for --skin Apps. A --cmd App sets its own header (k2 study publish-framing)",
+            concat!("frame policy is for --skin Apps. A --cmd App sets its own header (", cli_name!(), " study publish-framing)"),
         )));
     }
     let stored = match change {

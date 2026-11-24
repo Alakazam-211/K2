@@ -24,6 +24,8 @@
 use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
+#[cfg(windows)]
+use k2_core::brand::PRODUCT_NAME;
 
 /// The daemon argument that runs this supervisor instead of the daemon.
 pub const ARG: &str = "--keep-alive";
@@ -78,7 +80,7 @@ pub fn run() -> i32 {
     use std::process::Stdio;
 
     let Some(_guard) = single_instance() else {
-        k2_core::log_debug!("[keep-alive] another supervisor is running for this K2 home; leaving it to that one");
+        k2_core::log_debug!("[keep-alive] another supervisor is running for this {PRODUCT_NAME} home; leaving it to that one");
         return 0;
     };
     let exe = match std::env::current_exe() {

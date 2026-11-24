@@ -32,6 +32,7 @@ use k2_core::sim::manager::{self, Actor, SimError, Ws};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::brand::PRODUCT_NAME;
 
 pub const STATUS: &str = "/cli/sim/status";
 pub const DEVICES: &str = "/cli/sim/devices";
@@ -679,7 +680,7 @@ pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String>
     }
     manager::manager().start_setup(lane, &accept, &who).map_err(|e| e.message)?;
     let what = if accept.len() == 1 { "Accepted".to_string() } else { format!("Accepted all {} licences", accept.len()) };
-    Ok(json!({ "ok": true, "message": format!("{what}. K2 is downloading the {} tools; devices can boot when it finishes.", lane.platform()) }))
+    Ok(json!({ "ok": true, "message": format!("{what}. {PRODUCT_NAME} is downloading the {} tools; devices can boot when it finishes.", lane.platform()) }))
 }
 
 // ── daemon lifecycle ─────────────────────────────────────────────────

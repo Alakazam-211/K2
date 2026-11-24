@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use k2_core::jobs::{self as store, Job, JobError};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug};
 use parking_lot::Mutex;
 
 use super::{Live, STOP_KILL, STOP_NONE};
+use k2_core::brand::CLI_NAME;
 
 /// A run's log keeps at most this much output (the rest is counted).
 pub const LOG_CAP_BYTES: u64 = 1024 * 1024;
@@ -94,7 +95,7 @@ pub fn start_run(job: &Job, trigger: &str, started_by: &str) -> Result<String, J
             let conn = db.lock();
             let _ = store::insert_run(&conn, &run_id, &job.id, "skipped_overlap", trigger, None, started_by, now);
         }
-        return Err(JobError::new("job_running", 409, format!("{} is already running (k2 job kill {} stops it)", job.name, job.name)));
+        return Err(JobError::new("job_running", 409, format!("{} is already running ({CLI_NAME} job kill {} stops it)", job.name, job.name)));
     };
 
     let log_path = jobs_dir().join(&job.workspace_id).join(&job.name).join(format!("{run_id}.log"));
@@ -483,7 +484,7 @@ fn supervise(job: Job, live: Arc<Live>, mut s: Started) {
         }
         match reason {
             Some("timeout") => sink.note(&format!("\n[k2] stopped: timeout after {}\n", store::human_secs(job.timeout_secs))),
-            Some("killed") => sink.note("\n[k2] stopped: k2 job kill\n"),
+            Some("killed") => sink.note(concat!("\n[k2] stopped: ", cli_name!(), " job kill\n")),
             _ => {}
         }
         let _ = sink.file.sync_all();

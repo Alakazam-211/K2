@@ -42,6 +42,8 @@ use k2_core::deploy::store;
 use k2_core::disk_guard::{self as dg, human_gb, human_gib, Fs, Level, Lines, Snapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `~/.k2/disk-watch.json`.
 pub const STATE_FILE: &str = "disk-watch.json";
@@ -164,7 +166,7 @@ pub struct Merge {
 /// The note a merged duplicate gets before it is resolved.
 pub fn merge_note(m: &Merge) -> String {
     format!(
-        "Same disk as ticket {} ({}): K2 used to name a disk by its device number, which macOS changes at every restart, \
+        "Same disk as ticket {} ({}): {PRODUCT_NAME} used to name a disk by its device number, which macOS changes at every restart, \
          so it filed this one again. It now names a disk by its mount and volume ID; this duplicate is closed and {} stays open.",
         short_id(&m.into),
         m.mount,
@@ -481,13 +483,13 @@ pub fn crossing_notices(
     };
     let mut body = String::new();
     if top.is_empty() {
-        body.push_str("K2 doesn't know yet which agents use the most (the folder scan hasn't finished). ");
+        body.push_str(concat!(product_name!(), " doesn't know yet which agents use the most (the folder scan hasn't finished). "));
     } else {
-        body.push_str(&format!("The biggest users: {}. K2 has told those agents. ", top.iter().map(owner_words).collect::<Vec<_>>().join(", ")));
+        body.push_str(&format!("The biggest users: {}. {PRODUCT_NAME} has told those agents. ", top.iter().map(owner_words).collect::<Vec<_>>().join(", ")));
     }
     body.push_str("Nothing was deleted. ");
     if let Some(w) = snap.k2_will_clear.as_ref().filter(|w| w.seeds_bytes > 0) {
-        body.push_str(&format!("K2 clears {} of its own old Seeds in its next daily sweep. ", human_gb(w.seeds_bytes)));
+        body.push_str(&format!("{PRODUCT_NAME} clears {} of its own old Seeds in its next daily sweep. ", human_gb(w.seeds_bytes)));
     }
     match (level, warn_only) {
         (_, true) => body.push_str(&format!(
@@ -501,7 +503,7 @@ pub fn crossing_notices(
             human_gib(lines.reserve_bytes)
         )),
         (Level::Refuse, false) => body.push_str(&format!(
-            "New deploys, builds and large uploads are refused now: this box keeps {} free for Postgres, mail and K2. Running Apps are untouched; restarts and rollbacks still work. You can push one action through with --disk-override \"<reason>\". ",
+            "New deploys, builds and large uploads are refused now: this box keeps {} free for Postgres, mail and {PRODUCT_NAME}. Running Apps are untouched; restarts and rollbacks still work. You can push one action through with --disk-override \"<reason>\". ",
             human_gib(lines.reserve_bytes)
         )),
         (_, false) => body.push_str(
@@ -509,7 +511,7 @@ pub fn crossing_notices(
         ),
     }
     body.push_str(&format!(
-        "See `k2 app resources`. Change the lines: `k2 app resources settings --refuse {} --reserve {}`. Turn the guard off: `k2 app resources settings --mode off`.",
+        "See `{CLI_NAME} app resources`. Change the lines: `{CLI_NAME} app resources settings --refuse {} --reserve {}`. Turn the guard off: `{CLI_NAME} app resources settings --mode off`.",
         lines.refuse_pct,
         human_gib(lines.reserve_bytes).replace(" GiB", "G").replace(" MiB", "M")
     ));
@@ -520,17 +522,17 @@ pub fn crossing_notices(
             continue;
         }
         let head = format!("Disk {mount} on this box is {pct}% full ({free} free).");
-        let mut text = format!(" You use {}: {}. K2 deletes nothing of yours.", human_gb(s.total), rows_words(s));
+        let mut text = format!(" You use {}: {}. {PRODUCT_NAME} deletes nothing of yours.", human_gb(s.total), rows_words(s));
         match (level, warn_only) {
             (Level::Warn, _) | (_, true) => text.push_str(&format!(
-                " If you can, clear old builds or caches. New deploys stop at {}% full. `k2 app resources --json` shows the whole box.",
+                " If you can, clear old builds or caches. New deploys stop at {}% full. `{CLI_NAME} app resources --json` shows the whole box.",
                 lines.refuse_pct
             )),
             (Level::Refuse, false) => text.push_str(
-                " New deploys, builds and large uploads are refused until space is freed. Please clear old builds, caches or uploads you no longer need, then check `k2 app resources --json`.",
+                concat!(" New deploys, builds and large uploads are refused until space is freed. Please clear old builds, caches or uploads you no longer need, then check `", cli_name!(), " app resources --json`."),
             ),
             (_, false) => text.push_str(
-                " The disk is critical: new work waits for the server's owner in person. Please free space now (old builds, caches, uploads you no longer need) and check `k2 app resources --json`.",
+                concat!(" The disk is critical: new work waits for the server's owner in person. Please free space now (old builds, caches, uploads you no longer need) and check `", cli_name!(), " app resources --json`."),
             ),
         }
         if level == Level::Warn {
@@ -580,7 +582,7 @@ pub fn growth_notices(state: &mut WatchState, snap: &Snapshot, now: i64) -> Vec<
             workspace: ws.clone(),
             title: format!("{words} grew {} in a day", human_gb(grew)),
             text: format!(
-                "{} grew from {} to {} since yesterday. K2 deletes nothing of yours; if it isn't expected, look for a runaway log, cache or upload. `k2 app resources --json` shows the whole box.",
+                "{} grew from {} to {} since yesterday. {PRODUCT_NAME} deletes nothing of yours; if it isn't expected, look for a runaway log, cache or upload. `{CLI_NAME} app resources --json` shows the whole box.",
                 capitalize(words),
                 human_gb(before),
                 human_gb(*b)
@@ -615,7 +617,7 @@ pub fn budget_notices(state: &mut WatchState, snap: &Snapshot, now: i64) -> Vec<
                 out.push(Notice::Wake {
                     workspace: ws,
                     text: format!(
-                        "App {} uses {} of its {} disk budget. Its new deploys are refused (disk_low, budget) until it is under it: clear its data or cache, or ask the owner for a bigger budget (k2 app config {} --disk N).",
+                        "App {} uses {} of its {} disk budget. Its new deploys are refused (disk_low, budget) until it is under it: clear its data or cache, or ask the owner for a bigger budget ({CLI_NAME} app config {} --disk N).",
                         c.id,
                         human_gb(used),
                         human_gb(budget),
@@ -628,7 +630,7 @@ pub fn budget_notices(state: &mut WatchState, snap: &Snapshot, now: i64) -> Vec<
                 workspace: ws,
                 title: format!("App {} is at {pct}% of its disk budget", c.id),
                 text: format!(
-                    "App {} uses {} of its {} disk budget. At 100% its new deploys are refused. `k2 app inspect {} --resources` shows its parts.",
+                    "App {} uses {} of its {} disk budget. At 100% its new deploys are refused. `{CLI_NAME} app inspect {} --resources` shows its parts.",
                     c.id,
                     human_gb(used),
                     human_gb(budget),

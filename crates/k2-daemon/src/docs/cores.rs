@@ -38,6 +38,7 @@ use serde_json::{json, Value};
 use super::caller::DocCaller;
 use super::target::{Target, Tier};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// `GET /cli/docs/cores`.
 pub const CORES_ROUTE: &str = "/cli/docs/cores";
@@ -171,7 +172,7 @@ pub fn core_off(core: &str, rel: &str) -> CliResponse {
             "error": {
                 "code": "core_off",
                 "hint": format!(
-                    "{rel}: {} is off on this server. The owner or an Admin turns it on in Settings → Cores → Multiplayer (k2 doc cores on {core}, people only). Until then, edit the file with ordinary tools.",
+                    "{rel}: {} is off on this server. The owner or an Admin turns it on in Settings → Cores → Multiplayer ({CLI_NAME} doc cores on {core}, people only). Until then, edit the file with ordinary tools.",
                     sentence_name(core)
                 ),
                 "core": core,

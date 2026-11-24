@@ -52,7 +52,8 @@ use k2_core::domains::{
     self, AppDomain, CheckRecord, PATH_DIRECT, STATE_EXTERNAL, STATE_FAILING, STATE_ISSUING, STATE_LIVE, STATE_VERIFYING,
     STATE_WAITING_DNS,
 };
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A served name keeps serving this long after its re-checks start failing.
 pub const FAILING_AFTER_SECS: i64 = 7 * 24 * 3600;
@@ -202,13 +203,13 @@ pub(crate) fn set_test_nat(v: Option<Option<bool>>) {
 
 /// The Path B pointer for a box behind a router (PRD §7), when Path B is
 /// open to it.
-pub const NAT_WORDING: &str = "This server is on a home or office connection. Pointing your domain here would send \
-visitors to your network directly and show its address, so K2 uses K2 Connect: your domain points at K2's relays \
-(set the records below) and your address stays hidden.";
+pub const NAT_WORDING: &str = concat!("This server is on a home or office connection. Pointing your domain here would send \
+visitors to your network directly and show its address, so ", product_name!(), " uses K2 Connect: your domain points at K2's relays \
+(set the records below) and your address stays hidden.");
 /// What a Mac or Windows computer offers (PRD §7, vs-live PB-A16): Path B
 /// only (front443 is Linux-only).
-pub const DESKTOP_WORDING: &str = "On this computer your own domain goes through K2 Connect: it points at K2's \
-relays (set the records below). Nothing listens on this computer's port 443.";
+pub const DESKTOP_WORDING: &str = concat!("On this computer your own domain goes through K2 Connect: it points at ", product_name!(), "'s \
+relays (set the records below). Nothing listens on this computer's port 443.");
 
 /// Path B's facts for [`advice_for`] (PB-4).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,7 +298,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
         if open {
             let lead = match foreign {
                 Some(_) => "Another web server holds port 443 on this server.",
-                None => "K2's :443 front is off on this server.",
+                None => concat!(product_name!(), "'s :443 front is off on this server."),
             };
             let mut v = json!({
                 "path": "b",
@@ -306,7 +307,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
                 "records": "shown",
                 "message": format!(
                     "{lead} Through K2 Connect (Pro) your domain points at K2's relays instead: no sudo, nothing on port \
-                     443 (set the records below). Path A (the owner runs k2 front enable) also works."
+                     443 (set the records below). Path A (the owner runs {CLI_NAME} front enable) also works."
                 ),
                 "pathB": pb,
             });
@@ -331,7 +332,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
             "pathA": true,
             "behindNat": nat,
             "records": "shown",
-            "message": "Turn on the :443 front first: the owner runs k2 front enable (an agent's request is held for the owner).",
+            "message": concat!("Turn on the :443 front first: the owner runs ", cli_name!(), " front enable (an agent's request is held for the owner)."),
             "pathB": pb,
         });
     }
@@ -501,7 +502,7 @@ pub fn evaluate_with(d: &AppDomain, lk: &dyn Lookup, box_ips: &[IpAddr], sub: &s
         }
         if c == k2_core::tunnel::config::SUBDOMAIN_HOST || c.ends_with(&format!(".{}", k2_core::tunnel::config::SUBDOMAIN_HOST)) {
             problems.push(format!(
-                "{} points at {c}, which isn't this server's K2 name: point it at {}",
+                "{} points at {c}, which isn't this server's {PRODUCT_NAME} name: point it at {}",
                 d.hostname,
                 target.as_deref().unwrap_or("this server's <app>.<box>.k2.dev")
             ));
@@ -569,7 +570,7 @@ pub fn evaluate_with(d: &AppDomain, lk: &dyn Lookup, box_ips: &[IpAddr], sub: &s
         Ok(addrs) => {
             seen = addrs.iter().map(IpAddr::to_string).collect();
             if box_ips.is_empty() {
-                problems.push("K2 can't tell this box's public address right now".to_string());
+                problems.push(concat!(product_name!(), " can't tell this box's public address right now").to_string());
             } else {
                 let elsewhere: Vec<String> = addrs.iter().filter(|a| !box_ips.contains(a)).map(IpAddr::to_string).collect();
                 if addrs.iter().any(is_cloudflare_proxy) {
@@ -700,7 +701,7 @@ pub fn apply(d: &AppDomain, o: &Outcome, at: i64) -> Next {
                 &conn,
                 host,
                 STATE_EXTERNAL,
-                Some(&format!("still served by your own web server; K2 can serve it once: {reason}")),
+                Some(&format!("still served by your own web server; {PRODUCT_NAME} can serve it once: {reason}")),
             );
             Next::Nothing
         }
@@ -789,7 +790,7 @@ pub fn check_with(host: &str, lk: &dyn Lookup, issue: &dyn Fn(&str)) -> Option<(
             super::relay_claims::Step::Verified => None,
             super::relay_claims::Step::Waiting(w) => Some(format!("through K2 Connect: {w}")),
             super::relay_claims::Step::Refused { words, .. } => Some(words),
-            super::relay_claims::Step::Unreachable(w) => Some(format!("K2 Connect didn't answer ({w}); K2 tries again")),
+            super::relay_claims::Step::Unreachable(w) => Some(format!("K2 Connect didn't answer ({w}); {PRODUCT_NAME} tries again")),
         };
         if let Some(w) = words {
             o.ok = false;

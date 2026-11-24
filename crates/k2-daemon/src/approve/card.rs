@@ -10,6 +10,7 @@ use k2_core::overlay::{self, ApprovalCardBody};
 use k2_core::push::{PushEvent, ThreadBudget, ThreadMsgKind, ThreadPush};
 
 use super::people;
+use k2_core::brand::CLI_NAME;
 
 /// The asking workspace's Thread address (its handle), or its id.
 pub(crate) fn agent_addr(workspace_id: &str) -> String {
@@ -125,7 +126,7 @@ pub(crate) fn outcome_line(req: &ApprovalRequest) -> Option<String> {
     let by = &req.person_login;
     let what = match req.state {
         State::Approved => format!(
-            "{by} approved it{}. Get the approval record with: k2 approve status {} --out approval.json",
+            "{by} approved it{}. Get the approval record with: {CLI_NAME} approve status {} --out approval.json",
             req.device.as_deref().map(|d| format!(" on {d}")).unwrap_or_default(),
             req.id
         ),

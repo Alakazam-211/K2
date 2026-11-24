@@ -33,9 +33,11 @@
 use crate::domains::renew::{self, RenewRecord};
 use crate::domains::status::LeafInfo;
 use crate::mail::jmap::{sans_locked_to, CertManagement, StalwartClient};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The remedy command for a box that is no longer K2-issuer.
-pub const RESTORE_COMMAND: &str = "k2 hostmail cert owner --stalwart-acme";
+pub const RESTORE_COMMAND: &str = concat!(cli_name!(), " hostmail cert owner --stalwart-acme");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertOwner {
@@ -156,7 +158,7 @@ pub fn ensure_manual(api: &dyn CertMgmtApi, host: &str) -> Result<ManualSwitch, 
             Ok(ManualSwitch::Switched)
         }
         CertManagement::Other(t) => Err(format!(
-            "domain {id} has certificateManagement '@type' '{t}' — K2 only knows \
+            "domain {id} has certificateManagement '@type' '{t}' — {PRODUCT_NAME} only knows \
              Manual/Automatic; not touching it"
         )),
     }
@@ -204,15 +206,15 @@ pub fn restore_stalwart_acme(
                 [one] => one.clone(),
                 [] => {
                     return Err(
-                        "Stalwart has no ACME provider (it was set up without ACME) — K2 \
+                        concat!("Stalwart has no ACME provider (it was set up without ACME) — ", product_name!(), " \
                          cannot turn Stalwart ACME on for the mail host; attach the mail host \
-                         (`k2 domain name add <host> --role mail`) and let K2 issue it"
+                         (`", cli_name!(), " domain name add <host> --role mail`) and let ", product_name!(), " issue it")
                             .into(),
                     )
                 }
                 many => {
                     return Err(format!(
-                        "Stalwart has {} ACME providers ({}) — K2 will not guess which one \
+                        "Stalwart has {} ACME providers ({}) — {PRODUCT_NAME} will not guess which one \
                          orders the mail certificate",
                         many.len(),
                         many.join(", ")
@@ -240,10 +242,10 @@ pub fn reconcile(api: &dyn CertMgmtApi, host: &str, owner: CertOwner) -> String 
     }
     match ensure_manual(api, host) {
         Ok(ManualSwitch::AlreadyManual) => {
-            format!("{P} {host}: K2 owns the certificate; Stalwart ACME already Manual")
+            format!("{P} {host}: {PRODUCT_NAME} owns the certificate; Stalwart ACME already Manual")
         }
         Ok(ManualSwitch::Switched) => format!(
-            "{P} {host}: K2 owns the certificate; switched Stalwart ACME to Manual \
+            "{P} {host}: {PRODUCT_NAME} owns the certificate; switched Stalwart ACME to Manual \
              (no restart, certificate untouched)"
         ),
         Err(e) => format!("{P} {host}: FAILED to switch Stalwart ACME to Manual (retried at the next renew or boot): {e}"),
@@ -329,8 +331,8 @@ pub fn handle_post(body: &[u8]) -> crate::cli_response::CliResponse {
         return err_json(
             "400 Bad Request",
             "usage",
-            "action must be 'stalwart-acme' (K2 takes the certificate itself when the mail \
-             host is attached and K2 issues it — there is no action for that)"
+            concat!("action must be 'stalwart-acme' (", product_name!(), " takes the certificate itself when the mail \
+             host is attached and ", product_name!(), " issues it — there is no action for that)")
                 .into(),
         );
     }
@@ -407,9 +409,9 @@ pub fn handle_post(body: &[u8]) -> crate::cli_response::CliResponse {
 
 fn restore_stalwart_acme_refusal(host: &str) -> String {
     format!(
-        "K2 owns the certificate for {host} (attached in `k2 domain` with a K2-planted \
+        "{PRODUCT_NAME} owns the certificate for {host} (attached in `{CLI_NAME} domain` with a K2-planted \
          certificate) and renews it. Stalwart ACME stays off. To hand it back, first \
-         `k2 domain name remove {host}`, then run this again"
+         `{CLI_NAME} domain name remove {host}`, then run this again"
     )
 }
 

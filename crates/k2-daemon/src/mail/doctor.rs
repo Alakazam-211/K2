@@ -60,6 +60,8 @@ use std::io::BufRead;
 use crate::mail::dns_verify::{self, DnsError, DnsResolver};
 use crate::mail::domains;
 use crate::mail::jmap::{CertManagement, CertificateInfo, DefaultCertificate};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 // ── Check vocabulary ────────────────────────────────────────────────────
 
@@ -241,7 +243,7 @@ pub fn outbound_25_coaching(reason: &str) -> String {
          it; DigitalOcean effectively never; Hetzner unblocks via support ticket after \
          the first paid invoice (~1 month); Linode is friendliest (set rDNS + records \
          first, then ticket). Relay mode works everywhere — switch with \
-         `k2 hostmail config --domain <domain> --send-mode relay`"
+         `{CLI_NAME} hostmail config --domain <domain> --send-mode relay`"
     )
 }
 
@@ -302,7 +304,7 @@ pub fn run_checks_with_ptr_resolver(
                 id: "forward-outcomes".into(),
                 label: "Delivery reports for forwarded mail".into(),
                 status: ST_WARN,
-                detail: format!("not reaching K2 ({e}), so forwards won't pause by themselves when destinations refuse mail; K2 retries hourly"),
+                detail: format!("not reaching {PRODUCT_NAME} ({e}), so forwards won't pause by themselves when destinations refuse mail; {PRODUCT_NAME} retries hourly"),
                 gates_direct: false,
             });
         }
@@ -624,25 +626,25 @@ pub fn extra_name_certs_check(
         problems.push(format!(
             "{} point at this box but present no valid certificate for their own name \
              (strict TLS fails — they get the mail host's certificate). Run \
-             `k2 hostmail cert names issue`",
+             `{CLI_NAME} hostmail cert names issue`",
             missing_k2.join(", ")
         ));
     }
     if !missing_byo.is_empty() {
         problems.push(format!(
             "{} point at this box but present no valid certificate for their own name, and \
-             the zone ({}) is not K2-hosted, so K2 cannot issue one (DNS-01 on \
-             ns1/ns2.k2.dev only). Point them elsewhere or move the zone to K2 DNS",
+             the zone ({}) is not K2-hosted, so {PRODUCT_NAME} cannot issue one (DNS-01 on \
+             ns1/ns2.k2.dev only). Point them elsewhere or move the zone to {PRODUCT_NAME} DNS",
             missing_byo.join(", "),
             byo_zones.join(", ")
         ));
     }
     if !not_live.is_empty() {
         problems.push(format!(
-            "{} have a K2 certificate on this box, but Stalwart does not present it for \
-             that name yet (the leaf it serves is not the one K2 planted) — the hot reload \
+            "{} have a {PRODUCT_NAME} certificate on this box, but Stalwart does not present it for \
+             that name yet (the leaf it serves is not the one {PRODUCT_NAME} planted) — the hot reload \
              did not land. Restart Stalwart: `sudo /usr/bin/systemctl restart stalwart` (on boxes \
-             without the mail helper that is the way; never `k2 hostmail disable/enable`)",
+             without the mail helper that is the way; never `{CLI_NAME} hostmail disable/enable`)",
             not_live.join(", ")
         ));
     }
@@ -650,7 +652,7 @@ pub fn extra_name_certs_check(
         problems.push(format!(
             "{} expire within 14 days and the daemon's renewer has not replaced them \
              yet (see k2-cert-renewal for the last error) — retry with \
-             `k2 hostmail cert names renew`",
+             `{CLI_NAME} hostmail cert names renew`",
             due.join(", ")
         ));
     }
@@ -701,9 +703,9 @@ pub fn default_cert_check(
             ST_WARN,
             format!(
                 "the default certificate is {}, not {hostname}'s newest ({to}), so clients \
-                 without SNI and STARTTLS on 25 can get the wrong name. K2 repairs this at its \
-                 next boot or mail certificate renewal; on a K2-owned certificate `k2 hostmail \
-                 cert renew` does it now. Never `k2 hostmail disable/enable`",
+                 without SNI and STARTTLS on 25 can get the wrong name. {PRODUCT_NAME} repairs this at its \
+                 next boot or mail certificate renewal; on a K2-owned certificate `{CLI_NAME} hostmail \
+                 cert renew` does it now. Never `{CLI_NAME} hostmail disable/enable`",
                 from.as_deref().unwrap_or("unset"),
             ),
         ),
@@ -737,7 +739,7 @@ pub fn acme_cert_names_check(
         gates_direct: false,
     };
     let fix = format!(
-        "K2 locks it to {hostname} on enable and on `k2 hostmail cert renew` when \
+        "{PRODUCT_NAME} locks it to {hostname} on enable and on `{CLI_NAME} hostmail cert renew` when \
          Stalwart issues the mail cert"
     );
     match observed {
@@ -751,34 +753,34 @@ pub fn acme_cert_names_check(
         ),
         Ok(Some(CertManagement::Manual)) if owner == CertOwner::K2 => mk(
             ST_PASS,
-            "Manual (K2 owns and renews this certificate)".into(),
+            concat!("Manual (", product_name!(), " owns and renews this certificate)").into(),
         ),
         Ok(Some(CertManagement::Manual)) if port_plan == Some("tls-alpn") => mk(
             ST_WARN,
             format!(
-                "Stalwart ACME is off (Manual) but K2 does not own the certificate for \
-                 {hostname} (owner: {}), so nothing renews it. Either let K2 own it \
-                 again (`k2 domain name add {hostname} --role mail`, then \
-                 `k2 hostmail cert renew`), or hand it back to Stalwart ACME, mail host \
-                 only: `{RESTORE_COMMAND}`. Never `k2 hostmail disable/enable`",
+                "Stalwart ACME is off (Manual) but {PRODUCT_NAME} does not own the certificate for \
+                 {hostname} (owner: {}), so nothing renews it. Either let {PRODUCT_NAME} own it \
+                 again (`{CLI_NAME} domain name add {hostname} --role mail`, then \
+                 `{CLI_NAME} hostmail cert renew`), or hand it back to Stalwart ACME, mail host \
+                 only: `{RESTORE_COMMAND}`. Never `{CLI_NAME} hostmail disable/enable`",
                 owner.as_str()
             ),
         ),
         Ok(Some(CertManagement::Manual)) => mk(
             ST_INFO,
-            "Stalwart ACME is off for this domain — the mail cert comes from K2's \
-             issuer, Caddy, or a planted certificate"
+            concat!("Stalwart ACME is off for this domain — the mail cert comes from ", product_name!(), "'s \
+             issuer, Caddy, or a planted certificate")
                 .into(),
         ),
         Ok(Some(CertManagement::Automatic { .. })) if owner == CertOwner::K2 => mk(
             ST_WARN,
-            "Stalwart ACME is still on for a K2-owned domain — K2 switches it to Manual \
-             at the next renew/boot reconcile (`k2 hostmail cert renew` does it now)"
+            concat!("Stalwart ACME is still on for a K2-owned domain — ", product_name!(), " switches it to Manual \
+             at the next renew/boot reconcile (`", cli_name!(), " hostmail cert renew` does it now)")
                 .into(),
         ),
         Ok(Some(CertManagement::Other(t))) => mk(
             ST_WARN,
-            format!("unknown certificate management type '{t}' — K2 cannot check its names"),
+            format!("unknown certificate management type '{t}' — {PRODUCT_NAME} cannot check its names"),
         ),
         Ok(Some(CertManagement::Automatic {
             subject_alternative_names,
@@ -815,9 +817,9 @@ pub fn acme_cert_names_check(
 
 /// CAL38: calendar clients retry bad passwords, and Stalwart bans the IP.
 pub const CALENDAR_BANS_HINT: &str =
-    "A calendar client retrying a wrong password gets its IP banned (Stalwart auth \
-     bans) — see `k2 hostmail bans list`, `k2 hostmail bans clear <ip>`, and keep \
-     known office IPs on `k2 hostmail allowlist`.";
+    concat!("A calendar client retrying a wrong password gets its IP banned (Stalwart auth \
+     bans) — see `", cli_name!(), " hostmail bans list`, `", cli_name!(), " hostmail bans clear <ip>`, and keep \
+     known office IPs on `", cli_name!(), " hostmail allowlist`.");
 
 fn location_ends_dav_cal(loc: &str) -> bool {
     let path = loc
@@ -847,12 +849,12 @@ pub fn caldav_check(env: &dyn DoctorEnv, host: &str) -> DoctorCheck {
         return mk(
             ST_WARN,
             format!(
-                "{host} is a K2 control-plane name, not this box — calendar clients need \
+                "{host} is a {PRODUCT_NAME} control-plane name, not this box — calendar clients need \
                  the mail host on your own domain"
             ),
         );
     }
-    let fix = "check `k2 hostmail status` (calendar.reachable / calendar.reason)";
+    let fix = concat!("check `", cli_name!(), " hostmail status` (calendar.reachable / calendar.reason)");
     let wk = format!("https://{host}/.well-known/caldav");
     let (code, location) = match env.http_probe(&wk, "GET") {
         Ok(v) => v,
@@ -910,8 +912,8 @@ pub fn caldav_srv_check(
         gates_direct: false,
     };
     let apply = format!(
-        "run `k2 hostmail autoconfig apply {domain}` (plants them when this server hosts the \
-         zone; otherwise `k2 hostmail autoconfig show {domain}` prints them for your DNS host)"
+        "run `{CLI_NAME} hostmail autoconfig apply {domain}` (plants them when this server hosts the \
+         zone; otherwise `{CLI_NAME} hostmail autoconfig show {domain}` prints them for your DNS host)"
     );
     let resolver = match resolver {
         Ok(r) => r,
@@ -977,15 +979,15 @@ pub fn webdav_files_check(policy: Result<Option<&super::dav::DavPolicy>, String>
         Err(e) => mk(ST_UNKNOWN, format!("the stored DAV policy is unreadable: {e}")),
         Ok(None) => mk(
             ST_WARN,
-            "webdav-files: on — Stalwart's default lets every hosted address store files \
-             over WebDAV. `k2 hostmail calendar enable` (or `disable`) turns file storage \
-             off for every address (keep it with `--files on`)"
+            concat!("webdav-files: on — Stalwart's default lets every hosted address store files \
+             over WebDAV. `", cli_name!(), " hostmail calendar enable` (or `disable`) turns file storage \
+             off for every address (keep it with `--files on`)")
                 .into(),
         ),
         Ok(Some(p)) if p.files == OnOff::On => mk(
             ST_WARN,
-            "webdav-files: on (chosen with --files on) — every hosted address can store \
-             files over WebDAV. `k2 hostmail calendar enable --files off` turns it off"
+            concat!("webdav-files: on (chosen with --files on) — every hosted address can store \
+             files over WebDAV. `", cli_name!(), " hostmail calendar enable --files off` turns it off")
                 .into(),
         ),
         Ok(Some(_)) => mk(ST_PASS, "webdav-files: off for every hosted address".into()),
@@ -1272,7 +1274,7 @@ fn domain_checks(
     now: i64,
 ) -> Vec<DoctorCheck> {
     let summary = dns_verify::verify_rows(resolver, &d.domain, &mut d.rows, now);
-    let show_hint = format!("`k2 hostmail domain show {}` has the expected-vs-live diff", d.domain);
+    let show_hint = format!("`{CLI_NAME} hostmail domain show {}` has the expected-vs-live diff", d.domain);
     let mut out = Vec::new();
     let mut push = |id: &str, label: String, ok: bool, gates: bool, detail: String| {
         out.push(DoctorCheck {
@@ -1865,11 +1867,11 @@ pub fn direct_send_gate(domain: Option<(&str, &str)>) -> Result<serde_json::Valu
         return Err(match domain_name {
             Some(d) => format!(
                 "direct mode is locked until the deliverability doctor grades this box — \
-                 run `k2 hostmail doctor {d}` (or `k2 hostmail doctor` for the whole box) \
+                 run `{CLI_NAME} hostmail doctor {d}` (or `{CLI_NAME} hostmail doctor` for the whole box) \
                  first; direct unlocks on a non-failing grade"
             ),
-            None => "direct mode is locked until the deliverability doctor grades this box — \
-                     run `k2 hostmail doctor` first (direct unlocks on a non-failing grade)"
+            None => concat!("direct mode is locked until the deliverability doctor grades this box — \
+                     run `", cli_name!(), " hostmail doctor` first (direct unlocks on a non-failing grade)")
                 .to_string(),
         });
     };
@@ -1883,8 +1885,8 @@ pub fn direct_send_gate(domain: Option<(&str, &str)>) -> Result<serde_json::Valu
             "direct mode is locked — the last doctor run failed on: {}. Provider \
              realities if outbound port 25 is the blocker: GCP never unblocks it, \
              DigitalOcean effectively never, Hetzner takes a support ticket + ~1 month. \
-             Relay mode works everywhere: `k2 hostmail config --domain <domain> --send-mode \
-             relay`. Re-run `k2 hostmail doctor{}` after fixing.",
+             Relay mode works everywhere: `{CLI_NAME} hostmail config --domain <domain> --send-mode \
+             relay`. Re-run `{CLI_NAME} hostmail doctor{}` after fixing.",
             if blockers.is_empty() { "(unrecorded checks)".to_string() } else { blockers.join(", ") },
             domain_name.map(|d| format!(" {d}")).unwrap_or_default()
         ));

@@ -52,6 +52,8 @@ use std::time::Duration;
 use serde_json::{json, Value as J};
 
 use k2_core::domains::{AppDomain, RELAY_CLAIMED, RELAY_RELEASED, RELAY_VERIFIED};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The control plane's answer for one name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +98,7 @@ pub const BASE_ENV: &str = "K2_CUSTOM_HOSTNAMES_BASE";
 pub const CAPABILITY: &str = "customSni";
 /// What K2 says while frps refuses the custom proxy: not verified on the
 /// relay yet, or another box's live proxy still holds the name. Not a failure.
-pub const WAITING_TO_TAKE_OVER: &str = "waiting to take over at K2's relay (it isn't routing this name here yet; if another server held it, that server's tunnel must let go first; K2 tries again)";
+pub const WAITING_TO_TAKE_OVER: &str = concat!("waiting to take over at K2's relay (it isn't routing this name here yet; if another server held it, that server's tunnel must let go first; ", product_name!(), " tries again)");
 /// Where a person upgrades to Pro.
 pub const UPGRADE_URL: &str = k2_core::hosts::DASHBOARD_URL;
 
@@ -137,55 +139,55 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
                 _ => format!("the most ({default_l})"),
             };
             format!(
-                "{what} already holds {of} names through K2's relays: remove one you no longer need (k2 app domain rm <app-id> <name>), then try again"
+                "{what} already holds {of} names through K2's relays: remove one you no longer need ({CLI_NAME} app domain rm <app-id> <name>), then try again"
             )
         }
         "hostname_claimed_elsewhere" => match detail {
             // k2-connect names the case: another box of this account, or not.
-            Some(d) if d.contains("your account") => format!("{d}. K2 never takes a name over"),
+            Some(d) if d.contains("your account") => format!("{d}. {PRODUCT_NAME} never takes a name over"),
             _ => format!(
-                "{hostname} is already verified for another K2 server or account. Whoever holds it removes it there first; K2 never takes a name over"
+                "{hostname} is already verified for another K2 server or account. Whoever holds it removes it there first; {PRODUCT_NAME} never takes a name over"
             ),
         },
         "verify_token_not_accepted" => {
-            "K2 Connect refused this request because it carried a proof token, which it now picks itself: this is a K2 bug. Update K2 on this server (the owner runs k2 update) and report it".to_string()
+            concat!("K2 Connect refused this request because it carried a proof token, which it now picks itself: this is a ", product_name!(), " bug. Update ", product_name!(), " on this server (the owner runs ", cli_name!(), " update) and report it").to_string()
         }
         "bad_request" => {
-            format!("K2 Connect couldn't read K2's request{d}: this is a K2 bug. Update K2 on this server (the owner runs k2 update) and report it")
+            format!("K2 Connect couldn't read {PRODUCT_NAME}'s request{d}: this is a {PRODUCT_NAME} bug. Update {PRODUCT_NAME} on this server (the owner runs {CLI_NAME} update) and report it")
         }
         "capability_missing" => {
-            "K2 Connect says this K2 can't serve custom names yet: update K2 on this server (the owner runs k2 update), then try again".to_string()
+            concat!("K2 Connect says this ", product_name!(), " can't serve custom names yet: update ", product_name!(), " on this server (the owner runs ", cli_name!(), " update), then try again").to_string()
         }
         "invalid_token" => {
-            "K2 Connect refused this server's tunnel token: the owner re-pairs this server (k2 tunnel status shows how)".to_string()
+            concat!("K2 Connect refused this server's tunnel token: the owner re-pairs this server (", cli_name!(), " tunnel status shows how)").to_string()
         }
         "nested_label" => {
             "this server's tunnel token is for a nested label, which has no tunnel of its own: the owner re-pairs it under the server's main name".to_string()
         }
         "hostname_invalid" => format!(
-            "K2 Connect says {hostname} isn't a valid domain name{d}. Check the spelling: k2 app domain rm, then add it again"
+            "K2 Connect says {hostname} isn't a valid domain name{d}. Check the spelling: {CLI_NAME} app domain rm, then add it again"
         ),
         "hostname_not_allowed" => format!(
             "K2 Connect won't route {hostname}{d}. Its k2.dev zones, public suffixes and its deny list can't be claimed; use another name"
         ),
         "not_claimed" => format!(
-            "K2 Connect has no claim on {hostname} from this server (it dropped an old one, or this server's name changed hands); K2 claims it again at the next check, and the TXT value may change"
+            "K2 Connect has no claim on {hostname} from this server (it dropped an old one, or this server's name changed hands); {PRODUCT_NAME} claims it again at the next check, and the TXT value may change"
         ),
         "verification_failed" => format!(
-            "K2 Connect can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; K2 tries again"
+            "K2 Connect can't see the right TXT record yet{d}. It checks through public DNS, which can take a few minutes; {PRODUCT_NAME} tries again"
         ),
         "txt_missing" | "not_verified" | "pending" => format!(
             "K2 Connect can't see the TXT record yet (_k2-domain.{hostname}). It checks through public DNS, which can take a few minutes"
         ),
         "rate_limited" => {
             let limit = v.get("limit").and_then(J::as_u64).unwrap_or(5);
-            format!("K2 Connect takes {limit} new names an hour per account and this account is over that now: K2 tries again later")
+            format!("K2 Connect takes {limit} new names an hour per account and this account is over that now: {PRODUCT_NAME} tries again later")
         }
-        "conflict" => format!("another change to {hostname} reached K2 Connect at the same moment: K2 tries again"),
-        "supabase_error" => "K2 Connect's database didn't answer: K2 tries again".to_string(),
-        "dns_unavailable" => "K2 Connect couldn't look up the TXT record right now: K2 tries again".to_string(),
+        "conflict" => format!("another change to {hostname} reached K2 Connect at the same moment: {PRODUCT_NAME} tries again"),
+        "supabase_error" => concat!("K2 Connect's database didn't answer: ", product_name!(), " tries again").to_string(),
+        "dns_unavailable" => concat!("K2 Connect couldn't look up the TXT record right now: ", product_name!(), " tries again").to_string(),
         "custom_hostnames_disabled" => {
-            "K2 Connect hasn't turned on custom names yet: Path B starts working once K2's relays do; K2 tries again".to_string()
+            concat!("K2 Connect hasn't turned on custom names yet: Path B starts working once K2's relays do; ", product_name!(), " tries again").to_string()
         }
         other => format!("K2 Connect won't route {hostname} ({other}){d}"),
     }
@@ -209,7 +211,7 @@ fn answer(v: &J, hostname: &str) -> Result<ClaimAnswer, CpError> {
         let name_ok = v.get("txtName").and_then(J::as_str).is_none_or(|n| n.eq_ignore_ascii_case(&k2_core::domains::verify_txt_name(&host)));
         let value_ok = v.get("txtValue").and_then(J::as_str).is_none_or(|x| x == k2_core::domains::verify_txt_value(t));
         if !valid_token(t) || !name_ok || !value_ok {
-            return Err(CpError::Unreachable(format!("K2 Connect's TXT record for {host} isn't one K2 can use")));
+            return Err(CpError::Unreachable(format!("K2 Connect's TXT record for {host} isn't one {PRODUCT_NAME} can use")));
         }
     }
     Ok(ClaimAnswer {
@@ -385,7 +387,7 @@ pub fn ready() -> Result<(), String> {
     }
     let cfg = k2_core::tunnel::config::load_without_token().map_err(|e| format!("K2 Connect isn't set up here ({e})"))?;
     if cfg.subdomain.trim().is_empty() {
-        return Err("this server isn't on K2 Connect yet (no <name>.k2.dev): pair it first (k2 connect login)".into());
+        return Err(concat!("this server isn't on K2 Connect yet (no <name>.k2.dev): pair it first (", cli_name!(), " connect login)").into());
     }
     if !k2_core::tunnel::e2e_enabled(&cfg) {
         return Err("this server's K2 Connect tunnel has end-to-end TLS off: Path B needs it on (K2_E2E)".into());
@@ -410,17 +412,17 @@ pub fn pro() -> Result<bool, String> {
         if let Some(r) = subdomains::tier_view(&label).reading() {
             return Ok(r.is_pro());
         }
-        let token = crate::dns::proxy::tunnel_bearer_token().map_err(|e| format!("K2 can't check this server's plan right now: {e}"))?;
+        let token = crate::dns::proxy::tunnel_bearer_token().map_err(|e| format!("{PRODUCT_NAME} can't check this server's plan right now: {e}"))?;
         subdomains::refresh_tier(&label, &token)
             .map(|r| r.is_pro())
-            .map_err(|e| format!("K2 can't check this server's plan right now ({e}); try again in a minute"))
+            .map_err(|e| format!("{PRODUCT_NAME} can't check this server's plan right now ({e}); try again in a minute"))
     }
 }
 
 /// The words for "not Pro" (with Path A where this box can serve it).
 pub fn not_pro_words() -> String {
     let path_a = if cfg!(target_os = "linux") {
-        " Or serve it from this server's own address (Path A, free): the owner turns on K2's :443 front (k2 front enable)."
+        concat!(" Or serve it from this server's own address (Path A, free): the owner turns on ", product_name!(), "'s :443 front (", cli_name!(), " front enable).")
     } else {
         ""
     };
@@ -478,7 +480,7 @@ pub fn precheck(d: &AppDomain) -> Result<(), (String, String)> {
             "cap_reached".into(),
             format!(
                 "this server already has {cap} of {cap} names through K2's relays (the most on Pro): remove one you no longer \
-                 need (k2 app domain rm <app-id> <name>), then try again"
+                 need ({CLI_NAME} app domain rm <app-id> <name>), then try again"
             ),
         ));
     }
@@ -490,8 +492,8 @@ pub fn precheck(d: &AppDomain) -> Result<(), (String, String)> {
 pub fn txt_pending_words(d: &AppDomain) -> String {
     let why = d.relay_error.as_deref().map(|e| format!(" ({e})")).unwrap_or_default();
     format!(
-        "No TXT record to set yet: K2 Connect gives the value once it accepts the claim{why}. K2 tries again every 10 minutes; \
-         k2 app domain check {} {} tries now. The CNAME or ALIAS can be set already.",
+        "No TXT record to set yet: K2 Connect gives the value once it accepts the claim{why}. {PRODUCT_NAME} tries again every 10 minutes; \
+         {CLI_NAME} app domain check {} {} tries now. The CNAME or ALIAS can be set already.",
         d.app, d.hostname
     )
 }
@@ -511,7 +513,7 @@ pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
     match api.claim(host, k2_core::front443::load().http) {
         Ok(a) => {
             let Some(token) = a.verify_token.as_deref() else {
-                let w = format!("K2 Connect's answer for {host} carries no TXT value; K2 tries again");
+                let w = format!("K2 Connect's answer for {host} carries no TXT value; {PRODUCT_NAME} tries again");
                 record(host, d.relay_state.as_deref(), Some(&w));
                 return Err(w);
             };
@@ -528,7 +530,7 @@ pub fn ensure_claim(d: &AppDomain, api: &dyn RelayApi) -> Result<(), String> {
             Err(w)
         }
         Err(CpError::Unreachable(w)) => {
-            let w = format!("K2 Connect didn't answer ({w}); K2 tries again");
+            let w = format!("K2 Connect didn't answer ({w}); {PRODUCT_NAME} tries again");
             record(host, d.relay_state.as_deref(), Some(&w));
             Err(w)
         }

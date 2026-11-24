@@ -39,6 +39,8 @@ use crate::compute_routes::{no, refusal_response, ws_by_id, ws_by_token, Refusal
 use k2_core::clone_proposals::{self as cp, CloneOptions, SecretChoice};
 use k2_core::connect_users::Role;
 use serde_json::{json, Value as J};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const NEW: &str = "/cli/clone-proposal/new";
 pub const LIST: &str = "/cli/clone-proposal/list";
@@ -142,7 +144,7 @@ fn need_person_admin(who: &Who, what: &str) -> R<()> {
         Who::Agent { .. } | Who::Shell { .. } => Err(no(
             codes::PERSON_ONLY,
             403,
-            format!("only a person (the owner or an admin) can {what} a clone proposal, from a terminal outside K2 or the K2 app"),
+            format!("only a person (the owner or an admin) can {what} a clone proposal, from a terminal outside {PRODUCT_NAME} or the {PRODUCT_NAME} app"),
         )),
         Who::Login { .. } => Err(no(codes::FORBIDDEN, 403, format!("only the owner or an admin can {what} a clone proposal"))),
         Who::Wrong | Who::Invalid => Err(no(codes::FORBIDDEN, 403, "invalid or missing token")),
@@ -160,8 +162,8 @@ fn confirm_stamp(who: &Who) -> Option<String> {
 }
 
 fn find(token: Option<&str>) -> R<cp::Proposal> {
-    let t = token.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the proposal (its cp_… id; k2 clone proposals)"))?;
-    db(|c| cp::find(c, t))?.ok_or_else(|| no(codes::NOT_FOUND, 404, format!("no clone proposal '{t}' (k2 clone proposals)")))
+    let t = token.ok_or_else(|| no(codes::BAD_REQUEST, 400, concat!("name the proposal (its cp_… id; ", cli_name!(), " clone proposals)")))?;
+    db(|c| cp::find(c, t))?.ok_or_else(|| no(codes::NOT_FOUND, 404, format!("no clone proposal '{t}' ({CLI_NAME} clone proposals)")))
 }
 
 fn decide_err(code: &'static str) -> Refusal {
@@ -333,7 +335,7 @@ fn propose(who: &Who, body: &[u8]) -> R<J> {
         .map_err(|e| no(codes::BAD_REQUEST, 400, e))?
     };
     let line = format!(
-        "Proposed: {}. Review in K2 or `k2 clone approve {}`{}",
+        "Proposed: {}. Review in {PRODUCT_NAME} or `{CLI_NAME} clone approve {}`{}",
         summary_line(&p, Some(&ws)),
         p.id,
         p.why.as_deref().map(|w| format!(" (why: {w})")).unwrap_or_default()
@@ -349,7 +351,7 @@ fn propose(who: &Who, body: &[u8]) -> R<J> {
         "proposal": proposal_json(&p),
         "threadNotice": notice.is_ok(),
         "hint": format!(
-            "held for a person: they approve it with k2 clone approve {} (or in K2), or deny it. Check with k2 clone proposals --mine.",
+            "held for a person: they approve it with {CLI_NAME} clone approve {} (or in {PRODUCT_NAME}), or deny it. Check with {CLI_NAME} clone proposals --mine.",
             p.id
         ),
     }))
@@ -429,7 +431,7 @@ fn approve(who: &Who, body: &[u8], ingress: &str) -> R<J> {
         return Err(no(
             codes::CONFIRM_REQUIRED,
             403,
-            "approving needs a fresh confirm (Touch ID, the vault password or your login password): k2 clone approve <id> asks for it",
+            concat!("approving needs a fresh confirm (Touch ID, the vault password or your login password): ", cli_name!(), " clone approve <id> asks for it"),
         ));
     };
     let proof = vault()?
@@ -450,9 +452,9 @@ fn approve(who: &Who, body: &[u8], ingress: &str) -> R<J> {
     let ws = ws_by_id(&done.project_id);
     let copies = done.options.secrets.values().filter(|c| **c == SecretChoice::Copy).count();
     let hint = if copies > 0 {
-        "approved: run it now (k2 clone approve runs it for you). Copying secrets needs the clone-carry confirm; k2 clone approve and K2 get both in one confirm (/cli/clone/vault/confirm with proposal)."
+        concat!("approved: run it now (", cli_name!(), " clone approve runs it for you). Copying secrets needs the clone-carry confirm; ", cli_name!(), " clone approve and ", product_name!(), " get both in one confirm (/cli/clone/vault/confirm with proposal).")
     } else {
-        "approved: run it now (k2 clone approve runs it for you)."
+        concat!("approved: run it now (", cli_name!(), " clone approve runs it for you).")
     };
     Ok(json!({
         "ok": true,

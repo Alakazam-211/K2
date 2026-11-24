@@ -60,6 +60,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 // ── Constants ───────────────────────────────────────────────────────────
 
@@ -535,8 +536,8 @@ pub fn handle_status() -> CliResponse {
 }
 
 /// Why the active-login refresher is gone, and where refresh lives now.
-pub const RETIRED_HINT: &str = "K2 no longer refreshes the server default Claude subscription: Claude refreshes it itself. \
-K2 keeps your other saved subscriptions fresh (Settings → Language Models → Subs / Tokens). Remove the old background refresher with uninstall-scheduler.";
+pub const RETIRED_HINT: &str = concat!(product_name!(), " no longer refreshes the server default Claude subscription: Claude refreshes it itself. \
+", product_name!(), " keeps your other saved subscriptions fresh (Settings → Language Models → Subs / Tokens). Remove the old background refresher with uninstall-scheduler.");
 
 fn retired() -> CliResponse {
     CliResponse {

@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::cli_response::CliResponse;
+use k2_core::cli_name;
 
 pub const PROFILE: &str = "/cli/skin/profile";
 pub const PROFILE_IMAGE: &str = "/cli/skin/profile/image";
@@ -219,7 +220,7 @@ fn edits_refused(p: &SkinPrincipal) -> Option<CliResponse> {
         Ok(true) => Some(refusal(
             "403 Forbidden",
             "agent_login",
-            "an agent's login takes its name and picture from its workspace; the owner manages it (k2 app user …)",
+            concat!("an agent's login takes its name and picture from its workspace; the owner manages it (", cli_name!(), " app user …)"),
         )),
         Ok(false) => None,
         Err(r) => Some(r),

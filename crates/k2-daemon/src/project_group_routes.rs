@@ -93,6 +93,8 @@ use std::collections::HashMap;
 use crate::{cli::{opt_param, str_param}, project_group_member_view_routes as member_view};
 use crate::cli_response::CliResponse;
 use k2_core::project_groups::{self, ResolveError};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// Project-group-domain GET dispatch. Returns `Some(resp)` for a
 /// handled path, `None` if the path isn't a project-group route.
@@ -529,8 +531,8 @@ fn delete_needs_admin() -> CliResponse {
     error_response(
         "403 Forbidden",
         "forbidden",
-        "only the owner, an admin, or an agent with 'Let this agent manage K2 projects' on can delete a project \
-         (it removes the project's chat too)",
+        concat!("only the owner, an admin, or an agent with 'Let this agent manage ", product_name!(), " projects' on can delete a project \
+         (it removes the project's chat too)"),
     )
 }
 
@@ -540,10 +542,10 @@ fn agent_permission_off(ws: &str) -> CliResponse {
         "403 Forbidden",
         "agent_permission_off",
         format!(
-            "'Let this agent manage K2 projects' is off for {ws}, so this agent can't create, rename or delete \
+            "'Let this agent manage {PRODUCT_NAME} projects' is off for {ws}, so this agent can't create, rename or delete \
              projects or change their members or settings. Reading projects and posting in your \
              project chat still work. Ask your human to turn it on in Settings → Workspaces / Agents → {ws} \
-             → Permissions (or the owner runs: k2 project access on --workspace {ws})."
+             → Permissions (or the owner runs: {CLI_NAME} project access on --workspace {ws})."
         ),
     )
 }
@@ -714,8 +716,8 @@ pub fn dispatch_post_as(
                     error_response(
                         "403 Forbidden",
                         "forbidden",
-                        "only the owner, an admin, or an agent with 'Let this agent manage K2 projects' on can change \
-                         the view a project opens its agents in (it changes it for everyone)",
+                        concat!("only the owner, an admin, or an agent with 'Let this agent manage ", product_name!(), " projects' on can change \
+                         the view a project opens its agents in (it changes it for everyone)"),
                     )
                 } else {
                     member_view::refusal_or(path, error_response(

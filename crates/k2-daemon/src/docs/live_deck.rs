@@ -68,6 +68,7 @@ use super::host_events::HostEvent;
 use super::live_wire::{self as wire, ClientFrame};
 use super::preview::{self, service};
 use super::target::Target;
+use k2_core::brand::CLI_NAME;
 
 /// The live deck's container root (the pptx pack's `slides`).
 pub const ROOT: &str = "slides";
@@ -183,7 +184,7 @@ pub fn refuse(f: &ClientFrame) -> Option<Value> {
         | ClientFrame::Viewport { .. } => return None,
     };
     let e = wire::unreadable(&format!(
-        "`{what}` isn't taken on a deck, timeline or scene: people watch a live keyed doc, agents change it with k2 doc"
+        "`{what}` isn't taken on a deck, timeline or scene: people watch a live keyed doc, agents change it with {CLI_NAME} doc"
     ));
     Some(match op {
         Some(op) => wire::refused_frame(op, &e),

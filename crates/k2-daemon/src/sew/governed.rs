@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 
 use super::routes::Who;
 use super::supervisor::{no, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Vault confirm action of the governance switch (both directions).
 pub const CONFIRM_GOVERNANCE: &str = "chat-governance";
@@ -99,8 +101,8 @@ pub fn governance(who: &Who, v: &Value) -> R<Value> {
             403,
             format!(
                 "nothing changed: only the server's owner or an admin switches who governs a Space, in person with a confirm \
-                 (Manage chat and voice does not cover it). Ask them to run, from a terminal outside K2: \
-                 k2 hostchat app-space governance {app} {space} {to}"
+                 (Manage chat and voice does not cover it). Ask them to run, from a terminal outside {PRODUCT_NAME}: \
+                 {CLI_NAME} hostchat app-space governance {app} {space} {to}"
             ),
         ));
     }
@@ -126,12 +128,12 @@ pub fn governance(who: &Who, v: &Value) -> R<Value> {
         super::routes::PersonFloor::Admin,
     )?;
     let changed = hook::set_space_governance(&app, &space, to, &who.label()).map_err(|r| match r {
-        GovernanceRefusal::SpaceUnbound => no("space_unbound", 409, format!("Space {space} is bound to no App here: k2 hostchat app-space bind <app> {space} first")),
+        GovernanceRefusal::SpaceUnbound => no("space_unbound", 409, format!("Space {space} is bound to no App here: {CLI_NAME} hostchat app-space bind <app> {space} first")),
         GovernanceRefusal::AppMismatch(a) => no("app_mismatch", 409, format!("Space {space} belongs to App '{a}', not '{app}'")),
         GovernanceRefusal::ChatKeyRequired => no(
             "chat_key_required",
             409,
-            format!("an App governs its Spaces only with a chat key: k2 app grant {app} --kind chat-key (the owner, in person)"),
+            format!("an App governs its Spaces only with a chat key: {CLI_NAME} app grant {app} --kind chat-key (the owner, in person)"),
         ),
         GovernanceRefusal::FeatureMissing => {
             let mut f = no("sew_feature_missing", 409, "this box's Sew can't do App-governed Spaces yet (it needs Sew 0.6.0: app_governed_spaces)");
@@ -144,8 +146,8 @@ pub fn governance(who: &Who, v: &Value) -> R<Value> {
     crate::vault::auth_audit(CONFIRM_GOVERNANCE, &who.label(), &format!("space={space} app={app} governance={to} method={method}"), "cli");
     super::s32::emit("app-space");
     let hint = if to == "app" {
-        "Sew makes the App's service owner the Space's owner; box users in the Space leave first (k2 app chat shows them), \
-         and their messages stay. K2 then keeps every App user's private channels in step with their role."
+        concat!("Sew makes the App's service owner the Space's owner; box users in the Space leave first (", cli_name!(), " app chat shows them), \
+         and their messages stay. ", product_name!(), " then keeps every App user's private channels in step with their role.")
     } else {
         "Back to Sew's own rules: people manage the Space in chat; private channels and levels stay as they are."
     };

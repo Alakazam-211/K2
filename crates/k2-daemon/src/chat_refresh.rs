@@ -45,6 +45,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::{AgentCaller, Caller};
 use k2_core::workspace::canonical_swap::{normalize_harness, store_refresh_note, NOTES_CHAR_CAP};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTE: &str = "/cli/agent/refresh";
 pub const MAX_BODY: usize = crate::agent_harness::MAX_BODY;
@@ -111,7 +113,7 @@ fn agent_may_refresh(agent: &AgentCaller, project_id: &str) -> Result<bool, CliR
         return Err(refused(
             "403 Forbidden",
             "other_workspace",
-            "an agent can't refresh another workspace's pinned chat; a person runs `k2 agent refresh <workspace>` from a terminal outside K2",
+            concat!("an agent can't refresh another workspace's pinned chat; a person runs `", cli_name!(), " agent refresh <workspace>` from a terminal outside ", product_name!()),
         ));
     }
     // The passport's map key, not K2_SESSION_ID (see the module doc).
@@ -119,7 +121,7 @@ fn agent_may_refresh(agent: &AgentCaller, project_id: &str) -> Result<bool, CliR
         return Err(refused(
             "403 Forbidden",
             MAIN_ONLY,
-            "a sidecar can't refresh itself. A new sidecar knows nothing of this chat, so write a handover to a file first, then ask your main session (`k2 msg <workspace>`) to stop you and open a sidecar under a new name with `--brief <file>`. `k2 sidecar new` on the same name resumes this chat.",
+            concat!("a sidecar can't refresh itself. A new sidecar knows nothing of this chat, so write a handover to a file first, then ask your main session (`", cli_name!(), " msg <workspace>`) to stop you and open a sidecar under a new name with `--brief <file>`. `", cli_name!(), " sidecar new` on the same name resumes this chat."),
         ));
     }
     Ok(k2_core::workspace::settings::agents_can_refresh_chat(project_id))
@@ -133,7 +135,7 @@ fn needs_person(project_id: &str, project_path: &str, notes: &str, mode: &str) -
     let hint = format!(
         "Refreshing ends this chat and starts a new one, so a person allows it. Finish your work first: when they run it, this chat ends \
          at once. Your note was not kept: save it to a file and give your person the whole command, with the file's full path, \
-         `k2 agent refresh {ws} --notes-file <path>`, to run from a terminal outside K2. Or ask them to pick \"Continue in a new chat…\" in \
+         `{CLI_NAME} agent refresh {ws} --notes-file <path>`, to run from a terminal outside {PRODUCT_NAME}. Or ask them to pick \"Continue in a new chat…\" in \
          the pinned chat's menu (tell them where the note is), or to turn on \"Let this agent refresh its pinned chat\" (Settings → Workspaces / Agents \
          → {ws} → Permissions)."
     );
@@ -141,8 +143,8 @@ fn needs_person(project_id: &str, project_path: &str, notes: &str, mode: &str) -
     if k2_core::permission::gate::enabled_for(project_id) {
         error["hint"] = json!(format!(
             "Refreshing ends this chat and starts a new one, so a person allows it. Save your work first, then ask with the line below: \
-             K2 keeps your note for the card. Once you've asked, this chat can end at any moment, so start nothing long. Don't run \
-             `k2 agent refresh` again: the card does it. Allowed, this chat ends and the new chat is told; denied, a `[permission:]` line \
+             {PRODUCT_NAME} keeps your note for the card. Once you've asked, this chat can end at any moment, so start nothing long. Don't run \
+             `{CLI_NAME} agent refresh` again: the card does it. Allowed, this chat ends and the new chat is told; denied, a `[permission:]` line \
              comes here. {ws}'s owner or an admin may also allow it from now on when they answer."
         ));
         if !notes.trim().is_empty() {
@@ -170,7 +172,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
             return refused(
                 "403 Forbidden",
                 "wrong_credential",
-                "k2 agent refresh takes the owner token, a Connect login, or a K2 session passport (not an app pass, API key, or API cell)",
+                concat!(cli_name!(), " agent refresh takes the owner token, a Connect login, or a ", product_name!(), " session passport (not an app pass, API key, or API cell)"),
             )
         }
         Caller::Invalid => return refused("403 Forbidden", "invalid_token", "invalid or missing token"),
@@ -190,7 +192,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
     }
     let token = match (req.workspace.trim(), caller) {
         ("", Caller::Agent(agent)) => agent.project_id.clone(),
-        ("", _) => return refused("400 Bad Request", "usage", "usage: k2 agent refresh <workspace> [--note <text> | --notes-file <path>] [--full] [--dry-run]"),
+        ("", _) => return refused("400 Bad Request", "usage", concat!("usage: ", cli_name!(), " agent refresh <workspace> [--note <text> | --notes-file <path>] [--full] [--dry-run]")),
         (w, _) => w.to_string(),
     };
     let target = match crate::agent_harness::resolve(&token) {
@@ -242,7 +244,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
             return refused(
                 "409 Conflict",
                 "chat_refresh_custom",
-                format!("{} runs on {current}, a custom program, so K2 has no chat to summarize. Restart it with `k2 agent restart`.", target.handle),
+                format!("{} runs on {current}, a custom program, so {PRODUCT_NAME} has no chat to summarize. Restart it with `{CLI_NAME} agent restart`.", target.handle),
             )
         }
     };

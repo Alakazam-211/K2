@@ -72,12 +72,13 @@ use serde_json::{json, Value};
 
 use k2_core::connect_users::Role;
 use k2_core::tool_hook::admin_space::{self, RoomRow};
-use k2_core::voice_rooms;
+use k2_core::{cli_name, product_name, voice_rooms};
 
 use super::bff::{self, Forward, Person, Refusal};
 use super::occupancy::{self, Occupant};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ROOMS: &str = "/cli/voice/rooms";
 pub const STATUS: &str = "/cli/voice/status";
@@ -259,7 +260,7 @@ pub fn dark() -> CliResponse {
     no(
         404,
         "voice_rooms_off",
-        "voice rooms are a preview: the owner turns them on (k2 settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1)",
+        concat!("voice rooms are a preview: the owner turns them on (", cli_name!(), " settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1)"),
     )
 }
 
@@ -353,7 +354,7 @@ fn need_manager(c: &Caller) -> Result<(), CliResponse> {
         Caller::Passport | Caller::ChatManager => Err(no(
             403,
             "owner_or_admin_only",
-            "agents read voice rooms (k2 voice rooms, k2 voice status); the owner or an Admin changes them. Ask your human in your Thread.",
+            concat!("agents read voice rooms (", cli_name!(), " voice rooms, ", cli_name!(), " voice status); the owner or an Admin changes them. Ask your human in your Thread."),
         )),
         _ => Err(no(403, "owner_or_admin_only", "only the owner or an Admin changes voice rooms")),
     }
@@ -379,7 +380,7 @@ fn person_refusal(c: &Caller) -> Option<Refusal> {
         Caller::Passport | Caller::ChatManager => Some(Refusal::new(
             403,
             "agents_not_in_voice",
-            "agents don't join voice rooms (the CLI has no audio; people join from the K2 app)",
+            concat!("agents don't join voice rooms (the CLI has no audio; people join from the ", product_name!(), " app)"),
         )),
         Caller::Login { .. } => None,
         Caller::App | Caller::DeviceEnded | Caller::Invalid => Some(Refusal::new(401, "unauthenticated", "invalid or missing token")),
@@ -524,7 +525,7 @@ fn rooms_view(c: &Caller, owner_token: &str) -> CliResponse {
     let hosting = super::hosting_state();
     let view = match k2_core::tool_hook::admin_space_view() {
         Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")),
     };
     let (rev, occ) = occupancy::snapshot();
     let closes = close_now_pending();
@@ -580,7 +581,7 @@ fn status_view() -> CliResponse {
     let hosting = super::hosting_state();
     let view = match k2_core::tool_hook::admin_space_view() {
         Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the K2 Admin Space: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the {PRODUCT_NAME} Admin Space: {e}")),
     };
     let flags = k2_core::tool_hook::sew_voice_features().unwrap_or_default();
     let (sessions, calls) = bff::counts();
@@ -589,7 +590,7 @@ fn status_view() -> CliResponse {
     let feed = occupancy::feed_status();
     let stale = match crate::sew_chat::install::stale_spaces() {
         Ok(s) => s,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the stale Spaces: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the stale Spaces: {e}")),
     };
     ok(json!({
         "ok": true,
@@ -685,7 +686,7 @@ fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
             return no(
                 409,
                 "client_consent_missing",
-                "K2's desktop can't answer a recording consent prompt yet, so a room that requires recording would hold every desktop join: this switch comes with that update",
+                concat!(product_name!(), "'s desktop can't answer a recording consent prompt yet, so a room that requires recording would hold every desktop join: this switch comes with that update"),
             );
         }
         if !matches!(c, Caller::OwnerToken | Caller::Login { role: Role::Owner, .. }) {
@@ -700,8 +701,8 @@ fn recording_settings(c: &Caller, b: &Value) -> CliResponse {
     }
     let space = match k2_core::tool_hook::recording_k5_space() {
         Ok(Some(s)) => s,
-        Ok(None) => return no(409, "voice_space_not_ready", "the K5 rooms' Space isn't made yet (k2 voice status)"),
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the K5 Space: {e}")),
+        Ok(None) => return no(409, "voice_space_not_ready", concat!("the K5 rooms' Space isn't made yet (", cli_name!(), " voice status)")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the K5 Space: {e}")),
     };
     let widening = required == Some(json!(true)) || level.as_ref().and_then(Value::as_str).is_some_and(|l| l != "none");
     match k2_core::tool_hook::recording_space(&space) {
@@ -756,13 +757,13 @@ pub fn space_health(sp: Option<&admin_space::SpaceRow>, feed: &occupancy::FeedSt
     };
     if sp.state == admin_space::SPACE_BLOCKED {
         return json!({"state": "blocked", "line": sp.why.clone().unwrap_or_else(|| "Sew refused it".into()),
-            "fix": "fix what blocked it, then run k2 voice repair"});
+            "fix": concat!("fix what blocked it, then run ", cli_name!(), " voice repair")});
     }
     if sp.verify.is_some() {
         return json!({"state": "checking",
-            "line": format!("K2 is asking Sew whether it still holds this Space ({}); if it's gone, K2 makes it again",
+            "line": format!("{PRODUCT_NAME} is asking Sew whether it still holds this Space ({}); if it's gone, {PRODUCT_NAME} makes it again",
                 sp.suspect.as_deref().unwrap_or("a routine check")),
-            "fix": "k2 voice repair runs it now"});
+            "fix": concat!(cli_name!(), " voice repair runs it now")});
     }
     let feed_gone = feed.state == "retrying"
         && feed.last_error.as_deref().is_some_and(admin_space::says_not_found)
@@ -770,7 +771,7 @@ pub fn space_health(sp: Option<&admin_space::SpaceRow>, feed: &occupancy::FeedSt
     if feed_gone {
         return json!({"state": "suspect",
             "line": format!("Sew answered {} for this Space", feed.last_error.as_deref().unwrap_or("not_found")),
-            "fix": "k2 voice repair"});
+            "fix": concat!(cli_name!(), " voice repair")});
     }
     json!({"state": "ready", "line": "ready"})
 }
@@ -784,7 +785,7 @@ fn set_count(count: u32, now: bool) -> Result<Value, CliResponse> {
         return Err(no(400, "usage", &format!("rooms is 0-{}", voice_rooms::ROOMS_MAX)));
     }
     let live: Vec<String> = k2_core::tool_hook::admin_rooms_above(count)
-        .map_err(|e| no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")))?
+        .map_err(|e| no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")))?
         .into_iter()
         .map(|r| r.slug)
         .collect();
@@ -866,7 +867,7 @@ fn close(c: &Caller, b: &Value) -> CliResponse {
     };
     let view = match k2_core::tool_hook::admin_space_view() {
         Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")),
     };
     let room = match bff::find_room(&view.rooms, &key) {
         Ok(r) => r,
@@ -879,7 +880,7 @@ fn close(c: &Caller, b: &Value) -> CliResponse {
                 409,
                 "close_from_top",
                 format!(
-                    "rooms close from the top: room-{count} closes first. To close {}, lower the count: k2 voice set rooms {}",
+                    "rooms close from the top: room-{count} closes first. To close {}, lower the count: {CLI_NAME} voice set rooms {}",
                     room.slug,
                     room.n.saturating_sub(1)
                 ),
@@ -938,7 +939,7 @@ fn join(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     }
     let view = match k2_core::tool_hook::admin_space_view() {
         Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")),
     };
     let join_body = b.get("join").cloned().unwrap_or_else(|| json!({}));
     match bff::join(&p, &room, &join_body, &view.rooms, &bff::deps()) {
@@ -1124,7 +1125,7 @@ fn recording_act_inner(c: &Caller, owner_token: &str, path: &str, b: &Value) -> 
     let rooms = match &act {
         bff::RecordingAct::Start { .. } => match k2_core::tool_hook::admin_space_view() {
             Ok(v) => v.rooms,
-            Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+            Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")),
         },
         bff::RecordingAct::Stop { .. } => Vec::new(),
     };
@@ -1155,7 +1156,7 @@ fn recording_controls(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     } else {
         let view = match k2_core::tool_hook::admin_space_view() {
             Ok(v) => v,
-            Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+            Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")),
         };
         bff::recording_perms(&p, room.as_deref().unwrap_or_default(), &view.rooms, &bff::deps())
     };
@@ -1238,10 +1239,10 @@ fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     };
     let view = match k2_core::tool_hook::admin_space_view() {
         Ok(v) => v,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the rooms: {e}")),
     };
     let Some(space) = view.space.as_ref().filter(|s| s.state == admin_space::SPACE_READY).and_then(|s| s.space_id.clone()) else {
-        return no(503, "voice_unavailable", "the K2 Admin Space isn't ready (k2 voice status)");
+        return no(503, "voice_unavailable", concat!("the ", product_name!(), " Admin Space isn't ready (", cli_name!(), " voice status)"));
     };
     let occ: BTreeMap<String, Vec<Occupant>> = occupancy::snapshot().1;
     match bff::moderate(&p, &room, &who, &action, &space, &view.rooms, &occ, &bff::deps()) {
@@ -1276,22 +1277,22 @@ fn repair(c: &Caller) -> CliResponse {
             return no(
                 403,
                 "chat_manage_off",
-                "k2 voice repair is the owner's, an Admin's, or an agent's whose workspace has \"Manage chat and voice\" on \
-                 (the owner or an Admin runs k2 agent access set <workspace> chat_manage on). Ask your human in your Thread.",
+                concat!(cli_name!(), " voice repair is the owner's, an Admin's, or an agent's whose workspace has \"Manage chat and voice\" on \
+                 (the owner or an Admin runs ", cli_name!(), " agent access set <workspace> chat_manage on). Ask your human in your Thread."),
             )
         }
         _ => return no(403, "owner_or_admin_only", "only the owner or an Admin repairs voice rooms"),
     }
-    let start = match crate::voice_admin::repair_begin("k2 voice repair") {
+    let start = match crate::voice_admin::repair_begin(concat!(cli_name!(), " voice repair")) {
         Ok(s) => s,
-        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not start the repair: {e}")),
+        Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not start the repair: {e}")),
     };
     let wait = Duration::from_millis(REPAIR_WAIT_MS.load(std::sync::atomic::Ordering::Relaxed));
     let deadline = std::time::Instant::now() + wait;
     let (view, settled) = loop {
         let v = match k2_core::tool_hook::admin_space_view() {
             Ok(v) => v,
-            Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the K5 Space: {e}")),
+            Err(e) => return no(503, "voice_unavailable", &format!("{PRODUCT_NAME} could not read the K5 Space: {e}")),
         };
         let done = crate::voice_admin::repair_settled(&start, &v);
         if done || std::time::Instant::now() >= deadline {
@@ -1328,7 +1329,7 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         return match path {
             ROOMS => rooms_view(&caller, owner_token),
             _ => match &caller {
-                Caller::Login { role, .. } if *role < Role::Admin => no(403, "owner_or_admin_only", "k2 voice status is the owner's and Admins'; k2 voice rooms is everyone's"),
+                Caller::Login { role, .. } if *role < Role::Admin => no(403, "owner_or_admin_only", concat!(cli_name!(), " voice status is the owner's and Admins'; ", cli_name!(), " voice rooms is everyone's")),
                 _ => status_view(),
             },
         };

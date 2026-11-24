@@ -24,6 +24,8 @@ use serde_json::{json, Value as J};
 
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const ROUTE: &str = "/cli/capabilities";
 /// The answer's shape version.
@@ -69,7 +71,7 @@ pub fn handle(who: Who, params: &HashMap<String, String>) -> CliResponse {
             return crate::apps::routes::refusal_response(&crate::apps::routes::no(
                 "not_found",
                 404,
-                format!("no compute node '{n}' this workspace may use (k2 compute nodes)"),
+                format!("no compute node '{n}' this workspace may use ({CLI_NAME} compute nodes)"),
             ));
         }
     }
@@ -106,16 +108,16 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
     let linux = cfg!(target_os = "linux");
     let ready = doctor["ready"].as_bool().unwrap_or(false);
     out.push(if !linux {
-        no_row("engine.walled", "walled Apps run on Linux boxes only", HARDWARE, "deploy walled Apps to a Linux K2 server", Some("linux_only"))
+        no_row("engine.walled", "walled Apps run on Linux boxes only", HARDWARE, concat!("deploy walled Apps to a Linux ", product_name!(), " server"), Some("linux_only"))
     } else if ready {
         row("engine.walled", true, format!("ready (runtime {})", doctor["runtime"].as_str().unwrap_or("crun")))
     } else {
-        no_row("engine.walled", "the box isn't set up for walled Apps yet", NOT_PREPARED, "the owner runs k2 app box prepare (k2 app doctor lists what is missing)", Some("engine_unavailable"))
+        no_row("engine.walled", "the box isn't set up for walled Apps yet", NOT_PREPARED, concat!("the owner runs ", cli_name!(), " app box prepare (", cli_name!(), " app doctor lists what is missing)"), Some("engine_unavailable"))
     });
     out.push(if doctor["processEngine"].as_bool().unwrap_or(!linux) {
         row("engine.open", true, "the open (process) path: Apps run unwalled")
     } else {
-        no_row("engine.open", "the open path is off here", OWNER_DISABLED, "deploy walled Apps, or the owner opens the path for one App (k2 app exception)", Some("open_path_only"))
+        no_row("engine.open", "the open path is off here", OWNER_DISABLED, concat!("deploy walled Apps, or the owner opens the path for one App (", cli_name!(), " app exception)"), Some("open_path_only"))
     });
     // The static engine (`apps::static_engine`, 0.46.7) is always built in
     // and needs no wall, so it is on exactly when Apps are (every
@@ -131,20 +133,20 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
         "protocols.other",
         "HTTP/2 to the App, gRPC and UDP",
         NOT_BUILT,
-        "speak HTTP/1.1 or WebSocket to K2's front; K2 terminates TLS and HTTP/2 for browsers",
+        concat!("speak HTTP/1.1 or WebSocket to ", product_name!(), "'s front; ", product_name!(), " terminates TLS and HTTP/2 for browsers"),
         None,
     ));
     out.push(no_row("ports.public", "an App can't open its own public TCP port", NOT_BUILT, "serve on the App's label (HTTPS) or a custom domain", None));
     out.push(custom_domains_row());
     out.push(if crate::sim_routes::boot_status_key().is_some() {
-        row("sim", true, "a phone simulator or emulator lane can run here (k2 sim status)")
+        row("sim", true, concat!("a phone simulator or emulator lane can run here (", cli_name!(), " sim status)"))
     } else {
-        no_row("sim", "no phone simulator lane can run here", HARDWARE, "run phone builds on a compute node with Xcode or the Android SDK (k2 compute nodes)", None)
+        no_row("sim", "no phone simulator lane can run here", HARDWARE, concat!("run phone builds on a compute node with Xcode or the Android SDK (", cli_name!(), " compute nodes)"), None)
     });
     let majors: Vec<String> = k2_root_proto::pg_major::SUPPORTED.iter().map(|m| m.to_string()).collect();
     out.push(row("postgres", true, format!("majors {}", majors.join(", "))));
     out.push(if crate::email_notify::box_enabled() {
-        row("mail", true, "an App can send email to its own users once its owner grants a sender (k2 app email on)")
+        row("mail", true, concat!("an App can send email to its own users once its owner grants a sender (", cli_name!(), " app email on)"))
     } else {
         no_row("mail", "email from Apps is off on this server", OWNER_DISABLED, "the owner turns it on (Settings → Cores → Email Notifications)", Some("email_off"))
     });
@@ -153,7 +155,7 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
     // behind the same Apps switch; each App still needs its download-host
     // token before a push (`dl_token_missing`, per App, not per box).
     out.push(if apps_on {
-        row("updates", true, "a desktop app's update feed (k2 app updates); each App keeps its own download-host token (k2 app updates token)")
+        row("updates", true, concat!("a desktop app's update feed (", cli_name!(), " app updates); each App keeps its own download-host token (", cli_name!(), " app updates token)"))
     } else {
         no_row("updates", "the update feed for desktop apps runs only while Apps are on", OWNER_DISABLED, "the owner turns Apps on in Settings → Cores → Apps → This server", Some("apps_disabled"))
     });
@@ -162,7 +164,7 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
         "limits",
         true,
         format!(
-            "Seed {} GiB and {}k entries; request body {} MiB, upload part {} MiB; disk guard lines: k2 app resources",
+            "Seed {} GiB and {}k entries; request body {} MiB, upload part {} MiB; disk guard lines: {CLI_NAME} app resources",
             k2_core::deploy::seed::MAX_BYTES >> 30,
             k2_core::deploy::seed::MAX_ENTRIES / 1000,
             q.body_bytes >> 20,
@@ -173,7 +175,7 @@ fn box_rows(who: &Who, doctor: &J) -> Vec<J> {
 }
 
 fn custom_domains_row() -> J {
-    row("domains.custom", true, "an App answers on its owner's own domain once its DNS points here (k2 app domain add)")
+    row("domains.custom", true, concat!("an App answers on its owner's own domain once its DNS points here (", cli_name!(), " app domain add)"))
 }
 
 /// Push keys per App the caller sees: set or not (never the key).
@@ -196,10 +198,10 @@ fn push_rows(who: &Who) -> Vec<J> {
                 if apns || fcm {
                     row(&format!("push.{}", a.app_id), true, detail)
                 } else {
-                    no_row(&format!("push.{}", a.app_id), detail, NOT_PREPARED, "the App's owner adds a key: k2 app push setup <app>", Some("push_not_configured"))
+                    no_row(&format!("push.{}", a.app_id), detail, NOT_PREPARED, concat!("the App's owner adds a key: ", cli_name!(), " app push setup <app>"), Some("push_not_configured"))
                 }
             }
-            Err(_) => no_row(&format!("push.{}", a.app_id), format!("{}: no push settings", a.app_id), NOT_PREPARED, "k2 app push setup <app>", Some("push_not_configured")),
+            Err(_) => no_row(&format!("push.{}", a.app_id), format!("{}: no push settings", a.app_id), NOT_PREPARED, concat!(cli_name!(), " app push setup <app>"), Some("push_not_configured")),
         })
         .collect()
 }
@@ -249,7 +251,7 @@ pub fn node_row(n: &J) -> J {
     let mut r = if online {
         row(&format!("node.{name}"), true, detail)
     } else {
-        no_row(&format!("node.{name}"), detail, NOT_PREPARED, "the node's machine is off or offline (k2 compute status)", None)
+        no_row(&format!("node.{name}"), detail, NOT_PREPARED, concat!("the node's machine is off or offline (", cli_name!(), " compute status)"), None)
     };
     r["node"] = json!({ "name": name, "os": os, "arch": arch, "online": online, "freeSlots": free, "xcode": xcode, "androidSdk": android, "tools": offer["tools"] });
     r

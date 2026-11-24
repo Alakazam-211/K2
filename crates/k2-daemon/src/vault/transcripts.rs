@@ -33,6 +33,8 @@ use k2_vault::{LocalVault, Requester, VaultError};
 use serde_json::{json, Value};
 
 use super::actor::VaultCaller;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// Bytes one run may read.
 pub const DEFAULT_BUDGET_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -47,7 +49,7 @@ pub const FILES_SHOWN: usize = 50;
 /// Enough for a transcript's header line, however long its instructions.
 const FIRST_LINE_MAX: u64 = 4 * 1024 * 1024;
 
-pub const ASK_OWNER: &str = "ask your owner to run k2 vault doctor --transcripts";
+pub const ASK_OWNER: &str = concat!("ask your owner to run ", cli_name!(), " vault doctor --transcripts");
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -577,7 +579,7 @@ fn leak_finding(name: &str, cli: Cli, workspace: Option<&str>, g: &Group) -> Val
         "newest": newest,
         "files": g.files,
         "message": format!(
-            "{name} appears in {files} of {owner}{} transcripts (newest {newest}). The provider may already hold a copy, so rotate it: k2 vault rotate {name}. K2 doesn't edit other tools' transcripts; to remove this copy, move the listed files to the Trash.",
+            "{name} appears in {files} of {owner}{} transcripts (newest {newest}). The provider may already hold a copy, so rotate it: {CLI_NAME} vault rotate {name}. {PRODUCT_NAME} doesn't edit other tools' transcripts; to remove this copy, move the listed files to the Trash.",
             cli.label()
         ),
     })
@@ -633,7 +635,7 @@ pub fn run(vault: &LocalVault, c: &VaultCaller, limits: Limits) -> Result<Value,
         findings.push(json!({ "level": "warning", "code": "transcript_files_unreadable", "count": unreadable, "message": format!("{unreadable} transcript file(s) or folder(s) couldn't be read, so they weren't checked") }));
     }
     if set.unreadable > 0 {
-        findings.push(json!({ "level": "warning", "code": "transcript_values_unreadable", "count": set.unreadable, "message": format!("{} stored value(s) couldn't be opened, so they weren't looked for; run k2 vault doctor", set.unreadable) }));
+        findings.push(json!({ "level": "warning", "code": "transcript_values_unreadable", "count": set.unreadable, "message": format!("{} stored value(s) couldn't be opened, so they weren't looked for; run {CLI_NAME} vault doctor", set.unreadable) }));
     }
     if set.below_floor > 0 {
         findings.push(json!({ "level": "info", "code": "transcript_values_too_short", "count": set.below_floor, "message": format!("{} value(s) under {SURFACE_MIN_LEN} bytes are too short to match reliably and weren't looked for", set.below_floor) }));

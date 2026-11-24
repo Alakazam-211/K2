@@ -77,6 +77,8 @@ use serde_json::json;
 
 use super::forward_sync;
 use crate::email_notify::webhook::HookEvent;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 const P: &str = "[mail/forward-outcomes]";
 
@@ -558,10 +560,10 @@ fn evaluate_box_locked(now: i64) -> Vec<String> {
                 "Forwarding to outside addresses is paused on this server",
                 &format!(
                     "Receiving servers refused {} of the {} messages this server forwarded to outside addresses in the last 24 hours \
-                     (more than {}%). To protect this server's mail reputation, K2 paused all {n} outside forward{}. \
+                     (more than {}%). To protect this server's mail reputation, {PRODUCT_NAME} paused all {n} outside forward{}. \
                      New mail stays in each mailbox; nothing is lost.\n\n\
-                     Only the owner or an Admin can resume them. See which ones: k2 hostmail forward list --paused. \
-                     Resume one: k2 hostmail forward resume <mailbox>. Check what was refused first: \
+                     Only the owner or an Admin can resume them. See which ones: {CLI_NAME} hostmail forward list --paused. \
+                     Resume one: {CLI_NAME} hostmail forward resume <mailbox>. Check what was refused first: \
                      the bounce reports are in each mailbox.",
                     c.refused(),
                     c.queued,
@@ -589,7 +591,7 @@ fn pause_one_mailbox(rows: &[Forward], c: &Counts) -> Vec<String> {
         super::forward_verify::tell_owner(
             &format!("Forwarding from {} is paused", f.address),
             &format!(
-                "Receiving servers refused {} of the {} messages this server forwarded in the last 24 hours, all of them from {}. To protect this server's mail reputation, K2 paused that mailbox's outside forwards; other mailboxes keep forwarding. New mail stays in the mailbox. Resume: k2 hostmail forward resume {}.",
+                "Receiving servers refused {} of the {} messages this server forwarded in the last 24 hours, all of them from {}. To protect this server's mail reputation, {PRODUCT_NAME} paused that mailbox's outside forwards; other mailboxes keep forwarding. New mail stays in the mailbox. Resume: {CLI_NAME} hostmail forward resume {}.",
                 c.refused(),
                 c.queued,
                 f.address,
@@ -635,23 +637,23 @@ fn pause_and_tell(f: &Forward, reason: &'static str, detail: serde_json::Value, 
 pub fn notice_for(f: &Forward, reason: &str, c: &Counts, in_a_row: i64, daily_cap: i64) -> (String, String) {
     let (addr, dest) = (&f.address, &f.dest);
     let resume = format!(
-        "Resume it when that's fixed: k2 hostmail forward resume {addr} --to {dest} (the mailbox's person can use k2 mail forward resume). \
-         Or stop forwarding there: k2 hostmail forward rm {addr} --to {dest}."
+        "Resume it when that's fixed: {CLI_NAME} hostmail forward resume {addr} --to {dest} (the mailbox's person can use {CLI_NAME} mail forward resume). \
+         Or stop forwarding there: {CLI_NAME} hostmail forward rm {addr} --to {dest}."
     );
     let stays = format!("New mail stays in {addr}; nothing is lost.");
     let title = format!("Forwarding from {addr} is paused");
     let body = match reason {
         r if r == store::P_DEST_GONE && in_a_row >= store::DEST_GONE_IN_A_ROW => format!(
-            "K2 paused forwarding from {addr} to {dest}: the receiving server said {dest} doesn't exist or is disabled, \
+            "{PRODUCT_NAME} paused forwarding from {addr} to {dest}: the receiving server said {dest} doesn't exist or is disabled, \
              {in_a_row} times in a row. {stays}\n\nCheck the address with whoever owns it. {resume}"
         ),
         r if r == store::P_DEST_GONE => format!(
-            "K2 paused forwarding from {addr} to {dest}: the receiving server said {dest} doesn't exist or is disabled \
+            "{PRODUCT_NAME} paused forwarding from {addr} to {dest}: the receiving server said {dest} doesn't exist or is disabled \
              for {} of the {} messages forwarded in the last 24 hours. {stays}\n\nCheck the address with whoever owns it. {resume}",
             c.refused_user, c.queued
         ),
         r if r == store::P_REFUSED => format!(
-            "K2 paused forwarding from {addr} to {dest}: the receiving server refused {} of the {} messages forwarded in the \
+            "{PRODUCT_NAME} paused forwarding from {addr} to {dest}: the receiving server refused {} of the {} messages forwarded in the \
              last 24 hours as spam or against its policy (more than {}%). Forwarding more of them would hurt this server's \
              mail reputation. {stays}\n\nThe bounce reports in {addr} say why. {resume}",
             c.refused_policy,
@@ -659,16 +661,16 @@ pub fn notice_for(f: &Forward, reason: &str, c: &Counts, in_a_row: i64, daily_ca
             store::REFUSED_PCT
         ),
         r if r == store::P_DAILY_CAP => format!(
-            "K2 paused forwarding from {addr} to {dest}: it forwarded {} messages in the last 24 hours, the daily limit of {}. \
+            "{PRODUCT_NAME} paused forwarding from {addr} to {dest}: it forwarded {} messages in the last 24 hours, the daily limit of {}. \
              {stays}\n\nIf that much mail is expected, the owner can raise the limit for every mailbox, up to {}: \
-             k2 hostmail config --forward-copies-per-day <n>. Then resume it, or resume it as it is and the count starts over: \
-             k2 hostmail forward resume {addr}. If it isn't expected, check what is arriving in {addr} before you resume. \
+             {CLI_NAME} hostmail config --forward-copies-per-day <n>. Then resume it, or resume it as it is and the count starts over: \
+             {CLI_NAME} hostmail forward resume {addr}. If it isn't expected, check what is arriving in {addr} before you resume. \
              Mail that arrived during the pause isn't forwarded.",
             c.queued,
             daily_cap,
             store::DAILY_CAP_MAX
         ),
-        other => format!("K2 paused forwarding from {addr} to {dest} ({other}). {stays}\n\n{resume}"),
+        other => format!("{PRODUCT_NAME} paused forwarding from {addr} to {dest} ({other}). {stays}\n\n{resume}"),
     };
     (title, body)
 }
@@ -744,13 +746,13 @@ pub fn webhook_health(error: Option<&str>) {
     }
     match error {
         Some(e) => super::forward_verify::tell_owner(
-            "K2 can't see what happens to forwarded mail",
+            concat!(product_name!(), " can't see what happens to forwarded mail"),
             &format!(
-                "K2 couldn't set up the delivery reports from this server's mail server ({e}), so it can't see bounces or refusals. Until that's fixed, a forward won't pause by itself when its destination refuses mail, and the daily limit won't count. K2 keeps trying hourly. Check: k2 hostmail doctor."
+                "{PRODUCT_NAME} couldn't set up the delivery reports from this server's mail server ({e}), so it can't see bounces or refusals. Until that's fixed, a forward won't pause by itself when its destination refuses mail, and the daily limit won't count. {PRODUCT_NAME} keeps trying hourly. Check: {CLI_NAME} hostmail doctor."
             ),
             &[],
         ),
-        None => super::forward_verify::tell_owner("K2 can see forwarded mail's delivery again", "The delivery reports from this server's mail server work again, so forwards pause by themselves when they should.", &[]),
+        None => super::forward_verify::tell_owner(concat!(product_name!(), " can see forwarded mail's delivery again"), "The delivery reports from this server's mail server work again, so forwards pause by themselves when they should.", &[]),
     }
 }
 

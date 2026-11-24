@@ -20,7 +20,7 @@
 //! per the daemon-first contract.
 
 use crate::cli_response::CliResponse;
-use k2_core::connect_users;
+use k2_core::{connect_users, product_name};
 
 /// `GET /cli/users` → `{"users":[{username,createdAt,disabled,role,wasViewer}, ...]}`.
 /// Redacted views only — never the password hash. `role` is the #629
@@ -863,7 +863,7 @@ pub fn handle_login_from(body: &[u8], ip: Option<&str>) -> LoginReply {
                 content_type: "application/json",
                 body: serde_json::json!({ "error": {
                     "code": "reserved_name",
-                    "hint": "this username is one K2 uses for the server's owner and its agents, so it can't sign in. If you are the server's owner, use the K2 app on the server itself; anyone else, ask the owner for a login with another username",
+                    "hint": concat!("this username is one ", product_name!(), " uses for the server's owner and its agents, so it can't sign in. If you are the server's owner, use the ", product_name!(), " app on the server itself; anyone else, ask the owner for a login with another username"),
                 } })
                 .to_string(),
             },

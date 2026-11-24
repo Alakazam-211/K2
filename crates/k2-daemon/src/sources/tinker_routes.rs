@@ -38,6 +38,7 @@ use crate::compute_routes::Who;
 use super::approve_routes::util::*;
 use super::budget::{Budget, Take};
 use super::SourceErr;
+use k2_core::brand::PRODUCT_NAME;
 
 pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> Result<Value, SourceErr> {
     let _ = params;
@@ -222,12 +223,12 @@ fn take_budget(origins: &[String]) -> Result<(), SourceErr> {
             Take::Go => {}
             Take::Wait(at) => {
                 let secs = at.saturating_duration_since(now).as_secs().max(1);
-                return Err(SourceErr::new("rate_limited", 429, format!("K2 is holding requests to {o}; try again in {secs} s"))
+                return Err(SourceErr::new("rate_limited", 429, format!("{PRODUCT_NAME} is holding requests to {o}; try again in {secs} s"))
                     .with("retryAfterSecs", secs));
             }
             Take::Parked(p) => {
                 let secs = p.until.saturating_duration_since(now).as_secs().max(1);
-                return Err(SourceErr::new("rate_limited", 429, format!("{o} asked K2 to slow down; try again later"))
+                return Err(SourceErr::new("rate_limited", 429, format!("{o} asked {PRODUCT_NAME} to slow down; try again later"))
                     .with("retryAfterSecs", secs));
             }
         }

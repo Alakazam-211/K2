@@ -83,6 +83,7 @@ use crate::cli_response::CliResponse;
 use crate::docs::caller::refusal;
 use crate::docs::routes::{self, Call, OpenError};
 use crate::docs::target::Tier;
+use k2_core::{cli_name, product_name};
 
 pub const PREVIEW: &str = "/cli/docs/preview";
 
@@ -92,9 +93,9 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
     let t = c.target;
     let Some(renderer) = super::renderer_for(t) else {
         let why = if crate::docs::target::is_deck_file(&t.rel) && t.tier == Tier::Blob {
-            "previews are drawn for decks opened live by the Slides core, which is off on this server (k2 doc cores on slides)"
+            concat!("previews are drawn for decks opened live by the Slides core, which is off on this server (", cli_name!(), " doc cores on slides)")
         } else {
-            "K2 draws no previews of this kind of file yet"
+            concat!(product_name!(), " draws no previews of this kind of file yet")
         };
         return routes::with_exit(refusal("409 Conflict", "no_preview", why), k2_mpc_base::tools::exit::REFUSED);
     };
@@ -148,7 +149,7 @@ pub(crate) fn handle(rt: &Arc<crate::docs::Runtime>, c: &Call) -> CliResponse {
         Err(OpenError::CoreOff(r)) => return r,
         Err(OpenError::Session(SessionError::PackMismatch { .. } | SessionError::Declined(_))) => {
             return routes::with_exit(
-                refusal("409 Conflict", "no_preview", "this deck is an any-file doc here, not a live deck: K2 draws no previews of it"),
+                refusal("409 Conflict", "no_preview", concat!("this deck is an any-file doc here, not a live deck: ", product_name!(), " draws no previews of it")),
                 k2_mpc_base::tools::exit::REFUSED,
             )
         }

@@ -1565,7 +1565,7 @@ fn no_drop_folder() -> CliResponse {
         content_type: "application/json",
         body: serde_json::json!({
             "error": format!("missing capability {}", k2_core::skin::CAP_FILES_UPLOAD),
-            "hint": "this room has no drop folder: ask the owner (k2 app role paths <role> <room> --upload <folder>)",
+            "hint": concat!("this room has no drop folder: ask the owner (", cli_name!(), " app role paths <role> <room> --upload <folder>)"),
         })
         .to_string(),
     }
@@ -3164,6 +3164,7 @@ pub fn handle_upload_chunk(body: &[u8]) -> CliResponse {
 
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
+use k2_core::cli_name;
 
 // ── extract (server-side zip → folder; inverse of compress) ───────────
 // Same async job shape as compress. Defined just below the compress

@@ -15,6 +15,8 @@ use k2_core::domains::{
 
 use crate::cli_response::CliResponse;
 use crate::domains::bind::{bind_apex, unbind_apex, BindOutcome};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
     CliResponse {
@@ -176,7 +178,7 @@ pub fn pending_ns_hint(b: &DomainBinding) -> String {
     format!(
         "Pending: point nameservers to {ns} at the registrar for {apex}. This server re-checks \
 with k2.dev by itself and opens DNS record writes once the zone is active (to check now: \
-Settings → Network → Custom Domains → Check again, or `k2 domain refresh {apex}`).",
+Settings → Network → Custom Domains → Check again, or `{CLI_NAME} domain refresh {apex}`).",
         apex = b.apex
     )
 }
@@ -186,7 +188,7 @@ pub fn zone_readonly_hint(b: &DomainBinding) -> String {
     let state = b.status.as_deref().unwrap_or("read-only");
     format!(
         "{apex} is {state} on k2.dev, so its DNS records are read-only. The owner can check the \
-plan in the k2.dev dashboard, then `k2 domain refresh {apex}`.",
+plan in the k2.dev dashboard, then `{CLI_NAME} domain refresh {apex}`.",
         apex = b.apex
     )
 }
@@ -282,7 +284,7 @@ pub fn handle_refresh(params: &HashMap<String, String>) -> CliResponse {
                     return error_response(
                         "404 Not Found",
                         "not_found",
-                        &format!("no domain binding for '{apex}' — k2 domain add {apex} first"),
+                        &format!("no domain binding for '{apex}' — {CLI_NAME} domain add {apex} first"),
                     )
                 }
                 Err(e) => return error_response("500 Internal Server Error", "db", &e.to_string()),
@@ -477,7 +479,7 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "400 Bad Request",
             "usage",
-            "--external is only for an App's name: --role app:<name> (k2 app domain --help)",
+            concat!("--external is only for an App's name: --role app:<name> (", cli_name!(), " app domain --help)"),
         );
     }
     let caller = caller_ws();
@@ -523,7 +525,7 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "404 Not Found",
             "not_found",
-            &format!("apex '{apex}' is not attached — k2 domain add {apex} first"),
+            &format!("apex '{apex}' is not attached — {CLI_NAME} domain add {apex} first"),
         );
     }
     if !hostname_under_apex(&hostname, &apex) {
@@ -561,8 +563,8 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
             let mut out = serde_json::json!({ "ok": true, "name": name });
             if let Some(app) = k2_core::domains::app_of_role(&n.role).filter(|_| external) {
                 out["note"] = serde_json::json!(format!(
-                    "{} is served by your own web server, not K2. It is one of the App's origins from its next start: \
-                     k2 app restart {app}",
+                    "{} is served by your own web server, not {PRODUCT_NAME}. It is one of the App's origins from its next start: \
+                     {CLI_NAME} app restart {app}",
                     n.hostname
                 ));
             }

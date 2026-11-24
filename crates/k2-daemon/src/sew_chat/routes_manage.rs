@@ -29,6 +29,8 @@ use super::routes::{backend, caller, internal, now, parse_body, resolve_channel,
 use super::routes_admin::{audit, Admin};
 use super::sew::{self, ActAs, ChannelPerm, MemberLookup, MemberRef, NewSpace, Overwrite};
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTES: &[&str] = &[
     "/cli/sew/chat/manage/ban",
@@ -91,8 +93,8 @@ fn manager(c: &Caller) -> R<Admin> {
         return Err(ChatErr::new(
             "chat_manage_off",
             403,
-            "community management needs the Manage chat and voice switch on your workspace — your owner or an admin turns it on \
-             (k2 agent access set <workspace> chat_manage on). It also makes your agent's own chat account",
+            concat!("community management needs the Manage chat and voice switch on your workspace — your owner or an admin turns it on \
+             (", cli_name!(), " agent access set <workspace> chat_manage on). It also makes your agent's own chat account"),
         ));
     }
     Ok(Admin::Agent { project_id: c.project_id.clone(), label: format!("agent:{}", c.handle) })
@@ -106,14 +108,14 @@ fn manage_space(c: &Caller, slug: &str) -> R<store::Access> {
         store::list_access(&conn, &c.project_id).map_err(internal)?
     };
     let row = rows.into_iter().find(|r| r.space_slug.eq_ignore_ascii_case(slug.trim())).ok_or_else(|| {
-        ChatErr::new("not_granted", 403, format!("you have no chat access in '{}' (k2 chat spaces lists yours)", slug.trim()))
+        ChatErr::new("not_granted", 403, format!("you have no chat access in '{}' ({CLI_NAME} chat spaces lists yours)", slug.trim()))
     })?;
     if row.level < Level::Manage {
         return Err(ChatErr::new(
             "manage_level_required",
             403,
             format!(
-                "your chat level in {} is '{}': managing it needs level manage — ask your human (k2 chat access set)",
+                "your chat level in {} is '{}': managing it needs level manage — ask your human ({CLI_NAME} chat access set)",
                 row.space_slug,
                 row.level.as_str()
             ),
@@ -131,7 +133,7 @@ fn act(c: &Caller, m: &Admin) -> ActAs {
 fn lookup(member: &str) -> R<MemberLookup> {
     let t = member.trim();
     if t.is_empty() || t == "@" {
-        return Err(usage("name a member: a K2 username (@user) or a workspace"));
+        return Err(usage(concat!("name a member: a ", product_name!(), " username (@user) or a workspace")));
     }
     if let Some(u) = t.strip_prefix('@') {
         return Ok(MemberLookup::Username(u.to_string()));
@@ -209,7 +211,7 @@ pub(crate) fn refuse_box_user_in_governed(space_id: &str, member_id: &str) -> R<
         return Err(ChatErr::new(
             "box_user_not_allowed",
             409,
-            "this Space is governed by its App: the server's owner and admins aren't members of App Spaces (they run things from K2); add App users through the App",
+            concat!("this Space is governed by its App: the server's owner and admins aren't members of App Spaces (they run things from ", product_name!(), "); add App users through the App"),
         ));
     }
     Ok(())
@@ -643,8 +645,8 @@ fn owner_external_id(owner: Option<&str>) -> R<(String, String)> {
 
 /// Why a new Space needs the creating agent's chat account.
 const MANAGER_NEEDS_ACCOUNT: &str =
-    "Sew makes the agent that creates a Space its manager, and only an agent with its own chat account can be one. \
-     Manage chat and voice makes that account by itself, so a person removed or turned off this one, or K2 couldn't make it";
+    concat!("Sew makes the agent that creates a Space its manager, and only an agent with its own chat account can be one. \
+     Manage chat and voice makes that account by itself, so a person removed or turned off this one, or ", product_name!(), " couldn't make it");
 
 /// Sew's 422 for a manager it has no member for (`principal_unknown` on
 /// `managers.<n>`).
@@ -746,7 +748,7 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
         "sewManager": assistant.is_none(),
         "note": assistant.map(|p| format!(
             "you are {}'s assistant in chat: Sew never makes an assistant a Space manager, so the Space has no manager in Sew. \
-             K2 gives you level manage on it, but Sew's role ladder gives an assistant no rank: roles, bans and timeouts there \
+             {PRODUCT_NAME} gives you level manage on it, but Sew's role ladder gives an assistant no rank: roles, bans and timeouts there \
              are for a person (or a coworker agent) to do",
             p.username
         )),

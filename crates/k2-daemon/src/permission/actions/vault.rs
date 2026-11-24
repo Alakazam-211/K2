@@ -89,7 +89,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::vault::actor::{Channel, VaultCaller};
-use k2_core::brand::{CLI_NAME, CLI_SLOT};
+use k2_core::brand::{CLI_NAME, CLI_SLOT, PRODUCT_NAME};
 use k2_core::cli_name;
 
 /// The card's id.
@@ -662,8 +662,8 @@ fn use_computed(ctx: &Ctx) -> Ctx {
     };
     let reads = match text_param(ctx, "as") {
         Some("file" | "env") => format!("{ws} can read the value until then, and so can anything it runs."),
-        Some("agent") => format!("{ws} can't read the value: K2's ssh agent signs with it."),
-        _ => format!("{ws} can't read the value: K2 adds it to {ws}'s calls."),
+        Some("agent") => format!("{ws} can't read the value: {PRODUCT_NAME}'s ssh agent signs with it."),
+        _ => format!("{ws} can't read the value: {PRODUCT_NAME} adds it to {ws}'s calls."),
     };
     out.params.insert("lasts".into(), json!(lasts_words(span)));
     out.params.insert("effect".into(), json!(format!("{ends} {reads} To end it sooner: Settings → Vault.")));
@@ -676,7 +676,7 @@ fn use_source(from: &str, name: &str) -> Result<Selector, String> {
         None => Scope::server(),
         Some(w) => match crate::vault::workspace_id(w) {
             Some(id) => Scope::workspace(id),
-            None => return Err(format!("K2 has no workspace named {w}, so no secret {name} there; nothing to allow.")),
+            None => return Err(format!("{PRODUCT_NAME} has no workspace named {w}, so no secret {name} there; nothing to allow.")),
         },
     };
     Ok(Selector::Name { namespace: Namespace::User, scope, name: name.to_string() })
@@ -685,8 +685,8 @@ fn use_source(from: &str, name: &str) -> Result<Selector, String> {
 /// What an approver is told when the named secret isn't there.
 fn missing_line(from: &str, name: &str) -> String {
     match from.strip_prefix("ws:") {
-        None => format!("K2 has no server secret {name}; nothing to allow."),
-        Some(w) => format!("K2 has no secret {name} in {w}; nothing to allow."),
+        None => format!("{PRODUCT_NAME} has no server secret {name}; nothing to allow."),
+        Some(w) => format!("{PRODUCT_NAME} has no secret {name} in {w}; nothing to allow."),
     }
 }
 
@@ -762,7 +762,7 @@ fn apply_use(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
         (format!("session:{sid}"), k2_vault::Consumer::session(sid))
     } else {
         if crate::vault::workspace_id(&ctx.workspace_handle).as_deref() != Some(ctx.workspace_id.as_str()) {
-            return refused("not_found", format!("K2 can't find the workspace {} any more", ctx.workspace_handle));
+            return refused("not_found", format!("{PRODUCT_NAME} can't find the workspace {} any more", ctx.workspace_handle));
         }
         (format!("ws:{}", ctx.workspace_handle), k2_vault::Consumer::workspace(ctx.workspace_id.clone()))
     };
@@ -800,7 +800,7 @@ fn apply_use(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
     let name = ask.secret;
     let scope = ask.from;
     let how = match ask.how {
-        Delivery::Fetch => format!("{CLI_NAME} vault fetch --secret {name} --scope {scope} <url> (K2 adds it; you never see it)"),
+        Delivery::Fetch => format!("{CLI_NAME} vault fetch --secret {name} --scope {scope} <url> ({PRODUCT_NAME} adds it; you never see it)"),
         Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK in new sessions".to_string(),
         Delivery::File => format!("{CLI_NAME} vault file {name} --scope {scope} (a short-lived 0600 file)"),
         _ => format!("{CLI_NAME} vault env-file {name} --scope {scope}, or ${} in new sessions", k2_vault::delivery::default_env_name(name)),

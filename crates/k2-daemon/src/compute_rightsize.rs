@@ -19,6 +19,7 @@ pub const PATH: &str = "/cli/compute/rightsize";
 
 /// `mem_auto_no_history` (exit 2).
 pub use k2_core::compute::proto::gens::codes::MEM_AUTO_NO_HISTORY;
+use k2_core::cli_name;
 
 /// Default and largest `--days`.
 pub const DEFAULT_DAYS: i64 = 14;
@@ -130,7 +131,7 @@ pub(crate) fn resolve_auto(ws_id: &str, key: &Key, fallback: Option<u64>) -> R<(
 pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<Value> {
     need_credential(who)?;
     passport_gate(who)?;
-    ci_gate("k2 compute rightsize")?;
+    ci_gate(concat!(cli_name!(), " compute rightsize"))?;
     let ws = target_ws(who, params.get("workspace").map(String::as_str))?;
     let get = |k: &str| params.get(k).map(|s| s.trim()).filter(|s| !s.is_empty());
     let picked = [get("check").is_some(), get("tag").is_some(), get("argv").is_some()].iter().filter(|x| **x).count();

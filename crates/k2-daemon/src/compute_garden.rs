@@ -35,6 +35,7 @@ use k2_core::compute::{self as compute, share, store};
 
 use crate::compute_routes::ws_handle;
 use crate::compute_ws;
+use k2_core::product_name;
 
 /// The `/boot-status` and frame feature key that brings `compute.nodes`.
 pub const FEATURE: &str = "compute-nodes-v1";
@@ -310,7 +311,7 @@ fn state_of(f: &NodeFacts) -> (&'static str, Option<String>) {
         Some(_) => return ("paused", n.controller_pause_by.as_ref().map(|b| format!("paused on this server (by {b})"))),
         None => {}
     }
-    let Some(o) = f.offer.as_ref() else { return ("unavailable", Some("K2 hasn't heard what it can take yet".to_string())) };
+    let Some(o) = f.offer.as_ref() else { return ("unavailable", Some(concat!(product_name!(), " hasn't heard what it can take yet").to_string())) };
     match o.control {
         Control::Active => {}
         c => return (c.as_str(), o.control_by.as_ref().map(|b| format!("{} on the node (by {b})", c.as_str()))),

@@ -79,6 +79,8 @@ use k2_deskd_proto::msg::{Button as DeskdButton, Display as DeskdDisplay, InputE
 
 use crate::stream::viewer::WsFrame;
 use crate::stream::{Auth, DesktopRule, EngineMsg, Hooks, InputSink, JoinError, Negotiated, Offer, PointerWheel, Push, Refusal, ServeError, Source, StreamMsg, Verdict, Wheel, AUTH_TICK};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const ROUTE: &str = "/cli/desktop/stream";
 
@@ -265,7 +267,7 @@ pub fn banner_text(entries: &[(String, Mode)]) -> Option<String> {
         let verb = if watching.len() == 1 { "is" } else { "are" };
         parts.push(format!("{} {verb} viewing", watching.join(", ")));
     }
-    Some(format!("{} this screen through K2", parts.join(" and ")))
+    Some(format!("{} this screen through {PRODUCT_NAME}", parts.join(" and ")))
 }
 
 fn refresh_banner(desktop: &str, deskd: &Arc<dyn StreamDeskd>) {
@@ -453,7 +455,7 @@ pub fn admit(params: &HashMap<String, String>, ingress: &str) -> Result<Admitted
         return Err(Refused::new(
             403,
             "desktop_logins_only",
-            "the desktop stream opens with a ticket from POST /cli/desktop/ticket, which takes a Connect login (sign in from another device); the owner token, K2 terminals and agents never watch",
+            concat!("the desktop stream opens with a ticket from POST /cli/desktop/ticket, which takes a Connect login (sign in from another device); the owner token, ", product_name!(), " terminals and agents never watch"),
         ));
     };
     let Some(claim) = ticket::redeem(t) else {
@@ -480,7 +482,7 @@ pub fn admit(params: &HashMap<String, String>, ingress: &str) -> Result<Admitted
         return Err(Refused::new(403, wire::reason::SAME_MACHINE, "You're on this computer: there's no use watching its own screen"));
     }
     if !access.may_view {
-        return Err(Refused::new(403, "not_allowed", "you don't have access to this computer's screen (the owner grants it: k2 desktop grant)"));
+        return Err(Refused::new(403, "not_allowed", concat!("you don't have access to this computer's screen (the owner grants it: ", cli_name!(), " desktop grant)")));
     }
     match store::is_enabled(k2_core::desktop::virtual_desktop::switch_id(&claim.desktop)) {
         Ok(true) => {}
@@ -895,7 +897,7 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
     let neg = crate::stream::viewer::negotiate(SourceKind::Desktop, &offer, &gives, path, None);
     if neg.codec == Codec::Jpeg && !a.deskd.jpeg() {
         let have = gives.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ");
-        let r = Refused::new(409, "desktop_codec", format!("this viewer can't decode what K2 Screen sends here ({have}); use the K2 desktop app or a browser that decodes H.264"));
+        let r = Refused::new(409, "desktop_codec", format!("this viewer can't decode what K2 Screen sends here ({have}); use the {PRODUCT_NAME} desktop app or a browser that decodes H.264"));
         refuse_http(stream, &r).await;
         return;
     }
@@ -912,7 +914,7 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
     let logged = tokio::task::spawn_blocking(move || audit::write(&connect)).await.unwrap_or_else(|e| Err(e.to_string()));
     if let Err(e) = logged {
         k2_core::log_debug!("[desktop] audit write failed, viewer refused: {e}");
-        refuse_http(stream, &Refused::new(503, wire::reason::AUDIT_UNAVAILABLE, "K2 couldn't write the remote desktop access log (~/.k2/desktop-audit.jsonl), so the screen stays closed")).await;
+        refuse_http(stream, &Refused::new(503, wire::reason::AUDIT_UNAVAILABLE, concat!(product_name!(), " couldn't write the remote desktop access log (~/.k2/desktop-audit.jsonl), so the screen stays closed"))).await;
         return;
     }
     // One capture per desktop: a joiner gets the display the hub shows.

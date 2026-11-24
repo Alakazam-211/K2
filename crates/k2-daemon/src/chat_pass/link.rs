@@ -22,6 +22,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::cli_name;
 
 /// Where a mint gets the install id (tests inject fixed answers).
 pub trait SewStatus: Send + Sync {
@@ -65,22 +67,22 @@ impl SewStatus for SewRow {
 
 /// The install id a row admits a pass for (module doc).
 pub fn install_id_from_row(row: Option<&crate::sew::store::Row>) -> Result<String, String> {
-    let row = row.ok_or("Chat and voice are not installed on this server (k2 hostchat enable)")?;
+    let row = row.ok_or(concat!("Chat and voice are not installed on this server (", cli_name!(), " hostchat enable)"))?;
     match row.status.as_str() {
-        "removed" => return Err("Chat and voice were uninstalled (k2 hostchat enable brings it back)".into()),
-        "disabled" => return Err("Chat and voice are turned off (k2 hostchat enable)".into()),
+        "removed" => return Err(concat!("Chat and voice were uninstalled (", cli_name!(), " hostchat enable brings it back)").into()),
+        "disabled" => return Err(concat!("Chat and voice are turned off (", cli_name!(), " hostchat enable)").into()),
         _ => {}
     }
     let provider = crate::sew::supervisor::row_provider(row);
     if provider != k2_root_proto::sew::PROVIDER_K2 {
         return Err(format!(
-            "Sew runs its own logins on this box (identity {provider}); K2 chat passes are for --identity k2"
+            "Sew runs its own logins on this box (identity {provider}); {PRODUCT_NAME} chat passes are for --identity k2"
         ));
     }
     match row.install_id.as_deref() {
         Some(id) if is_install_id(id) => Ok(id.to_string()),
         Some(_) => Err("the recorded Sew install id is malformed".into()),
-        None => Err("Sew has no install id yet (enable has not finished: k2 hostchat status)".into()),
+        None => Err(concat!("Sew has no install id yet (enable has not finished: ", cli_name!(), " hostchat status)").into()),
     }
 }
 

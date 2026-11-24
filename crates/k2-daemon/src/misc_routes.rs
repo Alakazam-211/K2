@@ -25,6 +25,8 @@ use std::collections::HashMap;
 
 use crate::cli::{bool_param, need_project, opt_param, respond, respond_unit, str_param};
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// `GET /cli/connections?action=list&users=1` (or `include_users=1`).
 fn list_wants_users(params: &HashMap<String, String>) -> bool {
@@ -161,7 +163,7 @@ fn heartbeat_workspace(params: &HashMap<String, String>, project: String) -> Res
             content_type: "application/json",
             body: serde_json::json!({ "error": {
                 "code": "other_workspace",
-                "hint": format!("an agent reads and changes only its own workspace's heartbeats; a person runs this with --workspace {ws} from a terminal outside K2"),
+                "hint": format!("an agent reads and changes only its own workspace's heartbeats; a person runs this with --workspace {ws} from a terminal outside {PRODUCT_NAME}"),
             }})
             .to_string(),
         });
@@ -885,7 +887,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     serde_json::json!({
                         "success": true,
                         "action": if include_merge { "commit-merge" } else { "commit" },
-                        "note": "AI commit terminal session will be launched by K2"
+                        "note": concat!("AI commit terminal session will be launched by ", product_name!())
                     })
                     .to_string(),
                 )
@@ -2101,7 +2103,7 @@ fn take_hire_mint_confirm(actor: &str, token: Option<&str>) -> Result<String, Cl
     take_hire_confirm(
         actor,
         token,
-        "a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key create --hire …` asks for it, or Settings → Access → API Keys",
+        concat!("a key that can hire agents needs a fresh owner confirm (Touch ID, your login password or the vault password): `", cli_name!(), " api-key create --hire …` asks for it, or Settings → Access → API Keys"),
     )
 }
 
@@ -2202,7 +2204,7 @@ pub fn handle_api_key_hire_ceiling(body: &[u8], actor: &str) -> CliResponse {
         match take_hire_confirm(
             actor,
             token,
-            "widening a hire key's App access needs a fresh owner confirm (Touch ID, your login password or the vault password): `k2 api-key hire-ceiling` asks for it, or Settings → Access → API Keys",
+            concat!("widening a hire key's App access needs a fresh owner confirm (Touch ID, your login password or the vault password): `", cli_name!(), " api-key hire-ceiling` asks for it, or Settings → Access → API Keys"),
         ) {
             Ok(m) => confirm_method = Some(m),
             Err(resp) => {

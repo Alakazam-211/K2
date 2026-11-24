@@ -26,6 +26,8 @@ use super::{db_fail, fail, respond, Fail, R};
 use crate::apps::grace::Target;
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const SHOW: &str = "/cli/app/email";
 pub const ON: &str = "/cli/app/email/on";
@@ -55,7 +57,7 @@ fn from_refusal(r: crate::apps::routes::Refusal) -> Fail {
 fn target(who: &Who, raw: Option<&str>) -> R<Target> {
     crate::apps::routes::need_credential(who).map_err(from_refusal)?;
     if raw.map(str::trim) == Some(k2_core::skin::HOST_APP_ID) {
-        return Err(fail(400, "not_for_host", "App email is for a published App, never the box login (host): K2's own mail uses the system sender"));
+        return Err(fail(400, "not_for_host", concat!("App email is for a published App, never the box login (host): ", product_name!(), "'s own mail uses the system sender")));
     }
     crate::apps::grace::target(who, raw).map_err(from_refusal)
 }
@@ -114,7 +116,7 @@ fn take_confirm(who: &Who, token: Option<&str>, action: &str, binding: &str) -> 
             code: "vault_confirm_required",
             hint: format!(
                 "turning an App's email on needs a fresh owner confirm (Touch ID, your login or the vault password){}; \
-                 k2 app email on asks for it from a terminal outside K2",
+                 {CLI_NAME} app email on asks for it from a terminal outside {PRODUCT_NAME}",
                 if action == super::CONFIRM_APP_ANY { ", and a second one for the any-address scope" } else { "" }
             ),
             retry_after_ms: None,
@@ -137,8 +139,8 @@ fn on(who: &Who, v: &J) -> Result<J, CliResponse> {
             403,
             "owner_only",
             &format!(
-                "turning an App's email on is the owner's, in person: k2 app email on {} --sender <address> from a terminal \
-                 outside K2. An agent asks the owner (a permission card or a Thread message naming the sender).",
+                "turning an App's email on is the owner's, in person: {CLI_NAME} app email on {} --sender <address> from a terminal \
+                 outside {PRODUCT_NAME}. An agent asks the owner (a permission card or a Thread message naming the sender).",
                 t.name
             ),
         )));
@@ -148,10 +150,10 @@ fn on(who: &Who, v: &J) -> Result<J, CliResponse> {
         store::SCOPE_ANY => store::SCOPE_ANY,
         _ => return Err(super::fail_response(&fail(400, "usage", "scope is users (default) or any"))),
     };
-    let sender_raw = s(v, "sender").ok_or_else(|| super::fail_response(&fail(400, "usage", "send {app, sender} (a sender from k2 notifications email sender list)")))?;
+    let sender_raw = s(v, "sender").ok_or_else(|| super::fail_response(&fail(400, "usage", concat!("send {app, sender} (a sender from ", cli_name!(), " notifications email sender list)"))))?;
     let sender = super::senders::find_live(sender_raw).map_err(|f| super::fail_response(&f))?;
     if sender.is_system() {
-        return Err(super::fail_response(&fail(409, "system_sender", "the system sender is K2's own; an App gets its own sender (k2 notifications email sender add)")));
+        return Err(super::fail_response(&fail(409, "system_sender", concat!("the system sender is ", product_name!(), "'s own; an App gets its own sender (", cli_name!(), " notifications email sender add)"))));
     }
     if let Some(other) = sender.app().filter(|a| *a != t.service_id) {
         return Err(super::fail_response(&fail(409, "sender_in_use", &format!("{} is App {other}'s sender (one App per address)", sender.address))));
@@ -195,7 +197,7 @@ fn on(who: &Who, v: &J) -> Result<J, CliResponse> {
         &t.project_id,
         "App email on",
         &format!(
-            "The owner turned email on for {} from {} (scope {scope}). Send with k2 app email send or email.send; you can't read the sender's mailbox.",
+            "The owner turned email on for {} from {} (scope {scope}). Send with {CLI_NAME} app email send or email.send; you can't read the sender's mailbox.",
             t.name, sender.address
         ),
     );
@@ -217,7 +219,7 @@ fn off(who: &Who, v: &J) -> R<J> {
 }
 
 /// The fixed text of `k2 app email test`.
-pub const TEST_SUBJECT: &str = "Test email from K2";
+pub const TEST_SUBJECT: &str = concat!("Test email from ", product_name!());
 
 /// POST `/cli/app/email/test`: K2's fixed text from the App's sender to the
 /// owner's own address (never anyone else's).
@@ -235,10 +237,10 @@ fn test(who: &Who, v: &J) -> R<J> {
         (st, sender, store::settings(&conn).map_err(db_fail)?.owner_email)
     };
     if !st.enabled {
-        return Err(fail(403, "email_off", "this App's email is off (k2 app email on)"));
+        return Err(fail(403, "email_off", concat!("this App's email is off (", cli_name!(), " app email on)")));
     }
     let Some(sender) = sender.filter(|s| s.is_live()) else { return Err(fail(409, "no_sender", "this App has no sender")) };
-    let to = owner_email.ok_or_else(|| fail(409, "no_owner_email", "the owner hasn't set their own address (k2 notifications email settings --owner-email); tests only ever go there"))?;
+    let to = owner_email.ok_or_else(|| fail(409, "no_owner_email", concat!("the owner hasn't set their own address (", cli_name!(), " notifications email settings --owner-email); tests only ever go there")))?;
     let c = super::send::Composed { subject: TEST_SUBJECT.to_string(), text: super::relay::TEST_TEXT.to_string(), html: None };
     let warm = super::budget::warming_up(&sender, super::now()).then_some(sender.domain.as_str());
     let id = super::send::send_fixed(&sender, store::ORIGIN_AGENT, "test", Some(&t.service_id), &to, &c, &super::budget::Kind::App { app: &t.service_id, scope_any: false, warmup_domain: warm })?;

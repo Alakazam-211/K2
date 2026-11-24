@@ -81,12 +81,13 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use k2_core::log_debug;
+use k2_core::{log_debug, product_name};
 use k2_core::tool_hook::outbox::OutboxRow;
 use k2_core::tool_hook::sew_wire::{self, codes, reasons};
 use k2_core::tool_hook::{self as hook, Op};
 
 use crate::sew_mgmt::{MgmtClient, MgmtResponse, TransportError};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Worker knobs (read once at spawn).
 #[derive(Debug, Clone)]
@@ -311,14 +312,14 @@ pub fn classify(
         409 if op == Op::AdminSpaceCreate && reason == reasons::SLUG_TAKEN => Outcome::Blocked {
             status: Some(status),
             error: format!(
-                "{}: another Sew Space already has the slug k5-admin, so K2 can't make its Admin Space; rename that Space's slug in Sew, then retry (k2 voice status)",
+                "{}: another Sew Space already has the slug k5-admin, so {PRODUCT_NAME} can't make its Admin Space; rename that Space's slug in Sew, then retry ({CLI_NAME} voice status)",
                 resp.error_line()
             ),
         },
         409 if op == Op::AdminSpaceCreate && reason == reasons::IDENTITY_NOT_K2 => Outcome::Blocked {
             status: Some(status),
             error: format!(
-                "{}: this Sew is a standalone install (not started with K2), so it has no K2 Admin Space",
+                "{}: this Sew is a standalone install (not started with {PRODUCT_NAME}), so it has no {PRODUCT_NAME} Admin Space",
                 resp.error_line()
             ),
         },
@@ -353,7 +354,7 @@ pub fn classify(
         409 if op == Op::SpaceSettings && reason == reasons::NO_GOVERNING_APP => Outcome::Blocked {
             status: Some(status),
             error: format!(
-                "{}: Sew holds no governing link for this Space; bind it again (k2 hostchat app-space bind <app> <space>), then retry this row",
+                "{}: Sew holds no governing link for this Space; bind it again ({CLI_NAME} hostchat app-space bind <app> <space>), then retry this row",
                 resp.error_line()
             ),
         },
@@ -547,7 +548,7 @@ async fn send_sync_group(
     // A row this worker can't read is a bug: block it loudly.
     for r in rows.iter().filter(|r| !parsed.iter().any(|(p, _, _)| p.id == r.id)) {
         report.attempted += 1;
-        apply(kind, r, Outcome::Blocked { status: None, error: "not a channel sync row this K2 can read".into() }, report).await?;
+        apply(kind, r, Outcome::Blocked { status: None, error: concat!("not a channel sync row this ", product_name!(), " can read").into() }, report).await?;
     }
     for chunk in parsed.chunks(sew_wire::MEMBER_CHANNELS_BULK_MAX) {
         let now = k2_core::tool_hook::outbox::now_secs();
@@ -665,8 +666,8 @@ async fn home_client_send(
         return Err(Outcome::Blocked {
             status: None,
             error: format!(
-                "the home client was set by {}, not this server's owner, so K2 won't send the owner's approval for it; \
-                 the owner sets it again (k2 hostchat home client <app|none>)",
+                "the home client was set by {}, not this server's owner, so {PRODUCT_NAME} won't send the owner's approval for it; \
+                 the owner sets it again ({CLI_NAME} hostchat home client <app|none>)",
                 row.actor
             ),
         });

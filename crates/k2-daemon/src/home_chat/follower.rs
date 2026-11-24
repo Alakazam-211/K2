@@ -52,6 +52,7 @@ use crate::voice::bff::Refusal;
 /// The supervisor's tick (a disabled login's session ends within one).
 pub const TICK: Duration = Duration::from_secs(5);
 pub use crate::sew::gateway::op;
+use k2_core::brand::PRODUCT_NAME;
 /// Sew's DM call events, passed to the person's clients as `{"type": <t>,
 /// "conv", "d"}` beside the chat frames.
 pub const FORWARD: &[&str] = &["call_ring", "call_updated"];
@@ -664,7 +665,7 @@ async fn connect_once(h: &Arc<Held>, token: &str, resume: bool) -> Ended {
                     Some(Ok(Message::Close(c))) => {
                         if c.as_ref().is_some_and(|c| u16::from(c.code) == CLOSE_ALREADY_AUTHENTICATED) {
                             k2_core::log_debug!(
-                                "[home-chat] BUG {}: Sew closed the follower with 4005 already_authenticated (more than its per-login socket cap); K2 holds one socket per person",
+                                "[home-chat] BUG {}: Sew closed the follower with 4005 already_authenticated (more than its per-login socket cap); {PRODUCT_NAME} holds one socket per person",
                                 h.ext
                             );
                         }

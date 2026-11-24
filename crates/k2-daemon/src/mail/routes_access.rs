@@ -29,6 +29,8 @@ use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::mail::access::{self, AccessError};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
     CliResponse {
@@ -184,7 +186,7 @@ pub fn handle_capabilities(params: &HashMap<String, String>) -> CliResponse {
             None => error_response(
                 "404 Not Found",
                 "not_found",
-                &format!("no inbox '{addr}' in this workspace — 'k2 mail inboxes' lists yours"),
+                &format!("no inbox '{addr}' in this workspace — '{CLI_NAME} mail inboxes' lists yours"),
             ),
         },
         None => {
@@ -218,8 +220,8 @@ fn privacy_refused() -> Option<CliResponse> {
         error_response(
             "403 Forbidden",
             "owner_only",
-            "whether agents see event descriptions is a person's choice — ask your human \
-             (Settings → Email Link, or 'k2 mail access set-level … --calendar-omit-description on|off')",
+            concat!("whether agents see event descriptions is a person's choice — ask your human \
+             (Settings → Email Link, or '", cli_name!(), " mail access set-level … --calendar-omit-description on|off')"),
         )
     })
 }
@@ -240,7 +242,7 @@ fn set_calendar_privacy(address: &str, project_id: &str, omit: bool) -> Result<b
         return Err(error_response(
             "404 Not Found",
             "not_found",
-            &format!("that workspace has no access to '{addr}' — grant it first ('k2 mail access grant')"),
+            &format!("that workspace has no access to '{addr}' — grant it first ('{CLI_NAME} mail access grant')"),
         ));
     }
     let action = if omit { "omit_description_on" } else { "omit_description_off" };
@@ -312,7 +314,7 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox to share ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox to share ('", cli_name!(), " mail inboxes')"));
     }
     if b.project.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'project' — the workspace to grant (name | path | UUID)");
@@ -352,7 +354,7 @@ pub fn handle_grant(body: &[u8]) -> CliResponse {
             "projectId": grantee_id,
             "level": b.level.trim(),
             "hint": format!(
-                "granted '{}' on {} to '{}' — see 'k2 mail inboxes'",
+                "granted '{}' on {} to '{}' — see '{CLI_NAME} mail inboxes'",
                 b.level.trim(), address, b.project
             ),
         })),
@@ -377,7 +379,7 @@ pub fn handle_revoke(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox ('", cli_name!(), " mail inboxes')"));
     }
     if b.project.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'project' — the workspace to revoke (name | path | UUID)");
@@ -419,7 +421,7 @@ pub fn handle_set_primary(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox ('", cli_name!(), " mail inboxes')"));
     }
     if b.project.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'project' — the new primary workspace (name | path | UUID)");
@@ -465,7 +467,7 @@ pub fn handle_set_level(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox ('", cli_name!(), " mail inboxes')"));
     }
     if b.project.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'project' — the workspace (name | path | UUID)");
@@ -532,7 +534,7 @@ pub fn handle_set_manage(body: &[u8]) -> CliResponse {
         Err(e) => return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}")),
     };
     if b.address.trim().is_empty() {
-        return error_response("400 Bad Request", "usage", "missing 'address' — the inbox ('k2 mail inboxes')");
+        return error_response("400 Bad Request", "usage", concat!("missing 'address' — the inbox ('", cli_name!(), " mail inboxes')"));
     }
     if b.project.trim().is_empty() {
         return error_response("400 Bad Request", "usage", "missing 'project' — the workspace (name | path | UUID)");

@@ -32,6 +32,7 @@ use super::keyring::{self, KeyError, KeyState, PUBLISH_LEAD_MIN_SECS, RETIRE_AFT
 use super::{JWKS_PATH, PASS_TTL_SECS};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
+use k2_core::product_name;
 
 pub const KEYS: &str = "/cli/sew/keys";
 pub const ROTATE: &str = "/cli/sew/keys/rotate";
@@ -91,7 +92,7 @@ fn key_error(e: &KeyError) -> CliResponse {
             "the next key was published under 10 minutes ago; Sew may not have it yet. Try again later, or use an emergency rotation",
             Some(json!({ "retry_after_ms": (*retry_after_secs).max(0) * 1000 })),
         ),
-        KeyError::VaultClosed(_) => error(503, "chat_keys_unavailable", "the K2 vault isn't open, so the chat keys can't be read", None),
+        KeyError::VaultClosed(_) => error(503, "chat_keys_unavailable", concat!("the ", product_name!(), " vault isn't open, so the chat keys can't be read"), None),
         KeyError::Corrupt(_) => error(
             500,
             "chat_keys_unavailable",

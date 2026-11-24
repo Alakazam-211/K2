@@ -50,7 +50,7 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 
-use k2_core::log_debug;
+use k2_core::{log_debug, product_name};
 use k2_core::product_feedback::screenshot::Meta as ShotMeta;
 use k2_core::product_feedback::store::{self, Row, State};
 use k2_core::product_feedback::wire::{self, BoxToken, Health, Outcome, Screenshot};
@@ -180,7 +180,7 @@ impl Hold {
         match self {
             Hold::Airgap => "Air-gap is on: this server sends nothing to the internet, feedback included.".into(),
             Hold::Disabled => {
-                "Sending feedback to K2 is turned off on this server (Settings → General → Send feedback).".into()
+                concat!("Sending feedback to ", product_name!(), " is turned off on this server (Settings → General → Send feedback).").into()
             }
             Hold::NeedsConnect => format!(
                 "This server isn't paired with K2 Connect, so it can't prove which server it is and can't send feedback. Copy your text and email {}.",

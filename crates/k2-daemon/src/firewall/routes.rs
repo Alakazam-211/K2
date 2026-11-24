@@ -35,6 +35,8 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTES: &[&str] = &[
     "/cli/firewall",
@@ -143,13 +145,13 @@ pub fn front_caller(who: &Who, path: &str) -> Result<String, CliResponse> {
         Caller::Person { actor, .. } => Ok(actor),
         Caller::Agent => {
             let verb = path.rsplit('/').next().unwrap_or("status");
-            let cmd = if verb == "enable" { "k2 front enable [--mail]".to_string() } else { format!("k2 front {verb}") };
+            let cmd = if verb == "enable" { concat!(cli_name!(), " front enable [--mail]").to_string() } else { format!("{CLI_NAME} front {verb}") };
             Err(refuse(
                 403,
                 "owner_only",
                 format!(
-                    "K2's front on the box's :443 is the owner's: no agent reads or changes it (box-level). The owner runs: {cmd} \
-                     (over SSH, or in a K2 shell tab)"
+                    "{PRODUCT_NAME}'s front on the box's :443 is the owner's: no agent reads or changes it (box-level). The owner runs: {cmd} \
+                     (over SSH, or in a {PRODUCT_NAME} shell tab)"
                 ),
             ))
         }
@@ -191,7 +193,7 @@ fn save(cfg: &mut fw::FirewallConfig) -> Result<(), CliResponse> {
 }
 
 fn load() -> Result<fw::FirewallConfig, CliResponse> {
-    fw::load_checked().map_err(|e| refuse(500, "firewall_config_unreadable", format!("{e} (fix or remove the file; K2 won't guess)")))
+    fw::load_checked().map_err(|e| refuse(500, "firewall_config_unreadable", format!("{e} (fix or remove the file; {PRODUCT_NAME} won't guess)")))
 }
 
 fn json_ok(v: Value) -> CliResponse {
@@ -256,7 +258,7 @@ fn post(path: &str, c: &Caller, who: &Who, b: &Value, port: u16) -> Result<CliRe
         "/cli/firewall/upstream" => upstream(c, b, port),
         "/cli/front/passthrough/add" => {
             let Caller::Person { actor, .. } = c else {
-                return Err(owner_only("k2 front passthrough add <host> --to 127.0.0.1:<port>"));
+                return Err(owner_only(concat!(cli_name!(), " front passthrough add <host> --to 127.0.0.1:<port>")));
             };
             let host = b["host"].as_str().unwrap_or("");
             let to = b["to"].as_str().unwrap_or("");
@@ -268,16 +270,16 @@ fn post(path: &str, c: &Caller, who: &Who, b: &Value, port: u16) -> Result<CliRe
         // 0.46.8 (PB-8): the :80 front's switch (`{on: bool}`).
         "/cli/front/http" => {
             let Caller::Person { actor, .. } = c else {
-                return Err(owner_only("k2 front http on|off"));
+                return Err(owner_only(concat!(cli_name!(), " front http on|off")));
             };
-            let on = b["on"].as_bool().ok_or_else(|| refuse(400, "bad_request", "say on or off: k2 front http on|off"))?;
+            let on = b["on"].as_bool().ok_or_else(|| refuse(400, "bad_request", concat!("say on or off: ", cli_name!(), " front http on|off")))?;
             let r = crate::front443::http_set(on).map_err(front_refusal)?;
             audit(if on { "http-on" } else { "http-off" }, actor, "");
             Ok(json_ok(r))
         }
         "/cli/front/passthrough/rm" => {
             let Caller::Person { actor, .. } = c else {
-                return Err(owner_only("k2 front passthrough rm <host>"));
+                return Err(owner_only(concat!(cli_name!(), " front passthrough rm <host>")));
             };
             let host = b["host"].as_str().unwrap_or("");
             let r = crate::front443::passthrough_rm(host).map_err(front_refusal)?;
@@ -306,7 +308,7 @@ fn changed(port: u16, extra: Value) -> Result<CliResponse, CliResponse> {
 
 /// `k2 firewall ssh any | allow <cidr>... | port <n>`.
 fn ssh(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
-    let actor = person(c, "k2 firewall ssh any|allow <cidr>...|port <n>")?;
+    let actor = person(c, concat!(cli_name!(), " firewall ssh any|allow <cidr>...|port <n>"))?;
     let mut cfg = load()?;
     let what;
     if b["any"] == true {
@@ -318,7 +320,7 @@ fn ssh(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
             return Err(refuse(
                 400,
                 "ssh_needs_an_address",
-                "name at least one address (k2 firewall ssh allow 198.51.100.0/24); SSH is never closed. For anyone: k2 firewall ssh any",
+                concat!("name at least one address (", cli_name!(), " firewall ssh allow 198.51.100.0/24); SSH is never closed. For anyone: ", cli_name!(), " firewall ssh any"),
             ));
         }
         what = format!("allow {}", list.join(","));
@@ -326,7 +328,7 @@ fn ssh(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
     } else if let Some(p) = b["port"].as_u64() {
         let p = u16::try_from(p).ok().filter(|p| *p > 0).ok_or_else(|| refuse(400, "bad_port", "1–65535"))?;
         if cfg.open.iter().any(|o| o.port == p && o.proto == Proto::Tcp) {
-            return Err(refuse(409, "port_in_use", format!("{p}/tcp is an owner port already (k2 firewall close {p}/tcp first)")));
+            return Err(refuse(409, "port_in_use", format!("{p}/tcp is an owner port already ({CLI_NAME} firewall close {p}/tcp first)")));
         }
         cfg.ssh.port = p;
         what = format!("port {p}");
@@ -335,7 +337,7 @@ fn ssh(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
     }
     save(&mut cfg)?;
     audit("ssh", actor, &what);
-    changed(port, json!({"ssh": cfg.ssh, "note": "K2 records the SSH port; it doesn't move sshd"}))
+    changed(port, json!({"ssh": cfg.ssh, "note": concat!(product_name!(), " records the SSH port; it doesn't move sshd")}))
 }
 
 /// The K2 sources that own a port in the view now (their rows are
@@ -356,7 +358,7 @@ fn port_proto(b: &Value) -> Result<(u16, Proto), CliResponse> {
 
 /// `k2 firewall open <port>/<proto> --label … [--from …]`.
 fn open(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
-    let actor = person(c, "k2 firewall open <port>/<tcp|udp> --label \"<why>\" [--from <cidr>...]")?;
+    let actor = person(c, concat!(cli_name!(), " firewall open <port>/<tcp|udp> --label \"<why>\" [--from <cidr>...]"))?;
     let (p, proto) = port_proto(b)?;
     let label: String = b["label"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(fw::MAX_LABEL).collect();
     if label.trim().is_empty() {
@@ -365,10 +367,10 @@ fn open(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
     let from = fw::normalize_allow_from(&str_list(b, "from")).map_err(|e| refuse(400, "bad_cidr", e))?;
     let mut cfg = load()?;
     if p == cfg.ssh.port && proto == Proto::Tcp {
-        return Err(refuse(409, "is_ssh", "that's SSH: use k2 firewall ssh allow|any"));
+        return Err(refuse(409, "is_ssh", concat!("that's SSH: use ", cli_name!(), " firewall ssh allow|any")));
     }
     if let Some(src) = k2_owned(port, p, proto)? {
-        return Err(refuse(409, "k2_owned", format!("{p}/{} is K2's ({src}): K2 opens and closes it with that feature", proto.as_str())));
+        return Err(refuse(409, "k2_owned", format!("{p}/{} is {PRODUCT_NAME}'s ({src}): {PRODUCT_NAME} opens and closes it with that feature", proto.as_str())));
     }
     cfg.open.retain(|o| !(o.port == p && o.proto == proto));
     if cfg.open.len() >= fw::MAX_OPEN {
@@ -383,23 +385,23 @@ fn open(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
 
 /// `k2 firewall close <port>/<proto>`: owner rows only (never SSH, never K2's).
 fn close(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
-    let actor = person(c, "k2 firewall close <port>/<tcp|udp>")?;
+    let actor = person(c, concat!(cli_name!(), " firewall close <port>/<tcp|udp>"))?;
     let (p, proto) = port_proto(b)?;
     let mut cfg = load()?;
     if p == cfg.ssh.port && proto == Proto::Tcp {
         return Err(refuse(
             409,
             "ssh_stays_open",
-            "SSH is never closed (the lockout guard). Narrow it instead: k2 firewall ssh allow <cidr>",
+            concat!("SSH is never closed (the lockout guard). Narrow it instead: ", cli_name!(), " firewall ssh allow <cidr>"),
         ));
     }
     let before = cfg.open.len();
     cfg.open.retain(|o| !(o.port == p && o.proto == proto));
     if cfg.open.len() == before {
         if let Some(src) = k2_owned(port, p, proto)? {
-            return Err(refuse(409, "k2_owned", format!("{p}/{} is K2's ({src}): turn that feature off to close it", proto.as_str())));
+            return Err(refuse(409, "k2_owned", format!("{p}/{} is {PRODUCT_NAME}'s ({src}): turn that feature off to close it", proto.as_str())));
         }
-        return Err(refuse(404, "not_open", format!("{p}/{} is not an owner port (k2 firewall)", proto.as_str())));
+        return Err(refuse(404, "not_open", format!("{p}/{} is not an owner port ({CLI_NAME} firewall)", proto.as_str())));
     }
     save(&mut cfg)?;
     audit("close", actor, &format!("{p}/{}", proto.as_str()));
@@ -429,7 +431,7 @@ fn guard(c: &Caller, who: &Who, b: &Value) -> Result<CliResponse, CliResponse> {
     let actor: String;
     match b["app"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
         None => {
-            actor = person(c, "k2 firewall guard [on|off] [--conns-per-ip N] [--writes-per-min N]")?.to_string();
+            actor = person(c, concat!(cli_name!(), " firewall guard [on|off] [--conns-per-ip N] [--writes-per-min N]"))?.to_string();
             if reset {
                 cfg.guard = fw::GuardConfig { apps: std::mem::take(&mut cfg.guard.apps), ..Default::default() };
             }
@@ -445,7 +447,7 @@ fn guard(c: &Caller, who: &Who, b: &Value) -> Result<CliResponse, CliResponse> {
         }
         Some(app) => {
             if conns.is_some() {
-                return Err(refuse(400, "box_wide", "connections per visitor are box-wide (K2 counts them before it knows the App): leave out the App"));
+                return Err(refuse(400, "box_wide", concat!("connections per visitor are box-wide (", product_name!(), " counts them before it knows the App): leave out the App")));
             }
             let row = crate::apps::routes::app_for(who, Some(app)).map_err(|r| refuse(r.status, r.code, r.hint))?;
             let id = row.app_id.clone();
@@ -467,7 +469,7 @@ fn guard(c: &Caller, who: &Who, b: &Value) -> Result<CliResponse, CliResponse> {
                         (Some(x), Some(y)) => y <= x,
                     };
                     if !tighter {
-                        return Err(owner_only(&format!("k2 firewall guard {app} …")));
+                        return Err(owner_only(&format!("{CLI_NAME} firewall guard {app} …")));
                     }
                     actor = crate::apps::routes::actor(who);
                 }
@@ -487,8 +489,8 @@ fn guard(c: &Caller, who: &Who, b: &Value) -> Result<CliResponse, CliResponse> {
 fn upstream(c: &Caller, b: &Value, port: u16) -> Result<CliResponse, CliResponse> {
     let actor = match c {
         Caller::Person { actor, owner: true } => actor.clone(),
-        Caller::Person { .. } => return Err(refuse(403, "owner_only", "the applied record is the owner's (K2 Web runs it as the box's daemon user)")),
-        Caller::Agent => return Err(owner_only("k2 firewall upstream --hash <hash> --provider <name> --applied-at <unix>")),
+        Caller::Person { .. } => return Err(refuse(403, "owner_only", concat!("the applied record is the owner's (", product_name!(), " Web runs it as the box's daemon user)"))),
+        Caller::Agent => return Err(owner_only(concat!(cli_name!(), " firewall upstream --hash <hash> --provider <name> --applied-at <unix>"))),
     };
     let mut cfg = load()?;
     let mut did: Vec<String> = Vec::new();

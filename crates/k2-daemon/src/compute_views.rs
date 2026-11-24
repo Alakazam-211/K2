@@ -21,6 +21,8 @@ use crate::compute_routes::{
     ws_handle, Who, R,
 };
 use crate::compute_ws;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 // ── nodes ────────────────────────────────────────────────────────────
 
@@ -1300,8 +1302,8 @@ fn mem_cap_hint(j: &store::JobRow) -> Option<String> {
             }
         }
         None => match peak {
-            Some(p) => format!("killed at the node's memory cap (used {}): pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2", gib_shown(p)),
-            None => "killed at the node's memory cap: pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2".into(),
+            Some(p) => format!("killed at the node's memory cap (used {}): pass a bigger --mem ({CLI_NAME} compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2", gib_shown(p)),
+            None => concat!("killed at the node's memory cap: pass a bigger --mem (", cli_name!(), " compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2").into(),
         },
     })
 }
@@ -1317,7 +1319,7 @@ fn gpu_mem_cap_hint(j: &store::JobRow) -> Option<String> {
         None => format!("the default --gpu-mem {} (a unified GPU)", gib_shown(k2_core::compute::proto::gpu::DEFAULT_GPU_MEM_UNIFIED)),
     };
     Some(format!(
-        "stopped: its own GPU memory went over {budget} by more than {}%. On an APU (an iGPU), GPU buffers come out of system RAM beside --mem: pass a bigger --gpu-mem (k2 study compute: GPU JOBS)",
+        "stopped: its own GPU memory went over {budget} by more than {}%. On an APU (an iGPU), GPU buffers come out of system RAM beside --mem: pass a bigger --gpu-mem ({CLI_NAME} study compute: GPU JOBS)",
         k2_core::compute::proto::gpu::GPU_MEM_SLACK_PCT
     ))
 }
@@ -1603,7 +1605,7 @@ pub(crate) fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Err(no(
                 JOB_STARTED,
                 409,
-                format!("split run {short} has {started} shard(s) already started; k2 compute cancel {short} --force stops them"),
+                format!("split run {short} has {started} shard(s) already started; {CLI_NAME} compute cancel {short} --force stops them"),
             ));
         }
         let mut n = 0;
@@ -1774,7 +1776,7 @@ pub(crate) fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> 
                 JOB_STARTED,
                 409,
                 format!(
-                    "job {short} {} on {node_name}{}; k2 compute cancel {short} --force stops it",
+                    "job {short} {} on {node_name}{}; {CLI_NAME} compute cancel {short} --force stops it",
                     if j.state == "assigned" { "was just assigned" } else { "started" },
                     since.map(|d| format!(" {d} ago")).unwrap_or_default(),
                 ),
@@ -1809,7 +1811,7 @@ pub(crate) fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> 
             compute_ws::notify_change();
             Ok(serde_json::json!({"ok": true, "state": "cancel_requested", "was": "queued", "onNode": true, "node": node_name, "by": by,
                 "cancel": if sent { "asked the node (only if it hasn't started)" } else { "asked when the node reconnects" },
-                "note": format!("it ends cancelled, or keeps running if it just started (job_started); k2 compute get {short}")}))
+                "note": format!("it ends cancelled, or keeps running if it just started (job_started); {CLI_NAME} compute get {short}")}))
         }
     }
 }

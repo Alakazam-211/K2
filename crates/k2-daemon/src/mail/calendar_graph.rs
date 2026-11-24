@@ -118,6 +118,7 @@ pub type GraphCalInbox = LinkedCalInbox;
 pub use crate::mail::calendar_provider::{capability_missing, linked_target, CalErr};
 #[cfg(test)]
 use crate::mail::calendar_provider::cap_name;
+use k2_core::brand::CLI_NAME;
 
 // ── The Graph client (injectable) ───────────────────────────────────────
 
@@ -1024,7 +1025,7 @@ pub fn handle_linked_calendars_post(body: &[u8]) -> CliResponse {
         Ok(b) => b,
         Err(e) => {
             return usage(format!(
-                "body must be {{\"enabled\": true|false}} ({e}) — k2 mail link calendars on|off"
+                "body must be {{\"enabled\": true|false}} ({e}) — {CLI_NAME} mail link calendars on|off"
             ))
         }
     };

@@ -38,6 +38,8 @@ use k2_vault::{Actor, Delivery, Kind, Namespace, PutMode, PutRequest, Requester,
 use serde_json::json;
 
 use crate::compute_routes::{audit, b, json_body, need_credential, no, owner_only, resolve_node_for, s, target_ws, Who, Ws, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `GET` grants and the credential (`k2 compute git-access`).
 pub const SHOW: &str = "/cli/compute/git-access";
@@ -97,7 +99,7 @@ fn vault_put(name: &str, value: &[u8], what: &str) -> Result<(), (&'static str, 
     r.default_delivery = Some(Delivery::None);
     r.delivery_ceiling = Some(Delivery::None);
     r.origin = format!("system:{SUBSYSTEM}");
-    r.description = format!("{what} for compute git access (k2 compute git-access); daemon-only.");
+    r.description = format!("{what} for compute git access ({CLI_NAME} compute git-access); daemon-only.");
     r.mode = PutMode::Upsert;
     r.idempotent = true;
     v.put(r, SecretBytes::from_slice(value), &Actor::System(SUBSYSTEM.into())).map(|_| ()).map_err(|e| (gcodes::VAULT_LOCKED, format!("the vault refused ({})", e.code)))
@@ -146,7 +148,7 @@ pub fn mint(ws: &str, repo: &str) -> Result<(Minted, &'static str), (&'static st
         let conn = db.lock();
         cgit::credential(&conn)
     }
-    .ok_or((gcodes::NO_CREDENTIAL, "this server has no GitHub credential for compute git access; a person runs: k2 compute git-access setup".to_string()))?;
+    .ok_or((gcodes::NO_CREDENTIAL, concat!("this server has no GitHub credential for compute git access; a person runs: ", cli_name!(), " compute git-access setup").to_string()))?;
     let (owner, name) = gitcred::owner_repo(repo).ok_or((gcodes::NOT_GRANTED, format!("{repo} isn't a GitHub repo key")))?;
     let now = compute::now();
     if cred.is_app() {
@@ -155,7 +157,7 @@ pub fn mint(ws: &str, repo: &str) -> Result<(Minted, &'static str), (&'static st
                 return Ok((m.clone(), "app"));
             }
         }
-        let pem = vault_get(APP_KEY)?.ok_or((gcodes::NO_CREDENTIAL, "the GitHub App's key is missing from the vault; a person runs k2 compute git-access setup again".to_string()))?;
+        let pem = vault_get(APP_KEY)?.ok_or((gcodes::NO_CREDENTIAL, concat!("the GitHub App's key is missing from the vault; a person runs ", cli_name!(), " compute git-access setup again").to_string()))?;
         let key = cgit::app_key(&pem).map_err(|e| (gcodes::NO_CREDENTIAL, e))?;
         let app_id = cred.app_id.clone().unwrap_or_default();
         let jwt = cgit::app_jwt(&app_id, &key, now).map_err(|e| (gcodes::UNAVAILABLE, e))?;
@@ -169,7 +171,7 @@ pub fn mint(ws: &str, repo: &str) -> Result<(Minted, &'static str), (&'static st
         TOKENS.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).insert((ws.to_string(), repo.to_string()), minted.clone());
         Ok((minted, "app"))
     } else {
-        let t = vault_get(TOKEN)?.ok_or((gcodes::NO_CREDENTIAL, "the fine-grained token is missing from the vault; a person runs k2 compute git-access setup again".to_string()))?;
+        let t = vault_get(TOKEN)?.ok_or((gcodes::NO_CREDENTIAL, concat!("the fine-grained token is missing from the vault; a person runs ", cli_name!(), " compute git-access setup again").to_string()))?;
         Ok((Minted { token: t, expires_at: now + cgit::TOKEN_NOMINAL_SECS }, "token"))
     }
 }
@@ -184,7 +186,7 @@ fn check_repo(ws: &str, repo: &str) -> R<()> {
     };
     let fail = |m: String| no(CHECK_FAILED, 502, m);
     match is_app {
-        None => Err(no(gcodes::NO_CREDENTIAL, 409, "set the server's GitHub credential first (a person, from a terminal outside K2): k2 compute git-access setup --github-app <app id> --key-file <app.pem>, or --github-token-file <file> for a fine-grained token; or Allow an agent's card for it (compute.git-access-setup)")),
+        None => Err(no(gcodes::NO_CREDENTIAL, 409, concat!("set the server's GitHub credential first (a person, from a terminal outside ", product_name!(), "): ", cli_name!(), " compute git-access setup --github-app <app id> --key-file <app.pem>, or --github-token-file <file> for a fine-grained token; or Allow an agent's card for it (compute.git-access-setup)"))),
         Some(true) => mint(ws, repo).map(|_| ()).map_err(|(c, m)| if c == gcodes::VAULT_LOCKED { no(gcodes::VAULT_LOCKED, 503, m) } else { fail(format!("{repo}: {m}")) }),
         Some(false) => {
             let (owner, name) = gitcred::owner_repo(repo).ok_or_else(|| no(BAD_REPO, 400, format!("{repo} isn't a GitHub repo")))?;
@@ -205,8 +207,8 @@ pub(crate) fn has_credential() -> bool {
 
 /// What an agent hears while the server has no credential: the grant
 /// route's refusal and the grant card at request time and at the click.
-pub(crate) const NEEDS_SETUP_HINT: &str = "this server has no GitHub credential yet, so no grant can work. A person (the owner or an Admin) sets it up first, on a card \
-     or from a terminal outside K2 (k2 compute git-access setup). Once it's set, run your command again: the grant itself is a second card";
+pub(crate) const NEEDS_SETUP_HINT: &str = concat!("this server has no GitHub credential yet, so no grant can work. A person (the owner or an Admin) sets it up first, on a card \
+     or from a terminal outside ", product_name!(), " (", cli_name!(), " compute git-access setup). Once it's set, run your command again: the grant itself is a second card");
 
 // ── who ──────────────────────────────────────────────────────────────
 
@@ -255,7 +257,7 @@ fn nodes_in(v: &serde_json::Value) -> Vec<String> {
 /// What a person reads before a token goes to another server's machine.
 fn shared_warning(n: &store::NodeRow) -> String {
     format!(
-        "'{}' belongs to another K2 server ({}): while a job uses a token there, that machine's admin (root) and its k2-node user can read it. \
+        "'{}' belongs to another {PRODUCT_NAME} server ({}): while a job uses a token there, that machine's admin (root) and its k2-node user can read it. \
          Tokens are read-only, for one repo, and live one hour",
         n.name,
         n.owner_label.as_deref().unwrap_or("its owner")
@@ -292,7 +294,7 @@ fn view(ws: &Ws) -> serde_json::Value {
         "workspace": ws.handle,
         "credential": cred.map(|c| json!({"forge": "github", "kind": c.kind, "appId": c.app_id, "setBy": c.set_by, "setAt": c.set_at})),
         "grants": grants,
-        "note": "jobs read these repos with short-lived, read-only tokens through git's credential helper; they keep --cache and warm slots (k2 study compute, GIT ACCESS)",
+        "note": concat!("jobs read these repos with short-lived, read-only tokens through git's credential helper; they keep --cache and warm slots (", cli_name!(), " study compute, GIT ACCESS)"),
     })
 }
 
@@ -342,7 +344,7 @@ pub(crate) fn setup(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             let conn = db.lock();
             cgit::set_credential(&conn, "app", Some(id), &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
             drop(conn);
-            json!({"credential": {"kind": "app", "appId": id, "app": slug}, "note": "1-hour, read-only tokens for one repo each. Install the App on the repos (Contents: read), then: k2 compute git-access grant --github <owner>/<repo>"})
+            json!({"credential": {"kind": "app", "appId": id, "app": slug}, "note": concat!("1-hour, read-only tokens for one repo each. Install the App on the repos (Contents: read), then: ", cli_name!(), " compute git-access grant --github <owner>/<repo>")})
         }
         (None, None, Some(t)) => {
             if let Some(why) = cgit::token_refusal(t) {
@@ -398,7 +400,7 @@ pub(crate) fn grant(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             403,
             format!(
                 "giving {}'s compute jobs read access to {} sends short-lived tokens for them to its nodes, so only a person does it: the owner or an Admin, \
-                 from a terminal outside K2 (k2 compute git-access grant --github {} --workspace {})",
+                 from a terminal outside {PRODUCT_NAME} ({CLI_NAME} compute git-access grant --github {} --workspace {})",
                 ws.handle,
                 list.join(", "),
                 list.join(","),
@@ -432,7 +434,7 @@ pub(crate) fn grant(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Err(no(
                 gcodes::SHARED_NEEDS_OPTIN,
                 400,
-                format!("{}. Grant it there only on purpose: add --shared (k2 compute git-access grant … --nodes {} --shared)", shared_warning(&n), n.name),
+                format!("{}. Grant it there only on purpose: add --shared ({CLI_NAME} compute git-access grant … --nodes {} --shared)", shared_warning(&n), n.name),
             )
             .with("node", n.name.clone()));
         }
@@ -440,7 +442,7 @@ pub(crate) fn grant(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             return Err(no(
                 gcodes::PAT_SHARED,
                 400,
-                format!("a fine-grained token never goes to another server's node ('{}'): its own limits are all it has. Set up a GitHub App (1-hour tokens for one repo): k2 compute git-access setup --github-app <id> --key-file <app.pem>", n.name),
+                format!("a fine-grained token never goes to another server's node ('{}'): its own limits are all it has. Set up a GitHub App (1-hour tokens for one repo): {CLI_NAME} compute git-access setup --github-app <id> --key-file <app.pem>", n.name),
             ));
         }
         warnings.push(shared_warning(&n));
@@ -593,7 +595,7 @@ pub fn plan_repos_for(conn: &rusqlite::Connection, job: &store::JobRow, features
 /// it's on GitHub.
 pub fn relay_hint(remote: Option<&str>) -> String {
     match remote.and_then(gitcred::repo_of_remote) {
-        Some(r) => format!(". For a private GitHub repo, let the node fetch it itself: k2 compute git-access grant --github {} (a person)", short(&r)),
+        Some(r) => format!(". For a private GitHub repo, let the node fetch it itself: {CLI_NAME} compute git-access grant --github {} (a person)", short(&r)),
         None => String::new(),
     }
 }
@@ -650,7 +652,7 @@ pub fn release(node_id: &str, n: &GitCredNeed) -> Result<(GitCred, &'static str,
     }
     let plan = job.plan().ok_or_else(|| stale("the job's plan is unreadable"))?;
     if !plan.git_access.iter().any(|r| r == &n.repo) {
-        return Err(Some((gcodes::NOT_GRANTED, format!("{} isn't in this job's plan (a person runs: k2 compute git-access grant --github {})", n.repo, short(&n.repo)))));
+        return Err(Some((gcodes::NOT_GRANTED, format!("{} isn't in this job's plan (a person runs: {CLI_NAME} compute git-access grant --github {})", n.repo, short(&n.repo)))));
     }
     // The live grant, now (a revoke since the plan was written refuses).
     let (grant, cred) = {

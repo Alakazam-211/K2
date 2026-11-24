@@ -36,6 +36,7 @@
 //! falls through to the same 405/404 the route answered before.
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 /// The lowest login that may reach a route. Ordered: a login passes when
 /// its role is at or above the floor. `Public` and `VoiceChat` admit every
@@ -668,7 +669,7 @@ pub(crate) fn role_unreadable() -> CliResponse {
     CliResponse {
         status: "503 Service Unavailable",
         content_type: "application/json",
-        body: r#"{"error":"role_unreadable","message":"K2 couldn't read this login's role just now; try again."}"#.to_string(),
+        body: concat!(r#"{"error":"role_unreadable","message":""#, product_name!(), r#" couldn't read this login's role just now; try again."}"#).to_string(),
     }
 }
 

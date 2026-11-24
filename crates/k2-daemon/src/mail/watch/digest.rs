@@ -10,6 +10,7 @@ use rusqlite::params;
 use super::sanitize::{sanitize, sanitize_addr};
 use super::store::{self, PendingRow};
 use crate::mail::access::Source;
+use k2_core::brand::CLI_NAME;
 
 /// The row's name.
 pub const DIGEST_NAME: &str = "mail-digest";
@@ -134,7 +135,7 @@ pub fn build(rows: &[PendingRow], hb: &AgentHeartbeat, wakeup: Option<&str>, sub
             _ => "",
         };
         let line = format!(
-            "{}. {} <{}> «{}»{flag} — k2 mail read {}\n",
+            "{}. {} <{}> «{}»{flag} — {CLI_NAME} mail read {}\n",
             i + 1,
             stamp_time(&r.received_at, tz),
             sanitize_addr(&r.from_addr),
@@ -148,7 +149,7 @@ pub fn build(rows: &[PendingRow], hb: &AgentHeartbeat, wakeup: Option<&str>, sub
         shown += 1;
     }
     let more = if rows.len() > shown {
-        format!("+{} more: k2 mail messages --unread --since {}\n", rows.len() - shown, rows[0].received_at)
+        format!("+{} more: {CLI_NAME} mail messages --unread --since {}\n", rows.len() - shown, rows[0].received_at)
     } else {
         String::new()
     };

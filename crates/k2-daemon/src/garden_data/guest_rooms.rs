@@ -39,6 +39,8 @@ use k2_core::skin::guest_rooms::{self as gr, Ceiling};
 use super::budget::{self, BudgetKey, Spend};
 use super::call::{made_by_label, resolve, CallBody, Placed};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::product_name;
 
 /// The vault confirm action a Garden guest-rooms write takes
 /// (`vault_routes::CONFIRM_ACTIONS`).
@@ -111,7 +113,7 @@ fn take_confirm(token: &str, secret: &str) -> Result<(), CliResponse> {
     #[cfg(not(test))]
     let vault = crate::vault::get().ok();
     let Some(vault) = vault else {
-        return Err(no(503, "failed", "the vault isn't open, so K2 can't take your confirm", None));
+        return Err(no(503, "failed", concat!("the vault isn't open, so ", product_name!(), " can't take your confirm"), None));
     };
     vault.confirm.take(token, CONFIRM_ACTION, Some(secret), "owner").map(|_| ()).map_err(|_| again())
 }
@@ -183,7 +185,7 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
                     return Err(no(
                         403,
                         "grant_required",
-                        format!("an agent-made widget needs the owner's grant: k2 app grant {} --kind guests-rooms", t.name),
+                        format!("an agent-made widget needs the owner's grant: {CLI_NAME} app grant {} --kind guests-rooms", t.name),
                         None,
                     ))
                 }
@@ -248,7 +250,7 @@ fn run(b: &CallBody) -> Result<J, CliResponse> {
         return Err(no(
             403,
             "confirm_required",
-            "changing a guest's rooms needs you: K2 shows the change on its own sheet",
+            concat!("changing a guest's rooms needs you: ", product_name!(), " shows the change on its own sheet"),
             Some(json!({ "secretId": secret, "action": CONFIRM_ACTION, "change": change })),
         ));
     };
@@ -275,7 +277,7 @@ fn author_unknown(w: &Placed) -> CliResponse {
     no(
         403,
         "author_unknown",
-        format!("nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine", w.widget),
+        format!("nobody signed this version of {0}. Run `{CLI_NAME} zen validate --widget {0}`, or click It's mine", w.widget),
         None,
     )
 }

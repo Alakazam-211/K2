@@ -32,6 +32,7 @@ use serde_json::{json, Value as J};
 
 use crate::cli_response::CliResponse;
 use crate::guest_rooms_routes::{app_of, error, pass_invalid, OnLink};
+use k2_core::cli_name;
 
 pub const ROUTE: &str = "/cli/skin/guests/chat";
 
@@ -58,7 +59,7 @@ pub fn grant_required() -> CliResponse {
     error(
         403,
         "grant_required",
-        "the owner hasn't granted this App guests:chat (k2 app grant <app> --kind guests-chat [--max N])",
+        concat!("the owner hasn't granted this App guests:chat (", cli_name!(), " app grant <app> --kind guests-chat [--max N])"),
         None,
     )
 }

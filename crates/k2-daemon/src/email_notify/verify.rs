@@ -47,6 +47,8 @@ use serde_json::{json, Value as J};
 
 use super::{fail, respond, Fail, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const ADDRESS_PATH: &str = "/cli/notify/email/address";
 pub const ADDRESS_SET_PATH: &str = "/cli/notify/email/address/set";
@@ -89,13 +91,13 @@ pub(crate) fn who(person: &str, box_label: &str) -> String {
 
 /// The confirm mail (fixed K2 text).
 pub fn compose_verify(box_label: &str, asker: &str, why: &str, address: &str, confirm_url: &str, stop_url: &str) -> super::send::Composed {
-    let subject = format!("Confirm this address for K2 on {box_label}");
+    let subject = format!("Confirm this address for {PRODUCT_NAME} on {box_label}");
     let text = format!(
-        "{asker} asked K2 to send {why} to this address ({address}).\n\n\
+        "{asker} asked {PRODUCT_NAME} to send {why} to this address ({address}).\n\n\
          To allow it, open this link and press Confirm. The link works for 24 hours:\n{confirm_url}\n\n\
          If you didn't expect this, ignore this email: nothing else is sent here unless the address is confirmed.\n\
-         To stop K2 from emailing this address for this request, open:\n{stop_url}\n\n\
-         K2 on {box_label}\n"
+         To stop {PRODUCT_NAME} from emailing this address for this request, open:\n{stop_url}\n\n\
+         {PRODUCT_NAME} on {box_label}\n"
     );
     super::send::Composed { subject: subject.chars().filter(|c| !c.is_control()).take(180).collect(), text, html: None }
 }
@@ -103,12 +105,12 @@ pub fn compose_verify(box_label: &str, asker: &str, why: &str, address: &str, co
 /// The "you've been added" mail to an outside forward address (fixed K2
 /// text; the same wording rules as the confirm mail).
 pub fn compose_forward_notice(box_label: &str, asker: &str, mailbox: &str, address: &str, stop_url: &str) -> super::send::Composed {
-    let subject = format!("Mail from {mailbox} is being forwarded to you (K2 on {box_label})");
+    let subject = format!("Mail from {mailbox} is being forwarded to you ({PRODUCT_NAME} on {box_label})");
     let text = format!(
-        "{asker} told K2 to send {why} to this address ({address}). This has started, and you may get those copies from now on.\n\n\
+        "{asker} told {PRODUCT_NAME} to send {why} to this address ({address}). This has started, and you may get those copies from now on.\n\n\
          If you don't want them, open this link and press Stop. It needs no login and works at any time:\n{stop_url}\n\n\
-         Once you press Stop, K2 sends nothing more here for {mailbox}.\n\n\
-         K2 on {box_label}\n",
+         Once you press Stop, {PRODUCT_NAME} sends nothing more here for {mailbox}.\n\n\
+         {PRODUCT_NAME} on {box_label}\n",
         why = why(store::PURPOSE_FORWARD, mailbox)
     );
     super::send::Composed { subject: subject.chars().filter(|c| !c.is_control()).take(180).collect(), text, html: None }
@@ -118,7 +120,7 @@ pub fn compose_forward_notice(box_label: &str, asker: &str, mailbox: &str, addre
 pub(crate) fn link(path: &str, token: &str) -> R<String> {
     match crate::app_user_invites::k2_front_door_url(path) {
         Ok(Some(u)) => Ok(format!("{u}?t={token}")),
-        Ok(None) => Err(fail(409, "no_front_door", "this server has no front door URL for the confirm link (k2 app front-door --url <https URL> from your own terminal (not an agent's), or turn on the tunnel in Settings → Network → Tunnel)")),
+        Ok(None) => Err(fail(409, "no_front_door", concat!("this server has no front door URL for the confirm link (", cli_name!(), " app front-door --url <https URL> from your own terminal (not an agent's), or turn on the tunnel in Settings → Network → Tunnel)"))),
         Err(why) => Err(fail(409, "no_front_door", format!("the confirm link can't use this server's front door: {why}"))),
     }
 }
@@ -160,7 +162,7 @@ pub fn request(purpose: &str, subject_ref: &str, address: &str, asker_person: &s
     }
     // Refuse before a row exists when no mail can go out.
     let sender = super::send::sender_for(None)?
-        .ok_or_else(|| fail(409, "no_mail_path", "this server has no system sender, so it can't send the confirm email (k2 notifications email system-sender set)"))?;
+        .ok_or_else(|| fail(409, "no_mail_path", concat!("this server has no system sender, so it can't send the confirm email (", cli_name!(), " notifications email system-sender set)")))?;
     link(VERIFY_PATH, "x")?;
     let issued = {
         let db = k2_core::db::shared();
@@ -356,9 +358,9 @@ fn form(action: &str, token: &str, button: &str) -> String {
 fn forward_old_link_page(conn: &rusqlite::Connection, v: &store::Verified, token: &str, box_label: &str) -> Page {
     let on = k2_core::mail_forward::live_for_pair(conn, &v.subject_ref, &v.address).ok().flatten().is_some_and(|f| f.is_active());
     let what = if on {
-        format!("K2 on {} is sending {} to <strong>{}</strong>.", esc(box_label), esc(&why(&v.purpose, &v.subject_ref)), esc(&v.address))
+        format!("{PRODUCT_NAME} on {} is sending {} to <strong>{}</strong>.", esc(box_label), esc(&why(&v.purpose, &v.subject_ref)), esc(&v.address))
     } else {
-        format!("K2 on {} is set up to send {} to <strong>{}</strong>, and isn't sending them right now.", esc(box_label), esc(&why(&v.purpose, &v.subject_ref)), esc(&v.address))
+        format!("{PRODUCT_NAME} on {} is set up to send {} to <strong>{}</strong>, and isn't sending them right now.", esc(box_label), esc(&why(&v.purpose, &v.subject_ref)), esc(&v.address))
     };
     let stop = format!(
         r#"<form method="post" action="{}"><input type="hidden" name="t" value="{}"><input type="hidden" name="do" value="stop"><button type="submit">Stop these emails</button></form>"#,
@@ -377,8 +379,8 @@ fn asks_stop(query: &str, body: &[u8]) -> bool {
 }
 
 /// The confirm page's words for a link K2 can't place.
-const VERIFY_GONE: &str = "It was already used, it expired (links work for 24 hours), or it was replaced by a newer one. \
-     If it was about mail forwarded to you: K2 no longer asks for a confirm, and the stop link in the same email still works.";
+const VERIFY_GONE: &str = concat!("It was already used, it expired (links work for 24 hours), or it was replaced by a newer one. \
+     If it was about mail forwarded to you: ", product_name!(), " no longer asks for a confirm, and the stop link in the same email still works.");
 
 fn gone(status: &'static str, what: &str) -> Page {
     Page { status, html: html("Link not valid", &format!("<h1>This link doesn't work any more</h1><p>{}</p>", esc(what))) }
@@ -416,7 +418,7 @@ pub fn page_get(path: &str, query: &str) -> Page {
                 html: html(
                     "Confirm your address",
                     &format!(
-                        "<h1>Confirm this address</h1><p>{} asked K2 to send {} to <strong>{}</strong>.</p>\
+                        "<h1>Confirm this address</h1><p>{} asked {PRODUCT_NAME} to send {} to <strong>{}</strong>.</p>\
                          <p>Press Confirm to allow it. You can stop these emails later from a link in each one.</p>{}",
                         esc(&who(&v.requested_by, &box_label)),
                         esc(&why(&v.purpose, &v.subject_ref)),
@@ -426,7 +428,7 @@ pub fn page_get(path: &str, query: &str) -> Page {
                 ),
             },
             Ok(None) => gone("404 Not Found", VERIFY_GONE),
-            Err(_) => gone("500 Internal Server Error", "K2 couldn't read its records. Try again later."),
+            Err(_) => gone("500 Internal Server Error", concat!(product_name!(), " couldn't read its records. Try again later.")),
             },
         },
         _ => match store::peek_stop(&conn, &token) {
@@ -441,7 +443,7 @@ pub fn page_get(path: &str, query: &str) -> Page {
                 html: html(
                     "Stop these emails",
                     &format!(
-                        "<h1>Stop K2's emails to this address?</h1><p>K2 on {} will stop sending {} to <strong>{}</strong>.</p>{}",
+                        "<h1>Stop {PRODUCT_NAME}'s emails to this address?</h1><p>{PRODUCT_NAME} on {} will stop sending {} to <strong>{}</strong>.</p>{}",
                         esc(&box_label),
                         esc(&why(&v.purpose, &v.subject_ref)),
                         esc(&v.address),
@@ -451,10 +453,10 @@ pub fn page_get(path: &str, query: &str) -> Page {
             },
             Ok(Some(v)) => Page {
                 status: "200 OK",
-                html: html("Already stopped", &format!("<h1>Already stopped</h1><p>K2 sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),
+                html: html("Already stopped", &format!("<h1>Already stopped</h1><p>{PRODUCT_NAME} sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),
             },
-            Ok(None) => gone("404 Not Found", "K2 doesn't know this stop link."),
-            Err(_) => gone("500 Internal Server Error", "K2 couldn't read its records. Try again later."),
+            Ok(None) => gone("404 Not Found", concat!(product_name!(), " doesn't know this stop link.")),
+            Err(_) => gone("500 Internal Server Error", concat!(product_name!(), " couldn't read its records. Try again later.")),
         },
     }
 }
@@ -480,7 +482,7 @@ pub fn page_post(path: &str, query: &str, body: &[u8]) -> Page {
                 html: html(
                     "Stopping",
                     &format!(
-                        "<h1>K2 has your stop</h1><p>K2 won't start sending to <strong>{}</strong> again for this. It's still telling its mail server, which is having trouble, so a message or two may arrive in the next few minutes.</p>",
+                        "<h1>{PRODUCT_NAME} has your stop</h1><p>{PRODUCT_NAME} won't start sending to <strong>{}</strong> again for this. It's still telling its mail server, which is having trouble, so a message or two may arrive in the next few minutes.</p>",
                         esc(&v.address)
                     ),
                 ),
@@ -530,7 +532,7 @@ fn stop_rate_limited(token: &str) -> bool {
 fn stopped_page(v: &store::Verified) -> Page {
     Page {
         status: "200 OK",
-        html: html("Stopped", &format!("<h1>Stopped</h1><p>K2 sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),
+        html: html("Stopped", &format!("<h1>Stopped</h1><p>{PRODUCT_NAME} sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),
     }
 }
 
@@ -544,11 +546,11 @@ fn page_post_inner(path: &str, query: &str, body: &[u8], stopped: &mut Option<st
         // Only `do=stop` changes anything.
         VERIFY_PATH if store::peek_any(&conn, &token).ok().flatten().is_some_and(|v| v.purpose == store::PURPOSE_FORWARD) => {
             let Ok(Some(v)) = store::peek_any(&conn, &token) else {
-                return gone("500 Internal Server Error", "K2 couldn't read its records. Try again later.");
+                return gone("500 Internal Server Error", concat!(product_name!(), " couldn't read its records. Try again later."));
             };
             if asks_stop(query, body) {
                 let Ok(changed) = store::revoke(&conn, &v.id, store::BY_RECIPIENT, now) else {
-                    return gone("500 Internal Server Error", "K2 couldn't save this. Try again later.");
+                    return gone("500 Internal Server Error", concat!(product_name!(), " couldn't save this. Try again later."));
                 };
                 let page = stopped_page(&v);
                 if changed {
@@ -576,7 +578,7 @@ fn page_post_inner(path: &str, query: &str, body: &[u8], stopped: &mut Option<st
             }
             Err(store::ConfirmError::Expired) => gone("404 Not Found", "It expired (links work for 24 hours). Ask for a new one."),
             Err(store::ConfirmError::Invalid) => gone("404 Not Found", "It was already used, or it was replaced by a newer one."),
-            Err(store::ConfirmError::Db(_)) => gone("500 Internal Server Error", "K2 couldn't save this. Try again later."),
+            Err(store::ConfirmError::Db(_)) => gone("500 Internal Server Error", concat!(product_name!(), " couldn't save this. Try again later.")),
         },
         _ => match store::stop_changed(&conn, &token, now) {
             Ok(Some((v, changed))) => {
@@ -587,8 +589,8 @@ fn page_post_inner(path: &str, query: &str, body: &[u8], stopped: &mut Option<st
                 }
                 page
             }
-            Ok(None) => gone("404 Not Found", "K2 doesn't know this stop link."),
-            Err(_) => gone("500 Internal Server Error", "K2 couldn't save this. Try again later."),
+            Ok(None) => gone("404 Not Found", concat!(product_name!(), " doesn't know this stop link.")),
+            Err(_) => gone("500 Internal Server Error", concat!(product_name!(), " couldn't save this. Try again later.")),
         },
     }
 }

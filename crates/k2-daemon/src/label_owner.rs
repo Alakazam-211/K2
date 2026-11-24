@@ -24,6 +24,7 @@ use k2_core::db::schema::{SelfStamp, SubdomainWorkspace};
 use rusqlite::Connection;
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 pub const CODE: &str = "label_owned_by_other_workspace";
 pub const TRANSFER_CODE: &str = "transfer_owner_only";
@@ -136,7 +137,7 @@ pub fn owned_by_other(conn: &Connection, label: &str, owner: &str, caller: &Call
     let m = crate::apps::coordination::maintainer_with(conn, owner);
     let mut owner_json = m.json();
     let ask = match (&m.address, m.kind) {
-        (Some(a), "agent") => format!(" Ask it: k2 msg {a} \"…\""),
+        (Some(a), "agent") => format!(" Ask it: {CLI_NAME} msg {a} \"…\""),
         _ => String::new(),
     };
     let body = if caller.is_manager() {

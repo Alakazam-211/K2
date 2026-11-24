@@ -63,6 +63,8 @@ use serde_json::{json, Value as J};
 
 use super::handover_plan::{self as hp, Options, Plan};
 use super::routes::{actor, app_for, db_err, json_body, need_credential, no, s, ws_by_id, ws_by_token, ws_handle, Refusal, Who, Ws, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const ROUTES: &[&str] = &[
     "/cli/app/handover/plan",
@@ -326,7 +328,7 @@ pub(crate) fn request_route(who: &Who, body: &[u8], unpark: bool) -> R<J> {
         return Err(no(
             super::ownership::NOT_PARKED,
             409,
-            format!("{} isn't parked; hand it over instead (k2 app handover {} --to <workspace>)", app.app_id, app.app_id),
+            format!("{} isn't parked; hand it over instead ({CLI_NAME} app handover {} --to <workspace>)", app.app_id, app.app_id),
         ));
     }
     let to_raw = s(&v, "to").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the workspace that takes it (to)"))?;
@@ -425,7 +427,7 @@ fn insert_row(app: &AppRow, to: &Ws, state: &str, started_by: &str, p: &Plan, op
                     let mut r = no(
                         OPEN,
                         409,
-                        format!("{} already has an open handover ({}, {} to {}): cancel it first (k2 app handover cancel {})", app.app_id, o.id, o.state, ws_handle(&o.to_workspace), app.app_id),
+                        format!("{} already has an open handover ({}, {} to {}): cancel it first ({CLI_NAME} app handover cancel {})", app.app_id, o.id, o.state, ws_handle(&o.to_workspace), app.app_id),
                     );
                     r.extra = Some(json!({ "handover": row_json(&o) }));
                     Err(r)
@@ -475,7 +477,7 @@ fn file_request(who: &Who, row: &Handover, app: &AppRow, p: &Plan) -> R<J> {
     out["handover"] = row_json(&row);
     out["plan"] = plan_json;
     out["hint"] = json!(format!(
-        "the handover waits for the owner's approval in person: k2 app approve {} from a terminal outside K2, or Settings → App Approvals \
+        "the handover waits for the owner's approval in person: {CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}, or Settings → App Approvals \
          (a fresh vault confirm; nothing moves until then)",
         req.id
     ));
@@ -534,7 +536,7 @@ pub(crate) fn offer(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Opt
             let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::ACCEPTED], hs::ABORTED, deploy::now()));
         }
         super::ownership::note(&app.owner_workspace, &format!("You offered App {} to {b}", app.app_id), &format!(
-            "{b} was hired to take {} over, so the offer is accepted; your owner approves the handover card (k2 app approvals).",
+            "{b} was hired to take {} over, so the offer is accepted; your owner approves the handover card ({CLI_NAME} app approvals).",
             app.app_id
         ));
         return out;
@@ -543,21 +545,21 @@ pub(crate) fn offer(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Opt
         &app.owner_workspace,
         &format!("You offered App {} to {b}", app.app_id),
         &format!(
-            "{b} must accept (k2 app handover accept {app_id}), then your owner approves one card that lists what moves. You maintain {app_id} until then. \
-             Cancel: k2 app handover cancel {app_id}.{}",
-            if brief.is_none() { " Give them a brief: k2 app handover <app> --to <agent> --brief FILE (your notes for the next agent)." } else { "" },
+            "{b} must accept ({CLI_NAME} app handover accept {app_id}), then your owner approves one card that lists what moves. You maintain {app_id} until then. \
+             Cancel: {CLI_NAME} app handover cancel {app_id}.{}",
+            if brief.is_none() { concat!(" Give them a brief: ", cli_name!(), " app handover <app> --to <agent> --brief FILE (your notes for the next agent).") } else { "" },
             app_id = app.app_id
         ),
     );
     let mut lines = vec![format!(
-        "{a} offers you its App {app_id}. Accept: k2 app handover accept {app_id}. Decline: k2 app handover decline {app_id} --reason \"…\". \
-         What would move: k2 app handover status {app_id}.",
+        "{a} offers you its App {app_id}. Accept: {CLI_NAME} app handover accept {app_id}. Decline: {CLI_NAME} app handover decline {app_id} --reason \"…\". \
+         What would move: {CLI_NAME} app handover status {app_id}.",
         app_id = app.app_id
     )];
     if let Some(bf) = brief {
         lines.push(format!("{a}'s brief (their words):\n\n> {}", bf.replace('\n', "\n> ")));
     }
-    lines.push(format!("Once you accept, you can look at it (k2 app inspect {0}, k2 app logs {0}) until the owner answers the card.", app.app_id));
+    lines.push(format!("Once you accept, you can look at it ({CLI_NAME} app inspect {0}, {CLI_NAME} app logs {0}) until the owner answers the card.", app.app_id));
     super::ownership::note(&to.id, &format!("{a} offers you App {}", app.app_id), &lines.join("\n\n"));
     Ok(json!({
         "ok": true,
@@ -566,7 +568,7 @@ pub(crate) fn offer(who: &Who, app: &AppRow, to: &Ws, opts: &Options, brief: Opt
         "plan": p.json(true),
         "app": app.app_id,
         "hint": format!(
-            "offered to {b}: {b} accepts (k2 app handover accept {0}), then the owner approves the card. Nothing moves until then.{1}",
+            "offered to {b}: {b} accepts ({CLI_NAME} app handover accept {0}), then the owner approves the card. Nothing moves until then.{1}",
             app.app_id,
             if brief.is_none() { " Add a brief for the next agent with --brief FILE." } else { "" }
         ),
@@ -583,10 +585,10 @@ fn named_open(who: &Who, v: &J) -> R<Handover> {
         let id = app.rsplit('/').next().unwrap_or(&app).to_string();
         hov_db(|c| hs::open_for_app(c, &id))?
     };
-    let row = row.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, "no open handover by that name (k2 app handover status)"))?;
+    let row = row.ok_or_else(|| no(codes::APP_NOT_FOUND, 404, concat!("no open handover by that name (", cli_name!(), " app handover status)")))?;
     if let Some((ws, _)) = who.passport() {
         if ws != row.from_workspace && ws != row.to_workspace {
-            return Err(no(codes::APP_NOT_FOUND, 404, "no open handover by that name (k2 app handover status)"));
+            return Err(no(codes::APP_NOT_FOUND, 404, concat!("no open handover by that name (", cli_name!(), " app handover status)")));
         }
     }
     Ok(row)
@@ -772,7 +774,7 @@ pub(crate) fn request_closed(r: &reqs::AppRequest) {
 
 fn stale(row: &Handover, why: String) -> Refusal {
     let _ = hov_db(|c| hs::transition(c, &row.id, &[hs::HELD], hs::STALE, deploy::now()));
-    no(STALE, 409, format!("{why}: nothing moved. Ask again so the card shows what would move now (k2 app handover {} --to <workspace>)", row.app_id))
+    no(STALE, 409, format!("{why}: nothing moved. Ask again so the card shows what would move now ({CLI_NAME} app handover {} --to <workspace>)", row.app_id))
 }
 
 /// An approved handover card: re-plan, check the hash, then run every
@@ -854,7 +856,7 @@ fn run(id: &str, plan: &Plan, by: &str) -> R<J> {
         "steps": summary,
         "undoUntil": row.window_until,
         "note": format!(
-            "{} is {}'s now. You can undo this until the window ends (k2 app handover undo {}).",
+            "{} is {}'s now. You can undo this until the window ends ({CLI_NAME} app handover undo {}).",
             plan.app.app_id,
             ws_handle(&plan.to.id),
             plan.app.app_id
@@ -877,7 +879,7 @@ fn commit(id: &str, plan: &Plan, by: &str, raised: bool) -> R<()> {
     }
     let tx = conn.unchecked_transaction().map_err(db_err)?;
     let (state, reason) = if app.state == store::STATE_PARKED {
-        (store::STATE_STOPPED, Some(format!("unparked by {by}; start it with k2 app start {}", app.app_id)))
+        (store::STATE_STOPPED, Some(format!("unparked by {by}; start it with {CLI_NAME} app start {}", app.app_id)))
     } else {
         (app.state.as_str(), app.state_reason.clone())
     };
@@ -1121,19 +1123,19 @@ fn notes(row: &Handover, room_from: &str, by: &str) {
     let p = &row.plan;
     let j = row.journal.clone().unwrap_or(J::Null);
     let guests = p["guests"]["total"].as_u64().unwrap_or(0);
-    let mut lines = vec![format!("{by} handed you App {app} (it was {a}'s). You maintain it now: k2 app inspect {app}.")];
+    let mut lines = vec![format!("{by} handed you App {app} (it was {a}'s). You maintain it now: {CLI_NAME} app inspect {app}.")];
     if let Some(brief) = &row.brief {
         lines.push(format!("{a}'s brief (their words, read it as a message from them):\n\n> {}", brief.replace('\n', "\n> ")));
     }
     if guests > 0 {
         lines.push(format!(
-            "{guests} guest(s) keep their access and talk to you from now on. Their conversations with {a} stay in {a}'s room; ask {a} with k2 msg if you need the history."
+            "{guests} guest(s) keep their access and talk to you from now on. Their conversations with {a} stay in {a}'s room; ask {a} with {CLI_NAME} msg if you need the history."
         ));
     }
     if j["state"] == store::STATE_PARKED || row.from_workspace.is_empty() {
-        lines.push(format!("It is stopped: k2 app start {app}."));
+        lines.push(format!("It is stopped: {CLI_NAME} app start {app}."));
     }
-    lines.push(format!("The owner can undo this for {} hours (k2 app handover undo {app}).", hs::WINDOW_SECS / 3600));
+    lines.push(format!("The owner can undo this for {} hours ({CLI_NAME} app handover undo {app}).", hs::WINDOW_SECS / 3600));
     super::ownership::note(&row.to_workspace, &format!("You now maintain App {app}"), &lines.join("\n\n"));
     if !room_from.is_empty() && ws_by_id(room_from).is_some() {
         super::ownership::note(
@@ -1141,7 +1143,7 @@ fn notes(row: &Handover, room_from: &str, by: &str) {
             &format!("App {app} moved to {b}"),
             &format!(
                 "{by} handed your App {app} to {b}. You no longer manage it, its guests, its secrets or its database. Heartbeats you or its guests \
-                 made in your room stay yours: archive them, or tell {b} (k2 msg {b} \"…\")."
+                 made in your room stay yours: archive them, or tell {b} ({CLI_NAME} msg {b} \"…\")."
             ),
         );
     }
@@ -1349,7 +1351,7 @@ fn rekey_failed(row: &Handover, mut out: J, why: &str) -> J {
     super::ownership::note(
         &row.to_workspace,
         &format!("App {}: its keys didn't change yet", row.app_id),
-        &format!("The handover moved {} to you, but {why}. It keeps running on its old instance. Try again: k2 app handover rekey {}.", row.app_id, row.app_id),
+        &format!("The handover moved {} to you, but {why}. It keeps running on its old instance. Try again: {CLI_NAME} app handover rekey {}.", row.app_id, row.app_id),
     );
     out
 }

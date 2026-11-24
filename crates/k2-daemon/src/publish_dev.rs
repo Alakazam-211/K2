@@ -13,6 +13,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use k2_core::brand::PRODUCT_NAME;
+#[cfg(target_os = "linux")]
+use k2_core::product_name;
 
 /// `--idle` default: 60 minutes (P-D7).
 pub const IDLE_DEFAULT_SECS: i64 = 60 * 60;
@@ -280,7 +283,7 @@ pub fn caps_of(pid: Option<i64>) -> String {
     #[cfg(target_os = "linux")]
     {
         let Some(path) = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok().as_deref().and_then(parse_cgroup_path) else {
-            return no_caps("K2 can't read this process's cgroup");
+            return no_caps(concat!(product_name!(), " can't read this process's cgroup"));
         };
         // A user scope (`k2-dev-…`), or (B4) the agent's own root-made
         // scope, whose caps are its properties: read at the scope itself.
@@ -495,7 +498,7 @@ pub fn exposed_addrs(ls: &[Listener]) -> Vec<String> {
 /// The warning for a gated site whose program listens beyond loopback (PA-5).
 pub fn bind_warning(label: &str, addrs: &[String]) -> String {
     format!(
-        "{label} listens on {}: anyone who can reach this machine on that port gets the site without K2's check. Bind it to 127.0.0.1 and restart it.",
+        "{label} listens on {}: anyone who can reach this machine on that port gets the site without {PRODUCT_NAME}'s check. Bind it to 127.0.0.1 and restart it.",
         addrs.join(", ")
     )
 }

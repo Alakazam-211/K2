@@ -32,6 +32,7 @@ use sha2::{Digest, Sha256};
 
 use super::{deps, Deps};
 use crate::voice::bff::{sew_refusal, Refusal, SewAnswer};
+use k2_core::brand::PRODUCT_NAME;
 
 pub const AUTH_K2: &str = "/api/v1/auth/k2";
 pub const AUTH_RENEW: &str = "/api/v1/auth/renew";
@@ -79,7 +80,7 @@ pub fn may_hold(ext: &str) -> bool {
 }
 
 pub fn unavailable(e: impl std::fmt::Display) -> Refusal {
-    Refusal::new(503, "chat_unavailable", format!("K2 could not reach this server's chat: {e}")).retry(crate::voice::bff::RETRY_SECS)
+    Refusal::new(503, "chat_unavailable", format!("{PRODUCT_NAME} could not reach this server's chat: {e}")).retry(crate::voice::bff::RETRY_SECS)
 }
 
 fn session_of(a: &SewAnswer, member_fallback: &str, now: i64) -> Result<Session, Refusal> {

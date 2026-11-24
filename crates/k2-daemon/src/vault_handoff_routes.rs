@@ -28,6 +28,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
 use crate::vault_routes::{refuse, Sel};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const SEND: &str = "/cli/vault/send";
 pub const INCOMING: &str = "/cli/vault/incoming";
@@ -259,7 +261,7 @@ fn send_inner(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, ingress: &
                 return Err(VaultError::new(
                     "send_by_name_only",
                     422,
-                    "agents send secrets by name: put it in your vault first (k2 vault set NAME < file), then k2 vault send NAME --to <agent>",
+                    concat!("agents send secrets by name: put it in your vault first (", cli_name!(), " vault set NAME < file), then ", cli_name!(), " vault send NAME --to <agent>"),
                 )
                 .into());
             }
@@ -267,7 +269,7 @@ fn send_inner(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, ingress: &
                 return Err(VaultError::new(
                     "use_vault_set",
                     422,
-                    "on this server, give it straight to the agent: k2 vault set NAME --scope ws:<agent> < file",
+                    concat!("on this server, give it straight to the agent: ", cli_name!(), " vault set NAME --scope ws:<agent> < file"),
                 )
                 .into());
             }
@@ -276,7 +278,7 @@ fn send_inner(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, ingress: &
         None => prepare_named(vault, c, b, as_name.clone(), note_max)?,
     };
     if is_k2_credential(prep.value.expose()) {
-        return Err(VaultError::new("never_sendable", 422, "that value is a K2 credential (an owner token, passport, login session or tunnel token); those are never sent").into());
+        return Err(VaultError::new("never_sendable", 422, concat!("that value is a ", product_name!(), " credential (an owner token, passport, login session or tunnel token); those are never sent")).into());
     }
     prep.note = crate::vault::redact_str(&prep.note);
     match target {
@@ -334,7 +336,7 @@ fn prepare_named(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, as_name
     };
     let meta = vault.meta(&sel, &c.actor).map_err(|e| {
         if e.status == 404 {
-            VaultError::not_found(format!("no secret named {name} here (k2 vault list)"))
+            VaultError::not_found(format!("no secret named {name} here ({CLI_NAME} vault list)"))
         } else {
             e
         }
@@ -485,11 +487,11 @@ pub(crate) fn send_answer(rec: &HandoffRecord, to: &str, cross: bool, reference:
     let who = match rec.status.as_str() {
         "landed" => None,
         "pending" if cross => Some(format!(
-            "a person on {} accepts it: K2 puts a card on that agent's Thread there (desktop and phone)",
+            "a person on {} accepts it: {PRODUCT_NAME} puts a card on that agent's Thread there (desktop and phone)",
             to.split_once("::").map(|x| x.1).unwrap_or(to)
         )),
         "pending" => Some(format!(
-            "a person on this server accepts it on the card K2 put on {to}'s Thread (desktop and phone: Allow accepts, Deny declines)"
+            "a person on this server accepts it on the card {PRODUCT_NAME} put on {to}'s Thread (desktop and phone: Allow accepts, Deny declines)"
         )),
         _ => Some(format!("it was {}", rec.status)),
     };
@@ -532,13 +534,13 @@ pub(crate) fn stamp_text(rec: &HandoffRecord, from_label: &str, reference: Optio
             let sites = landed.map(|m| !m.hosts.is_empty()).unwrap_or(!rec.item.hosts.is_empty());
             format!(
                 "[k2 vault] {from_label} sent {name} → your vault ({}, delivered to you as {d}{}). Use: {}.{note}",
-                reference.unwrap_or("k2 vault list"),
+                reference.unwrap_or(concat!(cli_name!(), " vault list")),
                 expiry_words(rec.expires_at.as_deref()),
                 handoff::use_hint_for(d, &name, sites)
             )
         }
         _ => format!(
-            "[k2 vault] {from_label} sent {name}. It waits for a person here: K2 put a card on your Thread for your owner to accept or decline (desktop and phone). Nothing for you to run; you hear back when they answer.{note}"
+            "[k2 vault] {from_label} sent {name}. It waits for a person here: {PRODUCT_NAME} put a card on your Thread for your owner to accept or decline (desktop and phone). Nothing for you to run; you hear back when they answer.{note}"
         ),
     }
 }
@@ -804,13 +806,13 @@ fn sender_key(vault: &LocalVault, r: &HandoffRecord) -> Option<String> {
 
 fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
     let b: DecideBody = parse(body)?;
-    let id = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("id_required", "which delivery? (k2 vault incoming)"))?;
+    let id = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("id_required", concat!("which delivery? (", cli_name!(), " vault incoming)")))?;
     let stamp = c.actor.stamp();
     if c.is_passport() {
         let e = VaultError::forbidden(
             "handoff_person_only",
             format!(
-                "a person on this server accepts or declines it on the card K2 put on the receiving agent's Thread (desktop and phone); agents can't. No card there? Ask for one: {}",
+                "a person on this server accepts or declines it on the card {PRODUCT_NAME} put on the receiving agent's Thread (desktop and phone); agents can't. No card there? Ask for one: {}",
                 crate::permission::actions::vault_incoming::ask_line(id)
             ),
         );
@@ -876,12 +878,12 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
             let text = format!(
                 "[k2 vault] your owner accepted {landed} from {} → your vault ({}, delivered to you as {d}{}). Use: {}.{more}",
                 r.peer_addr,
-                reference.as_deref().unwrap_or("k2 vault list"),
+                reference.as_deref().unwrap_or(concat!(cli_name!(), " vault list")),
                 expiry_words(got.meta.as_ref().and_then(|m| m.expires_at.as_deref())),
                 handoff::use_hint_for(d, &landed, sites)
             );
             let sender = crate::hire_routes::Sender { workspace_id: None, via: "owner", actor: stamp.clone(), on_behalf_of: None };
-            let _ = crate::hire_routes::deliver_recorded(&path, &text, "k2 vault", "", true, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT, "msg", &sender);
+            let _ = crate::hire_routes::deliver_recorded(&path, &text, concat!(cli_name!(), " vault"), "", true, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT, "msg", &sender);
         }
     }
     // Bug 2: the accept answer shows the copy's effective delivery,
@@ -905,7 +907,7 @@ pub(crate) fn accept_more(vault: &LocalVault, m: &k2_vault::SecretMeta) -> Optio
         return None;
     }
     Some(format!(
-        "Accepting it lets you take it up to {ceiling} yourself, no owner needed: k2 vault grant {} --to ws:{} --as {ceiling}{}.",
+        "Accepting it lets you take it up to {ceiling} yourself, no owner needed: {CLI_NAME} vault grant {} --to ws:{} --as {ceiling}{}.",
         m.name,
         crate::vault::workspace_label(&m.scope.id),
         crate::vault_use_routes::after_grant(ceiling, &m.name)
@@ -1045,7 +1047,7 @@ pub(crate) fn send_allow_post(vault: &LocalVault, c: &VaultCaller, body: &[u8], 
     if c.is_passport() || !c.actor.is_admin_human() {
         let e = VaultError::forbidden(
             "handoff_person_only",
-            "only an Owner or Admin on this server decides which secrets an agent may send to another server (to ask: k2 vault send it, and run the Ask with: line)",
+            concat!("only an Owner or Admin on this server decides which secrets an agent may send to another server (to ask: ", cli_name!(), " vault send it, and run the Ask with: line)"),
         );
         audit(&stamp, &format!("deny send-allow {}: {}", b.action, e.code), ingress);
         return Err(e);
@@ -1229,7 +1231,7 @@ struct UnsendBody {
 /// Unsend is not a revoke: rotate the key at the provider for that.
 fn unsend(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
     let b: UnsendBody = parse(body)?;
-    let id = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("id_required", "which delivery? (k2 vault sent)"))?;
+    let id = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("id_required", concat!("which delivery? (", cli_name!(), " vault sent)")))?;
     let stamp = c.actor.stamp();
     let out = vault.handoff_get(id, "out")?;
     let mine = match c.workspace_id() {

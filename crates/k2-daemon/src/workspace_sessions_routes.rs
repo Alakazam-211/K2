@@ -31,7 +31,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug};
 use k2_core::past_conversations::{self as past, IdMatch, PastQuery, PastRow};
 use k2_core::sidecar::{self as core, SidecarError};
 use serde_json::{json, Value};
@@ -39,6 +39,7 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::{self as sc, err, Caller, Workspace};
 use crate::workspace_roster::{self, RosterOpts};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ROSTER: &str = "/cli/sessions/roster";
 pub const PAST: &str = "/cli/sessions/past";
@@ -156,7 +157,7 @@ fn deny_sandboxed(caller: &Caller) -> Result<(), SidecarError> {
             return Err(err(
                 "sandboxed",
                 403,
-                "a sandboxed session cannot read host transcripts (k2 sessions still lists who is here)",
+                concat!("a sandboxed session cannot read host transcripts (", cli_name!(), " sessions still lists who is here)"),
             ));
         }
     }
@@ -353,7 +354,7 @@ fn not_found(token: &str) -> SidecarError {
     err(
         "conversation_not_found",
         404,
-        format!("no conversation '{token}' in this workspace; find it with: k2 sessions --past --search \"<words>\" (or --days 365)"),
+        format!("no conversation '{token}' in this workspace; find it with: {CLI_NAME} sessions --past --search \"<words>\" (or --days 365)"),
     )
 }
 
@@ -378,7 +379,7 @@ fn by_address(ws: &Workspace, token: &str) -> Option<(String, Option<String>)> {
 fn resolve(ws: &Workspace, token: &str) -> Result<Resolved, SidecarError> {
     let token = token.trim();
     if token.is_empty() {
-        return Err(err("bad_request", 400, "name a conversation: an id from k2 sessions --past, or an address"));
+        return Err(err("bad_request", 400, concat!("name a conversation: an id from ", cli_name!(), " sessions --past, or an address")));
     }
     let paths = project_paths()?;
     let looks_like_address = token == ws.handle || token.contains('/');
@@ -447,7 +448,7 @@ fn resolve(ws: &Workspace, token: &str) -> Result<Resolved, SidecarError> {
                 ))
             }
             IdMatch::TooShort => {
-                return Err(err("id_too_short", 400, "give at least 6 characters of the id (k2 sessions --past shows them)"))
+                return Err(err("id_too_short", 400, concat!("give at least 6 characters of the id (", cli_name!(), " sessions --past shows them)")))
             }
             IdMatch::None => last_err = Some(not_found(token)),
         }
@@ -486,7 +487,7 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
             "main_chat_needs_person",
             403,
             format!(
-                "only a person chooses the pinned main chat. Ask your human to run k2 sessions main set <id> in a K2 terminal (or choose it from this chat's menu); {} can run k2 sessions main to see what is pinned",
+                "only a person chooses the pinned main chat. Ask your human to run {CLI_NAME} sessions main set <id> in a {PRODUCT_NAME} terminal (or choose it from this chat's menu); {} can run {CLI_NAME} sessions main to see what is pinned",
                 ws.handle
             ),
         ));
@@ -496,7 +497,7 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| err("bad_request", 400, "name a conversation: an id from k2 sessions --past"))?;
+        .ok_or_else(|| err("bad_request", 400, concat!("name a conversation: an id from ", cli_name!(), " sessions --past")))?;
     let thread = parse_main_thread(body.get("thread").and_then(Value::as_str))?;
     let previous = k2_core::workspace::resume_chat::main_chat_status(&ws.path).conversation_id;
     let row = resolve(&ws, id)?.row;
@@ -504,7 +505,7 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
         return Err(err(
             "conversation_in_worktree",
             409,
-            format!("{} ran in the worktree {tree}, but the main chat runs in the workspace folder; reopen it with k2 sessions open {id} instead", row.conversation_id),
+            format!("{} ran in the worktree {tree}, but the main chat runs in the workspace folder; reopen it with {CLI_NAME} sessions open {id} instead", row.conversation_id),
         ));
     }
     let Some(choice) = thread else {
@@ -516,7 +517,7 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
             "previous": previous,
             "main": main_json(&ws),
             "title": row.custom_name.clone().unwrap_or(row.title),
-            "restartWith": format!("k2 agent restart {}", ws.handle),
+            "restartWith": format!("{CLI_NAME} agent restart {}", ws.handle),
         }));
     };
     let switch = k2_core::workspace::resume_chat::set_main_chat_with_thread(
@@ -535,7 +536,7 @@ fn handle_main_set(caller: &Caller, body: &Value) -> Result<Value, SidecarError>
         "main": main_json(&ws),
         "thread": main_thread_json(&switch),
         "title": row.custom_name.clone().unwrap_or(row.title),
-        "restartWith": format!("k2 agent restart {}", ws.handle),
+        "restartWith": format!("{CLI_NAME} agent restart {}", ws.handle),
     }))
 }
 
@@ -658,7 +659,7 @@ fn open_gate(caller: &Caller, ws: &Workspace, id: &str) -> Result<(), SidecarErr
             "main_only",
             403,
             format!(
-                "only the main session may open sessions; ask it: k2 msg {} \"please open {id}\"",
+                "only the main session may open sessions; ask it: {CLI_NAME} msg {} \"please open {id}\"",
                 ws.handle
             ),
         ));
@@ -695,7 +696,7 @@ fn preset_for(cli: &str, harness: Option<&str>) -> Result<core::HarnessPreset, S
     }
     core::resolve_preset(&conn, cli).map_err(|e| {
         if e.code == "harness_unknown" {
-            err("harness_not_installed", 409, format!("no enabled {} preset (k2 preset list)", cli))
+            err("harness_not_installed", 409, format!("no enabled {} preset ({CLI_NAME} preset list)", cli))
         } else {
             e
         }
@@ -741,7 +742,7 @@ fn already(ws: &Workspace, address: Option<String>, role: &str, live: bool, cid:
         "outcome": if live { "already_live" } else { "asleep_main" },
     });
     if role == "main" && !live {
-        v["wakeWith"] = json!(format!("k2 msg {} \"…\"", ws.handle));
+        v["wakeWith"] = json!(format!("{CLI_NAME} msg {} \"…\"", ws.handle));
     }
     v
 }
@@ -774,7 +775,7 @@ pub fn handle_open(caller: &Caller, v: &Value, extra: OpenExtra) -> Result<Opene
     let cid = row.conversation_id.clone();
     let cli = row.cli.clone();
     if cli.is_empty() || core::SUPPORTED_PROVIDERS.iter().all(|p| *p != cli) {
-        return Err(err("harness_not_supported", 409, format!("conversation {cid} is not one of the seven CLIs K2 resumes")));
+        return Err(err("harness_not_supported", 409, format!("conversation {cid} is not one of the seven CLIs {PRODUCT_NAME} resumes")));
     }
 
     // WS-O4: one runner.
@@ -810,7 +811,7 @@ pub fn handle_open(caller: &Caller, v: &Value, extra: OpenExtra) -> Result<Opene
             "conversation_recently_active",
             409,
             format!(
-                "this conversation was written {age} s ago, maybe in a terminal outside K2; opening it here would run it twice. Pass --force if it is closed."
+                "this conversation was written {age} s ago, maybe in a terminal outside {PRODUCT_NAME}; opening it here would run it twice. Pass --force if it is closed."
             ),
         ));
     }
@@ -897,7 +898,7 @@ pub fn handle_open(caller: &Caller, v: &Value, extra: OpenExtra) -> Result<Opene
         return Err(err(
             "sidecar_cap",
             409,
-            format!("{} already has {cap} live sidecars; stop one first (k2 sessions stop <name>)", ws.handle),
+            format!("{} already has {cap} live sidecars; stop one first ({CLI_NAME} sessions stop <name>)", ws.handle),
         ));
     }
     // WS-O10: installed.
@@ -1101,7 +1102,7 @@ fn self_refusal() -> CliResponse {
         body: json!({
             "success": false,
             "reason": "self_message",
-            "hint": "that is you (k2 whoami); message another session from k2 sessions",
+            "hint": concat!("that is you (", cli_name!(), " whoami); message another session from ", cli_name!(), " sessions"),
         })
         .to_string(),
     }
@@ -1179,7 +1180,7 @@ pub fn msg_session(
             json!({
                 "success": false,
                 "reason": "dormant_no_wake",
-                "hint": format!("{} is a past conversation; without --no-wake k2 msg --session reopens it", row.conversation_id),
+                "hint": format!("{} is a past conversation; without --no-wake {CLI_NAME} msg --session reopens it", row.conversation_id),
             })
             .to_string(),
         ));

@@ -51,6 +51,8 @@ use k2_core::db::schema::{AgentHeartbeat, HeartbeatFire, LeaseCheck, LeaseOutcom
 use k2_core::session::SessionId;
 
 use crate::session_lookup;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// Decision returned by the planner half of smart-launch. Useful for
 /// callers (and tests) that want to assert what would happen without
@@ -560,8 +562,8 @@ pub fn stale_step(hb_name: &str, chosen: bool, stale: Option<crate::hb_stale::St
     }
     StaleStep::Fail(format!(
         "stuck: {} ({}); this heartbeat delivers into a chosen session \
-         (k2 heartbeat session {}), so K2 does not replace it: fix that session, \
-         or set --auto to let K2 start a new one",
+         ({CLI_NAME} heartbeat session {}), so {PRODUCT_NAME} does not replace it: fix that session, \
+         or set --auto to let {PRODUCT_NAME} start a new one",
         s.reason.code().replace('_', " "),
         s.detail,
         hb_name
@@ -1012,7 +1014,7 @@ pub fn restart_session(project_path: &str, raw_name: &str) -> Result<(serde_json
     if name.is_empty() || name.contains(':') || name.contains('/') {
         return Err(format!(
             "not_a_heartbeat: '{raw}' is not a heartbeat name. Name one from \
-             k2 heartbeat schedule list (this workspace's only; a person adds \
+             {CLI_NAME} heartbeat schedule list (this workspace's only; a person adds \
              --workspace <ws> for another workspace's)"
         ));
     }
@@ -1075,7 +1077,7 @@ pub fn restart_session(project_path: &str, raw_name: &str) -> Result<(serde_json
         "clearedSessionId": cleared,
         "keptChosenSession": chosen,
         "next": if chosen {
-            "the next fire resumes the chosen session (k2 heartbeat session)"
+            concat!("the next fire resumes the chosen session (", cli_name!(), " heartbeat session)")
         } else {
             "the next fire starts a new session"
         },
@@ -1861,7 +1863,7 @@ fn skip_unavailable_wakeup(
             format!("WAKEUP.md at {} can't be read", hb.wakeup_path)
         }
     };
-    let reason = format!("{reason}; skipped, the heartbeat stays on and K2 retries");
+    let reason = format!("{reason}; skipped, the heartbeat stays on and {PRODUCT_NAME} retries");
     write_audit(project_id, agent_name, hb, DECISION_WAKEUP_UNAVAILABLE, &reason);
     k2_core::log_debug!(
         "[heartbeat] skipped hb={} project={} agent={}: {}",

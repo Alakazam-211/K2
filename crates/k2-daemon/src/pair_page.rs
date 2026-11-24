@@ -35,6 +35,7 @@
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
+use k2_core::brand::PRODUCT_NAME;
 
 pub const PAIR_PAGE: &str = "/pair";
 pub const AASA: &str = "/.well-known/apple-app-site-association";
@@ -107,7 +108,7 @@ pub fn pair_html(nonce: &str) -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="apple-itunes-app" content="app-id={app_store_id}">
-<title>Pair a phone with K2</title>
+<title>Pair a phone with {PRODUCT_NAME}</title>
 <style nonce="{nonce}">
 :root {{ color-scheme: light dark; --bg:#f6f6f4; --fg:#1d1d1b; --muted:#6b6b66; --card:#ffffff; --line:#dcdcd6; --accent:#2f5bd3; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --bg:#111214; --fg:#ececea; --muted:#9a9a94; --card:#1b1c1f; --line:#2c2d31; --accent:#7c9cff; }} }}
@@ -131,11 +132,11 @@ button, a.store {{ background:transparent; color:var(--accent); }}
 </head>
 <body>
 <main>
-  <h1>Open this in the K2 app</h1>
-  <p id="lead">This link pairs your phone with a K2 server. Open it in the K2 Companion app, or copy the code and paste it on the app's Pair screen.</p>
+  <h1>Open this in the {PRODUCT_NAME} app</h1>
+  <p id="lead">This link pairs your phone with a {PRODUCT_NAME} server. Open it in the K2 Companion app, or copy the code and paste it on the app's Pair screen.</p>
   <p id="scan">You can also scan the QR code from inside the K2 Companion app. If you don't have it yet, get it below.</p>
   <code id="code">…</code>
-  <a class="button" id="open" href="#" hidden>Open in K2</a>
+  <a class="button" id="open" href="#" hidden>Open in {PRODUCT_NAME}</a>
   <button type="button" id="copy" hidden>Copy code</button>
   <p id="status" role="status"></p>
   <section id="get">
@@ -162,14 +163,14 @@ button, a.store {{ background:transparent; color:var(--accent); }}
   open.hidden = false;
   copy.hidden = false;
   copy.addEventListener("click", function () {{
-    function done() {{ status.textContent = "Copied. Paste it on the K2 app's Pair screen."; }}
+    function done() {{ status.textContent = "Copied. Paste it on the {PRODUCT_NAME} app's Pair screen."; }}
     function manual() {{
       var range = document.createRange();
       range.selectNodeContents(code);
       var sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
-      status.textContent = "Selected. Copy it, then paste it in the K2 app.";
+      status.textContent = "Selected. Copy it, then paste it in the {PRODUCT_NAME} app.";
     }}
     if (navigator.clipboard && navigator.clipboard.writeText) {{
       navigator.clipboard.writeText(raw).then(done, manual);

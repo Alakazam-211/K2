@@ -22,6 +22,8 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const LIST: &str = "/cli/jobs/list";
 pub const SHOW: &str = "/cli/jobs/show";
@@ -153,7 +155,7 @@ fn find(ws: &str, name: Option<&str>) -> Result<Job, JobError> {
     let name = name.map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| err("name_required", 400, "which job? give its name"))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    store::get_by_name(&conn, ws, name)?.ok_or_else(|| err("no_such_job", 404, format!("no job named {name} here (k2 job list)")))
+    store::get_by_name(&conn, ws, name)?.ok_or_else(|| err("no_such_job", 404, format!("no job named {name} here ({CLI_NAME} job list)")))
 }
 
 // ── vault glue (`k2 vault grant NAME --to job:<name>`) ──────────────
@@ -178,7 +180,7 @@ pub fn job_for_grant(c: &VaultCaller, id: &str) -> Result<(String, String), Vaul
     let conn = db.lock();
     let job = store::get_by_name(&conn, &ws, &name)
         .map_err(|e| VaultError::internal(e.hint))?
-        .ok_or_else(|| VaultError::not_found(format!("no job named {name} (k2 job add first)")))?;
+        .ok_or_else(|| VaultError::not_found(format!("no job named {name} ({CLI_NAME} job add first)")))?;
     Ok((ws, job.id))
 }
 
@@ -295,9 +297,9 @@ fn note(job: &Job, w: &Who, verb: &str) -> bool {
     );
     let Some(path) = crate::vault::workspace_path(&job.workspace_id) else { return false };
     let body = match verb {
-        "removed" => format!("K2: job **{}** removed by {}.", job.name, w.label()),
+        "removed" => format!("{PRODUCT_NAME}: job **{}** removed by {}.", job.name, w.label()),
         _ => format!(
-            "K2: job **{}** {verb} by {}: {}, runs `{}` (timeout {}). It runs unattended with only the secrets granted to job:{}. `k2 job disable {}` stops it.",
+            "{PRODUCT_NAME}: job **{}** {verb} by {}: {}, runs `{}` (timeout {}). It runs unattended with only the secrets granted to job:{}. `{CLI_NAME} job disable {}` stops it.",
             job.name,
             w.label(),
             job.schedule.describe(),
@@ -461,11 +463,11 @@ fn dispatch(path: &str, c: &VaultCaller, body: &[u8], params: &HashMap<String, S
             let ws = workspace(&w, b.workspace.as_deref())?;
             let job = find(&ws, b.name.as_deref())?;
             if !job.enabled {
-                return Err(err("job_disabled", 409, format!("{} is off (k2 job enable {})", job.name, job.name)));
+                return Err(err("job_disabled", 409, format!("{} is off ({CLI_NAME} job enable {})", job.name, job.name)));
             }
             let paused = store::paused(&db.lock())?.0;
             if paused {
-                return Err(err("jobs_paused", 409, "every job is paused (k2 job resume --all, people only)"));
+                return Err(err("jobs_paused", 409, concat!("every job is paused (", cli_name!(), " job resume --all, people only)")));
             }
             let run = crate::jobs::start_run(&job, "manual", w.stamp())?;
             Ok(json!({ "ok": true, "job": job.name, "run": run }))

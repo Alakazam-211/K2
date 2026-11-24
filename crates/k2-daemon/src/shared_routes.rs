@@ -52,6 +52,8 @@ use serde_json::{json, Value as J};
 use k2_core::connect_users::{self, Shares};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const LIST: &str = "/cli/shared";
 pub const THREAD: &str = "/cli/shared/thread";
@@ -302,20 +304,20 @@ pub fn agent_risks(project_id: &str) -> Vec<String> {
             match count(sql) {
                 Ok(0) => {}
                 Ok(_) => out.push(what.to_string()),
-                Err(e) => out.push(format!("{what}: K2 couldn't check ({e})")),
+                Err(e) => out.push(format!("{what}: {PRODUCT_NAME} couldn't check ({e})")),
             }
         }
         for (column, label) in RISKY_SWITCHES {
             match count(&format!("SELECT COALESCE({column}, 0) FROM projects WHERE id = ?1")) {
                 Ok(0) => {}
                 Ok(_) => out.push(format!("switch on: {label} ({column})")),
-                Err(e) => out.push(format!("switch {column}: K2 couldn't check ({e})")),
+                Err(e) => out.push(format!("switch {column}: {PRODUCT_NAME} couldn't check ({e})")),
             }
         }
         path = match conn.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get::<_, String>(0)) {
             Ok(p) => Some(p),
             Err(e) => {
-                out.push(format!("its folder: K2 couldn't check ({e})"));
+                out.push(format!("its folder: {PRODUCT_NAME} couldn't check ({e})"));
                 None
             }
         };
@@ -340,12 +342,12 @@ pub fn agent_risks(project_id: &str) -> Vec<String> {
         Ok(v) => match v.grants_to(&k2_vault::Consumer::workspace(project_id)) {
             Ok(g) if g.is_empty() => {}
             Ok(_) => out.push("vault grants".to_string()),
-            Err(e) => out.push(format!("vault grants: K2 couldn't check ({e})")),
+            Err(e) => out.push(format!("vault grants: {PRODUCT_NAME} couldn't check ({e})")),
         },
         // No vault on this server at all: no grant can exist. A vault that
         // exists but isn't open can't be checked: a risk.
         Err(_) if !crate::vault::vault_dir(&k2_core::paths::k2_home()).join("vault.db").exists() => {}
-        Err(e) => out.push(format!("vault grants: K2 couldn't check ({e})")),
+        Err(e) => out.push(format!("vault grants: {PRODUCT_NAME} couldn't check ({e})")),
     }
     out
 }
@@ -378,7 +380,7 @@ pub fn demo_agent_check(shares: &mut Shares, force: bool) -> Result<Vec<String>,
     }
     if !warnings.is_empty() && !force {
         return Err(not_demo(
-            "share only a dedicated demo agent: anyone with this login can talk to it. Send force (k2 users … --force) to share it anyway.",
+            concat!("share only a dedicated demo agent: anyone with this login can talk to it. Send force (", cli_name!(), " users … --force) to share it anyway."),
             warnings,
         ));
     }
@@ -871,7 +873,7 @@ fn post(login: &str, shares: &Shares, body: &[u8]) -> CliResponse {
     }
     // A reply header is K2's to write (from `replyTo`), never the client's.
     if text.starts_with(REPLY_MARK) {
-        return refuse("400 Bad Request", "reply_header_not_allowed", "send replyTo (the message's seq) instead of a reply header; K2 writes the header");
+        return refuse("400 Bad Request", "reply_header_not_allowed", concat!("send replyTo (the message's seq) instead of a reply header; ", product_name!(), " writes the header"));
     }
     // H1: a reply quotes only this person's own conversation.
     let part = b.reply_quote.as_deref().map(crate::overlay_routes::strip_untrusted_controls);

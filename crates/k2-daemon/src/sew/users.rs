@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 
 use super::ops::MgmtError;
 use super::supervisor::{self as sup, no, Env, Fail, R};
+use k2_core::{cli_name, product_name};
 
 /// Sew's local handle rule: `[a-z0-9_-]{2,64}`.
 pub fn username_ok(u: &str) -> bool {
@@ -102,13 +103,13 @@ fn mgmt_fail(e: MgmtError) -> Fail {
                 "provider_is_k2" => (
                     "provider_is_k2",
                     409,
-                    "this Sew install uses K2 identity: its users come from K2 (chat grants), not Sew passwords. \
-                     A standalone install is a fresh install: k2 hostchat enable --identity standalone"
+                    concat!("this Sew install uses ", product_name!(), " identity: its users come from ", product_name!(), " (chat grants), not Sew passwords. \
+                     A standalone install is a fresh install: ", cli_name!(), " hostchat enable --identity standalone")
                         .into(),
                 ),
-                "owner_exists" => ("owner_exists", 409, "this Sew install already has an owner: invite people with k2 hostchat users invite".into()),
+                "owner_exists" => ("owner_exists", 409, concat!("this Sew install already has an owner: invite people with ", cli_name!(), " hostchat users invite").into()),
                 "username_taken" => ("username_taken", 409, "that username is taken: pick another name".into()),
-                "user_deactivated" => ("user_deactivated", 409, "that user is deactivated: k2 hostchat users reactivate <name>".into()),
+                "user_deactivated" => ("user_deactivated", 409, concat!("that user is deactivated: ", cli_name!(), " hostchat users reactivate <name>").into()),
                 "is_owner" => ("is_owner", 409, "the install owner cannot be revoked".into()),
                 "owner_role_fixed" | "guest_role_fixed" => ("role_fixed", 409, format!("Sew refused the role change ({code})")),
                 "not_a_local_person" => ("not_a_local_person", 409, "that member is not a local person".into()),
@@ -121,7 +122,7 @@ fn mgmt_fail(e: MgmtError) -> Fail {
             f
         }
         MgmtError::Unreachable(e) => no("sew_unreachable", 503, format!("Sew's mgmt socket is unreachable: {e}")),
-        MgmtError::Unauthorized => no("sew_unreachable", 503, "Sew refused K2's mgmt token"),
+        MgmtError::Unauthorized => no("sew_unreachable", 503, concat!("Sew refused ", product_name!(), "'s mgmt token")),
     }
 }
 
@@ -129,7 +130,7 @@ fn need_running(env: &Env) -> R<()> {
     if !env.ops.linux() {
         return Err(no("unsupported", 409, "Chat and voice run on Linux servers only"));
     }
-    let r = super::store::load().ok_or_else(|| no("not_installed", 404, "Chat and voice are not installed on this server (k2 hostchat enable)"))?;
+    let r = super::store::load().ok_or_else(|| no("not_installed", 404, concat!("Chat and voice are not installed on this server (", cli_name!(), " hostchat enable)")))?;
     if !matches!(r.status.as_str(), "running" | "degraded") {
         return Err(no("not_running", 409, format!("Sew is '{}': users need a running server", r.status)));
     }

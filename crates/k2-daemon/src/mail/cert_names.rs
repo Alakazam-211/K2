@@ -58,6 +58,8 @@ use k2_core::domains::DomainBinding;
 use crate::cli_response::CliResponse;
 use crate::mail::dns_verify::{DnsError, DnsResolver};
 use crate::mail::jmap::DefaultCertificate;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The only extra names (IT1). Never the apex, never `www`.
 pub const EXTRA_LABELS: [&str; 4] = ["autoconfig", "autodiscover", "mta-sts", "ua-auto-config"];
@@ -429,8 +431,8 @@ pub fn run(
             }
             let binding = match plan.binding.as_ref() {
                 None => Err(format!(
-                    "zone {} is not attached here — K2 issues per-name certificates through \
-                     DNS-01 on a K2-hosted zone only (k2 domain attach)",
+                    "zone {} is not attached here — {PRODUCT_NAME} issues per-name certificates through \
+                     DNS-01 on a K2-hosted zone only ({CLI_NAME} domain attach)",
                     plan.apex
                 )),
                 Some(b) => crate::domains::acme::check_extra_name_issuable(name, b).map(|_| b),
@@ -584,14 +586,14 @@ fn default_certificate_guard(state: Result<DefaultCertificate, String>) -> Resul
     match state {
         Ok(DefaultCertificate::Present(_)) => Ok(()),
         Ok(DefaultCertificate::Unset) => Err(
-            "Stalwart has no default certificate — adding a per-name certificate could \
+            concat!("Stalwart has no default certificate — adding a per-name certificate could \
              change what clients without SNI get. Fix the mail certificate first \
-             (k2 hostmail cert renew)"
+             (", cli_name!(), " hostmail cert renew)")
                 .into(),
         ),
         Ok(DefaultCertificate::Missing(id)) => Err(format!(
             "Stalwart's default certificate ({id}) no longer exists (expired?) — fix the \
-             mail certificate first (k2 hostmail cert renew)"
+             mail certificate first ({CLI_NAME} hostmail cert renew)"
         )),
         Err(e) => Err(format!("could not read Stalwart's default certificate: {e}")),
     }
@@ -732,7 +734,7 @@ fn issuer_label(binding: Option<&DomainBinding>, name: &str) -> (&'static str, O
     match binding {
         None => (
             "unsupported",
-            Some("zone not attached here (K2 issues per-name certificates on K2-hosted zones only)".into()),
+            Some(concat!("zone not attached here (", product_name!(), " issues per-name certificates on K2-hosted zones only)").into()),
         ),
         Some(b) => match crate::domains::acme::check_extra_name_issuable(name, b) {
             Ok(()) => ("k2-dns-01", None),

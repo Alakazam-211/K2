@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use k2_core::homes_sync::{self, DeviceState};
-use k2_core::stash_sync;
+use k2_core::{product_name, stash_sync};
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
@@ -84,7 +84,7 @@ fn person_for(actor: &Actor) -> Result<String, CliResponse> {
         PersonRefusal::Reserved => error(
             "403 Forbidden",
             "stash_person_only",
-            "this login's name is one K2 uses for the server's owner and its agents, so it has no stash; the owner can remove it in Settings → Admin Access and add the person under another name",
+            concat!("this login's name is one ", product_name!(), " uses for the server's owner and its agents, so it has no stash; the owner can remove it in Settings → Admin Access and add the person under another name"),
         ),
     })
 }

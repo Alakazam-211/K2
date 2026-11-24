@@ -53,6 +53,7 @@ use serde_json::{json, Value as J};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Concurrent door connections per App (its roles have their own
 /// connection limits in Postgres).
@@ -380,7 +381,7 @@ pub fn decide(app: &str, params: &[(String, String)], admits: &[Admit]) -> Resul
         return Err(refusal(
             codes::NO_DATABASE,
             "28000",
-            format!("App {app} has no database on this box: its workspace owns none and was granted none (k2 db create, or k2 db grant)"),
+            format!("App {app} has no database on this box: its workspace owns none and was granted none ({CLI_NAME} db create, or {CLI_NAME} db grant)"),
         ));
     }
     let Some(a) = admits.iter().find(|a| a.database == database) else {
@@ -414,8 +415,8 @@ pub fn error_response(app: &str, r: &Refusal) -> Vec<u8> {
     field(b'S', "FATAL");
     field(b'V', "FATAL");
     field(b'C', r.sqlstate);
-    field(b'M', &format!("K2 database door: {} [k2:{}]", r.message, r.code));
-    field(b'H', &format!("k2 app doctor {app} shows what the App may reach"));
+    field(b'M', &format!("{PRODUCT_NAME} database door: {} [k2:{}]", r.message, r.code));
+    field(b'H', &format!("{CLI_NAME} app doctor {app} shows what the App may reach"));
     f.push(0);
     let mut out = vec![b'E'];
     out.extend_from_slice(&((f.len() + 4) as u32).to_be_bytes());

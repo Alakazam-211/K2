@@ -34,6 +34,8 @@ use crate::app_push::owner_routes::{admin_human, app_agent_at, fresh_confirm, ow
 use crate::apps::grace::{target, Target};
 use crate::apps::routes::{actor, json_body, need_credential, no, respond, s, Refusal, Who, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/app/pairing";
 pub const SET: &str = "/cli/app/pairing/set";
@@ -143,8 +145,8 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             "owner_only",
             403,
-            "which phone apps open an App's sign-in codes is the owner's choice, in person (k2 app pairing setup from a terminal outside K2). \
-             An agent asks with a permission card.",
+            concat!("which phone apps open an App's sign-in codes is the owner's choice, in person (", cli_name!(), " app pairing setup from a terminal outside ", product_name!(), "). \
+             An agent asks with a permission card."),
         ));
     }
     let input = store::parse_input(&v).map_err(|e| no("usage", 400, e))?;
@@ -156,7 +158,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(
             "no_public_host",
             409,
-            "this App has no public k2.dev host to pair on (it needs K2 Connect and its own label: k2 app domain add, or a tunnelled deploy)",
+            concat!("this App has no public k2.dev host to pair on (it needs K2 Connect and its own label: ", cli_name!(), " app domain add, or a tunnelled deploy)"),
         ));
     }
     if let Some(h) = input.hosts.as_ref().and_then(|hs| hs.iter().find(|h| !all.contains(h))) {
@@ -176,8 +178,8 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
         &t,
         &v,
         super::CONFIRM_ACTION,
-        "the phone apps that open this App's sign-in codes need a fresh owner confirm (Touch ID, your login or vault password); \
-         k2 app pairing setup asks for it from a terminal outside K2",
+        concat!("the phone apps that open this App's sign-in codes need a fresh owner confirm (Touch ID, your login or vault password); \
+         ", cli_name!(), " app pairing setup asks for it from a terminal outside ", product_name!()),
         "confirm again: a confirm works once, for this App's phone apps, within 60 seconds",
     )?;
     let by = actor(who);
@@ -200,12 +202,12 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     let mut out = status_json(&t)?;
     let served: Vec<String> = super::served_hosts(&cfg, &all);
     let mut warnings = if desktop_only {
-        vec!["desktop only: K2 serves no iOS or Android link file for this App and no app opens the QR's link; \
-              show the code for the person to type into your desktop app (pairing.check, then pairing.redeem: k2 study app-pairing)"
+        vec![concat!("desktop only: ", product_name!(), " serves no iOS or Android link file for this App and no app opens the QR's link; \
+              show the code for the person to type into your desktop app (pairing.check, then pairing.redeem: ", cli_name!(), " study app-pairing)")
             .to_string()]
     } else {
         vec![format!(
-            "while pairing is on, K2 itself answers /.well-known/apple-app-site-association and /.well-known/assetlinks.json on {}: \
+            "while pairing is on, {PRODUCT_NAME} itself answers /.well-known/apple-app-site-association and /.well-known/assetlinks.json on {}: \
              the App's own files there are replaced; list its other universal-link paths with --link-path",
             served.join(", ")
         )]
@@ -265,7 +267,7 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let t = pairing_target(who, s(&v, "app"))?;
     if !owner_in_person(who) && !matches!(who, Who::Shell { .. }) {
-        return Err(no("owner_only", 403, "checking an App's phone link files fetches them over the internet: the owner runs k2 app pairing check"));
+        return Err(no("owner_only", 403, concat!("checking an App's phone link files fetches them over the internet: the owner runs ", cli_name!(), " app pairing check")));
     }
     if crate::push_routes::airgap_blocks() {
         return Err(no("airgap", 503, "air-gap is on: nothing leaves this server"));
@@ -273,7 +275,7 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let Some(app_id) = t.app_id.clone() else { return Err(no("pairing_needs_k2_front", 409, super::NotServed::NotRuntime.hint())) };
     super::refresh_links(&t.service_id);
     let Some(set) = super::links::get(&app_id) else {
-        return Err(no("pairing_off", 409, "this App's pairing is off, so K2 serves no link files to check (k2 app pairing setup)"));
+        return Err(no("pairing_off", 409, concat!("this App's pairing is off, so ", product_name!(), " serves no link files to check (", cli_name!(), " app pairing setup)")));
     };
     // What K2 serves now, with the App's link-file setting merged in (0.46.7).
     let files = super::links::get_files(&app_id);

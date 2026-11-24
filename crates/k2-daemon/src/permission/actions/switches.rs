@@ -45,7 +45,8 @@ use serde_json::{json, Value};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
+use k2_core::brand::PRODUCT_NAME;
 
 // ── shared helpers for the E1 entries (also used by connections.rs) ──
 
@@ -437,8 +438,8 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "projects.manage-off",
             Floor::Admin,
             &[],
-            "Let this agent manage K2 projects",
-            "Let {ws} create, rename and delete K2 projects and change who is in them",
+            concat!("Let this agent manage ", product_name!(), " projects"),
+            concat!("Let {ws} create, rename and delete ", product_name!(), " projects and change who is in them"),
             "It covers every project {ws} can see.",
             &[code_wall("agent_permission_off", "/cli/")],
             WallCoverage::Code,
@@ -447,8 +448,8 @@ pub(crate) static SWITCHES: [Switch; 21] = [
             "projects.manage-off",
             Floor::Admin,
             &[],
-            "Let this agent manage K2 projects",
-            "Stop {ws} changing K2 projects",
+            concat!("Let this agent manage ", product_name!(), " projects"),
+            concat!("Stop {ws} changing ", product_name!(), " projects"),
             "It can still read its projects and use their project chat.",
         ),
         writer: Writer::Access("projects_manage"),
@@ -866,7 +867,7 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
             }
             Ok(level == crate::apps::access::Level::Full)
         }
-        Writer::Access(other) => Err(format!("K2 doesn't know the switch {other}")),
+        Writer::Access(other) => Err(format!("{PRODUCT_NAME} doesn't know the switch {other}")),
         Writer::AppCore => {
             path()?;
             let core = param(ctx, "core").ok_or("name the core: core=<db|files|thread|mail|sew>")?;
@@ -974,7 +975,7 @@ pub(crate) fn actions() -> Vec<Registered> {
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────
 
-const IN_SETTINGS: &str = "Settings, or a terminal outside K2";
+const IN_SETTINGS: &str = concat!("Settings, or a terminal outside ", product_name!());
 
 /// Rows near the switches that aren't v1 cards: the two "no" rows of A1,
 /// the rows a switch covers, and Rosson's rule that agents can't ask for
@@ -990,7 +991,7 @@ pub(crate) static NOT_CARDABLE: [NotCardableSpec; 10] = [
         id: "workspace.skip-permissions",
         area: Area::Switches,
         why: NotCardable::Dropped,
-        r#where: concat!("a terminal outside K2 (", cli_name!(), " workspace api-skip-permissions)"),
+        r#where: concat!("a terminal outside ", product_name!(), " (", cli_name!(), " workspace api-skip-permissions)"),
     },
     NotCardableSpec { id: "compute.node.pause", area: Area::Compute, why: NotCardable::Dropped, r#where: "Settings → Cores → Compute → Machine settings" },
     NotCardableSpec { id: "domain.apex.add", area: Area::Domains, why: NotCardable::Covered { by: "dns.manage" }, r#where: IN_SETTINGS },

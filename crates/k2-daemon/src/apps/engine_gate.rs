@@ -25,6 +25,8 @@ use std::time::Duration;
 
 use k2_core::deploy::engine::RunHandle;
 use serde_json::{json, Value};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// How often boot asks the engine to adopt while it doesn't answer.
 pub const ADOPT_RETRY: Duration = Duration::from_secs(2);
@@ -158,15 +160,15 @@ pub fn observe(ans: &Result<Value, String>) -> Seen {
 /// R34: the ERROR line and the owner notice for a protocol mismatch.
 pub fn report_mismatch(running: u64, want: u32) {
     let next = if k2_core::deploy::engine_heal_enabled() {
-        "K2 installs the matching engine now (engine heal; k2 app engine status)"
+        concat!(product_name!(), " installs the matching engine now (engine heal; ", cli_name!(), " app engine status)")
     } else {
-        "the engine heal is off (appsEngineHeal): the owner runs k2 app engine install"
+        concat!("the engine heal is off (appsEngineHeal): the owner runs ", cli_name!(), " app engine install")
     };
     super::runtime_notes::error(&format!("engine protocol {running} vs {want}: {next}"));
     super::runtime_notes::owner_notice(
-        "K2's App engine doesn't match this K2",
+        concat!(product_name!(), "'s App engine doesn't match this ", product_name!()),
         &format!(
-            "The running k2-app-engine speaks protocol {running} and this K2 speaks {want}, so Apps can't start or \
+            "The running k2-app-engine speaks protocol {running} and this {PRODUCT_NAME} speaks {want}, so Apps can't start or \
              restart on it. {next}. Apps that should run wait for the engine (they don't count as crashing) and start \
              as soon as it matches."
         ),
@@ -222,12 +224,12 @@ pub fn report_not_answering(waited: Duration, last_error: &str) {
         waited.as_secs()
     ));
     super::runtime_notes::owner_notice(
-        "K2's App engine isn't answering",
+        concat!(product_name!(), "'s App engine isn't answering"),
         &format!(
-            "K2 has asked k2-app-engine to report the running Apps for {}s and it hasn't answered ({last_error}). \
-             K2 starts no App until it does, so nothing runs twice; their addresses answer 503 meanwhile. \
-             Check `k2 app engine status` and `systemctl --user -M k2app@ status k2-app-engine`; the owner can run \
-             `k2 app engine install`.",
+            "{PRODUCT_NAME} has asked k2-app-engine to report the running Apps for {}s and it hasn't answered ({last_error}). \
+             {PRODUCT_NAME} starts no App until it does, so nothing runs twice; their addresses answer 503 meanwhile. \
+             Check `{CLI_NAME} app engine status` and `systemctl --user -M k2app@ status k2-app-engine`; the owner can run \
+             `{CLI_NAME} app engine install`.",
             waited.as_secs()
         ),
     );

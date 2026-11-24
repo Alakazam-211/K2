@@ -42,7 +42,8 @@ use k2_core::hire::{ledger, links, HireCaller, HireError};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::routes::http::V1Principal;
-use k2_core::brand::CLI_SLOT;
+use k2_core::brand::{CLI_NAME, CLI_SLOT, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
 
@@ -868,7 +869,7 @@ fn team_view(conn: &rusqlite::Connection, ws: &links::Ws) -> serde_json::Value {
 // ── /cli ─────────────────────────────────────────────────────────────
 
 fn owner_only() -> CliResponse {
-    err(403, "owner_only", "only a person can do this (owner token or an Owner/Admin login); an agent never hires teams, links or retires through K2")
+    err(403, "owner_only", concat!("only a person can do this (owner token or an Owner/Admin login); an agent never hires teams, links or retires through ", product_name!()))
 }
 
 fn is_admin(who: &Who) -> bool {
@@ -1131,7 +1132,7 @@ fn agent_hire_gate(who: &Who, body: &[u8]) -> Result<(), CliResponse> {
         return Err(err(
             403,
             "main_only",
-            format!("only the workspace's main session may hire agents; a sidecar can't. Ask it: k2 msg {ws} \"please hire …\""),
+            format!("only the workspace's main session may hire agents; a sidecar can't. Ask it: {CLI_NAME} msg {ws} \"please hire …\""),
         ));
     }
     Ok(())
@@ -1187,7 +1188,7 @@ fn templates_read(path: &str, params: &HashMap<String, String>) -> CliResponse {
     } else {
         match params.get("id").map(|s| s.trim()).filter(|s| !s.is_empty()) {
             Some(id) => k2_core::hire::template::show_json(id, flag("files")),
-            None => Err(HireError::usage("missing ?id=<template id> (see: k2 agent template list)")),
+            None => Err(HireError::usage(concat!("missing ?id=<template id> (see: ", cli_name!(), " agent template list)"))),
         }
     };
     match r {
@@ -1346,7 +1347,7 @@ fn msg_who(who: &Who, params: &HashMap<String, String>) -> CliResponse {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Some(d) = k2_core::hire::deliveries::get(&conn, id) else {
-        return err(404, "not_found", format!("no delivery {id}: K2 never sent it (text that looks like a prefix proves nothing)"));
+        return err(404, "not_found", format!("no delivery {id}: {PRODUCT_NAME} never sent it (text that looks like a prefix proves nothing)"));
     };
     if let Some((ws, _)) = who.passport() {
         let mine = d.target_workspace_id.as_deref() == Some(ws) || d.sender_workspace_id.as_deref() == Some(ws);

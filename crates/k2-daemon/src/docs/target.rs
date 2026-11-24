@@ -62,6 +62,7 @@
 use std::path::{Path, PathBuf};
 
 use k2_mpc_base::store::DocKey;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A `.pptx` deck, by its name alone (any case, a name before the dot).
 pub fn is_deck_file(rel: &str) -> bool {
@@ -276,7 +277,7 @@ impl Refusal {
     /// bytes on disk past the format's codec, so `k2 doc` never opens one.
     /// [`share_rel`] still takes it (a share names a file, it opens nothing).
     fn board_file(rel: &str) -> Self {
-        Refusal::declined("board_file", format!("{rel} is a Board file; k2 doc doesn't read or change Board files"))
+        Refusal::declined("board_file", format!("{rel} is a Board file; {CLI_NAME} doc doesn't read or change Board files"))
     }
 }
 
@@ -459,7 +460,7 @@ pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
     if is_generated(rel) || is_root_mirror {
         return Err(Refusal::declined(
             "generated",
-            format!("K2 writes {rel} itself, so it can't be a live doc; edit its source instead"),
+            format!("{PRODUCT_NAME} writes {rel} itself, so it can't be a live doc; edit its source instead"),
         ));
     }
     if let Some(hit) = k2_core::secret_paths::classify(rel, abs) {
@@ -573,7 +574,7 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
         return Err(Refusal::declined("protected", format!("{rel} is in the vault folder")));
     }
     if is_generated(&rel) {
-        return Err(Refusal::declined("generated", format!("K2 writes {rel} itself")));
+        return Err(Refusal::declined("generated", format!("{PRODUCT_NAME} writes {rel} itself")));
     }
     if is_git_internal(&rel) || k2_protected(&rel).is_some() {
         return Err(Refusal::declined("protected", format!("{rel} is protected (git's folder, or the vault, dumps or the daemon's own state)")));

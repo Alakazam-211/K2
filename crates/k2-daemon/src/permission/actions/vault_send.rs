@@ -44,7 +44,8 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::vault::{caller_of, SHARE_CONFIRM};
 use super::{Answerer, Applied, Check, Ctx, Registered};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// The card's id.
 pub(crate) const ACTION: &str = "vault.send";
@@ -73,7 +74,7 @@ pub(crate) static SEND: ActionSpec = ActionSpec {
     words: Words {
         setting: "Send {secrets} to {to}",
         what_changes: "Send {secrets} from {ws}'s vault to {to}, an agent on another server",
-        consequences: "A person gave {ws} {secrets}, so {them} leave this server only when you say so. K2 sends {them} as you, sealed to that server's vault: nobody sees the value on the way, and it waits there until a person on that server accepts it, unless that server already lets {to} take secrets from {ws} without asking. \"From now on\" also lets {ws} send {secrets} to {to} itself, without a card, until you remove it in {path}.{noted}",
+        consequences: concat!("A person gave {ws} {secrets}, so {them} leave this server only when you say so. ", product_name!(), " sends {them} as you, sealed to that server's vault: nobody sees the value on the way, and it waits there until a person on that server accepts it, unless that server already lets {to} take secrets from {ws} without asking. \"From now on\" also lets {ws} send {secrets} to {to} itself, without a card, until you remove it in {path}.{noted}"),
         scope: "{secrets} to {to}",
         duration: "once, unless you choose from now on",
         retry: "",
@@ -270,7 +271,7 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
         return refused("send_refused", format!("Nothing was sent: {}.", failed.join("; ")));
     }
     let there = if pending { " It waits there until a person on that server accepts it." } else { " It's in their vault now." };
-    let mut msg = format!("K2 sent {} to {to} as {}.{there} Don't send {} again.", and_list(&sent), who_words(who), if sent.len() == 1 { "it" } else { "them" });
+    let mut msg = format!("{PRODUCT_NAME} sent {} to {to} as {}.{there} Don't send {} again.", and_list(&sent), who_words(who), if sent.len() == 1 { "it" } else { "them" });
     if !failed.is_empty() {
         msg.push_str(&format!(" Not sent: {}.", failed.join("; ")));
     }

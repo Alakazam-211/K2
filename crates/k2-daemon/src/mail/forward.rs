@@ -76,6 +76,8 @@ use crate::email_notify::{self, fail, respond, Fail, R};
 use crate::mail::forward_sync::{self, ChangeError};
 use crate::mail::forward_verify::{self, OutsideChange, Told};
 use crate::mail::hostmail_auth::authorize_mailbox;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const FORWARD_PATH: &str = "/cli/mail/forward";
 pub const ADD_PATH: &str = "/cli/mail/forward/add";
@@ -180,7 +182,7 @@ impl Caller {
                 Err(fail(
                     403,
                     "agent_send_required",
-                    "K2 paused this forward because agent sending is off for this mailbox's workspace; it goes back on when sending does, or the owner, an Admin or the mailbox's person resumes it",
+                    concat!(product_name!(), " paused this forward because agent sending is off for this mailbox's workspace; it goes back on when sending does, or the owner, an Admin or the mailbox's person resumes it"),
                 ))
             } else {
                 Ok(())
@@ -190,21 +192,21 @@ impl Caller {
             return Err(fail(
                 409,
                 "held",
-                "K2 paused this forward because it can't email the address its link to stop it; it goes back on by itself when that email goes, or remove it (k2 hostmail forward rm)",
+                concat!(product_name!(), " paused this forward because it can't email the address its link to stop it; it goes back on by itself when that email goes, or remove it (", cli_name!(), " hostmail forward rm)"),
             ));
         }
         if reason == store::P_REVOKED {
             return Err(fail(
                 409,
                 "destination_stopped",
-                "that address pressed Stop in K2's email, so this forward can't be resumed; only the owner or an Admin can choose it again (k2 hostmail forward add <mailbox> --to <address> --restart-stopped)",
+                concat!("that address pressed Stop in ", product_name!(), "'s email, so this forward can't be resumed; only the owner or an Admin can choose it again (", cli_name!(), " hostmail forward add <mailbox> --to <address> --restart-stopped)"),
             ));
         }
         if store::auto_lifts(reason) {
             return Err(fail(
                 409,
                 "held",
-                format!("K2 paused this forward because {}; it resumes by itself when that changes", reason_words(reason)),
+                format!("{PRODUCT_NAME} paused this forward because {}; it resumes by itself when that changes", reason_words(reason)),
             ));
         }
         match self {
@@ -212,7 +214,7 @@ impl Caller {
                 403,
                 "owner_only",
                 format!(
-                    "{} paused this forward, so an agent can't turn it back on; the owner, an Admin or the mailbox's person resumes it (k2 hostmail forward resume)",
+                    "{} paused this forward, so an agent can't turn it back on; the owner, an Admin or the mailbox's person resumes it ({CLI_NAME} hostmail forward resume)",
                     paused_by.map_or("someone".to_string(), forward_verify::actor_words)
                 ),
             )),
@@ -220,7 +222,7 @@ impl Caller {
                 403,
                 "owner_only",
                 format!(
-                    "K2 paused this forward because {}; the owner, an Admin or the mailbox's person resumes it (k2 hostmail forward resume)",
+                    "{PRODUCT_NAME} paused this forward because {}; the owner, an Admin or the mailbox's person resumes it ({CLI_NAME} hostmail forward resume)",
                     reason_words(reason)
                 ),
             )),
@@ -246,15 +248,15 @@ pub fn reason_words(reason: &str) -> &'static str {
     match reason {
         store::P_DEST_GONE => "the destination says the address doesn't exist",
         store::P_REFUSED => "the destination refused too many forwards as spam or by policy",
-        store::P_REVOKED => "the destination asked K2 to stop",
-        store::P_DAILY_CAP => "it reached its daily limit (the owner can raise it: k2 hostmail config --forward-copies-per-day <n>)",
+        store::P_REVOKED => concat!("the destination asked ", product_name!(), " to stop"),
+        store::P_DAILY_CAP => concat!("it reached its daily limit (the owner can raise it: ", cli_name!(), " hostmail config --forward-copies-per-day <n>)"),
         store::P_BOX_BRAKE => "too many forwards from this server were refused",
         store::P_RECEIVE_ONLY => "the mailbox's domain is receive-only",
         store::P_AIR_GAP => "air-gap is on",
         store::P_MANUAL => "someone paused it",
-        store::P_NOT_TOLD => "K2 hasn't been able to email the address its link to stop this",
+        store::P_NOT_TOLD => concat!(product_name!(), " hasn't been able to email the address its link to stop this"),
         store::P_AGENT_SEND_OFF => "agent sending is off for the workspace whose agent set this forward",
-        store::P_UPGRADE => "not forwarding: the mail server needs upgrading: k2 hostmail upgrade",
+        store::P_UPGRADE => concat!("not forwarding: the mail server needs upgrading: ", cli_name!(), " hostmail upgrade"),
         _ => "of a rule",
     }
 }
@@ -306,7 +308,7 @@ fn change_fail(e: ChangeError) -> Fail {
             fail(409, "bad_state", format!("the forward is {from}; it can't become {to}"))
         }
         ChangeError::Row(store::TransitionError::Db(e)) => email_notify::db_fail(e),
-        ChangeError::Sieve(_, e) => fail(502, "engine", format!("saved, but the mail server wasn't updated yet ({e}); K2 retries within the hour")),
+        ChangeError::Sieve(_, e) => fail(502, "engine", format!("saved, but the mail server wasn't updated yet ({e}); {PRODUCT_NAME} retries within the hour")),
     }
 }
 
@@ -479,7 +481,7 @@ fn addresses_from(v: &J) -> R<Option<Vec<String>>> {
 /// `show`'s and `list`'s words for a row whose mail can't arrive.
 fn cant_arrive_words(f: &Forward) -> String {
     format!(
-        "mail to {} can't arrive: this server hosts its domain and has no such mailbox, so it bounces here and never reaches another provider. Remove it (k2 hostmail forward rm {} --to {}) or create the mailbox",
+        "mail to {} can't arrive: this server hosts its domain and has no such mailbox, so it bounces here and never reaches another provider. Remove it ({CLI_NAME} hostmail forward rm {} --to {}) or create the mailbox",
         f.dest, f.address, f.dest
     )
 }
@@ -525,7 +527,7 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
         "notice": f.notice_state,
         "noticeAt": f.notice_at,
         "noticeWords": if f.notice_failed_at.is_some() && f.notice_state.as_deref() == Some(store::N_DUE) {
-            Some("not on: K2 hasn't been able to email this address its stop link, and it stays off until that email goes; K2 keeps trying".to_string())
+            Some(concat!("not on: ", product_name!(), " hasn't been able to email this address its stop link, and it stays off until that email goes; ", product_name!(), " keeps trying").to_string())
         } else {
             f.notice_state.as_deref().and_then(notice_words)
         },
@@ -543,10 +545,10 @@ pub fn forward_json(f: &Forward, now: i64) -> J {
 /// `show`'s words for what K2 told an outside address, when they matter.
 fn notice_words(state: &str) -> Option<String> {
     match state {
-        store::N_FAILED => Some("K2 couldn't email this address its stop link yet, so it can't stop this itself; K2 keeps trying, and pauses the forward after a day".to_string()),
-        store::N_DUE => Some("not on yet: K2 is pacing its emails, so it will email this address and then turn this on, within minutes or a few hours if many are waiting".to_string()),
+        store::N_FAILED => Some(concat!(product_name!(), " couldn't email this address its stop link yet, so it can't stop this itself; ", product_name!(), " keeps trying, and pauses the forward after a day").to_string()),
+        store::N_DUE => Some(concat!("not on yet: ", product_name!(), " is pacing its emails, so it will email this address and then turn this on, within minutes or a few hours if many are waiting").to_string()),
         store::N_STALE => Some(format!(
-            "not on: it was waiting for a confirm and was set more than {} days ago, so K2 didn't turn it on. It sends nothing. To turn it on, set it again",
+            "not on: it was waiting for a confirm and was set more than {} days ago, so {PRODUCT_NAME} didn't turn it on. It sends nothing. To turn it on, set it again",
             store::LEGACY_ON_WINDOW_SECS / 86_400
         )),
         _ => None,
@@ -622,7 +624,7 @@ fn agent_own_mailbox_limit(row: &MailAddress, caller: &Caller) -> R<()> {
         403,
         "agent_send_required",
         format!(
-            "this is your own mailbox, and forwarding it outside would send its mail past your sending rules (agent sending is {mode} here). The owner or an Admin sets the forward, or turns sending on: k2 mail sending <workspace> on"
+            "this is your own mailbox, and forwarding it outside would send its mail past your sending rules (agent sending is {mode} here). The owner or an Admin sets the forward, or turns sending on: {CLI_NAME} mail sending <workspace> on"
         ),
     ))
 }
@@ -666,14 +668,14 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 409,
                 "destination_stopped",
                 if caller.may_restart() {
-                    format!("{d} pressed Stop in K2's email, so K2 won't forward to it. To override that, add --restart-stopped; ask them first")
+                    format!("{d} pressed Stop in {PRODUCT_NAME}'s email, so {PRODUCT_NAME} won't forward to it. To override that, add --restart-stopped; ask them first")
                 } else {
-                    format!("{d} pressed Stop in K2's email, so K2 won't forward to it. Only the owner or an Admin can choose it again")
+                    format!("{d} pressed Stop in {PRODUCT_NAME}'s email, so {PRODUCT_NAME} won't forward to it. Only the owner or an Admin can choose it again")
                 },
             ));
         }
         if !caller.may_restart() {
-            return Err(fail(403, "owner_only", format!("{d} pressed Stop in K2's email; only the owner or an Admin can choose it again")));
+            return Err(fail(403, "owner_only", format!("{d} pressed Stop in {PRODUCT_NAME}'s email; only the owner or an Admin can choose it again")));
         }
     }
     // Agents' own limits (review findings 6 and 9).
@@ -688,7 +690,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 let who = if reason == store::P_MANUAL {
                     "a person paused it".to_string()
                 } else {
-                    format!("K2 paused it because {}", reason_words(&reason))
+                    format!("{PRODUCT_NAME} paused it because {}", reason_words(&reason))
                 };
                 return Err(fail(
                     403,
@@ -709,7 +711,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
             "too_many_destinations",
             match mode {
                 Mode::Add => format!(
-                    "a mailbox forwards to at most {} addresses, and this would make {} for {}. Nothing changed. Remove one first: k2 hostmail forward rm {} --to <address>",
+                    "a mailbox forwards to at most {} addresses, and this would make {} for {}. Nothing changed. Remove one first: {CLI_NAME} hostmail forward rm {} --to <address>",
                     store::MAX_DESTINATIONS,
                     others_left + dests.len(),
                     row.address,
@@ -743,7 +745,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
             let mut f = fail(
                 429,
                 "notice_limit",
-                format!("K2 has emailed {} about forwards {told} times in the last 24 hours, the most it will. Nothing changed; try tomorrow", d.address()),
+                format!("{PRODUCT_NAME} has emailed {} about forwards {told} times in the last 24 hours, the most it will. Nothing changed; try tomorrow", d.address()),
             );
             f.retry_after_ms = Some(3_600_000);
             return Err(f);
@@ -757,7 +759,7 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
                 429,
                 "new_outside_limit",
                 format!(
-                    "this server adds at most {cap} new outside addresses a day: {used} went on in the last 24 hours, and this would add {fresh_outside}. Nothing changed. Add fewer, try later, or forward to a mailbox on this server. Only the owner can raise the limit, up to {}: k2 hostmail config --forward-new-per-day <n>",
+                    "this server adds at most {cap} new outside addresses a day: {used} went on in the last 24 hours, and this would add {fresh_outside}. Nothing changed. Add fewer, try later, or forward to a mailbox on this server. Only the owner can raise the limit, up to {}: {CLI_NAME} hostmail config --forward-new-per-day <n>",
                     store::NEW_OUTSIDE_PER_DAY_MAX
                 ),
             );
@@ -884,15 +886,15 @@ fn set_or_add(row: &MailAddress, caller: &Caller, v: &J, mode: Mode) -> R<J> {
         let f = rows.iter().find(|f| f.dest == d.address()).ok_or_else(|| email_notify::db_fail(format!("the row for {} is gone", d.address())))?;
         let t = told.iter().find(|(a, _)| a == d.address()).map(|(_, t)| t);
         let message = match t {
-            Some(Told { via: Some(_), .. }) => Some(format!("Forwarding to {} is on. K2 emailed {} to say so, with a link to stop it.", f.dest, f.dest)),
+            Some(Told { via: Some(_), .. }) => Some(format!("Forwarding to {} is on. {PRODUCT_NAME} emailed {} to say so, with a link to stop it.", f.dest, f.dest)),
             Some(Told { error, .. }) => Some(format!(
-                "Forwarding to {} is on, but K2 couldn't email {} its stop link yet ({}). K2 keeps trying; after a day without that email it pauses this until the email goes. forward list shows it.",
+                "Forwarding to {} is on, but {PRODUCT_NAME} couldn't email {} its stop link yet ({}). {PRODUCT_NAME} keeps trying; after a day without that email it pauses this until the email goes. forward list shows it.",
                 f.dest,
                 f.dest,
                 error.as_deref().unwrap_or("the mail server refused")
             )),
             None if queued.iter().any(|q| q == &f.dest) => Some(format!(
-                "Forwarding to {} isn't on yet. K2 is pacing its emails, so it will email {} first and then turn this on, within minutes or a few hours if many are waiting.",
+                "Forwarding to {} isn't on yet. {PRODUCT_NAME} is pacing its emails, so it will email {} first and then turn this on, within minutes or a few hours if many are waiting.",
                 f.dest, f.dest
             )),
             None => None,
@@ -975,7 +977,7 @@ fn remove_rows(row: &MailAddress, caller: &Caller, rows: &[Forward]) -> R<(Forwa
 
 fn rm(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
     if addresses_from(v)?.is_none() {
-        return Err(fail(400, "usage", "missing 'to': which destination to remove (k2 hostmail forward unset removes them all)"));
+        return Err(fail(400, "usage", concat!("missing 'to': which destination to remove (", cli_name!(), " hostmail forward unset removes them all)")));
     }
     let rows = targets(row, v)?;
     let (_, note) = remove_rows(row, caller, &rows)?;
@@ -1104,7 +1106,7 @@ fn resume(row: &MailAddress, caller: &Caller, v: &J) -> R<J> {
             let k2_decides = reason == store::P_NOT_TOLD || (store::auto_lifts(&reason) && reason != store::P_AGENT_SEND_OFF);
             if k2_decides && f.held_by.is_some() && (!caller.is_agent() || f.held_by.as_deref() == Some(caller.pauser().as_str())) {
                 let f = db(|c| store::clear_hold(c, &f.id, at))?;
-                note = note.take().or_else(|| Some(format!("Your pause is lifted, but K2 still holds this forward because {}; it comes back by itself when that changes", reason_words(&reason))));
+                note = note.take().or_else(|| Some(format!("Your pause is lifted, but {PRODUCT_NAME} still holds this forward because {}; it comes back by itself when that changes", reason_words(&reason))));
                 return Ok(f);
             }
             caller.may_resume(&reason, f.paused_by.as_deref())?;
@@ -1233,12 +1235,12 @@ pub fn handle_forward_cap(body: &[u8]) -> CliResponse {
         }
         let before = db(store::new_outside_cap)?;
         if !db(|c| store::set_new_outside_cap(c, n))? {
-            return Err(fail(409, "not_ready", "this server has no mail server yet (k2 hostmail enable)"));
+            return Err(fail(409, "not_ready", concat!("this server has no mail server yet (", cli_name!(), " hostmail enable)")));
         }
         email_notify::audit_line("mail-forward-cap", "owner", &format!("new_outside_per_day={before}->{n}"));
         forward_verify::tell_owner(
             "The daily limit on new forward addresses changed",
-            &format!("This server may now add {n} new outside forward addresses a day (it was {before}; the default is {}). This was done with the owner's credentials: if it wasn't you, change it back: k2 hostmail config --forward-new-per-day {before}.", store::NEW_OUTSIDE_PER_DAY),
+            &format!("This server may now add {n} new outside forward addresses a day (it was {before}; the default is {}). This was done with the owner's credentials: if it wasn't you, change it back: {CLI_NAME} hostmail config --forward-new-per-day {before}.", store::NEW_OUTSIDE_PER_DAY),
             &[],
         );
         Ok(json!({
@@ -1295,20 +1297,20 @@ fn set_volume(l: &VolumeLimit, body: &[u8]) -> CliResponse {
                 400,
                 "usage",
                 format!(
-                    "{} must be 1 to {} (default {}), and {n} is out of range. Nothing changed. To stop forwarding, use k2 hostmail forward pause",
+                    "{} must be 1 to {} (default {}), and {n} is out of range. Nothing changed. To stop forwarding, use {CLI_NAME} hostmail forward pause",
                     l.flag, l.max, l.default
                 ),
             ));
         }
         let before = db(l.read)?;
         if !db(|c| (l.write)(c, n))? {
-            return Err(fail(409, "not_ready", "this server has no mail server yet (k2 hostmail enable)"));
+            return Err(fail(409, "not_ready", concat!("this server has no mail server yet (", cli_name!(), " hostmail enable)")));
         }
         email_notify::audit_line("mail-forward-volume", "owner", &format!("{}={before}->{n}", l.audit));
         forward_verify::tell_owner(
             "How much a mailbox may forward changed",
             &format!(
-                "Each mailbox on this server may now forward {n} {} (it was {before}; the default is {}). {} This was done with the owner's credentials: if it wasn't you, change it back: k2 hostmail config {} {before}.",
+                "Each mailbox on this server may now forward {n} {} (it was {before}; the default is {}). {} This was done with the owner's credentials: if it wasn't you, change it back: {CLI_NAME} hostmail config {} {before}.",
                 l.per, l.default, l.past, l.flag
             ),
             &[],
@@ -1321,7 +1323,7 @@ fn set_volume(l: &VolumeLimit, body: &[u8]) -> CliResponse {
         let unapplied = if l.field == "perHour" { forward_applied() } else { None };
         let mut notes: Vec<String> = Vec::new();
         if let Some(why) = &unapplied {
-            notes.push(format!("saved, but the mail server isn't enforcing it yet ({why}). K2 tries again within the hour, and the old number holds until then"));
+            notes.push(format!("saved, but the mail server isn't enforcing it yet ({why}). {PRODUCT_NAME} tries again within the hour, and the old number holds until then"));
         }
         notes.extend(volume_note(per_day, per_hour));
         let mut out = json!({ "ok": true, "default": l.default, "max": l.max, "note": if notes.is_empty() { J::Null } else { J::String(notes.join(". ")) } });
@@ -1345,7 +1347,7 @@ pub fn handle_forward_copies_day(body: &[u8]) -> CliResponse {
             flag: "--forward-copies-per-day",
             audit: "copies_per_day",
             per: "copies in 24 hours",
-            past: "Past that K2 pauses the mailbox's outside forwards. A mailbox already paused for this stays paused until it's resumed.",
+            past: concat!("Past that ", product_name!(), " pauses the mailbox's outside forwards. A mailbox already paused for this stays paused until it's resumed."),
             default: store::DAILY_CAP,
             max: store::DAILY_CAP_MAX,
             read: store::copies_per_day,
@@ -1417,7 +1419,7 @@ pub fn handle_person_link(body: &[u8]) -> CliResponse {
                     Some(p.to_string())
                 } else {
                     if k2_core::connect_users::role_for_user(p).is_none() {
-                        return Err(fail(404, "not_found", format!("no login '{p}' on this server (k2 users list)")));
+                        return Err(fail(404, "not_found", format!("no login '{p}' on this server ({CLI_NAME} users list)")));
                     }
                     // The person key (a login the owner linked is the owner).
                     let people = k2_core::notify_prefs::People::load().map_err(email_notify::db_fail)?;
@@ -1442,7 +1444,7 @@ fn person_mailbox(person: &str, address: Option<&str>) -> R<MailAddress> {
     let mine = db(|c| store::mailboxes_of_person(c, person))?;
     let pick = match address.map(|a| a.trim().to_ascii_lowercase()) {
         Some(a) => mine.iter().find(|(_, addr)| *addr == a).ok_or_else(|| {
-            fail(403, "forbidden", format!("{a} isn't linked to you; the owner or an Admin links mailboxes (k2 hostmail person link)"))
+            fail(403, "forbidden", format!("{a} isn't linked to you; the owner or an Admin links mailboxes ({CLI_NAME} hostmail person link)"))
         })?,
         None => match mine.as_slice() {
             [one] => one,
@@ -1450,7 +1452,7 @@ fn person_mailbox(person: &str, address: Option<&str>) -> R<MailAddress> {
                 return Err(fail(
                     404,
                     "not_found",
-                    "no mailbox is linked to you; the owner or an Admin links one (k2 hostmail person link <address> <login>)",
+                    concat!("no mailbox is linked to you; the owner or an Admin links one (", cli_name!(), " hostmail person link <address> <login>)"),
                 ))
             }
             _ => return Err(fail(400, "usage", "more than one mailbox is linked to you: say which with 'address'")),

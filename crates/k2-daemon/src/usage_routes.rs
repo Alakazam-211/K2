@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::{cli_name, product_name};
 
 pub const TOKENS: &str = "/cli/usage/tokens";
 pub const TURNS: &str = "/cli/usage/turns";
@@ -79,7 +80,7 @@ pub fn access(who: &Who, path: &str) -> Result<Scope, CliResponse> {
             if path == LIMITS_REFRESH {
                 return Err(forbidden(
                     "owner_only",
-                    "an agent reads limits but can't start a check; run `k2 usage limits --refresh` in a terminal outside K2",
+                    concat!("an agent reads limits but can't start a check; run `", cli_name!(), " usage limits --refresh` in a terminal outside ", product_name!()),
                 ));
             }
             match project_path(project_id) {

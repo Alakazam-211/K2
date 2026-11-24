@@ -21,6 +21,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// How long a peer port's answer is reused (keep-alive connections send
 /// many requests on one port).
@@ -150,8 +151,8 @@ pub fn refusal_body(service_id: &str, name: &str) -> String {
             "code": "owner_token_from_app",
             "hint": format!(
                 "{name} runs in clean mode (how an App runs): Apps can't use the owner token. \
-                 Use the App key K2 granted it ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/…, \
-                 or turn clean mode off: k2 app clean-mode {name} off"
+                 Use the App key {PRODUCT_NAME} granted it ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/…, \
+                 or turn clean mode off: {CLI_NAME} app clean-mode {name} off"
             ),
             "app": service_id,
         }

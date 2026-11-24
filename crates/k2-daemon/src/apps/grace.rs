@@ -43,6 +43,8 @@ use serde_json::{json, Value as J};
 
 use super::routes::{actor, db_err, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const MAX_BODY: usize = 64 * 1024;
 
@@ -186,7 +188,7 @@ impl Target {
 }
 
 fn not_found(raw: &str) -> Refusal {
-    no(codes::APP_NOT_FOUND, 404, format!("no App or published service '{raw}' (k2 publish list, k2 app list)"))
+    no(codes::APP_NOT_FOUND, 404, format!("no App or published service '{raw}' ({CLI_NAME} publish list, {CLI_NAME} app list)"))
 }
 
 /// Resolve `raw`: a runtime App id, a published service id, `<workspace>/<name>`,
@@ -390,7 +392,7 @@ fn form_post_warnings(name: &str, posts: &[scan::FormPost]) -> Vec<J> {
                 "form_body_json_only",
                 "breaks",
                 format!("{at} sends a form-encoded body, and this file calls {list}, which reads JSON only: on the App gateway that is 415 json_required."),
-                format!("send those calls as JSON (Content-Type: application/json), or use the server SDK; k2 study app-api lists what {name} may call"),
+                format!("send those calls as JSON (Content-Type: application/json), or use the server SDK; {CLI_NAME} study app-api lists what {name} may call"),
             ));
         }
         if !form_ok.is_empty() {
@@ -406,8 +408,8 @@ fn form_post_warnings(name: &str, posts: &[scan::FormPost]) -> Vec<J> {
             out.push(warning(
                 "form_body",
                 "check",
-                format!("{at} sends a form-encoded body and talks to K2, but names no K2 route here; if the form goes to K2, only {} read one on the App gateway.", k2_core::app_body::FORM_POSTS.join(", ")),
-                "send K2 calls as JSON (Content-Type: application/json), or use the server SDK".to_string(),
+                format!("{at} sends a form-encoded body and talks to {PRODUCT_NAME}, but names no {PRODUCT_NAME} route here; if the form goes to {PRODUCT_NAME}, only {} read one on the App gateway.", k2_core::app_body::FORM_POSTS.join(", ")),
+                concat!("send ", product_name!(), " calls as JSON (Content-Type: application/json), or use the server SDK").to_string(),
             ));
         }
     }
@@ -441,7 +443,7 @@ fn link_warnings(t: &Target) -> Vec<J> {
             } else {
                 format!("the App gateway refused {} {} time(s) in the last 7 days with 415 json_required: this route reads JSON only.", v.verb, v.calls)
             },
-            format!("send the body as JSON with Content-Type: application/json (k2 app audit {app_id} --denied shows each call)"),
+            format!("send the body as JSON with Content-Type: application/json ({CLI_NAME} app audit {app_id} --denied shows each call)"),
         ));
     }
     if let Some(q) = super::gateway::query_pass_use(app_id) {
@@ -449,7 +451,7 @@ fn link_warnings(t: &Target) -> Vec<J> {
             "pass_in_query",
             "check",
             format!(
-                "{} call(s) on the gateway link since K2 started sent the pass in ?token= (last: {} as {}). It still works and is attributed the same, but it is deprecated: a pass in a URL ends up in access logs, HTTP-client traces and proxies.",
+                "{} call(s) on the gateway link since {PRODUCT_NAME} started sent the pass in ?token= (last: {} as {}). It still works and is attributed the same, but it is deprecated: a pass in a URL ends up in access logs, HTTP-client traces and proxies.",
                 q.count, q.last_verb, q.last_actor
             ),
             "send the pass as Authorization: Bearer <pass> (the server SDK does)".to_string(),
@@ -476,8 +478,8 @@ pub(crate) fn report(t: &Target) -> J {
         warnings.push(warning(
             "legacy_env",
             "breaks",
-            format!("{name} inherits the K2 daemon's whole environment ({} variables); it keeps it as a --cmd service, and an App (or clean mode) starts without it.", inherited.len()),
-            format!("k2 publish env {name} clean (and grant what it needs: k2 publish secret add {name} NAME)"),
+            format!("{name} inherits the {PRODUCT_NAME} daemon's whole environment ({} variables); it keeps it as a --cmd service, and an App (or clean mode) starts without it.", inherited.len()),
+            format!("{CLI_NAME} publish env {name} clean (and grant what it needs: {CLI_NAME} publish secret add {name} NAME)"),
         ));
     }
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -494,22 +496,22 @@ pub(crate) fn report(t: &Target) -> J {
             warnings.push(warning(
                 "app_env",
                 SEVERITY_EXPECTED,
-                format!("{at} reads {n}: K2 sets it for every App (the App runtime's own environment), so this is App-mode code. Expected inside an App; a --cmd service doesn't get it."),
-                "nothing to change once it runs as an App (k2 study app-move)".to_string(),
+                format!("{at} reads {n}: {PRODUCT_NAME} sets it for every App (the App runtime's own environment), so this is App-mode code. Expected inside an App; a --cmd service doesn't get it."),
+                concat!("nothing to change once it runs as an App (", cli_name!(), " study app-move)").to_string(),
             ));
         } else if (n.starts_with("K2_") || n.starts_with("K2SO_")) && !provided.contains(n) {
             warnings.push(warning(
                 "k2_internal_env",
                 "breaks",
                 format!("{at} reads {n}: a K2-internal variable no App gets (the owner token and the daemon's session variables stay out of reach)."),
-                format!("use the App key (k2 app key mint {name} …) and K2_HOST/K2_PORT/K2_GATEWAY_URL"),
+                format!("use the App key ({CLI_NAME} app key mint {name} …) and K2_HOST/K2_PORT/K2_GATEWAY_URL"),
             ));
         } else if n == "HOME" {
             warnings.push(warning(
                 "home_changes",
                 "check",
                 format!("{at} reads HOME: in clean mode and in an App it is the App's own folder, not the daemon user's home."),
-                "keep App files in its folder or K2_SECRETS_DIR; try it with k2 app clean-mode".to_string(),
+                concat!("keep App files in its folder or K2_SECRETS_DIR; try it with ", cli_name!(), " app clean-mode").to_string(),
             ));
         } else if n == "PATH" {
             warnings.push(warning(
@@ -523,7 +525,7 @@ pub(crate) fn report(t: &Target) -> J {
                 "inherited_env_read",
                 "breaks",
                 format!("{at} reads {n}, which {name} gets only from the daemon's environment; in clean mode and in an App it is unset."),
-                format!("k2 publish secret add {name} {n} --as env (or a k2v:// reference in .env.k2)"),
+                format!("{CLI_NAME} publish secret add {name} {n} --as env (or a k2v:// reference in .env.k2)"),
             ));
         }
     }
@@ -532,14 +534,14 @@ pub(crate) fn report(t: &Target) -> J {
         let (msg, fix) = match p.what.as_str() {
             "owner_token_file" => (
                 format!("{at} reads ~/.k2/daemon.token (the owner token): no App can reach it."),
-                format!("mint an App key (k2 app key mint {name} --scopes users,rooms …) and call /v1/apps/$K2_APP_ID/…"),
+                format!("mint an App key ({CLI_NAME} app key mint {name} --scopes users,rooms …) and call /v1/apps/$K2_APP_ID/…"),
             ),
             "daemon_port_file" => (
                 format!("{at} reads ~/.k2/heartbeat.port: out of reach from an App."),
                 "use K2_HOST and K2_PORT (or K2_GATEWAY_URL), set for every service".to_string(),
             ),
-            "k2_database" => (format!("{at} names a K2 database file: out of reach from an App."), "use k2 db or the App key routes".to_string()),
-            _ => (format!("{at} names a K2 socket: out of reach from an App."), "call K2 over K2_GATEWAY_URL with the App key".to_string()),
+            "k2_database" => (format!("{at} names a {PRODUCT_NAME} database file: out of reach from an App."), concat!("use ", cli_name!(), " db or the App key routes").to_string()),
+            _ => (format!("{at} names a {PRODUCT_NAME} socket: out of reach from an App."), concat!("call ", product_name!(), " over K2_GATEWAY_URL with the App key").to_string()),
         };
         warnings.push(warning(&p.what, "breaks", msg, fix));
     }
@@ -588,7 +590,7 @@ pub(crate) fn report(t: &Target) -> J {
                 u.count,
                 if u.refused > 0 { format!(" ({} refused in clean mode)", u.refused) } else { String::new() }
             ),
-            format!("mint an App key (k2 app key mint {name} --scopes users,rooms --rooms …) and call /v1/apps/{}/…", t.service_id),
+            format!("mint an App key ({CLI_NAME} app key mint {name} --scopes users,rooms --rooms …) and call /v1/apps/{}/…", t.service_id),
         ));
     }
     let breaks = warnings.iter().filter(|w| w["severity"] == "breaks").count();
@@ -630,7 +632,7 @@ fn warnings(who: &Who, params: &HashMap<String, String>) -> R<J> {
                 let breaks = warnings.iter().filter(|w| w["severity"] == "breaks").count();
                 return Ok(json!({ "app": t.summary(), "cutover": app_grace::CUTOVER_RELEASE, "readyForCutover": breaks == 0, "breaks": breaks,
                     "warnings": warnings,
-                    "note": "only server Apps (--cmd services) have an environment; the warnings here are about how it calls K2" }));
+                    "note": concat!("only server Apps (--cmd services) have an environment; the warnings here are about how it calls ", product_name!()) }));
             }
             Ok(report(&t))
         }
@@ -681,7 +683,7 @@ fn restart_service(t: &Target) -> J {
 pub(crate) fn set_clean_mode(t: &Target, on: bool, who_label: &str, restart: bool) -> R<J> {
     let se = crate::vault::publish_env::set_clean_mode(&t.service_id, on).map_err(|e| no("store", 500, e))?;
     audit("app-clean-mode", who_label, &format!("{} {}", t.service_id, if on { "on" } else { "off" }));
-    let restarted = if restart { restart_service(t) } else { json!("applies at the next start (k2 publish start, or pass restart)") };
+    let restarted = if restart { restart_service(t) } else { json!(concat!("applies at the next start (", cli_name!(), " publish start, or pass restart)")) };
     let mut out = json!({ "ok": true, "app": t.summary(), "cleanMode": se.clean_mode, "envMode": se.mode, "restart": restarted,
         "ownerTokenAttribution": super::attribution::availability() });
     if on && !cfg!(target_os = "linux") {
@@ -759,14 +761,14 @@ pub(crate) fn mint_and_deliver(t: &Target, grant: &keys::AppKeyGrant, label: &st
             "vaultSecret": secret_name,
             "file": KEY_FILE,
             "note": format!(
-                "{} reads it at its next start from $K2_SECRETS_DIR/{KEY_FILE} (restart it: k2 publish stop/start {}); \
+                "{} reads it at its next start from $K2_SECRETS_DIR/{KEY_FILE} (restart it: {CLI_NAME} publish stop/start {}); \
                  nobody sees the value",
                 t.name, t.name
             ),
         });
     } else {
         out["key"] = json!(raw);
-        out["note"] = json!("shown once; K2 keeps only its hash");
+        out["note"] = json!(concat!("shown once; ", product_name!(), " keeps only its hash"));
     }
     audit("app-key-mint", by, &format!("ok {id} app={} scopes={} via={deliver}", t.service_id, grant.scopes.join(",")));
     Ok(out)
@@ -813,7 +815,7 @@ fn deliver_to_vault(t: &Target, secret: &str, raw: &str) -> Result<(), k2_vault:
     let mut put = PutRequest::new(Namespace::User, Scope::server(), secret, Kind::ApiKey);
     put.default_delivery = Some(Delivery::Fetch);
     put.delivery_ceiling = Some(Delivery::File);
-    put.description = format!("App key for {} (made by K2; the App reads $K2_SECRETS_DIR/{KEY_FILE})", t.name);
+    put.description = format!("App key for {} (made by {PRODUCT_NAME}; the App reads $K2_SECRETS_DIR/{KEY_FILE})", t.name);
     put.origin = "k2 app key".into();
     vault.put(put, SecretBytes::from_slice(raw.as_bytes()), &Actor::Owner)?;
     // One K2_APP_KEY file per service: the new key replaces the file (the
@@ -865,8 +867,8 @@ fn key_mint(who: &Who, body: &[u8]) -> R<J> {
                 ..no(
                     "vault_confirm_required",
                     403,
-                    "an App key is a credential: minting needs a fresh owner confirm (Touch ID, your login or vault password). \
-                     k2 app key mint asks for it from a terminal outside K2.",
+                    concat!("an App key is a credential: minting needs a fresh owner confirm (Touch ID, your login or vault password). \
+                     ", cli_name!(), " app key mint asks for it from a terminal outside ", product_name!(), "."),
                 )
             });
         };
@@ -975,7 +977,7 @@ fn key_list(who: &Who, params: &HashMap<String, String>) -> R<J> {
 fn key_revoke(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
-    let id = s(&v, "id").ok_or_else(|| no(codes::BAD_REQUEST, 400, "id is required (k2 app keys)"))?;
+    let id = s(&v, "id").ok_or_else(|| no(codes::BAD_REQUEST, 400, concat!("id is required (", cli_name!(), " app keys)")))?;
     let k = k2_core::api_keys::get_app_key(id).ok_or_else(|| no("not_found", 404, format!("no App key '{id}'")))?;
     // Scope check: the caller must see the key's App.
     let t = target(who, Some(&k.service_id)).map_err(|_| no("not_found", 404, format!("no App key '{id}'")))?;

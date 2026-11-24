@@ -30,6 +30,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use k2_core::tool_hook::features::HomeChatFeatures;
 
 use crate::voice::bff::{HttpSew, SewApi};
+use k2_core::brand::PRODUCT_NAME;
 
 pub mod arrivals;
 pub mod call_push;
@@ -183,7 +184,7 @@ pub fn sew_data_reset(why: &str) {
             r.members,
             r.lists
         ),
-        Err(e) => k2_core::log_debug!("[home-chat] Sew's data was reset ({why}); K2's ledger: {e}"),
+        Err(e) => k2_core::log_debug!("[home-chat] Sew's data was reset ({why}); {PRODUCT_NAME}'s ledger: {e}"),
     }
     for ext in follower::held_people() {
         if let Some(h) = follower::get(&ext) {

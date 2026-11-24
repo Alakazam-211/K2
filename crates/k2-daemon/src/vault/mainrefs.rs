@@ -18,6 +18,7 @@ use std::sync::Arc;
 use k2_vault::{Actor, Delivery, Kind, LocalVault, Namespace, PutMode, PutRequest, Scope, VaultError};
 
 use super::adopt::{put_and_verify, Adopted};
+use k2_core::product_name;
 
 fn provider_host(provider: Option<&str>, base_url: Option<&str>) -> Vec<String> {
     if let Some(u) = base_url.filter(|u| !u.trim().is_empty()) {
@@ -47,7 +48,7 @@ fn put_key(vault: &LocalVault, scope: Scope, name: &str, value: &str, hosts: Vec
     r.mode = PutMode::Upsert;
     r.idempotent = true;
     r.human_given_override = Some(true);
-    r.description = "moved from K2's settings when the vault arrived".into();
+    r.description = concat!("moved from ", product_name!(), "'s settings when the vault arrived").into();
     put_and_verify(vault, r, value.as_bytes(), &Actor::System("adopt".into())).map(|_| ())
 }
 

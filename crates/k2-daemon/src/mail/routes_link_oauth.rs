@@ -53,6 +53,10 @@ use crate::mail::oauth::{
     self, CalAccess, ClientChoice, Features, FlowKind, HttpClient, OauthProvider, Poll, ReqwestHttp, Tokens,
 };
 use crate::mail::secrets::{FileSecretStore, SecretStore};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
+#[cfg(target_os = "linux")]
+use k2_core::product_name;
 
 // ── MCS1: what a link does once its tokens arrive ───────────────────────
 
@@ -322,7 +326,7 @@ fn complete_with_tokens(
             )
         } else {
             format!(
-                "mail access was not granted for {address} — link again and allow K2 to read \
+                "mail access was not granted for {address} — link again and allow {PRODUCT_NAME} to read \
                  and send mail. Nothing was stored"
             )
         };
@@ -341,7 +345,7 @@ fn complete_with_tokens(
             LinkStatus::Error,
             "scope_not_granted",
             format!(
-                "calendar access was not granted for {address} — link again and allow K2 to \
+                "calendar access was not granted for {address} — link again and allow {PRODUCT_NAME} to \
                  {what}. Nothing was stored"
             ),
             None,
@@ -364,7 +368,7 @@ fn complete_with_tokens(
         account_checked_at: Some(now),
     };
     let calendar_note = if plan.features.calendar.any() && !features.calendar.any() {
-        " Calendar access was not granted — add it later with 'k2 mail link upgrade'."
+        concat!(" Calendar access was not granted — add it later with '", cli_name!(), " mail link upgrade'.")
     } else if features.calendar < plan.features.calendar {
         " Only read access to the calendar was granted."
     } else {
@@ -391,15 +395,15 @@ fn complete_with_tokens(
                     } else if features.calendar == CalAccess::Read {
                         format!(
                             "connected {address} (calendar, read-only) — agents in the bound \
-                             workspace can read its primary calendar with 'k2 cal events'; they \
-                             can't change anything on it. Add shared calendars with 'k2 cal \
+                             workspace can read its primary calendar with '{CLI_NAME} cal events'; they \
+                             can't change anything on it. Add shared calendars with '{CLI_NAME} cal \
                              calendars {address} --add <id|name>' (owner).{calendar_note}"
                         )
                     } else {
                         format!(
                             "connected {address} (calendar) — agents in the bound workspace can \
-                             use its calendar with 'k2 calendar' (drafts only: no attendees, \
-                             nobody is emailed). Mail was not linked; add it later with 'k2 mail \
+                             use its calendar with '{CLI_NAME} calendar' (drafts only: no attendees, \
+                             nobody is emailed). Mail was not linked; add it later with '{CLI_NAME} mail \
                              link upgrade {address} --features mail'.{calendar_note}"
                         )
                     }),
@@ -475,7 +479,7 @@ fn run_device_flow(
             set_terminal(
                 link_id,
                 LinkStatus::Expired,
-                Some("the device code expired before approval — run 'k2 mail link add' again".to_string()),
+                Some(concat!("the device code expired before approval — run '", cli_name!(), " mail link add' again").to_string()),
             );
             return;
         }
@@ -498,7 +502,7 @@ fn run_device_flow(
                 set_terminal(
                     link_id,
                     LinkStatus::Expired,
-                    Some("the device code expired before approval — run 'k2 mail link add' again".to_string()),
+                    Some(concat!("the device code expired before approval — run '", cli_name!(), " mail link add' again").to_string()),
                 );
                 return;
             }
@@ -547,7 +551,7 @@ fn run_loopback_flow(
             set_terminal(
                 link_id,
                 LinkStatus::Expired,
-                Some("timed out waiting for the browser approval — run 'k2 mail link add' again".to_string()),
+                Some(concat!("timed out waiting for the browser approval — run '", cli_name!(), " mail link add' again").to_string()),
             );
             return;
         }
@@ -740,8 +744,8 @@ fn open_in_system_browser(url: &str) -> Result<(), String> {
         let wayland = std::env::var("WAYLAND_DISPLAY").unwrap_or_default();
         if display.trim().is_empty() && wayland.trim().is_empty() {
             return Err(
-                "no DISPLAY/WAYLAND_DISPLAY — this host is headless; use the K2 desktop \
-                 app's client-capture Gmail flow (in-app browser)"
+                concat!("no DISPLAY/WAYLAND_DISPLAY — this host is headless; use the ", product_name!(), " desktop \
+                 app's client-capture Gmail flow (in-app browser)")
                     .into(),
             );
         }
@@ -822,21 +826,21 @@ fn require_configured_client(provider: OauthProvider, client: &ClientChoice) -> 
     }
     let how = match provider {
         OauthProvider::Microsoft => {
-            "register an app in Microsoft Entra (any organisation directory + personal accounts, \
+            concat!("register an app in Microsoft Entra (any organisation directory + personal accounts, \
              'Allow public client flows' on, delegated Graph permissions openid profile email \
              offline_access User.Read Mail.ReadWrite Mail.Send Calendars.Read Calendars.ReadWrite), then run \
-             'k2 mail oauth-config set --provider microsoft --client-id <application id> \
-             [--tenant <tenant>]' or use Settings → Email Link → Sign-in apps"
+             '", cli_name!(), " mail oauth-config set --provider microsoft --client-id <application id> \
+             [--tenant <tenant>]' or use Settings → Email Link → Sign-in apps")
         }
         OauthProvider::Gmail => {
-            "set your own Google OAuth Desktop client with 'k2 mail oauth-config set --provider \
-             gmail --client-id <id> --secret-stdin' or Settings → Email Link → Sign-in apps"
+            concat!("set your own Google OAuth Desktop client with '", cli_name!(), " mail oauth-config set --provider \
+             gmail --client-id <id> --secret-stdin' or Settings → Email Link → Sign-in apps")
         }
     };
     Err(error_response(
         "409 Conflict",
         "not_configured",
-        &format!("this K2 build has no {} OAuth app configured — {how}", provider.as_str()),
+        &format!("this {PRODUCT_NAME} build has no {} OAuth app configured — {how}", provider.as_str()),
     ))
 }
 
@@ -950,7 +954,7 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
             "404 Not Found",
             "not_found",
             &format!(
-                "no linked inbox '{}' — 'k2 mail link list' shows what's connected",
+                "no linked inbox '{}' — '{CLI_NAME} mail link list' shows what's connected",
                 b.inbox.trim()
             ),
         );
@@ -966,7 +970,7 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
                 "400 Bad Request",
                 "usage",
                 &format!(
-                    "'{}' is linked with an app password, not OAuth — remove it ('k2 mail link \
+                    "'{}' is linked with an app password, not OAuth — remove it ('{CLI_NAME} mail link \
                      remove') and link it again with --provider gmail|microsoft",
                     row.email_address
                 ),
@@ -1007,8 +1011,8 @@ fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
             "400 Bad Request",
             "usage",
             &format!(
-                "'{}' already has calendar write — to make it read-only, unlink it ('k2 mail \
-                 link remove {}') and link it again with 'k2 cal link'",
+                "'{}' already has calendar write — to make it read-only, unlink it ('{CLI_NAME} mail \
+                 link remove {}') and link it again with '{CLI_NAME} cal link'",
                 row.email_address, row.email_address
             ),
         );
@@ -1226,7 +1230,7 @@ fn start_loopback(plan: LinkPlan, link_id: &str) -> CliResponse {
             "409 Conflict",
             "remote_unsupported",
             &format!(
-                "link Gmail on the machine running this K2 daemon — its system browser handles \
+                "link Gmail on the machine running this {PRODUCT_NAME} daemon — its system browser handles \
                  Google's consent (a webview is refused, and a remote daemon can't reach your \
                  browser). The daemon could not open a browser: {e}"
             ),
@@ -1495,7 +1499,7 @@ pub fn handle_link_oauth_status(params: &HashMap<String, String>) -> CliResponse
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'linkId' — the id returned by 'k2 mail link add --provider …'",
+            concat!("missing 'linkId' — the id returned by '", cli_name!(), " mail link add --provider …'"),
         );
     };
     let map = registry().lock().unwrap_or_else(|p| p.into_inner());
@@ -1521,8 +1525,8 @@ pub fn handle_link_oauth_status(params: &HashMap<String, String>) -> CliResponse
         None => error_response(
             "404 Not Found",
             "not_found",
-            "no such link — it may have completed and expired from memory; \
-             run 'k2 mail link add --provider …' again",
+            concat!("no such link — it may have completed and expired from memory; \
+             run '", cli_name!(), " mail link add --provider …' again"),
         ),
     }
 }

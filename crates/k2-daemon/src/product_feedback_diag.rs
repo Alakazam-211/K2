@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use k2_core::product_feedback::diagnostics::{Facts, Logs};
 use k2_core::product_feedback::scrub::{NameBook, Workspace};
+use k2_core::product_name;
 
 /// The vendor AI CLIs whose version the bundle names (never an account).
 const AGENT_TOOLS: &[&str] = &["claude", "codex", "gemini", "grok", "cursor-agent", "opencode", "aider", "goose", "qwen", "pi"];
@@ -157,7 +158,7 @@ pub fn gather(ctx: &Context) -> (Facts, Logs, NameBook) {
     f.computer.push(("Memory free".into(), mem_available().map(gb).unwrap_or_else(|| "not measured here".into())));
     if hw.disk_total_bytes > 0 {
         let pct = hw.disk_free_bytes as f64 * 100.0 / hw.disk_total_bytes as f64;
-        f.computer.push(("Disk free (K2's volume)".into(), format!("{} ({pct:.0}%)", gb(hw.disk_free_bytes))));
+        f.computer.push((concat!("Disk free (", product_name!(), "'s volume)").into(), format!("{} ({pct:.0}%)", gb(hw.disk_free_bytes))));
     }
 
     // K2 state: names and counts, never contents.

@@ -264,7 +264,7 @@ pub fn reset(ws: &str, session: Option<&str>, body: &[u8], actor: &str, is_post:
             return Err(no(
                 "no_email",
                 409,
-                format!("'{}' has no email: a reset goes as a one-time link to the email on the login. Ask your human to set one, or ask for one password set (k2 app user password {} --password-stdin)", l.p.username, l.p.username),
+                format!("'{}' has no email: a reset goes as a one-time link to the email on the login. Ask your human to set one, or ask for one password set ({CLI_NAME} app user password {} --password-stdin)", l.p.username, l.p.username),
             ));
         }
         let what = format!("the login {} (App {}; it talks in {})", l.p.username, app_handle(&app, ws), handles(&l.outside));
@@ -455,7 +455,7 @@ fn add_held(ws: &str, session: Option<&str>, v: &J) -> R<Option<CliResponse>> {
         ws_handle(ws)
     )];
     more.push(if password_wanted {
-        format!("no password is on this card or kept: after approval the agent sets it once (k2 app user password {username} --password-stdin), and {username} chooses their own at the next sign-in")
+        format!("no password is on this card or kept: after approval the agent sets it once ({CLI_NAME} app user password {username} --password-stdin), and {username} chooses their own at the next sign-in")
     } else {
         "no password yet: they get one through an invite or a reset".to_string()
     });
@@ -482,7 +482,7 @@ fn add_held(ws: &str, session: Option<&str>, v: &J) -> R<Option<CliResponse>> {
 /// What the agent does after an approved password set or add.
 fn after_approval(username: &str) -> String {
     format!(
-        "After approval, set the password once within {} h: k2 app user password {username} --password-stdin. The password you sent was not used or kept.",
+        "After approval, set the password once within {} h: {CLI_NAME} app user password {username} --password-stdin. The password you sent was not used or kept.",
         PASSWORD_ONCE_SECS / 3600
     )
 }
@@ -767,7 +767,7 @@ pub(crate) fn box_login_hint(ws: Option<&str>, username: &str) -> String {
 /// to an App themselves, or turns cards on so the agent can ask.
 pub(crate) fn box_login_grant_by_owner(username: &str) -> String {
     format!(
-        "To give {username} access to your App, ask your human to do it: Settings → Cores → Apps → <your App> → Add a person (the server's logins are listed there too), or k2 app grant add \
+        "To give {username} access to your App, ask your human to do it: Settings → Cores → Apps → <your App> → Add a person (the server's logins are listed there too), or {CLI_NAME} app grant add \
          --subject-kind principal --subject <{username}'s principal id> --kind app --target <your app> --role <role> from a terminal outside {PRODUCT_NAME}. \
          Or they turn on permission cards ({PERMISSION_CARDS_ON_PATH}) and you ask on a card."
     )

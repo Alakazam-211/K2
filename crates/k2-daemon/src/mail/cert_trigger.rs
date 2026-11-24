@@ -39,6 +39,8 @@ use serde_json::Value;
 
 use crate::domains::renew::{IssueError, Issued};
 use crate::mail::cert_owner::CertOwner;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// One order per window: long enough for an ACME order (Stalwart's or
 /// K2's) to finish and the hot reload to land before the next look.
@@ -113,12 +115,12 @@ pub fn order_path(owner: CertOwner, port_plan: Option<&str>) -> Result<OrderPath
         CertOwner::K2 => Ok(OrderPath::K2),
         CertOwner::StalwartAcme if port_plan == Some("tls-alpn") => Ok(OrderPath::StalwartAcme),
         CertOwner::StalwartAcme => Err(format!(
-            "port plan {} — Stalwart ACME runs on tls-alpn only and K2 does not own the \
+            "port plan {} — Stalwart ACME runs on tls-alpn only and {PRODUCT_NAME} does not own the \
              mail certificate",
             port_plan.unwrap_or("unset")
         )),
         CertOwner::Unknown => Err(
-            "owner unknown — neither K2 nor Stalwart ACME owns the mail certificate".into(),
+            concat!("owner unknown — neither ", product_name!(), " nor Stalwart ACME owns the mail certificate").into(),
         ),
     }
 }
@@ -321,7 +323,7 @@ pub fn run_once(deps: &mut dyn TriggerDeps, host: &str, k2_scan_touched: bool) -
             };
             let Some(result) = result else {
                 return done(format!(
-                    "{P} {host}: {state}, no order — K2's issuer is busy or {host} no longer \
+                    "{P} {host}: {state}, no order — {PRODUCT_NAME}'s issuer is busy or {host} no longer \
                      qualifies"
                 ));
             };

@@ -36,7 +36,7 @@ use super::vault::OwnService;
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
 use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 
 pub(crate) const ACTION: &str = "apps.recording";
 pub(crate) const ROUTE: &str = crate::apps::recording_routes::SET;
@@ -66,7 +66,7 @@ pub(crate) static APPS_RECORDING: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " app recording <app> set --required off --server-read off (a terminal outside K2)") },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " app recording <app> set --required off --server-read off (a terminal outside ", product_name!(), ")") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: ROUTE,

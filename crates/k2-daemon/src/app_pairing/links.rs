@@ -37,6 +37,7 @@ use std::sync::{Arc, OnceLock};
 use arc_swap::ArcSwap;
 use k2_core::skin::app_pairing::{AndroidApp, PAIR_PATH};
 use serde_json::json;
+use k2_core::brand::PRODUCT_NAME;
 
 pub const AASA: &str = "/.well-known/apple-app-site-association";
 pub const ASSETLINKS: &str = "/.well-known/assetlinks.json";
@@ -309,7 +310,7 @@ a.button, button {{ display:block; width:100%; text-align:center; font:600 16px/
   <p id="lead">This link signs your phone in to {name}. Open it with the {name} app on your phone, or copy the code and paste it in the app.</p>
   <code id="code">…</code>
   <button type="button" id="copy" hidden>Copy code</button>
-  <p class="warn">Never share this code or read it to anyone. K2 and {name} will never ask you for it.</p>
+  <p class="warn">Never share this code or read it to anyone. {PRODUCT_NAME} and {name} will never ask you for it.</p>
 {stores}  <p id="status" role="status"></p>
 </main>
 <script nonce="{nonce}">

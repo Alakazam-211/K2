@@ -47,6 +47,8 @@ use k2_vault::{
     Selector, Use,
 };
 use serde::{Deserialize, Serialize};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// "Used lately": the look-back for the audit evidence.
 pub const WINDOW_DAYS: i64 = 30;
@@ -558,7 +560,7 @@ fn evidence(
         return Err("checked again after its .env.k2 couldn't be read: only a running service holding it in its environment counts".into());
     }
     if referrers != 1 {
-        return Err(format!("{referrers} services name it, so K2 can't tell which one used it"));
+        return Err(format!("{referrers} services name it, so {PRODUCT_NAME} can't tell which one used it"));
     }
     if !svc.recent {
         return Err(format!("not running and not started in the last {WINDOW_DAYS} days"));
@@ -566,7 +568,7 @@ fn evidence(
     if !svc.is_app {
         match (env_mtime, svc.last_started_at) {
             (Some(m), Some(s)) if m <= s => {}
-            (_, None) => return Err("K2 has no record of when it last started".into()),
+            (_, None) => return Err(concat!(product_name!(), " has no record of when it last started").into()),
             _ => return Err("its .env.k2 changed after it last started".into()),
         }
     }
@@ -791,20 +793,20 @@ fn scope_flag(l: &RefLine) -> String {
 
 pub fn notice_body(r: &Report) -> String {
     let mut b = String::from(
-        "K2 0.46.4 closes a gap: a published service or App could read any server-wide secret through a k2v:// line in \
+        concat!(product_name!(), " 0.46.4 closes a gap: a published service or App could read any server-wide secret through a k2v:// line in \
          its .env.k2 with no grant, and an agent's launch env could read any secret. Now a reference needs a grant \
          to that service or workspace, like any shared secret. Names and service ids only below; no value was read \
-         out or moved.\n",
+         out or moved.\n"),
     );
     if !r.granted.is_empty() {
         b.push_str(&format!(
-            "\nKept working for {} days (K2 saw each service use it, so it granted each to that one service, as env). \
+            "\nKept working for {} days ({PRODUCT_NAME} saw each service use it, so it granted each to that one service, as env). \
              Keep them on the card in the workspace's Thread, or they lapse:\n",
             r.grant_days
         ));
         for l in &r.granted {
             b.push_str(&format!(
-                "- service {} (\"{}\", workspace {}): {} = {} ({} secret). Keep for good: k2 vault grant {} {} --to service:{} --as env --env-name {}\n",
+                "- service {} (\"{}\", workspace {}): {} = {} ({} secret). Keep for good: {CLI_NAME} vault grant {} {} --to service:{} --as env --env-name {}\n",
                 l.service_id, l.service, l.workspace, l.key, l.secret, l.scope, l.secret, scope_flag(l), l.service_id, l.key
             ));
         }
@@ -813,7 +815,7 @@ pub fn notice_body(r: &Report) -> String {
         b.push_str("\nNow refused (the service starts without it):\n");
         for l in &r.refused {
             b.push_str(&format!(
-                "- service {} (\"{}\", workspace {}): {} = {} ({} secret): {}. To allow: k2 vault grant {} {} --to service:{} --as env --env-name {}\n",
+                "- service {} (\"{}\", workspace {}): {} = {} ({} secret): {}. To allow: {CLI_NAME} vault grant {} {} --to service:{} --as env --env-name {}\n",
                 l.service_id, l.service, l.workspace, l.key, l.secret, l.scope, l.reason, l.secret, scope_flag(l), l.service_id, l.key
             ));
         }
@@ -822,7 +824,7 @@ pub fn notice_body(r: &Report) -> String {
         b.push_str("\nAgent launch blocks now refused (the agent's next session starts without it):\n");
         for l in &r.launch_refused {
             b.push_str(&format!(
-                "- workspace {} ({}): {} = {}: {}. To allow: k2 vault grant {} {} --to ws:{} --as env\n",
+                "- workspace {} ({}): {} = {}: {}. To allow: {CLI_NAME} vault grant {} {} --to ws:{} --as env\n",
                 l.workspace, l.workspace_id, l.key, l.secret, l.reason, l.secret, scope_flag(l), l.workspace_id
             ));
         }
@@ -885,7 +887,7 @@ fn chain_broken_report(vault: &LocalVault, code: &str) -> Report {
                     secret: m.name.clone(),
                     secret_id: m.id.clone(),
                     scope: if m.scope.kind == ScopeKind::Server { "server".into() } else { "workspace".into() },
-                    reason: format!("the vault audit chain doesn't verify ({code}), so K2 made no upgrade grants"),
+                    reason: format!("the vault audit chain doesn't verify ({code}), so {PRODUCT_NAME} made no upgrade grants"),
                     ..Default::default()
                 });
             }
@@ -899,10 +901,10 @@ fn chain_broken_report(vault: &LocalVault, code: &str) -> Report {
 pub fn chain_broken_notice(code: &str, r: &Report) -> (String, String) {
     let title = "Vault: the audit log doesn't verify, so .env.k2 references weren't carried over".to_string();
     let mut b = format!(
-        "K2 0.46.4 asks for a grant before a service reads a secret through a k2v:// line in .env.k2. On update K2 would \
+        "{PRODUCT_NAME} 0.46.4 asks for a grant before a service reads a secret through a k2v:// line in .env.k2. On update {PRODUCT_NAME} would \
          grant references that services were really using, but it decides that from the vault's audit log, and that log \
-         doesn't verify ({code}). So K2 made no upgrade grants. Services using k2v://server/… (or fetch-only workspace) \
-         references will start without them.\n\nCheck the vault: k2 vault doctor\n"
+         doesn't verify ({code}). So {PRODUCT_NAME} made no upgrade grants. Services using k2v://server/… (or fetch-only workspace) \
+         references will start without them.\n\nCheck the vault: {CLI_NAME} vault doctor\n"
     );
     if r.refused.is_empty() {
         b.push_str("\nK2 found no such references in your services' .env.k2 files.\n");
@@ -910,7 +912,7 @@ pub fn chain_broken_notice(code: &str, r: &Report) -> (String, String) {
         b.push_str("\nTo let a service keep one, grant it (names and service ids only):\n");
         for l in &r.refused {
             b.push_str(&format!(
-                "- service {} (\"{}\", workspace {}): {} = {} ({} secret): k2 vault grant {} {} --to service:{} --as env --env-name {}\n",
+                "- service {} (\"{}\", workspace {}): {} = {} ({} secret): {CLI_NAME} vault grant {} {} --to service:{} --as env --env-name {}\n",
                 l.service_id, l.service, l.workspace, l.key, l.secret, l.scope, l.secret, scope_flag(l), l.service_id, l.key
             ));
         }
@@ -978,7 +980,7 @@ pub fn row_label(r: &CardRow) -> String {
 /// The card's words and buttons for these rows.
 pub fn card_for(rows: &[CardRow]) -> (String, Vec<String>) {
     let mut prompt = format!(
-        "K2 0.46.4 now asks for a grant before a service reads a secret through .env.k2. These kept working because K2 saw each \
+        "{PRODUCT_NAME} 0.46.4 now asks for a grant before a service reads a secret through .env.k2. These kept working because {PRODUCT_NAME} saw each \
          service use it; each lasts {UPGRADE_GRANT_DAYS} days unless you keep it:"
     );
     for r in rows {

@@ -29,6 +29,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::person_wallet_runtime::{self as prt, audit, person_key, VaultSealer};
 use crate::sidecar_routes::Caller;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const LIST: &str = "/cli/skin/wallet/list";
 pub const STATUS: &str = "/cli/skin/wallet/status";
@@ -237,7 +239,7 @@ fn me(pass: Option<&SkinPass>) -> Result<Me, CliResponse> {
         return Err(refuse(
             403,
             "wallet_off",
-            "this App doesn't use personal wallets; the App's owner can turn it on (k2 app wallet settings <app> --on)",
+            concat!("this App doesn't use personal wallets; the App's owner can turn it on (", cli_name!(), " app wallet settings <app> --on)"),
         ));
     }
     Ok(Me { principal_id: pid.to_string(), app: pass.app.clone(), first_name: person.first_name() })
@@ -441,7 +443,7 @@ fn handle_skin_post(path: &str, body: &[u8], me: &Me, who: &str) -> CliResponse 
                 Ok(()) => ok(json!({
                     "ok": true,
                     "removed": item.id,
-                    "note": "Deleted from this server. Also sign K2 out on the vendor's website if you want that session gone there too.",
+                    "note": concat!("Deleted from this server. Also sign ", product_name!(), " out on the vendor's website if you want that session gone there too."),
                 })),
                 Err(e) => wallet_err(e),
             }
@@ -531,7 +533,7 @@ pub(crate) fn resolve_wallet_app(raw: &str) -> Result<(String, Option<String>), 
         _ => Err(refuse(
             404,
             "app_not_found",
-            format!("no App {t:?} on this box: name it by its App id (k2 app list), its service id, or <workspace>/<name>"),
+            format!("no App {t:?} on this box: name it by its App id ({CLI_NAME} app list), its service id, or <workspace>/<name>"),
         )),
     }
 }
@@ -759,7 +761,7 @@ fn personal_agent(b: &Body, key: &str, ingress: &str) -> CliResponse {
         return refuse(
             409,
             "room_not_granted",
-            format!("{user} doesn't have this agent's room in {app}; grant it first (k2 app guest rooms {app} {user} …)"),
+            format!("{user} doesn't have this agent's room in {app}; grant it first ({CLI_NAME} app guest rooms {app} {user} …)"),
         );
     }
     match with_conn(|c| pw::set_person_agent(c, &project_id, Some((&person.principal_id, &app)), Some(key))) {

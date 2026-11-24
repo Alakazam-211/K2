@@ -16,6 +16,7 @@
 //! unnamed and the refusal says "a hosted-mail enable or upgrade".
 
 use std::sync::Mutex;
+use k2_core::brand::PRODUCT_NAME;
 
 static HOLDER: Mutex<Option<&'static str>> = Mutex::new(None);
 
@@ -56,7 +57,7 @@ impl Drop for Held {
 /// The refusal text while the latch is held.
 pub fn busy_text() -> String {
     let who = holder().map(str::to_string).unwrap_or_else(|| "a hosted-mail enable or upgrade".into());
-    format!("{who} is running and K2 runs one root sequence at a time: try again when it finishes")
+    format!("{who} is running and {PRODUCT_NAME} runs one root sequence at a time: try again when it finishes")
 }
 
 /// Claim the latch for `what`, or say who has it.

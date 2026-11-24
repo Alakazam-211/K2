@@ -20,6 +20,8 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use crate::dns::proxy::proxy_request;
 use crate::domains::renew;
 use crate::domains::store::{self, AcmeConfig, InstalledPem};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 const PROD_DIR: &str = "https://acme-v02.api.letsencrypt.org/directory";
 const STAGING_DIR: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
@@ -84,8 +86,8 @@ pub fn select_challenge(binding: &DomainBinding, hostname: &str) -> Result<Chall
     if binding.dns_write {
         if crate::dns::proxy::tunnel_bearer_token().is_err() {
             return Err(
-                "DNS-01 needs a Connect tunnel token to plant TXT via k2 dns — \
-sign in to your account in Settings → Network → Tunnel, or point the name here and use HTTP-01/:80 or TLS-ALPN/:443"
+                concat!("DNS-01 needs a Connect tunnel token to plant TXT via ", cli_name!(), " dns — \
+sign in to your account in Settings → Network → Tunnel, or point the name here and use HTTP-01/:80 or TLS-ALPN/:443")
                     .into(),
             );
         }
@@ -208,8 +210,8 @@ pub(crate) fn app_name_may_issue(hostname: &str) -> Result<(), String> {
     match d.state.as_str() {
         k2_core::domains::STATE_ISSUING | k2_core::domains::STATE_LIVE => Ok(()),
         s => Err(format!(
-            "{hostname} is not proven yet (state {s}): K2 orders no certificate before its TXT record and DNS check pass \
-             (k2 app domain check {} {hostname})",
+            "{hostname} is not proven yet (state {s}): {PRODUCT_NAME} orders no certificate before its TXT record and DNS check pass \
+             ({CLI_NAME} app domain check {} {hostname})",
             d.app
         )),
     }
@@ -252,7 +254,7 @@ pub fn select_app_challenge(binding: &DomainBinding, hostname: &str) -> Result<C
     }
     Err(format!(
         "no ACME proof for {hostname}: its zone is not K2-hosted (DNS-01), the :443 front is not serving \
-         (TLS-ALPN-01 through the App door: the owner runs k2 front enable), and :80 is closed (HTTP-01)"
+         (TLS-ALPN-01 through the App door: the owner runs {CLI_NAME} front enable), and :80 is closed (HTTP-01)"
     ))
 }
 
@@ -309,7 +311,7 @@ pub(crate) fn check_extra_name_issuable(
     }
     if !binding.dns_write {
         return Err(format!(
-            "zone {} is not K2-hosted (not attached with DNS write) — K2 issues per-name \
+            "zone {} is not K2-hosted (not attached with DNS write) — {PRODUCT_NAME} issues per-name \
              certificates through DNS-01 on ns1/ns2.k2.dev only",
             binding.apex
         ));

@@ -44,6 +44,8 @@ use serde_json::{json, Value as J};
 
 use super::labels;
 use super::routes::{actor, app_for, b, db_err, json_body, need_build, need_credential, no, s, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const ROUTES: &[&str] = &[
     "/cli/app/domains",
@@ -119,7 +121,7 @@ fn custom_json(d: &k2_core::domains::AppDomain) -> J {
     v["next"] = if let Some(p) = pending {
         json!(p)
     } else if advice["records"] == "none" && d.state != k2_core::domains::STATE_LIVE {
-        json!(format!("No DNS to set yet. Once that's solved: k2 app domain add {} {} prints the records.", d.app, d.hostname))
+        json!(format!("No DNS to set yet. Once that's solved: {CLI_NAME} app domain add {} {} prints the records.", d.app, d.hostname))
     } else {
         json!(next_step(d, shown))
     };
@@ -136,7 +138,7 @@ fn custom_json(d: &k2_core::domains::AppDomain) -> J {
 fn own_server_hint(d: &k2_core::domains::AppDomain, front_enabled: bool) -> Option<String> {
     use k2_core::domains::{STATE_VERIFYING, STATE_WAITING_DNS};
     (!front_enabled && matches!(d.state.as_str(), STATE_WAITING_DNS | STATE_VERIFYING)).then(|| {
-        format!("If your own web server serves this name, run: k2 app domain add {} {} --external", d.app, d.hostname)
+        format!("If your own web server serves this name, run: {CLI_NAME} app domain add {} {} --external", d.app, d.hostname)
     })
 }
 
@@ -148,34 +150,34 @@ fn next_step(d: &k2_core::domains::AppDomain, shown: &str) -> String {
     let front = if connect || k2_core::front443::load().enabled {
         String::new()
     } else {
-        " This box's :443 front is off: path (a) needs it (the owner runs k2 front enable).".to_string()
+        concat!(" This box's :443 front is off: path (a) needs it (the owner runs ", cli_name!(), " front enable).").to_string()
     };
     if connect && d.state == STATE_ISSUING {
-        return "Proven, and K2 Connect routes it here; K2 is getting its certificate through the relay (TLS-ALPN-01). \
-                The tunnel restarts once to carry the name (a few seconds' blip)."
+        return concat!("Proven, and K2 Connect routes it here; ", product_name!(), " is getting its certificate through the relay (TLS-ALPN-01). \
+                The tunnel restarts once to carry the name (a few seconds' blip).")
             .to_string();
     }
     match d.state.as_str() {
         STATE_LIVE => format!(
-            "Served. Make it the App's primary origin with k2 app domain primary {} {} (then k2 app restart {}).",
+            "Served. Make it the App's primary origin with {CLI_NAME} app domain primary {} {} (then {CLI_NAME} app restart {}).",
             d.app, d.hostname, d.app
         ),
-        STATE_ISSUING => format!("Proven; K2 is getting its certificate (TLS-ALPN-01 or DNS-01).{front}"),
+        STATE_ISSUING => format!("Proven; {PRODUCT_NAME} is getting its certificate (TLS-ALPN-01 or DNS-01).{front}"),
         STATE_EXTERNAL => format!(
-            "Your own web server serves it, not K2: K2 makes no DNS check or certificate for it. It is one of the App's \
-             origins from the App's next start (k2 app restart {app}). For K2 to serve it instead: \
-             k2 app domain external {app} {host} off",
+            "Your own web server serves it, not {PRODUCT_NAME}: {PRODUCT_NAME} makes no DNS check or certificate for it. It is one of the App's \
+             origins from the App's next start ({CLI_NAME} app restart {app}). For {PRODUCT_NAME} to serve it instead: \
+             {CLI_NAME} app domain external {app} {host} off",
             app = d.app,
             host = d.hostname
         ),
         STATE_FAILING => format!(
-            "Not served: {}. Fix the DNS records below, then: k2 app domain check {} {}",
+            "Not served: {}. Fix the DNS records below, then: {CLI_NAME} app domain check {} {}",
             d.last_error.as_deref().unwrap_or("its DNS moved away"),
             d.app,
             d.hostname
         ),
         _ => format!(
-            "Set these at your DNS host (DNS-only, no proxy), then run: k2 app domain check {} {}.{front}",
+            "Set these at your DNS host (DNS-only, no proxy), then run: {CLI_NAME} app domain check {} {}.{front}",
             d.app, d.hostname
         ),
     }
@@ -187,7 +189,7 @@ fn app_domain_of(app: &AppRow, host: &str) -> R<k2_core::domains::AppDomain> {
     k2_core::domains::app_domain(&conn, host)
         .map_err(db_err)?
         .filter(|d| d.app == app.app_id)
-        .ok_or_else(|| no(NOT_ATTACHED, 404, format!("{} has no custom domain {host} (k2 app domains {})", app.app_id, app.app_id)))
+        .ok_or_else(|| no(NOT_ATTACHED, 404, format!("{} has no custom domain {host} ({CLI_NAME} app domains {})", app.app_id, app.app_id)))
 }
 
 /// POST `/cli/app/domain/add {app, label: app.customer.com, external?}`
@@ -245,7 +247,7 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
             NOT_ATTACHED,
             409,
             format!(
-                "no attached domain covers {host}: the owner attaches its zone first (k2 domain add {apex}), then run this again"
+                "no attached domain covers {host}: the owner attaches its zone first ({CLI_NAME} domain add {apex}), then run this again"
             ),
         ));
     };
@@ -327,8 +329,8 @@ fn claim_if_path_b(app: &AppRow, d: &k2_core::domains::AppDomain) -> R<k2_core::
 /// What an `external` name needs to reach the App: its next start.
 fn restart_note(app_id: &str, host: &str) -> String {
     format!(
-        "{host} is served by your own web server, not K2. It is one of the App's origins from its next start: \
-         k2 app restart {app_id}"
+        "{host} is served by your own web server, not {PRODUCT_NAME}. It is one of the App's origins from its next start: \
+         {CLI_NAME} app restart {app_id}"
     )
 }
 
@@ -346,7 +348,7 @@ fn custom_external(who: &Who, body: &[u8]) -> R<J> {
     let on = v
         .get("external")
         .and_then(J::as_bool)
-        .ok_or_else(|| no(codes::BAD_REQUEST, 400, "say on or off: k2 app domain external <app-id> <host> on|off"))?;
+        .ok_or_else(|| no(codes::BAD_REQUEST, 400, concat!("say on or off: ", cli_name!(), " app domain external <app-id> <host> on|off")))?;
     let d = app_domain_of(&app, &host)?;
     set_external(who, &app, &d, on)
 }
@@ -388,8 +390,8 @@ fn set_external(who: &Who, app: &AppRow, d: &k2_core::domains::AppDomain, on: bo
         restart_note(&app.app_id, &host)
     } else {
         format!(
-            "K2's front serves {host} once its DNS checks pass and it is live; until then it is not one of the App's \
-             origins. Then: k2 app restart {}",
+            "{PRODUCT_NAME}'s front serves {host} once its DNS checks pass and it is live; until then it is not one of the App's \
+             origins. Then: {CLI_NAME} app restart {}",
             app.app_id
         )
     };
@@ -450,7 +452,7 @@ fn custom_check(who: &Who, body: &[u8]) -> R<J> {
     let host = host_arg(&v)?;
     let before = app_domain_of(&app, &host)?;
     if k2_core::airgap::enabled() {
-        return Err(no("airgap", 409, "air-gap is on: K2 makes no DNS checks"));
+        return Err(no("airgap", 409, concat!("air-gap is on: ", product_name!(), " makes no DNS checks")));
     }
     let (d, o) = super::custom_domain_flow::check_now(&host).ok_or_else(|| no(NOT_ATTACHED, 404, format!("{host} is gone")))?;
     // This check claimed the name and K2 Connect gave a new TXT value: on a
@@ -496,9 +498,9 @@ fn custom_primary(who: &Who, body: &[u8]) -> R<J> {
         // An `external` name (the owner's own server serves it) is an
         // origin already: primary from the next start too.
         "note": if d.is_origin() {
-            format!("K2_APP_ORIGIN is https://{host} from the App's next start (k2 app restart {})", app.app_id)
+            format!("K2_APP_ORIGIN is https://{host} from the App's next start ({CLI_NAME} app restart {})", app.app_id)
         } else {
-            format!("{host} becomes K2_APP_ORIGIN once it is live; until then the App's K2 label stays primary")
+            format!("{host} becomes K2_APP_ORIGIN once it is live; until then the App's {PRODUCT_NAME} label stays primary")
         },
     }))
 }
@@ -640,7 +642,7 @@ pub(crate) fn label_check(app_id: &str, ws: &str, label: &str) -> R<()> {
                 Ok(_) => labels::foreign_refusal(label, &holder),
             });
         }
-        return Err(no(USE_LABEL_TAKE, 409, format!("'{label}' is a published service's label in your workspace (k2 publish list)")));
+        return Err(no(USE_LABEL_TAKE, 409, format!("'{label}' is a published service's label in your workspace ({CLI_NAME} publish list)")));
     }
     crate::label_owner::check(label, ws, false).map_err(|r| foreign(label, r))?;
     Ok(())
@@ -657,7 +659,7 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
         return Err(no(
             codes::BAD_REQUEST,
             400,
-            "--external is for your own domain (e.g. shop.example.com): a <box>.k2.dev subdomain is always served by K2",
+            concat!("--external is for your own domain (e.g. shop.example.com): a <box>.k2.dev subdomain is always served by ", product_name!()),
         ));
     }
     let label = label_of(s(&v, "label").ok_or_else(|| no(codes::BAD_REQUEST, 400, "label is required (the subdomain, e.g. agents)"))?)?;
@@ -675,7 +677,7 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
         return Err(no(RESERVED, 400, k2_core::skin::reserved_nested_label_error(&label)));
     }
     if let Some(other) = served_by_other_app(&app.app_id, &label)? {
-        return Err(no(OTHER_APP, 409, format!("'{label}' already serves the App {other}: remove it there first (k2 app domain rm {other} {label})")));
+        return Err(no(OTHER_APP, 409, format!("'{label}' already serves the App {other}: remove it there first ({CLI_NAME} app domain rm {other} {label})")));
     }
     // A published service's own label: this workspace's --cmd service or
     // --skin site is `label take` (it unroutes that service); anything
@@ -702,12 +704,12 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
         };
         let hint = if legacy {
             format!(
-                "'{label}' is your --cmd service's or --skin site's own label: move it with k2 app label take {} {label} \
+                "'{label}' is your --cmd service's or --skin site's own label: move it with {CLI_NAME} app label take {} {label} \
                  (that also unroutes the old service; a site's guests are copied onto the App)",
                 app.app_id
             )
         } else {
-            format!("'{label}' is a published service's label in your workspace (k2 publish list): stop it there first")
+            format!("'{label}' is a published service's label in your workspace ({CLI_NAME} publish list): stop it there first")
         };
         return Err(no(USE_LABEL_TAKE, 409, hint));
     }
@@ -721,7 +723,7 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
             no(
                 labels::NOT_HEALTHY,
                 409,
-                format!("{why}: deploy it and wait until it's live before it serves '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
+                format!("{why}: deploy it and wait until it's live before it serves '{label}' ({CLI_NAME} app deployment {} ; {CLI_NAME} app logs {})", app.app_id, app.app_id),
             )
         })?,
     };
@@ -750,8 +752,8 @@ fn add_with(who: &Who, body: &[u8], front_override: Option<u16>) -> R<J> {
         "frontPort": front,
         "previousTarget": previous,
         "note": format!(
-            "https://{label}.<your box>.k2.dev now serves {}. It is in K2_APP_ORIGINS from the App's next start (k2 app restart {}). \
-             Undo: k2 app domain rm {} {label}{}",
+            "https://{label}.<your box>.k2.dev now serves {}. It is in K2_APP_ORIGINS from the App's next start ({CLI_NAME} app restart {}). \
+             Undo: {CLI_NAME} app domain rm {} {label}{}",
             app.app_id,
             app.app_id,
             app.app_id,
@@ -796,9 +798,9 @@ fn rm(who: &Who, body: &[u8]) -> R<J> {
     let mut cfg = labels::load_cfg(&app.app_id)?;
     let Some(i) = cfg.subdomains.iter().position(|d| d.label == label) else {
         let hint = if cfg.labels.iter().any(|l| l.label == label) {
-            format!("'{label}' was taken from your --cmd service: k2 app label return {} {label}", app.app_id)
+            format!("'{label}' was taken from your --cmd service: {CLI_NAME} app label return {} {label}", app.app_id)
         } else {
-            format!("{} has no attached '{label}' (k2 app domains {})", app.app_id, app.app_id)
+            format!("{} has no attached '{label}' ({CLI_NAME} app domains {})", app.app_id, app.app_id)
         };
         return Err(no(NOT_ATTACHED, 404, hint));
     };

@@ -39,6 +39,8 @@ use k2_core::email_notify::{self as store, LogRow, Sender};
 
 use super::compose::{self, Request};
 use super::{db_fail, fail, Fail, R};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// Refused rows one App may add to the log an hour (a flood guard).
 pub const MAX_REFUSED_ROWS_PER_HOUR: i64 = 100;
@@ -113,7 +115,7 @@ fn app_sender(app: &str) -> R<(store::AppState, Sender)> {
         return Err(fail(
             403,
             "email_off",
-            "this App doesn't send email: its owner turns it on with a sender (k2 app email on <app> --sender <address>)",
+            concat!("this App doesn't send email: its owner turns it on with a sender (", cli_name!(), " app email on <app> --sender <address>)"),
         ));
     }
     let sender = match st.sender_id.as_deref() {
@@ -122,7 +124,7 @@ fn app_sender(app: &str) -> R<(store::AppState, Sender)> {
     };
     match sender {
         Some(s) if s.is_live() && s.app() == Some(app) => Ok((st, s)),
-        _ => Err(fail(409, "no_sender", "this App has no sender: its owner grants one (k2 app email on <app> --sender <address>)")),
+        _ => Err(fail(409, "no_sender", concat!("this App has no sender: its owner grants one (", cli_name!(), " app email on <app> --sender <address>)"))),
     }
 }
 
@@ -156,7 +158,7 @@ fn check_from(req_from: Option<&str>, s: &Sender) -> R<()> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     match store::find_sender(&conn, f).map_err(db_fail)? {
-        Some(o) if o.is_system() => Err(fail(409, "system_sender", "the system sender is K2's own; an App never sends from it")),
+        Some(o) if o.is_system() => Err(fail(409, "system_sender", concat!("the system sender is ", product_name!(), "'s own; an App never sends from it"))),
         _ => Err(fail(403, "sender_not_granted", "from names a sender this App wasn't granted (omit from to use the App's own)")),
     }
 }
@@ -238,8 +240,8 @@ fn check_scope(app: &str, scope_any: bool, envelope: &[String]) -> R<()> {
             return Err(fail(
                 403,
                 "recipient_out_of_scope",
-                "this App emails only its own users whose address is confirmed (they used a link K2 mailed them). \
-                 Other addresses need the owner's any scope (k2 app email on <app> --scope any)",
+                concat!("this App emails only its own users whose address is confirmed (they used a link ", product_name!(), " mailed them). \
+                 Other addresses need the owner's any scope (", cli_name!(), " app email on <app> --scope any)"),
             ));
         }
     }
@@ -650,7 +652,7 @@ pub fn send(caller: &Caller, v: &J, now: i64) -> R<J> {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 let _ = store::set_log_status(&conn, &row.id, store::ST_SCHEDULED, store::ST_FAILED, Some("failed"), now);
-                return Err(fail(500, "failed", format!("K2 couldn't keep the scheduled email: {e}")));
+                return Err(fail(500, "failed", format!("{PRODUCT_NAME} couldn't keep the scheduled email: {e}")));
             }
             Ok(accepted(&row))
         }
@@ -718,12 +720,12 @@ fn hold(row: &LogRow, s: &Sender, req: &Request, name: &str, rt: &[String], proj
             let r = store::get_log(&conn, &row.id).map_err(db_fail)?.ok_or_else(|| db_fail("the log row vanished"))?;
             let mut v = accepted(&r);
             v["outboundId"] = json!(ob);
-            v["hint"] = json!("held for the owner's approval (k2 mail approvals)");
+            v["hint"] = json!(concat!("held for the owner's approval (", cli_name!(), " mail approvals)"));
             Ok(v)
         }
         Err(e) => {
             let _ = store::set_log_status(&conn, &row.id, store::ST_HELD, store::ST_FAILED, Some("failed"), now);
-            Err(fail(500, "failed", format!("K2 couldn't hold the email for approval: {e}")))
+            Err(fail(500, "failed", format!("{PRODUCT_NAME} couldn't hold the email for approval: {e}")))
         }
     }
 }
@@ -1001,7 +1003,7 @@ pub fn system_send_from(s: &Sender, purpose: &str, app: Option<&str>, to: &str, 
 /// kept (empty in the log), the stored copy is destroyed, the system
 /// budget applies (no warm-up). Returns the log id.
 pub fn system_send(purpose: &str, to: &str, composed: &Composed, app: Option<&str>) -> R<String> {
-    let s = sender_for(app)?.ok_or_else(|| fail(409, "no_mail_path", "this server has no system sender (k2 notifications email system-sender set)"))?;
+    let s = sender_for(app)?.ok_or_else(|| fail(409, "no_mail_path", concat!("this server has no system sender (", cli_name!(), " notifications email system-sender set)")))?;
     send_fixed(&s, store::ORIGIN_SYSTEM, purpose, app, to, composed, &super::budget::Kind::System)
 }
 

@@ -41,6 +41,7 @@ use k2_vault::{
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, json_body, need_credential, no, s, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The file name the App reads in `$K2_SECRETS_DIR`.
 pub const SEAL_FILE: &str = "K2_APP_SEAL_KEY";
@@ -95,7 +96,7 @@ pub fn ensure(app_id: &str, service_id: &str) -> Result<bool, VaultError> {
             put.default_delivery = Some(Delivery::Fetch);
             put.delivery_ceiling = Some(Delivery::File);
             put.description =
-                format!("Seal key for App {app_id} (made by K2; the App reads $K2_SECRETS_DIR/{SEAL_FILE}; rotate: k2 app seal rotate {app_id})");
+                format!("Seal key for App {app_id} (made by {PRODUCT_NAME}; the App reads $K2_SECRETS_DIR/{SEAL_FILE}; rotate: {CLI_NAME} app seal rotate {app_id})");
             put.origin = "k2 app seal".into();
             vault.put(put, generate()?, &Actor::Owner)?;
             (name, true)
@@ -222,13 +223,13 @@ fn rotate_route(who: &Who, body: &[u8]) -> R<J> {
             403,
             format!(
                 "rotating an App's seal key signs everyone out, so only the owner (or an agent whose workspace has \
-                 \"…and manage them end to end\") may: k2 app seal rotate {} --yes",
+                 \"…and manage them end to end\") may: {CLI_NAME} app seal rotate {} --yes",
                 app.app_id
             ),
         ));
     }
     if v.get("yes").and_then(J::as_bool) != Some(true) {
-        let mut r = no("signout_confirm_required", 409, format!("{SIGNOUT_WARNING} Send yes: true (k2 app seal rotate {} --yes) to go ahead.", app.app_id));
+        let mut r = no("signout_confirm_required", 409, format!("{SIGNOUT_WARNING} Send yes: true ({CLI_NAME} app seal rotate {} --yes) to go ahead.", app.app_id));
         r.extra = Some(json!({ "warning": SIGNOUT_WARNING }));
         return Err(r);
     }
@@ -254,7 +255,7 @@ fn rotate_route(who: &Who, body: &[u8]) -> R<J> {
         "rotated": true,
         "version": version,
         "warning": SIGNOUT_WARNING,
-        "next": format!("it reaches the App at its next start: k2 app restart {}", app.app_id),
+        "next": format!("it reaches the App at its next start: {CLI_NAME} app restart {}", app.app_id),
     }))
 }
 

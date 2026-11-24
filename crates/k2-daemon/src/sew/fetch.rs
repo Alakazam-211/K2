@@ -33,6 +33,7 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use k2_root_proto::sew::{SewAppKit, SewArtifact, MAX_TARBALL};
+use k2_core::brand::PRODUCT_NAME;
 
 /// Sew's public release downloads.
 pub const RELEASES_URL: &str = "https://github.com/Alakazam-211/sew-releases/releases/download";
@@ -274,7 +275,7 @@ pub fn cache_dir(root: &Path, f: &ReleaseFile) -> PathBuf {
 /// A directory only this user can use: created 0700, refused when it is a
 /// symlink or another user's, tightened to 0700 when looser.
 fn private_dir(d: &Path) -> Result<(), FetchError> {
-    let err = |e: String| FetchError::Cache(format!("K2's download cache {}: {e}", d.display()));
+    let err = |e: String| FetchError::Cache(format!("{PRODUCT_NAME}'s download cache {}: {e}", d.display()));
     if let Some(p) = d.parent() {
         fs::create_dir_all(p).map_err(|e| err(e.to_string()))?;
     }
@@ -406,7 +407,7 @@ pub fn probe(src: &Source, f: &ReleaseFile) -> Result<Option<u64>, FetchError> {
         }
         let n = content_length(r.headers());
         if n.is_some_and(|n| n > cap) {
-            return Err(FetchError::Refused(format!("{shown} is larger than K2 accepts ({} MB)", cap / 1_000_000)));
+            return Err(FetchError::Refused(format!("{shown} is larger than {PRODUCT_NAME} accepts ({} MB)", cap / 1_000_000)));
         }
         Ok(n)
     })?
@@ -444,7 +445,7 @@ pub fn download(src: &Source, f: &ReleaseFile, progress: &dyn Fn(u64, Option<u64
     if !hash.eq_ignore_ascii_case(&f.sha256) {
         let _ = fs::remove_file(&part);
         return Err(FetchError::Mismatch(format!(
-            "the download of {} ({}) has sha256 {hash}, but K2's pin for it is {}: the file was deleted and nothing was installed",
+            "the download of {} ({}) has sha256 {hash}, but {PRODUCT_NAME}'s pin for it is {}: the file was deleted and nothing was installed",
             f.label,
             f.url(),
             f.sha256
@@ -452,7 +453,7 @@ pub fn download(src: &Source, f: &ReleaseFile, progress: &dyn Fn(u64, Option<u64
     }
     fs::rename(&part, &fin).map_err(|e| {
         let _ = fs::remove_file(&part);
-        FetchError::Cache(format!("K2's download cache {}: {e}", dir.display()))
+        FetchError::Cache(format!("{PRODUCT_NAME}'s download cache {}: {e}", dir.display()))
     })?;
     Ok(fin)
 }
@@ -467,7 +468,7 @@ fn stream(o: &Origin, f: &ReleaseFile, url: reqwest::Url, part: &Path, tx: &std:
         return Err(FetchError::Unreachable(format!("{shown} answered HTTP {}", r.status().as_u16())));
     }
     let total = content_length(r.headers());
-    let too_big = || FetchError::Refused(format!("{shown} is larger than K2 accepts for {} ({} MB)", f.label, f.cap / 1_000_000));
+    let too_big = || FetchError::Refused(format!("{shown} is larger than {PRODUCT_NAME} accepts for {} ({} MB)", f.label, f.cap / 1_000_000));
     if total.is_some_and(|t| t > f.cap) {
         return Err(too_big());
     }
@@ -478,7 +479,7 @@ fn stream(o: &Origin, f: &ReleaseFile, url: reqwest::Url, part: &Path, tx: &std:
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let cache = |e: std::io::Error| FetchError::Cache(format!("K2's download cache {}: {e}", part.display()));
+    let cache = |e: std::io::Error| FetchError::Cache(format!("{PRODUCT_NAME}'s download cache {}: {e}", part.display()));
     let mut out = opts.open(part).map_err(cache)?;
     let mut h = Sha256::new();
     let mut buf = vec![0u8; CHUNK];

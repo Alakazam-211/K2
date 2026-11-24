@@ -21,17 +21,21 @@ pub const ARG: &str = "--vault-run";
 
 #[cfg(unix)]
 pub use imp::run_from_args;
+#[cfg(not(unix))]
+use k2_core::brand::CLI_NAME;
 
 /// Windows isn't a 0.46.11 gate; ship it when its CI lane passes.
 #[cfg(not(unix))]
 pub fn run_from_args(_args: &[OsString]) -> i32 {
-    eprintln!("run_not_on_windows: k2 vault run needs macOS or Linux for now; use k2 vault env-file or k2 vault file");
+    eprintln!("run_not_on_windows: {CLI_NAME} vault run needs macOS or Linux for now; use {CLI_NAME} vault env-file or {CLI_NAME} vault file");
     1
 }
 
 #[cfg(unix)]
 mod imp {
     use super::{OsString, ARG};
+    use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+    use k2_core::cli_name;
     use std::ffi::OsStr;
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
@@ -49,7 +53,7 @@ mod imp {
     use serde::Deserialize;
     use serde_json::{json, Value};
 
-    const USAGE: &str = "usage: k2 vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]";
+    const USAGE: &str = concat!("usage: ", cli_name!(), " vault run [--secret NAME[=ENV_NAME]]... [--env-file .env.k2] [--scope workspace|server|session] [--no-mask] -- cmd [args…]");
     /// The credential variables the child never gets, by name. Any other
     /// `K2_`, `K5_` or `K2SO_` variable whose name holds TOKEN or PASSPORT
     /// goes too ([`private_var`]).
@@ -117,7 +121,7 @@ mod imp {
                     let fd = v.parse::<i32>().ok().filter(|n| *n > 2);
                     a.token_fd = Some(fd.ok_or_else(|| format!("usage: --token-fd takes a file descriptor above 2\n{USAGE}"))?);
                 }
-                _ => return Err(format!("usage: unknown flag (k2 vault run --help)\n{USAGE}")),
+                _ => return Err(format!("usage: unknown flag ({CLI_NAME} vault run --help)\n{USAGE}")),
             }
         }
         if !dashes {
@@ -388,7 +392,7 @@ mod imp {
             None => env_str("K2_HOOK_TOKEN"),
         };
         let (Some(sock), Some(token)) = (env_str("K2_HOOK_SOCK"), token) else {
-            eprintln!("use_run_as_agent: k2 vault run runs inside a K2 session (it needs $K2_HOOK_SOCK and the session's passport); people use k2 vault reveal");
+            eprintln!("use_run_as_agent: {CLI_NAME} vault run runs inside a {PRODUCT_NAME} session (it needs $K2_HOOK_SOCK and the session's passport); people use {CLI_NAME} vault reveal");
             return 3;
         };
         block_signals();
@@ -431,7 +435,7 @@ mod imp {
             None => None,
             Some(p) => {
                 let cwd = std::env::current_dir().map_err(|e| {
-                    eprintln!("k2 vault run: can't read the current folder ({})", e.kind());
+                    eprintln!("{CLI_NAME} vault run: can't read the current folder ({})", e.kind());
                     1
                 })?;
                 let abs = cwd.join(p);
@@ -458,7 +462,7 @@ mod imp {
             body["scope"] = json!(s);
         }
         let (status, mut raw) = post(sock, token, "/cli/vault/run", &body.to_string()).map_err(|e| {
-            eprintln!("run_unavailable: can't reach the K2 daemon on $K2_HOOK_SOCK ({}); is this session still running?", e.kind());
+            eprintln!("run_unavailable: can't reach the {PRODUCT_NAME} daemon on $K2_HOOK_SOCK ({}); is this session still running?", e.kind());
             1
         })?;
         if status != 200 {
@@ -469,7 +473,7 @@ mod imp {
         let parsed = serde_json::from_slice::<Answer>(&raw);
         wipe(&mut raw);
         let answer = parsed.map_err(|_| {
-            eprintln!("run_failed: the daemon's answer wasn't understood; is the k2 CLI the same version as the daemon?");
+            eprintln!("run_failed: the daemon's answer wasn't understood; is the {CLI_NAME} CLI the same version as the daemon?");
             1
         })?;
         Ok(launch(args, answer))
@@ -505,7 +509,7 @@ mod imp {
                     child_env.push((it.env, v));
                 }
                 // A newer daemon's delivery this helper can't honour.
-                _ => return fail(1, format!("run_failed: this helper can't deliver {} that way; update K2", it.name)),
+                _ => return fail(1, format!("run_failed: this helper can't deliver {} that way; update {PRODUCT_NAME}", it.name)),
             }
         }
 
@@ -560,7 +564,7 @@ mod imp {
                     std::io::ErrorKind::PermissionDenied => (126, "permission denied"),
                     _ => (126, "could not start it"),
                 };
-                return fail(code, format!("k2 vault run: {}: {why}", args.cmd[0].to_string_lossy()));
+                return fail(code, format!("{CLI_NAME} vault run: {}: {why}", args.cmd[0].to_string_lossy()));
             }
         };
         // Copies std made for the child are not reachable; ours are wiped.
@@ -597,7 +601,7 @@ mod imp {
         match status {
             Ok(s) => s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
             Err(e) => {
-                eprintln!("k2 vault run: lost the child ({})", e.kind());
+                eprintln!("{CLI_NAME} vault run: lost the child ({})", e.kind());
                 1
             }
         }

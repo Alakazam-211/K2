@@ -49,7 +49,8 @@ use k2_root_proto::version::SEW_RECORDING_MIN_PROTOCOL;
 use super::fetch::ReleaseFile;
 use super::routes::{need_manage, need_person, PersonFloor, Who};
 use super::supervisor::{self as sup, no, Env, Fail, R};
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
+use k2_core::brand::CLI_NAME;
 
 /// Sew 0.9.0's flag for Apps' recording and the recorder install (a
 /// stand-in for `k2_core::tool_hook::features::APP_RECORDING`, K-h prep).
@@ -171,8 +172,8 @@ fn need_feature(env: &Env) -> R<()> {
     Err(no(
         "sew_feature_missing",
         409,
-        "this server's Sew can't record yet (it needs Sew 0.9.0: app_recording). Nothing changed. Once K2 pins Sew 0.9.0, \
-         k2 hostchat upgrade, then try again",
+        concat!("this server's Sew can't record yet (it needs Sew 0.9.0: app_recording). Nothing changed. Once ", product_name!(), " pins Sew 0.9.0, \
+         ", cli_name!(), " hostchat upgrade, then try again"),
     ))
 }
 
@@ -242,7 +243,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     if feature_on(env) {
         c.push(check("sew", "ok", "Sew reports app_recording", ""));
     } else {
-        c.push(check("sew", "fail", "this Sew has no app_recording", "recording needs Sew 0.9.0: k2 hostchat upgrade once K2 pins it"));
+        c.push(check("sew", "fail", "this Sew has no app_recording", concat!("recording needs Sew 0.9.0: ", cli_name!(), " hostchat upgrade once ", product_name!(), " pins it")));
     }
     if helper_ready(env) {
         c.push(check("helper", "ok", format!("k2-root-helper protocol {}", env.ops.helper_state().protocol), ""));
@@ -251,30 +252,30 @@ pub fn preflight(env: &Env) -> Vec<Value> {
             "helper",
             "fail",
             format!("k2-root-helper protocol {} without the recorder verbs", env.ops.helper_state().protocol),
-            format!("update it: k2 root-helper update (recording needs protocol {SEW_RECORDING_MIN_PROTOCOL})"),
+            format!("update it: {CLI_NAME} root-helper update (recording needs protocol {SEW_RECORDING_MIN_PROTOCOL})"),
         ));
     }
     match super::store::load() {
         Some(r) if matches!(r.status.as_str(), "running" | "degraded") => c.push(check("chat", "ok", format!("Chat and voice are {}", r.status), "")),
-        Some(r) => c.push(check("chat", "fail", format!("Chat and voice are {}", r.status), "recording needs it running: k2 hostchat enable")),
-        None => c.push(check("chat", "fail", "Chat and voice are not installed", "k2 hostchat enable --voice first")),
+        Some(r) => c.push(check("chat", "fail", format!("Chat and voice are {}", r.status), concat!("recording needs it running: ", cli_name!(), " hostchat enable"))),
+        None => c.push(check("chat", "fail", "Chat and voice are not installed", concat!(cli_name!(), " hostchat enable --voice first"))),
     }
     if super::voice::load(env).installed {
         c.push(check("voice", "ok", "voice is installed", ""));
     } else {
-        c.push(check("voice", "fail", "voice is not installed", "the recorder joins calls: k2 hostchat media install first"));
+        c.push(check("voice", "fail", "voice is not installed", concat!("the recorder joins calls: ", cli_name!(), " hostchat media install first")));
     }
     let arch = env.ops.arch();
     for s in Sidecar::BOTH {
         match rec::pinned_sidecar(s, &arch) {
             Ok((v, _)) => c.push(check(s.key(), "ok", format!("{} {v}", s.member()), "")),
-            Err(e) => c.push(check(s.key(), "fail", e, "this K2 build pins no recorder for this CPU")),
+            Err(e) => c.push(check(s.key(), "fail", e, concat!("this ", product_name!(), " build pins no recorder for this CPU"))),
         }
     }
     let model = rec::pinned_asr_model();
     match &model {
         Ok(m) => c.push(check("model", "ok", format!("speech model {} ({} MB)", m.name, m.size / 1_000_000), "")),
-        Err(e) => c.push(check("model", "fail", e, "update K2 once it pins Sew's speech model (k2 update)")),
+        Err(e) => c.push(check("model", "fail", e, concat!("update ", product_name!(), " once it pins Sew's speech model (", cli_name!(), " update)"))),
     }
     let ram = env.ops.mem_total();
     match ram {
@@ -285,7 +286,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
             format!("{} of RAM", gib(b)),
             "recording needs at least 8 GiB of RAM: move chat and voice to a server with 8 GiB or more",
         )),
-        None => c.push(check("ram", "fail", "K2 couldn't read this box's memory", "recording needs at least 8 GiB of RAM")),
+        None => c.push(check("ram", "fail", concat!(product_name!(), " couldn't read this box's memory"), "recording needs at least 8 GiB of RAM")),
     }
     c.push(fit_check(env, ram, model.as_ref().ok().copied()));
     c.push(disk_check(env, model.as_ref().ok().copied()));
@@ -303,7 +304,7 @@ fn fit_check(env: &Env, ram: Option<u64>, model: Option<&rec::SewAsrModel>) -> V
     let units: Option<Vec<u64>> =
         [k2_root_proto::sew::UNIT_DB, k2_root_proto::sew::UNIT_SEW, k2_root_proto::sew::UNIT_MEDIA].iter().map(|u| env.ops.unit(u).memory_max).collect();
     let Some(units) = units else {
-        return check("fit", "info", "K2 can't read every Sew unit's MemoryMax (is voice running?)", "Sew checks the fit itself at install");
+        return check("fit", "info", concat!(product_name!(), " can't read every Sew unit's MemoryMax (is voice running?)"), "Sew checks the fit itself at install");
     };
     let (fits, sum, budget) = rec::shared_fit(ram / MIB, units.iter().sum::<u64>() / MIB, m.memory_max_mib);
     let detail = format!("Sew's units with the recorder and {} need {sum} MiB; this shared box gives them {budget} MiB", m.name);
@@ -314,8 +315,8 @@ fn fit_check(env: &Env, ram: Option<u64>, model: Option<&rec::SewAsrModel>) -> V
             "fit",
             "fail",
             detail,
-            "free memory or move to a bigger box: on a shared box 40% of RAM stays with K2's own database, and every Sew \
-             unit (chat, its database, voice, the recorder, the transcriber) must fit beside it",
+            concat!("free memory or move to a bigger box: on a shared box 40% of RAM stays with ", product_name!(), "'s own database, and every Sew \
+             unit (chat, its database, voice, the recorder, the transcriber) must fit beside it"),
         )
     }
 }
@@ -332,7 +333,7 @@ fn disk_check(env: &Env, model: Option<&rec::SewAsrModel>) -> Value {
             "disk",
             "fail",
             format!("{} free on {DISK_PATH}; recording needs {} beyond the disk guard's {} reserve", gib(free), gib(need), gib(reserve)),
-            "free disk on /var/lib, where Sew keeps recordings: k2 app resources shows what uses it",
+            concat!("free disk on /var/lib, where Sew keeps recordings: ", cli_name!(), " app resources shows what uses it"),
         ),
         None => check("disk", "warn", format!("statvfs({DISK_PATH}) failed"), ""),
     }
@@ -365,16 +366,16 @@ fn plan_check(env: &Env, so_far: &[Value]) -> Option<Value> {
 /// `(needles, code, fix)`: the first row whose needles all appear in Sew's
 /// message wins. Specific codes first; then Sew's check order.
 pub const SEW_REFUSALS: &[(&[&str], &str, &str)] = &[
-    (&["k2_managed"], "sew_k2_managed", "this Sew refused K2's call without --i-am-k2: update the root helper (k2 root-helper update), then retry"),
-    (&["model_sha256_mismatch"], "model_sha256_mismatch", "the speech model isn't the one Sew pins: K2 and Sew disagree, so nothing was installed. k2 hostchat upgrade so both are the same release"),
-    (&["model_does_not_fit"], "model_does_not_fit", "the speech model doesn't fit beside chat and voice on this box: free memory, or move to a box with more RAM (on a shared box 40% stays with K2's database)"),
+    (&["k2_managed"], "sew_k2_managed", concat!("this Sew refused ", product_name!(), "'s call without --i-am-k2: update the root helper (", cli_name!(), " root-helper update), then retry")),
+    (&["model_sha256_mismatch"], "model_sha256_mismatch", concat!("the speech model isn't the one Sew pins: ", product_name!(), " and Sew disagree, so nothing was installed. ", cli_name!(), " hostchat upgrade so both are the same release")),
+    (&["model_does_not_fit"], "model_does_not_fit", concat!("the speech model doesn't fit beside chat and voice on this box: free memory, or move to a box with more RAM (on a shared box 40% stays with ", product_name!(), "'s database)")),
     (&["service_account_unsafe"], "service_account_unsafe", "an existing sew-recorder or sew-transcriber account can log in: lock it (usermod -L <name>; usermod -s /usr/sbin/nologin <name>), then retry"),
-    (&["voice is not installed"], "voice_not_installed", "install voice first: k2 hostchat media install, then k2 hostchat recording enable"),
-    (&["recording_needs_loopback_media"], "recording_needs_loopback_media", "the voice engine must bind 0.0.0.0 or a loopback address (voice.ops.bind_v4) so the recorder can reach it: k2 hostchat media status, then k2 hostchat doctor"),
-    (&["recording_unpinned_build"], "recording_unpinned_build", "this Sew build carries no recorder pins (a dev build): k2 hostchat upgrade to the Sew this K2 pins"),
-    (&["tarball", "sha256"], "sidecar_sha256_mismatch", "the recorder or transcriber isn't the one this Sew pins: k2 hostchat upgrade so K2 and Sew are the same release, then retry"),
+    (&["voice is not installed"], "voice_not_installed", concat!("install voice first: ", cli_name!(), " hostchat media install, then ", cli_name!(), " hostchat recording enable")),
+    (&["recording_needs_loopback_media"], "recording_needs_loopback_media", concat!("the voice engine must bind 0.0.0.0 or a loopback address (voice.ops.bind_v4) so the recorder can reach it: ", cli_name!(), " hostchat media status, then ", cli_name!(), " hostchat doctor")),
+    (&["recording_unpinned_build"], "recording_unpinned_build", concat!("this Sew build carries no recorder pins (a dev build): ", cli_name!(), " hostchat upgrade to the Sew this ", product_name!(), " pins")),
+    (&["tarball", "sha256"], "sidecar_sha256_mismatch", concat!("the recorder or transcriber isn't the one this Sew pins: ", cli_name!(), " hostchat upgrade so ", product_name!(), " and Sew are the same release, then retry")),
     (&["8 GiB"], "recording_needs_8gib", "recording needs at least 8 GiB of RAM: move chat and voice to a server with 8 GiB or more"),
-    (&["not a pinned, selectable model"], "model_unknown", "this Sew doesn't offer the model K2 pins (or hasn't measured it yet): k2 hostchat upgrade so K2 and Sew are the same release"),
+    (&["not a pinned, selectable model"], "model_unknown", concat!("this Sew doesn't offer the model ", product_name!(), " pins (or hasn't measured it yet): ", cli_name!(), " hostchat upgrade so ", product_name!(), " and Sew are the same release")),
 ];
 
 /// Sew's refusal message → K2's code and named fix.
@@ -383,7 +384,7 @@ pub fn refusal_of(message: &str) -> (&'static str, &'static str) {
         .iter()
         .find(|(needles, _, _)| needles.iter().all(|n| message.contains(n)))
         .map(|(_, code, fix)| (*code, *fix))
-        .unwrap_or(("recording_install_failed", "k2 hostchat doctor, and the journal: journalctl -u sew-recorder -u sew-transcriber -e"))
+        .unwrap_or(("recording_install_failed", concat!(cli_name!(), " hostchat doctor, and the journal: journalctl -u sew-recorder -u sew-transcriber -e")))
 }
 
 fn sew_refused(v: &Value, what: &str) -> Fail {
@@ -447,7 +448,7 @@ fn obtain(env: &Env, f: &ReleaseFile, path: Option<&Path>, flag: &str, code: &'s
         Some(p) => p,
         None => {
             let note = |_: Value| {};
-            fetched = sup::obtain_release(env, f, &format!("k2 hostchat recording enable {flag}"), &note)
+            fetched = sup::obtain_release(env, f, &format!("{CLI_NAME} hostchat recording enable {flag}"), &note)
                 .map_err(|e| no("recording_file_needed", 409, e))?;
             fetched.as_path()
         }
@@ -670,7 +671,7 @@ pub fn install_machine(env: &Env, files: &Files) -> R<Value> {
                 "alreadyInstalled": i.already,
                 "version": i.pin_v,
                 "model": i.model,
-                "next": "recording stays off until the owner or an admin turns it on (Settings → Chat Hosting → Recording, or k2 hostchat recording enable)",
+                "next": concat!("recording stays off until the owner or an admin turns it on (Settings → Chat Hosting → Recording, or ", cli_name!(), " hostchat recording enable)"),
             }))
         }
         Err(f) => {
@@ -764,7 +765,7 @@ pub fn uninstall(env: &Env) -> R<Value> {
         "ok": true,
         "installed": false,
         "enabled": false,
-        "kept": "every recording stays in Sew (k2 hostchat recording enable puts the recorder back)",
+        "kept": concat!("every recording stays in Sew (", cli_name!(), " hostchat recording enable puts the recorder back)"),
         "warnings": warnings,
     }))
 }
@@ -797,7 +798,7 @@ pub fn after_upgrade(env: &Env) -> Result<Option<String>, String> {
             });
             Ok(Some("the recorder and transcriber are upgraded (when idle)".into()))
         }
-        Some(2) => Ok(Some("this Sew has no recording upgrade yet: the recorder stays on its version; k2 hostchat doctor shows it".into())),
+        Some(2) => Ok(Some(concat!("this Sew has no recording upgrade yet: the recorder stays on its version; ", cli_name!(), " hostchat doctor shows it").into())),
         _ => Err(format!("the recorder wasn't upgraded: {}", sup::sew_message(&v))),
     }
 }
@@ -930,8 +931,8 @@ pub fn route(env: Env<'static>, path: &str, who: &Who, v: &Value, background: bo
                 return Err(no(
                     "confirm_required",
                     409,
-                    "Remove Sew's recorder? Live recordings stop; every recording is kept. Send {\"confirm\": true} \
-                     (k2 hostchat recording uninstall --yes)",
+                    concat!("Remove Sew's recorder? Live recordings stop; every recording is kept. Send {\"confirm\": true} \
+                     (", cli_name!(), " hostchat recording uninstall --yes)"),
                 ));
             }
             let _latch = sup::begin(&env)?;

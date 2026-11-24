@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use k2_core::connect_users::Role;
 use k2_core::notify_prefs::{People, OWNER};
-use k2_core::person_picture;
+use k2_core::{person_picture, product_name};
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
@@ -176,7 +176,7 @@ fn target(people: &People, actor: &Actor, role: Role, v: &Value) -> Result<Strin
         return Err(error(
             "403 Forbidden",
             "reserved_login",
-            "this login's name is one K2 uses for the server's owner and its agents, so it can't have a profile; the owner can remove it in Settings > Admin Access and add the person under another name",
+            concat!("this login's name is one ", product_name!(), " uses for the server's owner and its agents, so it can't have a profile; the owner can remove it in Settings > Admin Access and add the person under another name"),
         ));
     };
     let login = match v.get("person") {

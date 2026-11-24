@@ -33,6 +33,7 @@ use k2_core::llm_accounts::{self as wallet_core, auto_next, state, wallet, Entry
 
 use crate::llm_accounts_routes as routes;
 use crate::subscription_usage as su;
+use k2_core::brand::PRODUCT_NAME;
 
 /// How often the loop looks.
 pub const TICK: Duration = Duration::from_secs(30);
@@ -193,7 +194,7 @@ fn all_at_limit(tool: Tool, person: &str, ts: i64) -> Result<Outcome, WalletErro
         owner_notice(
             &line,
             &format!(
-                "Auto-rotate is on for {}, and every signed-in {} subscription on this server is at 99% or more of its limit, so K2 didn't switch. \
+                "Auto-rotate is on for {}, and every signed-in {} subscription on this server is at 99% or more of its limit, so {PRODUCT_NAME} didn't switch. \
                  It switches again once one has room (when a limit resets), or add another subscription on Settings → Language Models → Subs / Tokens.",
                 tool.display(),
                 tool.display()

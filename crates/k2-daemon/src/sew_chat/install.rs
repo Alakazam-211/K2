@@ -4,6 +4,7 @@
 //! [`forget`]. Both log once when they move anything.
 
 use k2_core::sew_chat::install::{self, InstallReport};
+use k2_core::brand::CLI_NAME;
 
 /// When the current install was made (`sew_server.installed_at`).
 fn installed_at() -> Option<i64> {
@@ -17,7 +18,7 @@ fn log(rep: &InstallReport, what: &str) {
     let slugs: Vec<&str> = rep.stale.iter().map(|s| s.slug.as_str()).collect();
     k2_core::log_debug!(
         "[sew-install] {what}: {} agent Space(s) from an earlier install set aside ({}), {} hub cursor(s) reset. \
-         k2 voice repair lists them and how to make them again",
+         {CLI_NAME} voice repair lists them and how to make them again",
         rep.stale.len(),
         slugs.join(", "),
         rep.cursors_reset

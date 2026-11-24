@@ -14,6 +14,8 @@ use std::str::FromStr;
 use crate::cli_response::CliResponse;
 use crate::mail::domains;
 use crate::mail::jmap::{AuthBanRate, IpListEntry, StalwartClient};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// Rejected wholesale NAT (T-Mobile). Do not allowlist.
 const REJECTED_ALLOWLIST_CIDR: &str = "172.56.0.0/16";
@@ -609,8 +611,8 @@ pub fn handle_migrate_post(body: &[u8]) -> CliResponse {
         return err_json(
             "409 Conflict",
             "exists",
-            "a bans migrate window is already active — \
-             `k2 hostmail bans migrate status` or `migrate restore`"
+            concat!("a bans migrate window is already active — \
+             `", cli_name!(), " hostmail bans migrate status` or `migrate restore`")
                 .to_string(),
         );
     }
@@ -654,8 +656,8 @@ pub fn handle_migrate_post(body: &[u8]) -> CliResponse {
 pub fn restore_migrate_now(engine: &StalwartClient) -> Result<serde_json::Value, String> {
     let Some(state) = load_migrate_state() else {
         return Err(
-            "no bans migrate snapshot on file — nothing to restore \
-             (run `k2 hostmail bans migrate --hours N` first)"
+            concat!("no bans migrate snapshot on file — nothing to restore \
+             (run `", cli_name!(), " hostmail bans migrate --hours N` first)")
                 .to_string(),
         );
     };
@@ -767,7 +769,7 @@ pub fn doctor_ban_checks() -> Vec<crate::mail::doctor::DoctorCheck> {
                         status: ST_WARN,
                         detail: format!(
                             "{} authFailure ban(s): {} — clear + allowlist \
-                             (`k2 hostmail bans clear` / `allowlist add`); \
+                             (`{CLI_NAME} hostmail bans clear` / `allowlist add`); \
                              unban does not reset fail counters",
                             auth.len(),
                             addrs.join(", ")
@@ -793,7 +795,7 @@ pub fn doctor_ban_checks() -> Vec<crate::mail::doctor::DoctorCheck> {
             status: ST_WARN,
             detail: format!(
                 "migrate window overdue (restoreAt={}) — daemon should auto-restore; \
-                 run `k2 hostmail bans migrate restore` if still open",
+                 run `{CLI_NAME} hostmail bans migrate restore` if still open",
                 s.restore_at
             ),
             gates_direct: false,

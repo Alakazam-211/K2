@@ -40,6 +40,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::cli_response::CliResponse;
 use crate::mail::access::Source;
+use k2_core::{cli_name, product_name};
 
 /// Who is calling, when it isn't an agent passport.
 #[derive(Debug, Clone)]
@@ -159,7 +160,7 @@ pub fn audit_unavailable() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "audit_unavailable",
-                "hint": "K2 couldn't write the mailbox access log, so it didn't open the mailbox. Try again; if it keeps happening, the daemon's database needs a look (k2 doctor).",
+                "hint": concat!(product_name!(), " couldn't write the mailbox access log, so it didn't open the mailbox. Try again; if it keeps happening, the daemon's database needs a look (", cli_name!(), " doctor)."),
             },
         })
         .to_string(),

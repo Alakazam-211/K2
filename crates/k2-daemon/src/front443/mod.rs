@@ -55,10 +55,11 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_root_proto::version::{FRONT80_MIN_PROTOCOL, FRONT_MIN_PROTOCOL};
 
 use routes::{Backend, Kind, RouteTable};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// sew-media's passthrough TURN listener (Sew's default).
 pub const TURN_BACKEND: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 5349);
@@ -271,7 +272,7 @@ pub fn current_use(host: &str) -> Option<String> {
     }
     for (rh, b) in routes::current().entries() {
         if rh == &h && b.kind == Kind::Passthrough {
-            return Some(format!("{h} is passed through to {} on :443 (k2 front passthrough rm {h})", b.addr));
+            return Some(format!("{h} is passed through to {} on :443 ({CLI_NAME} front passthrough rm {h})", b.addr));
         }
         if rh == &h && b.kind != Kind::App {
             return Some(format!("{h} already routes to {} on :443", b.kind.as_str()));
@@ -559,7 +560,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             return Err((
                 409,
                 "front_off",
-                "the :80 front comes with K2's :443 front, which is off here: the owner runs k2 front enable first. Names through K2 Connect need nothing here: K2's relays redirect them".into(),
+                concat!("the :80 front comes with ", product_name!(), "'s :443 front, which is off here: the owner runs ", cli_name!(), " front enable first. Names through K2 Connect need nothing here: K2's relays redirect them").into(),
             ));
         }
     }
@@ -604,7 +605,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             "helper": helper,
             "restarting": restart,
             "next": if restart {
-                "K2 will restart its daemon once to take port 80 (a few seconds; agents resume)."
+                concat!(product_name!(), " will restart its daemon once to take port 80 (a few seconds; agents resume).")
             } else {
                 "restart the daemon to take port 80"
             },
@@ -619,14 +620,14 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
         "httpServing": false,
         "stopped": stopped,
         "helper": helper,
-        "next": "port 80 is free. Visitors who type http:// get no redirect from this server; K2's HTTP-01 certificates bind :80 per order.",
+        "next": concat!("port 80 is free. Visitors who type http:// get no redirect from this server; ", product_name!(), "'s HTTP-01 certificates bind :80 per order."),
     }))
 }
 
 /// The `http` block of `GET /cli/front/status`.
 fn http_status(cfg: &k2_core::front443::FrontConfig) -> Value {
     let serving = http80::serving();
-    let next = (cfg.enabled && cfg.http_on() && !serving).then_some("k2 front http on installs it (the daemon restarts once)");
+    let next = (cfg.enabled && cfg.http_on() && !serving).then_some(concat!(cli_name!(), " front http on installs it (the daemon restarts once)"));
     json!({
         "on": cfg.http_on(),
         "serving": serving,
@@ -820,7 +821,7 @@ pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
         "warnings": warnings,
         "restartNeeded": needs_restart,
         "next": if restart {
-            "K2 will restart its daemon once to take port 443 (a few seconds; agents resume). Voice moves to TURN on 443 when it is back."
+            concat!(product_name!(), " will restart its daemon once to take port 443 (a few seconds; agents resume). Voice moves to TURN on 443 when it is back.")
         } else if needs_restart {
             "restart the daemon to take port 443"
         } else {
@@ -924,18 +925,18 @@ pub fn classify_443(
 /// The ways out when a web server that isn't K2's holds :443.
 pub fn foreign_443_message(units: &[String]) -> String {
     let who = if units.is_empty() {
-        "Another program (not K2) holds port 443 on this box".to_string()
+        concat!("Another program (not ", product_name!(), ") holds port 443 on this box").to_string()
     } else {
-        format!("A web server that isn't K2's holds port 443 on this box ({})", units.join(", "))
+        format!("A web server that isn't {PRODUCT_NAME}'s holds port 443 on this box ({})", units.join(", "))
     };
     format!(
-        "{who}, so K2's :443 front can't take it and custom App names can't be served from this box's own IP yet. \
+        "{who}, so {PRODUCT_NAME}'s :443 front can't take it and custom App names can't be served from this box's own IP yet. \
          Ways to fix it: (1) move that server to a loopback port, e.g. 127.0.0.1:9443 (it keeps its own sites and \
-         certificates), then run k2 front enable and k2 front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
-         for every name K2 doesn't serve): its sites keep working and K2 serves your App names; (2) keep it and have it \
-         proxy the App's name to the App yourself, and add the name with k2 app domain add <app-id> <name> \
+         certificates), then run {CLI_NAME} front enable and {CLI_NAME} front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
+         for every name {PRODUCT_NAME} doesn't serve): its sites keep working and {PRODUCT_NAME} serves your App names; (2) keep it and have it \
+         proxy the App's name to the App yourself, and add the name with {CLI_NAME} app domain add <app-id> <name> \
          --external so the App takes it as its origin; or (3) on K2 Connect Pro, point the name at K2's relays \
-         (Path B, k2 app domain --help): nothing on :443, no sudo. K2 never takes :443 from another server."
+         (Path B, {CLI_NAME} app domain --help): nothing on :443, no sudo. {PRODUCT_NAME} never takes :443 from another server."
     )
 }
 
@@ -996,15 +997,15 @@ pub fn port443_holder() -> Value {
         Holder443::Free => json!({"holder": "free", "message": "nothing listens on :443"}),
         Holder443::SkinDirect => json!({
             "holder": "k2-skin-direct",
-            "message": "Skin Direct's Caddy (K2's) holds :443; k2 front enable moves it behind the front"
+            "message": concat!("Skin Direct's Caddy (", product_name!(), "'s) holds :443; ", cli_name!(), " front enable moves it behind the front")
         }),
         Holder443::Mail => json!({
             "holder": "k2-mail",
-            "message": "hosted mail's HTTPS (K2's Stalwart) holds :443; k2 front enable --mail moves it behind the front"
+            "message": concat!("hosted mail's HTTPS (", product_name!(), "'s Stalwart) holds :443; ", cli_name!(), " front enable --mail moves it behind the front")
         }),
         Holder443::Unknown => json!({
             "holder": "unknown",
-            "message": "K2 can't read this box's socket table (the :443 front is Linux-only)"
+            "message": concat!(product_name!(), " can't read this box's socket table (the :443 front is Linux-only)")
         }),
         Holder443::Foreign { units } => json!({"holder": "foreign", "units": units, "message": foreign_443_message(&units)}),
     }
@@ -1029,7 +1030,7 @@ fn passthrough_host(raw: &str) -> Result<String, Refusal> {
         return Ok(t);
     }
     client_hello::host_name(t.as_bytes()).ok_or_else(|| {
-        (400, "bad_host", format!("not a host name: {raw:?} (a name like shop.example.com, or '*' for every name K2 doesn't serve)"))
+        (400, "bad_host", format!("not a host name: {raw:?} (a name like shop.example.com, or '*' for every name {PRODUCT_NAME} doesn't serve)"))
     })
 }
 
@@ -1039,7 +1040,7 @@ pub fn passthrough_add(host: &str, to: &str, proxy_v2: bool, label: &str, by: &s
     // `k2 publish` visibility (vs-live PA-4): a nested name stays behind the
     // site gate, whatever its mode. `*` itself is fine: it skips these names.
     if k2_core::tunnel::subdomains::current().is_nested_name(&host) {
-        return Err((409, "host_is_k2s", format!("{host} can't be passed through: it is one of this server's published addresses, and K2 serves those itself. Use a name you own.")));
+        return Err((409, "host_is_k2s", format!("{host} can't be passed through: it is one of this server's published addresses, and {PRODUCT_NAME} serves those itself. Use a name you own.")));
     }
     let addr: SocketAddr = to.trim().parse().map_err(|_| {
         (400, "bad_upstream", format!("--to must be a loopback address and port, e.g. 127.0.0.1:9443 (got {to:?})"))
@@ -1052,14 +1053,14 @@ pub fn passthrough_add(host: &str, to: &str, proxy_v2: bool, label: &str, by: &s
         ));
     }
     if addr.port() == 0 || addr.port() == daemon_port || k2_core::front443::RESERVED_BACKEND_PORTS.contains(&addr.port()) {
-        return Err((409, "upstream_port_reserved", format!("port {} is K2's own; pick another loopback port (e.g. 9443)", addr.port())));
+        return Err((409, "upstream_port_reserved", format!("port {} is {PRODUCT_NAME}'s own; pick another loopback port (e.g. 9443)", addr.port())));
     }
     if host != k2_core::front443::PASSTHROUGH_DEFAULT {
         if let Some(why) = current_use(&host).filter(|w| !w.contains("is passed through")) {
-            return Err((409, "host_is_k2s", format!("{why}: K2 serves that name itself")));
+            return Err((409, "host_is_k2s", format!("{why}: {PRODUCT_NAME} serves that name itself")));
         }
         if crate::apps::tls_door::reload().routed.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
-            return Err((409, "host_is_k2s", format!("{host} is a custom App name K2 serves (k2 app domain rm first)")));
+            return Err((409, "host_is_k2s", format!("{host} is a custom App name {PRODUCT_NAME} serves ({CLI_NAME} app domain rm first)")));
         }
     }
     let label: String = label.chars().filter(|c| !c.is_control()).take(80).collect();
@@ -1088,7 +1089,7 @@ pub fn passthrough_add(host: &str, to: &str, proxy_v2: bool, label: &str, by: &s
         "passthrough": list,
         "routes": table,
         "warnings": warnings,
-        "next": if enabled { "routed now" } else { "the :443 front is off: these route once the owner runs k2 front enable" },
+        "next": if enabled { "routed now" } else { concat!("the :443 front is off: these route once the owner runs ", cli_name!(), " front enable") },
     }))
 }
 
@@ -1099,7 +1100,7 @@ pub fn passthrough_rm(host: &str) -> Result<Value, Refusal> {
     let before = list.len();
     list.retain(|p| p.host != host);
     if list.len() == before {
-        return Err((404, "not_found", format!("{host} is not a passthrough name (k2 front passthrough)")));
+        return Err((404, "not_found", format!("{host} is not a passthrough name ({CLI_NAME} front passthrough)")));
     }
     k2_core::front443::save_passthrough(&list).map_err(|e| (500, "config_write_failed", e))?;
     let (table, warnings) = rebuild_if_enabled();

@@ -17,6 +17,8 @@
 use serde_json::{json, Value as J};
 
 use k2_core::domains::{self, AppDomain};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `app:<id>` names no App or published service here (or, for an agent,
 /// none in its workspace: the same answer, so no existence leak).
@@ -76,7 +78,7 @@ pub fn may_bind(caller_ws: Option<&str>, name: &str) -> Result<(), Refusal> {
         return Err(refuse(
             400,
             UNKNOWN_APP,
-            format!("no App or published service '{name}' on this box (k2 app list): a custom domain binds to an App that exists"),
+            format!("no App or published service '{name}' on this box ({CLI_NAME} app list): a custom domain binds to an App that exists"),
         ));
     }
     let Some(ws) = caller_ws else { return Ok(()) };
@@ -84,15 +86,15 @@ pub fn may_bind(caller_ws: Option<&str>, name: &str) -> Result<(), Refusal> {
         return Err(refuse(
             400,
             UNKNOWN_APP,
-            format!("no App or published service '{name}' in your workspace (k2 app list): an agent binds names only to its own workspace's Apps"),
+            format!("no App or published service '{name}' in your workspace ({CLI_NAME} app list): an agent binds names only to its own workspace's Apps"),
         ));
     }
     if super::access::level(ws) == super::access::Level::Off {
         return Err(refuse(
             403,
             k2_core::deploy::codes::APPS_MANAGE_OFF,
-            "\"Build and run Apps\" is off for this agent: use `k2 app domain add <app> <host>`, which asks your owner, \
-             or ask them to turn it on (Settings → Workspaces / Agents → <agent> → Permissions → Apps)",
+            concat!("\"Build and run Apps\" is off for this agent: use `", cli_name!(), " app domain add <app> <host>`, which asks your owner, \
+             or ask them to turn it on (Settings → Workspaces / Agents → <agent> → Permissions → Apps)"),
         ));
     }
     Ok(())
@@ -114,7 +116,7 @@ pub fn bind_conflict(hostname: &str, existing_role: Option<&str>) -> Result<(), 
         return Err(refuse(
             400,
             K2_DEV_NAME,
-            format!("{h} is a k2.dev name: an App's k2.dev names are `k2 app domain add <app> <label>` (never a custom domain)"),
+            format!("{h} is a k2.dev name: an App's k2.dev names are `{CLI_NAME} app domain add <app> <label>` (never a custom domain)"),
         ));
     }
     match existing_role {
@@ -186,13 +188,13 @@ pub fn served_by(hostname: &str) -> ServedBy {
 /// The plain-words line for a state (CLI and Settings).
 pub fn state_words(d: &AppDomain) -> String {
     if !d.apex_attached {
-        return format!("not served yet: its apex {} is no longer attached (k2 domain add {})", d.apex, d.apex);
+        return format!("not served yet: its apex {} is no longer attached ({CLI_NAME} domain add {})", d.apex, d.apex);
     }
     let words = match d.state.as_str() {
         domains::STATE_LIVE if d.via_relay() => "live: this box serves it through K2 Connect (Path B)".to_string(),
         domains::STATE_LIVE => "live: this box serves it".to_string(),
         domains::STATE_EXTERNAL => {
-            return "served by your own web server (not by K2's front); one of the App's origins".to_string()
+            return concat!("served by your own web server (not by ", product_name!(), "'s front); one of the App's origins").to_string()
         }
         domains::STATE_ISSUING => "not served yet: proven, getting its certificate".to_string(),
         domains::STATE_VERIFYING => "not served yet: checking the DNS records".to_string(),
@@ -204,7 +206,7 @@ pub fn state_words(d: &AppDomain) -> String {
     };
     if k2_core::airgap::enabled() && d.state != domains::STATE_LIVE {
         // Departure #5: no DNS checks or public ACME under air-gap.
-        return format!("{words}. Air-gap is on: K2 makes no DNS checks and orders no certificates, so it stays {}", d.state);
+        return format!("{words}. Air-gap is on: {PRODUCT_NAME} makes no DNS checks and orders no certificates, so it stays {}", d.state);
     }
     words
 }

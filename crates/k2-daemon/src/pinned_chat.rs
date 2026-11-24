@@ -56,7 +56,7 @@ use crate::spawn::{
 };
 use std::collections::HashSet;
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_core::workspace::provider_resume::provider_resume_for_provider;
 use k2_core::workspace::resume_chat::{
     resolve_never_chatted_chat_args, resolve_resume_chat_args_ex,
@@ -780,7 +780,7 @@ pub fn handle_swap_canonical(
             return swap_refused(
                 "403 Forbidden",
                 "wrong_credential",
-                "swap-canonical takes the owner token, a Connect login, or a K2 session passport (not an app pass, API key, or API cell)",
+                concat!("swap-canonical takes the owner token, a Connect login, or a ", product_name!(), " session passport (not an app pass, API key, or API cell)"),
             );
         }
         Caller::Invalid => {
@@ -843,7 +843,7 @@ pub fn handle_swap_canonical(
                 return swap_refused(
                     "403 Forbidden",
                     "other_workspace",
-                    "an agent can't move another workspace's pinned chat; a person runs `k2 agent harness <workspace> <harness>` from a terminal outside K2",
+                    concat!("an agent can't move another workspace's pinned chat; a person runs `", cli_name!(), " agent harness <workspace> <harness>` from a terminal outside ", product_name!()),
                 );
             }
             None => {

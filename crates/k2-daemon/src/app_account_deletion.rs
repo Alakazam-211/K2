@@ -41,6 +41,8 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const FEATURE: &str = "app-account-deletion-v1";
 pub const DELETE: &str = "/cli/skin/account/delete";
@@ -217,7 +219,7 @@ fn delete(pass: &SkinPass, body: &[u8], ctx: &Ctx) -> Result<Value, CliResponse>
     // An agent's own login is the owner's to remove (k2 app user remove).
     let tie = skin::ties::get(&pid).map_err(CliResponse::internal_error)?;
     if person.agent_workspace.is_some() || tie.is_some_and(|t| t.reasons.iter().any(|r| r == skin::ties::REASON_AGENT_LOGIN)) {
-        return Err(refusal("403 Forbidden", "agent_login", "an agent's own login can't delete itself: the owner removes it (k2 app user remove)"));
+        return Err(refusal("403 Forbidden", "agent_login", concat!("an agent's own login can't delete itself: the owner removes it (", cli_name!(), " app user remove)")));
     }
     // A fresh sign-in, or the password again. A phone's pass is refreshed
     // often, so its age is its device sign-in's, never the pass's.
@@ -274,10 +276,10 @@ fn delete(pass: &SkinPass, body: &[u8], ctx: &Ctx) -> Result<Value, CliResponse>
             &app,
             &format!("{} asked to delete their account in {name}", person.username),
             &format!(
-                "{user} asked to delete their account in the App {name}. K2 signed them out of it everywhere and turned their access off. \
-                 K2 completes the deletion on {due} (the App's grace period), or now: k2 app account-deletion complete {app} {user}. \
-                 If they change their mind: k2 app account-deletion cancel {app} {user}. \
-                 When it completes, delete what the App keeps for {user} in its own data. History: k2 app history {app} --users.",
+                "{user} asked to delete their account in the App {name}. {PRODUCT_NAME} signed them out of it everywhere and turned their access off. \
+                 {PRODUCT_NAME} completes the deletion on {due} (the App's grace period), or now: {CLI_NAME} app account-deletion complete {app} {user}. \
+                 If they change their mind: {CLI_NAME} app account-deletion cancel {app} {user}. \
+                 When it completes, delete what the App keeps for {user} in its own data. History: {CLI_NAME} app history {app} --users.",
                 user = person.username,
                 due = when(r.due_at),
             ),
@@ -329,8 +331,8 @@ fn finish(app: &str, pid: &str, username: &str, actor: &str, request_id: Option<
         app,
         &format!("{username}'s account in {name} is deleted"),
         &format!(
-            "{username}'s account in the App {name} is deleted ({by}). K2 removed: {}. \
-             Now delete what the App keeps for {username} in its own data (K2 can't see inside it). History: k2 app history {app} --users.",
+            "{username}'s account in the App {name} is deleted ({by}). {PRODUCT_NAME} removed: {}. \
+             Now delete what the App keeps for {username} in its own data ({PRODUCT_NAME} can't see inside it). History: {CLI_NAME} app history {app} --users.",
             done.join(", "),
         ),
     );

@@ -11,6 +11,7 @@ use crate::mail::addresses::{self, AddrError};
 use crate::mail::dkim::{self, err_json, hosted_domain};
 use crate::mail::dns_verify::{self, DnsResolver, SystemResolver};
 use crate::mail::domains::{self, CAT_REQUIRED};
+use k2_core::cli_name;
 
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default)]
@@ -115,7 +116,7 @@ pub fn handle_dmarc_get(params: &HashMap<String, String>) -> CliResponse {
             "note": if minted {
                 None
             } else {
-                Some("reportAddressUri is not a minted inbox on this domain (Stalwart default mailto:postmaster). Use k2 hostmail dmarc report-to.")
+                Some(concat!("reportAddressUri is not a minted inbox on this domain (Stalwart default mailto:postmaster). Use ", cli_name!(), " hostmail dmarc report-to."))
             },
         })
         .to_string(),

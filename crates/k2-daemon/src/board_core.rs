@@ -19,6 +19,8 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The Board widget's data space.
 pub const BOARD_SPACE: &str = "data:k2:board";
@@ -36,7 +38,7 @@ pub fn data_refusal() -> k2_core::garden_data::DataError {
     k2_core::garden_data::DataError::Refused {
         code: "core_off",
         status: 403,
-        hint: "the Board core is off on this computer, so Board's data is closed (it is kept). The person turns it on in Settings → Cores → Multiplayer (k2 doc cores on board), or by adding a Board Garden. Agents: ask your human (k2 thread).".into(),
+        hint: concat!("the Board core is off on this computer, so Board's data is closed (it is kept). The person turns it on in Settings → Cores → Multiplayer (", cli_name!(), " doc cores on board), or by adding a Board Garden. Agents: ask your human (", cli_name!(), " thread).").into(),
     }
 }
 
@@ -88,13 +90,13 @@ pub fn gate_template(owner_token: bool, caller: &Caller, body: &[u8]) -> Result<
     let name = k2_core::docs_cores::by_id(core).map(|c| c.name).unwrap_or(core);
     if !owner_token {
         let who = match caller {
-            Caller::Agent(_) | Caller::Shell { .. } => "an agent can't turn a core on: ask your human (k2 thread)",
+            Caller::Agent(_) | Caller::Shell { .. } => concat!("an agent can't turn a core on: ask your human (", cli_name!(), " thread)"),
             _ => "only the person at this computer turns a core on",
         };
         return Err(refusal(
             "403 Forbidden",
             core,
-            format!("{name} is a Beta that is off on this computer; {who}. They add the Garden in New Garden (it turns the core on) or run k2 doc cores on {core}."),
+            format!("{name} is a Beta that is off on this computer; {who}. They add the Garden in New Garden (it turns the core on) or run {CLI_NAME} doc cores on {core}."),
         ));
     }
     if asked.as_ref().and_then(Value::as_str) != Some(core) {

@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Failed system restarts in one run before the owner hears (R44).
 pub const NOTICE_AFTER_RESTARTS: u32 = 3;
@@ -142,14 +143,14 @@ pub fn failed_attempt(a: &Attempt<'_>) -> Option<String> {
     };
     let mut filed = None;
     if waiting_notice {
-        let title = format!("App {} is waiting for K2's App engine", a.app_id);
+        let title = format!("App {} is waiting for {PRODUCT_NAME}'s App engine", a.app_id);
         owner_notice(
             &title,
             &format!(
-                "K2 couldn't start the App {} because of K2's own App engine ({}: {}). This is not the App's fault and \
-                 doesn't count as a crash. K2 starts it as soon as the engine answers (it checks every few seconds and \
-                 retries every minute). If it doesn't come back, check `k2 app engine status`; the owner can run \
-                 `k2 app engine install`. History: k2 app history {}",
+                "{PRODUCT_NAME} couldn't start the App {} because of {PRODUCT_NAME}'s own App engine ({}: {}). This is not the App's fault and \
+                 doesn't count as a crash. {PRODUCT_NAME} starts it as soon as the engine answers (it checks every few seconds and \
+                 retries every minute). If it doesn't come back, check `{CLI_NAME} app engine status`; the owner can run \
+                 `{CLI_NAME} app engine install`. History: {CLI_NAME} app history {}",
                 a.app_id, a.code, a.message, a.app_id
             ),
         );
@@ -160,8 +161,8 @@ pub fn failed_attempt(a: &Attempt<'_>) -> Option<String> {
         owner_notice(
             &title,
             &format!(
-                "K2 tried to restart the App {} {n} times and it isn't running. Last attempt {} ({}): {}. K2's plan: {}. \
-                 Read why: k2 app errors {} ; history: k2 app history {}",
+                "{PRODUCT_NAME} tried to restart the App {} {n} times and it isn't running. Last attempt {} ({}): {}. {PRODUCT_NAME}'s plan: {}. \
+                 Read why: {CLI_NAME} app errors {} ; history: {CLI_NAME} app history {}",
                 a.app_id,
                 a.deployment,
                 a.code,

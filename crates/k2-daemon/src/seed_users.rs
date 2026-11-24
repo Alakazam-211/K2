@@ -35,7 +35,7 @@
 //! (every normal boot).
 
 use k2_core::connect_users::{self, Role};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug};
 
 /// Path to the consume-once seed file: `~/.k2/seed-users.json`.
 pub fn seed_file_path() -> std::path::PathBuf {
@@ -135,7 +135,7 @@ pub fn consume_seed_file() -> Vec<(String, SeedOutcome)> {
 
 /// The text of an owner row on a server that has started before.
 pub const OWNER_ROW_AFTER_FIRST_START: &str =
-    "an owner login from the seed file is made only on the server's first start; the owner adds one in person (k2 users set-role asks for this computer's own user check)";
+    concat!("an owner login from the seed file is made only on the server's first start; the owner adds one in person (", cli_name!(), " users set-role asks for this computer's own user check)");
 
 /// This server's first start: the K2 database isn't there yet (it is
 /// opened right after the seed file is read).

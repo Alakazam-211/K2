@@ -48,6 +48,7 @@ use sha2::{Digest, Sha256, Sha384, Sha512};
 use k2_core::zen::stdlib::{self, LibSource, ZenLibEntry, ZenLibManifest};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::PRODUCT_NAME;
 
 /// The POST row (B2 lists it in `zen_routes::POST_ROUTES` and the policy table).
 pub const POST_ROUTES: &[&str] = &["/cli/zen/lib/fetch"];
@@ -164,9 +165,9 @@ fn download_entry<'m>(m: &'m ZenLibManifest, id: &str, version: &str) -> Result<
         .libs
         .iter()
         .find(|e| e.id == id && e.version == version)
-        .ok_or_else(|| LibErr::new("404 Not Found", "unknown_lib", format!("K2 has no library {id}@{version}")))?;
+        .ok_or_else(|| LibErr::new("404 Not Found", "unknown_lib", format!("{PRODUCT_NAME} has no library {id}@{version}")))?;
     if e.source == LibSource::Bundled {
-        return Err(LibErr::bad(format!("{id}@{version} ships inside the K2 app; there is nothing to download")));
+        return Err(LibErr::bad(format!("{id}@{version} ships inside the {PRODUCT_NAME} app; there is nothing to download")));
     }
     Ok(e)
 }
@@ -211,7 +212,7 @@ fn read_cached(path: &Path, check: &dyn Fn(&[u8]) -> bool) -> Result<Option<Vec<
             Err(LibErr::new(
                 "409 Conflict",
                 "hash_mismatch",
-                format!("{} no longer matches its pin; K2 deleted it. Fetch it again.", path.display()),
+                format!("{} no longer matches its pin; {PRODUCT_NAME} deleted it. Fetch it again.", path.display()),
             ))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -225,7 +226,7 @@ fn refuse_airgap(env: &Env<'_>, what: &str) -> Result<(), LibErr> {
             "403 Forbidden",
             "airgapped",
             format!(
-                "This computer is air-gapped (K2_AIRGAP), so K2 won't download {what}. Libraries that ship inside the K2 app still work."
+                "This computer is air-gapped (K2_AIRGAP), so {PRODUCT_NAME} won't download {what}. Libraries that ship inside the {PRODUCT_NAME} app still work."
             ),
         ));
     }
@@ -277,7 +278,7 @@ fn fetch_named(env: &Env<'_>, id: &str, version: &str) -> Result<J, LibErr> {
                 return Err(LibErr::new(
                     "502 Bad Gateway",
                     "hash_mismatch",
-                    format!("{url} sent bytes with sha256 {got}, not the pinned {}; K2 refused them", f.sha256),
+                    format!("{url} sent bytes with sha256 {got}, not the pinned {}; {PRODUCT_NAME} refused them", f.sha256),
                 ));
             }
             write_atomic(&path, &bytes)?;
@@ -343,7 +344,7 @@ fn fetch_cdn(env: &Env<'_>, url: &str, integrity: &str) -> Result<J, LibErr> {
                 return Err(LibErr::new(
                     "502 Bad Gateway",
                     "hash_mismatch",
-                    format!("{url} doesn't match its integrity {integrity}; K2 refused it"),
+                    format!("{url} doesn't match its integrity {integrity}; {PRODUCT_NAME} refused it"),
                 ));
             }
             write_atomic(&path, &bytes)?;

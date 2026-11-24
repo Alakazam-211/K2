@@ -32,6 +32,8 @@ use serde_json::{json, Value};
 pub use k2_root_proto::box_backup::{BoxBackupFacts, FileRead, CONFIG_DIR, EXCLUDES_FILE, PATHS_FILE, SEW_BACKUPS_DIR, TIMER_UNIT};
 
 use crate::root_helper::RootHelperState;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// The ship kind (`sew_server.ship_kind`).
 pub const KIND: &str = "box-backup";
@@ -61,7 +63,7 @@ impl Evidence {
         if self.ok {
             "the box backup (k2-backup) carries Sew's bundles".to_string()
         } else {
-            format!("the box backup (k2-backup) is chosen, but K2 can't see it carry Sew's bundles: {}", self.reasons.join("; "))
+            format!("the box backup (k2-backup) is chosen, but {PRODUCT_NAME} can't see it carry Sew's bundles: {}", self.reasons.join("; "))
         }
     }
 
@@ -352,7 +354,7 @@ pub enum Direct {
 
 /// Why a root-only file can't be read when the helper can't help.
 pub const HELPER_TOO_OLD: &str =
-    "it is root-only and this K2's root helper can't read it for K2 yet (it needs root helper protocol 13)";
+    concat!("it is root-only and this ", product_name!(), "'s root helper can't read it for ", product_name!(), " yet (it needs root helper protocol 13)");
 
 /// Does this helper serve `engine sew box-backup`?
 pub fn helper_serves(st: &RootHelperState) -> bool {

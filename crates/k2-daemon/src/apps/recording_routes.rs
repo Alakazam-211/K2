@@ -35,7 +35,7 @@ use serde_json::{json, Map, Value as J};
 use super::grace::{target, Target};
 use super::routes::{actor, json_body, need_credential, no, s, Refusal, Who, R};
 use crate::app_push::owner_routes::{admin_human, app_agent_at, fresh_confirm};
-use k2_core::brand::CLI_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const READ: &str = "/cli/app/recording";
 pub const SET: &str = "/cli/app/recording/set";
@@ -90,7 +90,7 @@ fn feature_missing(flag: &str, what: &str) -> Refusal {
         ..no(
             "sew_feature_missing",
             409,
-            format!("this server's chat can't {what} yet (it needs Sew 0.9.0: {flag}); the owner upgrades it with k2 hostchat upgrade"),
+            format!("this server's chat can't {what} yet (it needs Sew 0.9.0: {flag}); the owner upgrades it with {CLI_NAME} hostchat upgrade"),
         )
     }
 }
@@ -321,7 +321,7 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<J> {
                 403,
                 format!(
                     "only the server's owner or an admin, in person with a confirm, lets more people start recordings or keeps audio longer: \
-                     ask them to run k2 app recording {} set … from a terminal outside K2",
+                     ask them to run {CLI_NAME} app recording {} set … from a terminal outside {PRODUCT_NAME}",
                     t.name
                 ),
             ));

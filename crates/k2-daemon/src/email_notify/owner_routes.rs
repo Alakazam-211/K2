@@ -41,6 +41,8 @@ use serde_json::{json, Value as J};
 use super::{db_fail, fail, respond, sender_json, Fail, R};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/notifications/email";
 pub const SENDERS: &str = "/cli/notifications/email/senders";
@@ -92,8 +94,8 @@ fn admin(who: &Who) -> R<()> {
         _ => Err(fail(
             403,
             "owner_only",
-            "Email Notifications (senders, the system sender, relays) are the owner's and Admins', from a terminal outside K2 \
-             or Settings. An agent asks with a permission card.",
+            concat!("Email Notifications (senders, the system sender, relays) are the owner's and Admins', from a terminal outside ", product_name!(), " \
+             or Settings. An agent asks with a permission card."),
         )),
     }
 }
@@ -125,7 +127,7 @@ fn confirm(who: &Who, v: &J, action: &str, secret_id: &str) -> R<()> {
         return Err(Fail {
             status: 403,
             code: "vault_confirm_required",
-            hint: format!("this needs a fresh owner confirm (Touch ID, your login or the vault password) for {action} {secret_id}; k2 notifications email asks for it from a terminal outside K2"),
+            hint: format!("this needs a fresh owner confirm (Touch ID, your login or the vault password) for {action} {secret_id}; {CLI_NAME} notifications email asks for it from a terminal outside {PRODUCT_NAME}"),
             retry_after_ms: None,
         });
     };
@@ -263,19 +265,19 @@ fn sender_set(who: &Who, v: &J) -> Result<J, CliResponse> {
 }
 
 fn system_set(who: &Who, v: &J) -> Result<J, CliResponse> {
-    let raw = s(v, "sender").ok_or_else(|| super::fail_response(&fail(400, "usage", "send {sender} (an id or address from k2 notifications email sender list)")))?;
+    let raw = s(v, "sender").ok_or_else(|| super::fail_response(&fail(400, "usage", concat!("send {sender} (an id or address from ", cli_name!(), " notifications email sender list)"))))?;
     let sender = super::senders::find_live(raw).map_err(|f| super::fail_response(&f))?;
     confirm(who, v, super::CONFIRM_SYSTEM_SENDER, &sender.address).map_err(|f| confirm_needed(f, super::CONFIRM_SYSTEM_SENDER, &sender.address))?;
     super::senders::set_system(&sender.id, &actor(who), super::now()).map_err(|f| super::fail_response(&f))
 }
 
 /// The fixed text of `system-sender test`.
-pub const SYSTEM_TEST_SUBJECT: &str = "Test email from K2";
+pub const SYSTEM_TEST_SUBJECT: &str = concat!("Test email from ", product_name!());
 
 fn system_test(who: &Who, v: &J) -> Result<J, CliResponse> {
     let sys = super::senders::system()
         .map_err(|f| super::fail_response(&f))?
-        .ok_or_else(|| super::fail_response(&fail(409, "no_sender", "no system sender yet (k2 notifications email system-sender set <sender>)")))?;
+        .ok_or_else(|| super::fail_response(&fail(409, "no_sender", concat!("no system sender yet (", cli_name!(), " notifications email system-sender set <sender>)"))))?;
     confirm(who, v, super::CONFIRM_TEST, &sys.address).map_err(|f| confirm_needed(f, super::CONFIRM_TEST, &sys.address))?;
     let owner_email = {
         let db = k2_core::db::shared();
@@ -283,7 +285,7 @@ fn system_test(who: &Who, v: &J) -> Result<J, CliResponse> {
         store::settings(&conn).map_err(|e| super::fail_response(&db_fail(e)))?.owner_email
     };
     let to = owner_email.ok_or_else(|| {
-        super::fail_response(&fail(409, "no_owner_email", "set your own address first: k2 notifications email settings --owner-email you@example.com (tests only ever go there)"))
+        super::fail_response(&fail(409, "no_owner_email", concat!("set your own address first: ", cli_name!(), " notifications email settings --owner-email you@example.com (tests only ever go there)")))
     })?;
     let c = super::send::Composed { subject: SYSTEM_TEST_SUBJECT.to_string(), text: super::relay::TEST_TEXT.to_string(), html: None };
     let id = super::send::send_fixed(&sys, store::ORIGIN_SYSTEM, "test", None, &to, &c, &super::budget::Kind::System).map_err(|f| super::fail_response(&f))?;
@@ -326,7 +328,7 @@ fn test_checks(s: &store::Sender) -> J {
         "dkimPublished": dkim,
         "spfPublished": spf,
         "note": if s.path == store::PATH_HOSTED {
-            "K2's mail server signs DKIM for this domain; check the headers in your inbox for the receiving server's verdict"
+            concat!(product_name!(), "'s mail server signs DKIM for this domain; check the headers in your inbox for the receiving server's verdict")
         } else {
             "the relay provider signs; check the headers in your inbox for the receiving server's verdict"
         },

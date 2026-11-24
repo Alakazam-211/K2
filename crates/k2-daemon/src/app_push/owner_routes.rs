@@ -35,6 +35,8 @@ use serde_json::{json, Value as J};
 use crate::apps::grace::{target, Target};
 use crate::apps::routes::{actor, json_body, need_credential, no, respond, s, Refusal, Who, R};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/app/push";
 pub const CREDENTIALS: &str = "/cli/app/push/credentials";
@@ -45,7 +47,7 @@ pub const SEND: &str = "/cli/app/push/send";
 pub const TEST: &str = "/cli/app/push/test";
 pub const LOG: &str = "/cli/app/push/log";
 /// The fixed text of `k2 app push test`.
-pub const TEST_TEXT: &str = "Test notification from K2";
+pub const TEST_TEXT: &str = concat!("Test notification from ", product_name!());
 pub const DEVICES: &str = "/cli/app/push/devices";
 pub const DEVICES_REMOVE: &str = "/cli/app/push/devices/remove";
 
@@ -80,7 +82,7 @@ pub(crate) fn owner_in_person(who: &Who) -> bool {
 }
 
 fn admin_only(_t: &Target) -> Refusal {
-    no("admin_only", 403, "push devices are the owner's and Admins' to see (an agent reads counts with k2 app push status)")
+    no("admin_only", 403, concat!("push devices are the owner's and Admins' to see (an agent reads counts with ", cli_name!(), " app push status)"))
 }
 
 /// The App a call names, checked against the caller (a passport sees only
@@ -138,7 +140,7 @@ fn devices_remove(who: &Who, body: &[u8]) -> R<J> {
     if !admin_human(who) {
         return Err(admin_only(&t));
     }
-    let id = s(&v, "id").ok_or_else(|| no("usage", 400, "send {app, id} (an apd_… id from k2 app push devices)"))?;
+    let id = s(&v, "id").ok_or_else(|| no("usage", 400, concat!("send {app, id} (an apd_… id from ", cli_name!(), " app push devices)")))?;
     let removed = store::remove_by_owner(&t.service_id, id).map_err(|e| no("store", 500, e))?;
     if !removed {
         return Err(no("not_found", 404, "no push device of this App by that id"));
@@ -199,7 +201,7 @@ pub(crate) fn status_json(t: &Target) -> R<J> {
 
 fn key_refusal(e: super::creds::KeyError) -> Refusal {
     match e {
-        super::creds::KeyError::VaultClosed => no("vault_closed", 503, "the vault isn't open yet; try again when K2 has finished starting"),
+        super::creds::KeyError::VaultClosed => no("vault_closed", 503, concat!("the vault isn't open yet; try again when ", product_name!(), " has finished starting")),
         super::creds::KeyError::NotConfigured => no("push_not_configured", 409, "this App has no key for that platform"),
         super::creds::KeyError::Vault(c) => no("vault_error", 500, format!("the vault refused ({c})")),
     }
@@ -212,8 +214,8 @@ fn keys_confirm(who: &Who, t: &Target, v: &J) -> R<()> {
         return Err(no(
             "owner_only",
             403,
-            "an App's push keys are the owner's: set or remove them in person (k2 app push setup from a terminal outside K2). \
-             An agent asks with a permission card.",
+            concat!("an App's push keys are the owner's: set or remove them in person (", cli_name!(), " app push setup from a terminal outside ", product_name!(), "). \
+             An agent asks with a permission card."),
         ));
     }
     fresh_confirm(
@@ -221,8 +223,8 @@ fn keys_confirm(who: &Who, t: &Target, v: &J) -> R<()> {
         t,
         v,
         super::creds::CONFIRM_ACTION,
-        "push keys are credentials: setting or removing them needs a fresh owner confirm (Touch ID, your login or vault password). \
-         k2 app push setup asks for it from a terminal outside K2.",
+        concat!("push keys are credentials: setting or removing them needs a fresh owner confirm (Touch ID, your login or vault password). \
+         ", cli_name!(), " app push setup asks for it from a terminal outside ", product_name!(), "."),
         "confirm again: a confirm works once, for this App's push keys, within 60 seconds",
     )
 }
@@ -286,7 +288,7 @@ fn credentials(who: &Who, body: &[u8]) -> R<J> {
     crate::apps::alerts::note(
         &t.project_id,
         "App push keys changed",
-        &format!("The owner set push keys for {} ({}): {}. You can send with k2 app push send; you can't read the keys.", t.name, by, set.join("; ")),
+        &format!("The owner set push keys for {} ({}): {}. You can send with {CLI_NAME} app push send; you can't read the keys.", t.name, by, set.join("; ")),
     );
     let mut out = status_json(&t)?;
     out["set"] = json!(set);
@@ -331,7 +333,7 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let t = push_target(who, s(&v, "app"))?;
     if !owner_in_person(who) && !matches!(who, Who::Shell { .. }) {
-        return Err(no("owner_only", 403, "checking an App's push keys calls Apple and Google: the owner runs k2 app push check"));
+        return Err(no("owner_only", 403, concat!("checking an App's push keys calls Apple and Google: the owner runs ", cli_name!(), " app push check")));
     }
     if crate::push_routes::airgap_blocks() {
         return Err(no("airgap", 503, "air-gap is on: nothing leaves this server"));
@@ -392,8 +394,8 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 "owner_only",
                 403,
-                "turning an App's notifications on (or raising its device ceiling) is the owner's approval, in person \
-                 (k2 app push on <app> from a terminal outside K2); an agent asks with a permission card",
+                concat!("turning an App's notifications on (or raising its device ceiling) is the owner's approval, in person \
+                 (", cli_name!(), " app push on <app> from a terminal outside ", product_name!(), "); an agent asks with a permission card"),
             ));
         }
         fresh_confirm(
@@ -401,8 +403,8 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
             &t,
             &v,
             super::CONFIRM_ON,
-            "turning an App's notifications on (or raising its device ceiling) needs a fresh owner confirm \
-             (Touch ID, your login or vault password); k2 app push on asks for it from a terminal outside K2",
+            concat!("turning an App's notifications on (or raising its device ceiling) needs a fresh owner confirm \
+             (Touch ID, your login or vault password); ", cli_name!(), " app push on asks for it from a terminal outside ", product_name!()),
             "confirm again: a confirm works once, for this App's notifications, within 60 seconds",
         )?;
     } else if max_devices.is_some() && !admin_human(who) {

@@ -37,6 +37,7 @@ use super::budget::{self, BudgetKey, Spend};
 use super::call::{self, CallBody, Ingress, Placed};
 use super::{refused, store};
 use crate::zen_data_routes::DataWho;
+use k2_core::{cli_name, product_name};
 
 pub const WIDGET_PUT: &str = "/cli/zen/blob/put";
 pub const WIDGET_GET: &str = "/cli/zen/blob/get";
@@ -540,7 +541,7 @@ pub fn widget(path: &str, who: &DataWho, headers: &str, body: &[u8], params: &Ha
         return Err(refused(
             "owner_only",
             403,
-            "only the K2 app on this computer calls widget data; agents use `k2 store blob`",
+            concat!("only the ", product_name!(), " app on this computer calls widget data; agents use `", cli_name!(), " store blob`"),
         ));
     }
     let ingress = call::origin_gate(headers).inspect_err(|_| {

@@ -143,7 +143,7 @@ pub fn default_change_blocked(caller: &Caller) -> Option<&'static str> {
 pub const DEFAULT_CHANGE_ADMIN_REASON: &str =
     "Only an Admin or the Owner can change the server default token. Ask an Admin, or set a token for your own chat instead.";
 pub const DEFAULT_CHANGE_AGENT_REASON: &str =
-    "Agents and K2 terminals can only read tokens. Change the server default on Settings → Language Models → Subs / Tokens.";
+    concat!("Agents and ", product_name!(), " terminals can only read tokens. Change the server default on Settings → Language Models → Subs / Tokens.");
 
 /// Shown when a Member (or a passport) tries to flip where saved logins
 /// live.
@@ -492,6 +492,7 @@ pub(crate) fn run_next(
 // ── Auto-rotate (opt-in, per person) ────────────────────────────────
 
 use k2_core::llm_accounts::auto_next;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The vault confirm's actor for a wallet key: `owner` for the owner
 /// token, `connect:<name>` for a login (the stamps the vault mints for).
@@ -511,7 +512,7 @@ fn auto_next_confirm_required(tool: Tool) -> CliResponse {
         body: json!({"error": {
             "code": "vault_confirm_required",
             "hint": format!(
-                "turning on auto-rotate for {} is a person's own decision: confirm it's you (Touch ID, your login or the vault password; a confirm works once, for this step, within 60 seconds). Settings → Language Models → Subs / Tokens, or k2 llm tokens auto-next {} on from a terminal outside K2",
+                "turning on auto-rotate for {} is a person's own decision: confirm it's you (Touch ID, your login or the vault password; a confirm works once, for this step, within 60 seconds). Settings → Language Models → Subs / Tokens, or {CLI_NAME} llm tokens auto-next {} on from a terminal outside {PRODUCT_NAME}",
                 tool.display(),
                 tool.as_str()
             ),
@@ -1020,7 +1021,7 @@ pub fn handle(
         return refuse(
             403,
             "owner_only",
-            "Agents and K2 terminals can only read tokens. Change tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.",
+            concat!("Agents and ", product_name!(), " terminals can only read tokens. Change tokens on Settings → Language Models → Subs / Tokens, or run ", cli_name!(), " from a terminal outside ", product_name!(), "."),
         );
     }
     // Changing the server default: switch, next, clear-default, and a
@@ -1346,7 +1347,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     audit("llm_accounts.pin", &key, &format!("{}:{}", kind.as_str(), p["tool"].as_str().unwrap_or("")), ingress);
                     crate::session_events::emit_llm_accounts_changed(p["tool"].as_str());
                     let note = match (chat, p["tool"] == "claude" && !api) {
-                        (true, true) => "This chat runs on this token from its next start (Refresh restarts it now). K2 copies its Claude history to this subscription first.",
+                        (true, true) => concat!("This chat runs on this token from its next start (Refresh restarts it now). ", product_name!(), " copies its Claude history to this subscription first."),
                         (true, false) => "This chat runs on this token from its next start (Refresh restarts it now).",
                         (false, true) => "This chat's Claude history will stay with this subscription. New chats use this token; a resumed chat keeps the token it started on.",
                         (false, false) => "New chats use this token; a resumed chat keeps the token it started on.",

@@ -32,6 +32,8 @@ use crate::garden_data::audit::{self, Counted};
 use crate::garden_data::budget::{self, BudgetKey, Spend};
 use crate::garden_data::{notify_changed, store};
 use crate::zen_data_routes::DataWho;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The route.
 pub const ROUTE: &str = "/cli/zen/data/board";
@@ -78,7 +80,7 @@ pub fn handle(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
 fn body_of(body: &[u8]) -> Result<Map<String, Value>, Fail> {
     match serde_json::from_slice::<Value>(body) {
         Ok(Value::Object(m)) => Ok(m),
-        _ => Err(Fail::Board(BoardError::new("bad_request", "k2 board sends {cmd, board?, …}"))),
+        _ => Err(Fail::Board(BoardError::new("bad_request", concat!(cli_name!(), " board sends {cmd, board?, …}")))),
     }
 }
 
@@ -180,7 +182,7 @@ fn resolve(space: &Space, acc: &Access, arg: Option<&str>) -> Result<String, Fai
                     } else {
                         return Err(Fail::Board(BoardError::new(
                             "no_board",
-                            format!("no board {a} you can read (k2 board boards; boards: {})", if live.is_empty() { "none".into() } else { listing() }),
+                            format!("no board {a} you can read ({CLI_NAME} board boards; boards: {})", if live.is_empty() { "none".into() } else { listing() }),
                         )));
                     }
                 }
@@ -245,7 +247,7 @@ fn commit(who: &DataWho, space: &Space, acc: &Access, ws: &[Write]) -> Result<i6
         return Ok(0);
     }
     if ws.len() > MAX_OPS {
-        return Err(DataError::TooLarge(format!("one k2 board command writes at most {MAX_OPS} objects")));
+        return Err(DataError::TooLarge(format!("one {CLI_NAME} board command writes at most {MAX_OPS} objects")));
     }
     for w in ws {
         if !acc.can_write(&w.key) {
@@ -309,7 +311,7 @@ fn written(ws: &[Write], b: &Board, id: &str) -> Value {
 
 fn run(who: &DataWho, body: &[u8]) -> Result<Value, Fail> {
     let b = body_of(body)?;
-    let cmd = need(&b, "cmd", "k2 board")?.to_string();
+    let cmd = need(&b, "cmd", concat!(cli_name!(), " board"))?.to_string();
     // Static answers: no data read.
     match cmd.as_str() {
         "fields" => return Ok(json!({ "ok": true, "types": schema::describe(s(&b, "type"))? })),
@@ -577,7 +579,7 @@ fn run(who: &DataWho, body: &[u8]) -> Result<Value, Fail> {
             audit::count(space.as_str(), &who.audit_label(), None, Counted::Read);
             Ok(json!({ "ok": true, "board": id, "export": env }))
         }
-        other => Err(Fail::Board(BoardError::new("bad_request", format!("unknown k2 board command {other} (k2 board --help)")))),
+        other => Err(Fail::Board(BoardError::new("bad_request", format!("unknown {CLI_NAME} board command {other} ({CLI_NAME} board --help)")))),
     }
 }
 

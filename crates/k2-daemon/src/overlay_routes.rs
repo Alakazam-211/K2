@@ -46,6 +46,7 @@ use closed_cards::expired_or_not_pending;
 use system_notice::{post_not_taken_notice, post_system_line, refuse_system_notice_param};
 pub(crate) use system_notice::FEATURE_THREAD_SYSTEM_NOTICE;
 pub(crate) use closed_cards::{card_not_pending_response, card_time_words};
+use k2_core::{brand::{CLI_NAME, PRODUCT_NAME}, cli_name, product_name};
 
 thread_local! {
     static REQUEST_SKIN: RefCell<Option<SkinPass>> = const { RefCell::new(None) };
@@ -190,9 +191,9 @@ fn gb_refused() -> CliResponse {
     error_json(
         "403 Forbidden",
         "grokbots_humans_only",
-        "gb: Threads hold a Grok Bot's messages for people signed in to this server: \
+        concat!("gb: Threads hold a Grok Bot's messages for people signed in to this server: \
          agents and App guests can't read them, and nobody posts there (message the bot \
-         from its chat in K2).",
+         from its chat in ", product_name!(), ")."),
     )
 }
 
@@ -812,7 +813,7 @@ fn authorize_write(
     let caller_is_sidecar = stamped_from.contains('/');
     if resolved.canonical_alias && caller_is_sidecar {
         return Err(forbidden(
-            "write Chat overlay (k2 thread <workspace>) is canonical-only",
+            concat!("write Chat overlay (", cli_name!(), " thread <workspace>) is canonical-only"),
         ));
     }
     Ok(())
@@ -1626,7 +1627,7 @@ fn widget_post_refusal(
             Some(k2_core::zen::widget_access::PlacementRefusal {
                 code: k2_core::zen::widget_access::WIDGET_NOT_APPROVED,
                 message: format!(
-                    "a widget in Garden '{}' must name its placement and hash; K2 reloads the widget",
+                    "a widget in Garden '{}' must name its placement and hash; {PRODUCT_NAME} reloads the widget",
                     origin.garden
                 ),
             })
@@ -2671,7 +2672,7 @@ pub(crate) fn post_k2_note(addr: &str, body: &str, via: &str, notice: overlay::S
 /// the sender's address only, never the subject or snippet (W34).
 pub(crate) fn post_mail_notice(workspace: &str, n: crate::mail::watch::ThreadNoticeArgs) -> Result<String, String> {
     let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
-    let body = format!("VIP mail from {} · open in K2 to see it", n.from_addr);
+    let body = format!("VIP mail from {} · open in {PRODUCT_NAME} to see it", n.from_addr);
     let notice = k2_core::overlay::doc::ThreadNotice {
         source: "mail".to_string(),
         inbox: n.inbox,
@@ -2756,7 +2757,7 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     if delivery.as_deref() == Some("agent") && parsed_kind != Some(k2_vault::Kind::SshKey) {
         return Err(k2_vault::VaultError::bad_request(
             "delivery_not_for_kind",
-            "--delivery agent is for ssh keys: add --kind ssh_key (K2 signs with it on $SSH_AUTH_SOCK; you never see the key)",
+            concat!("--delivery agent is for ssh keys: add --kind ssh_key (", product_name!(), " signs with it on $SSH_AUTH_SOCK; you never see the key)"),
         ));
     }
     // How K2 sends it (prd-secret-card-injection-v1 §1): `inject: {dst, fmt}`,
@@ -2784,7 +2785,7 @@ fn card_scope_word(raw: &str, own_id: &str, own_label: &str, resolve: impl Fn(&s
     Err(k2_vault::VaultError::bad_request(
         "bad_scope",
         format!(
-            "a card keeps the secret for the workspace whose Thread it is on ({own_label}): use --scope workspace (or ws:{own_label}), server or session. To give it to {w}, save it here, then k2 vault send NAME --to {w}"
+            "a card keeps the secret for the workspace whose Thread it is on ({own_label}): use --scope workspace (or ws:{own_label}), server or session. To give it to {w}, save it here, then {CLI_NAME} vault send NAME --to {w}"
         ),
     ))
 }
@@ -2825,7 +2826,7 @@ fn session_card_refused_to_ask(session_id: Option<&str>, delivery: Option<&str>)
     let Some(sid) = session_id.filter(|s| crate::session_liveness::is_live(s)) else {
         return refused(
             "session_scope_needs_session",
-            "--scope session keeps a secret for the running K2 session that asks, and this call isn't from one; run it in that session, or use --scope workspace",
+            concat!("--scope session keeps a secret for the running ", product_name!(), " session that asks, and this call isn't from one; run it in that session, or use --scope workspace"),
         );
     };
     match delivery {
@@ -2973,8 +2974,8 @@ fn card_receiver(req: &k2_vault::vault::SecretRequest, resolved: &ResolvedOverla
 /// choose where it is kept, so a guest only hears what a guest can do.
 fn session_card_refused_to_save(receiver: Option<&str>, delivery: k2_vault::Delivery, guest: bool, once: bool) -> Option<CliResponse> {
     let hint = match receiver {
-        None if guest => "The agent isn't running right now, so it can't receive this. Nothing was saved. K2 is waking it: try Save again in a minute. If this comes back, send the agent a message.",
-        None => "This agent isn't running right now, so it can't receive this. Nothing was saved. K2 is waking it: try Save again in a minute, or keep it for this workspace in the card's options.",
+        None if guest => concat!("The agent isn't running right now, so it can't receive this. Nothing was saved. ", product_name!(), " is waking it: try Save again in a minute. If this comes back, send the agent a message."),
+        None => concat!("This agent isn't running right now, so it can't receive this. Nothing was saved. ", product_name!(), " is waking it: try Save again in a minute, or keep it for this workspace in the card's options."),
         Some(sid) if delivery == k2_vault::Delivery::File && !once && crate::vault::spawn::kept_dir(sid).is_none() => {
             "The running session can't hold files. Nothing was saved. You can keep it for this workspace in the card's options: the file arrives when the session restarts."
         }
@@ -3068,7 +3069,7 @@ fn card_file_delivery(vault: &k2_vault::LocalVault, receiver: Option<&str>, work
     if t.present.iter().any(|f| f == n) {
         return Some((
             false,
-            format!(" NOT delivered: $K2_SECRETS_DIR/{n} already exists and K2 doesn't overwrite it, so it may hold an earlier value. k2 vault file --secret {n} gives you this one."),
+            format!(" NOT delivered: $K2_SECRETS_DIR/{n} already exists and {PRODUCT_NAME} doesn't overwrite it, so it may hold an earlier value. {CLI_NAME} vault file --secret {n} gives you this one."),
         ));
     }
     let (with_colon, with_how) = (format!("{n}:"), format!("{n} ("));
@@ -3077,7 +3078,7 @@ fn card_file_delivery(vault: &k2_vault::LocalVault, receiver: Option<&str>, work
         false,
         match why {
             Some(why) => format!(" NOT delivered: {why}."),
-            None => format!(" NOT delivered: this session isn't granted {n}; ask the owner to share it with this workspace (k2 vault grant)."),
+            None => format!(" NOT delivered: this session isn't granted {n}; ask the owner to share it with this workspace ({CLI_NAME} vault grant)."),
         },
     ))
 }
@@ -3088,13 +3089,13 @@ fn card_summary(s: &overlay::SecretBody) -> String {
     let sites = k2_vault::vault::sites_words(&s.hosts);
     let to = if sites.is_empty() { " (no site yet: the person must add one)".to_string() } else { format!(" to {sites}") };
     let mut line = match s.delivery.as_deref().unwrap_or("fetch") {
-        _ if s.once => format!("{0} goes to you once: read it with k2 vault file {0} (used once, then deleted)", s.name),
+        _ if s.once => format!("{0} goes to you once: read it with {CLI_NAME} vault file {0} (used once, then deleted)", s.name),
         "env" => format!("{} goes to you as ${} (you can read it)", s.name, s.env_name.as_deref().unwrap_or(&s.name)),
         "file" => format!("{} goes to you as the file $K2_SECRETS_DIR/{} (you can read it)", s.name, s.name),
         "agent" => format!("ssh and git sign with {} on $SSH_AUTH_SOCK in your new sessions (you never see the key)", s.name),
         _ => match s.inject.as_ref().and_then(|i| k2_vault::inject::card_inject(Some(&i.dst), Some(&i.fmt)).ok().flatten()) {
-            Some(i) => format!("K2 will send {} {}{to}", s.name, i.words()),
-            None => format!("K2 will send {}{to} in the format it knows for that key, else as a Bearer token", s.name),
+            Some(i) => format!("{PRODUCT_NAME} will send {} {}{to}", s.name, i.words()),
+            None => format!("{PRODUCT_NAME} will send {}{to} in the format it knows for that key, else as a Bearer token", s.name),
         },
     };
     if s.replaces {
@@ -3122,7 +3123,7 @@ fn card_answerer(params: &HashMap<String, String>, resolved: &ResolvedOverlay, s
         return Err(error_json(
             "403 Forbidden",
             "secret_card_human_only",
-            "secret cards are answered by a person, never by an agent or a K2 terminal",
+            concat!("secret cards are answered by a person, never by an agent or a ", product_name!(), " terminal"),
         ));
     }
     if let Some(pass) = request_skin() {
@@ -3135,7 +3136,7 @@ fn card_answerer(params: &HashMap<String, String>, resolved: &ResolvedOverlay, s
     // A reserved-name login (made before 0.46.6) is nobody, whatever role
     // it was given.
     if k2_core::connect_users::is_reserved_username(session_author) || session_author == crate::session_author::RESERVED_LOGIN {
-        return Err(forbidden("this login's name is one K2 uses for the server's owner and its agents, so it can't answer cards"));
+        return Err(forbidden(concat!("this login's name is one ", product_name!(), " uses for the server's owner and its agents, so it can't answer cards")));
     }
     let role = match k2_core::connect_users::role_for_user(session_author) {
         Some(k2_core::connect_users::Role::Owner) => k2_vault::Role::Owner,
@@ -3279,7 +3280,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
     // A one-time secret is never put in the folder (§3.5): no delivery to report.
     let file_delivery = if req.once { None } else { card_file_delivery(&vault, receiver.as_deref(), &req.workspace_id, m) };
     let session_only = if m.scope.kind == k2_vault::ScopeKind::Session {
-        " It stays with this chat until it expires: after a restart or --resume, the chat's next session gets it within a minute, or at once with k2 vault sync. To keep it for good, ask again: k2 thread secret --scope workspace."
+        concat!(" It stays with this chat until it expires: after a restart or --resume, the chat's next session gets it within a minute, or at once with ", cli_name!(), " vault sync. To keep it for good, ask again: ", cli_name!(), " thread secret --scope workspace.")
     } else {
         ""
     };
@@ -3287,14 +3288,14 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         && !crate::vault_use_routes::session_secret_may_shadow(m)
         && vault.user_secret_exists(&k2_vault::Scope::workspace(req.workspace_id.clone()), &m.name)
     {
-        format!(" A workspace secret named {0} also exists, and k2 vault fetch, file and env-file keep using it. To use the one just saved, pass --scope session. First check who gave it: k2 vault show {0} --scope session.", m.name)
+        format!(" A workspace secret named {0} also exists, and {CLI_NAME} vault fetch, file and env-file keep using it. To use the one just saved, pass --scope session. First check who gave it: {CLI_NAME} vault show {0} --scope session.", m.name)
     } else {
         String::new()
     };
     let shares = match result.shares_removed {
         0 => String::new(),
-        1 => " K2 removed 1 share that could read more than this card says.".to_string(),
-        n => format!(" K2 removed {n} shares that could read more than this card says."),
+        1 => concat!(" ", product_name!(), " removed 1 share that could read more than this card says.").to_string(),
+        n => format!(" {PRODUCT_NAME} removed {n} shares that could read more than this card says."),
     };
     // A server secret reaches only the workspaces it is shared with: Save
     // shared it with the one that asked (field report 0.46.10).
@@ -3302,12 +3303,12 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         Some(ws) => {
             let label = crate::vault::workspace_label(ws);
             let now = if m.default_delivery == k2_vault::Delivery::Env {
-                format!(" In a running session: k2 vault env-file --secret {} --scope server.", m.name)
+                format!(" In a running session: {CLI_NAME} vault env-file --secret {} --scope server.", m.name)
             } else {
                 String::new()
             };
             format!(
-                " Shared with ws:{label} as {}; other workspaces get it only when a person shares it (k2 vault grant {} --to ws:<name> --scope server).{now}",
+                " Shared with ws:{label} as {}; other workspaces get it only when a person shares it ({CLI_NAME} vault grant {} --to ws:<name> --scope server).{now}",
                 m.default_delivery, m.name
             )
         }
@@ -3329,9 +3330,9 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         if sites.is_empty() { String::new() } else { format!("; {}", sites.join(", ")) },
         // The outcome is known: never "within a minute" beside it.
         if req.once {
-            format!("k2 vault file {} (once; then it is deleted)", m.name)
+            format!("{CLI_NAME} vault file {} (once; then it is deleted)", m.name)
         } else if file_delivery.is_some() {
-            format!("k2 vault file --secret {} for a 0600 copy", m.name)
+            format!("{CLI_NAME} vault file --secret {} for a 0600 copy", m.name)
         } else {
             crate::vault_routes::use_hint(m)
         },
@@ -3539,7 +3540,7 @@ pub(crate) fn with_card_person_only<T>(on: bool, f: impl FnOnce() -> T) -> T {
     out
 }
 
-const CARD_PERSON_ONLY_HINT: &str = "only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass); an agent, a K2 terminal or an App's server never can. To close your own card, k2 thread void.";
+const CARD_PERSON_ONLY_HINT: &str = concat!("only a person answers a card (the Thread tab, the phone, an App's sign-in with the guest's own pass); an agent, a ", product_name!(), " terminal or an App's server never can. To close your own card, ", cli_name!(), " thread void.");
 
 /// 403 `card_person_only`.
 fn card_person_only() -> CliResponse {
@@ -3599,8 +3600,8 @@ fn secret_card_human_only() -> CliResponse {
     error_json(
         "403 Forbidden",
         "secret_card_human_only",
-        "only a person can answer a secret card (from the Thread tab, a Connect login or an app); \
-         agents and K2 terminal tabs cannot",
+        concat!("only a person can answer a secret card (from the Thread tab, a Connect login or an app); \
+         agents and ", product_name!(), " terminal tabs cannot"),
     )
 }
 
@@ -3792,7 +3793,7 @@ fn refuse_action_card_non_person(params: &HashMap<String, String>, verb: &str) -
         || params.contains_key("cell_session_id");
     if passport {
         return Err(action_card_person_only(&format!(
-            "this card changes your settings, so only you {} it (the Thread tab, an owner login); an agent or a K2 terminal never can",
+            "this card changes your settings, so only you {} it (the Thread tab, an owner login); an agent or a {PRODUCT_NAME} terminal never can",
             base_form(verb)
         )));
     }
@@ -4180,7 +4181,7 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
                         return error_json(
                             "403 Forbidden",
                             "card_not_yours",
-                            "only the session that asked for this secret withdraws its card (K2's own secret cards are the person's): the person answers or dismisses it",
+                            concat!("only the session that asked for this secret withdraws its card (", product_name!(), "'s own secret cards are the person's): the person answers or dismisses it"),
                         );
                     }
                 }
@@ -4954,16 +4955,16 @@ fn not_taken_text(agent: &str, quote: &str, why: NotTaken) -> String {
     let what = if quote.is_empty() { "a message".to_string() } else { format!("the message \"{quote}\"") };
     match why {
         NotTaken::NeverReadIn => format!(
-            "K2: {agent} didn't take {what}. K2 typed it into {agent}'s terminal twice, but the agent never read it in. Its screen may be on another view. Check its terminal, then send the message again."
+            "{PRODUCT_NAME}: {agent} didn't take {what}. {PRODUCT_NAME} typed it into {agent}'s terminal twice, but the agent never read it in. Its screen may be on another view. Check its terminal, then send the message again."
         ),
         NotTaken::RetryFailed => format!(
-            "K2: {agent} didn't take {what}, and K2 couldn't type it in again. Check its terminal, then send the message again."
+            "{PRODUCT_NAME}: {agent} didn't take {what}, and {PRODUCT_NAME} couldn't type it in again. Check its terminal, then send the message again."
         ),
         NotTaken::RestartMidDelivery => format!(
-            "K2: K2 itself restarted while it was typing {what} into {agent}'s terminal, so it may not have reached {agent}. Check before you send it again."
+            "{PRODUCT_NAME}: {PRODUCT_NAME} itself restarted while it was typing {what} into {agent}'s terminal, so it may not have reached {agent}. Check before you send it again."
         ),
         NotTaken::RestartTooOld => format!(
-            "K2: {what} was still waiting for {agent} when K2 restarted, and it was over an hour old, so K2 didn't send it. Send it again if it still matters."
+            "{PRODUCT_NAME}: {what} was still waiting for {agent} when {PRODUCT_NAME} restarted, and it was over an hour old, so {PRODUCT_NAME} didn't send it. Send it again if it still matters."
         ),
     }
 }

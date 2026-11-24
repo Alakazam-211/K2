@@ -43,6 +43,8 @@ use k2_root_proto::engine::Wall;
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, db_err, no, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `engine_ref` prefix of a relaxed instance (`supervisor::engine_of`).
 pub const REF_PREFIX: &str = super::guarded::RELAXED_REF_PREFIX;
@@ -124,13 +126,13 @@ pub fn ready() -> std::result::Result<(), String> {
     }
     let st = crate::root_helper::state();
     if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
-        return Err("the box isn't prepared for Apps (no root helper at protocol 6+: k2 app box prepare)".into());
+        return Err(concat!("the box isn't prepared for Apps (no root helper at protocol 6+: ", cli_name!(), " app box prepare)").into());
     }
-    let v = super::guarded::engine_version().map_err(|e| format!("the App engine isn't answering ({e}): k2 app engine install"))?;
+    let v = super::guarded::engine_version().map_err(|e| format!("the App engine isn't answering ({e}): {CLI_NAME} app engine install"))?;
     match v["protocol"].as_u64() {
         Some(p) if p == k2_root_proto::engine::ENGINE_PROTOCOL as u64 => Ok(()),
         p => Err(format!(
-            "the App engine speaks protocol {} and this daemon {}: k2 app engine install",
+            "the App engine speaks protocol {} and this daemon {}: {CLI_NAME} app engine install",
             p.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
             k2_root_proto::engine::ENGINE_PROTOCOL
         )),
@@ -156,7 +158,7 @@ pub fn label(app: &AppRow, cfg: &AppConfig, egress_mode: &str) -> Label {
         return Label {
             text: "Open (process)".into(),
             reason: Some("the owner's process exception (a device a container can't reach)".into()),
-            back: Some(format!("k2 app exception {} off", app.app_id)),
+            back: Some(format!("{CLI_NAME} app exception {} off", app.app_id)),
         };
     }
     match (app.path.as_str(), app.isolation.as_str()) {
@@ -174,7 +176,7 @@ pub fn label(app: &AppRow, cfg: &AppConfig, egress_mode: &str) -> Label {
             if !ports.is_empty() {
                 why.push(format!("{} extra port{}", ports.len(), if ports.len() == 1 { "" } else { "s" }));
             }
-            Label { text: "Open (container)".into(), reason: Some(why.join("; ")), back: Some(format!("k2 app config {} --path guarded", app.app_id)) }
+            Label { text: "Open (container)".into(), reason: Some(why.join("; ")), back: Some(format!("{CLI_NAME} app config {} --path guarded", app.app_id)) }
         }
         ("open", _) => plain("Open (no engine on this box)"),
         (_, "container") => plain("Guarded (container)"),
@@ -243,7 +245,7 @@ pub(crate) fn check_run(r: &Run) -> R<()> {
         return Err(no(
             codes::BAD_REQUEST,
             400,
-            format!("port {} can't be an open-path App's port (1024 or more, not 8730, outside K2's 38600-38999)", r.port),
+            format!("port {} can't be an open-path App's port (1024 or more, not 8730, outside {PRODUCT_NAME}'s 38600-38999)", r.port),
         ));
     }
     if !r.cwd.is_dir() {
@@ -270,7 +272,7 @@ pub(crate) fn publish_run(who: &Who, r: &Run) -> R<J> {
             return Err(no(
                 codes::APP_EXISTS,
                 409,
-                format!("'{id}' is already an App on this box (not this workspace's --cmd service): k2 app list"),
+                format!("'{id}' is already an App on this box (not this workspace's --cmd service): {CLI_NAME} app list"),
             ))
         }
         None => (create(who, r, &id)?, true),
@@ -301,7 +303,7 @@ pub(crate) fn publish_run(who: &Who, r: &Run) -> R<J> {
         let m = deploy::build::folder_manifest(&app.app_id, &r.cmd);
         deploy::build::snapshot_folder(&conn, &r.cwd, &super::routes::signer(who), &m).map_err(|f| no(f.code, 422, f.message))?
     };
-    let dep = super::supervisor::begin(&app, &seed.seed.hash, store::KIND_DEPLOY, &by, Some("k2 publish run --cmd (open path)"))?;
+    let dep = super::supervisor::begin(&app, &seed.seed.hash, store::KIND_DEPLOY, &by, Some(concat!(cli_name!(), " publish run --cmd (open path)")))?;
     let row = super::supervisor::wait_done(&dep, 20);
     let svc = {
         let db = k2_core::db::shared();
@@ -325,13 +327,13 @@ pub(crate) fn publish_run(who: &Who, r: &Run) -> R<J> {
         "deployment": dep,
         "seed": seed.seed.hash,
         "result": row.as_ref().map(|d| d.result.clone()),
-        "note": "from K2 0.46.1 a new --cmd service runs as an open-path App: a relaxed container with a copy of this folder \
+        "note": concat!("from ", product_name!(), " 0.46.1 a new --cmd service runs as an open-path App: a relaxed container with a copy of this folder \
                  made at each start (keep what must last in $K2_APP_DATA, /data), egress logged. \
-                 Re-run to deploy your changes; k2 app logs|inspect|history <name>.",
+                 Re-run to deploy your changes; ", cli_name!(), " app logs|inspect|history <name>."),
     });
     if failed {
         let why = row.and_then(|d| d.error).unwrap_or_else(|| "the deploy failed".into());
-        let mut refusal = no(codes::HEALTH_FAILED, 409, format!("{} didn't come up on the open path: {why} (k2 app logs {})", app.app_id, app.app_id));
+        let mut refusal = no(codes::HEALTH_FAILED, 409, format!("{} didn't come up on the open path: {why} ({CLI_NAME} app logs {})", app.app_id, app.app_id));
         refusal.extra = Some(out);
         return Err(refusal);
     }
@@ -399,7 +401,7 @@ fn create(who: &Who, r: &Run, id: &str) -> R<AppRow> {
             rusqlite::params![id, r.cwd.to_string_lossy()],
         )
         .map_err(db_err)?;
-        store::set_state(&conn, id, store::STATE_INSTALLING, Some("k2 publish run --cmd (open path)")).map_err(db_err)?;
+        store::set_state(&conn, id, store::STATE_INSTALLING, Some(concat!(cli_name!(), " publish run --cmd (open path)"))).map_err(db_err)?;
         // K24: broad, through the App's own proxy, every host logged.
         deploy::egress::set_mode(&conn, id, deploy::egress::MODE_BROAD, "open-path").map_err(db_err)?;
         // A folder App asks for no caps: its approved set is empty (lane 2:
@@ -439,7 +441,7 @@ fn create(who: &Who, r: &Run, id: &str) -> R<AppRow> {
         "install",
         &by,
         None,
-        &json!({ "path": "open", "source": "folder", "folder": r.cwd, "frontPort": port, "tunnel": !r.no_tunnel, "via": "k2 publish run --cmd" }),
+        &json!({ "path": "open", "source": "folder", "folder": r.cwd, "frontPort": port, "tunnel": !r.no_tunnel, "via": concat!(cli_name!(), " publish run --cmd") }),
     );
     drop(conn);
     super::routes::mirror(id);

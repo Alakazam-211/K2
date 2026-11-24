@@ -4,6 +4,7 @@
 use serde_json::json;
 
 use super::supervisor::{no, Env, R};
+use k2_core::brand::CLI_NAME;
 
 /// sew-db runs an older Postgres than the installed package (it started
 /// before the package was upgraded). `k2 hostchat upgrade` refuses until
@@ -24,7 +25,7 @@ pub fn need_sew_db_current(env: &Env) -> R<()> {
                 format!(
                     "nothing changed: sew-db runs an older Postgres than the installed {} ({}): it started before \
                      the package was upgraded, so the upgrade's migrations would fail to load the new libraries. \
-                     Restart sew-db first: sudo systemctl restart sew-db.service, then k2 hostchat restart, then \
+                     Restart sew-db first: sudo systemctl restart sew-db.service, then {CLI_NAME} hostchat restart, then \
                      run the upgrade again",
                     f.package.as_deref().unwrap_or("postgresql package"),
                     f.installed_version.as_deref().unwrap_or("version unknown"),

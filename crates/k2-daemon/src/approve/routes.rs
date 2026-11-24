@@ -26,6 +26,8 @@ use super::{card, people, shape, wait};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::permission::answer::err;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub(crate) const REQUEST: &str = "/cli/approve/request";
 pub(crate) const STATUS: &str = "/cli/approve/status";
@@ -135,7 +137,7 @@ pub(crate) fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: 
                 return err(
                     403,
                     "approval_agent_only",
-                    "an agent verb: agents ask with k2 approve request; people answer on their phone in K2",
+                    concat!("an agent verb: agents ask with ", cli_name!(), " approve request; people answer on their phone in ", product_name!()),
                 );
             };
             match path {
@@ -150,7 +152,7 @@ pub(crate) fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: 
                 return err(
                     403,
                     "approval_person_only",
-                    "only the asked person answers an approval, signed in on their own device; an agent, a K2 terminal or the owner token never can",
+                    concat!("only the asked person answers an approval, signed in on their own device; an agent, a ", product_name!(), " terminal or the owner token never can"),
                 );
             };
             let Some(person_id) = people::id_of_login(username) else {
@@ -224,7 +226,7 @@ fn request(ws: &str, session: &str, b: &Map<String, Value>) -> CliResponse {
             return err(
                 403,
                 CODE_OFF,
-                "this agent may not ask people for signed approvals yet. An Owner or Admin turns it on with k2 approve agents <workspace> on",
+                concat!("this agent may not ask people for signed approvals yet. An Owner or Admin turns it on with ", cli_name!(), " approve agents <workspace> on"),
             )
         }
         Err(e) => return store_err(e),
@@ -258,7 +260,7 @@ fn request(ws: &str, session: &str, b: &Map<String, Value>) -> CliResponse {
                     403,
                     "approval_not_allowed",
                     format!(
-                        "{} hasn't allowed this agent to ask them for approvals. By default an agent asks only the person it works for; {} can allow it in K2",
+                        "{} hasn't allowed this agent to ask them for approvals. By default an agent asks only the person it works for; {} can allow it in {PRODUCT_NAME}",
                         person.login, person.login
                     ),
                 )
@@ -284,7 +286,7 @@ fn own(ws: &str, id: &str) -> Result<ApprovalRequest, CliResponse> {
     let conn = db.lock();
     match store::get(&conn, id) {
         Ok(Some(r)) if r.workspace_id == ws => Ok(r),
-        Ok(_) => Err(err(404, codes::NOT_FOUND, format!("no approval {id} from this agent (k2 approve status lists yours)"))),
+        Ok(_) => Err(err(404, codes::NOT_FOUND, format!("no approval {id} from this agent ({CLI_NAME} approve status lists yours)"))),
         Err(e) => Err(store_err(e)),
     }
 }

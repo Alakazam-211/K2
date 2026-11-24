@@ -47,6 +47,8 @@ use serde_json::{json, Value};
 
 use crate::ci_engine;
 use crate::compute_routes::{audit, b, json_body, need_credential, no, passport_gate, s, target_ws, Who, Ws, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 fn now() -> i64 {
     k2_core::compute::now()
@@ -223,10 +225,10 @@ fn plan_set(ws: &Ws, v: &Value, run_id: &str) -> R<Planned> {
     let text = o
         .read_config(&root, &sha)
         .map_err(|e| no(ci::codes::BAD_CONFIG, 400, format!("{CI_CONFIG_PATH} at {}: {}", &sha[..12], one_line(&e))))?
-        .ok_or_else(|| no(ci::codes::NO_CONFIG, 404, format!("commit {} has no {CI_CONFIG_PATH}: add a [release] section, commit it, then release (k2 study ci-release)", &sha[..12])))?;
+        .ok_or_else(|| no(ci::codes::NO_CONFIG, 404, format!("commit {} has no {CI_CONFIG_PATH}: add a [release] section, commit it, then release ({CLI_NAME} study ci-release)", &sha[..12])))?;
     let cfg = CiConfig::parse(&text).map_err(|e| no(ci::codes::BAD_CONFIG, 400, format!("at {}: {e}", &sha[..12])))?;
     let Some(rcfg) = cfg.release else {
-        return Err(no(rcodes::NO_RELEASE, 404, format!("{CI_CONFIG_PATH} at {} has no [release]: add one (k2 study ci-release; k2 app init --template tauri writes one)", &sha[..12])));
+        return Err(no(rcodes::NO_RELEASE, 404, format!("{CI_CONFIG_PATH} at {} has no [release]: add one ({CLI_NAME} study ci-release; {CLI_NAME} app init --template tauri writes one)", &sha[..12])));
     };
     let tree = tree_of(&root, &sha).map_err(|e| no(ci::codes::NO_COMMIT, 404, e))?;
     let tier = match s(v, "tier") {
@@ -253,7 +255,7 @@ fn plan_set(ws: &Ws, v: &Value, run_id: &str) -> R<Planned> {
                 rcodes::NO_SEAT,
                 404,
                 format!(
-                    "this server holds no seat on {}'s lane {}: a person asks for one (k2 compute seats request {} --lane {}), the owner approves it, then release again",
+                    "this server holds no seat on {}'s lane {}: a person asks for one ({CLI_NAME} compute seats request {} --lane {}), the owner approves it, then release again",
                     rcfg.owner, rcfg.lane, rcfg.owner, rcfg.lane
                 ),
             )
@@ -320,7 +322,7 @@ fn placed_json(p: &[Placed]) -> Value {
 pub(crate) fn release(who: &Who, body: &[u8]) -> R<Value> {
     let v = json_body(body)?;
     let ws = reader(who, s(&v, "workspace"))?;
-    let version = s(&v, "version").ok_or_else(|| no("bad_request", 400, "the version to release: k2 ci release <x.y.z>"))?;
+    let version = s(&v, "version").ok_or_else(|| no("bad_request", 400, concat!("the version to release: ", cli_name!(), " ci release <x.y.z>")))?;
     if !rel::valid_version(version) {
         return Err(no(rcodes::BAD_VERSION, 400, format!("'{version}' is not a release version (x.y.z, optionally -pre or +build)")));
     }
@@ -427,13 +429,13 @@ fn spki_b64(pem: &str) -> Option<String> {
 pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
     let v = json_body(body)?;
     let ws = reader(who, s(&v, "workspace"))?;
-    let token = s(&v, "run").ok_or_else(|| no("bad_request", 400, "which release run: k2 ci evidence <run> --out <dir>"))?;
+    let token = s(&v, "run").ok_or_else(|| no("bad_request", 400, concat!("which release run: ", cli_name!(), " ci evidence <run> --out <dir>")))?;
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let run = ci::find_run(&conn, &ws.id, token).ok_or_else(|| no(ci::codes::NO_RUN, 404, format!("no CI run '{token}' in workspace {} (k2 ci status lists them)", ws.handle)))?;
+    let run = ci::find_run(&conn, &ws.id, token).ok_or_else(|| no(ci::codes::NO_RUN, 404, format!("no CI run '{token}' in workspace {} ({CLI_NAME} ci status lists them)", ws.handle)))?;
     let (kind, facts) = rel::release_facts(&conn, &run.id).ok_or_else(|| no(ci::codes::NO_RUN, 404, "the run is gone"))?;
     if kind != rel::kind::RELEASE {
-        return Err(no(rcodes::NOT_A_RELEASE, 409, format!("run {} checks a commit; evidence is for release runs (k2 ci release)", run.short())));
+        return Err(no(rcodes::NOT_A_RELEASE, 409, format!("run {} checks a commit; evidence is for release runs ({CLI_NAME} ci release)", run.short())));
     }
     let checks = ci::checks_of(&conn, &run.id);
     let jobs = rel::job_facts(&conn, &run.id);
@@ -442,7 +444,7 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
         return Err(no(
             rcodes::NOT_DONE,
             409,
-            format!("release run {} is {} ({}): evidence needs every job done with exit 0 (k2 ci status {})", run.short(), run.state, not_done.join(", "), run.short()),
+            format!("release run {} is {} ({}): evidence needs every job done with exit 0 ({CLI_NAME} ci status {})", run.short(), run.state, not_done.join(", "), run.short()),
         ));
     }
     let seat_id = facts.seat_id.clone().unwrap_or_default();
@@ -583,11 +585,11 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
 pub(crate) fn provenance(who: &Who, body: &[u8]) -> R<Value> {
     let v = json_body(body)?;
     let ws = reader(who, s(&v, "workspace"))?;
-    let token = s(&v, "run").ok_or_else(|| no("bad_request", 400, "which run: k2 ci provenance <run> --out <dir>"))?;
+    let token = s(&v, "run").ok_or_else(|| no("bad_request", 400, concat!("which run: ", cli_name!(), " ci provenance <run> --out <dir>")))?;
     let (run, rows) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        let run = ci::find_run(&conn, &ws.id, token).ok_or_else(|| no(ci::codes::NO_RUN, 404, format!("no CI run '{token}' in workspace {} (k2 ci status lists them)", ws.handle)))?;
+        let run = ci::find_run(&conn, &ws.id, token).ok_or_else(|| no(ci::codes::NO_RUN, 404, format!("no CI run '{token}' in workspace {} ({CLI_NAME} ci status lists them)", ws.handle)))?;
         let rows: Vec<(String, Option<store::JobRow>)> = ci::checks_of(&conn, &run.id).into_iter().map(|c| (c.name.clone(), c.job_id.as_deref().and_then(|id| store::job_by_id(&conn, id)))).collect();
         (run, rows)
     };
@@ -658,14 +660,14 @@ pub(crate) fn setup(who: &Who, body: &[u8]) -> R<Value> {
     };
     match &owner {
         None => missing.push(format!(
-            "this server hasn't pinned node owner {}: pin its roster key (k2 compute owners; compare the fingerprint with k2 compute roster key on {})",
+            "this server hasn't pinned node owner {}: pin its roster key ({CLI_NAME} compute owners; compare the fingerprint with {CLI_NAME} compute roster key on {})",
             rcfg.owner, rcfg.owner
         )),
-        Some(_) if roster.is_none() => missing.push(format!("no node roster from {} is held here yet (the owner publishes one: k2 compute roster publish)", rcfg.owner)),
+        Some(_) if roster.is_none() => missing.push(format!("no node roster from {} is held here yet (the owner publishes one: {CLI_NAME} compute roster publish)", rcfg.owner)),
         Some(_) => {}
     }
     match &seat {
-        None => missing.push(format!("no seat on {}'s lane {}: k2 compute seats request {} --lane {}, then the owner approves", rcfg.owner, rcfg.lane, rcfg.owner, rcfg.lane)),
+        None => missing.push(format!("no seat on {}'s lane {}: {CLI_NAME} compute seats request {} --lane {}, then the owner approves", rcfg.owner, rcfg.lane, rcfg.owner, rcfg.lane)),
         Some(st) if !st.active => missing.push(format!("seat {} on {}'s lane {} is not active yet (the owner approves it)", st.seat_id, rcfg.owner, rcfg.lane)),
         Some(_) => {}
     }
@@ -710,7 +712,7 @@ impl PushEvidence {
             let (label, name) = self.files.get(sha).ok_or_else(|| {
                 (
                     EVIDENCE_MISMATCH,
-                    format!("the {platform} file is not one release run {} built (its sha256 {} is in none of the run's receipts): push the file k2 ci evidence fetched", self.short, &sha[..sha.len().min(12)]),
+                    format!("the {platform} file is not one release run {} built (its sha256 {} is in none of the run's receipts): push the file {CLI_NAME} ci evidence fetched", self.short, &sha[..sha.len().min(12)]),
                 )
             })?;
             matched.insert(platform.clone(), json!({"label": label, "name": name, "sha256": sha}));
@@ -727,10 +729,10 @@ pub const EVIDENCE_MISMATCH: &str = "evidence_mismatch";
 pub(crate) fn evidence_for_push(ws_id: &str, token: &str, version: &str) -> Result<PushEvidence, (&'static str, u16, String)> {
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let run = ci::find_run(&conn, ws_id, token).ok_or((ci::codes::NO_RUN, 404, format!("--evidence {token}: no CI run of the App's workspace by that name (k2 ci status lists them)")))?;
+    let run = ci::find_run(&conn, ws_id, token).ok_or((ci::codes::NO_RUN, 404, format!("--evidence {token}: no CI run of the App's workspace by that name ({CLI_NAME} ci status lists them)")))?;
     let (kind, facts) = rel::release_facts(&conn, &run.id).ok_or((ci::codes::NO_RUN, 404, "the run is gone".to_string()))?;
     if kind != rel::kind::RELEASE {
-        return Err((rcodes::NOT_A_RELEASE, 409, format!("--evidence {}: a check run, not a release (k2 ci release)", run.short())));
+        return Err((rcodes::NOT_A_RELEASE, 409, format!("--evidence {}: a check run, not a release ({CLI_NAME} ci release)", run.short())));
     }
     if run.state != run_state::PASSED {
         return Err((rcodes::NOT_DONE, 409, format!("--evidence {}: the release run is {}, not passed", run.short(), run.state)));

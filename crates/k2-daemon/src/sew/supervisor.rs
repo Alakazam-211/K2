@@ -41,6 +41,7 @@ use super::ops::{MgmtError, RealOps, SewOps, UnitInfo};
 use super::secrets::{kek_id, SewSecrets, VaultSecrets};
 use super::sew_wire as wire;
 use super::store::{self, Row};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 // ── environment ──────────────────────────────────────────────────────────
 
@@ -130,8 +131,8 @@ pub fn begin<'a>(env: &Env<'a>) -> R<Latch<'a>> {
             no(
                 "lifecycle_in_progress",
                 409,
-                "another Sew step (enable, upgrade, rollback, restore, rotation, disable, uninstall) is running: \
-                 wait for it (k2 hostchat status), then retry",
+                concat!("another Sew step (enable, upgrade, rollback, restore, rotation, disable, uninstall) is running: \
+                 wait for it (", cli_name!(), " hostchat status), then retry"),
             )
         })
 }
@@ -263,7 +264,7 @@ pub fn helper_check(env: &Env) -> R<()> {
             409,
             format!(
                 "the root helper pins Sew {theirs}, this daemon pins {}: update the helper to this daemon's version \
-                 (k2 root-helper update)",
+                 ({CLI_NAME} root-helper update)",
                 pinned().version
             ),
         ));
@@ -456,7 +457,7 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             "postgres",
             "ok",
             format!(
-                "PostgreSQL {want} binaries missing: K2 installs them through the root helper, with no second cluster \
+                "PostgreSQL {want} binaries missing: {PRODUCT_NAME} installs them through the root helper, with no second cluster \
                  ({PG_SOURCE_WORDS})"
             ),
             "",
@@ -481,7 +482,7 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             if installed {
                 by_hand
             } else {
-                format!("K2 installs it itself through a current root helper: k2 root-helper update, then run this again. {by_hand}")
+                format!("{PRODUCT_NAME} installs it itself through a current root helper: {CLI_NAME} root-helper update, then run this again. {by_hand}")
             },
         ));
     }
@@ -497,7 +498,7 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     };
     match pinned_artifact(&arch) {
         Ok(_) => c.push(check("pin", "ok", format!("Sew {}", pinned().version), "")),
-        Err(e) => c.push(check("pin", "fail", e, "this K2 build pins no Sew release for this CPU")),
+        Err(e) => c.push(check("pin", "fail", e, concat!("this ", product_name!(), " build pins no Sew release for this CPU"))),
     }
     let st = if helper_ok { box_status(env) } else { None };
     let (present, version, known) = st.as_ref().map(on_disk).unwrap_or((false, None, false));
@@ -512,13 +513,13 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
                 why.trim_start_matches("sew helper: ").to_string(),
                 "Sew's binary must be root:root and not group/other-writable: reinstall it from a pinned release",
             )),
-            None => c.push(check("binary", "fail", "/usr/local/bin/sew is not a Sew release this K2 knows", "remove it or reinstall from a pinned release")),
+            None => c.push(check("binary", "fail", concat!("/usr/local/bin/sew is not a Sew release this ", product_name!(), " knows"), "remove it or reinstall from a pinned release")),
         }
     } else if let Some(v) = &version {
         if v == pin_v {
             c.push(check("binary", "ok", format!("Sew {v} installed"), ""));
         } else {
-            c.push(check("binary", "fail", format!("Sew {v} installed, the pin is {pin_v}"), "enable installs nothing over it: k2 hostchat upgrade"));
+            c.push(check("binary", "fail", format!("Sew {v} installed, the pin is {pin_v}"), concat!("enable installs nothing over it: ", cli_name!(), " hostchat upgrade")));
         }
     } else {
         c.push(check("binary", "ok", "not installed", ""));
@@ -533,7 +534,7 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     // (`autosetup::floor`) before they get here; these two only warn then.
     let fail = if req.auto { "warn" } else { "fail" };
     match env.ops.mem_total() {
-        Some(m) if m < 4 * GIB => c.push(check("ram", fail, gib(m), "Sew on a K2 box needs at least 4 GiB of RAM")),
+        Some(m) if m < 4 * GIB => c.push(check("ram", fail, gib(m), concat!("Sew on a ", product_name!(), " box needs at least 4 GiB of RAM"))),
         Some(m) => {
             let split = memory_split(m);
             let detail = format!(
@@ -597,8 +598,8 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         c.push(check(
             "existing_data",
             "fail",
-            "Sew data or config is on this box and the K2 vault holds no Sew master key",
-            "give the recovery key: k2 hostchat enable --recovery-key-file <file>",
+            concat!("Sew data or config is on this box and the ", product_name!(), " vault holds no Sew master key"),
+            concat!("give the recovery key: ", cli_name!(), " hostchat enable --recovery-key-file <file>"),
         ));
     } else {
         c.push(check("existing_data", "ok", if data { "existing Sew data will be adopted" } else { "no Sew data" }, ""));
@@ -609,11 +610,11 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     }
     // A read probe: never writes the vault.
     if !has_key && env.secrets.resolve("sewsec_probe_000000000000").is_err() {
-        c.push(check("vault", "fail", "the K2 vault isn't open", "Sew's master key lives in the vault: open it first (k2 vault status)"));
+        c.push(check("vault", "fail", concat!("the ", product_name!(), " vault isn't open"), concat!("Sew's master key lives in the vault: open it first (", cli_name!(), " vault status)")));
     } else if has_key {
-        c.push(check("vault", "ok", "the K2 vault holds Sew's master key", ""));
+        c.push(check("vault", "ok", concat!("the ", product_name!(), " vault holds Sew's master key"), ""));
     } else {
-        c.push(check("vault", "ok", "the K2 vault is open (enable stores a new Sew master key there)", ""));
+        c.push(check("vault", "ok", concat!("the ", product_name!(), " vault is open (enable stores a new Sew master key there)"), ""));
     }
     c
 }
@@ -628,12 +629,12 @@ fn source_check(env: &Env, arch: &str) -> Value {
     let f = ReleaseFile::core(pinned().version, art);
     let src = env.ops.release_source();
     if fetch::cached(&src, &f).is_some() {
-        return check("source", "ok", format!("{} is in K2's download cache", f.label), "");
+        return check("source", "ok", format!("{} is in {PRODUCT_NAME}'s download cache", f.label), "");
     }
     match fetch::probe(&src, &f) {
         Ok(Some(n)) => check("source", "ok", format!("will download {} ({}) from Sew's GitHub releases on enable", f.label, fetch::size_words(n)), ""),
         Ok(None) => check("source", "ok", format!("will download {} from Sew's GitHub releases on enable", f.label), ""),
-        Err(e) => check("source", "fail", format!("can't download {}: {e}", f.label), f.by_hand("k2 hostchat enable --tarball")),
+        Err(e) => check("source", "fail", format!("can't download {}: {e}", f.label), f.by_hand(concat!(cli_name!(), " hostchat enable --tarball"))),
     }
 }
 
@@ -741,7 +742,7 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
             return Ok(Err(json!({"ok": true, "alreadyEnabled": true, "state": r.status})));
         }
         if r.status == "upgrading" {
-            return Err(no("upgrade_in_progress", 409, "a Sew upgrade is recorded as running: wait for it or check k2 hostchat status"));
+            return Err(no("upgrade_in_progress", 409, concat!("a Sew upgrade is recorded as running: wait for it or check ", cli_name!(), " hostchat status")));
         }
         let had = row_provider(&r);
         let installed_once = r.install_id.is_some() || step_done(&r.enable_progress, "install");
@@ -751,7 +752,7 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
                 409,
                 format!(
                     "this Sew install uses identity '{had}'; it can only change with a fresh install \
-                     (k2 hostchat purge --confirm-hostname <host>, then k2 hostchat enable --identity {})",
+                     ({CLI_NAME} hostchat purge --confirm-hostname <host>, then {CLI_NAME} hostchat enable --identity {})",
                     req.provider()
                 ),
             ));
@@ -828,7 +829,7 @@ fn ensure_pg_major(env: &Env) -> Result<(), String> {
         return Ok(());
     }
     let argv = ["pg".to_string(), "add-major".to_string(), want.to_string()];
-    let v = env.ops.helper(&argv, None).map_err(|e| format!("K2 could not install PostgreSQL {want} through the root helper: {e}"))?;
+    let v = env.ops.helper(&argv, None).map_err(|e| format!("{PRODUCT_NAME} could not install PostgreSQL {want} through the root helper: {e}"))?;
     if !env.ops.pg_majors().contains(&want) {
         return Err(format!("the root helper answered {} but the PostgreSQL {want} binaries are still missing", short(&v)));
     }
@@ -901,9 +902,9 @@ fn fetch_app_kit(env: &Env, save: &dyn Fn(Value)) -> Result<(), String> {
     let f = ReleaseFile::app_kit(pin_v, kit);
     let o = match fetch::obtain(&env.ops.release_source(), &f, &download_note(&f, save)) {
         Ok(o) => o,
-        Err(e @ (FetchError::Mismatch(_) | FetchError::Refused(_))) => return Err(fetch_refusal(&f, &e, "k2 app sdk kit")),
+        Err(e @ (FetchError::Mismatch(_) | FetchError::Refused(_))) => return Err(fetch_refusal(&f, &e, concat!(cli_name!(), " app sdk kit"))),
         Err(e) => {
-            k2_core::log_debug!("[sew] {} not fetched ({e}); k2 app sdk add --sew waits for k2 app sdk kit", f.label);
+            k2_core::log_debug!("[sew] {} not fetched ({e}); {CLI_NAME} app sdk add --sew waits for {CLI_NAME} app sdk kit", f.label);
             return Ok(());
         }
     };
@@ -928,7 +929,7 @@ pub(crate) fn keep_app_kit_beside(env: &Env, tarball: &std::path::Path) -> Resul
     let bytes = match env.ops.read_file(&path, k2_core::app_sdk::sew_kit::MAX_KIT) {
         Ok(b) => b,
         Err(e) if e.contains("No such file") => {
-            k2_core::log_debug!("[sew] no App kit beside the tarball ({}): k2 app sdk add --sew waits for k2 app sdk kit", path.display());
+            k2_core::log_debug!("[sew] no App kit beside the tarball ({}): {CLI_NAME} app sdk add --sew waits for {CLI_NAME} app sdk kit", path.display());
             return Ok(());
         }
         Err(e) => return Err(format!("Sew's App kit: {e}")),
@@ -966,7 +967,7 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
         };
         let key_ref = match (existing, from_file) {
             (Some(k), Some(f)) if k != f => {
-                return Err(("master-key", "the vault already holds a different Sew master key; K2 will not replace it".into()))
+                return Err(("master-key", concat!("the vault already holds a different Sew master key; ", product_name!(), " will not replace it").into()))
             }
             (Some(_), _) => row.master_key_ref.clone().expect("resolved above"),
             (None, Some(f)) => env.secrets.store("master", &f).map_err(|e| ("master-key", e))?,
@@ -1007,7 +1008,7 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
                 p["download"] = d.clone();
             })
         };
-        stage_tarball(env, req.tarball_path.as_deref(), "k2 hostchat enable --tarball", &note).map_err(|e| ("stage", e))?;
+        stage_tarball(env, req.tarball_path.as_deref(), concat!(cli_name!(), " hostchat enable --tarball"), &note).map_err(|e| ("stage", e))?;
         done(env, "stage");
         step(env, "install-bin");
         helper(env, &["install-bin"], None).map_err(|e| ("install-bin", e))?;
@@ -1136,7 +1137,7 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
 pub fn link_check(status: &Value, pin_v: &str, key: &str, want_provider: &str) -> Result<String, String> {
     let provider = status.get("provider").and_then(Value::as_str).unwrap_or("");
     if provider == "standalone" && want_provider != "standalone" {
-        return Err("a standalone Sew install is on this box; K2 will not adopt it".into());
+        return Err(concat!("a standalone Sew install is on this box; ", product_name!(), " will not adopt it").into());
     }
     if provider != want_provider {
         return Err(format!("Sew reports provider '{provider}', expected {want_provider}"));
@@ -1152,7 +1153,7 @@ pub fn link_check(status: &Value, pin_v: &str, key: &str, want_provider: &str) -
         .ok_or("Sew reports no install id")?;
     if let Some(kek) = status.pointer("/keys/kek_id").and_then(Value::as_str) {
         if kek != kek_id(key)? {
-            return Err("Sew's KEK id does not match the master key in the K2 vault (k2_vault_key_mismatch)".into());
+            return Err(concat!("Sew's KEK id does not match the master key in the ", product_name!(), " vault (k2_vault_key_mismatch)").into());
         }
     }
     Ok(id)
@@ -1182,7 +1183,7 @@ fn install_refusal(exit: i64, out: &Value) -> String {
     if code == "pg_major_ambiguous" || m.contains("pg_major_ambiguous") {
         return format!(
             "exit {exit}: Sew can't tell which Postgres major to use (pg_major_ambiguous): {m}. A first install asks \
-             for Postgres {}; make sure /usr/lib/postgresql/{}/bin is complete (k2 hostchat preflight). A reconfigure \
+             for Postgres {}; make sure /usr/lib/postgresql/{}/bin is complete ({CLI_NAME} hostchat preflight). A reconfigure \
              names no major (the install's own sew.toml does): check that Sew's config is still on the box",
             pin::SEW_PG_MAJOR,
             pin::SEW_PG_MAJOR
@@ -1239,12 +1240,12 @@ impl std::fmt::Display for ReconfErr {
 
 fn blocked_hint(code: &str) -> String {
     match code {
-        SERVICE_ACCOUNT_UNSAFE => "Sew runs as a pre-existing login account named `sew` (a uid at or above UID_MIN, or a \
+        SERVICE_ACCOUNT_UNSAFE => concat!("Sew runs as a pre-existing login account named `sew` (a uid at or above UID_MIN, or a \
             home outside /var/lib/sew), so `sew install --reconfigure` changed nothing. The upgrade itself is done and \
             chat keeps running. A person fixes the account in place (sew doctor shows service_accounts: fail), then runs \
-            k2 hostchat reconfigure."
+            ", cli_name!(), " hostchat reconfigure.")
             .into(),
-        other => format!("Sew refused to reconfigure ({other}); a person must look (k2 hostchat doctor), then run k2 hostchat reconfigure"),
+        other => format!("Sew refused to reconfigure ({other}); a person must look ({CLI_NAME} hostchat doctor), then run {CLI_NAME} hostchat reconfigure"),
     }
 }
 
@@ -1255,7 +1256,7 @@ pub fn reconfigure_step(env: &Env) -> Result<Value, ReconfErr> {
     let failed = ReconfErr::Failed;
     if !helper_reconfigures(env) {
         return Err(failed(format!(
-            "the root helper is older than protocol {}: k2 root-helper update, then k2 hostchat reconfigure",
+            "the root helper is older than protocol {}: {CLI_NAME} root-helper update, then {CLI_NAME} hostchat reconfigure",
             k2_root_proto::version::SEW_RECONFIGURE_MIN_PROTOCOL
         )));
     }
@@ -1330,7 +1331,7 @@ pub fn restart(env: &Env) -> R<Value> {
         return Err(no(
             "not_restartable",
             409,
-            format!("Chat and voice are {}: k2 hostchat enable (or wait for the running step)", row.status),
+            format!("Chat and voice are {}: {CLI_NAME} hostchat enable (or wait for the running step)", row.status),
         ));
     }
     helper_check(env)?;
@@ -1452,8 +1453,8 @@ pub fn reconcile(row: &str, db: &UnitInfo, sew: &UnitInfo, verdict: &str) -> Rec
         other => {
             if both {
                 let note = if other == "error" {
-                    "systemd reports Sew running; the record says otherwise (when Sew is healthy, \
-                     k2 hostchat adopt clears the error)"
+                    concat!("systemd reports Sew running; the record says otherwise (when Sew is healthy, \
+                     ", cli_name!(), " hostchat adopt clears the error)")
                 } else {
                     "systemd reports Sew running; the record says otherwise"
                 };
@@ -1558,9 +1559,9 @@ pub fn split_setup_warnings(alarms: &mut Vec<String>, sew_status: Option<&Value>
         w.push(json!({
             "code": "no_offbox_key_copy",
             "alarm": ALARM_KEYS_MIRROR_STALE,
-            "message": "no off-box key copy: backups can't be read after a disk loss without one; \
-                        set a keyring mirror (keys.mirror) or back up the K2 vault off the box \
-                        (k2 vault backup <dir>; it holds the recovery key)",
+            "message": concat!("no off-box key copy: backups can't be read after a disk loss without one; \
+                        set a keyring mirror (keys.mirror) or back up the ", product_name!(), " vault off the box \
+                        (", cli_name!(), " vault backup <dir>; it holds the recovery key)"),
         }));
     }
     w
@@ -1585,15 +1586,15 @@ pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
     if row.ship_kind != "dir" && !external {
         missing.push("ship_folder");
         words.push(if boxed {
-            "the box backup carrying Sew's bundles (k2 hostchat status says what K2 can't see)"
+            concat!("the box backup carrying Sew's bundles (", cli_name!(), " hostchat status says what ", product_name!(), " can't see)")
         } else {
-            "an off-box backup folder (k2 hostchat ship dir <folder on another disk>)"
+            concat!("an off-box backup folder (", cli_name!(), " hostchat ship dir <folder on another disk>)")
         });
     }
     if row.mirror_kind != "dir" {
         missing.push("keyring_mirror");
         words.push(if row.ship_kind == "dir" {
-            "the keyring mirror (K2 sets it in the backup folder on its own; k2 hostchat status shows why it waits)"
+            concat!("the keyring mirror (", product_name!(), " sets it in the backup folder on its own; ", cli_name!(), " hostchat status shows why it waits)")
         } else if external {
             concat!(
                 "the keyring mirror (",
@@ -1603,18 +1604,18 @@ pub fn move_off_k2(row: &Row, launch_key: bool, box_backup: bool) -> Value {
                 " hostchat mirror dir <folder on another disk>)"
             )
         } else if boxed {
-            "the keyring mirror (the box backup doesn't set it: k2 hostchat mirror dir <folder on another disk>)"
+            concat!("the keyring mirror (the box backup doesn't set it: ", cli_name!(), " hostchat mirror dir <folder on another disk>)")
         } else {
             "the keyring mirror (it follows the backup folder)"
         });
     }
     if !launch_key {
         missing.push("launch_key");
-        words.push("the launch key in the K2 vault (sew-launch-key; K2 copies it on its own once the vault is open)");
+        words.push(concat!("the launch key in the ", product_name!(), " vault (sew-launch-key; ", product_name!(), " copies it on its own once the vault is open)"));
     }
     let copy = if external { format!(" (bundles off the box in {})", super::offbox::LABEL) } else { String::new() };
     let line = if missing.is_empty() {
-        format!("Ready to move off K2: a backup bundle{copy}, the keyring mirror and the owner's sew-launch-key are enough")
+        format!("Ready to move off {PRODUCT_NAME}: a backup bundle{copy}, the keyring mirror and the owner's sew-launch-key are enough")
     } else {
         format!("Not ready to move off K2{copy}: missing {}", words.join("; "))
     };
@@ -1887,7 +1888,7 @@ pub fn jwks_drift_check(env: &Env) -> Value {
         return json!({"result": "not_applicable", "why": "no Sew install"});
     };
     if row_provider(&row) != pin::PROVIDER_K2 {
-        return json!({"result": "not_applicable", "why": "standalone identity has no K2 JWKS"});
+        return json!({"result": "not_applicable", "why": concat!("standalone identity has no ", product_name!(), " JWKS")});
     }
     if !matches!(row.status.as_str(), "running" | "degraded" | "stopped" | "error") {
         return json!({"result": "sew_down", "why": format!("Sew is {}", row.status)});
@@ -2067,7 +2068,7 @@ const HOOK_ACTOR: &str = "system:sew";
 /// the answer is recorded.
 pub fn grant_hook_on(env: &Env, row: &Row) -> Value {
     if row_provider(row) != pin::PROVIDER_K2 {
-        return json!({"target": "none", "why": "a standalone install takes no K2 grants"});
+        return json!({"target": "none", "why": concat!("a standalone install takes no ", product_name!(), " grants")});
     }
     let socket = env.ops.mgmt_socket();
     let chat = chat_backend_on(&socket);
@@ -2148,9 +2149,9 @@ pub fn grant_hook_boot(env: &Env) -> Value {
 // ── disable / uninstall / purge ──────────────────────────────────────────
 
 pub(super) fn need_row(allow_removed: bool) -> R<Row> {
-    let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat and voice are not installed on this server (k2 hostchat enable)"))?;
+    let r = store::load().ok_or_else(|| no("not_installed", 404, concat!("Chat and voice are not installed on this server (", cli_name!(), " hostchat enable)")))?;
     if !allow_removed && r.status == "removed" {
-        return Err(no("not_installed", 409, "Chat and voice were uninstalled (data kept): k2 hostchat enable brings it back"));
+        return Err(no("not_installed", 409, concat!("Chat and voice were uninstalled (data kept): ", cli_name!(), " hostchat enable brings it back")));
     }
     Ok(r)
 }
@@ -2187,8 +2188,8 @@ pub fn disable(env: &Env) -> R<Value> {
         "ok": true,
         "state": "disabled",
         "grantHook": hook,
-        "warning": "Chat is down for everyone on this box. Agents' k2 chat calls fail. Data, keys and backups are kept: \
-                    k2 hostchat enable brings it back.",
+        "warning": concat!("Chat is down for everyone on this box. Agents' ", cli_name!(), " chat calls fail. Data, keys and backups are kept: \
+                    ", cli_name!(), " hostchat enable brings it back."),
     }))
 }
 
@@ -2212,10 +2213,10 @@ pub fn uninstall(env: &Env, drop_grants: bool) -> R<Value> {
         // (disable-now never runs Sew), so say so instead of `error`, and
         // point at the two ways out.
         Err(e) if e.contains("unknown sew binary") => {
-            let m = "uninstall refused: /usr/local/bin/sew is not a Sew release this K2 knows, so K2 will not run it to \
-                     remove Sew while keeping its data. Sew is stopped. Either wipe it (k2 hostchat purge \
-                     --confirm-hostname <host>: K2 removes it without running it) or put a pinned Sew binary back and \
-                     uninstall again";
+            let m = concat!("uninstall refused: /usr/local/bin/sew is not a Sew release this ", product_name!(), " knows, so ", product_name!(), " will not run it to \
+                     remove Sew while keeping its data. Sew is stopped. Either wipe it (", cli_name!(), " hostchat purge \
+                     --confirm-hostname <host>: ", product_name!(), " removes it without running it) or put a pinned Sew binary back and \
+                     uninstall again");
             let msg = m.to_string();
             save_enable(env, |r| {
                 if stopped {
@@ -2295,11 +2296,11 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
             fail_row(env, &format!("purge: {e}"));
             let hint = if e.contains("unknown sew binary") || e.contains("sew is not installed") {
                 format!(
-                    "{e}: this root helper predates K2's own teardown of a Sew it does not recognise; update it \
-                     (k2 root-helper update) and purge again (nothing in the K2 vault was deleted)"
+                    "{e}: this root helper predates {PRODUCT_NAME}'s own teardown of a Sew it does not recognise; update it \
+                     ({CLI_NAME} root-helper update) and purge again (nothing in the {PRODUCT_NAME} vault was deleted)"
                 )
             } else {
-                format!("{e} (nothing in the K2 vault was deleted; retry when fixed)")
+                format!("{e} (nothing in the {PRODUCT_NAME} vault was deleted; retry when fixed)")
             };
             return Err(no("purge_failed", 500, hint));
         }
@@ -2341,7 +2342,7 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     // Every Sew id K2 kept names nothing now (voicetest 11-04): agent Spaces
     // are set aside, hub cursors dropped, and the K5 Space is checked (and
     // made again) before anything is sent to it. The next install starts clean.
-    let chat_ids = env.ops.chat_ids_forget("Sew was purged (k2 hostchat purge)").unwrap_or_else(|e| json!({"error": e}));
+    let chat_ids = env.ops.chat_ids_forget(concat!("Sew was purged (", cli_name!(), " hostchat purge)")).unwrap_or_else(|e| json!({"error": e}));
     changed("purged");
     // What the teardown left on the box (K2's path: the kept recovery
     // file, a sysctl it could not restore, a login-like `sew` account).
@@ -2357,13 +2358,13 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
         "backupsAt": backups_at,
         "voiceLeftovers": voice_left,
         "left": left,
-        "warning": "Off-box backups and the keyring mirror can no longer be read unless you kept a copy of the recovery key \
-                    (K2 deleted sew-launch-key from the vault). K2 did not delete off-box copies.",
+        "warning": concat!("Off-box backups and the keyring mirror can no longer be read unless you kept a copy of the recovery key \
+                    (", product_name!(), " deleted sew-launch-key from the vault). ", product_name!(), " did not delete off-box copies."),
     });
     if teardown == "k2" {
         body["note"] = json!(
-            "/usr/local/bin/sew was missing or not a Sew release this K2 knows, so K2 removed Sew's units, config, data, \
-             credentials and binaries itself (it never ran that binary). Accounts are kept."
+            concat!("/usr/local/bin/sew was missing or not a Sew release this ", product_name!(), " knows, so ", product_name!(), " removed Sew's units, config, data, \
+             credentials and binaries itself (it never ran that binary). Accounts are kept.")
         );
         for k in ["removed", "units", "sysctl", "accounts", "binary"] {
             if let Some(v) = out.get(k) {
@@ -2406,9 +2407,9 @@ pub fn public_url_warning(env: &Env) -> Value {
         "message": format!(
             "Sew's public URL isn't set, so password setup links and invites won't open from outside this box. \
              Set it to the https origin people use (your chat App, a host on this box's k2.dev label or a bound custom domain): \
-             k2 hostchat config --public-url https://{host}"
+             {CLI_NAME} hostchat config --public-url https://{host}"
         ),
-        "fix": format!("k2 hostchat config --public-url https://{host}"),
+        "fix": format!("{CLI_NAME} hostchat config --public-url https://{host}"),
     })
 }
 
@@ -2480,10 +2481,10 @@ fn upgrade_source(st: &Value, accept: Option<&str>) -> R<String> {
         }
         let hint = match (present, sha.as_deref()) {
             (true, Some(sha)) => format!(
-                "/usr/local/bin/sew (sha256 {sha}) is not a Sew release this K2 knows; nothing was changed. If you trust \
-                 exactly this binary, the owner can accept it: k2 hostchat upgrade --accept-binary {sha}"
+                "/usr/local/bin/sew (sha256 {sha}) is not a Sew release this {PRODUCT_NAME} knows; nothing was changed. If you trust \
+                 exactly this binary, the owner can accept it: {CLI_NAME} hostchat upgrade --accept-binary {sha}"
             ),
-            _ => "/usr/local/bin/sew is not a Sew release this K2 knows; nothing was changed".to_string(),
+            _ => concat!("/usr/local/bin/sew is not a Sew release this ", product_name!(), " knows; nothing was changed").to_string(),
         };
         return Err(no("unknown_sew_binary", 409, hint));
     };
@@ -2491,7 +2492,7 @@ fn upgrade_source(st: &Value, accept: Option<&str>) -> R<String> {
         return Err(no(
             "helper_outdated",
             409,
-            "this root helper can't accept a binary (it predates 0.46.5): update it first (k2 root-helper update); nothing was changed",
+            concat!("this root helper can't accept a binary (it predates 0.46.5): update it first (", cli_name!(), " root-helper update); nothing was changed"),
         ));
     }
     if !present {
@@ -2501,7 +2502,7 @@ fn upgrade_source(st: &Value, accept: Option<&str>) -> R<String> {
         return Err(no(
             "accept_binary_not_needed",
             409,
-            format!("/usr/local/bin/sew is Sew {}, a release K2 knows: upgrade without --accept-binary", version.unwrap_or_default()),
+            format!("/usr/local/bin/sew is Sew {}, a release {PRODUCT_NAME} knows: upgrade without --accept-binary", version.unwrap_or_default()),
         ));
     }
     match sha.as_deref() {
@@ -2569,11 +2570,11 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
             if req.tarball_path.is_some() {
                 "stage the pinned tarball (--tarball)"
             } else {
-                "download the pinned tarball from Sew's GitHub releases (or take K2's cached copy), check it against K2's pin, stage it"
+                concat!("download the pinned tarball from Sew's GitHub releases (or take ", product_name!(), "'s cached copy), check it against ", product_name!(), "'s pin, stage it")
             },
             "sew upgrade --binary (the installed Sew backs up, swaps, migrates, checks health, rolls back on failure)",
-            "K2 health check: units active, mgmt healthy, version = pin",
-            "on a failed K2 health check: automatic rollback",
+            concat!(product_name!(), " health check: units active, mgmt healthy, version = pin"),
+            concat!("on a failed ", product_name!(), " health check: automatic rollback"),
         ];
         if voice {
             steps.insert(
@@ -2593,7 +2594,7 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
             }
         }
         if !is_release(&from) {
-            steps.push("rollback: never onto the binary on disk now (not a release K2 pinned); a failed upgrade waits for a person");
+            steps.push(concat!("rollback: never onto the binary on disk now (not a release ", product_name!(), " pinned); a failed upgrade waits for a person"));
         }
         return Ok(Err(json!({"ok": true, "dryRun": true, "from": from, "to": to, "voice": voice, "steps": steps})));
     }
@@ -2640,7 +2641,7 @@ fn upgrade_note(env: &Env, step: Option<&str>, result: Option<&str>) {
             p["result"] = json!(res);
             p["finishedAt"] = json!(now);
             if res != "done" && r.last_error.as_deref().is_none_or(|e| e.trim().is_empty()) {
-                let m = format!("the upgrade ended '{res}' but no reason was recorded (a K2 bug: report it with the k2-daemon log)");
+                let m = format!("the upgrade ended '{res}' but no reason was recorded (a {PRODUCT_NAME} bug: report it with the k2-daemon log)");
                 k2_core::log_debug!("[sew] upgrade: {m}");
                 r.last_error = Some(m);
             }
@@ -2692,7 +2693,7 @@ fn upgrade_tunnel_bind(env: &Env, to: &str) -> &'static str {
         Err(f) => {
             let m = format!(
                 "Sew and its voice engine are upgraded to {to}, but voice through the tunnel may still listen on this box's \
-                 IPv6 addresses: {} ({}). Fix that, then run k2 hostchat media rebind",
+                 IPv6 addresses: {} ({}). Fix that, then run {CLI_NAME} hostchat media rebind",
                 f.hint, f.code
             );
             save_enable(env, |r| r.last_error = Some(m));
@@ -2718,9 +2719,9 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
             }
         })
     };
-    let staged = stage_tarball(env, req.tarball_path.as_deref(), "k2 hostchat upgrade --tarball", &note).and_then(|_| {
+    let staged = stage_tarball(env, req.tarball_path.as_deref(), concat!(cli_name!(), " hostchat upgrade --tarball"), &note).and_then(|_| {
         if voice {
-            super::voice::stage_media_bytes(env, req.media_tarball_path.as_deref(), "k2 hostchat upgrade --media-tarball", &note)
+            super::voice::stage_media_bytes(env, req.media_tarball_path.as_deref(), concat!(cli_name!(), " hostchat upgrade --media-tarball"), &note)
                 .map_err(|f| format!("sew-media: {}", f.hint))
         } else {
             Ok(())
@@ -2828,7 +2829,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
             Some(2) => {
                 let m = format!(
                     "upgrade to {to} failed AND Sew's rollback failed: {}. A person must act: read {SEW_UPGRADE_STATE} \
-                     and the sew journal (journalctl -u sew.service); K2 will not retry",
+                     and the sew journal (journalctl -u sew.service); {PRODUCT_NAME} will not retry",
                     sew_message(&v)
                 );
                 save_enable(env, |r| {
@@ -2880,9 +2881,9 @@ fn auto_rollback(env: &Env, from: &str, to: &str, why: &str) -> &'static str {
     // (Sew's own rollback inside `sew upgrade` is Sew's). A person decides.
     if !is_release(from) {
         let m = format!(
-            "upgrade to {to} failed K2's health check ({why}). K2 does not roll back onto {from} (not a release K2 \
-             pinned). A person must act: read {SEW_UPGRADE_STATE} and k2 hostchat doctor; a restore \
-             (k2 hostchat backups) is the way back"
+            "upgrade to {to} failed {PRODUCT_NAME}'s health check ({why}). {PRODUCT_NAME} does not roll back onto {from} (not a release {PRODUCT_NAME} \
+             pinned). A person must act: read {SEW_UPGRADE_STATE} and {CLI_NAME} hostchat doctor; a restore \
+             ({CLI_NAME} hostchat backups) is the way back"
         );
         save_enable(env, |r| {
             r.status = "error".into();
@@ -2899,7 +2900,7 @@ fn auto_rollback(env: &Env, from: &str, to: &str, why: &str) -> &'static str {
     let engine = rb.as_ref().ok().and_then(|v| sew_rollback_media(v).and_then(|m| media_note(m, from)));
     let healthy = rb.is_ok() && health_check(env, from).is_ok();
     if healthy {
-        let mut m = format!("upgrade to {to} failed K2's health check ({why}); rolled back to {from}");
+        let mut m = format!("upgrade to {to} failed {PRODUCT_NAME}'s health check ({why}); rolled back to {from}");
         if let Some((_, note)) = &engine {
             m = format!("{m}. {note}");
         }
@@ -2911,8 +2912,8 @@ fn auto_rollback(env: &Env, from: &str, to: &str, why: &str) -> &'static str {
         "rolled_back"
     } else {
         let m = format!(
-            "upgrade to {to} failed K2's health check ({why}) and the automatic rollback failed ({}). A person must act: \
-             read {SEW_UPGRADE_STATE}; k2 hostchat rollback (k2 hostchat rollback --accept-data-loss when Sew's schema \
+            "upgrade to {to} failed {PRODUCT_NAME}'s health check ({why}) and the automatic rollback failed ({}). A person must act: \
+             read {SEW_UPGRADE_STATE}; {CLI_NAME} hostchat rollback ({CLI_NAME} hostchat rollback --accept-data-loss when Sew's schema \
              changed), or a restore",
             rb.err().unwrap_or_else(|| "Sew still unhealthy after rollback".into())
         );
@@ -2978,8 +2979,8 @@ fn rollback_media_source(env: &Env, prev: Option<&str>, req: &RollbackRequest) -
         return Err(no(
             "rollback_target_unknown",
             409,
-            "voice is installed but K2 has no record of the previous Sew version, so it can't put the matching voice \
-             engine back; nothing was changed",
+            concat!("voice is installed but ", product_name!(), " has no record of the previous Sew version, so it can't put the matching voice \
+             engine back; nothing was changed"),
         ));
     };
     let (mv, art) = k2_root_proto::sew::media_artifact_of(prev, &env.ops.arch()).map_err(|e| no("media_unpinned", 409, e))?;
@@ -3005,7 +3006,7 @@ fn rollback_media_source(env: &Env, prev: Option<&str>, req: &RollbackRequest) -
     if !kept_now() {
         // 0.46.7: neither kept nor named: K2's cache, else Sew's release.
         let f = ReleaseFile::media(prev, mv, art);
-        let fetched = obtain_release(env, &f, "k2 hostchat rollback --media-tarball", &|_: Value| {}).and_then(|p| {
+        let fetched = obtain_release(env, &f, concat!(cli_name!(), " hostchat rollback --media-tarball"), &|_: Value| {}).and_then(|p| {
             let bytes = env.ops.read_file(&p, MAX_TARBALL)?;
             if !crate::update_routes::verify_sha256(&bytes, art.tarball_sha256) {
                 return Err(format!("{} is not sew-media {mv} for {} — NOT installing", p.display(), art.triple));
@@ -3073,8 +3074,8 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
             "rollback_refused",
             409,
             format!(
-                "Sew's previous binary ({p}) is not a release K2 pinned, so K2 never rolls back onto it. A restore is the way \
-                 back: list the backups with k2 hostchat backups, then k2 hostchat restore <bundle-id> --confirm"
+                "Sew's previous binary ({p}) is not a release {PRODUCT_NAME} pinned, so {PRODUCT_NAME} never rolls back onto it. A restore is the way \
+                 back: list the backups with {CLI_NAME} hostchat backups, then {CLI_NAME} hostchat restore <bundle-id> --confirm"
             ),
         ));
     }
@@ -3101,8 +3102,8 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
 /// 2026-10-28): the person-only emergency rollback.
 pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = concat!("Nothing changed. The upgrade changed how Sew stores chat, so a plain rollback \
      would lose everything written since the upgrade, and it refuses to go back past it. To go back anyway (that chat \
-     leaves the live chat; K2 backs it up first), the owner runs k2 hostchat rollback --accept-data-loss in a terminal \
-     outside K2: K2 then runs Sew's rollback with --accept-data-loss-since=<the backup taken just before the upgrade> \
+     leaves the live chat; ", product_name!(), " backs it up first), the owner runs ", cli_name!(), " hostchat rollback --accept-data-loss in a terminal \
+     outside ", product_name!(), ": ", product_name!(), " then runs Sew's rollback with --accept-data-loss-since=<the backup taken just before the upgrade> \
      (an upgrade to Sew 0.9.0 or later from 0.8.x, to 0.9.2 or 0.9.3 from 0.9.0, or to 0.10.0 or later from any 0.9.x, is one of \
      these). An agent asks the owner on a card: ", cli_name!(), " permission request \
      sew.rollback-data-loss --why \"<why>\"");
@@ -3133,7 +3134,7 @@ fn after_rollback(env: &Env, previous: Option<String>, v: &Value, media_to: Opti
     let Some(mv) = media_to else { return body };
     if !ok {
         // The old core is not healthy: its engine is not touched.
-        body["media"] = json!({"result": "skipped", "to": mv, "error": "the old core failed K2's health check"});
+        body["media"] = json!({"result": "skipped", "to": mv, "error": concat!("the old core failed ", product_name!(), "'s health check")});
         return body;
     }
     let media = match helper(env, &["media", "rollback"], None) {
@@ -3219,9 +3220,9 @@ fn media_note(m: &Value, want: &str) -> Option<(&'static str, String)> {
     let field = |k: &str| m[k].as_str().map(str::trim).filter(|s| !s.is_empty());
     let run = match field("command") {
         Some(c) => format!("Run this once on the box, as root: {c}"),
-        None => "Sew named no command to run: check the voice engine with k2 hostchat doctor".to_string(),
+        None => concat!("Sew named no command to run: check the voice engine with ", cli_name!(), " hostchat doctor").to_string(),
     };
-    const ONCE: &str = "The rollback itself is done: don't run k2 hostchat rollback again";
+    const ONCE: &str = concat!("The rollback itself is done: don't run ", cli_name!(), " hostchat rollback again");
     Some(match state {
         SEW_MEDIA_MANUAL => (
             MEDIA_NOT_ROLLED_BACK,
@@ -3240,8 +3241,8 @@ fn media_note(m: &Value, want: &str) -> Option<(&'static str, String)> {
         other => (
             MEDIA_STATE_UNKNOWN,
             format!(
-                "Sew is rolled back to {want}, but it answered media.state '{other}', which this K2 doesn't know: check the \
-                 voice engine with k2 hostchat doctor. {ONCE}"
+                "Sew is rolled back to {want}, but it answered media.state '{other}', which this {PRODUCT_NAME} doesn't know: check the \
+                 voice engine with {CLI_NAME} hostchat doctor. {ONCE}"
             ),
         ),
     })
@@ -3323,14 +3324,14 @@ pub fn rollback_plan(env: &Env) -> R<Value> {
         return Err(no(
             "no_previous_version",
             409,
-            "K2 has no record of a Sew version before this one, so there is nothing to roll back to (k2 hostchat backups lists the backups)",
+            concat!(product_name!(), " has no record of a Sew version before this one, so there is nothing to roll back to (", cli_name!(), " hostchat backups lists the backups)"),
         ));
     };
     if !is_release(&to) {
         return Err(no(
             "rollback_refused",
             409,
-            format!("Sew's previous binary ({to}) is not a release K2 pinned, so K2 never rolls back onto it (k2 hostchat backups)"),
+            format!("Sew's previous binary ({to}) is not a release {PRODUCT_NAME} pinned, so {PRODUCT_NAME} never rolls back onto it ({CLI_NAME} hostchat backups)"),
         ));
     }
     let point = env.ops.record_load(ROLLBACK_POINT_RECORD);
@@ -3362,7 +3363,7 @@ pub fn rollback_plan(env: &Env) -> R<Value> {
             "no_rollback_point",
             409,
             format!(
-                "K2 has no backup of Sew {to} from before the upgrade to roll back to (k2 hostchat backups); a restore of \
+                "{PRODUCT_NAME} has no backup of Sew {to} from before the upgrade to roll back to ({CLI_NAME} hostchat backups); a restore of \
                  another backup is the way back"
             ),
         )),
@@ -3406,7 +3407,7 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
         return Err(no(
             "helper_update_needed",
             409,
-            "this box's root helper can't do this rollback yet: k2 root-helper update, then try again (nothing was changed)",
+            concat!("this box's root helper can't do this rollback yet: ", cli_name!(), " root-helper update, then try again (nothing was changed)"),
         ));
     }
     let _l = begin(env)?;
@@ -3417,7 +3418,7 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
         no(
             "backup_first_failed",
             f.status,
-            format!("K2 backs up Sew {from} before it rolls back, and that backup failed: {}. Nothing was changed", f.hint),
+            format!("{PRODUCT_NAME} backs up Sew {from} before it rolls back, and that backup failed: {}. Nothing was changed", f.hint),
         )
     })?;
     let kept_id = kept.id.clone();
@@ -3464,7 +3465,7 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
             } else if healthy && clean {
                 let done = format!(
                     "Sew is back on {to} with its chat from {}. The chat from Sew {from} is kept in backup {kept_id}; to bring it back \
-                     later: k2 hostchat upgrade, then k2 hostchat restore {kept_id} --confirm.",
+                     later: {CLI_NAME} hostchat upgrade, then {CLI_NAME} hostchat restore {kept_id} --confirm.",
                     bundle_time_text(bundle)
                 );
                 match body["mediaNote"].as_str() {
@@ -3475,9 +3476,9 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
                 let why = match &fails {
                     Some(f) if !f.is_empty() => format!("sew doctor reports failures: {}", f.join(", ")),
                     None => "sew doctor didn't answer".to_string(),
-                    _ => body["error"].as_str().unwrap_or("K2's health check failed").to_string(),
+                    _ => body["error"].as_str().unwrap_or(concat!(product_name!(), "'s health check failed")).to_string(),
                 };
-                format!("Sew went back to {to}, but it isn't healthy: {why}. Backups {kept_id} and {bundle} are kept; k2 hostchat doctor")
+                format!("Sew went back to {to}, but it isn't healthy: {why}. Backups {kept_id} and {bundle} are kept; {CLI_NAME} hostchat doctor")
             });
             if !(healthy && clean) {
                 body["ok"] = json!(false);
@@ -3502,7 +3503,7 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
         Some(2) => {
             let m = format!(
                 "ROLLBACK FAILED: Sew could neither roll back to {to} nor put Sew {from} back (exit 2): {}. A person must act \
-                 now: read {SEW_UPGRADE_STATE} (upgradeState here) and k2 hostchat doctor. Both backups are kept: {kept_id} \
+                 now: read {SEW_UPGRADE_STATE} (upgradeState here) and {CLI_NAME} hostchat doctor. Both backups are kept: {kept_id} \
                  (Sew {from}, taken just now) and {bundle} (Sew {to}, from before the upgrade)",
                 sew_message(&v)
             );
@@ -3628,7 +3629,7 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         return Err(unsupported());
     }
     if !pin::bundle_id_ok(bundle_id) {
-        return Err(no("bad_request", 400, "name a backup id from k2 hostchat backups"));
+        return Err(no("bad_request", 400, concat!("name a backup id from ", cli_name!(), " hostchat backups")));
     }
     let row = need_row(false)?;
     // A stopped or failed Sew is when a restore is needed most (S29 VM
@@ -3645,7 +3646,7 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         Ok(listed) => {
             let exists = listed["backups"].as_array().is_some_and(|a| a.iter().any(|b| b["id"] == bundle_id));
             if !exists {
-                return Err(no("bundle_not_found", 404, format!("no backup '{bundle_id}' (k2 hostchat backups)")));
+                return Err(no("bundle_not_found", 404, format!("no backup '{bundle_id}' ({CLI_NAME} hostchat backups)")));
             }
         }
         Err(f) if f.code == "mgmt_unreachable" => {}
@@ -3697,7 +3698,7 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
             let safety = v.pointer("/sew/safety_bundle").and_then(Value::as_str).map(|s| format!(" {s}")).unwrap_or_default();
             format!(
                 "(the restore stopped partway: Sew's data may be changed or empty; restore Sew's pre-restore safety \
-                 bundle{safety} with k2 hostchat restore <bundle-id> --confirm; k2 hostchat backups lists it)"
+                 bundle{safety} with {CLI_NAME} hostchat restore <bundle-id> --confirm; {CLI_NAME} hostchat backups lists it)"
             )
         };
         Some(format!("sew restore: exit {exit}: {} {tail}", sew_message(&v)))
@@ -3737,7 +3738,7 @@ pub fn rotate_start(env: &Env) -> R<Value> {
         return Err(no("not_running", 409, "rotation needs a running server"));
     }
     if row.master_prev_ref.is_some() {
-        return Err(no("rotation_in_progress", 409, "a previous master key is still loaded: a person finishes it (k2 hostchat rotate-master drop-prev)"));
+        return Err(no("rotation_in_progress", 409, concat!("a previous master key is still loaded: a person finishes it (", cli_name!(), " hostchat rotate-master drop-prev)")));
     }
     helper_check(env)?;
     let _l = begin(env)?;
@@ -3755,7 +3756,7 @@ pub fn rotate_start(env: &Env) -> R<Value> {
     let want_kek = kek_id(&key).map_err(|e| no("rotate_failed", 500, e))?;
     if let Some(k) = v.pointer("/sew/kek_id").and_then(Value::as_str) {
         if k != want_kek {
-            return Err(no("rotate_failed", 500, "Sew's new KEK id does not match the key K2 sent"));
+            return Err(no("rotate_failed", 500, concat!("Sew's new KEK id does not match the key ", product_name!(), " sent")));
         }
     }
     let ver = row.installed_version.clone().unwrap_or_else(|| pinned().version.into());
@@ -3779,14 +3780,14 @@ pub fn rotate_start(env: &Env) -> R<Value> {
         "phase": "rewrapping",
         "jobId": job.get("job_id"),
         "kekId": want_kek,
-        "next": "when the rewrap job is done, a person drops the old key: k2 hostchat rotate-master drop-prev. \
-                 The vault's sew-launch-key now holds the new key (the old one no longer opens new data)",
+        "next": concat!("when the rewrap job is done, a person drops the old key: ", cli_name!(), " hostchat rotate-master drop-prev. \
+                 The vault's sew-launch-key now holds the new key (the old one no longer opens new data)"),
     });
     if let Err(e) = put_recovery_copy(env, &key) {
         k2_core::log_debug!("[sew] rotate: recovery key copy: {e}");
         body["warning"] = json!(format!(
-            "the vault's sew-launch-key still holds the old key ({e}); K2 copies the new one on its next start, \
-             or when a person reveals it (k2 hostchat recovery-key)"
+            "the vault's sew-launch-key still holds the old key ({e}); {PRODUCT_NAME} copies the new one on its next start, \
+             or when a person reveals it ({CLI_NAME} hostchat recovery-key)"
         ));
     }
     Ok(body)
@@ -3821,9 +3822,9 @@ pub fn rotate_drop_prev(env: &Env) -> R<Value> {
     Ok(json!({"ok": true, "dropped": true}))
 }
 
-pub const RECOVERY_WARNING: &str = "This key (Sew's launch key) plus a backup bundle plus the keyring mirror can read every \
-     message. K2 keeps it in the vault (sew-launch-key, the owner only), so the vault's own recovery key and backups cover \
-     it; keep any copy you make as safe.";
+pub const RECOVERY_WARNING: &str = concat!("This key (Sew's launch key) plus a backup bundle plus the keyring mirror can read every \
+     message. ", product_name!(), " keeps it in the vault (sew-launch-key, the owner only), so the vault's own recovery key and backups cover \
+     it; keep any copy you make as safe.");
 
 // ── the recovery key in the vault (Rosson 2026-10-30) ────────────────────
 
@@ -3918,7 +3919,7 @@ pub fn doctor(env: &Env) -> R<Value> {
         Ok(s) if s.is_empty() => {}
         Ok(s) => {
             out["staleSpaces"] = json!(s.iter().map(|x| format!("{} (old id {})", x.slug, x.space_id)).collect::<Vec<_>>());
-            out["staleSpacesFix"] = json!("agent Spaces from an earlier Sew install: k2 voice repair lists who had them and how to make them again");
+            out["staleSpacesFix"] = json!(concat!("agent Spaces from an earlier Sew install: ", cli_name!(), " voice repair lists who had them and how to make them again"));
         }
         Err(e) => out["staleSpaces"] = json!({"error": e}),
     }

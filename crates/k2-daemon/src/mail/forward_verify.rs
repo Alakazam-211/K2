@@ -57,6 +57,8 @@ use k2_core::mail_forward as store;
 use serde_json::json;
 
 use crate::email_notify::{self, compose, fail, verify, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 const P: &str = "[mail/forward-verify]";
 
@@ -108,7 +110,7 @@ impl Told {
 /// now is a failure that may pass, so it isn't refused here.
 pub fn can_tell(account_id: Option<&str>, dest: &str) -> R<()> {
     verify::link(verify::STOP_PATH, "x").map_err(|f| {
-        fail(409, "no_front_door", format!("this server has no front door to build a stop link on, and K2 won't forward to an outside address that has no way to stop it ({})", f.hint))
+        fail(409, "no_front_door", format!("this server has no front door to build a stop link on, and {PRODUCT_NAME} won't forward to an outside address that has no way to stop it ({})", f.hint))
     })?;
     let system = email_notify::send::sender_for(None).ok().flatten();
     if system.is_none() && account_id.is_none_or(str::is_empty) {
@@ -123,7 +125,7 @@ pub fn can_tell(account_id: Option<&str>, dest: &str) -> R<()> {
         return Err(fail(
             409,
             "suppressed",
-            format!("{dest} bounced or complained before, so this server won't email it, and K2 won't forward to an address it can't send a stop link. Nothing changed"),
+            format!("{dest} bounced or complained before, so this server won't email it, and {PRODUCT_NAME} won't forward to an address it can't send a stop link. Nothing changed"),
         ));
     }
     Ok(())
@@ -139,7 +141,7 @@ pub fn tell_destination(mailbox: &str, account_id: Option<&str>, dest: &str, ask
         let conn = db.lock();
         vstore::open_for_notice(&conn, mailbox, dest, asker, restart, now).map_err(|e| {
             if e == vstore::STOPPED {
-                email_notify::Fail { status: 409, code: "destination_stopped", hint: format!("{dest} pressed Stop in K2's email just now, so K2 won't forward to it"), retry_after_ms: None }
+                email_notify::Fail { status: 409, code: "destination_stopped", hint: format!("{dest} pressed Stop in {PRODUCT_NAME}'s email just now, so {PRODUCT_NAME} won't forward to it"), retry_after_ms: None }
             } else {
                 email_notify::db_fail(e)
             }
@@ -250,7 +252,7 @@ fn email_owner(title: &str, body: &str) -> R<()> {
     };
     let box_label = crate::app_user_invites::box_label();
     let text = format!(
-        "{body}\n\n--\nK2 on {box_label}. You get these because this is your notice address.\nStop K2's emails to this address: {}\n",
+        "{body}\n\n--\nK2 on {box_label}. You get these because this is your notice address.\nStop {PRODUCT_NAME}'s emails to this address: {}\n",
         verify::link(verify::STOP_PATH, &stop)?
     );
     let subject: String = title.chars().filter(|c| !c.is_control()).take(180).collect();
@@ -326,11 +328,11 @@ pub fn tell_owner_changed(mailbox_id: &str, mailbox: &str, actor: &str, c: &Outs
     );
     let mut lines = vec![format!("Where {mailbox} forwards its mail was changed by {}.", actor_words(actor))];
     if !c.added.is_empty() {
-        lines.push(format!("Now also forwarding to: {}. K2 doesn't wait for an address to agree.", c.added.join(", ")));
+        lines.push(format!("Now also forwarding to: {}. {PRODUCT_NAME} doesn't wait for an address to agree.", c.added.join(", ")));
     }
     if !c.queued.is_empty() {
         lines.push(format!(
-            "Added, and on within minutes: {}. K2 is pacing these emails, so it emails each address first and then turns it on.",
+            "Added, and on within minutes: {}. {PRODUCT_NAME} is pacing these emails, so it emails each address first and then turns it on.",
             c.queued.join(", ")
         ));
     }
@@ -339,11 +341,11 @@ pub fn tell_owner_changed(mailbox_id: &str, mailbox: &str, actor: &str, c: &Outs
     }
     let told: Vec<&str> = c.added.iter().chain(&c.restarted).filter(|d| !c.not_told.contains(d)).map(String::as_str).collect();
     if !told.is_empty() {
-        lines.push(format!("K2 emailed {} a link to stop it.", told.join(", ")));
+        lines.push(format!("{PRODUCT_NAME} emailed {} a link to stop it.", told.join(", ")));
     }
     if !c.not_told.is_empty() {
         lines.push(format!(
-            "K2 couldn't email {}, so they have no link to stop it yet. The forward is on while K2 keeps trying; after a day without that email it pauses until the email goes. forward list shows it.",
+            "{PRODUCT_NAME} couldn't email {}, so they have no link to stop it yet. The forward is on while {PRODUCT_NAME} keeps trying; after a day without that email it pauses until the email goes. forward list shows it.",
             c.not_told.join(", ")
         ));
     }
@@ -364,7 +366,7 @@ pub fn tell_owner_changed(mailbox_id: &str, mailbox: &str, actor: &str, c: &Outs
             "Forwarded mail leaves this server without agent-send approval or BCC. Spam, bounces and mail that fails DMARC stay in the mailbox.".to_string(),
         );
         let one = c.added.first().or(c.restarted.first()).or(c.queued.first()).map_or("<address>", String::as_str);
-        lines.push(format!("If you didn't expect this, stop it: k2 hostmail forward rm {mailbox} --to {one}"));
+        lines.push(format!("If you didn't expect this, stop it: {CLI_NAME} hostmail forward rm {mailbox} --to {one}"));
     }
     let mut what: Vec<String> = Vec::new();
     for (word, list) in [
@@ -452,7 +454,7 @@ pub fn flush_owner_summary(now: i64) {
     let adds: Vec<&str> = due.iter().filter(|(k, _)| k == store::OWNER_ADD).map(|(_, l)| l.as_str()).collect();
     let (stops, changes): (Vec<_>, Vec<_>) = due.iter().filter(|(k, _)| k != store::OWNER_ADD).partition(|(k, _)| k == store::OWNER_STOP);
     let mut lines = vec![format!(
-        "{} more change{} to outside forwarding on this server. K2 told you about the first {} in the hour one by one and rolled up the rest.",
+        "{} more change{} to outside forwarding on this server. {PRODUCT_NAME} told you about the first {} in the hour one by one and rolled up the rest.",
         due.len(),
         if due.len() == 1 { "" } else { "s" },
         store::OWNER_NOTES_PER_HOUR
@@ -463,7 +465,7 @@ pub fn flush_owner_summary(now: i64) {
     }
     if !stops.is_empty() {
         lines.push(format!(
-            "Stopped by the address itself ({}). K2 won't forward to these again unless the owner or an Admin chooses to:\n{}",
+            "Stopped by the address itself ({}). {PRODUCT_NAME} won't forward to these again unless the owner or an Admin chooses to:\n{}",
             stops.len(),
             stops.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("\n")
         ));
@@ -479,7 +481,7 @@ pub fn flush_owner_summary(now: i64) {
         ));
     }
     lines.push(
-        "See every forward: k2 hostmail forward list. See one mailbox's history: k2 hostmail forward show <mailbox>. Each change is also in the access audit.".to_string(),
+        concat!("See every forward: ", cli_name!(), " hostmail forward list. See one mailbox's history: ", cli_name!(), " hostmail forward show <mailbox>. Each change is also in the access audit.").to_string(),
     );
     let title = format!("{} more outside forwarding change{}", due.len(), if due.len() == 1 { "" } else { "s" });
     let body = lines.join("\n\n");
@@ -530,7 +532,7 @@ pub fn note_cant_arrive(host: Option<&str>, now: i64) -> usize {
     tell_owner(
         "Forwards whose mail can't arrive",
         &format!(
-            "This server hosts these destinations' domains but has no such mailboxes, so their mail bounces here and never reaches another provider, whatever the domain's MX says: {}.\n\nK2 hasn't changed them. Remove one (k2 hostmail forward rm <mailbox> --to <address>) or create the mailbox. See them: k2 hostmail forward list.",
+            "This server hosts these destinations' domains but has no such mailboxes, so their mail bounces here and never reaches another provider, whatever the domain's MX says: {}.\n\nK2 hasn't changed them. Remove one ({CLI_NAME} hostmail forward rm <mailbox> --to <address>) or create the mailbox. See them: {CLI_NAME} hostmail forward list.",
             pairs(&rows)
         ),
         &[],
@@ -569,8 +571,8 @@ pub fn on_stopped(v: &vstore::Verified) -> bool {
         &format!("{} pressed Stop for {}", v.address, v.subject_ref),
         &format!("{} stopped forwarding from {}", v.address, v.subject_ref),
         &format!(
-            "{addr} pressed Stop on the link in K2's email, so {mb} no longer forwards to it. New mail stays in {mb}; nothing is lost, and its other destinations are untouched.\n\n\
-             K2 won't forward there again unless the owner or an Admin chooses to, and they should ask {addr} first: k2 hostmail forward add {mb} --to {addr} --restart-stopped",
+            "{addr} pressed Stop on the link in {PRODUCT_NAME}'s email, so {mb} no longer forwards to it. New mail stays in {mb}; nothing is lost, and its other destinations are untouched.\n\n\
+             {PRODUCT_NAME} won't forward there again unless the owner or an Admin chooses to, and they should ask {addr} first: {CLI_NAME} hostmail forward add {mb} --to {addr} --restart-stopped",
             addr = v.address,
             mb = v.subject_ref
         ),
@@ -643,7 +645,7 @@ fn tell_owner_sorted(due: &[store::Forward], stale: &[store::Forward]) {
     if due.is_empty() && stale.is_empty() {
         return;
     }
-    let mut lines = vec!["K2 no longer asks an outside address to confirm before it forwards mail there: it tells the address, with a link to stop.".to_string()];
+    let mut lines = vec![concat!(product_name!(), " no longer asks an outside address to confirm before it forwards mail there: it tells the address, with a link to stop.").to_string()];
     if !due.is_empty() {
         lines.push(format!(
             "Turning on over the next few minutes, because they were set in the last {} days and were still waiting: {}. Each address gets an email with a stop link first.",
@@ -653,7 +655,7 @@ fn tell_owner_sorted(due: &[store::Forward], stale: &[store::Forward]) {
     }
     if !stale.is_empty() {
         lines.push(format!(
-            "Not turned on because they're old (set more than {} days ago): {}. They send nothing. To turn one on, set it again: k2 hostmail forward add <mailbox> --to <address>.",
+            "Not turned on because they're old (set more than {} days ago): {}. They send nothing. To turn one on, set it again: {CLI_NAME} hostmail forward add <mailbox> --to <address>.",
             store::LEGACY_ON_WINDOW_SECS / 86_400,
             pairs(stale)
         ));
@@ -711,7 +713,7 @@ fn turn_on_due(f: &store::Forward, now: i64) -> bool {
             f.notice_failed_at.is_some_and(|t| now - t >= store::NOT_TOLD_PAUSE_SECS) && !store::has_event(&conn, &f.id, store::E_NOT_TOLD).unwrap_or(true)
         };
         if first_long_fail {
-            note_not_told(f, "it isn't on, and sends nothing until K2 can", now);
+            note_not_told(f, concat!("it isn't on, and sends nothing until ", product_name!(), " can"), now);
         }
         return false;
     }
@@ -779,7 +781,7 @@ pub(crate) fn retry_notice(f: &store::Forward, now: i64) -> bool {
         if back_on {
             tell_owner(
                 &format!("Forwarding from {} to {} is back on", f.address, f.dest),
-                &format!("K2 could finally email {} its link to stop this, so forwarding from {} went back on.", f.dest, f.address),
+                &format!("{PRODUCT_NAME} could finally email {} its link to stop this, so forwarding from {} went back on.", f.dest, f.address),
                 &[],
             );
         }
@@ -810,7 +812,7 @@ pub(crate) fn retry_notice(f: &store::Forward, now: i64) -> bool {
             k2_core::log_debug!("{P} WARN forward {} not paused: {e}", f.id);
         }
         if paused {
-            note_not_told(f, "K2 paused it, and new mail stays in the mailbox", now);
+            note_not_told(f, concat!(product_name!(), " paused it, and new mail stays in the mailbox"), now);
         }
     }
     false
@@ -829,7 +831,7 @@ fn note_not_told(f: &store::Forward, what: &str, now: i64) {
     tell_owner(
         &format!("{} can't be told about forwarding from {}", f.dest, f.address),
         &format!(
-            "K2 has been trying for a day to email {} its link to stop forwarding from {}, and can't, so {what}. K2 keeps trying and goes on by itself when the email goes. See why: k2 hostmail forward show {}. Or remove it: k2 hostmail forward rm {} --to {}.",
+            "{PRODUCT_NAME} has been trying for a day to email {} its link to stop forwarding from {}, and can't, so {what}. {PRODUCT_NAME} keeps trying and goes on by itself when the email goes. See why: {CLI_NAME} hostmail forward show {}. Or remove it: {CLI_NAME} hostmail forward rm {} --to {}.",
             f.dest, f.address, f.address, f.address, f.dest
         ),
         &[],
@@ -849,9 +851,9 @@ pub fn notice_bounced(f: &store::Forward, now: i64) {
         }
     }
     tell_owner(
-        &format!("K2's email to {} bounced", f.dest),
+        &format!("{PRODUCT_NAME}'s email to {} bounced", f.dest),
         &format!(
-            "K2 told you it had emailed {} its link to stop forwarding from {}. That email bounced, so {} doesn't have the link. K2 keeps trying; if it can't within a day, the forward pauses. See it: k2 hostmail forward show {}.",
+            "{PRODUCT_NAME} told you it had emailed {} its link to stop forwarding from {}. That email bounced, so {} doesn't have the link. {PRODUCT_NAME} keeps trying; if it can't within a day, the forward pauses. See it: {CLI_NAME} hostmail forward show {}.",
             f.dest, f.address, f.dest, f.address
         ),
         &[],

@@ -68,6 +68,8 @@ use k2_core::zen::{phone as garden_phone, ZenError, ZenFiles};
 use crate::cli_response::CliResponse;
 use crate::garden_data::budget::{BudgetKey, Spend};
 use crate::garden_data::call::{CallBody, Device};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 pub const GARDENS: &str = "/cli/zen/remote/gardens";
 pub const PAGE: &str = "/cli/zen/remote/page";
@@ -356,7 +358,7 @@ pub fn envelope(r: CliResponse) -> CliResponse {
         }
         _ => {
             e.insert("code".into(), json!("failed"));
-            e.insert("hint".into(), json!("K2 couldn't answer this"));
+            e.insert("hint".into(), json!(concat!(product_name!(), " couldn't answer this")));
         }
     }
     if !e.contains_key("hint") || e["hint"].is_null() {
@@ -665,7 +667,7 @@ fn lib_row(n: usize, key: &J) -> Result<J, String> {
         })),
         r @ LibRef::Named { .. } => {
             let m = stdlib::zen_lib_manifest();
-            let e = stdlib::find(m, &r).ok_or_else(|| format!("no library {key} in K2"))?;
+            let e = stdlib::find(m, &r).ok_or_else(|| format!("no library {key} in {PRODUCT_NAME}"))?;
             Ok(json!({
                 "slot": slot,
                 "key": e.key(),
@@ -826,7 +828,7 @@ fn bundled_file(e: &stdlib::ZenLibEntry, name: Option<&str>) -> CliResponse {
     };
     let key = e.key();
     let Some(bytes) = crate::zen_lib_bundled::file(&key, name) else {
-        return refuse("404 Not Found", "not_found", format!("this K2 doesn't carry {key}/{name}; update K2"));
+        return refuse("404 Not Found", "not_found", format!("this {PRODUCT_NAME} doesn't carry {key}/{name}; update {PRODUCT_NAME}"));
     };
     let id = format!("{key}/{name}");
     let seen = CHECKED.lock().unwrap_or_else(|p| p.into_inner()).contains(&id);

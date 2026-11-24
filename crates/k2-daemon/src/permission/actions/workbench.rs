@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 use super::held::{error_of, route_floor, text_param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::sidecar_worktree::{LAND_NEEDS_PERSON, LAND_ROUTE, RETIRE_NEEDS_PERSON, RETIRE_ROUTE};
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 
 pub(crate) const LAND_ACTION: &str = "git.land";
 pub(crate) const REVIEW_APPROVE_ACTION: &str = "git.review-approve";
@@ -56,7 +56,7 @@ pub(crate) static LAND: ActionSpec = ActionSpec {
     words: Words {
         setting: "Land {ws}/{sidecar}",
         what_changes: "Land {ws}/{sidecar}'s commits (up to {tip}) on {ws}'s main branch",
-        consequences: concat!("K2 cherry-picks the worktree's commits that aren't on the main branch yet onto it, in {ws}'s main checkout, then retires the worktree (to the Trash). It refuses if the main checkout has uncommitted changes, and stops with nothing changed on a conflict. Read them first: ", cli_name!(), " sidecar review {ws}/{sidecar}."),
+        consequences: concat!(product_name!(), " cherry-picks the worktree's commits that aren't on the main branch yet onto it, in {ws}'s main checkout, then retires the worktree (to the Trash). It refuses if the main checkout has uncommitted changes, and stops with nothing changed on a conflict. Read them first: ", cli_name!(), " sidecar review {ws}/{sidecar}."),
         scope: "{ws}/{sidecar} at {tip}",
         duration: "once",
         retry: "",
@@ -89,7 +89,7 @@ pub(crate) static RETIRE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Retire {ws}/{sidecar}",
         what_changes: "Retire {ws}/{sidecar} (discard its unlanded work: {discard})",
-        consequences: "The sidecar stops and its worktree goes to the Trash; its Thread stays. With discard no, K2 refuses while it has commits not on the main branch or uncommitted files. With discard yes, those are thrown away and its branch is deleted.",
+        consequences: concat!("The sidecar stops and its worktree goes to the Trash; its Thread stays. With discard no, ", product_name!(), " refuses while it has commits not on the main branch or uncommitted files. With discard yes, those are thrown away and its branch is deleted."),
         scope: "{ws}/{sidecar}",
         duration: "once",
         retry: "",

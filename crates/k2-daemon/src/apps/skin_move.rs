@@ -24,6 +24,7 @@ use k2_core::skin::handover::app_move::{self, AppMoveReport, ExpectError};
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, agent_ws, no, Who, R};
+use k2_core::brand::CLI_NAME;
 
 pub const GUESTS_CHANGED: &str = "site_guests_changed";
 pub const COPY_FAILED: &str = "site_copy_failed";
@@ -72,7 +73,7 @@ pub(crate) fn hold_without_users_switch(who: &Who, app: &AppRow, label: &str, si
     if dry.added.is_empty() {
         return Ok(None);
     }
-    let summary = format!("k2 app label take {} {label} (copies {} guest(s) of the --skin site onto the App)", app.app_id, dry.added.len());
+    let summary = format!("{CLI_NAME} app label take {} {label} (copies {} guest(s) of the --skin site onto the App)", app.app_id, dry.added.len());
     let mut lines = vec![summary.clone(), format!("guests: {}", dry.added.join(", "))];
     if !dry.roles_copied.is_empty() {
         lines.push(format!(
@@ -98,7 +99,7 @@ pub(crate) fn hold_without_users_switch(who: &Who, app: &AppRow, label: &str, si
     let mut out = super::approvals::held_answer(&r);
     out["hint"] = json!(format!(
         "held for the owner: moving {label} copies {} guest(s) onto {}, and \"Let this agent manage its Apps' users\" is off. \
-         The owner approves it in person (k2 app approve {} outside {}, or Settings → App Approvals); then the label moves.",
+         The owner approves it in person ({CLI_NAME} app approve {} outside {}, or Settings → App Approvals); then the label moves.",
         dry.added.len(),
         app.app_id,
         r.id,
@@ -142,7 +143,7 @@ pub(crate) fn take_answer(app: &AppRow, label: &str, front: u16, site: &ps::Publ
     let mut left: Vec<String> = Vec::new();
     if rooms_grant {
         left.push(format!(
-            "the site's guests-rooms grant (the owner gives the App its own: k2 app grant {} --kind {})",
+            "the site's guests-rooms grant (the owner gives the App its own: {CLI_NAME} app grant {} --kind {})",
             app.app_id,
             k2_core::skin::guest_rooms::GRANT_KIND
         ));
@@ -165,8 +166,8 @@ pub(crate) fn take_answer(app: &AppRow, label: &str, front: u16, site: &ps::Publ
         "note": format!(
             "https://{label}.<your box>{zone} now serves {app}, and the site's {n} guest(s) can sign in to it with the same username and \
              password (each signs in once more: a site's sign-ins don't carry over to an App). The --skin site keeps running without a \
-             public label; stop it when you're sure (k2 publish stop {label}), or move the label back: k2 app label return {app} {label}. \
-             The App sees the label in K2_APP_ORIGINS from its next start (k2 app restart {app}).",
+             public label; stop it when you're sure ({CLI_NAME} publish stop {label}), or move the label back: {CLI_NAME} app label return {app} {label}. \
+             The App sees the label in K2_APP_ORIGINS from its next start ({CLI_NAME} app restart {app}).",
             app = app.app_id,
             n = c.added.len() + c.kept_existing.len(),
             zone = k2_core::hosts::ZONE_SUFFIX,

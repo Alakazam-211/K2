@@ -47,6 +47,8 @@ use crate::mail::addresses::{self, AddrError};
 use crate::mail::jmap::{ReplyContext, StalwartClient};
 use crate::mail::messages;
 use crate::mail::secrets::SecretStore;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 // ── §8.4 always-on limits ───────────────────────────────────────────────
 
@@ -131,8 +133,8 @@ pub enum SendError {
 /// Settings control. Every `gated` hint names them, never a hosted-only
 /// page.
 pub const AGENT_SEND_CONTROLS: &str =
-    "`k2 mail sending <workspace> on` (the owner runs it from a terminal outside a K2 \
-     agent session) or Settings → Workspaces / Agents → <workspace> → Permissions → Email sending";
+    concat!("`", cli_name!(), " mail sending <workspace> on` (the owner runs it from a terminal outside a ", product_name!(), " \
+     agent session) or Settings → Workspaces / Agents → <workspace> → Permissions → Email sending");
 
 /// The `gated` hint for a workspace whose agent-send mode is `off`.
 pub fn agent_send_off_hint() -> String {
@@ -161,7 +163,7 @@ pub fn effective_gate(mode: Result<String, String>) -> Result<Gate, SendError> {
         Ok(m) if m == "on" => Ok(Gate::On),
         Ok(other) => Err(SendError::Engine(format!(
             "unrecognized send-gating mode '{other}' — refusing to send (fail-closed); \
-             your human can reset it with `k2 mail sending <workspace> off|approval|on` or \
+             your human can reset it with `{CLI_NAME} mail sending <workspace> off|approval|on` or \
              Settings → Workspaces / Agents → <workspace> → Permissions → Email sending"
         ))),
         Err(e) => Err(SendError::Engine(format!(
@@ -497,7 +499,7 @@ pub fn policy_bcc_for_path(project_path: &str) -> Result<Vec<String>, SendError>
     normalize_recipients(&raw).map_err(|e| {
         SendError::Engine(format!(
             "this workspace's always-BCC policy holds an invalid address — refusing to send \
-             (fail-closed); the owner can fix it with 'k2 hostmail config --workspace <ws> \
+             (fail-closed); the owner can fix it with '{CLI_NAME} hostmail config --workspace <ws> \
              --always-bcc …': {e:?}"
         ))
     })
@@ -1289,17 +1291,17 @@ impl OutboundStore for DbOutboundStore {
         if file_bytes > 0 {
             if self.held_bytes().saturating_add(file_bytes) > self.max_held_bytes {
                 return Err(
-                    "this server is already holding as many files as it can for messages waiting \
+                    concat!("this server is already holding as many files as it can for messages waiting \
                      for approval or a send time. Nothing was queued. Send fewer or smaller files, \
-                     or ask your human to clear the queue (k2 hostmail approvals)"
+                     or ask your human to clear the queue (", cli_name!(), " hostmail approvals)")
                         .to_string(),
                 );
             }
             if self.held_bytes_for(project_id).saturating_add(file_bytes) > self.max_held_per_workspace {
                 return Err(
-                    "this workspace already has as many files waiting for approval or a send time \
+                    concat!("this workspace already has as many files waiting for approval or a send time \
                      as it may hold. Nothing was queued. Send fewer or smaller files, or ask your \
-                     human to decide what's waiting (k2 hostmail approvals)"
+                     human to decide what's waiting (", cli_name!(), " hostmail approvals)")
                         .to_string(),
                 );
             }
@@ -2383,7 +2385,7 @@ pub fn check_reply_guardrails(
             return Err(SendError::Guardrail(format!(
                 "the original message {why}, so its sender may be forged — replying is blocked \
                  unless send gating is 'approval' (your human reviews it). Ask your human via \
-                 'k2 tickets ask' with an HTML brief (k2 study ticket-brief)"
+                 '{CLI_NAME} tickets ask' with an HTML brief ({CLI_NAME} study ticket-brief)"
             )));
         }
     }

@@ -9,6 +9,7 @@ use k2_core::compute::{self as compute, store};
 
 use crate::compute_place::Want;
 use crate::compute_routes::{b, no, pinned_now, s, Who, Ws, R};
+use k2_core::brand::PRODUCT_NAME;
 
 const BAD_REQUEST: &str = compute::codes::BAD_REQUEST;
 
@@ -60,7 +61,7 @@ pub(crate) fn check_named(ws: &Ws, v: &serde_json::Value, cache: Option<&str>, n
             BAD_REQUEST,
             400,
             format!(
-                "--cache-required: cache {name} is on {}, not {}. Leave the node off (K2 sends it to {}), or drop --cache-required to start an empty cache on {}",
+                "--cache-required: cache {name} is on {}, not {}. Leave the node off ({PRODUCT_NAME} sends it to {}), or drop --cache-required to start an empty cache on {}",
                 h.name, named.name, h.name, named.name
             ),
         )),

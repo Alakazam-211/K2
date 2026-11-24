@@ -11,6 +11,7 @@ use k2_core::notify_prefs::{People, OWNER};
 
 use crate::cli_response::CliResponse;
 use crate::permission::answer::err;
+use k2_core::brand::CLI_NAME;
 
 /// A person who can be asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +60,7 @@ pub(crate) fn resolve(to: Option<&str>) -> Result<Person, CliResponse> {
         })?,
     };
     let Some((id, role, disabled)) = facts(&login).map_err(|e| err(500, "approval_store", e))? else {
-        return Err(err(404, "approval_no_person", format!("no login named {login} on this server (k2 people lists them)")));
+        return Err(err(404, "approval_no_person", format!("no login named {login} on this server ({CLI_NAME} people lists them)")));
     };
     if disabled {
         return Err(err(409, "approval_no_person", format!("{login}'s login is turned off")));

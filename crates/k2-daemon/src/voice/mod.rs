@@ -44,6 +44,8 @@ use k2_core::tool_hook::features::VoiceFeatures;
 use k2_core::voice_rooms::Hosting as Tier;
 
 use lane::{LaneKind, LaneState};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The clock the doors' rate limits (`kit_door`, `sew_lane`) read for one
 /// credential's request. Real time; a test can hold one credential's
@@ -123,17 +125,17 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
         return h("not_linux", "Voice rooms are hosted on Linux servers. Sign in to one from the server list to join its rooms.", None);
     }
     if !f.preview {
-        return h("preview_off", "Voice rooms are a preview: the owner turns them on (k2 settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1).", None);
+        return h("preview_off", concat!("Voice rooms are a preview: the owner turns them on (", cli_name!(), " settings set voiceRoomsPreview true, or K2_VOICE_ROOMS=1)."), None);
     }
     if !f.chat_on {
         if f.sew_standalone {
             return h(
                 "sew_off",
-                "This server's chat and voice use their own sign-ins (standalone), so it can't host K2 voice rooms.",
-                Some("identity: standalone (k2 hostchat status)".into()),
+                concat!("This server's chat and voice use their own sign-ins (standalone), so it can't host ", product_name!(), " voice rooms."),
+                Some(concat!("identity: standalone (", cli_name!(), " hostchat status)").into()),
             );
         }
-        return h("sew_off", "Voice rooms are off on this server: chat and voice aren't on (k2 hostchat status).", None);
+        return h("sew_off", concat!("Voice rooms are off on this server: chat and voice aren't on (", cli_name!(), " hostchat status)."), None);
     }
     if !f.flags.server_governed_space {
         return h("voice_off", "Voice isn't set up: this server's Sew is too old for voice rooms.", Some(SEW_TOO_OLD.into()));
@@ -141,10 +143,10 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
     match &f.space {
         Some(s) if s.state == SPACE_BLOCKED => {
             let why = s.why.clone().unwrap_or_else(|| "blocked".into());
-            return h("voice_off", "Voice isn't set up: the K2 Admin Space can't be made.", Some(format!("K2 Admin Space: {why}")));
+            return h("voice_off", concat!("Voice isn't set up: the ", product_name!(), " Admin Space can't be made."), Some(format!("{PRODUCT_NAME} Admin Space: {why}")));
         }
         Some(s) if s.state == SPACE_READY => {}
-        _ => return h("starting", "Turning on voice rooms…", Some("the K2 Admin Space is being made".into())),
+        _ => return h("starting", "Turning on voice rooms…", Some(concat!("the ", product_name!(), " Admin Space is being made").into())),
     }
     match f.tier {
         Tier::NotPro | Tier::Unknown => return h("not_pro", "Voice rooms need the Pro plan.", f.not_pro_reason.clone()),
@@ -157,8 +159,8 @@ pub fn hosting_of(f: &HostingFacts) -> Hosting {
         return h("count_zero", "This server hosts no rooms.", None);
     }
     match f.lane.state {
-        LaneKind::Down => h("voice_lane_down", "Voice is reconnecting to K2's network…", f.lane.reason.clone()),
-        LaneKind::Reconnecting => h("voice_lane_reconnecting", "Voice is reconnecting to K2's network…", f.lane.reason.clone()),
+        LaneKind::Down => h("voice_lane_down", concat!("Voice is reconnecting to ", product_name!(), "'s network…"), f.lane.reason.clone()),
+        LaneKind::Reconnecting => h("voice_lane_reconnecting", concat!("Voice is reconnecting to ", product_name!(), "'s network…"), f.lane.reason.clone()),
         LaneKind::Up | LaneKind::NotApplicable => h(HOSTING_OK, "Voice rooms are on.", None),
     }
 }

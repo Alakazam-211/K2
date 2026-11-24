@@ -78,7 +78,7 @@ use k2_mpc_base::session::{
     HistoryOptions, LogItem, LogQuery, Need, Notes, RosterEntry, Role, Session, SessionError, Stay, UndoMode, UndoOutcome,
     UndoRequest, VersionInfo, WriteOptions, WriteOutcome,
 };
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_mpc_base::blob::BlobError;
 use k2_mpc_base::session::LimitSource;
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
@@ -91,6 +91,7 @@ use super::host::{self, CrossRefusal, DocRights, Principal};
 use super::shares::{self, Share};
 use super::target::{self, Target};
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const STATUS: &str = "/cli/docs/status";
 pub const READ: &str = "/cli/docs/read";
@@ -492,7 +493,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
                 "400 Bad Request",
                 "no_lease_on_text",
                 format!(
-                    "{} is a live text doc: everyone's edits merge live, so it has no lease. Leases are for files that aren't text (k2 doc lease photo.png)",
+                    "{} is a live text doc: everyone's edits merge live, so it has no lease. Leases are for files that aren't text ({CLI_NAME} doc lease photo.png)",
                     target.rel
                 ),
             ),
@@ -711,7 +712,7 @@ fn rights_uncapped(
                         "error": {
                             "code": "doc_not_shared",
                             "hint": format!(
-                                "{} is in workspace {ws}, which hasn't shared it with yours. A person shares it (k2 doc share), or you ask with a permission card",
+                                "{} is in workspace {ws}, which hasn't shared it with yours. A person shares it ({CLI_NAME} doc share), or you ask with a permission card",
                                 t.rel
                             ),
                             "workspace": ws,
@@ -837,9 +838,9 @@ pub fn session_error(e: &SessionError) -> CliResponse {
 }
 
 /// A quarantined doc (kit v0.9.5): what every verb on it answers.
-pub const QUARANTINED_HINT: &str = "quarantined: this doc's stored history holds content K2 doesn't accept, so it isn't \
-     opened as a live doc. Nothing was changed, and the file itself is as it was: edit it outside k2 doc for now, and \
-     report it (the daemon log names the doc)";
+pub const QUARANTINED_HINT: &str = concat!("quarantined: this doc's stored history holds content ", product_name!(), " doesn't accept, so it isn't \
+     opened as a live doc. Nothing was changed, and the file itself is as it was: edit it outside ", cli_name!(), " doc for now, and \
+     report it (the daemon log names the doc)");
 
 /// The kit's `MPC-E502` `store_newer` (v0.9.5): the store holds a newer
 /// kit's data (`table`), so a purge or rewrite is refused before anything
@@ -872,7 +873,7 @@ fn kit_refusal(code: &str, id: &str, hint: String) -> CliResponse {
 fn engine_mismatch_hint(e: &dyn std::fmt::Display) -> String {
     format!(
         "{e}. It isn't opened as a live doc: nothing was changed, and the file itself is as it was. \
-         Edit it outside k2 doc for now, and report it"
+         Edit it outside {CLI_NAME} doc for now, and report it"
     )
 }
 
@@ -891,7 +892,7 @@ fn entry_engine_refused_hint(e: &dyn std::fmt::Display) -> String {
 pub(super) fn native_engine_missing_hint(e: &dyn std::fmt::Display) -> String {
     format!(
         "{e}. Only this doc is refused: nothing of it was read or changed, the file itself is as it was, \
-         and every other doc works as usual. A newer K2 opened it live; update K2 to open it live again"
+         and every other doc works as usual. A newer {PRODUCT_NAME} opened it live; update {PRODUCT_NAME} to open it live again"
     )
 }
 
@@ -920,7 +921,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                         // The kit's id (its registry is private to it): a client matches on it.
                         "id": "MPC-E701",
                         "hint": format!(
-                            "leased by {} for another {}: nothing was written. Try again after it expires, or ask them to let go (k2 doc lease --release)",
+                            "leased by {} for another {}: nothing was written. Try again after it expires, or ask them to let go ({CLI_NAME} doc lease --release)",
                             pid_label(holder),
                             human_ms(left)
                         ),
@@ -964,7 +965,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
             "404 Not Found",
             "no_claim",
             match id {
-                Some(id) => format!("no live claim {id} here (it ended); k2 doc who lists the claims"),
+                Some(id) => format!("no live claim {id} here (it ended); {CLI_NAME} doc who lists the claims"),
                 None => "you hold no claim here".to_string(),
             },
         ),
@@ -980,7 +981,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::NoLease => refusal(
             "409 Conflict",
             "no_lease",
-            "nobody holds a lease on it (a daemon restart drops leases); take one with k2 doc lease",
+            concat!("nobody holds a lease on it (a daemon restart drops leases); take one with ", cli_name!(), " doc lease"),
         ),
         SessionError::NoBlobStore => refusal(
             "503 Service Unavailable",
@@ -1046,7 +1047,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         ),
         SessionError::Blob(err) => refusal("500 Internal Server Error", "blob_error", format!("the stored file failed: {err}")),
         SessionError::Store(StoreError::NoVersion(_, v)) => {
-            refusal("404 Not Found", "no_such_version", format!("no version {v} of this doc (k2 doc versions)"))
+            refusal("404 Not Found", "no_such_version", format!("no version {v} of this doc ({CLI_NAME} doc versions)"))
         }
         SessionError::Store(StoreError::PurgedVersion(_, v)) => {
             refusal("404 Not Found", "purged_version", format!("version {v} was purged; its content is gone"))
@@ -1062,7 +1063,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::RevertTooOld { seq } => refusal(
             "409 Conflict",
             "revert_too_old",
-            format!("change {seq} is older than the revert window; restore an older version instead (k2 doc restore --version V)"),
+            format!("change {seq} is older than the revert window; restore an older version instead ({CLI_NAME} doc restore --version V)"),
         ),
         SessionError::NoSuchChange(seq) => refusal("404 Not Found", "no_such_change", format!("no change {seq} in this doc")),
         SessionError::Deleted => refusal("404 Not Found", "doc_deleted", "this doc was removed (its workspace is gone)"),
@@ -1089,8 +1090,8 @@ fn session_error_body(e: &SessionError) -> CliResponse {
             // Kit A4 (MPC-E116): a read-only share comments only when the
             // share grants it; edit implies it.
             Need::Comment => kit_report(e, Some(
-                "you can read this doc but not comment on it: commenting needs edit, or a share with the comment grant \
-                 (a person runs k2 doc share <file> --with <your workspace> --comment). Nothing changed. Read the threads: k2 doc comments <file>",
+                concat!("you can read this doc but not comment on it: commenting needs edit, or a share with the comment grant \
+                 (a person runs ", cli_name!(), " doc share <file> --with <your workspace> --comment). Nothing changed. Read the threads: ", cli_name!(), " doc comments <file>"),
             )),
             _ => refusal("403 Forbidden", "doc_forbidden", "refused"),
         },
@@ -1098,7 +1099,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::Stale { expected, actual } => CliResponse {
             status: "409 Conflict",
             content_type: "application/json",
-            body: json!({ "ok": false, "error": { "code": "stale", "hint": format!("doc changed since {expected} (now {actual}): nothing applied. Read it again (k2 doc cat) and redo the edit from what you see"), "expected": expected, "actual": actual } }).to_string(),
+            body: json!({ "ok": false, "error": { "code": "stale", "hint": format!("doc changed since {expected} (now {actual}): nothing applied. Read it again ({CLI_NAME} doc cat) and redo the edit from what you see"), "expected": expected, "actual": actual } }).to_string(),
         },
         SessionError::RateLimited { retry_after_ms } => CliResponse {
             status: "429 Too Many Requests",
@@ -1130,7 +1131,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::Doc(DocError::Unaccepted) => refusal(
             "422 Unprocessable Entity",
             "update_unaccepted",
-            "that update holds content K2 doesn't accept: nothing was applied",
+            concat!("that update holds content ", product_name!(), " doesn't accept: nothing was applied"),
         ),
         SessionError::Doc(DocError::Quarantined) => refusal("423 Locked", "doc_quarantined", QUARANTINED_HINT),
         // Kit v0.18.0 (MPC-E162 to MPC-E165): the native engine's refusals.
@@ -1157,9 +1158,9 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         }
         // Kit A1 (MPC-E715): the pack refuses agent writes (PSD/PSB files).
         SessionError::AgentWriteRefused => kit_report(e, Some(
-            "agents don't write this file type: nothing was written. Save your version as a new file beside it \
-             (k2 doc cat can't help: make it with your own tools), then comment on this one naming it: \
-             k2 doc comment --doc --body \"what I changed and why\" --proposal <new file> <file>",
+            concat!("agents don't write this file type: nothing was written. Save your version as a new file beside it \
+             (", cli_name!(), " doc cat can't help: make it with your own tools), then comment on this one naming it: \
+             ", cli_name!(), " doc comment --doc --body \"what I changed and why\" --proposal <new file> <file>"),
         )),
         // MPC-E822: a live keyed doc that isn't a table (a deck, a board) is
         // at its size limit, and the change would grow it. Nothing was
@@ -1190,7 +1191,7 @@ pub(super) const STORE_RECOVERING_HINT: &str = "saving to disk failed a moment a
 pub(super) fn opened_unknown_hint(version: u64) -> String {
     format!(
         "this doc has no version {version}, so nothing was noted: the app's next save merges from the doc's latest \
-         version, as it always did. Name a version the doc has (k2 doc versions), or open the file as it is now"
+         version, as it always did. Name a version the doc has ({CLI_NAME} doc versions), or open the file as it is now"
     )
 }
 
@@ -1205,8 +1206,8 @@ pub(super) fn opened_gone_hint(version: u64) -> String {
 }
 
 /// What `MPC-E182` (`opened_no_file`) says.
-pub(super) const OPENED_NO_FILE_HINT: &str = "this doc has no file on disk (or its file is missing), so no other app \
-     saves it: nothing was noted. Nothing to do; edit it with k2 doc";
+pub(super) const OPENED_NO_FILE_HINT: &str = concat!("this doc has no file on disk (or its file is missing), so no other app \
+     saves it: nothing was noted. Nothing to do; edit it with ", cli_name!(), " doc");
 
 /// What `MPC-E822` (`keyed_at_limit`) tells the person or agent: the limit,
 /// and which one applied (this server's for the file type, the file type's
@@ -1221,7 +1222,7 @@ pub(super) fn keyed_at_limit_hint(limit: usize, from: LimitSource) -> String {
     };
     format!(
         "this file is too big to change live: it is at its limit of {limit} parts ({whose}; its items and their \
-         fields, counting deleted items until they are cleared away). Nothing was changed. Read it (k2 doc cat), \
+         fields, counting deleted items until they are cleared away). Nothing was changed. Read it ({CLI_NAME} doc cat), \
          remove parts it no longer needs, then make the change again"
     )
 }
@@ -1479,7 +1480,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             let change = input
                 .u64("change")
                 .map_err(VerbError::Response)?
-                .ok_or_else(|| VerbError::Response(bad("change is required: the change number from k2 doc log")))?;
+                .ok_or_else(|| VerbError::Response(bad(concat!("change is required: the change number from ", cli_name!(), " doc log"))))?;
             let partial = input.flag("partial");
             let j = join(s, c, Stay::UntilIdle)?;
             let out = s.revert_with(j.conn, change, partial, &c.history_options())?;
@@ -1490,7 +1491,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             let v = input
                 .u64("version")
                 .map_err(VerbError::Response)?
-                .ok_or_else(|| VerbError::Response(bad("version is required: a version id from k2 doc versions")))?;
+                .ok_or_else(|| VerbError::Response(bad(concat!("version is required: a version id from ", cli_name!(), " doc versions"))))?;
             let j = join(s, c, Stay::UntilIdle)?;
             let r = s.restore_with(j.conn, v, &c.history_options())?;
             super::claims::record_read(c.caller, &t.key(), r.version);
@@ -1509,7 +1510,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                     refusal(
                         "409 Conflict",
                         "theirs_gone",
-                        "K2 no longer has that outside save's text (a newer save came, or K2 restarted): compare the versions, or undo their save",
+                        concat!(product_name!(), " no longer has that outside save's text (a newer save came, or ", product_name!(), " restarted): compare the versions, or undo their save"),
                     ),
                     k2_mpc_base::tools::exit::REFUSED,
                 ))
@@ -1821,7 +1822,7 @@ pub(super) fn mv(
 const MAX_ARGV: usize = 64;
 
 /// The prefix fence lines name (`┄┄ k2 doc <nonce> BEGIN …`).
-pub const FENCE_PREFIX: &str = "k2 doc";
+pub const FENCE_PREFIX: &str = concat!(cli_name!(), " doc");
 
 /// `tool`: one `k2 doc <verb>` on the kit's text tools (`Session::run_tool`).
 /// Body: `{argv: ["grep", "-n", "x"], stdin?: "<text>"}` (the doc path is
@@ -1849,7 +1850,7 @@ pub(super) fn is_tool_edit(argv: &[String]) -> bool {
 /// a position with no version) also says its id and, when it has them, the
 /// matches to choose from, so the caller can name one on the next try.
 fn tool_refused(t: &Target, verb: &str, e: &k2_mpc_base::tools::ToolError) -> Value {
-    let mut stderr = format!("k2 doc {verb}: {e}");
+    let mut stderr = format!("{CLI_NAME} doc {verb}: {e}");
     let mut v = json!({ "doc": doc_json(t), "exit": e.exit(), "stdout": "" });
     if let k2_mpc_base::tools::ToolError::Address(report) = e {
         stderr.push_str(&format!(" ({})", report.id()));
@@ -2424,7 +2425,7 @@ fn undo_response(c: &Call, out: UndoOutcome) -> CliResponse {
             "doc": doc_json(t),
             "steps": 0,
             "historyLost": true,
-            "hint": "your undo history went with the last reload; use k2 doc revert <change> (k2 doc log)",
+            "hint": concat!("your undo history went with the last reload; use ", cli_name!(), " doc revert <change> (", cli_name!(), " doc log)"),
             "exit": exit,
         })),
         UndoOutcome::ClearedByPurge => ok(json!({

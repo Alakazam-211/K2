@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 
 use super::helper;
 use super::{LidAccess, LidFacts, LidRefusal, PowerOs, PowerSource, WakeSupport};
+use k2_core::product_name;
 
 /// S6 — each `awake-hold` lasts this long unless renewed.
 const LID_HOLD_MAX_SECS: u64 = 180;
@@ -278,7 +279,7 @@ impl PowerOs for MacPowerOs {
         serde_json::json!({
             "helperInstalled": helper::installed(),
             "helperPath": helper::HELPER_PATH,
-            "lidClosed": "With the lid closed a scheduled wake is a short dark wake; on AC K2 holds it for the run, on battery the Mac may sleep again within about a minute.",
+            "lidClosed": concat!("With the lid closed a scheduled wake is a short dark wake; on AC ", product_name!(), " holds it for the run, on battery the Mac may sleep again within about a minute."),
         })
     }
 }

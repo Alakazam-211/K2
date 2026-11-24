@@ -52,6 +52,8 @@ use serde_json::{json, Value};
 use super::routes::{need_manage, Who};
 use super::store;
 use super::supervisor::{self as sup, no, Env, R};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const APP_URL: &str = "/cli/sew/server/app-url";
 pub const SHIP: &str = "/cli/sew/server/ship";
@@ -95,9 +97,9 @@ fn unsupported() -> sup::Fail {
 }
 
 fn need_row() -> R<store::Row> {
-    let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat and voice are not installed on this server (k2 hostchat enable)"))?;
+    let r = store::load().ok_or_else(|| no("not_installed", 404, concat!("Chat and voice are not installed on this server (", cli_name!(), " hostchat enable)")))?;
     if r.status == "removed" {
-        return Err(no("not_installed", 409, "Chat and voice were uninstalled (data kept): k2 hostchat enable brings it back"));
+        return Err(no("not_installed", 409, concat!("Chat and voice were uninstalled (data kept): ", cli_name!(), " hostchat enable brings it back")));
     }
     Ok(r)
 }
@@ -396,7 +398,7 @@ pub fn check_dir_on_disk(root: &Path, data_dir: &Path) -> Result<(), String> {
     let mut r = [0u8; 6];
     let _ = getrandom::getrandom(&mut r);
     let probe = root.join(format!(".k2-sew-probe-{}", r.iter().map(|b| format!("{b:02x}")).collect::<String>()));
-    std::fs::write(&probe, b"k2").map_err(|e| format!("K2 can't write to {}: {e}", root.display()))?;
+    std::fs::write(&probe, b"k2").map_err(|e| format!("{PRODUCT_NAME} can't write to {}: {e}", root.display()))?;
     let _ = std::fs::remove_file(&probe);
     Ok(())
 }
@@ -587,7 +589,7 @@ fn set_ship(env: &Env, who: &Who, v: &Value) -> R<Value> {
                 return Err(no(
                     "invalid_path",
                     400,
-                    "the folder must be an absolute path outside system folders, /var/lib/sew and ~/.k2 (never the K2 vault)",
+                    concat!("the folder must be an absolute path outside system folders, /var/lib/sew and ~/.k2 (never the ", product_name!(), " vault)"),
                 ));
             }
             fs().check_dir(p).map_err(|e| no("invalid_path", 400, e))?;
@@ -635,9 +637,9 @@ fn set_ship(env: &Env, who: &Who, v: &Value) -> R<Value> {
     if let Some(e) = evidence {
         out["ship"]["boxBackup"] = e.json();
         out["note"] = json!(if e.ok {
-            "K2 sees the box backup carry Sew's bundles: k2_backup_offbox_none clears (k2_backup_offbox_stale while its newest snapshot is over 36 h old)"
+            concat!(product_name!(), " sees the box backup carry Sew's bundles: k2_backup_offbox_none clears (k2_backup_offbox_stale while its newest snapshot is over 36 h old)")
         } else {
-            "recorded, but k2_backup_offbox_none stays until K2 sees the box backup carry Sew's bundles (ship.boxBackup.reason says what is missing)"
+            concat!("recorded, but k2_backup_offbox_none stays until ", product_name!(), " sees the box backup carry Sew's bundles (ship.boxBackup.reason says what is missing)")
         });
     } else if kind == "none" && super::box_backup::evidence(env).ok {
         out["note"] = json!(super::offbox::NONE_BUT_CARRIED);
@@ -658,9 +660,9 @@ fn need_owner_for_box_backup(who: &Who) -> R<()> {
         Who::Agent { .. } => Err(no(
             "owner_only",
             403,
-            "only the server's owner says the box backup carries Sew's bundles; an agent can't, even with \"Manage chat and voice\" (ask the owner to run k2 hostchat ship box-backup)",
+            concat!("only the server's owner says the box backup carries Sew's bundles; an agent can't, even with \"Manage chat and voice\" (ask the owner to run ", cli_name!(), " hostchat ship box-backup)"),
         )),
-        _ => Err(no("owner_only", 403, "only the server's owner says the box backup carries Sew's bundles (k2 hostchat ship box-backup)")),
+        _ => Err(no("owner_only", 403, concat!("only the server's owner says the box backup carries Sew's bundles (", cli_name!(), " hostchat ship box-backup)"))),
     }
 }
 
@@ -677,7 +679,7 @@ fn set_mirror(env: &Env, v: &Value) -> R<Value> {
                 return Err(no(
                     "invalid_path",
                     400,
-                    "the keyring mirror must be an absolute path outside system folders, /var/lib/sew and ~/.k2 (never the K2 vault)",
+                    concat!("the keyring mirror must be an absolute path outside system folders, /var/lib/sew and ~/.k2 (never the ", product_name!(), " vault)"),
                 ));
             }
             if env.ops.path_probe(p) == Some(false) {
@@ -782,7 +784,7 @@ pub fn tie_mirror(env: &Env) -> Value {
         ("dir", Some(ship)) => match row.install_id.as_deref() {
             None => json!({
                 "state": "pending",
-                "error": "Sew has no install id yet (it gets one when it first starts); K2 ties the keyring mirror then",
+                "error": concat!("Sew has no install id yet (it gets one when it first starts); ", product_name!(), " ties the keyring mirror then"),
                 "at": now, "nextTryAt": now + 300,
             }),
             Some(install) => {
@@ -949,7 +951,7 @@ fn app_spaces_list() -> R<Value> {
         "ok": true,
         "spaces": v,
         "unbound": unbound,
-        "note": "members come only from each App's user grants (k2 app grant); Admin Access never adds anyone",
+        "note": concat!("members come only from each App's user grants (", cli_name!(), " app grant); Admin Access never adds anyone"),
     }))
 }
 
@@ -965,10 +967,10 @@ fn app_space_bind(env: &Env, who: &Who, v: &Value) -> R<Value> {
     k2_core::tool_hook::app_space::check_ids(&app, &space).map_err(|e| no("bad_request", 400, e))?;
     let row = need_row()?;
     if !matches!(row.status.as_str(), "running" | "degraded") {
-        return Err(no("sew_not_running", 409, "Sew must be running to bind a Space (k2 hostchat status)"));
+        return Err(no("sew_not_running", 409, concat!("Sew must be running to bind a Space (", cli_name!(), " hostchat status)")));
     }
     if sup::row_provider(&row) != k2_root_proto::sew::PROVIDER_K2 {
-        return Err(no("provider_is_standalone", 409, "a standalone Sew install takes no K2 grants, so it has no App Spaces"));
+        return Err(no("provider_is_standalone", 409, concat!("a standalone Sew install takes no ", product_name!(), " grants, so it has no App Spaces")));
     }
     // Sew's side first (once; the same App again is a no-op there).
     let body = json!({"space_id": space, "app_id": app});
@@ -980,7 +982,7 @@ fn app_space_bind(env: &Env, who: &Who, v: &Value) -> R<Value> {
             return Err(no(
                 "space_bound_elsewhere",
                 409,
-                format!("Sew keeps Space {space} read-only for the removed App it belonged to. Bind another Space, or have the Sew install owner release this one in Sew (spaces/release) first; K2 never releases it. Sew said: {b}"),
+                format!("Sew keeps Space {space} read-only for the removed App it belonged to. Bind another Space, or have the Sew install owner release this one in Sew (spaces/release) first; {PRODUCT_NAME} never releases it. Sew said: {b}"),
             ));
         }
         Err(super::ops::MgmtError::Status(409, b)) => {
@@ -1023,9 +1025,9 @@ fn app_space_unbind(who: &Who, v: &Value) -> R<Value> {
     }
     emit("app-space");
     let members = if remove {
-        "the members K2 added there are being removed (people added by hand stay)"
+        concat!("the members ", product_name!(), " added there are being removed (people added by hand stay)")
     } else {
-        "everyone stays in the Space; K2 no longer manages its members"
+        concat!("everyone stays in the Space; ", product_name!(), " no longer manages its members")
     };
     let sew = if k2_core::tool_hook::sew_has(k2_core::tool_hook::features::SPACE_UNBIND).unwrap_or(false) {
         "The Space is now read-only in Sew: nobody can post; history and export still work"

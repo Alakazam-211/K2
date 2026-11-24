@@ -25,6 +25,8 @@ use serde_json::{json, Value as J};
 
 use super::routes::{app_for, db_err, need_credential, R};
 use crate::compute_routes::Who;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const ROUTE: &str = "/cli/app/status";
 pub const ROUTES: &[&str] = &[ROUTE];
@@ -61,15 +63,15 @@ pub(crate) fn route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     match last_result.as_str() {
         store::RESULT_PENDING | store::RESULT_STARTING => {
             yellow = true;
-            next.push(item("yellow", "deploy", "a deploy is in progress", format!("k2 app deployment {}", app.app_id)));
+            next.push(item("yellow", "deploy", "a deploy is in progress", format!("{CLI_NAME} app deployment {}", app.app_id)));
         }
         store::RESULT_FAILED | store::RESULT_STALLED | store::RESULT_ROLLED_BACK if !live => {
             red = true;
-            next.push(item("red", "deploy", "the last deploy didn't go live", format!("k2 app errors {}", app.app_id)));
+            next.push(item("red", "deploy", "the last deploy didn't go live", format!("{CLI_NAME} app errors {}", app.app_id)));
         }
         store::RESULT_FAILED | store::RESULT_STALLED | store::RESULT_ROLLED_BACK => {
             yellow = true;
-            next.push(item("yellow", "deploy", "the last deploy didn't go live; the previous Seed still serves", format!("k2 app errors {}", app.app_id)));
+            next.push(item("yellow", "deploy", "the last deploy didn't go live; the previous Seed still serves", format!("{CLI_NAME} app errors {}", app.app_id)));
         }
         _ => {}
     }
@@ -77,53 +79,53 @@ pub(crate) fn route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let health = health_part(&app);
     if app.state == store::STATE_CRASHLOOPING {
         red = true;
-        next.push(item("red", "health", "the App is crash looping", format!("k2 app errors {} --kind crash", app.app_id)));
+        next.push(item("red", "health", "the App is crash looping", format!("{CLI_NAME} app errors {} --kind crash", app.app_id)));
     } else if health.get("ok") == Some(&J::Bool(false)) {
         red = true;
-        next.push(item("red", "health", "the health check isn't answering 2xx", format!("k2 app logs {}", app.app_id)));
+        next.push(item("red", "health", "the health check isn't answering 2xx", format!("{CLI_NAME} app logs {}", app.app_id)));
         // Which visitors' requests reached it, and what each got (K2's 502
         // when the App didn't answer).
         next.push(item(
             "info",
             "requests",
             "see whether visitors' requests reach it and what they got",
-            format!("k2 app requests {} --since 1h", app.app_id),
+            format!("{CLI_NAME} app requests {} --since 1h", app.app_id),
         ));
     } else if !live && dep["last"].is_null() && app.live_seed.is_none() {
         yellow = true;
-        next.push(item("yellow", "deploy", "nothing deployed yet", format!("k2 app deploy {} <folder>", app.app_id)));
+        next.push(item("yellow", "deploy", "nothing deployed yet", format!("{CLI_NAME} app deploy {} <folder>", app.app_id)));
     } else if !live && (app.state == store::STATE_STOPPED || app.state == store::STATE_PARKED) {
-        next.push(item("info", "health", "the App is stopped", format!("k2 app start {}", app.app_id)));
+        next.push(item("info", "health", "the App is stopped", format!("{CLI_NAME} app start {}", app.app_id)));
     } else if !live && !yellow {
         red = true;
-        next.push(item("red", "health", "nothing is live", format!("k2 app start {}", app.app_id)));
+        next.push(item("red", "health", "nothing is live", format!("{CLI_NAME} app start {}", app.app_id)));
     }
 
     let checks = checks_part(&app, run_checks, public);
     if let Some(failed) = checks.get("failed").and_then(J::as_u64).filter(|n| *n > 0) {
         red = true;
-        next.push(item("red", "checks", &format!("{failed} of the App's host.checks failed"), format!("k2 app status {} --json", app.app_id)));
+        next.push(item("red", "checks", &format!("{failed} of the App's host.checks failed"), format!("{CLI_NAME} app status {} --json", app.app_id)));
     }
 
     let errors = errors_part(&app);
     if errors.get("total").and_then(J::as_u64).is_some_and(|n| n > 0) {
         yellow = true;
-        next.push(item("yellow", "errors", "failures in the last hour", format!("k2 app errors {} --since 1h", app.app_id)));
+        next.push(item("yellow", "errors", "failures in the last hour", format!("{CLI_NAME} app errors {} --since 1h", app.app_id)));
     }
 
     let resources = resources_part(who, &app);
     if resources.get("level").and_then(J::as_str).is_some_and(|l| l != "ok") {
         yellow = true;
-        next.push(item("yellow", "resources", "a disk is past the guard's line", format!("k2 app resources {}", app.app_id)));
+        next.push(item("yellow", "resources", "a disk is past the guard's line", format!("{CLI_NAME} app resources {}", app.app_id)));
     }
 
     let door = door_part(who, &app);
     if let Some(n) = door.get("heldApprovals").and_then(J::as_u64).filter(|n| *n > 0) {
         yellow = true;
-        next.push(item("yellow", "door", &format!("{n} request(s) wait for the owner"), format!("k2 app approvals {}", app.app_id)));
+        next.push(item("yellow", "door", &format!("{n} request(s) wait for the owner"), format!("{CLI_NAME} app approvals {}", app.app_id)));
     }
     if door.get("egressDenied").and_then(J::as_u64).is_some_and(|n| n > 0) {
-        next.push(item("info", "door", "the App was refused an outside host", format!("k2 app egress log {}", app.app_id)));
+        next.push(item("info", "door", "the App was refused an outside host", format!("{CLI_NAME} app egress log {}", app.app_id)));
     }
 
     let hosts = hosts_part(who, &app);
@@ -260,7 +262,7 @@ fn checks_part(app: &store::AppRow, fresh: bool, public: bool) -> J {
     let base = if public {
         match public_base(app) {
             Some(b) => b,
-            None => return json!({ "declared": checks.len(), "error": "no public host for this App (k2 app domains)" }),
+            None => return json!({ "declared": checks.len(), "error": concat!("no public host for this App (", cli_name!(), " app domains)") }),
         }
     } else {
         match super::supervisor::live_port(&app.app_id) {

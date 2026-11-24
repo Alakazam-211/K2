@@ -32,6 +32,7 @@ use k2_core::app_grace::requests as reqs;
 use k2_core::deploy::store::{self, AppRow};
 
 use super::routes::{agent_ws, db_err, s, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const MAX_APPS: usize = 3;
 /// The memory an install gets when none is given (every caller).
@@ -179,15 +180,15 @@ pub(crate) fn hold(who: &Who, path: &str, v: &J, ws: &str, reasons: Vec<String>)
         workspace: ws,
         body: json!({ "route": path, "body": v }),
         diff: json!({ "lines": reasons, "route": path }),
-        summary: format!("k2 app {verb} {label} (past the agent's default limits)"),
+        summary: format!("{CLI_NAME} app {verb} {label} (past the agent's default limits)"),
         reasons: reasons.clone(),
         reason: s(v, "reason"),
     })?;
     let mut out = super::approvals::held_answer(&r);
     out["limits"] = json!(reasons);
     out["hint"] = json!(format!(
-        "held for the owner: this goes past your default App limits ({}). They approve it in person (k2 app approve {} \
-         outside K2, or Settings → App Approvals).",
+        "held for the owner: this goes past your default App limits ({}). They approve it in person ({CLI_NAME} app approve {} \
+         outside {PRODUCT_NAME}, or Settings → App Approvals).",
         reasons.join("; "),
         r.id
     ));

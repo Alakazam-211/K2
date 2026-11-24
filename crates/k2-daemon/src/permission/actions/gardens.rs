@@ -41,8 +41,8 @@ use super::switches::{applied, as_caller, param};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::zen_garden_cards as cards;
 use k2_core::zen::garden_access::{AskKind, Via};
-use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Where Settings' "It's mine" lives.
 const LOCAL_DATA: SettingsRef = SettingsRef { page: "gardens/local-data", path: "Settings → Gardens → Local Data" };
@@ -207,7 +207,7 @@ pub(crate) static DELETE: ActionSpec = ActionSpec {
     words: Words {
         setting: "Delete Garden",
         what_changes: "Delete {garden}",
-        consequences: "{garden} leaves your Gardens. K2 keeps a copy in history.",
+        consequences: concat!("{garden} leaves your Gardens. ", product_name!(), " keeps a copy in history."),
         scope: "the {garden} Garden",
         duration: "once",
         // PRD G16 lists "ask again after 24 hours" here; that is the Keep
@@ -289,7 +289,7 @@ fn check_delete(ctx: &Ctx) -> Check {
         ));
     }
     if cards::is_last_garden() {
-        return Check::Moved(format!("{name} is the last Garden; K2 always keeps one"));
+        return Check::Moved(format!("{name} is the last Garden; {PRODUCT_NAME} always keeps one"));
     }
     Check::Needed
 }
@@ -320,7 +320,7 @@ fn apply_access_off(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applie
 fn apply_delete(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
     let Some(g) = param(ctx, "garden") else { return no_garden() };
     let r = cards::delete_entry(&as_caller(who), g, "permission-card");
-    applied(&r, "Deleted. K2 keeps a copy in history.")
+    applied(&r, concat!("Deleted. ", product_name!(), " keeps a copy in history."))
 }
 
 // ── zen.sign, its twin (0.46.5 S0, Rosson's addition) ───────────────
@@ -482,7 +482,7 @@ pub(crate) static NOT_CARDABLE: [NotCardableSpec; 6] = [
         id: "garden.widget.resume",
         area: Area::Gardens,
         why: NotCardable::Later,
-        r#where: "the K2 app (click Resume on the widget) or the phone, signed in as the owner",
+        r#where: concat!("the ", product_name!(), " app (click Resume on the widget) or the phone, signed in as the owner"),
     },
     // Ruling 6: the lock is the person's own tool, owner token only.
     NotCardableSpec {

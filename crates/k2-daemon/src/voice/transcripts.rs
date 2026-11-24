@@ -48,6 +48,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::sew_mgmt::{MgmtClient, MgmtResponse};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const LIST: &str = "/cli/voice/recordings";
 pub const TRANSCRIPT: &str = "/cli/voice/transcript";
@@ -251,12 +253,12 @@ fn k5() -> Result<K5, CliResponse> {
     if !flags.mgmt_recording_reads {
         return Err(error(409, "sew_feature_missing", "this server's chat can't hand out recordings yet (it needs Sew 0.9.0: mgmt_recording_reads)"));
     }
-    let view = hook::admin_space_view().map_err(|e| error(503, "voice_unavailable", format!("K2 could not read the rooms: {e}")))?;
+    let view = hook::admin_space_view().map_err(|e| error(503, "voice_unavailable", format!("{PRODUCT_NAME} could not read the rooms: {e}")))?;
     let space = view
         .space
         .as_ref()
         .and_then(|s| s.space_id.clone())
-        .ok_or_else(|| error(409, "voice_space_not_ready", "this server's voice rooms aren't made yet (k2 voice status)"))?;
+        .ok_or_else(|| error(409, "voice_space_not_ready", concat!("this server's voice rooms aren't made yet (", cli_name!(), " voice status)")))?;
     let rooms = view
         .rooms
         .iter()
@@ -273,7 +275,7 @@ fn room_channel(k5: &K5, key: &str) -> Result<String, CliResponse> {
         .iter()
         .find(|(ch, (s, n))| ch.as_str() == k || s == k || slug.as_deref() == Some(s.as_str()) || n.eq_ignore_ascii_case(k))
         .map(|(ch, _)| ch.clone())
-        .ok_or_else(|| error(404, "room_not_found", format!("no room '{k}' on this server (k2 voice rooms lists them)")))
+        .ok_or_else(|| error(404, "room_not_found", format!("no room '{k}' on this server ({CLI_NAME} voice rooms lists them)")))
 }
 
 fn sew_refusal(r: &MgmtResponse) -> CliResponse {
@@ -281,7 +283,7 @@ fn sew_refusal(r: &MgmtResponse) -> CliResponse {
     match (r.status, reason.as_deref()) {
         (404, _) => error(404, "not_found", "no such recording in this server's voice rooms"),
         (403, Some("sew_actor_admin_required")) => {
-            error(502, "failed", "this server's chat didn't take K2's owner read (sew_actor_admin_required): run k2 hostchat repair")
+            error(502, "failed", concat!("this server's chat didn't take ", product_name!(), "'s owner read (sew_actor_admin_required): run ", cli_name!(), " hostchat repair"))
         }
         (s, _) if s >= 500 => error(503, "chat_unavailable", "this server's chat didn't answer; try again"),
         _ => error(502, "failed", format!("chat refused the read: {}", r.error_line())),
@@ -391,7 +393,7 @@ async fn transcript(r: &Reader, params: &HashMap<String, String>) -> CliResponse
         return e;
     }
     let Some(id) = param(params, "id").filter(|i| dec(i)).map(str::to_string) else {
-        return error(400, "usage", "name the recording: id=<its id> (k2 voice recordings lists them)");
+        return error(400, "usage", concat!("name the recording: id=<its id> (", cli_name!(), " voice recordings lists them)"));
     };
     let (limit, after) = match (limit_of(params, TRANSCRIPT_LIMIT_DEFAULT), after_of(params)) {
         (Ok(l), Ok(a)) => (l, a),
@@ -430,7 +432,7 @@ async fn transcript(r: &Reader, params: &HashMap<String, String>) -> CliResponse
     let rid = id.clone();
     match blocking(move || store::log_read(&label, ws.as_deref(), &rid, n)).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => return error(503, "audit_unavailable", format!("K2 couldn't log the read, so it doesn't hand it out: {e}")),
+        Ok(Err(e)) => return error(503, "audit_unavailable", format!("{PRODUCT_NAME} couldn't log the read, so it doesn't hand it out: {e}")),
         Err(e) => return e,
     }
     ok(json!({
@@ -453,7 +455,7 @@ fn speaker_name(ext: &str) -> String {
 fn state_view(only: Option<&str>) -> Result<Value, CliResponse> {
     let readers = store::readers().map_err(|e| error(503, "store_unavailable", e))?;
     let subs = store::subscriptions().map_err(|e| error(503, "store_unavailable", e))?;
-    let view = hook::admin_space_view().map_err(|e| error(503, "voice_unavailable", format!("K2 could not read the rooms: {e}")))?;
+    let view = hook::admin_space_view().map_err(|e| error(503, "voice_unavailable", format!("{PRODUCT_NAME} could not read the rooms: {e}")))?;
     let rooms: Vec<Value> = view
         .rooms
         .iter()
@@ -530,7 +532,7 @@ fn subscribe(r: &Reader, b: &Value) -> CliResponse {
 
 /// The rooms, without Sew's read flag (subscribing works before Sew 0.9.0).
 fn k5_rooms_only() -> Result<K5, CliResponse> {
-    let view = hook::admin_space_view().map_err(|e| error(503, "voice_unavailable", format!("K2 could not read the rooms: {e}")))?;
+    let view = hook::admin_space_view().map_err(|e| error(503, "voice_unavailable", format!("{PRODUCT_NAME} could not read the rooms: {e}")))?;
     let rooms = view
         .rooms
         .iter()
@@ -679,7 +681,7 @@ pub fn note_text(recording_id: &str, room: &str, slug: &str) -> (String, String)
     (
         format!("Call transcript ready: {room}"),
         format!(
-            "A recorded call in {room} has its transcript.\n\nRead it: k2 voice transcript {recording_id}\nThis room's recordings: k2 voice recordings --room {slug}\n\nEvery read is logged. You get these notes because this room sends its transcripts to you; to stop them: k2 voice transcripts unsubscribe {slug} <your workspace>."
+            "A recorded call in {room} has its transcript.\n\nRead it: {CLI_NAME} voice transcript {recording_id}\nThis room's recordings: {CLI_NAME} voice recordings --room {slug}\n\nEvery read is logged. You get these notes because this room sends its transcripts to you; to stop them: {CLI_NAME} voice transcripts unsubscribe {slug} <your workspace>."
         ),
     )
 }

@@ -28,8 +28,9 @@ use super::held::text_param;
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::cli_response::CliResponse;
 use crate::publish_cards::{PIN, PUBLIC, PUBLIC_NEEDS_PERSON};
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 use serde_json::json;
+use k2_core::brand::PRODUCT_NAME;
 
 const ROUTE: &str = "/cli/publish/visibility";
 
@@ -62,7 +63,7 @@ pub(crate) static PUBLISH_PUBLIC: ActionSpec = ActionSpec {
     words: Words {
         setting: "Make {label} public",
         what_changes: "Anyone with the address can open {label}. {ws}'s reason: {reason}",
-        consequences: "K2 stops checking who opens it. Everyone signed in to it now is signed out, as they no longer need to be.",
+        consequences: concat!(product_name!(), " stops checking who opens it. Everyone signed in to it now is signed out, as they no longer need to be."),
         scope: "the site {label}",
         duration: "until someone changes it",
         retry: "run your command again",
@@ -91,7 +92,7 @@ pub(crate) static PUBLISH_PIN: ActionSpec = ActionSpec {
     expiry: Expiry::STANDARD,
     words: Words {
         setting: "Put {label} behind a PIN",
-        what_changes: "You choose a PIN in K2's own form. Anyone with the address and the PIN can open {label}",
+        what_changes: concat!("You choose a PIN in ", product_name!(), "'s own form. Anyone with the address and the PIN can open {label}"),
         consequences: "{ws} never sees the PIN. Send the address and the PIN separately.",
         scope: "the site {label}",
         duration: "until someone changes it",
@@ -279,7 +280,7 @@ fn check_public(ctx: &Ctx) -> Check {
         Err(why) => return Check::Moved(why),
     };
     if v.dev {
-        return Check::Moved(format!("{} is a dev server: only the owner or an admin can make it public, from a terminal outside K2", v.label));
+        return Check::Moved(format!("{} is a dev server: only the owner or an admin can make it public, from a terminal outside {PRODUCT_NAME}", v.label));
     }
     if text_param(ctx, "reason").is_none_or(|r| r.trim().is_empty()) {
         return Check::Moved("say why this site should be public: reason=\"…\"".into());
@@ -306,7 +307,7 @@ fn apply_public(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
     let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or(serde_json::Value::Null);
     Applied::Refused {
         code: v["code"].as_str().unwrap_or("failed").to_string(),
-        message: v["error"].as_str().unwrap_or("K2 couldn't change it").to_string(),
+        message: v["error"].as_str().unwrap_or(concat!(product_name!(), " couldn't change it")).to_string(),
     }
 }
 
@@ -325,7 +326,7 @@ fn apply_pin(_ctx: &Ctx, _who: &Answerer, _token: Option<&str>) -> Applied {
 }
 
 fn pin_form_words() -> String {
-    concat!("Set the PIN first, in K2's own form on this card, or from a terminal outside K2: ", cli_name!(), " publish visibility <name> pin").to_string()
+    concat!("Set the PIN first, in ", product_name!(), "'s own form on this card, or from a terminal outside ", product_name!(), ": ", cli_name!(), " publish visibility <name> pin").to_string()
 }
 
 /// Allow on `publish.pin` before the site has a PIN (a client without the form:

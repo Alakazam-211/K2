@@ -43,6 +43,7 @@ use k2_core::skin::{RoomPolicy, SkinPass};
 use super::budget::{self, BudgetKey, Spend};
 use super::call::{resolve, CallBody, Placed};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// The rows this file answers, in catalog order.
 pub const VERBS: [&str; 13] = [
@@ -239,7 +240,7 @@ fn room_reach(w: &Placed) -> Result<RoomReach, CliResponse> {
         MadeBy::Unclaimed => Err(no(
             403,
             "author_unknown",
-            format!("nobody signed this version of {0}. Run `k2 zen validate --widget {0}`, or click It's mine", w.widget),
+            format!("nobody signed this version of {0}. Run `{CLI_NAME} zen validate --widget {0}`, or click It's mine", w.widget),
         )),
     }
 }

@@ -19,6 +19,8 @@
 use crate::mail::access::{Level, Source};
 use crate::mail::external::OauthMeta;
 use crate::mail::oauth::{self, OauthProvider};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The facts about one inbox the derivation needs (all non-secret).
 pub struct CapInput<'a> {
@@ -106,7 +108,7 @@ impl Verdict {
             "level",
             format!(
                 "your workspace has '{}' on {address}; this needs '{}' — the owner raises it \
-                 with 'k2 mail access set-level'",
+                 with '{CLI_NAME} mail access set-level'",
                 have.as_str(),
                 want.as_str()
             ),
@@ -115,7 +117,7 @@ impl Verdict {
 }
 
 fn upgrade_fix(address: &str, feature: &str) -> String {
-    format!("k2 mail link upgrade {address} --features {feature} (owner)")
+    format!("{CLI_NAME} mail link upgrade {address} --features {feature} (owner)")
 }
 
 /// The capabilities object for one inbox (shape: PRD §3.1).
@@ -162,8 +164,8 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
     let draft_backend = match backend {
         Backend::Hosted => Verdict::off(
             "backend_unsupported",
-            "drafts are saved into linked inboxes only — a hosted inbox sends (or queues for \
-             approval) with 'k2 mail send'",
+            concat!("drafts are saved into linked inboxes only — a hosted inbox sends (or queues for \
+             approval) with '", cli_name!(), " mail send'"),
         ),
         _ if !mail_scope => Verdict::off("scope_not_granted", upgrade_fix(address, "mail")),
         _ => Verdict::on(),
@@ -171,7 +173,7 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
     let compose_backend = match backend {
         Backend::Hosted => Verdict::off(
             "backend_unsupported",
-            "drafts are saved into linked inboxes only — a hosted inbox sends with 'k2 mail send'",
+            concat!("drafts are saved into linked inboxes only — a hosted inbox sends with '", cli_name!(), " mail send'"),
         ),
         _ if !mail_scope => Verdict::off("scope_not_granted", upgrade_fix(address, "mail")),
         _ => Verdict::on(),
@@ -199,8 +201,8 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
         let v = match backend {
             Backend::Hosted if !input.hosted_calendars_on => Verdict::off(
                 "owner_disabled",
-                "the owner turned calendars off for hosted inboxes — 'k2 hostmail calendar \
-                 enable' (owner)",
+                concat!("the owner turned calendars off for hosted inboxes — '", cli_name!(), " hostmail calendar \
+                 enable' (owner)"),
             ),
             Backend::Hosted => Verdict::on(),
             Backend::Imap => Verdict::off(
@@ -218,8 +220,8 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
             }
             Backend::Google | Backend::Microsoft if !input.linked_calendars_on => Verdict::off(
                 "owner_disabled",
-                "the owner turned calendars on linked inboxes off — 'k2 mail link calendars on' \
-                 (owner)",
+                concat!("the owner turned calendars on linked inboxes off — '", cli_name!(), " mail link calendars on' \
+                 (owner)"),
             ),
             // MCS3: Microsoft 365 calendars run over Graph; MCS4: Google
             // calendars over the Google Calendar API.
@@ -244,7 +246,7 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
             }
             _ => Verdict::off(
                 "not_built",
-                "calendar invites and RSVPs are not available in this K2 version",
+                concat!("calendar invites and RSVPs are not available in this ", product_name!(), " version"),
             ),
         };
         v.needs(level, want, address)

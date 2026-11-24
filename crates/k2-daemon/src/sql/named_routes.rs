@@ -31,6 +31,7 @@ use crate::cli_response::CliResponse;
 use crate::sql::cluster::{self, Cluster};
 use crate::sql::sysops::SystemOps;
 use crate::sql::versions_access::{self, VersionsAct, Who};
+use k2_core::{cli_name, product_name};
 
 fn err(status: &'static str, code: &str, hint: impl Into<String>) -> CliResponse {
     CliResponse {
@@ -140,7 +141,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
     }
     if !is_post {
         if matches!(who, Who::Other) {
-            return err("403 Forbidden", "forbidden", "reading K2's Postgres clusters needs the owner, a login or an agent passport");
+            return err("403 Forbidden", "forbidden", concat!("reading ", product_name!(), "'s Postgres clusters needs the owner, a login or an agent passport"));
         }
         let health = params.get("health").is_some_and(|v| v == "1" || v == "true");
         return CliResponse::ok_json(list(ops, health).to_string());
@@ -166,7 +167,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
                 return r;
             }
             let (Some(major), Some(name)) = (b.major, b.name.as_deref()) else {
-                return err("400 Bad Request", "usage", "k2 db cluster create <major> --name <name> [--port <p>] [--wal-archive]");
+                return err("400 Bad Request", "usage", concat!(cli_name!(), " db cluster create <major> --name <name> [--port <p>] [--wal-archive]"));
             };
             match cluster::ensure_named_cluster(ops, major, name.trim(), b.port, b.wal_archive, &project) {
                 Ok(c) => {
@@ -178,7 +179,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
         }
         "restart" => {
             let Some(spec) = b.name.as_deref().or(b.cluster.as_deref()) else {
-                return err("400 Bad Request", "usage", "k2 db cluster restart <name>");
+                return err("400 Bad Request", "usage", concat!(cli_name!(), " db cluster restart <name>"));
             };
             let owner = matches!(who, Who::Owner);
             let c = match cluster::named_target(spec.trim(), (!owner).then_some(project.as_str())) {
@@ -198,7 +199,7 @@ pub fn handle(ops: &dyn SystemOps, who: Who, is_post: bool, body: &[u8], params:
         }
         "create-db" => {
             let Some(spec) = b.cluster.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
-                return err("400 Bad Request", "usage", "k2 db create --cluster <name> [--name <db>] [--id <id>]");
+                return err("400 Bad Request", "usage", concat!(cli_name!(), " db create --cluster <name> [--name <db>] [--id <id>]"));
             };
             if let Err(r) = gate(&who, VersionsAct::CreateOnNamedCluster, &project) {
                 return r;

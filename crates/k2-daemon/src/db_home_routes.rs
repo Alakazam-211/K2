@@ -21,6 +21,8 @@ use serde_json::{json, Value as J};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use k2_core::db::home_switch;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The card's action id ([`crate::action_cards::run`]).
 pub const CARD_ACTION: &str = "db.home.keep";
@@ -62,7 +64,7 @@ pub(crate) fn handle_at(
                 return err_json(
                     "403 Forbidden",
                     "forbidden",
-                    "Only the owner or an Admin can read where K2 keeps its database. Ask your human.".into(),
+                    concat!("Only the owner or an Admin can read where ", product_name!(), " keeps its database. Ask your human.").into(),
                 );
             }
             CliResponse::ok_json(json!({ "ok": true, "homeDb": home_switch::home_json(dir) }).to_string())
@@ -75,7 +77,7 @@ pub(crate) fn handle_at(
                 return err_json(
                     "403 Forbidden",
                     "owner_only",
-                    "Only the owner can choose which database K2 keeps. Ask your human.".into(),
+                    concat!("Only the owner can choose which database ", product_name!(), " keeps. Ask your human.").into(),
                 );
             }
             let keep = params.get("keep").map(String::as_str).unwrap_or("");
@@ -103,7 +105,7 @@ pub fn run_card(params: &J, answer: &str, by: &str) -> Result<J, String> {
 
 pub(crate) fn run_card_at(dir: &Path, params: &J, answer: &str, by: &str) -> Result<J, String> {
     if answer == NOT_NOW {
-        return Ok(json!({ "message": "Nothing changed. K2 keeps using the same file; k2 db home --keep chooses later." }));
+        return Ok(json!({ "message": concat!("Nothing changed. ", product_name!(), " keeps using the same file; ", cli_name!(), " db home --keep chooses later.") }));
     }
     let keep = [home_switch::NEW_NAME, home_switch::OLD_NAME]
         .into_iter()
@@ -112,7 +114,7 @@ pub(crate) fn run_card_at(dir: &Path, params: &J, answer: &str, by: &str) -> Res
     let is_owner = by == "owner"
         || k2_core::connect_users::role_for_user(by) == Some(k2_core::connect_users::Role::Owner);
     if !is_owner {
-        return Err("Only the owner can choose which database K2 keeps.".into());
+        return Err(concat!("Only the owner can choose which database ", product_name!(), " keeps.").into());
     }
     let v = home_switch::write_keep_choice(dir, keep, by)?;
     Ok(json!({ "keep": keep, "message": v["message"] }))
@@ -178,13 +180,13 @@ fn present_card(prompt: &str, k2: i64, k2so: i64) -> bool {
 
 fn file_ticket(body: &str) -> bool {
     let text = format!(
-        "{body}\n\nThere is no Thread to put a choice card on. From a terminal outside K2 (owner):\n\n\
-         ```\nk2 db home --keep k2so.db\nk2 db home --keep k2.db\n```\n\nThen restart K2."
+        "{body}\n\nThere is no Thread to put a choice card on. From a terminal outside {PRODUCT_NAME} (owner):\n\n\
+         ```\n{CLI_NAME} db home --keep k2so.db\n{CLI_NAME} db home --keep k2.db\n```\n\nThen restart {PRODUCT_NAME}."
     );
     match crate::feedback_routes::file_owners_only_notice(
         k2_core::db::AUDIT_SENTINEL_IDS[0],
         "K2",
-        "K2 did not rename its database: two copies hold workspaces",
+        concat!(product_name!(), " did not rename its database: two copies hold workspaces"),
         &text,
     ) {
         Ok(_) => true,

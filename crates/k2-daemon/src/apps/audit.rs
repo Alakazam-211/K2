@@ -324,7 +324,7 @@ fn log_refused(budget: &mut RefusedBudget, r: Refused) {
     let e = budget.entry(r.app_id.clone()).or_insert((Instant::now(), 0, 0));
     if e.0.elapsed() >= Duration::from_secs(60) {
         if e.2 > 0 {
-            append_log(&r.app_id, &format!("[k2] {} more refused call(s) in the last minute not shown here (k2 app audit {} --denied)", e.2, r.app_id));
+            append_log(&r.app_id, &format!("[k2] {} more refused call(s) in the last minute not shown here ({CLI_NAME} app audit {} --denied)", e.2, r.app_id));
         }
         *e = (Instant::now(), 0, 0);
     }
@@ -531,7 +531,7 @@ fn observe_with(ws: &str, call: &Call, upgrade: bool, hint: Option<&str>) {
                 app,
                 ws,
                 "pass_wrong_link",
-                &format!("[k2 apps] {app}: a pass for another link or App was presented on its gateway link ({}). k2 app audit {app} --denied", call.verb),
+                &format!("[k2 apps] {app}: a pass for another link or App was presented on its gateway link ({}). {CLI_NAME} app audit {app} --denied", call.verb),
             );
         }
         if QUOTA_CODES.contains(&code) {
@@ -539,7 +539,7 @@ fn observe_with(ws: &str, call: &Call, upgrade: bool, hint: Option<&str>) {
                 app,
                 ws,
                 &format!("quota:{code}"),
-                &format!("[k2 apps] {app} hit a quota ({code}) on {}. k2 app quota {app} shows the limits; k2 app audit {app} --denied", call.verb),
+                &format!("[k2 apps] {app} hit a quota ({code}) on {}. {CLI_NAME} app quota {app} shows the limits; {CLI_NAME} app audit {app} --denied", call.verb),
             );
         }
     }
@@ -576,7 +576,7 @@ fn observe_with(ws: &str, call: &Call, upgrade: bool, hint: Option<&str>) {
                 app,
                 ws,
                 "denial_spike",
-                &format!("[k2 apps] {app}: more than {SPIKE_DENIALS} refused calls in 5 minutes. k2 app audit {app} --denied --since 5m"),
+                &format!("[k2 apps] {app}: more than {SPIKE_DENIALS} refused calls in 5 minutes. {CLI_NAME} app audit {app} --denied --since 5m"),
             );
         }
     }

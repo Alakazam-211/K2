@@ -40,6 +40,7 @@ use k2_core::tool_hook::sew_wire::{
 };
 
 use crate::sew_mgmt::{long_poll_timeout, MgmtClient, MgmtResponse};
+use k2_core::{cli_name, product_name};
 
 /// `wait` the follower asks Sew to hold an empty answer, seconds.
 pub const FEED_WAIT_S: u32 = sew_wire::VOICE_CHANGES_WAIT_MAX_S;
@@ -519,7 +520,7 @@ fn run() {
                 // One warning per change of state, never one per retry.
                 if logged.as_deref() != Some(e.as_str()) {
                     let fix = if gone {
-                        "the K5 Space may be gone from Sew: K2 checks and re-makes it on its own; k2 voice repair runs it now"
+                        concat!("the K5 Space may be gone from Sew: ", product_name!(), " checks and re-makes it on its own; ", cli_name!(), " voice repair runs it now")
                     } else {
                         "retrying quietly until this changes"
                     };

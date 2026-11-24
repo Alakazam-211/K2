@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 
 use crate::cli_response::CliResponse;
 use k2_core::git_tools::{self, InstallStart};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 fn ok_json<T: serde::Serialize>(v: T) -> CliResponse {
     match serde_json::to_string(&v) {
@@ -86,7 +88,7 @@ fn respond(as_text: bool, started: Option<InstallStart>, finished: Option<Vec<St
 
 fn refused(as_text: bool, code: &str, message: String, how_to: Vec<String>) -> CliResponse {
     if as_text {
-        let mut body = format!("k2 git-tools: {message}\n");
+        let mut body = format!("{CLI_NAME} git-tools: {message}\n");
         for line in &how_to {
             body.push_str(&format!("  {line}\n"));
         }
@@ -105,7 +107,7 @@ fn refused(as_text: bool, code: &str, message: String, how_to: Vec<String>) -> C
 pub fn agent_install_refusal() -> String {
     serde_json::json!({
         "error": "owner_only",
-        "hint": "Installing git is your owner's step (on a Mac it opens Apple's installer on this computer's screen). Ask them to click Install in Settings → General → Git, or run `k2 git-tools install` in their own terminal. `k2 git-tools` shows the state; the waiting git steps finish by themselves once git runs.",
+        "hint": concat!("Installing git is your owner's step (on a Mac it opens Apple's installer on this computer's screen). Ask them to click Install in Settings → General → Git, or run `", cli_name!(), " git-tools install` in their own terminal. `", cli_name!(), " git-tools` shows the state; the waiting git steps finish by themselves once git runs."),
     })
     .to_string()
 }
@@ -125,7 +127,7 @@ pub fn handle_install(is_post: bool, as_text: bool) -> CliResponse {
         return refused(
             as_text,
             "not_macos",
-            "K2 installs git only on macOS (Apple's command line tools); install it with your package manager".into(),
+            concat!(product_name!(), " installs git only on macOS (Apple's command line tools); install it with your package manager").into(),
             git_tools::status(false).how_to,
         );
     }

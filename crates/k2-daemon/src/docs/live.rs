@@ -123,7 +123,7 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_mpc_base::session::position::{transform, At, Bias, LineRange};
 use k2_mpc_base::session::{
     ChangeEvent, ClaimPolicy, ConnId, EditOptions, JoinOptions, RosterEvent, Session, SessionError, Stay,
@@ -364,7 +364,7 @@ pub fn person_for(caller: crate::sidecar_routes::Caller, app_pass: bool) -> Resu
         Caller::Agent(_) | Caller::Shell { .. } => Err(refusal(
             "403 Forbidden",
             "agents_use_k2_doc",
-            "the Live socket is for a person's tab; agents edit live docs with k2 doc",
+            concat!("the Live socket is for a person's tab; agents edit live docs with ", cli_name!(), " doc"),
         )),
         Caller::WrongCredential => Err(refusal("403 Forbidden", "wrong_credential", "this credential can't open the Live view")),
         Caller::Invalid => Err(refusal("403 Forbidden", "forbidden", "invalid or missing token")),
@@ -1422,7 +1422,7 @@ impl Worker {
             ..Closed::k2(
                 CloseReason::Closed,
                 "core_off",
-                "K2 no longer edits this kind of file as live text: it is an any-file doc now, with every version kept. It reopens the usual way",
+                concat!(product_name!(), " no longer edits this kind of file as live text: it is an any-file doc now, with every version kept. It reopens the usual way"),
             )
         }
     }

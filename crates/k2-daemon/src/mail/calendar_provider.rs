@@ -40,6 +40,8 @@ use crate::mail::calendar::{
 };
 use crate::mail::oauth::{self, CalAccess, OauthProvider};
 use k2_core::db::schema::MailExternalInbox;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 // ── The target ──────────────────────────────────────────────────────────
 
@@ -123,7 +125,7 @@ pub(crate) fn cap_name(need: Level) -> &'static str {
 /// The owner's fix for a link consented without calendars: read-only
 /// (prd-google-calendar-link-v1 §3.1, CV-3).
 pub(crate) fn upgrade_fix(address: &str) -> String {
-    format!("k2 mail link upgrade {address} --features calendar-read (owner)")
+    format!("{CLI_NAME} mail link upgrade {address} --features calendar-read (owner)")
 }
 
 /// 409 `capability_missing` `{cap: calendar.write, reason: read_only_link}`
@@ -162,7 +164,7 @@ pub fn linked_target(inbox: AccessInbox, need: Level, project_id: &str) -> Resul
         return Err(capability_missing(
             cap,
             "backend_unsupported",
-            "link the account with OAuth (k2 mail link add <address> --provider gmail|microsoft) for calendars",
+            concat!("link the account with OAuth (", cli_name!(), " mail link add <address> --provider gmail|microsoft) for calendars"),
             &format!(
                 "'{address}' is linked over IMAP with an app password — that has no calendar API"
             ),
@@ -172,7 +174,7 @@ pub fn linked_target(inbox: AccessInbox, need: Level, project_id: &str) -> Resul
         return Err(capability_missing(
             cap,
             "owner_disabled",
-            "k2 mail link calendars on (owner)",
+            concat!(cli_name!(), " mail link calendars on (owner)"),
             "the owner turned calendars on linked inboxes off for this server — ask your human",
         ));
     }
@@ -261,7 +263,7 @@ fn no_such_calendar() -> CliResponse {
     error_response(
         "404 Not Found",
         "not_found",
-        "no such calendar on this inbox — see 'k2 calendar list'",
+        concat!("no such calendar on this inbox — see '", cli_name!(), " calendar list'"),
     )
 }
 
@@ -888,7 +890,7 @@ pub fn wait_with(
             "409 Conflict",
             "state_expired",
             &format!(
-                "{} can no longer list changes since that state — re-read with 'k2 calendar \
+                "{} can no longer list changes since that state — re-read with '{CLI_NAME} calendar \
                  events' and wait again without --since-state",
                 p.label()
             ),

@@ -35,6 +35,7 @@ use k2_core::deploy::{self, codes};
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, json_body, need_build, no, s, ws_by_id, Who, R};
+use k2_core::brand::CLI_NAME;
 
 pub const ROUTE: &str = "/cli/app/data/put";
 /// Largest put, compressed (one exec's stdin cap).
@@ -196,7 +197,7 @@ pub fn put_via_exec(tgz: &[u8], root: &str, to: &str, way: Way, exec: ExecIn<'_>
             cleanup(&mut calls);
             return Err(format!(
                 "writing part {} of {groups} of the upload into the App failed ({e}); this box's App engine predates piped input, \
-                 so the put goes in small parts: the owner can install the current engine with k2 app engine install",
+                 so the put goes in small parts: the owner can install the current engine with {CLI_NAME} app engine install",
                 i + 1
             ));
         }

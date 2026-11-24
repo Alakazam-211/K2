@@ -31,6 +31,7 @@ use super::super::db_door::test_seams::Seam;
 use super::super::db_probe;
 use super::*;
 use crate::sql::sysops::{RealSystemOps, SystemOps};
+use k2_core::cli_name;
 
 const PORT: u16 = 5445;
 const APP: &str = "conn-real";
@@ -313,7 +314,7 @@ fn real_pg_connect_end_to_end() {
     let migrated = crate::sql::routes::with_test_ops(srv, || {
         crate::sql::ops::migrate_db(srv, &crate::sql::secrets::FileSecretStore::default(), &ws, Some(&dbname), &ws_path, None)
     });
-    check("k2 db migrate applies 0001_notes.sql", migrated.as_ref().is_ok_and(|m| m["applied"].to_string().contains("0001")), format!("{migrated:?}"), &mut fails);
+    check(concat!(cli_name!(), " db migrate applies 0001_notes.sql"), migrated.as_ref().is_ok_and(|m| m["applied"].to_string().contains("0001")), format!("{migrated:?}"), &mut fails);
     let row = super::super::reach::app_row(APP).expect("app");
     let url = url_for_app(&row, "DATABASE_URL").expect("the App's URL in the vault");
     let pw = db_probe::parse_url(&url).expect("a URL").password;
@@ -325,7 +326,7 @@ fn real_pg_connect_end_to_end() {
     check("but can't create tables (DML only)", ddl.is_err(), format!("{ddl:?}"), &mut fails);
     // 4. The migrator's URL works through the door too.
     let (_, c) = call(srv, CHECK, &Who::Owner, json!({ "app": APP }));
-    check("k2 app db check PASSes", c["check"]["ok"] == true, &c, &mut fails);
+    check(concat!(cli_name!(), " app db check PASSes"), c["check"]["ok"] == true, &c, &mut fails);
     match in_wall("DATABASE_MIGRATE_URL") {
         Some(m) => {
             let p = db_probe::probe_url(&m, Duration::from_secs(10));

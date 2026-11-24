@@ -15,6 +15,7 @@ use k2_vault::{
     Actor, Delivery, Kind, LocalVault, Namespace, PutMode, PutRequest, Requester, Scope, SecretBytes, SecretStore,
     Selector, Use, VaultError,
 };
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// What one adoption pass did.
 #[derive(Debug, Default, Clone, serde::Serialize)]
@@ -117,7 +118,7 @@ pub fn thread_secrets(vault: &LocalVault, root: &Path) -> Adopted {
                     .map(|n| format!("- {n} → k2v://ws/{label}/{n} — read it at $K2_SECRETS_DIR/{n} in new sessions"))
                     .collect();
                 let body = format!(
-                    "The secrets people gave you through Thread cards now live in the K2 vault (encrypted).\n\n{}\n\nThey have no sites yet, so `k2 vault fetch` refuses them until the owner adds one (k2 vault hosts NAME --add <host>).\nMore: k2 study vault",
+                    "The secrets people gave you through Thread cards now live in the {PRODUCT_NAME} vault (encrypted).\n\n{}\n\nThey have no sites yet, so `{CLI_NAME} vault fetch` refuses them until the owner adds one ({CLI_NAME} vault hosts NAME --add <host>).\nMore: {CLI_NAME} study vault",
                     lines.join("\n")
                 );
                 let _ = k2_core::inbox::compose(Path::new(&path), "Your Thread secrets moved into the vault", &body, Some("normal"), Some("vault"), Some("k2"));
@@ -191,7 +192,7 @@ pub fn json_store(vault: &LocalVault, path: &Path, engine: &str, subsystem: &str
                 let marker = path.with_extension("json.moved");
                 let _ = k2_vault::fsutil::write_private_atomic(
                     &marker,
-                    format!("moved into the K2 vault at {}\n", chrono::Utc::now().to_rfc3339()).as_bytes(),
+                    format!("moved into the {PRODUCT_NAME} vault at {}\n", chrono::Utc::now().to_rfc3339()).as_bytes(),
                 );
             }
             Err(e) => out.errors.push(format!("moved but not removed ({})", e.kind())),

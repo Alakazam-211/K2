@@ -183,6 +183,8 @@ use crate::mail::{
     routes_access, routes_addresses, routes_domains, routes_external, routes_link_oauth,
     routes_messages, routes_oauth_config, routes_send, routes_server,
 };
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::cli_name;
 
 /// Mail-domain GET dispatch. Returns `Some(resp)` for a handled path,
 /// `None` if the path isn't a mail route. Claims the WHOLE
@@ -777,32 +779,32 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
     )
 }
 
-const OWNER_ONLY_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)";
+const OWNER_ONLY_HINT: &str = concat!("requires owner/admin — ask your human (", cli_name!(), " hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces)");
 
-const OWNER_ONLY_MANAGE_HINT: &str = "requires owner/admin — ask your human (k2 hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces). To let this workspace's agent manage hosted mail: Settings → Workspaces / Agents → (this workspace) → Permissions → Hosted mail → \"Let this agent manage hosted mail\".";
+const OWNER_ONLY_MANAGE_HINT: &str = concat!("requires owner/admin — ask your human (", cli_name!(), " hostmail and mail access/link/domain/server/config/approvals/doctor are owner surfaces). To let this workspace's agent manage hosted mail: Settings → Workspaces / Agents → (this workspace) → Permissions → Hosted mail → \"Let this agent manage hosted mail\".");
 
 /// C33: flag-on leftover M6 names the missing verb, not the Settings toggle.
 fn leftover_m6_hint(path: &str) -> String {
     let verb = if path == "/cli/mail/server/uninstall" {
-        "k2 hostmail uninstall"
+        concat!(cli_name!(), " hostmail uninstall")
     } else if path == "/cli/mail/server/upgrade" {
-        "k2 hostmail upgrade"
+        concat!(cli_name!(), " hostmail upgrade")
     } else if path == "/cli/mail/domain/remove" {
-        "k2 hostmail domain remove"
+        concat!(cli_name!(), " hostmail domain remove")
     } else if path.starts_with("/cli/mail/oauth-config") {
-        "k2 mail oauth-config"
+        concat!(cli_name!(), " mail oauth-config")
     } else if path.starts_with("/cli/mail/link/") {
-        "k2 mail link"
+        concat!(cli_name!(), " mail link")
     } else if path.starts_with("/cli/mail/external/") {
-        "k2 mail link"
+        concat!(cli_name!(), " mail link")
     } else if path == "/cli/mail-manage" {
         "POST /cli/mail-manage"
     } else if path == "/cli/mail/dav" {
-        "k2 hostmail calendar"
+        concat!(cli_name!(), " hostmail calendar")
     } else if path == "/cli/mail/profile" {
-        "k2 hostmail profile"
+        concat!(cli_name!(), " hostmail profile")
     } else if path == "/cli/mail/sieve-audit" {
-        "k2 hostmail audit-sieve"
+        concat!(cli_name!(), " hostmail audit-sieve")
     } else {
         path
     };
@@ -849,7 +851,7 @@ pub fn owner_only_manage_response_for(
                 .unwrap_or(p);
             (
                 format!(
-                    "{OWNER_ONLY_MANAGE_HINT} K2 checked workspace '{name}' ({p}): its \
+                    "{OWNER_ONLY_MANAGE_HINT} {PRODUCT_NAME} checked workspace '{name}' ({p}): its \
                      toggle is off. It is per workspace, so turn it on for '{name}' itself."
                 ),
                 serde_json::json!({ "name": name, "path": p, "id": workspace_uuid }),

@@ -56,6 +56,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(default)]
@@ -105,8 +106,8 @@ impl GitGuard {
         }
         match self.unpushed_commits {
             None => parts.push(
-                "unverifiable push state (detached HEAD or no upstream configured — \
-                 K2 cannot prove the work is pushed)"
+                concat!("unverifiable push state (detached HEAD or no upstream configured — \
+                 ", product_name!(), " cannot prove the work is pushed)")
                     .to_string(),
             ),
             Some(n) if n > 0 => parts.push(format!(

@@ -27,6 +27,8 @@ use k2_core::deploy::validate::pg_range_ok;
 use k2_root_proto::pg_major::SUPPORTED;
 use serde::Serialize;
 use serde_json::{json, Value as J};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Where [`db_of`] found the App's database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -84,11 +86,11 @@ pub fn resolve(url: &UrlLookup, known: &dyn Fn(&str) -> Option<(String, u32)>, d
         UrlLookup::Value(dsn) => match dbname_from_dsn(dsn) {
             Some(name) => match known(&name) {
                 Some((project_id, major)) => DbOf::Known(DbRef { name, project_id, major, source: Source::Ref }),
-                None => DbOf::Unknown(format!("its DATABASE_URL names {name}, which isn't a K2 database on this server")),
+                None => DbOf::Unknown(format!("its DATABASE_URL names {name}, which isn't a {PRODUCT_NAME} database on this server")),
             },
-            None => DbOf::Unknown("its DATABASE_URL isn't a Postgres URL K2 can read".into()),
+            None => DbOf::Unknown(concat!("its DATABASE_URL isn't a Postgres URL ", product_name!(), " can read").into()),
         },
-        UrlLookup::Unreadable => DbOf::Unknown("its DATABASE_URL reference doesn't resolve now (k2 vault doctor)".into()),
+        UrlLookup::Unreadable => DbOf::Unknown(concat!("its DATABASE_URL reference doesn't resolve now (", cli_name!(), " vault doctor)").into()),
         UrlLookup::Absent => match default {
             Some((name, project_id, major)) => DbOf::Known(DbRef { name, project_id, major, source: Source::Default }),
             None => DbOf::None,
@@ -235,7 +237,7 @@ fn unsupported(range: &str) -> Unmet {
         code: MAJOR_UNSUPPORTED,
         status: 409,
         hint: format!(
-            "requires.postgres \"{range}\" is met by no Postgres major K2 runs ({sup}); 18 stays off until K2 supports it. Widen the range"
+            "requires.postgres \"{range}\" is met by no Postgres major {PRODUCT_NAME} runs ({sup}); 18 stays off until {PRODUCT_NAME} supports it. Widen the range"
         ),
         extra: json!({ "requires": range, "supported": SUPPORTED }),
     }
@@ -244,9 +246,9 @@ fn unsupported(range: &str) -> Unmet {
 /// The move that would satisfy `range` for a database on `major`.
 fn fix_for(db: &str, major: u32, range: &str) -> String {
     match supported_in(range).into_iter().rev().find(|m| *m > major) {
-        Some(to) => format!("move the database: k2 db upgrade {db} --to {to} (add --live to keep it serving while it copies)"),
+        Some(to) => format!("move the database: {CLI_NAME} db upgrade {db} --to {to} (add --live to keep it serving while it copies)"),
         None => format!(
-            "K2 moves databases only to a newer major, and no supported major above {major} meets \"{range}\": widen the App's range, or give it a database on an older major"
+            "{PRODUCT_NAME} moves databases only to a newer major, and no supported major above {major} meets \"{range}\": widen the App's range, or give it a database on an older major"
         ),
     }
 }
@@ -257,7 +259,7 @@ pub fn check(app: &str, range: &str, db: &DbOf) -> Result<(), Unmet> {
         return Err(Unmet {
             code: k2_core::deploy::codes::REQUIRES_UNMET,
             status: 409,
-            hint: format!("{app}'s requires.postgres is not a range ({e}); fix the manifest (k2 app validate)"),
+            hint: format!("{app}'s requires.postgres is not a range ({e}); fix the manifest ({CLI_NAME} app validate)"),
             extra: json!({ "requires": range }),
         });
     }
@@ -271,7 +273,7 @@ pub fn check(app: &str, range: &str, db: &DbOf) -> Result<(), Unmet> {
             code: k2_core::deploy::codes::REQUIRES_UNMET,
             status: 409,
             hint: format!(
-                "{app} needs a Postgres {range} database and its workspace has none. Create one: k2 db create --major {m}, then k2 db dsn --ref (or install with --pg-major {m})",
+                "{app} needs a Postgres {range} database and its workspace has none. Create one: {CLI_NAME} db create --major {m}, then {CLI_NAME} db dsn --ref (or install with --pg-major {m})",
                 m = best_major([range]).unwrap_or(k2_root_proto::pg_major::NEW_INSTALL)
             ),
             extra: json!({ "requires": range, "database": J::Null }),
@@ -298,7 +300,7 @@ pub fn check_live(app: &AppRow, range: Option<&str>) -> Result<(), Unmet> {
         return Err(Unmet {
             code: k2_core::deploy::codes::REQUIRES_UNMET,
             status: 409,
-            hint: format!("{} needs Postgres {range}; K2 runs Postgres on Linux boxes only", app.app_id),
+            hint: format!("{} needs Postgres {range}; {PRODUCT_NAME} runs Postgres on Linux boxes only", app.app_id),
             extra: json!({ "requires": range }),
         });
     }
@@ -312,7 +314,7 @@ fn unmet(hint: String, extra: J) -> Unmet {
 }
 
 fn create_hint(cluster: &str) -> String {
-    format!("create it there: k2 db create --cluster {cluster} --name <db>, then connect the App to it: k2 app db connect <app> --db <db> (its own login and DATABASE_URL, checked from inside)")
+    format!("create it there: {CLI_NAME} db create --cluster {cluster} --name <db>, then connect the App to it: {CLI_NAME} app db connect <app> --db <db> (its own login and DATABASE_URL, checked from inside)")
 }
 
 /// Pure: the App's database against `requires.postgres: {cluster, major?}`.
@@ -324,7 +326,7 @@ pub fn check_cluster(app: &str, req: &PgClusterRequire, db: &DbOf, cluster_of: &
     let extra = json!({ "requires": { "cluster": c, "major": req.major } });
     match db {
         DbOf::Unknown(why) => Err(unmet(
-            format!("{app} needs its database in the named cluster {c}, and {why}: a K2 database in {c} is the only one it may use; {}", create_hint(c)),
+            format!("{app} needs its database in the named cluster {c}, and {why}: a {PRODUCT_NAME} database in {c} is the only one it may use; {}", create_hint(c)),
             extra,
         )),
         DbOf::None => Err(unmet(format!("{app} needs a database in the named cluster {c} and its workspace has none; {}", create_hint(c)), extra)),
@@ -338,7 +340,7 @@ pub fn check_cluster(app: &str, req: &PgClusterRequire, db: &DbOf, cluster_of: &
                 let where_ = other.map(|(n, m)| format!("{m}/{n}")).unwrap_or_else(|| format!("{}/main", r.major));
                 Err(unmet(
                     format!(
-                        "{app} needs its database in the named cluster {c}, and its database {} lives in {where_}. K2 doesn't move databases between clusters: {}",
+                        "{app} needs its database in the named cluster {c}, and its database {} lives in {where_}. {PRODUCT_NAME} doesn't move databases between clusters: {}",
                         r.name,
                         create_hint(c)
                     ),
@@ -362,7 +364,7 @@ pub fn named_cluster_of_db(name: &str) -> Option<(String, u32)> {
 /// Live: the App's database against its cluster requirement.
 pub fn check_cluster_live(app: &AppRow, req: &PgClusterRequire) -> Result<(), Unmet> {
     if !crate::sql::sql_supported() && !cfg!(test) {
-        return Err(unmet(format!("{} needs a Postgres database; K2 runs Postgres on Linux boxes only", app.app_id), json!({})));
+        return Err(unmet(format!("{} needs a Postgres database; {PRODUCT_NAME} runs Postgres on Linux boxes only", app.app_id), json!({})));
     }
     let db = db_of(app);
     check_cluster(&app.app_id, req, &db, &named_cluster_of_db)
@@ -376,18 +378,18 @@ pub fn install_plan_cluster_live(app: &str, workspace: &str, req: &PgClusterRequ
     let c = req.cluster.as_str();
     let extra = json!({ "requires": { "cluster": c, "major": req.major } });
     if !crate::sql::sql_supported() && !cfg!(test) {
-        return Err(unmet(format!("{app} needs a Postgres database; K2 runs Postgres on Linux boxes only"), extra));
+        return Err(unmet(format!("{app} needs a Postgres database; {PRODUCT_NAME} runs Postgres on Linux boxes only"), extra));
     }
     let k2db = k2_core::db::shared();
     let conn = k2db.lock();
     let Some(cl) = crate::sql::cluster::for_name_in(&conn, c) else {
         return Err(unmet(
-            format!("{app} needs the named cluster {c}, and this box has none by that name: make it with k2 db cluster create <major> --name {c}"),
+            format!("{app} needs the named cluster {c}, and this box has none by that name: make it with {CLI_NAME} db cluster create <major> --name {c}"),
             extra,
         ));
     };
     if cl.role != "k2" || cl.origin != "created" {
-        return Err(unmet(format!("{app} needs the named cluster {c}, and {} isn't one K2 made: K2 never offers it to an App", cl.label()), extra));
+        return Err(unmet(format!("{app} needs the named cluster {c}, and {} isn't one {PRODUCT_NAME} made: {PRODUCT_NAME} never offers it to an App", cl.label()), extra));
     }
     if req.major.is_some_and(|m| m != cl.major) {
         return Err(unmet(format!("{app} needs {c} on Postgres {}, and {} is Postgres {}", req.major.unwrap_or_default(), cl.label(), cl.major), extra));
@@ -469,7 +471,7 @@ pub fn install_plan(app: &str, range: Option<&str>, pick: Option<u32>, existing:
             return Err(Unmet {
                 code: MAJOR_UNSUPPORTED,
                 status: 400,
-                hint: format!("--pg-major {m}: K2 creates databases on Postgres {sup}"),
+                hint: format!("--pg-major {m}: {PRODUCT_NAME} creates databases on Postgres {sup}"),
                 extra: json!({ "pgMajor": m, "supported": SUPPORTED }),
             });
         }
@@ -479,7 +481,7 @@ pub fn install_plan(app: &str, range: Option<&str>, pick: Option<u32>, existing:
             return Err(Unmet {
                 code: k2_core::deploy::codes::REQUIRES_UNMET,
                 status: 409,
-                hint: format!("{app}'s requires.postgres is not a range ({e}); fix the manifest (k2 app validate)"),
+                hint: format!("{app}'s requires.postgres is not a range ({e}); fix the manifest ({CLI_NAME} app validate)"),
                 extra: json!({ "requires": r }),
             });
         }
@@ -509,9 +511,9 @@ pub fn install_plan(app: &str, range: Option<&str>, pick: Option<u32>, existing:
             }
             let want = pick.or_else(|| range.and_then(|r| best_major([r]))).unwrap_or(major);
             let fix = if want > major {
-                format!("move it first: k2 db upgrade {name} --to {want} (add --live to keep it serving), then install again")
+                format!("move it first: {CLI_NAME} db upgrade {name} --to {want} (add --live to keep it serving), then install again")
             } else {
-                format!("K2 moves databases only to a newer major: install with --pg-major {major}{}", range.map(|r| format!(" if \"{r}\" allows it")).unwrap_or_default())
+                format!("{PRODUCT_NAME} moves databases only to a newer major: install with --pg-major {major}{}", range.map(|r| format!(" if \"{r}\" allows it")).unwrap_or_default())
             };
             Err(Unmet {
                 code: k2_core::deploy::codes::REQUIRES_UNMET,
@@ -547,7 +549,7 @@ pub fn install_plan_live(app: &str, workspace: &str, range: Option<&str>, pick: 
         return Err(Unmet {
             code: k2_core::deploy::codes::REQUIRES_UNMET,
             status: 409,
-            hint: format!("{app} needs a Postgres database; K2 runs Postgres on Linux boxes only"),
+            hint: format!("{app} needs a Postgres database; {PRODUCT_NAME} runs Postgres on Linux boxes only"),
             extra: json!({ "requires": range, "pgMajor": pick }),
         });
     }

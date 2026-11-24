@@ -49,6 +49,7 @@ use serde_json::{json, Map, Value as J};
 use super::routes::{no, Refusal};
 use crate::permission::actions::{Answerer, Applied, Ctx};
 use crate::permission::{answer, approvers, limits, present, store};
+use k2_core::brand::PRODUCT_NAME;
 
 /// What "Let this agent manage its Apps' users" covers, in one line: the
 /// card says it next to the option that turns it on, the switch's own
@@ -407,7 +408,7 @@ fn why_of(r: &reqs::AppRequest) -> String {
         .filter(|w| !crate::permission::routes::secret_shaped(w));
     match own {
         Some(w) => w.to_string(),
-        None => format!("K2 held this for you: {}", r.reasons.first().map(String::as_str).unwrap_or("an owner step")),
+        None => format!("{PRODUCT_NAME} held this for you: {}", r.reasons.first().map(String::as_str).unwrap_or("an owner step")),
     }
 }
 

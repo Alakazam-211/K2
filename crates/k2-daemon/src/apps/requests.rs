@@ -40,6 +40,7 @@ use serde_json::{json, Value as J};
 use sha2::Digest as _;
 
 use super::routes::{app_for, need_credential, no, Who, R};
+use k2_core::product_name;
 
 pub const ROUTES: &[&str] = &["/cli/app/requests"];
 
@@ -444,7 +445,7 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "totals": totals,
         "dropped": dropped(),
         "keep": { "days": store::KEEP_DAYS, "rowsPerApp": store::MAX_ROWS_PER_APP },
-        "stored": "method, path without its query, status, K2's code, bytes, timings, who closed early, a daily visitor key; never query strings, header values, bodies or IP addresses",
+        "stored": concat!("method, path without its query, status, ", product_name!(), "'s code, bytes, timings, who closed early, a daily visitor key; never query strings, header values, bodies or IP addresses"),
         "codes": [rcodes::BAD_REQUEST, rcodes::HEAD_TOO_LARGE, rcodes::TOO_MANY_WRITES, rcodes::APP_NOT_ANSWERING, rcodes::APP_NOT_RUNNING, rcodes::SIGN_IN_DOOR, rcodes::K2_ANSWER],
         "file": store::db_path(),
     }))

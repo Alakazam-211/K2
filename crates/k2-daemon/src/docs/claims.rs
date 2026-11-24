@@ -42,6 +42,7 @@ use super::caller::DocCaller;
 use super::host::{self, Principal};
 use super::routes::{self, Call};
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The docs store's host-table namespace of the last-read rows.
 pub const LAST_READ_NS: &str = "k2.docs.lastread";
@@ -225,7 +226,7 @@ pub(super) fn bounced(s: &Session, c: &Call, e: &SessionError) -> CliResponse {
     let what = note.as_deref().map(|n| format!(" (\"{n}\")")).unwrap_or_default();
     let next = match place {
         Some(p) => format!(
-            "You're #{p} in line: K2 will message you when they're free, with the version to re-read (k2 doc cat {}) before you edit again",
+            "You're #{p} in line: {PRODUCT_NAME} will message you when they're free, with the version to re-read ({CLI_NAME} doc cat {}) before you edit again",
             c.target.rel
         ),
         None => format!("Retry after it ends (in {}), re-reading first", human_secs(*remaining_ms)),
@@ -284,8 +285,8 @@ fn chatter_bounce(bounced_project: String, by: String, by_name: String, rel: Str
             Some(Principal::Agent(id)) => workspace_path(&id).unwrap_or(by_name),
             _ => by_name,
         };
-        let summary = format!("k2 doc: an edit to {rel} waited for a claim");
-        crate::overlay_routes::record_inject_chatter(&to, &from, &format!("k2 doc: {text}"), "doc", None, Some(&summary));
+        let summary = format!("{CLI_NAME} doc: an edit to {rel} waited for a claim");
+        crate::overlay_routes::record_inject_chatter(&to, &from, &format!("{CLI_NAME} doc: {text}"), "doc", None, Some(&summary));
     });
 }
 
@@ -298,7 +299,7 @@ pub fn notify_free(key: DocKey, waiter: String, holder: String, lines: (usize, u
         let Some(to) = workspace_path(&project_id) else { return };
         let ws = if project_id == key.space { String::new() } else { format!(" -w {}", workspace_path(&key.space).unwrap_or(key.space.clone())) };
         let text = format!(
-            "k2 doc: lines {}–{} of {} are free now ({} finished). The doc is at v{version}: re-read before editing (k2 doc cat{ws} {}); your next edit there is checked against what you read.",
+            "{CLI_NAME} doc: lines {}–{} of {} are free now ({} finished). The doc is at v{version}: re-read before editing ({CLI_NAME} doc cat{ws} {}); your next edit there is checked against what you read.",
             lines.0,
             lines.1,
             key.path,
@@ -308,7 +309,7 @@ pub fn notify_free(key: DocKey, waiter: String, holder: String, lines: (usize, u
         let r = crate::workspace_msg::deliver_live_with_via(&to, &text, "k2", "doc", false, Duration::from_secs(3), "doc");
         if !r.success {
             log_debug!("[docs] free-now for {waiter} on {} not delivered live ({:?}); Chatter only", host::key_label(&key), r.reason);
-            let summary = format!("k2 doc: {} is free now", key.path);
+            let summary = format!("{CLI_NAME} doc: {} is free now", key.path);
             crate::overlay_routes::record_inject_chatter(&to, "k2", &text, "doc", None, Some(&summary));
         }
     });

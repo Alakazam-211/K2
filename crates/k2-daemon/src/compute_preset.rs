@@ -44,6 +44,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
+use k2_core::brand::PRODUCT_NAME;
 
 /// The file, relative to a checkout or the workspace folder.
 pub const FILE: &str = ".k2/compute.toml";
@@ -338,7 +339,7 @@ fn read_in(dir: &Path, jail: &Path) -> Result<Option<String>, String> {
     }
     let real = dunce::canonicalize(&p).map_err(|e| format!("{FILE}: {e}"))?;
     if !real.starts_with(jail) {
-        return Err(format!("{} leads outside the workspace (a symlink?); K2 reads only files inside it", p.display()));
+        return Err(format!("{} leads outside the workspace (a symlink?); {PRODUCT_NAME} reads only files inside it", p.display()));
     }
     let mut f = std::fs::File::open(&real).map_err(|e| format!("{FILE}: {e}"))?;
     if f.metadata().map(|m| m.len()).unwrap_or(0) > MAX_BYTES {
@@ -429,7 +430,7 @@ pub fn apply(v: &mut Value, loaded: Option<&Loaded>, preset: Option<&str>) -> Re
     let (defaults, chosen): (&Settings, Option<&Settings>) = match (loaded, preset) {
         (None, None) => (&empty, None),
         (None, Some(p)) => {
-            return Err((codes::PRESET_NOT_FOUND, format!("--preset {p}: no {FILE} found (K2 looks in your checkout, the --repo folder, then the workspace folder)")))
+            return Err((codes::PRESET_NOT_FOUND, format!("--preset {p}: no {FILE} found ({PRODUCT_NAME} looks in your checkout, the --repo folder, then the workspace folder)")))
         }
         (Some(l), None) => (&l.file.defaults, None),
         (Some(l), Some(p)) => match l.file.presets.get(p) {

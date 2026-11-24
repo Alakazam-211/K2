@@ -627,7 +627,7 @@ impl StalwartClient {
             CertManagement::Other(t) => {
                 return Err(format!(
                     "x:Domain/get: domain '{domain_id}' has certificateManagement \
-                     '@type' '{t}' — K2 only knows Manual/Automatic; not touching it"
+                     '@type' '{t}' — {PRODUCT_NAME} only knows Manual/Automatic; not touching it"
                 ))
             }
             CertManagement::Automatic {
@@ -708,9 +708,9 @@ impl StalwartClient {
             // configured"). Never flip it back here — say who owns it.
             return Err(format!(
                 "Stalwart ACME is off (Manual) for {lock_host}, so Stalwart has nothing to \
-                 renew. K2 renews the mail certificate only while {lock_host} is attached \
-                 (`k2 domain`); to hand it back to Stalwart's own ACME run \
-                 `k2 hostmail cert owner --stalwart-acme`"
+                 renew. {PRODUCT_NAME} renews the mail certificate only while {lock_host} is attached \
+                 (`{CLI_NAME} domain`); to hand it back to Stalwart's own ACME run \
+                 `{CLI_NAME} hostmail cert owner --stalwart-acme`"
             ));
         }
         self.queue_acme_renewal(&domain_id)
@@ -1022,7 +1022,7 @@ impl StalwartClient {
             "accountId": account_id,
             "create": {
                 CREATE_TAG: {
-                    "description": "K2 daemon mail supervisor",
+                    "description": concat!(product_name!(), " daemon mail supervisor"),
                     "permissions": { "@type": "Inherit" },
                     "allowedIps": { "127.0.0.1": true },
                 }
@@ -2090,7 +2090,7 @@ impl StalwartClient {
             let body = serde_json::json!({
                 "@type": "Relay",
                 "name": route_name,
-                "description": format!("K2 smart-host route for {domain}"),
+                "description": format!("{PRODUCT_NAME} smart-host route for {domain}"),
                 "address": r.host,
                 "port": r.port,
                 "protocol": "smtp",
@@ -5503,6 +5503,8 @@ fn parse_email_set_updated(id: &str, args: &serde_json::Value) -> Result<(), Str
 mod reply_context;
 use reply_context::parse_reply_context;
 pub use reply_context::ReplyContext;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// Pure `Identity/get` matcher: the id of the identity whose email
 /// equals `from_email` (ASCII-case-insensitive). `None` = no match
@@ -5712,7 +5714,7 @@ pub fn sender_account_object(local_part: &str, stalwart_domain_id: &str) -> serd
         "@type": "User",
         "name": local_part,
         "domainId": stalwart_domain_id,
-        "description": "K2 Email Notifications sender",
+        "description": concat!(product_name!(), " Email Notifications sender"),
         "quotas": { "maxDiskQuota": SENDER_MAX_DISK_BYTES, "maxEmails": SENDER_MAX_EMAILS },
         "permissions": sender_permissions(),
     })
@@ -6045,7 +6047,7 @@ impl crate::mail::supervisor::BootstrapApi for StalwartBootstrap {
             "k2-daemon",
             &domain_id,
             &password,
-            "K2 daemon mail supervisor",
+            concat!(product_name!(), " daemon mail supervisor"),
         )
     }
 

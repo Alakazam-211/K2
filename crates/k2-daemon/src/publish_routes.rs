@@ -15,6 +15,7 @@ use crate::cli_response::CliResponse;
 use crate::label_owner;
 use crate::publish_runtime::{self, ProbeTimeout, PublishError, RunSpec};
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 const FOREIGN_STICKER: &str =
     "label_owned_by_other_workspace: not yours; ask the server owner to transfer it";
@@ -291,8 +292,8 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool, dev: bool) -> Opti
 /// Why an agent's first `--dev` run of a label waits.
 fn dev_gate() -> Gate {
     Gate {
-        why: "a --dev service runs from your live folder with no wall around it, so each new one waits for the owner's in-person approval \
-              (k2 app approve <id> from a terminal outside K2, or Settings → Cores → App Approvals)"
+        why: concat!("a --dev service runs from your live folder with no wall around it, so each new one waits for the owner's in-person approval \
+              (", cli_name!(), " app approve <id> from a terminal outside ", product_name!(), ", or Settings → Cores → App Approvals)")
             .into(),
         switch_off: false,
     }
@@ -348,16 +349,16 @@ fn gate_for(legacy: bool, level: crate::apps::access::Level) -> Option<Gate> {
             return None;
         }
         return Some(Gate {
-            why: "re-running this service needs \"Build and run Apps\" on this workspace (the owner turns it on: \
-                  k2 app access <workspace> --build on), or the owner approves this run"
+            why: concat!("re-running this service needs \"Build and run Apps\" on this workspace (the owner turns it on: \
+                  ", cli_name!(), " app access <workspace> --build on), or the owner approves this run")
                 .into(),
             switch_off: true,
         });
     }
     Some(Gate {
         why: format!(
-            "from K2 {PUBLISH_RUN_GATE_FROM} a new --cmd service from an agent is an open-path App, which loosens its wall: \
-             each new service waits for the owner's in-person approval (k2 app approve <id> from a terminal outside K2, or \
+            "from {PRODUCT_NAME} {PUBLISH_RUN_GATE_FROM} a new --cmd service from an agent is an open-path App, which loosens its wall: \
+             each new service waits for the owner's in-person approval ({CLI_NAME} app approve <id> from a terminal outside {PRODUCT_NAME}, or \
              Settings → Cores → App Approvals)"
         ),
         switch_off: false,
@@ -494,8 +495,8 @@ fn refuse_new_skin(project_id: &str, name: &str) -> Option<CliResponse> {
         "skin_retired",
         format!(
             "--skin no longer makes new sites, because Apps replaced it. '{normalized}' wasn't created. \
-             For a folder of files: k2 app init --template static, then k2 app deploy (k2 study app-deploys). \
-             For a server of your own: k2 publish run {normalized} --cmd \"<your server>\" --port <n>. Sites already on --skin keep working."
+             For a folder of files: {CLI_NAME} app init --template static, then {CLI_NAME} app deploy ({CLI_NAME} study app-deploys). \
+             For a server of your own: {CLI_NAME} publish run {normalized} --cmd \"<your server>\" --port <n>. Sites already on --skin keep working."
         ),
     ))
 }
@@ -559,7 +560,7 @@ fn handle_client_ip_set(params: &HashMap<String, String>) -> CliResponse {
     let on = match opt_param(params, "on").as_deref().map(str::trim) {
         Some("true" | "1" | "on") => true,
         Some("false" | "0" | "off") => false,
-        _ => return CliResponse::bad_request("pass on=true|false (k2 publish client-ip <label> on|off)"),
+        _ => return CliResponse::bad_request(concat!("pass on=true|false (", cli_name!(), " publish client-ip <label> on|off)")),
     };
     let norm = match k2_core::tunnel::client_ip_labels::normalize_label(&label) {
         Ok(l) => l,
@@ -574,7 +575,7 @@ fn handle_client_ip_set(params: &HashMap<String, String>) -> CliResponse {
             content_type: "application/json",
             body: serde_json::json!({
                 "error": format!(
-                    "no nested service {norm:?} on this box (k2 publish subdomain list, k2 app list): nothing changed"
+                    "no nested service {norm:?} on this box ({CLI_NAME} publish subdomain list, {CLI_NAME} app list): nothing changed"
                 ),
                 "code": "label_not_found",
             })
@@ -720,7 +721,7 @@ pub(crate) fn handle_subdomain_claim(params: &HashMap<String, String>) -> CliRes
                 body: serde_json::json!({
                     "code": "label_needs_owner",
                     "error": format!("label_needs_owner: '{label_lc}' already serves something on this box and no workspace holds it."),
-                    "hint": format!("k2 publish subdomain claim {label_lc} files a request for the owner (a card on your Thread)."),
+                    "hint": format!("{CLI_NAME} publish subdomain claim {label_lc} files a request for the owner (a card on your Thread)."),
                     "label": label_lc,
                 })
                 .to_string(),
@@ -923,7 +924,7 @@ fn handle_validate(params: &HashMap<String, String>) -> CliResponse {
                     body: serde_json::json!({
                         "error": "not_found",
                         "message": format!("no published App named '{}' in this workspace", name.trim()),
-                        "suggestion": "list them with k2 publish ps, or check a folder with k2 app validate --dir <path>",
+                        "suggestion": concat!("list them with ", cli_name!(), " publish ps, or check a folder with ", cli_name!(), " app validate --dir <path>"),
                     })
                     .to_string(),
                 }
@@ -933,7 +934,7 @@ fn handle_validate(params: &HashMap<String, String>) -> CliResponse {
         let base = PathBuf::from(&row.cwd);
         let dir = if row.kind == k2_core::published_services::KIND_SKIN && row.skin_root.trim().is_empty() {
             return CliResponse::bad_request(format!(
-                "'{}' serves K2's bundled app pages, not code of its own; nothing to validate",
+                "'{}' serves {PRODUCT_NAME}'s bundled app pages, not code of its own; nothing to validate",
                 row.name
             ));
         } else if row.kind == k2_core::published_services::KIND_SKIN {
@@ -1091,7 +1092,7 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
             "note": format!(
                 "the owner approved this exact run of {name} ({id}): the same command, folder, port and tunnel run again \
                  without asking until it lapses (30 days after the approval, or when {name} is removed) or the owner \
-                 revokes it (k2 app approvals revoke {id}); any change asks the owner again"
+                 revokes it ({CLI_NAME} app approvals revoke {id}); any change asks the owner again"
             ),
         })
     });
@@ -1185,7 +1186,7 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
                 if was_public {
                     o.insert(
                         "visibilityNote".into(),
-                        serde_json::json!("it was public, and a dev server isn't public by accident: it is private now (k2 publish visibility <name> public --dev-is-public to choose otherwise)"),
+                        serde_json::json!(concat!("it was public, and a dev server isn't public by accident: it is private now (", cli_name!(), " publish visibility <name> public --dev-is-public to choose otherwise)")),
                     );
                 }
                 if let Some(g) = gate {
@@ -1416,8 +1417,8 @@ fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
         return frame_error(
             "403 Forbidden",
             "owner_only",
-            "k2 publish frame is owner-only: it decides which other sites may frame this App. \
-             Ask your human to run it from a shell outside K2 (or the owner's terminal).",
+            concat!(cli_name!(), " publish frame is owner-only: it decides which other sites may frame this App. \
+             Ask your human to run it from a shell outside ", product_name!(), " (or the owner's terminal)."),
         );
     }
     let project = match need_project(params) {
@@ -1440,7 +1441,7 @@ fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
         return frame_error(
             "400 Bad Request",
             "usage",
-            "pass exactly one of allow, none or reset (k2 publish frame <name> --allow <origin> | --none | --reset)",
+            concat!("pass exactly one of allow, none or reset (", cli_name!(), " publish frame <name> --allow <origin> | --none | --reset)"),
         );
     }
     let change = if none {

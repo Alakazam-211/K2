@@ -33,6 +33,8 @@ pub const POST_ROUTES: &[&str] = &["/cli/app/egress/add", "/cli/app/egress/rm", 
 
 /// The vault confirm action for approving any held App request.
 pub use super::approvals::CONFIRM_ACTION;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub mod codes {
     pub const HELD: &str = "held";
@@ -121,7 +123,7 @@ pub(crate) fn check_specs(raw: &[String]) -> R<Vec<HostSpec>> {
             return Err(no(
                 codes::EGRESS_SELF,
                 400,
-                format!("{sp} is this box: an App reaches K2 through its gateway, never through the egress proxy"),
+                format!("{sp} is this box: an App reaches {PRODUCT_NAME} through its gateway, never through the egress proxy"),
             ));
         }
         if let Ok(ip) = sp.host.parse::<std::net::IpAddr>() {
@@ -152,7 +154,7 @@ fn held_answer(w: &pol::Widening, already: &[HostSpec]) -> J {
     let mut v = super::approvals::held_answer(w);
     v["alreadyAllowed"] = json!(already.iter().map(HostSpec::display).collect::<Vec<_>>());
     v["hint"] = json!(format!(
-        "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Cores → App \
+        "held for the owner: they approve it in person ({CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}, or Settings → Cores → App \
          Approvals). Until then the App can't reach it.",
         w.id
     ));
@@ -185,7 +187,7 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "note": if enf {
             "Guarded: the App reaches only the allowed hosts, through its own proxy (DNS in the proxy). Private, local and metadata addresses and this box's own names are always refused."
         } else if app.is_process_exception() {
-            "This App is the process exception: it has no route out at all (no proxy; its unit allows loopback only: its gateway and the box Postgres it was granted). This list doesn't apply to it. To reach the internet through the proxy, run it guarded (k2 app exception <app> off)."
+            concat!("This App is the process exception: it has no route out at all (no proxy; its unit allows loopback only: its gateway and the box Postgres it was granted). This list doesn't apply to it. To reach the internet through the proxy, run it guarded (", cli_name!(), " app exception <app> off).")
         } else {
             "This App runs on the unwalled process engine (the owner's dev opt-in): it has the daemon's network and the list is not enforced. Deploy with --engine guarded to enforce it."
         },
@@ -361,7 +363,7 @@ pub(crate) fn change_mode(who: &Who, app: &deploy::store::AppRow, mode: &str, re
                     409,
                     format!(
                         "broad egress is the open path's (it turns the label to Open); App {} is guarded. Ask for the hosts it needs instead: \
-                         k2 app egress add {} <host[:port]>",
+                         {CLI_NAME} app egress add {} <host[:port]>",
                         app.app_id, app.app_id
                     ),
                 ));

@@ -33,6 +33,8 @@
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use k2_core::connect_users::Role;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// The clone doors the gate knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +129,7 @@ pub fn decide(who: &Who, door: Door, personal_on: bool, can_clone: impl Fn(&str)
                     code: codes::NOT_ALLOWED,
                     hint: format!(
                         "cloning isn't allowed for '{username}' on this server: the owner turns on \"Can clone\" for you in \
-                         Settings → Admin Access (or k2 users set-can-clone {username} on)"
+                         Settings → Admin Access (or {CLI_NAME} users set-can-clone {username} on)"
                     ),
                 });
             }
@@ -143,7 +145,7 @@ pub fn decide(who: &Who, door: Door, personal_on: bool, can_clone: impl Fn(&str)
         }
         Who::Agent { .. } | Who::Shell { .. } => Err(Denied {
             code: codes::AGENTS_PROPOSE,
-            hint: "agents can't clone; propose it and a person approves: k2 clone propose --to <host|here> --why \"…\""
+            hint: concat!("agents can't clone; propose it and a person approves: ", cli_name!(), " clone propose --to <host|here> --why \"…\"")
                 .to_string(),
         }),
         Who::Wrong | Who::Invalid => Err(Denied {

@@ -40,6 +40,7 @@ use k2_core::org_chart::{self as oc, day, store};
 use serde_json::{json, Value};
 
 use crate::wake_governor::{Governor, Hold, Slot};
+use k2_core::brand::CLI_NAME;
 
 /// The governor's name for the Org Chart's wakes.
 pub const SOURCE: &str = "org_chart";
@@ -231,9 +232,9 @@ fn run_phase(
         };
         let lines = d.bulletin.as_ref().map_or(0, |b| b.lines.len());
         let text = format!(
-            "Night run {}: you are {}'s head. Your bulletin has {lines} of {} lines; {updates} update{} from members since last night (k2 organization updates). \
-             Ask members for news if you need it (k2 organization ask \"What changed today?\"), then write the bulletin, at most {} lines of {} characters: \
-             k2 organization bulletin set --file <path>. It shows to every agent at once.",
+            "Night run {}: you are {}'s head. Your bulletin has {lines} of {} lines; {updates} update{} from members since last night ({CLI_NAME} organization updates). \
+             Ask members for news if you need it ({CLI_NAME} organization ask \"What changed today?\"), then write the bulletin, at most {} lines of {} characters: \
+             {CLI_NAME} organization bulletin set --file <path>. It shows to every agent at once.",
             day::short_date(night + chrono::Duration::days(1)),
             d.org.name,
             k2_core::org_chart::text::BULLETIN_MAX_LINES,
@@ -286,7 +287,7 @@ fn last_call_phase(w: &dyn super::Waker, gov: &Governor, tonight: &[Due], key: &
             continue;
         }
         let text = format!(
-            "{}'s bulletin wasn't updated tonight. Write it now (k2 organization bulletin set --file <path>, at most {} lines), or it stays as it was.",
+            "{}'s bulletin wasn't updated tonight. Write it now ({CLI_NAME} organization bulletin set --file <path>, at most {} lines), or it stays as it was.",
             d.org.name,
             k2_core::org_chart::text::BULLETIN_MAX_LINES
         );
@@ -309,7 +310,7 @@ fn last_call_phase(w: &dyn super::Waker, gov: &Governor, tonight: &[Due], key: &
 
 /// The line a member gets for a head's ask.
 pub(crate) fn ask_line(org_name: &str, head_handle: &str, question: &str) -> String {
-    format!("{org_name}'s head ({head_handle}) asks: {question} Answer with: k2 organization update \"<your news>\"")
+    format!("{org_name}'s head ({head_handle}) asks: {question} Answer with: {CLI_NAME} organization update \"<your news>\"")
 }
 
 /// What trying one ask copy did.

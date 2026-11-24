@@ -32,13 +32,13 @@ use serde_json::json;
 
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::vault::actor::{Channel, VaultCaller};
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 use k2_core::brand::CLI_NAME;
 
 /// The card's route wall: an agent's own call to the owner handoff.
 pub(crate) const HANDOFF_ROUTE: &str = crate::chat_pass::mint::OWNER_HANDOFF;
 /// Why a tunnel answer (Connect, a phone) doesn't open Sew.
-pub(crate) const LOCAL_ONLY: &str = "Open this from K2 on the server's own computer (or Settings → Cores → Chat / Voice there): chat opens as its owner only from this server or its LAN, never through the tunnel";
+pub(crate) const LOCAL_ONLY: &str = concat!("Open this from ", product_name!(), " on the server's own computer (or Settings → Cores → Chat / Voice there): chat opens as its owner only from this server or its LAN, never through the tunnel");
 
 /// The one-time link lives this long (the handoff code's TTL).
 pub(crate) const LINK_TTL_SECS: i64 = crate::chat_pass::handoff::TTL_SECS;
@@ -55,7 +55,7 @@ pub(crate) static OWNER_HANDOFF: ActionSpec = ActionSpec {
     words: Words {
         setting: "Open chat as owner",
         what_changes: "Open the chat web app as its install owner, for you ({ws} asked)",
-        consequences: "K2 opens a one-time link for you only (it works once, for 60 seconds); {ws} never gets it and never becomes chat's owner. In chat, promoting someone to install owner or admin lifts their chat bans.",
+        consequences: concat!(product_name!(), " opens a one-time link for you only (it works once, for 60 seconds); {ws} never gets it and never becomes chat's owner. In chat, promoting someone to install owner or admin lifts their chat bans."),
         scope: "you, once",
         duration: "once",
         retry: "",
@@ -97,7 +97,7 @@ pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
         setting: "Roll chat back",
         what_changes: "Roll this server's chat back from {from} to {to}",
         consequences: concat!("Chat written since {since} will be lost from the live chat; a backup of it is kept. Approving runs \
-            it now: K2 backs up the chat on version {from}, then everyone's chat goes back to how it was at {since}. Chat is offline \
+            it now: ", product_name!(), " backs up the chat on version {from}, then everyone's chat goes back to how it was at {since}. Chat is offline \
             for a few minutes while it runs. To bring the newer chat back later: ", cli_name!(), " hostchat upgrade, then ", cli_name!(), " hostchat \
             restore <the kept backup> --confirm."),
         scope: "this server's chat, for everyone",
@@ -105,7 +105,7 @@ pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat rollback --accept-data-loss (a terminal outside K2)") },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat rollback --accept-data-loss (a terminal outside ", product_name!(), ")") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: crate::sew::routes::ROLLBACK_NEEDS_PERSON },
         route_prefix: ROLLBACK_ROUTE,

@@ -369,11 +369,11 @@ fn advanced_purpose(name: &str, rtype: &str) -> String {
 
 /// HF15: `ptr set` works only for K2 Cloud servers (a k2.dev K2X row).
 const PTR_PURPOSE: &str =
-    "Reverse DNS (K2 Cloud: `k2 hostmail ptr set`; self-hosted: at your VPS provider — not in this zone)";
+    concat!("Reverse DNS (", product_name!(), " Cloud: `", cli_name!(), " hostmail ptr set`; self-hosted: at your VPS provider — not in this zone)");
 
 fn ptr_instruction(host: &str) -> String {
     format!(
-        "Set the reverse DNS (PTR) of your server's IP to {host}. K2 Cloud: run `k2 hostmail \
+        "Set the reverse DNS (PTR) of your server's IP to {host}. {PRODUCT_NAME} Cloud: run `{CLI_NAME} hostmail \
          ptr set`. Self-hosted: set it in your VPS provider's panel (Hetzner/DigitalOcean/…) — \
          it cannot be set at your domain registrar"
     )
@@ -428,7 +428,7 @@ pub fn apply_mail_host_a_row(
         )
     };
     if expected == A_PLACEHOLDER {
-        purpose.push_str(" (run `k2 hostmail doctor` to fill in this server's IP)");
+        purpose.push_str(concat!(" (run `", cli_name!(), " hostmail doctor` to fill in this server's IP)"));
     }
     if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
         if row.expected != expected {
@@ -787,7 +787,7 @@ pub fn apply_external_zone_skips(rows: &mut [RecordRow], domain: &str, k2_hosted
 /// raw Stalwart text — so the relay-mode SPF adjustment is what the
 /// user downloads. TXT values keep their quoted split form.
 pub fn render_zone_file(domain: &str, rows: &[RecordRow]) -> String {
-    let mut out = format!("; K2 Mail DNS records for {domain}\n; records can take up to 48 h to propagate\n");
+    let mut out = format!("; {PRODUCT_NAME} Mail DNS records for {domain}\n; records can take up to 48 h to propagate\n");
     for row in rows {
         if row.category == CAT_INSTRUCTION || row.status == ST_SKIP {
             continue;
@@ -1001,6 +1001,8 @@ impl DomainEngine for StalwartClient {
 /// `env:<VAR>` / absolute-path spellings. A resolvable-but-absent ref
 /// is "re-run enable", not a scheme error.
 use super::secrets::{FileSecretStore, SecretStore as _};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The `mail_server` fields S2 needs (hostname rides along for the
 /// PTR row + MX synthesis).

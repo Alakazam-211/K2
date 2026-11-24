@@ -33,6 +33,8 @@ use k2_mpc_base::session::RESERVED_PID_PREFIX;
 use k2_mpc_base::store::{DocKey, DocStore, VersionId, BLOB_DOC_PACK};
 
 use super::host::Principal;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The name K2 gives an agent participant that has no display name
 /// ([`super::caller::DocCaller::participant`]).
@@ -298,7 +300,7 @@ pub fn inbox_note(c: &Conflict, holder_label: Option<&str>, copy: Option<&str>) 
         c.key.path,
         match holder_label {
             Some(h) => format!("while {h} held its lease"),
-            None => "over a version it hadn't seen (a write through K2, a restore or a merge)".to_string(),
+            None => concat!("over a version it hadn't seen (a write through ", product_name!(), ", a restore or a merge)").to_string(),
         },
         c.current,
         c.kept,
@@ -307,7 +309,7 @@ pub fn inbox_note(c: &Conflict, holder_label: Option<&str>, copy: Option<&str>) 
         body.push_str(&format!(", also kept as the copy \"{copy}\" in the workspace"));
     }
     body.push_str(&format!(
-        "\n\nk2 doc versions {p} lists them; k2 doc restore --version {kept} {p} makes the replaced one current again.",
+        "\n\n{CLI_NAME} doc versions {p} lists them; {CLI_NAME} doc restore --version {kept} {p} makes the replaced one current again.",
         p = c.key.path,
         kept = c.kept,
     ));
@@ -394,7 +396,7 @@ impl Sink for K2Sink {
     }
 
     fn inbox(&self, workspace: &str, title: &str, body: &str) {
-        if let Err(e) = k2_core::inbox::compose(Path::new(workspace), title, body, Some("high"), Some("docs"), Some("k2 doc")) {
+        if let Err(e) = k2_core::inbox::compose(Path::new(workspace), title, body, Some("high"), Some("docs"), Some(concat!(cli_name!(), " doc"))) {
             k2_core::log_debug!("[docs] WARN: conflict note in {workspace}: {e}");
         }
     }

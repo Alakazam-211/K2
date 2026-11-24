@@ -52,6 +52,8 @@ use serde_json::{json, Value as J};
 
 use super::data_put::Exec;
 use super::routes::{actor, app_for, json_body, need_build, no, s, Refusal, Who, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const ROUTE_LS: &str = "/cli/app/data/ls";
 pub const ROUTE_GET: &str = "/cli/app/data/get";
@@ -213,8 +215,8 @@ fn script_refusal(exit: i64, out: &str, rel: &str, other: &str) -> Refusal {
     let detail = if rest.is_empty() { String::new() } else { format!(" ({})", rest.chars().take(300).collect::<String>()) };
     match (exit, word) {
         (3, "symlink") => symlink_refusal(rel),
-        (3, "not_found") => fail(NOT_FOUND, 404, format!("{} isn't in the App's data folder (k2 app data ls)", shown(rel))),
-        (3, "is_dir") => fail(IS_FOLDER, 409, format!("{} is a folder: list it with k2 app data ls; remove it with --recursive", shown(rel))),
+        (3, "not_found") => fail(NOT_FOUND, 404, format!("{} isn't in the App's data folder ({CLI_NAME} app data ls)", shown(rel))),
+        (3, "is_dir") => fail(IS_FOLDER, 409, format!("{} is a folder: list it with {CLI_NAME} app data ls; remove it with --recursive", shown(rel))),
         (3, "not_file") => fail(NOT_FILE, 409, format!("{} isn't a regular file", shown(rel))),
         (3, "exists") => fail(EXISTS, 409, format!("{other} is there already: --force replaces it")),
         (3, "exists_dir") => fail(EXISTS, 409, format!("{other} is a folder that is there already: a move never lands inside it or replaces it")),
@@ -223,7 +225,7 @@ fn script_refusal(exit: i64, out: &str, rel: &str, other: &str) -> Refusal {
 }
 
 fn symlink_refusal(rel: &str) -> Refusal {
-    fail(SYMLINK, 403, format!("{} goes through a symlink: k2 app data never follows one (it could point outside the data folder)", shown(rel)))
+    fail(SYMLINK, 403, format!("{} goes through a symlink: {CLI_NAME} app data never follows one (it could point outside the data folder)", shown(rel)))
 }
 
 /// The data folder itself on an ls script's argv (see [`ls_script`]).
@@ -241,8 +243,8 @@ fn run(exec: Exec<'_>, argv: Vec<String>) -> R<(i64, String)> {
             409,
             match empty {
                 // skip(3): index i is the script's ${i} ($0 = k2-data).
-                Some(i) => format!("k2 app data built an empty argument (${i}) for the App's exec; nothing ran"),
-                None => "k2 app data built an argument the App's exec refuses; nothing ran".to_string(),
+                Some(i) => format!("{CLI_NAME} app data built an empty argument (${i}) for the App's exec; nothing ran"),
+                None => concat!(cli_name!(), " app data built an argument the App's exec refuses; nothing ran").to_string(),
             },
         ));
     }
@@ -348,7 +350,7 @@ pub(crate) fn get_local(root: &Path, parts: &[String], offset: u64) -> R<Chunk> 
     use std::io::{Read, Seek, SeekFrom};
     let rel = parts.join("/");
     match lwalk(root, parts)?.1 {
-        None => return Err(fail(NOT_FOUND, 404, format!("{} isn't in the App's data folder (k2 app data ls)", shown(&rel)))),
+        None => return Err(fail(NOT_FOUND, 404, format!("{} isn't in the App's data folder ({CLI_NAME} app data ls)", shown(&rel)))),
         Some(m) if m.file_type().is_symlink() => return Err(symlink_refusal(&rel)),
         Some(m) if m.is_dir() => return Err(script_refusal(3, "k2:is_dir", &rel, "")),
         Some(m) if !m.is_file() => return Err(script_refusal(3, "k2:not_file", &rel, "")),
@@ -452,7 +454,7 @@ pub(crate) fn ls_local(root: &Path, parts: &[String]) -> R<Listing> {
         lwalk(root, parts)?
     };
     let Some(m) = m else {
-        return Err(fail(NOT_FOUND, 404, format!("{} isn't in the App's data folder (k2 app data ls)", shown(&rel))));
+        return Err(fail(NOT_FOUND, 404, format!("{} isn't in the App's data folder ({CLI_NAME} app data ls)", shown(&rel))));
     };
     let name = parts.last().cloned().unwrap_or_default();
     if m.file_type().is_symlink() {
@@ -493,7 +495,7 @@ pub(crate) fn rm_wall(root: &str, rel: &str, recursive: bool, exec: Exec<'_>) ->
 pub(crate) fn rm_local(root: &Path, parts: &[String], recursive: bool) -> R<String> {
     let rel = parts.join("/");
     let (p, m) = lwalk(root, parts)?;
-    let m = m.ok_or_else(|| fail(NOT_FOUND, 404, format!("{rel} isn't in the App's data folder (k2 app data ls)")))?;
+    let m = m.ok_or_else(|| fail(NOT_FOUND, 404, format!("{rel} isn't in the App's data folder ({CLI_NAME} app data ls)")))?;
     let io = |e: std::io::Error| fail(FAILED, 409, format!("{rel}: {e}"));
     if m.file_type().is_symlink() {
         std::fs::remove_file(&p).map_err(io)?;
@@ -528,7 +530,7 @@ pub(crate) fn mv_local(root: &Path, from: &[String], to: &[String], force: bool)
     let (fr, tr) = (from.join("/"), to.join("/"));
     let (a, am) = lwalk(root, from)?;
     if am.is_none() {
-        return Err(fail(NOT_FOUND, 404, format!("{fr} isn't in the App's data folder (k2 app data ls)")));
+        return Err(fail(NOT_FOUND, 404, format!("{fr} isn't in the App's data folder ({CLI_NAME} app data ls)")));
     }
     let (b, bm) = lwalk(root, to)?;
     let io = |e: std::io::Error| fail(FAILED, 409, format!("{fr} → {tr}: {e}"));
@@ -646,7 +648,7 @@ fn get(who: &Who, params: &std::collections::HashMap<String, String>) -> R<J> {
             TOO_LARGE,
             413,
             format!(
-                "{rel} is {} MiB; k2 app data get reads back {} MiB at most: split or compress it inside the App first (k2 app exec {} -- …)",
+                "{rel} is {} MiB; {CLI_NAME} app data get reads back {} MiB at most: split or compress it inside the App first ({CLI_NAME} app exec {} -- …)",
                 c.size >> 20,
                 MAX_GET >> 20,
                 app.app_id

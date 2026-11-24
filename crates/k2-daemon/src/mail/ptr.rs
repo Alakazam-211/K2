@@ -32,6 +32,7 @@ use crate::cli_response::CliResponse;
 use crate::dns::proxy::{self, DnsHttpResponse};
 use crate::mail::dns_verify::{DnsError, DnsResolver, SystemResolver};
 use crate::mail::preflight::{PreflightEnv, RealPreflightEnv};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The relays this box knows about, resolved: never treated as the origin
 /// for PTR/HELO (0.46.6, PRD relay-default-and-ptr-guard D11–D14).
@@ -315,7 +316,7 @@ fn origin_ipv4(env: &dyn PreflightEnv, relays: &RelaySet) -> Result<Ipv4Addr, Cl
             "502 Bad Gateway",
             "origin_ip",
             format!(
-                "origin IPv4 {ip} is a K2 relay ({relay}) — refuse (PTR must be this box's \
+                "origin IPv4 {ip} is a {PRODUCT_NAME} relay ({relay}) — refuse (PTR must be this box's \
                  own public address, never a relay)"
             ),
         ));
@@ -660,7 +661,7 @@ pub(crate) fn handle_ptr_set_with(
         Err(e) => serde_json::json!({
             "warning": format!(
                 "the running mail server keeps its old name until it restarts: {e}. Restart it: \
-                 sudo /usr/bin/systemctl restart stalwart. Never `k2 hostmail disable/enable`"
+                 sudo /usr/bin/systemctl restart stalwart. Never `{CLI_NAME} hostmail disable/enable`"
             ),
         }),
     };

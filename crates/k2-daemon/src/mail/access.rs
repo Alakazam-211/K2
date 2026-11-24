@@ -37,6 +37,7 @@ use crate::mail::addresses::{self, AddrError};
 use crate::mail::external;
 use crate::mail::messages::ReadError;
 use k2_core::db::schema::MailExternalInbox;
+use k2_core::brand::CLI_NAME;
 
 // ── Levels ──────────────────────────────────────────────────────────────
 
@@ -496,7 +497,7 @@ pub fn can_delete(project_id: &str, raw_address: &str) -> Result<AccessInbox, Re
     if !cd {
         return Err(ReadError::Usage(format!(
             "deleting from '{}' needs the delete capability — ask your human to enable it \
-             ('k2 mail access manage {} <workspace> --delete')",
+             ('{CLI_NAME} mail access manage {} <workspace> --delete')",
             inbox.address, inbox.address
         )));
     }
@@ -722,7 +723,7 @@ fn manage_target(raw_address: &str) -> Result<ManageTarget, AccessError> {
         .ok();
     row.ok_or_else(|| {
         AccessError::NotFound(format!(
-            "no inbox '{address}' — 'k2 mail inboxes' shows what you manage"
+            "no inbox '{address}' — '{CLI_NAME} mail inboxes' shows what you manage"
         ))
     })
 }
@@ -834,7 +835,7 @@ pub fn revoke_access(
     if target.owner_project_id == grantee_project_id {
         return Err(AccessError::Usage(format!(
             "that workspace is the PRIMARY of '{}' — you can't revoke the manager. Transfer \
-             with 'k2 mail access primary', or remove a linked inbox with 'k2 mail link remove'.",
+             with '{CLI_NAME} mail access primary', or remove a linked inbox with '{CLI_NAME} mail link remove'.",
             target.address
         )));
     }

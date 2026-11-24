@@ -45,6 +45,8 @@ use super::supervisor::{
     STALWART_PINNED_VERSION, STALWART_SNAPSHOT_DIR, STALWART_SNAPSHOT_MARKER, STALWART_UNIT,
 };
 use super::sysops::SystemOps;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// JMAP ping attempts after the start (Stalwart may open a large store
 /// slowly after a version change), [`PING_INTERVAL_MS`] apart.
@@ -198,8 +200,8 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
     let Some(status) = plan.prior_status.clone() else {
         blockers.push(Blocker::new(
             "not_installed",
-            "hosted mail is not installed on this box — nothing to upgrade \
-             (k2 hostmail enable installs the pinned version directly)",
+            concat!("hosted mail is not installed on this box — nothing to upgrade \
+             (", cli_name!(), " hostmail enable installs the pinned version directly)"),
         ));
         return Preflight::Blocked(plan, blockers);
     };
@@ -208,8 +210,8 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
     if status == "installing" || installed.is_none() {
         blockers.push(Blocker::new(
             "enable_incomplete",
-            "hosted mail enable has not finished (no installed version recorded) — \
-             finish `k2 hostmail enable` first; upgrade only moves a completed install",
+            concat!("hosted mail enable has not finished (no installed version recorded) — \
+             finish `", cli_name!(), " hostmail enable` first; upgrade only moves a completed install"),
         ));
         return Preflight::Blocked(plan, blockers);
     }
@@ -233,8 +235,8 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
     {
         blockers.push(Blocker::new(
             "enable_incomplete",
-            "no management API key recorded — finish `k2 hostmail enable` first (the \
-             health check needs it)",
+            concat!("no management API key recorded — finish `", cli_name!(), " hostmail enable` first (the \
+             health check needs it)"),
         ));
     }
     if !ops.path_exists(STALWART_BIN) {
@@ -259,8 +261,8 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
             "upgrade_interrupted",
             format!(
                 "the last upgrade never finished (the daemon stopped mid-run, at step '{}') — \
-                 check `k2 hostmail status` and that Stalwart serves mail; the pre-upgrade \
-                 snapshot is {STALWART_SNAPSHOT_DIR}. Then run `k2 hostmail upgrade \
+                 check `{CLI_NAME} hostmail status` and that Stalwart serves mail; the pre-upgrade \
+                 snapshot is {STALWART_SNAPSHOT_DIR}. Then run `{CLI_NAME} hostmail upgrade \
                  --acknowledge-failed`",
                 previous_run
                     .as_ref()
@@ -271,9 +273,9 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
         Some("rollback_failed") => blockers.push(Blocker::new(
             "rollback_failed",
             format!(
-                "the last upgrade's rollback failed — follow its manual steps (k2 hostmail \
+                "the last upgrade's rollback failed — follow its manual steps ({CLI_NAME} hostmail \
                  status --json → upgrade.manualSteps; the snapshot at {STALWART_SNAPSHOT_DIR} \
-                 may be the only good copy), then run `k2 hostmail upgrade \
+                 may be the only good copy), then run `{CLI_NAME} hostmail upgrade \
                  --acknowledge-failed`"
             ),
         )),
@@ -326,8 +328,8 @@ pub fn preflight(ops: &dyn SystemOps, rt: &Runtime, arch: &str) -> Preflight {
             Err(_) => blockers.push(Blocker::new(
                 "mail_helper_outdated",
                 helper_fix_hint(
-                    "the mail helper on this box predates `k2 hostmail upgrade` (it has no \
-                     `version` verb)",
+                    concat!("the mail helper on this box predates `", cli_name!(), " hostmail upgrade` (it has no \
+                     `version` verb)"),
                 ),
             )),
             Ok(raw) => match serde_json::from_str::<serde_json::Value>(raw.trim()) {
@@ -557,8 +559,8 @@ fn rollback_steps(plan: &Plan) -> Vec<String> {
         steps.push("start Stalwart + the same health check".to_string());
     }
     steps.push(
-        "if any rollback step fails: state rollback_failed, hostmail status error, exact \
-         manual steps in `k2 hostmail status --json`"
+        concat!("if any rollback step fails: state rollback_failed, hostmail status error, exact \
+         manual steps in `", cli_name!(), " hostmail status --json`")
             .to_string(),
     );
     steps
@@ -654,12 +656,12 @@ pub fn untouched_steps(step: &str, was_running: bool) -> Vec<String> {
     )];
     if was_running {
         steps.push(format!(
-            "{SUDO_SYSTEMCTL} start stalwart && k2 hostmail status"
+            "{SUDO_SYSTEMCTL} start stalwart && {CLI_NAME} hostmail status"
         ));
     } else {
-        steps.push("k2 hostmail status   # it was stopped before the upgrade".into());
+        steps.push(concat!(cli_name!(), " hostmail status   # it was stopped before the upgrade").into());
     }
-    steps.push("k2 hostmail upgrade --acknowledge-failed".into());
+    steps.push(concat!(cli_name!(), " hostmail upgrade --acknowledge-failed").into());
     steps
 }
 
@@ -858,12 +860,12 @@ pub fn manual_steps(previous: Option<(&str, &StalwartArtifact)>, was_running: bo
     }
     if was_running {
         steps.push(format!(
-            "{SUDO_SYSTEMCTL} start stalwart && k2 hostmail status"
+            "{SUDO_SYSTEMCTL} start stalwart && {CLI_NAME} hostmail status"
         ));
     } else {
-        steps.push("k2 hostmail status   # Stalwart stays stopped, as before the upgrade".into());
+        steps.push(concat!(cli_name!(), " hostmail status   # Stalwart stays stopped, as before the upgrade").into());
     }
-    steps.push("k2 hostmail upgrade --acknowledge-failed".to_string());
+    steps.push(concat!(cli_name!(), " hostmail upgrade --acknowledge-failed").to_string());
     steps
 }
 
@@ -930,7 +932,7 @@ pub fn run(
         if let Err(e) = r.exec("stop-again", |r| r.stop()) {
             warning = Some(format!(
                 "upgraded, but Stalwart could not be stopped again ({e}) — it was '{}' \
-                 before the upgrade and is running now; run `k2 hostmail disable` if it \
+                 before the upgrade and is running now; run `{CLI_NAME} hostmail disable` if it \
                  should stay off",
                 plan.prior_status.as_deref().unwrap_or("?")
             ));
@@ -1052,7 +1054,7 @@ fn rollback_failed(r: &mut Run, msg: String, steps: Vec<String>) -> serde_json::
         .unwrap_or_else(|| "unknown".into());
     let status_msg = format!(
         "upgrade to {STALWART_PINNED_VERSION} failed and its rollback failed: {msg} — manual \
-         steps: k2 hostmail status --json (upgrade.manualSteps)"
+         steps: {CLI_NAME} hostmail status --json (upgrade.manualSteps)"
     );
     supervisor::set_status("error");
     supervisor::set_last_error(Some(&status_msg));
@@ -1261,7 +1263,7 @@ pub fn recover(
         Recovery::Nothing => unreachable!("returned above"),
         Recovery::Succeeded => {
             r.progress["warning"] = serde_json::json!(format!(
-                "{why} after the upgrade had succeeded; check `k2 hostmail status` (it was \
+                "{why} after the upgrade had succeeded; check `{CLI_NAME} hostmail status` (it was \
                  '{}' before and should be stopped again)",
                 plan.prior_status.as_deref().unwrap_or("?")
             ));
@@ -1338,7 +1340,7 @@ fn recover_finish(r: &mut Run, why: &str) -> serde_json::Value {
         if let Err(e) = r.exec("stop-again", |r| r.stop()) {
             r.progress["warning"] = serde_json::json!(format!(
                 "upgraded, but Stalwart could not be stopped again ({e}) — it was '{}' \
-                 before the upgrade and is running now; run `k2 hostmail disable` if it \
+                 before the upgrade and is running now; run `{CLI_NAME} hostmail disable` if it \
                  should stay off",
                 r.plan.prior_status.as_deref().unwrap_or("?")
             ));
@@ -1441,7 +1443,7 @@ pub fn start_live(req: UpgradeRequest) -> UpgradeStart {
                 "ok": true,
                 "outcome": "acknowledged",
                 "upgrade": p,
-                "hint": "acknowledged — next: k2 hostmail upgrade --dry-run",
+                "hint": concat!("acknowledged — next: ", cli_name!(), " hostmail upgrade --dry-run"),
             })),
             Err(b) => refused(&b, std::slice::from_ref(&b), None),
         };

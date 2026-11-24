@@ -16,6 +16,8 @@ use super::sysops::{RealSystemOps, SystemOps};
 
 #[cfg(test)]
 use super::sysops::FakeSystemOps;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub(crate) fn err_json(status: &'static str, code: &str, hint: impl Into<String>) -> CliResponse {
     CliResponse {
@@ -276,7 +278,7 @@ pub fn handle_server_default_major(body: &[u8]) -> CliResponse {
         .map(|n| n > 0)
         .unwrap_or(false);
     if !installed {
-        return err_json("409 Conflict", "not_ready", "the SQL sidecar is not enabled (k2 db enable)");
+        return err_json("409 Conflict", "not_ready", concat!("the SQL sidecar is not enabled (", cli_name!(), " db enable)"));
     }
     match super::cluster::set_default_major_in(&conn, b.major) {
         Ok(()) => ok_json(serde_json::json!({ "ok": true, "defaultMajor": b.major, "pinned": true })),
@@ -326,7 +328,7 @@ fn test_db_forbidden() -> CliResponse {
     err_json(
         "403 Forbidden",
         "forbidden",
-        "k2 db --test is owner or owning-workspace cell only — Connect members and grants cannot mint or fetch a migrator DSN",
+        concat!(cli_name!(), " db --test is owner or owning-workspace cell only — Connect members and grants cannot mint or fetch a migrator DSN"),
     )
 }
 
@@ -354,7 +356,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
             return err_json(
                 "400 Bad Request",
                 "usage",
-                "k2 db create --test does not take --name (name is {workspace}_test)",
+                concat!(cli_name!(), " db create --test does not take --name (name is {workspace}_test)"),
             );
         }
         if grant_path_blocks_test(&project_id) {
@@ -461,13 +463,13 @@ fn without_passwords(mut v: serde_json::Value, test: bool) -> serde_json::Value 
     }
     v["dsnHasPassword"] = serde_json::json!(false);
     v["dsnHint"] = serde_json::json!(if test {
-        "full DSNs: k2 db dsn --test --reveal (agent) and k2 db dsn --test --actor migrator --reveal; or k2 db run --test -- <cmd>".to_string()
+        concat!("full DSNs: ", cli_name!(), " db dsn --test --reveal (agent) and ", cli_name!(), " db dsn --test --actor migrator --reveal; or ", cli_name!(), " db run --test -- <cmd>").to_string()
     } else {
-        format!("run a command with it: k2 db run --db {name} -- <cmd> (or k2 db dsn --db {name} --reveal to print it)")
+        format!("run a command with it: {CLI_NAME} db run --db {name} -- <cmd> (or {CLI_NAME} db dsn --db {name} --reveal to print it)")
     });
     if !test {
         // 0.46.11 (F3): what an App needs next.
-        v["next"] = serde_json::json!(format!("k2 app db connect <app> --db {name}"));
+        v["next"] = serde_json::json!(format!("{CLI_NAME} app db connect <app> --db {name}"));
     }
     v
 }

@@ -32,6 +32,8 @@ pub mod links;
 pub mod owner_routes;
 
 use k2_core::skin::{self, app_pairing as store};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// The vault confirm action for setting an App's phone apps (`secretId` =
 /// the App's service id).
@@ -193,10 +195,10 @@ impl NotServed {
     pub fn hint(self) -> &'static str {
         match self {
             NotServed::NotRuntime => {
-                "pairing needs a runtime App (k2 app deploy): K2 serves the phone link files on its own front, which a --cmd or --skin service doesn't pass through"
+                concat!("pairing needs a runtime App (", cli_name!(), " app deploy): ", product_name!(), " serves the phone link files on its own front, which a --cmd or --skin service doesn't pass through")
             }
             NotServed::Raw => {
-                "this App's manifest says host.clientIp: false (a raw splice), so K2 can't answer on its host; turn the client-IP front back on to pair phones"
+                concat!("this App's manifest says host.clientIp: false (a raw splice), so ", product_name!(), " can't answer on its host; turn the client-IP front back on to pair phones")
             }
         }
     }
@@ -274,7 +276,7 @@ pub fn refresh_links(service_id: &str) {
         crate::apps::alerts::note(
             &app.owner_workspace,
             "Phone pairing stopped",
-            &format!("K2 no longer serves {name}'s phone link files, so phones can't pair: {why}. Starts answer pairing_not_served until it's fixed."),
+            &format!("{PRODUCT_NAME} no longer serves {name}'s phone link files, so phones can't pair: {why}. Starts answer pairing_not_served until it's fixed."),
         );
     }
 }
@@ -341,7 +343,7 @@ pub(crate) fn off_response(off: Off) -> crate::cli_response::CliResponse {
             refusal_with("403 Forbidden", "pairing_off", "phone pairing is off on this server (K2_APP_PAIRING=off)", extra)
         }
         Off::NotSetUp | Off::Owner => {
-            refusal("403 Forbidden", "pairing_off", "this App doesn't pair phones (its owner turns it on: k2 app pairing setup)")
+            refusal("403 Forbidden", "pairing_off", concat!("this App doesn't pair phones (its owner turns it on: ", cli_name!(), " app pairing setup)"))
         }
     }
 }

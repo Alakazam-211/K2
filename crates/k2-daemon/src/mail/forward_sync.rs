@@ -58,6 +58,8 @@ use serde_json::json;
 
 use super::jmap::{SieveScriptInfo, StalwartClient};
 use super::sieve_user::{self, guard_host_ok, ForwardBlock, ForwardGuard, UserSieve};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 const P: &str = "[mail/forward-sync]";
 
@@ -233,7 +235,7 @@ pub const V_OUTSIDE_FORWARD: super::defaults::Ver = (0, 16, 25);
 
 /// The refusal hint for an older (or unknown) mail server.
 pub const UPGRADE_HINT: &str =
-    "outside forwarding needs the mail server upgraded: k2 hostmail upgrade (same-box forwards work as they are)";
+    concat!("outside forwarding needs the mail server upgraded: ", cli_name!(), " hostmail upgrade (same-box forwards work as they are)");
 
 #[cfg(test)]
 thread_local! {
@@ -503,7 +505,7 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
         super::forward_verify::tell_owner(
             &format!("Forwarding from {} is paused", mb.address),
             &format!(
-                "Agent sending is off for this mailbox's workspace, so K2 paused the outside forwards its agent set: {}. New mail stays in the mailbox. They go back on by themselves if agent sending is turned on again. To keep one on anyway, resume it, and it no longer follows agent sending: k2 hostmail forward resume {} --to <address>.",
+                "Agent sending is off for this mailbox's workspace, so {PRODUCT_NAME} paused the outside forwards its agent set: {}. New mail stays in the mailbox. They go back on by themselves if agent sending is turned on again. To keep one on anyway, resume it, and it no longer follows agent sending: {CLI_NAME} hostmail forward resume {} --to <address>.",
                 sending_off.join(", "),
                 mb.address
             ),
@@ -514,7 +516,7 @@ fn sync_locked(io: &dyn SieveIo, address_id: &str, why: Why, ctx: &Ctx) -> Resul
         super::forward_verify::tell_owner(
             &format!("Forwarding from {} is back on", mb.address),
             &format!(
-                "Agent sending is on again for this mailbox's workspace, so K2 turned back on the outside forwards its agent set: {}. New mail goes there again. To stop it: k2 hostmail forward pause {}.",
+                "Agent sending is on again for this mailbox's workspace, so {PRODUCT_NAME} turned back on the outside forwards its agent set: {}. New mail goes there again. To stop it: {CLI_NAME} hostmail forward pause {}.",
                 sending_on.join(", "),
                 mb.address
             ),
@@ -590,7 +592,7 @@ impl std::fmt::Display for ChangeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ChangeError::Row(e) => write!(f, "{e}"),
-            ChangeError::Sieve(_, e) => write!(f, "saved, but the mail server wasn't updated yet ({e}); K2 retries within the hour"),
+            ChangeError::Sieve(_, e) => write!(f, "saved, but the mail server wasn't updated yet ({e}); {PRODUCT_NAME} retries within the hour"),
         }
     }
 }
@@ -1049,7 +1051,7 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
                 r.failed += 1;
                 k2_core::log_debug!("{P} mailbox {id} not cleaned: the old script can't be kept: {}", crate::email_notify::send::mask_addresses(&e));
                 if TOLD_LEFT.lock().unwrap_or_else(|p| p.into_inner()).insert(address.clone()) {
-                    left.push(format!("{address}: its script is as it was, because K2 couldn't save a copy of it first."));
+                    left.push(format!("{address}: its script is as it was, because {PRODUCT_NAME} couldn't save a copy of it first."));
                 }
                 continue;
             }
@@ -1094,9 +1096,9 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
     }
     if !stripped.is_empty() {
         super::forward_outcomes::notice(
-            "K2 removed a forward nobody set",
+            concat!(product_name!(), " removed a forward nobody set"),
             &format!(
-                "These mail filters had a redirect with no forward on record behind it: nobody set it through K2, and the address was never told or counted. K2 removed only that; any other rules in the script are still there.\n\n{}\n\nThe removal is in the audit log (k2 users audit --json). Check who could change these mailboxes, and their recent activity.",
+                "These mail filters had a redirect with no forward on record behind it: nobody set it through {PRODUCT_NAME}, and the address was never told or counted. {PRODUCT_NAME} removed only that; any other rules in the script are still there.\n\n{}\n\nThe removal is in the audit log ({CLI_NAME} users audit --json). Check who could change these mailboxes, and their recent activity.",
                 stripped.join("\n")
             ),
             &[],
@@ -1104,9 +1106,9 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
     }
     if !left.is_empty() {
         super::forward_outcomes::notice(
-            "K2 couldn't remove a forward nobody set",
+            concat!(product_name!(), " couldn't remove a forward nobody set"),
             &format!(
-                "These mail filters have a redirect with no forward on record behind it, and K2 couldn't take that out. K2 keeps trying each hour. Until it works, if the script is running, mail may still leave.\n\n{}",
+                "These mail filters have a redirect with no forward on record behind it, and {PRODUCT_NAME} couldn't take that out. {PRODUCT_NAME} keeps trying each hour. Until it works, if the script is running, mail may still leave.\n\n{}",
                 left.join("\n")
             ),
             &[],
@@ -1114,9 +1116,9 @@ fn strip_unbacked(io: &dyn SieveIo, ctx: &Ctx, skip: &std::collections::HashSet<
     }
     if !imported.is_empty() {
         super::forward_outcomes::notice(
-            "K2 found a same-box forward with no record",
+            concat!(product_name!(), " found a same-box forward with no record"),
             &format!(
-                "K2 found these in mail filters with no forward on record, so it recorded them and they keep running. If you didn't expect one, remove it: k2 hostmail forward unset <mailbox>.\n\n{}",
+                "{PRODUCT_NAME} found these in mail filters with no forward on record, so it recorded them and they keep running. If you didn't expect one, remove it: {CLI_NAME} hostmail forward unset <mailbox>.\n\n{}",
                 imported.join("\n")
             ),
             &[],

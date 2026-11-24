@@ -22,6 +22,8 @@
 //! the same approach the S6 doctor will need.
 
 use std::time::Duration;
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// One row of the checklist. `status` maps to the UI glyphs:
 /// pass = ✓, warn = ?, fail = ✖, info = neutral prose (e.g. the
@@ -202,7 +204,7 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
             status: CheckStatus::Fail,
             detail: format!(
                 "this box already runs a mail server ({who} is listening on :25); \
-                 K2 won't fight it"
+                 {PRODUCT_NAME} won't fight it"
             ),
         }),
         None => checks.push(PreflightCheck {
@@ -243,9 +245,9 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
             id: "port-443",
             label: "TLS / port plan",
             status: CheckStatus::Info,
-            detail: "K2's :443 front passes the mail names through to Stalwart on 127.0.0.1:8443 \
+            detail: concat!(product_name!(), "'s :443 front passes the mail names through to Stalwart on 127.0.0.1:8443 \
                      (PROXY v2, real client IPs) — plan A: certificates via ACME TLS-ALPN-01 \
-                     through the front"
+                     through the front")
                 .into(),
         });
         "tls-alpn"

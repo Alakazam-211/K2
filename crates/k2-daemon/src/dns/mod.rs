@@ -8,6 +8,7 @@
 //! tunnel bearer (`k2c_…` from `~/.k2/tunnel.json`).
 //!
 //! Routes: [`routes`] via the thin [`crate::dns_routes`] shim.
+use k2_core::cli_name;
 
 pub mod proxy;
 pub mod routes;
@@ -30,8 +31,8 @@ pub const ZONE_LIFECYCLE_HINT: &str =
     "agents cannot create or delete zones — zone lifecycle is owner-only";
 
 /// Teaching text when a DNS write targets a zone not attached on this box.
-pub const DNS_ZONE_NOT_ATTACHED_HINT: &str = "this DNS zone is not attached to this server — \
-the owner can attach it in Settings → Network → Custom Domains (or `k2 domain add`)";
+pub const DNS_ZONE_NOT_ATTACHED_HINT: &str = concat!("this DNS zone is not attached to this server — \
+the owner can attach it in Settings → Network → Custom Domains (or `", cli_name!(), " domain add`)");
 
 /// The owner name the k2.dev records API wants for `name` in zone `apex`.
 ///

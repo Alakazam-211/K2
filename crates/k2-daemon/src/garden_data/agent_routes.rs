@@ -23,6 +23,7 @@ use super::audit::{self, Counted};
 use super::budget::{self, BudgetKey, Spend};
 use super::{generation, notify_changed, store, wait_for_change};
 use crate::zen_data_routes::DataWho;
+use k2_core::brand::CLI_NAME;
 
 // ── shared helpers (grant and export routes use these too) ───────────
 
@@ -386,7 +387,7 @@ fn batch(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
     let space = data_space(&b.widget)?;
     if b.ops.is_empty() || b.ops.len() > MAX_BATCH_OPS {
         return Err(DataError::TooLarge(format!(
-            "a batch is 1–{MAX_BATCH_OPS} ops; use a transaction (k2 store batch does) for more"
+            "a batch is 1–{MAX_BATCH_OPS} ops; use a transaction ({CLI_NAME} store batch does) for more"
         )));
     }
     let bytes: usize = b.ops.iter().map(Op::value_bytes).sum();

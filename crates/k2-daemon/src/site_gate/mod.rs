@@ -34,13 +34,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use k2_core::auth_audit;
+use k2_core::{auth_audit, product_name};
 use k2_core::site_visibility::{self as sv, Mode, SessionKind};
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::client_ip::{self, GateHooks, GateRequest, GateVerdict};
 use dev::DevWake;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// K2's cookies: read by the gate, never forwarded to the site.
 pub const COOKIES: &[&str] = &[sv::COOKIE_SITE, sv::COOKIE_PIN];
@@ -499,7 +500,7 @@ impl Conn {
                 crate::apps::runtime_notes::owner_notice(
                     "A site's PIN is locked",
                     &format!(
-                        "{}: 30 wrong PINs in an hour. New tries wait an hour; people already in keep working. To end it now, set a new PIN (this also signs everyone with the old PIN out): k2 publish visibility {} pin",
+                        "{}: 30 wrong PINs in an hour. New tries wait an hour; people already in keep working. To end it now, set a new PIN (this also signs everyone with the old PIN out): {CLI_NAME} publish visibility {} pin",
                         self.label, self.label
                     ),
                 );
@@ -661,7 +662,7 @@ where
         // A silent peer just closes. Anything else that isn't a whole HTTP/1.x
         // request is refused, and nothing was dialed.
         if !peeked.bytes.is_empty() {
-            answer(client, &pages::plain("400 Bad Request", "K2 could not read this request.", g.dev, false)).await;
+            answer(client, &pages::plain("400 Bad Request", concat!(product_name!(), " could not read this request."), g.dev, false)).await;
         }
         return Ok(());
     };
@@ -756,11 +757,11 @@ pub fn door_refusal(label: &str) -> Option<String> {
     let conn = db.lock();
     let names = match custom_names(&conn, label) {
         Ok(n) => n,
-        Err(e) => return Some(format!("{}: K2 can't read this site's custom names ({e}), so it can't promise its gate covers them.", sv::DOOR_UNSUPPORTED)),
+        Err(e) => return Some(format!("{}: {PRODUCT_NAME} can't read this site's custom names ({e}), so it can't promise its gate covers them.", sv::DOOR_UNSUPPORTED)),
     };
     names.first().map(|n| {
         format!(
-            "{}: '{n}' serves this site directly, past K2's gate, so it can't be private or have a PIN yet. Remove that name first: k2 app domain rm {label} {n}",
+            "{}: '{n}' serves this site directly, past {PRODUCT_NAME}'s gate, so it can't be private or have a PIN yet. Remove that name first: {CLI_NAME} app domain rm {label} {n}",
             sv::DOOR_UNSUPPORTED
         )
     })
@@ -786,15 +787,15 @@ pub fn custom_name_refusal(label: &str, host: &str) -> Option<String> {
     match app_behind(&conn, label, "") {
         Ok(Some((_, true))) => {}
         Ok(_) => return None,
-        Err(e) => return refuse(format!("K2 can't read this site's App ({e}).")),
+        Err(e) => return refuse(format!("{PRODUCT_NAME} can't read this site's App ({e}).")),
     }
     match sv::effective_mode(&conn, label) {
         Ok(Mode::Public) => None,
         Ok(m) => refuse(format!(
-            "'{host}' would serve the {} site {label} past K2's gate, so it can't be added now. Keep {label} as it is and skip this name, or make {label} public first (anyone can then open it): k2 publish visibility {label} public --reason <why>",
+            "'{host}' would serve the {} site {label} past {PRODUCT_NAME}'s gate, so it can't be added now. Keep {label} as it is and skip this name, or make {label} public first (anyone can then open it): {CLI_NAME} publish visibility {label} public --reason <why>",
             m.as_str()
         )),
-        Err(e) => refuse(format!("K2 can't read this site's visibility ({e}).")),
+        Err(e) => refuse(format!("{PRODUCT_NAME} can't read this site's visibility ({e}).")),
     }
 }
 

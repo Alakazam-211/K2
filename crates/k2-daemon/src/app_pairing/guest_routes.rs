@@ -45,6 +45,8 @@ use serde_json::{json, Value};
 
 use super::{off_response, refusal, refusal_with};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const START: &str = "/cli/skin/pair/start";
 pub const STATUS: &str = "/cli/skin/pair/status";
@@ -183,7 +185,7 @@ fn start(pass: &SkinPass, body: &[u8], ctx: &Ctx) -> Result<Value, CliResponse> 
         return Err(refusal(
             "409 Conflict",
             "device_signin_off",
-            "this App's \"Stay signed in\" is off, so a phone can't stay signed in: its owner turns it on (k2 app people)",
+            concat!("this App's \"Stay signed in\" is off, so a phone can't stay signed in: its owner turns it on (", cli_name!(), " app people)"),
         ));
     }
     let all = super::pairing_hosts(app);
@@ -337,7 +339,7 @@ fn not_from_browser() -> CliResponse {
     refusal(
         "403 Forbidden",
         "pairing_not_from_browser",
-        "a phone app redeems the code, never a web page (an App's owner lists its webview origins with k2 app pairing setup --native-origin)",
+        concat!("a phone app redeems the code, never a web page (an App's owner lists its webview origins with ", cli_name!(), " app pairing setup --native-origin)"),
     )
 }
 
@@ -536,7 +538,7 @@ fn first_pairing_note(app: &str) {
         crate::apps::alerts::note(
             &row.project_id,
             "Phones can now pair",
-            &format!("The first phone paired with {} by QR. People see and end their phones in the App; the owner sees them with k2 app people.", row.name),
+            &format!("The first phone paired with {} by QR. People see and end their phones in the App; the owner sees them with {CLI_NAME} app people.", row.name),
         );
     }
 }

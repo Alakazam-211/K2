@@ -47,6 +47,8 @@ use crate::compute_place::{self as place, Tier, Want};
 use crate::compute_routes::{b, json_body, job_for, need_credential, no, no_fit_hint, passport_gate, resolve_node_for, s, ws_by_id, ws_by_token_or_worktree, no_workspace, Who, Ws, R};
 use crate::compute_views::tag_param;
 use crate::compute_ws;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// `POST {job | filter, auto | to, avoid?, os?, arch?, labels?}`.
 pub const MOVE: &str = "/cli/compute/jobs/move";
@@ -183,7 +185,7 @@ pub(crate) fn avoid_with_pinned(named: &str) -> crate::compute_routes::Refusal {
         AVOID_WITH_PINNED,
         400,
         format!(
-            "--avoid is for auto-placement, and this job names a node ({named}), which pins it there. Leave the node off so K2 picks one and skips the --avoid nodes, or drop --avoid"
+            "--avoid is for auto-placement, and this job names a node ({named}), which pins it there. Leave the node off so {PRODUCT_NAME} picks one and skips the --avoid nodes, or drop --avoid"
         ),
     )
 }
@@ -256,7 +258,7 @@ pub(crate) fn pinned_hint(job: &store::JobRow, want: &Want) -> Option<String> {
     };
     let short = compute::message::short(&job.id);
     Some(format!(
-        "hint: {here} can't start this job now ({queued} queued there) but {} could. Leave the node off next time (K2 picks one), or release this one: k2 compute move {short} --auto",
+        "hint: {here} can't start this job now ({queued} queued there) but {} could. Leave the node off next time ({PRODUCT_NAME} picks one), or release this one: {CLI_NAME} compute move {short} --auto",
         free.node.name
     ))
 }
@@ -304,7 +306,7 @@ pub(crate) fn handle(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let to = s(&v, "to").map(str::to_string);
     let auto = b(&v, "auto") == Some(true);
     if to.is_some() == auto {
-        return Err(no(codes::BAD_REQUEST, 400, "say where: k2 compute move <job> --auto (K2 picks a node) or --to <node> (pin it there)"));
+        return Err(no(codes::BAD_REQUEST, 400, concat!("say where: ", cli_name!(), " compute move <job> --auto (", product_name!(), " picks a node) or --to <node> (pin it there)")));
     }
     let labels: BTreeMap<String, String> = v
         .get("labels")
@@ -395,7 +397,7 @@ fn node_name(id: &str) -> String {
 fn move_one(who: &Who, j: &store::JobRow, ask: &Ask) -> R<serde_json::Value> {
     let short = compute::message::short(&j.id).to_string();
     if !j.ctl.shards.is_empty() {
-        return Err(no(codes::BAD_REQUEST, 400, format!("{short} is a split run: move its shards (k2 compute get {short} lists them)")));
+        return Err(no(codes::BAD_REQUEST, 400, format!("{short} is a split run: move its shards ({CLI_NAME} compute get {short} lists them)")));
     }
     let on_node = j.node_queued && j.state == "assigned";
     if j.state != "queued" && !on_node {
@@ -514,7 +516,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
             policy: compute::placement_policy().as_wire().into(),
             node: here.clone(),
             code: "released_auto".into(),
-            why: format!("released to auto-placement by {} (k2 compute move --auto) · it moves when another node can start it first", who.label()),
+            why: format!("released to auto-placement by {} ({CLI_NAME} compute move --auto) · it moves when another node can start it first", who.label()),
             fits: place::fits_words(report.cands.len() as u32, &skipped, &w),
             starts_now: None,
             eta_secs: None,
@@ -541,7 +543,7 @@ fn release(who: &Who, j: &store::JobRow, ws: &Ws, ask: &Ask, on_node: bool) -> R
     compute_ws::notify_change();
     Ok(serde_json::json!({
         "ok": true, "job": short, "mode": "auto", "from": here, "node": here, "moved": false, "filter": filter_json(&f, &j.workspace_id, who.is_admin()),
-        "note": "held on this server: it goes to the first node that fits with a free slot (K2 looks every 5 s)",
+        "note": concat!("held on this server: it goes to the first node that fits with a free slot (", product_name!(), " looks every 5 s)"),
     }))
 }
 
@@ -614,7 +616,7 @@ fn target(admin: bool, j: &store::JobRow, ws: &Ws, n: &store::NodeRow) -> R<plac
         return Err(no(
             codes::NOT_GRANTED,
             403,
-            format!("'{}' isn't granted to workspace {}: ask your owner (k2 compute grant {} --workspace {})", n.name, ws.handle, n.name, ws.handle),
+            format!("'{}' isn't granted to workspace {}: ask your owner ({CLI_NAME} compute grant {} --workspace {})", n.name, ws.handle, n.name, ws.handle),
         ));
     }
     let why: Vec<String> = report.skipped.iter().map(|(k, c)| place::skip_words(k, *c, &w)).collect();
@@ -622,7 +624,7 @@ fn target(admin: bool, j: &store::JobRow, ws: &Ws, n: &store::NodeRow) -> R<plac
         NODE_CANT_TAKE,
         409,
         format!(
-            "'{}' can't take job {short}: {}; it stays on {} (k2 compute nodes says more)",
+            "'{}' can't take job {short}: {}; it stays on {} ({CLI_NAME} compute nodes says more)",
             n.name,
             if why.is_empty() { "it isn't available".to_string() } else { why.join(", ") },
             node_name(&j.node_id)
@@ -640,7 +642,7 @@ fn pin_on(j: &store::JobRow, c: &place::Cand, by: &str) -> R<bool> {
     ctl.pull = None;
     let mut rec = place::pinned_record(&c.node.name, now);
     rec.code = "moved_to".into();
-    rec.why = format!("moved here by {by} (k2 compute move --to)");
+    rec.why = format!("moved here by {by} ({CLI_NAME} compute move --to)");
     ctl.placement = Some(rec);
     let same = c.node.id == j.node_id;
     let ok = {
@@ -736,8 +738,8 @@ fn pull(who: &Who, j: &store::JobRow, mut ctl: store::JobCtl, to: Option<(&store
 pub(crate) fn pulling_note(j: &store::JobRow) -> String {
     let here = node_name(&j.node_id);
     match j.ctl.pull.as_ref().and_then(|p| p.to.as_deref()) {
-        Some(to) => format!("pulling back: {here} was asked to give it back (k2 compute move); then it is pinned to {}", node_name(to)),
-        None => format!("pulling back: {here} was asked to give it back (k2 compute move); then it is held on this server for the first node that fits with a free slot"),
+        Some(to) => format!("pulling back: {here} was asked to give it back ({CLI_NAME} compute move); then it is pinned to {}", node_name(to)),
+        None => format!("pulling back: {here} was asked to give it back ({CLI_NAME} compute move); then it is held on this server for the first node that fits with a free slot"),
     }
 }
 

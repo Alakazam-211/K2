@@ -22,6 +22,8 @@ use serde_json::{json, Value as J};
 use crate::cli::{need_project, opt_param, str_param};
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 fn refusal(status: &'static str, code: &str, message: impl Into<String>) -> CliResponse {
     CliResponse {
@@ -35,7 +37,7 @@ fn not_found(label: &str) -> CliResponse {
     refusal(
         "404 Not Found",
         "label_not_found",
-        format!("no site {label:?} here (k2 publish ps, k2 publish subdomain list): nothing changed"),
+        format!("no site {label:?} here ({CLI_NAME} publish ps, {CLI_NAME} publish subdomain list): nothing changed"),
     )
 }
 
@@ -117,13 +119,13 @@ fn usable_label(raw: &str, passport_ws: Option<&str>) -> Result<String, CliRespo
         }
     }
     if !sv::is_covered(&label) {
-        return Err(refusal("400 Bad Request", "visibility_not_applicable", format!("'{label}' is one of K2's own front doors: its visibility isn't set here.")));
+        return Err(refusal("400 Bad Request", "visibility_not_applicable", format!("'{label}' is one of {PRODUCT_NAME}'s own front doors: its visibility isn't set here.")));
     }
     if is_real_app(&label) {
         return Err(refusal(
             "400 Bad Request",
             "visibility_not_applicable",
-            format!("'{label}' is an App: its own logins decide who gets in (k2 app user list)."),
+            format!("'{label}' is an App: its own logins decide who gets in ({CLI_NAME} app user list)."),
         ));
     }
     if !label_known(&label) {
@@ -225,7 +227,7 @@ fn passport_of(who: &Who) -> Option<&str> {
     }
 }
 
-const PARSER_WARNING: &str = "is public today, and K2 passes its bytes straight through. Private or PIN means K2 reads it as HTTP/1.1, which breaks a raw-TCP or HTTP/2-only service (one of those should stay public).";
+const PARSER_WARNING: &str = concat!("is public today, and ", product_name!(), " passes its bytes straight through. Private or PIN means ", product_name!(), " reads it as HTTP/1.1, which breaks a raw-TCP or HTTP/2-only service (one of those should stay public).");
 
 fn audit(event: &str, who: &Who, label: &str, detail: &str) {
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
@@ -283,7 +285,7 @@ pub(crate) fn handle_set(params: &HashMap<String, String>, who: &Who) -> CliResp
                 return refusal(
                     "403 Forbidden",
                     "dev_public_person_only",
-                    format!("'{label}' is a dev server: only the owner or an admin can make it public, from a terminal outside K2. For a friend, ask for a PIN instead (publish.pin)."),
+                    format!("'{label}' is a dev server: only the owner or an admin can make it public, from a terminal outside {PRODUCT_NAME}. For a friend, ask for a PIN instead (publish.pin)."),
                 );
             }
             if let Some(ws) = passport {
@@ -455,7 +457,7 @@ pub(crate) fn handle_open(params: &HashMap<String, String>, who: &Who) -> CliRes
     };
     drop(conn);
     let Some(url) = sv::open_url(&label, &code.code) else {
-        return refusal("409 Conflict", "no_public_address", "this server has no public address yet (k2 publish status)");
+        return refusal("409 Conflict", "no_public_address", concat!("this server has no public address yet (", cli_name!(), " publish status)"));
     };
     audit("site-open-link", who, &label, "minted");
     CliResponse::ok_json(

@@ -22,7 +22,7 @@
 //! Connect login included) when Sew answers the provision, and the sweep
 //! repairs the map from Sew's member list.
 
-use k2_core::home_chat;
+use k2_core::{cli_name, home_chat};
 use k2_core::sew_chat::hub::{Delivery, Place};
 use k2_core::tool_hook::{self as hook, sew_wire};
 
@@ -37,8 +37,8 @@ fn dm_refusal() -> ChatErr {
     ChatErr::new(
         DM_NOT_FOR_AGENTS,
         403,
-        "DMs with this server's people are for people: an agent never opens, reads or writes them. \
-         Talk with your person in your own Thread (k2 thread)",
+        concat!("DMs with this server's people are for people: an agent never opens, reads or writes them. \
+         Talk with your person in your own Thread (", cli_name!(), " thread)"),
     )
 }
 
@@ -133,7 +133,7 @@ pub fn refuse_notifications(ch: &Channel) -> R<()> {
         return Err(ChatErr::new(
             NO_CHANNEL_NOTIFICATIONS,
             403,
-            "agents get no notifications from K5 channels: read with k2 chat messages when you need to",
+            concat!("agents get no notifications from K5 channels: read with ", cli_name!(), " chat messages when you need to"),
         ));
     }
     Ok(())

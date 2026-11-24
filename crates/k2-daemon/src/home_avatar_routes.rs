@@ -19,6 +19,7 @@ use serde_json::{json, Value as J};
 use k2_core::home_avatars::{AvatarCache, AvatarError};
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 /// Request body cap for `put` (P15).
 pub const MAX_PUT_BODY: usize = 256 * 1024;
@@ -55,7 +56,7 @@ pub fn local_only() -> CliResponse {
         "403 Forbidden",
         json!({
             "error": "home_avatars_local_only",
-            "message": "The Home image cache belongs to this computer. Only this computer's own K2 can read or change it.",
+            "message": concat!("The Home image cache belongs to this computer. Only this computer's own ", product_name!(), " can read or change it."),
         }),
     )
 }

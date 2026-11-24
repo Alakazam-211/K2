@@ -27,6 +27,7 @@ use k2_core::zen::{ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::cli_name;
 
 /// The read.
 pub const ROUTE: &str = "/cli/zen/agents/order";
@@ -37,7 +38,7 @@ pub const SET_ROUTE: &str = "/cli/zen/agents/order/set";
 /// JSON escapes; anything bigger is 413.
 pub const MAX_BODY: usize = 160 * 1024;
 
-const OWNER_ONLY: &str = "Only the person sets the order and pins in a Garden's Agents widget, by dragging or pinning there on this computer. Agents can read them (k2 zen agents-order) but can't set them.";
+const OWNER_ONLY: &str = concat!("Only the person sets the order and pins in a Garden's Agents widget, by dragging or pinning there on this computer. Agents can read them (", cli_name!(), " zen agents-order) but can't set them.");
 
 pub fn is_route(path: &str) -> bool {
     path == ROUTE || path == SET_ROUTE

@@ -47,6 +47,8 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const PLAN: &str = "/cli/clone/vault/plan";
 pub const CONFIRM: &str = "/cli/clone/vault/confirm";
@@ -346,7 +348,7 @@ pub fn build_plan(vault: &LocalVault, caller: &VaultCaller, project_id: &str, as
                 name: m.name.clone(),
                 kind: m.kind.as_str().into(),
                 reason: "login",
-                note: "K2 logins, App passes and engine credentials are made again on the target".into(),
+                note: concat!(product_name!(), " logins, App passes and engine credentials are made again on the target").into(),
             });
             continue;
         }
@@ -375,7 +377,7 @@ pub fn build_plan(vault: &LocalVault, caller: &VaultCaller, project_id: &str, as
         let row = rows
             .iter_mut()
             .find(|r| &r.name == name)
-            .ok_or_else(|| VaultError::bad_request("unknown_secret", format!("{name} isn't one of this agent's secrets (k2 clone preview lists them)")))?;
+            .ok_or_else(|| VaultError::bad_request("unknown_secret", format!("{name} isn't one of this agent's secrets ({CLI_NAME} clone preview lists them)")))?;
         if *choice == Choice::Copy && !row.copy_allowed {
             return Err(VaultError::forbidden("copy_needs_admin", "copying secrets needs an Owner or Admin; leave them blank or skip"));
         }
@@ -579,7 +581,7 @@ pub fn export(
     }
     let recipient = k2_vault::agefmt::Recipient::parse(&target.recipient)?;
     if target.vault_id.trim().is_empty() {
-        return Err(VaultError::bad_request("target_required", "the target vault id (k2 vault recipient on the target)"));
+        return Err(VaultError::bad_request("target_required", concat!("the target vault id (", cli_name!(), " vault recipient on the target)")));
     }
     let mut report = report_base(plan);
     if !plan.has_carry() {
@@ -1037,7 +1039,7 @@ fn post_blank_cards(project_id: &str, blank: &[CarryBlank], source: &str) -> Car
     }
     if !cards.overflow.is_empty() {
         let body = format!(
-            "Also left blank: {}. Add each with `k2 vault set NAME --scope ws:{addr}`.",
+            "Also left blank: {}. Add each with `{CLI_NAME} vault set NAME --scope ws:{addr}`.",
             cards.overflow.join(", ")
         );
         crate::overlay_routes::post_clone_text_line(&conv, project_id, &addr, &body);
@@ -1231,7 +1233,7 @@ pub fn plan_json(vault: &LocalVault, caller: &VaultCaller, ask: &CarryAsk) -> Re
         "plan": plan,
         "envFiles": env_files,
         "envFilesHint": if env_files.is_empty() { Value::Null } else {
-            json!(format!("move them into the vault first: k2 vault import <file> --scope ws:{} (POST /cli/vault/import)", plan.source_workspace))
+            json!(format!("move them into the vault first: {CLI_NAME} vault import <file> --scope ws:{} (POST /cli/vault/import)", plan.source_workspace))
         },
         "needsConfirm": plan.needs_confirm(),
     });
@@ -1350,7 +1352,7 @@ pub fn handle(path: &str, caller: Result<VaultCaller, VaultError>, body: &[u8], 
     let r = (|| -> Result<Value, VaultError> {
         let c = caller?;
         if c.is_passport() {
-            return Err(VaultError::forbidden("people_only", "agents propose clones (k2 clone propose); a person runs them"));
+            return Err(VaultError::forbidden("people_only", concat!("agents propose clones (", cli_name!(), " clone propose); a person runs them")));
         }
         let vault = crate::vault::get()?;
         match path {

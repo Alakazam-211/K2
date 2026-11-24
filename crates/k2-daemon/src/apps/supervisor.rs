@@ -48,6 +48,7 @@ use serde_json::json;
 use super::process_engine::ProcessEngine;
 use super::router;
 use super::runtime_notes::{self as notes, Attempt, Next};
+use k2_core::product_name;
 
 /// Health failures in a row that count as "unhealthy" (watch and after).
 const FAILS_TO_UNHEALTHY: u32 = 3;
@@ -56,11 +57,11 @@ const FAILS_TO_UNHEALTHY: u32 = 3;
 /// relaunch, never a crash.
 const ADOPT_CHECK_SECS: u64 = 15;
 /// Why a restart the daemon's own restart caused is not a crash.
-const WHY_DAEMON_RESTARTED: &str = "the K2 daemon restarted";
-const WHY_STALE_SINK: &str = "relaunch: its log pipe went with the old K2 daemon";
-const WHY_ADOPT_UNHEALTHY: &str = "relaunch: it didn't answer its health check after the K2 daemon restarted";
+const WHY_DAEMON_RESTARTED: &str = concat!("the ", product_name!(), " daemon restarted");
+const WHY_STALE_SINK: &str = concat!("relaunch: its log pipe went with the old ", product_name!(), " daemon");
+const WHY_ADOPT_UNHEALTHY: &str = concat!("relaunch: it didn't answer its health check after the ", product_name!(), " daemon restarted");
 /// A restart that waits on K2's App engine (A4): not a crash.
-const WHY_WAITING_ENGINE: &str = "waiting for K2's App engine";
+const WHY_WAITING_ENGINE: &str = concat!("waiting for ", product_name!(), "'s App engine");
 /// R43: the engine changed, so a pending restart runs now.
 const WHY_ENGINE_CHANGED: &str = "the App engine changed";
 /// S2: a paused re-host's new instance failed; the old Seed starts again.

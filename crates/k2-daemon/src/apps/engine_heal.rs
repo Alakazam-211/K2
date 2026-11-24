@@ -32,6 +32,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
 
 use super::engine_stage::FetchError;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// How long the heal waits for a usable root helper.
 pub const HELPER_WAIT: Duration = Duration::from_secs(300);
@@ -161,7 +163,7 @@ pub fn heal_once(ops: &dyn HealOps, plan: &Plan, seen: &mut Seen) -> Outcome {
     while !ops.helper_protocol().is_some_and(|p| p >= APPS_MIN_PROTOCOL) {
         if waited >= HELPER_WAIT {
             return Outcome::NeedsOwner {
-                why: format!("the root helper isn't installed at protocol {APPS_MIN_PROTOCOL}+ (k2 root-helper status)"),
+                why: format!("the root helper isn't installed at protocol {APPS_MIN_PROTOCOL}+ ({CLI_NAME} root-helper status)"),
             };
         }
         ops.sleep(Duration::from_secs(10));
@@ -202,7 +204,7 @@ fn install_step(ops: &dyn HealOps, plan: &Plan, seen: &mut Seen) -> Outcome {
         (Some(plan.staged.as_path()), "staged")
     } else if ops.airgap() {
         return Outcome::NeedsOwner {
-            why: format!("air-gapped: copy {name} and {name}.sig for v{} into a folder and run k2 app engine install --from <folder>", plan.want),
+            why: format!("air-gapped: copy {name} and {name}.sig for v{} into a folder and run {CLI_NAME} app engine install --from <folder>", plan.want),
         };
     } else {
         (None, "release")
@@ -234,10 +236,10 @@ fn install_step(ops: &dyn HealOps, plan: &Plan, seen: &mut Seen) -> Outcome {
 fn note_failed(ops: &dyn HealOps, plan: &Plan, why: &str) {
     super::runtime_notes::error(&format!("engine heal to v{} failed: {why}", plan.want));
     ops.note_owner(
-        "K2 couldn't update its App engine",
+        concat!(product_name!(), " couldn't update its App engine"),
         &format!(
-            "K2 tried to install k2-app-engine v{} to match this K2 and it didn't work: {why}. Apps that should run wait \
-             for the engine. K2 tries again in an hour; the owner can run k2 app engine install now.",
+            "{PRODUCT_NAME} tried to install k2-app-engine v{} to match this {PRODUCT_NAME} and it didn't work: {why}. Apps that should run wait \
+             for the engine. {PRODUCT_NAME} tries again in an hour; the owner can run {CLI_NAME} app engine install now.",
             plan.want
         ),
     );

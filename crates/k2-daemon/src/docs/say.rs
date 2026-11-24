@@ -51,6 +51,8 @@ use super::host_events::{self, HostEvent};
 use super::routes::{self, Call};
 use super::target::Tier;
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 pub const SAY: &str = "/cli/docs/say";
 
@@ -296,7 +298,7 @@ fn agent_note(project: &str, from: &str, t: &super::target::Target, id: &str, m:
     };
     let Some(path) = path else { return false };
     let (title, text) = note(&routes::pid_label(from), from, t, project, id, m);
-    match k2_core::inbox::compose(std::path::Path::new(&path), &title, &text, Some("normal"), Some("docs"), Some("k2 doc")) {
+    match k2_core::inbox::compose(std::path::Path::new(&path), &title, &text, Some("normal"), Some("docs"), Some(concat!(cli_name!(), " doc"))) {
         Ok(_) => true,
         Err(e) => {
             k2_core::log_debug!("[docs] WARN: a say note for agent:{project} on {}: {e}", host::key_label(&t.key()));
@@ -326,7 +328,7 @@ pub fn note(by: &str, from: &str, t: &super::target::Target, agent_project: &str
         text.push('\n');
     }
     let ws = if agent_project == t.project_id { String::new() } else { format!(" -w {}", t.project_id) };
-    text.push_str(&format!("\nAnswer in the doc's live room: k2 doc say{ws} {} --to {from} --reply-to {id} \"…\"", t.rel));
+    text.push_str(&format!("\nAnswer in the doc's live room: {CLI_NAME} doc say{ws} {} --to {from} --reply-to {id} \"…\"", t.rel));
     (title, text)
 }
 

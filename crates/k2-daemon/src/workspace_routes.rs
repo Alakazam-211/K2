@@ -16,6 +16,7 @@ use crate::cli::{
     agents_md_wanted, fanout_wanted, need_project, opt_param, seed_wiki_wanted, str_param,
 };
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// Workspace-domain GET dispatch. Returns `Some(resp)` for a handled
 /// path, `None` if the path isn't a workspace-domain route.
@@ -627,10 +628,10 @@ pub(crate) fn workspace_not_found_response(q: &str) -> CliResponse {
                 .filter(|s| !s.trim().eq_ignore_ascii_case(token));
             let hint = match suggestion {
                 Some(s) => format!(
-                    "no agent/workspace named '{q}' — did you mean '{s}'? Run `k2 connections list` for the names you can reach (a person: `k2 workspace list`), or pass a full path."
+                    "no agent/workspace named '{q}' — did you mean '{s}'? Run `{CLI_NAME} connections list` for the names you can reach (a person: `{CLI_NAME} workspace list`), or pass a full path."
                 ),
                 None => format!(
-                    "no agent/workspace named '{q}'. Run `k2 connections list` for the names you can reach (a person: `k2 workspace list`), or pass a full path."
+                    "no agent/workspace named '{q}'. Run `{CLI_NAME} connections list` for the names you can reach (a person: `{CLI_NAME} workspace list`), or pass a full path."
                 ),
             };
             ("404 Not Found", "not_found", hint)

@@ -37,6 +37,8 @@ use k2_core::desktop::virtual_desktop::{self as vd, Action, Asker, BoxFacts, Clo
 use serde_json::{json, Value};
 
 pub use super::launch_agent::Output;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// What the manager does to the machine (a fake in tests).
 pub trait Host: Send + Sync {
@@ -199,12 +201,12 @@ impl StartError {
     pub fn hint(&self, limits: &Limits) -> String {
         match self {
             StartError::BadId => "that isn't a virtual desktop id (virtual, or virtual:<workspace id>)".into(),
-            StartError::NotSetUp { missing, .. } => format!("This server has no screen, and K2 needs {} to start a desktop on it (k2 desktop setup).", missing.join(", ")),
-            StartError::TooMany { .. } => format!("This server already has {} desktops, its limit. Close one first (k2 desktop stop --desktop <id>).", limits.max_desktops),
-            StartError::LowMemory => "This server has less than 1 GB of memory free, so K2 won't start a desktop on it now.".into(),
+            StartError::NotSetUp { missing, .. } => format!("This server has no screen, and {PRODUCT_NAME} needs {} to start a desktop on it ({CLI_NAME} desktop setup).", missing.join(", ")),
+            StartError::TooMany { .. } => format!("This server already has {} desktops, its limit. Close one first ({CLI_NAME} desktop stop --desktop <id>).", limits.max_desktops),
+            StartError::LowMemory => concat!("This server has less than 1 GB of memory free, so ", product_name!(), " won't start a desktop on it now.").into(),
             StartError::AgentPaused { until } => format!("Agents kept this desktop awake for 4 hours with nobody watching, so an agent can't wake it again until {until} (Unix time). A person can."),
             StartError::NoSocketDir(why) => format!(
-                "K2 can't start a desktop on this server: {why}. The system makes /tmp/.X11-unix at boot (systemd-tmpfiles); an administrator can run: sudo install -d -m 1777 /tmp/.X11-unix"
+                "{PRODUCT_NAME} can't start a desktop on this server: {why}. The system makes /tmp/.X11-unix at boot (systemd-tmpfiles); an administrator can run: sudo install -d -m 1777 /tmp/.X11-unix"
             ),
             StartError::Failed(why) => format!("The desktop didn't start: {why}"),
         }
@@ -249,7 +251,7 @@ impl Status {
 
     pub fn message(&self) -> String {
         if self.wire_state() == "not_set_up" {
-            return "This server has no screen. K2 can start a desktop on it once three small packages are installed.".into();
+            return concat!("This server has no screen. ", product_name!(), " can start a desktop on it once three small packages are installed.").into();
         }
         match (&self.state, &self.closed) {
             (State::Closed, Some(c)) => c.reason.message(),

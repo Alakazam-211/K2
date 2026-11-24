@@ -34,6 +34,8 @@ use serde_json::{json, Value};
 
 use crate::compute_rollout_stagger as stagger;
 use crate::compute_routes::{json_body, no, s, Who, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// A node's limit once offered (C12).
 pub const NODE_LIMIT_SECS: i64 = 600;
@@ -170,7 +172,7 @@ pub(crate) fn set(who: &Who, path: &str, body: &[u8]) -> R<Value> {
             Some(id) => ro::get(&conn, id),
             None => ro::open(&conn).into_iter().last(),
         };
-        let r = r.ok_or_else(|| no("rollout_not_found", 404, "no open rollout (k2 compute node update --all starts one)"))?;
+        let r = r.ok_or_else(|| no("rollout_not_found", 404, concat!("no open rollout (", cli_name!(), " compute node update --all starts one)")))?;
         if !matches!(r.state.as_str(), ro::RUNNING | ro::PAUSED) {
             return Err(no(codes::BAD_REQUEST, 409, format!("rollout {} is {}", r.id, r.state)));
         }
@@ -262,7 +264,7 @@ pub(crate) fn on_update_state(node_id: &str, phase: UpdatePhase, version: &str) 
         crate::compute_admin::send_alert(
             node_id,
             ROLLOUT_PAUSED,
-            &format!("k2-node {version} rolled back on {name}; the rollout ({id}) paused. Look at k2 compute node health {name}, then k2 compute node rollout resume or stop"),
+            &format!("k2-node {version} rolled back on {name}; the rollout ({id}) paused. Look at {CLI_NAME} compute node health {name}, then {CLI_NAME} compute node rollout resume or stop"),
         );
     }
     tick(now);

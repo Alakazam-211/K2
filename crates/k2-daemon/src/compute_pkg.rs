@@ -37,6 +37,8 @@ use k2_core::compute::{self as compute};
 use serde_json::{json, Value};
 
 use crate::compute_routes::{need_credential, no, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/compute/nodes/packages";
 pub const REQUEST: &str = "/cli/compute/nodes/packages/request";
@@ -102,8 +104,8 @@ fn decider(who: &Who) -> R<()> {
     Err(no(
         "owner_only",
         403,
-        "only this server's owner or an Admin decides package requests, in person: the card in chat, Settings → Cores → Compute → Machine settings → Waiting for you, \
-         or k2 compute node packages approve|deny <request> from a terminal outside K2. An agent can never approve.",
+        concat!("only this server's owner or an Admin decides package requests, in person: the card in chat, Settings → Cores → Compute → Machine settings → Waiting for you, \
+         or ", cli_name!(), " compute node packages approve|deny <request> from a terminal outside ", product_name!(), ". An agent can never approve."),
     ))
 }
 
@@ -189,7 +191,7 @@ fn request(who: &Who, body: &[u8]) -> R<Value> {
         tokens.push(n.to_string());
     }
     if tokens.is_empty() {
-        return Err(no(pcodes::PACKAGE_NOT_APPROVED, 400, "name the node(s): k2 compute node packages request <node>[,<node>…] <name>[,<name>…] --why \"…\""));
+        return Err(no(pcodes::PACKAGE_NOT_APPROVED, 400, concat!("name the node(s): ", cli_name!(), " compute node packages request <node>[,<node>…] <name>[,<name>…] --why \"…\"")));
     }
     let mut nodes = Vec::new();
     for t in &tokens {
@@ -213,7 +215,7 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
     pkgpolicy::check_request(names, why).map_err(|e| no(pcodes::PACKAGE_NOT_APPROVED, 400, e))?;
     let canon = pkgpolicy::expand_names(names).map_err(|e| no(k2_core::compute::proto::profiles::PROFILE_UNKNOWN, 400, e))?;
     if let Some((n, d)) = canon.iter().find_map(|n| pkgpolicy::denied(n).map(|d| (n.clone(), d))) {
-        return Err(no(pcodes::PACKAGE_DENIED, 409, format!("{n} is on K2's deny list ({d}): it changes how a machine boots, logs in or starts services. It can't be requested; a node's owner installs it by hand if they want it")));
+        return Err(no(pcodes::PACKAGE_DENIED, 409, format!("{n} is on {PRODUCT_NAME}'s deny list ({d}): it changes how a machine boots, logs in or starts services. It can't be requested; a node's owner installs it by hand if they want it")));
     }
     let batch = pr::new_id();
     let now = compute::now();
@@ -241,7 +243,7 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
                 k2_core::compute::admin::admin_cols(&conn, &n.id).remote_admin.as_deref() == Some("off")
             };
             if off {
-                cant.push(format!("{}: remote admin is off there, so K2 can't install for you; at the machine: sudo k2-node packages allow {} (or turn on remote admin: k2 compute local remote-admin policy)", n.name, canon.join(" ")));
+                cant.push(format!("{}: remote admin is off there, so {PRODUCT_NAME} can't install for you; at the machine: sudo k2-node packages allow {} (or turn on remote admin: {CLI_NAME} compute local remote-admin policy)", n.name, canon.join(" ")));
                 continue;
             }
         }
@@ -251,7 +253,7 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
             pr::open_count(&conn, &n.id, Some(&ws.id))
         };
         if open >= pkgpolicy::MAX_OPEN_PER_SERVER as i64 {
-            return Err(no(pcodes::TOO_MANY_PENDING, 429, format!("{} package requests from {} already wait on {}; wait for the owner's answer (k2 compute node packages requests)", open, ws.handle, n.name)));
+            return Err(no(pcodes::TOO_MANY_PENDING, 429, format!("{} package requests from {} already wait on {}; wait for the owner's answer ({CLI_NAME} compute node packages requests)", open, ws.handle, n.name)));
         }
         let origin = if n.is_tenant() { pr::SENT } else { pr::OWN };
         let server = if n.is_tenant() { n.owner_label.clone().unwrap_or_else(|| "its owner".into()) } else { "own".into() };
@@ -316,7 +318,7 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
     let sent: Vec<String> = filed.iter().filter(|r| r.origin == pr::SENT).map(|r| format!("{} ({})", node_name(&r.node_id), r.server)).collect();
     let mut hint = Vec::new();
     if own {
-        hint.push(format!("held for this server's owner or an Admin: they approve it on the card, or in Settings → Cores → Compute → Machine settings → Waiting for you (k2 compute node packages approve {batch})"));
+        hint.push(format!("held for this server's owner or an Admin: they approve it on the card, or in Settings → Cores → Compute → Machine settings → Waiting for you ({CLI_NAME} compute node packages approve {batch})"));
     }
     if !sent.is_empty() {
         hint.push(format!("asked the node's owner for {}: you hear back here when they decide", sent.join(", ")));
@@ -384,7 +386,7 @@ pub(crate) fn decide_batch(who: &Who, id: &str, approve: bool, add: bool, note: 
         pr::batch(&conn, id)
     };
     if rows.is_empty() {
-        return Err(no("request_not_found", 404, format!("no package request {id} (k2 compute node packages requests)")));
+        return Err(no("request_not_found", 404, format!("no package request {id} ({CLI_NAME} compute node packages requests)")));
     }
     let pending: Vec<&PkgRow> = rows.iter().filter(|r| r.state == state::PENDING && r.origin != pr::SENT).collect();
     if pending.is_empty() {
@@ -611,7 +613,7 @@ fn policy(who: &Who, body: &[u8]) -> R<Value> {
     }
     pkgpolicy::check_policy_args(&args).map_err(|e| no("bad_args", 400, e))?;
     if !has_feature(&node, pkgpolicy::FEATURE_PKG_STATUS) {
-        return Err(no(pcodes::REQUESTS_UNSUPPORTED, 409, format!("{}'s k2-node has no package policy yet (older than 0.46.9): update it (k2 compute node update {})", node.name, node.name)));
+        return Err(no(pcodes::REQUESTS_UNSUPPORTED, 409, format!("{}'s k2-node has no package policy yet (older than 0.46.9): update it ({CLI_NAME} compute node update {})", node.name, node.name)));
     }
     // Narrowing goes at once; the executor refuses a widening without the
     // owner's approval (`approval_required`), and then it's held.
@@ -622,6 +624,6 @@ fn policy(who: &Who, body: &[u8]) -> R<Value> {
             crate::compute_admin::handle(crate::compute_admin::PROPOSE, who, body.to_string().as_bytes(), &HashMap::new(), None)
         }
         Some(r) => Err(no("node_refused", 409, format!("{}: {}", r.code.unwrap_or_default(), r.message.unwrap_or_default()))),
-        None => Err(no("no_answer", 504, format!("{} didn't answer in time; check with k2 compute node packages {}", node.name, node.name))),
+        None => Err(no("no_answer", 504, format!("{} didn't answer in time; check with {CLI_NAME} compute node packages {}", node.name, node.name))),
     }
 }

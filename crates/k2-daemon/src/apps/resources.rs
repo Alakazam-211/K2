@@ -36,6 +36,8 @@ use k2_core::disk_guard::{self as dg, Consumer, Finding, Level, Mode, Owner, Sna
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, db_err, json_body, need_credential, no, s, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 pub const ROUTES: &[&str] = &[
     "/cli/app/resources",
@@ -156,7 +158,7 @@ fn suggestion(worst: Option<(&dg::Fs, Level)>, by: &[dg::OwnerTotal]) -> J {
         let name = top.owner.handle.clone().unwrap_or_else(|| "an agent".into());
         s.push_str(&format!(" The biggest owner is {name} ({})", dg::human_gb(top.disk_bytes)));
         if let Some(a) = &top.owner.address {
-            s.push_str(&format!(": k2 msg {a} \"…\""));
+            s.push_str(&format!(": {CLI_NAME} msg {a} \"…\""));
         }
     }
     json!(s)
@@ -211,7 +213,7 @@ fn view(who: &Who, params: &HashMap<String, String>) -> R<J> {
         .collect();
     if let Some(a) = &app_filter {
         if rows.is_empty() {
-            return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{a}' on this box (k2 app list)")));
+            return Err(no(codes::APP_NOT_FOUND, 404, format!("no App '{a}' on this box ({CLI_NAME} app list)")));
         }
     }
     let by_owner_json: Vec<J> = by_owner
@@ -328,7 +330,7 @@ fn rescan(who: &Who) -> R<J> {
 
 /// The command the owner would run for a patch (what an agent is told).
 fn settings_command(p: &dg::SettingsPatch) -> String {
-    let mut c = "k2 app resources settings".to_string();
+    let mut c = concat!(cli_name!(), " app resources settings").to_string();
     if let Some(m) = p.mode {
         c.push_str(&format!(" --mode {}", m.as_str()));
     }
@@ -513,7 +515,7 @@ pub(crate) fn memory_warning() -> Option<J> {
         "totalBytes": total,
         "biggestApps": apps.iter().map(|(a, b)| json!({ "app": a, "memBytes": b })).collect::<Vec<_>>(),
         "hint": format!(
-            "This box has {} of {} RAM available (under 10%).{} It still goes ahead: K2 warns about memory, it never refuses on it.",
+            "This box has {} of {} RAM available (under 10%).{} It still goes ahead: {PRODUCT_NAME} warns about memory, it never refuses on it.",
             avail.map(dg::human_gb).unwrap_or_default(),
             total.map(dg::human_gb).unwrap_or_default(),
             if names.is_empty() { String::new() } else { format!(" The biggest Apps: {}.", names.join(", ")) }
@@ -550,7 +552,7 @@ pub(crate) fn refusal(f: &Finding, action: &str) -> Refusal {
         let parts: Vec<String> = top
             .iter()
             .map(|(words, addr, _)| match addr {
-                Some(a) => format!("{words} (k2 msg {a} \"…\")"),
+                Some(a) => format!("{words} ({CLI_NAME} msg {a} \"…\")"),
                 None => words.clone(),
             })
             .collect();
@@ -559,9 +561,9 @@ pub(crate) fn refusal(f: &Finding, action: &str) -> Refusal {
     let snap = dg::latest_snapshot();
     let clears = snap.as_ref().and_then(|s| s.k2_will_clear.clone()).filter(|w| w.seeds_bytes > 0);
     if let Some(w) = &clears {
-        hint.push_str(&format!(" K2 clears {} of old Seeds at the next sweep.", dg::human_gb(w.seeds_bytes)));
+        hint.push_str(&format!(" {PRODUCT_NAME} clears {} of old Seeds at the next sweep.", dg::human_gb(w.seeds_bytes)));
     }
-    hint.push_str(" See k2 app resources.");
+    hint.push_str(concat!(" See ", cli_name!(), " app resources."));
     if f.level == Level::Critical {
         hint.push_str(" To go ahead anyway: --disk-override \"<reason>\" (at critical it waits for the owner in person).");
     } else {
@@ -723,7 +725,7 @@ pub(crate) fn app_gate(
                 label,
                 workspace,
                 body: json!({ "route": route, "body": b }),
-                diff: json!({ "lines": [format!("k2 app {action} {label} --disk-override \"{reason}\"")], "route": route }),
+                diff: json!({ "lines": [format!("{CLI_NAME} app {action} {label} --disk-override \"{reason}\"")], "route": route }),
                 summary: format!("{action} {label} past the disk guard"),
                 reasons: hold_reasons(&finding, action, &reason),
                 reason: Some(&reason),
@@ -731,7 +733,7 @@ pub(crate) fn app_gate(
             let mut out = super::approvals::held_answer(&r);
             out["disk"] = finding.disk_json();
             out["hint"] = json!(format!(
-                "held for the owner: {} They approve it in person (k2 app approve {} from a terminal outside K2, or Settings → App Approvals).",
+                "held for the owner: {} They approve it in person ({CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}, or Settings → App Approvals).",
                 finding.sentence(action),
                 r.id
             ));

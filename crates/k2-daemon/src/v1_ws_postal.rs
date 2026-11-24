@@ -25,6 +25,7 @@
 
 use crate::cli_response::CliResponse;
 use crate::routes::http::V1Principal;
+use k2_core::cli_name;
 
 /// The send-once route name (apart from plain `/v1` messages).
 const ONCE_ROUTE: &str = "/v1/w/message#postal";
@@ -52,7 +53,7 @@ pub(crate) fn handle(principal: &V1Principal, project_path: &str, v: &serde_json
         return refuse(
             "403 Forbidden",
             "postal_link_only",
-            "kind \"postal\" is accepted only from the p5 link key made for this workspace (k2 postal link-p5 <workspace>)",
+            concat!("kind \"postal\" is accepted only from the p5 link key made for this workspace (", cli_name!(), " postal link-p5 <workspace>)"),
         );
     };
     let Some(from) = v.get("from").and_then(|x| x.as_str()).and_then(k2_core::postal::parse_address) else {

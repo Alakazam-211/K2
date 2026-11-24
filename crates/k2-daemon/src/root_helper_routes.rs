@@ -24,6 +24,8 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::root_helper::{self, heal};
 use crate::sidecar_routes::Caller;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/root-helper/status";
 pub const UPDATE: &str = "/cli/root-helper/update";
@@ -77,7 +79,7 @@ pub fn handle(
         return refuse(
             "401 Unauthorized",
             "unauthorized",
-            "owner token, a Connect login or a K2 passport",
+            concat!("owner token, a Connect login or a ", product_name!(), " passport"),
         );
     }
     match path {
@@ -108,7 +110,7 @@ pub fn handle(
                 return refuse(
                     "403 Forbidden",
                     "owner_only",
-                    "updating or rolling back the root helper is an owner/admin step: run `k2 root-helper` outside a K2 terminal",
+                    concat!("updating or rolling back the root helper is an owner/admin step: run `", cli_name!(), " root-helper` outside a ", product_name!(), " terminal"),
                 );
             };
             if !cfg!(target_os = "linux") {
@@ -246,7 +248,7 @@ fn newer_daemon_warnings(target: &str, installed: Option<&str>, staged: Option<&
         if sv > t {
             out.push(format!(
                 "the {what} is v{sv}, newer than the helper this fetches (v{t}): \
-                 run `k2 root-helper update --version {sv}` (or `--match-installed`) to install its helper now; \
+                 run `{CLI_NAME} root-helper update --version {sv}` (or `--match-installed`) to install its helper now; \
                  otherwise the daemon fetches it after it restarts on v{sv}"
             ));
         }

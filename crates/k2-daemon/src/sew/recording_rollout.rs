@@ -13,6 +13,7 @@ use k2_core::tool_hook::features::RecordingFeatures;
 use k2_core::tool_hook::recording::{self as rec, ManifestChat, Step};
 use k2_core::tool_hook::{self as hook};
 use serde_json::json;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// What one sweep's rollout did, per App.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -69,9 +70,9 @@ fn tell(service_id: &str, roles: &[String]) {
     let handle = crate::permission::present::workspace_handle(&ws);
     let who = if roles.is_empty() { "No role of it held voice:join, so no role changed".to_string() } else { format!("Roles widened: {}", roles.join(", ")) };
     let text = format!(
-        "K2 gave the voice:record cap to every role line of your App {name} that can join calls, so people who could \
+        "{PRODUCT_NAME} gave the voice:record cap to every role line of your App {name} that can join calls, so people who could \
          press Record before still can now that this server's chat checks the cap. {who}. Each person in a call still \
-         consents for themselves. To narrow it, take voice:record off a role: k2 app role room <role> <workspace> --caps …"
+         consents for themselves. To narrow it, take voice:record off a role: {CLI_NAME} app role room <role> <workspace> --caps …"
     );
     if let Err(e) = crate::overlay_routes::post_workspace_notice(&handle, &text, k2_core::overlay::SystemNotice::info("app.voice_record_granted")) {
         k2_core::log_debug!("[recording] notice {app_id}: {e}");

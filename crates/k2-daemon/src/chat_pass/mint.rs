@@ -82,6 +82,8 @@ use super::routes::error;
 use super::{ChatPassClaims, KeyError, PASS_TTL_SECS};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const PASS: &str = "/cli/sew/pass";
 pub const OWNER_HANDOFF: &str = "/cli/sew/owner-handoff";
@@ -179,7 +181,7 @@ fn connect_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_
                 response: error(
                     503,
                     "chat_member_pending",
-                    "K2 is adding this login to chat; retry shortly",
+                    concat!(product_name!(), " is adding this login to chat; retry shortly"),
                     Some(json!({ "retry_after_ms": MEMBER_PENDING_RETRY_SECS * 1000 })),
                 ),
                 retry_after_secs: Some(MEMBER_PENDING_RETRY_SECS),
@@ -196,7 +198,7 @@ fn connect_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_
         Ok(ConnectChatGate::Off) => refuse(503, "chat_unavailable", "Chat and voice are not set up on this server"),
         Err(e) => {
             super::keyring::klog(format!("pass mint: connect member gate: {e}"));
-            refuse(503, "chat_unavailable", "K2 could not check this login's chat account")
+            refuse(503, "chat_unavailable", concat!(product_name!(), " could not check this login's chat account"))
         }
     }
 }
@@ -225,7 +227,7 @@ fn keyed_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_>)
                 response: error(
                     503,
                     "chat_member_pending",
-                    "K2 is adding this person to chat for this App; retry shortly",
+                    concat!(product_name!(), " is adding this person to chat for this App; retry shortly"),
                     Some(json!({ "retry_after_ms": MEMBER_PENDING_RETRY_SECS * 1000 })),
                 ),
                 retry_after_secs: Some(MEMBER_PENDING_RETRY_SECS),
@@ -237,13 +239,13 @@ fn keyed_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_>)
         Ok(KeyedChatGate::Limit(max)) => refuse(
             403,
             "chat_limit",
-            &format!("this App's chat key already gave chat to {max} people, its ceiling (the owner raises it: k2 app grant <app> --kind chat-key --max N)"),
+            &format!("this App's chat key already gave chat to {max} people, its ceiling (the owner raises it: {CLI_NAME} app grant <app> --kind chat-key --max N)"),
             Some(json!({ "maxMembers": max })),
         ),
         Ok(KeyedChatGate::Off) => refuse(503, "chat_unavailable", "chat isn't set up on this server", None),
         Err(e) => {
             super::keyring::klog(format!("pass mint: keyed member gate: {e}"));
-            refuse(503, "chat_unavailable", "K2 could not check this person's chat account", None)
+            refuse(503, "chat_unavailable", concat!(product_name!(), " could not check this person's chat account"), None)
         }
     }
 }
@@ -418,7 +420,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                 Err(e) => {
                     let e: RedeemError = e;
                     audit("chat-handoff", "handoff", &format!("handoff_invalid:{}", e.reason()), req.ingress, req.ip);
-                    return error(401, "handoff_invalid", "this handoff code is unknown, used or expired; open chat again from K2", None).into();
+                    return error(401, "handoff_invalid", concat!("this handoff code is unknown, used or expired; open chat again from ", product_name!()), None).into();
                 }
             }
         }
@@ -484,7 +486,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                     return error(
                         403,
                         "agent_subject",
-                        "this App login is an agent's (k2 app user agent): an agent is its workspace in chat, never a person, so it gets no chat pass (agents use k2 chat)",
+                        concat!("this App login is an agent's (", cli_name!(), " app user agent): an agent is its workspace in chat, never a person, so it gets no chat pass (agents use ", cli_name!(), " chat)"),
                         None,
                     )
                     .into();
@@ -494,7 +496,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                     return error(
                         403,
                         "no_chat_caps",
-                        "this person's App role holds no chat cap the App may hand out (its manifest caps, as the owner approved them): give the role chat:read or more (k2 app role room <role> <room> --caps …)",
+                        concat!("this person's App role holds no chat cap the App may hand out (its manifest caps, as the owner approved them): give the role chat:read or more (", cli_name!(), " app role room <role> <room> --caps …)"),
                         None,
                     )
                     .into();
@@ -506,7 +508,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                 Err(Refusal::Unavailable(e)) => {
                     super::keyring::klog(format!("pass mint: store unavailable: {e}"));
                     audit("chat-pass", "-", "chat_unavailable", req.ingress, req.ip);
-                    return error(503, "chat_unavailable", "K2's user store is unavailable", None).into();
+                    return error(503, "chat_unavailable", concat!(product_name!(), "'s user store is unavailable"), None).into();
                 }
             }
         }

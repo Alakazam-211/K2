@@ -96,6 +96,7 @@ pub(crate) use super::actions::password_reset::REVEAL_NEEDS_SCREEN;
 /// allowing a chat key past the Admin ceiling, `apps.chat-key`): the card
 /// stays open for the owner.
 pub(crate) use super::actions::chat_cards::OWNER_IN_PERSON;
+use k2_core::product_name;
 
 /// The display id of the request being applied on this thread.
 pub(crate) fn current_request() -> Option<String> {
@@ -541,7 +542,7 @@ fn decide_one(
         return Err(err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed"));
     }
     let Some(registered) = registered else {
-        return record(RequestState::Stale, Some("K2 no longer offers this request"), None);
+        return record(RequestState::Stale, Some(concat!(product_name!(), " no longer offers this request")), None);
     };
 
     // 2. The current state, on the stored values and the stored text.

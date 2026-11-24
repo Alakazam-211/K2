@@ -62,6 +62,8 @@ use k2_core::deploy::{self, codes};
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, agent_ws, need_credential, no, ws_by_id, ws_handle, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// A Member login on a mutating App route (Q7).
 pub const MEMBER_READ_ONLY: &str = "member_read_only";
@@ -167,8 +169,8 @@ pub(crate) fn need_build(who: &Who) -> R<()> {
         return Err(no(
             codes::APPS_MANAGE_OFF,
             403,
-            "\"Build and run Apps\" is off for this agent: ask your owner to turn it on (Settings → Workspaces / Agents → <agent> → Permissions → Apps, \
-             or k2 app access <workspace> --build on from a terminal outside K2)",
+            concat!("\"Build and run Apps\" is off for this agent: ask your owner to turn it on (Settings → Workspaces / Agents → <agent> → Permissions → Apps, \
+             or ", cli_name!(), " app access <workspace> --build on from a terminal outside ", product_name!(), ")"),
         ));
     }
     Ok(())
@@ -253,15 +255,15 @@ pub(crate) fn set_switches(ws_id: &str, change: SwitchChange, caller_is_owner: b
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces / Agents → \
-             <agent> → Permissions → Apps, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
+            concat!("only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces / Agents → \
+             <agent> → Permissions → Apps, or ", cli_name!(), " app access <ws> --build on|--manage on from a terminal outside ", product_name!()),
         ));
     }
     if change.full == Some(true) && !build {
         return Err(no(
             "parent_switch_off",
             409,
-            "turn on \"Build and run Apps\" first: \"…and manage them end to end\" sits under it (k2 app access <ws> --build on --manage on)",
+            concat!("turn on \"Build and run Apps\" first: \"…and manage them end to end\" sits under it (", cli_name!(), " app access <ws> --build on --manage on)"),
         ));
     }
     if !build {
@@ -272,8 +274,8 @@ pub(crate) fn set_switches(ws_id: &str, change: SwitchChange, caller_is_owner: b
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces / Agents → \
-             <agent> → Permissions → Apps, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
+            concat!("only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces / Agents → \
+             <agent> → Permissions → Apps, or ", cli_name!(), " app access <ws> --build on|--manage on from a terminal outside ", product_name!()),
         ));
     }
     if build != b0 {
@@ -363,7 +365,7 @@ pub(crate) fn tell_agent(ws_id: &str, handle: &str, by: &str) {
          App users and test guests, set passwords, email and names, unlock them, give roles and your own room, invite \
          people and give your App the guests-rooms grant in your own room. A ticked core lets your Apps use that core \
          inside their own slice without waiting for the owner. Anything that loosens an App's wall still waits for the \
-         owner in person.{} Check with k2 app access {handle}.",
+         owner in person.{} Check with {CLI_NAME} app access {handle}.",
         on_off(now >= Level::Build),
         on_off(now == Level::Full),
         on_off(k2_core::workspace::settings::agents_can_manage_app_users(ws_id)),
@@ -434,8 +436,8 @@ pub fn review_note_once() -> Option<String> {
     let title = "Review which agents can build and run Apps";
     let body = format!(
         "These agents could manage Apps before; they now have Build and run Apps on: {}.\n\n\
-         Review each one (Settings → Workspaces / Agents → <agent> → Permissions → Apps, or k2 app access <workspace> --build off \
-         from a terminal outside K2). \"…and manage them end to end\" starts off for all of them, and anything that \
+         Review each one (Settings → Workspaces / Agents → <agent> → Permissions → Apps, or {CLI_NAME} app access <workspace> --build off \
+         from a terminal outside {PRODUCT_NAME}). \"…and manage them end to end\" starts off for all of them, and anything that \
          loosens an App's wall still waits for you in person.",
         handles.join(", ")
     );
@@ -473,7 +475,7 @@ pub(crate) fn purge_confirm(who: &Who, app_id: &str, token: Option<&str>) -> R<(
             return Err(no(
                 codes::OWNER_ONLY,
                 403,
-                "--purge deletes the App's data: only the server's owner can, in person, from Settings or a terminal outside K2",
+                concat!("--purge deletes the App's data: only the server's owner can, in person, from Settings or a terminal outside ", product_name!()),
             ))
         }
     };
@@ -483,8 +485,8 @@ pub(crate) fn purge_confirm(who: &Who, app_id: &str, token: Option<&str>) -> R<(
             ..no(
                 super::egress_routes::codes::VAULT_CONFIRM_REQUIRED,
                 403,
-                "--purge deletes the App's data: it needs a fresh owner confirm (Touch ID, your login or the vault password). \
-                 k2 app uninstall <app> --purge asks for it",
+                concat!("--purge deletes the App's data: it needs a fresh owner confirm (Touch ID, your login or the vault password). \
+                 ", cli_name!(), " app uninstall <app> --purge asks for it"),
             )
         });
     };

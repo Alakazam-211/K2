@@ -31,6 +31,8 @@ use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The route.
 pub const ROUTE: &str = "/cli/agent/harness";
@@ -100,7 +102,7 @@ pub(crate) fn needs_person(project_id: &str, harness: &str) -> CliResponse {
     let ws = handle_of(project_id);
     let hint = format!(
         "Moving the pinned chat restarts your own session, so a person does it. Ask your person to run \
-         `k2 agent harness {ws} {harness}` from a terminal outside K2, or to pick \
+         `{CLI_NAME} agent harness {ws} {harness}` from a terminal outside {PRODUCT_NAME}, or to pick \
          \"Move pinned chat to {harness}\" in the pinned chat's menu. After the move you continue in a \
          new {harness} chat that starts with a summary of this one; this chat stays in Chat history."
     );
@@ -151,7 +153,7 @@ pub(crate) fn resolve(token: &str) -> Result<Target, CliResponse> {
             ))
         }
         WorkspaceResolve::Miss => {
-            return Err(refused("404 Not Found", "not_found", format!("workspace not found: {token} (k2 agent list)")))
+            return Err(refused("404 Not Found", "not_found", format!("workspace not found: {token} ({CLI_NAME} agent list)")))
         }
     };
     let id = {
@@ -212,7 +214,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
             return refused(
                 "403 Forbidden",
                 "wrong_credential",
-                "k2 agent harness takes the owner token, a Connect login, or a K2 session passport (not an app pass, API key, or API cell)",
+                concat!(cli_name!(), " agent harness takes the owner token, a Connect login, or a ", product_name!(), " session passport (not an app pass, API key, or API cell)"),
             )
         }
         Caller::Invalid => return refused("403 Forbidden", "invalid_token", "invalid or missing token"),
@@ -228,7 +230,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
         return refused(
             "400 Bad Request",
             "usage",
-            "usage: k2 agent harness <workspace> <harness> (claude, codex, grok, gemini, agy, cursor, pi, or hermes)",
+            concat!("usage: ", cli_name!(), " agent harness <workspace> <harness> (claude, codex, grok, gemini, agy, cursor, pi, or hermes)"),
         );
     }
     let harness = match k2_core::workspace::canonical_swap::normalize_harness(&req.harness) {
@@ -257,7 +259,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
             return refused(
                 "403 Forbidden",
                 "other_workspace",
-                "an agent can't move another workspace's pinned chat; a person runs `k2 agent harness <workspace> <harness>` from a terminal outside K2",
+                concat!("an agent can't move another workspace's pinned chat; a person runs `", cli_name!(), " agent harness <workspace> <harness>` from a terminal outside ", product_name!()),
             );
         }
         Caller::Login { username } => {

@@ -38,6 +38,7 @@ use k2_core::skin::SkinPass;
 
 use crate::cli::{opt_param, str_param};
 use crate::cli_response::CliResponse;
+use k2_core::brand::CLI_NAME;
 
 /// `/boot-status` feature key. A client shows no chips without it.
 pub const FEATURE: &str = "thread-attachments-v1";
@@ -417,7 +418,7 @@ pub(crate) fn serve(
                 "403 Forbidden",
                 "attachment_secret",
                 format!(
-                    "{} now looks like a secret and can't be opened here; secrets travel through the vault (k2 vault)",
+                    "{} now looks like a secret and can't be opened here; secrets travel through the vault ({CLI_NAME} vault)",
                     a.path
                 ),
             );

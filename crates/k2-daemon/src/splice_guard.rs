@@ -30,6 +30,7 @@ use std::sync::Mutex;
 use tokio::net::TcpStream;
 
 use crate::routes::dispatcher::Ingress;
+use k2_core::brand::PRODUCT_NAME;
 
 fn canonical(a: SocketAddr) -> SocketAddr {
     SocketAddr::new(a.ip().to_canonical(), a.port())
@@ -167,7 +168,7 @@ pub fn refuse_self_dial(upstream: &TcpStream) -> Result<(), String> {
             .map(|l| l.ip().to_canonical() == peer.ip())
             .unwrap_or(false);
         if same_host || is_this_machine(peer.ip()) {
-            return Err(format!("upstream {peer} is this K2 daemon's own port"));
+            return Err(format!("upstream {peer} is this {PRODUCT_NAME} daemon's own port"));
         }
     }
     Ok(())
@@ -268,7 +269,7 @@ pub fn check_target(raw: &str, caller: TargetCaller) -> Result<(), TargetRefusal
             return Err(refusal(
                 "target_is_daemon",
                 format!(
-                    "'{raw}' is this K2 server's own port; point the address at your app's port instead"
+                    "'{raw}' is this {PRODUCT_NAME} server's own port; point the address at your app's port instead"
                 ),
             ));
         }

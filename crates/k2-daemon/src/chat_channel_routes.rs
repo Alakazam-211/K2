@@ -34,6 +34,8 @@ use serde_json::{json, Value as J};
 use crate::cli_response::CliResponse;
 use crate::guest_rooms_routes::{app_of, error, pass_invalid, OnLink};
 use crate::sew_mgmt::{MgmtClient, MgmtResponse};
+use k2_core::brand::CLI_NAME;
+use k2_core::product_name;
 
 pub const ROUTE: &str = "/cli/sew/app/channels";
 
@@ -80,7 +82,7 @@ fn sew_refusal(r: &MgmtResponse, space: &str, slug: &str) -> Refusal {
     let is = |w: &str| code == w || reason == w;
     match r.status {
         409 if is("space_unbound") => Refusal::SpaceUnbound(format!(
-            "Sew says Space {space} is bound to no App (bind it again: k2 hostchat app-space bind <app> {space})"
+            "Sew says Space {space} is bound to no App (bind it again: {CLI_NAME} hostchat app-space bind <app> {space})"
         )),
         409 if is("app_mismatch") => {
             Refusal::AppMismatch(format!("Sew says Space {space} belongs to another App; an App makes channels in its own Space only"))
@@ -94,9 +96,9 @@ fn sew_refusal(r: &MgmtResponse, space: &str, slug: &str) -> Refusal {
                 .and_then(|e| e.error.details.get("existing_type").and_then(|x| x.as_str()).map(str::to_string))
                 .unwrap_or_default(),
         },
-        404 => Refusal::NotFound(format!("Sew has no Space {space} (k2 hostchat app-space list)")),
+        404 => Refusal::NotFound(format!("Sew has no Space {space} ({CLI_NAME} hostchat app-space list)")),
         400 => Refusal::Usage(format!("Sew refused the request: {}", r.error_line())),
-        401 => Refusal::Unreachable("Sew refused K2's mgmt token".into()),
+        401 => Refusal::Unreachable(concat!("Sew refused ", product_name!(), "'s mgmt token").into()),
         s if s >= 500 => Refusal::Unreachable(format!("Sew answered {s}")),
         _ => Refusal::Sew(format!("Sew refused: {}", r.error_line())),
     }

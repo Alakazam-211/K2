@@ -32,6 +32,8 @@ use crate::mail::addresses::{self, AddrError};
 use crate::mail::app_password::AppPasswordEngine;
 use crate::mail::dav;
 use crate::mail::hosted::{addr_err, err_json};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// IMAP over implicit TLS (`imap_listeners::IMAPS_IMPLICIT`).
 pub const IMAP_PORT: u16 = 993;
@@ -197,7 +199,7 @@ pub fn includes(include_dav: bool) -> Vec<&'static str> {
 
 /// The unsigned `.mobileconfig` XML.
 pub fn build_mobileconfig(spec: &ProfileSpec<'_>) -> String {
-    let display = format!("{} (K2 Mail)", spec.address);
+    let display = format!("{} ({PRODUCT_NAME} Mail)", spec.address);
     let id = profile_identifier(spec.address);
     let host = spec.mail_host.trim().trim_end_matches('.');
 
@@ -270,7 +272,7 @@ pub fn build_mobileconfig(spec: &ProfileSpec<'_>) -> String {
             "PayloadDescription",
             s(format!(
                 "{what} for {} on {host}. Signs in with the app password \"{}\" \
-                 (revoke it with k2 hostmail app-password revoke). Unsigned profile made by K2.",
+                 (revoke it with {CLI_NAME} hostmail app-password revoke). Unsigned profile made by {PRODUCT_NAME}.",
                 spec.address, spec.label
             )),
         ),
@@ -298,8 +300,8 @@ pub fn pick_mail_host(apex: &str, host: Option<String>) -> Result<String, CliRes
             "409 Conflict",
             "not_ready",
             format!(
-                "no mail hostname for {apex} — set one first (k2 hostmail enable --hostname \
-                 mail.{apex}, or attach it with k2 domain)"
+                "no mail hostname for {apex} — set one first ({CLI_NAME} hostmail enable --hostname \
+                 mail.{apex}, or attach it with {CLI_NAME} domain)"
             ),
         ));
     };
@@ -308,10 +310,10 @@ pub fn pick_mail_host(apex: &str, host: Option<String>) -> Result<String, CliRes
             "409 Conflict",
             "not_ready",
             format!(
-                "the mail host for {apex} is {host}, a k2.dev name that points at the K2 \
+                "the mail host for {apex} is {host}, a k2.dev name that points at the {PRODUCT_NAME} \
                  control plane, not this box — Mail, Calendar and Contacts can't sign in \
                  there. Put a mail hostname on your own domain (e.g. mail.{apex}) with a \
-                 certificate first (k2 hostmail ptr set / k2 domain), then make the profile"
+                 certificate first ({CLI_NAME} hostmail ptr set / {CLI_NAME} domain), then make the profile"
             ),
         ));
     }
@@ -325,13 +327,13 @@ pub fn require_running(status: Option<&str>) -> Result<(), CliResponse> {
         None => Err(err_json(
             "503 Service Unavailable",
             "not_ready",
-            "hosted mail is not installed — enable it first (k2 hostmail enable)".to_string(),
+            concat!("hosted mail is not installed — enable it first (", cli_name!(), " hostmail enable)").to_string(),
         )),
         Some("running") | Some("degraded") => Ok(()),
         Some(other) => Err(err_json(
             "503 Service Unavailable",
             "not_ready",
-            format!("hosted mail is {other} — start it (k2 hostmail enable) before making a profile"),
+            format!("hosted mail is {other} — start it ({CLI_NAME} hostmail enable) before making a profile"),
         )),
     }
 }
@@ -364,7 +366,7 @@ pub fn dav_inclusion(
         return DavInclusion {
             include: false,
             reason: Some(
-                "calendars are off for hosted addresses (k2 hostmail calendar enable)".to_string(),
+                concat!("calendars are off for hosted addresses (", cli_name!(), " hostmail calendar enable)").to_string(),
             ),
         };
     }
@@ -424,8 +426,8 @@ pub fn profile_on(
         notes.push(format!("mail only — {r}"));
     }
     notes.push(
-        "a device signing in with a stale or wrong password gets its network's IP banned — \
-         see k2 hostmail bans list / k2 hostmail allowlist"
+        concat!("a device signing in with a stale or wrong password gets its network's IP banned — \
+         see ", cli_name!(), " hostmail bans list / ", cli_name!(), " hostmail allowlist")
             .to_string(),
     );
     CliResponse::ok_json(
@@ -441,7 +443,7 @@ pub fn profile_on(
             "signed": false,
             "profile": xml,
             "notes": notes,
-            "revoke": format!("k2 hostmail app-password revoke {address} {}", created.id),
+            "revoke": format!("{CLI_NAME} hostmail app-password revoke {address} {}", created.id),
         })
         .to_string(),
     )

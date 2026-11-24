@@ -15,6 +15,7 @@
 use serde_json::{json, Value as J};
 
 use k2_core::overlay::CardAction;
+use k2_core::brand::PRODUCT_NAME;
 
 /// "Keep as mine": stamp a widget version as the person's (the same as
 /// Settings → Gardens → Local Data → It's mine).
@@ -69,7 +70,7 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
         crate::db_home_routes::CARD_ACTION => crate::db_home_routes::run_card(&action.params, answer, by),
         // PV-11: sites public from before 0.46.7, one click each.
         crate::publish_cards::UPGRADE_ACTION => crate::publish_cards::run_upgrade_card(answer, by),
-        other => Err(format!("K2 doesn't know the card action '{other}'")),
+        other => Err(format!("{PRODUCT_NAME} doesn't know the card action '{other}'")),
     }
 }
 

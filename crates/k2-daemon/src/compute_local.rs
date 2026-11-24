@@ -35,7 +35,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use k2_core::compute::{self as compute, local};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
+use k2_core::brand::PRODUCT_NAME;
 
 /// The root helper's binary and the first protocol with a `node`
 /// namespace (designed in `.k2/prds/compute-polish-v1-notes.md`; the
@@ -185,7 +186,7 @@ pub fn check_node_download(bin: &[u8], sig: &str, keys: &[k2_root_proto::keys::T
 #[cfg(not(feature = "airgap"))]
 pub fn download_binary() -> Result<PathBuf, String> {
     if !cfg!(target_os = "linux") {
-        return Err("k2-node ships inside K2.app on macOS; update K2".into());
+        return Err(concat!("k2-node ships inside K2.app on macOS; update ", product_name!()).into());
     }
     if k2_core::airgap::enabled() {
         return Err("air-gapped: copy k2-node next to the daemon by hand (the release asset k2-node-linux-<arch>)".into());
@@ -643,7 +644,7 @@ pub fn enable(req: &EnableReq, by: &str) -> Result<serde_json::Value, Refused> {
     )
     .map_err(|e| {
         let hint = if e.contains("permission") {
-            format!("{e}. K2 can't write the node's config yet: run `sudo k2-node setup` once more (it gives you access), or log out and back in")
+            format!("{e}. {PRODUCT_NAME} can't write the node's config yet: run `sudo k2-node setup` once more (it gives you access), or log out and back in")
         } else {
             e
         };
@@ -681,7 +682,7 @@ pub fn set_remote_admin(level: &str, by: &str, allow_prompt: bool) -> Result<ser
     }
     let bin = installed_binary_path();
     if !local::config_dir().is_dir() || !bin.is_file() {
-        return Err(("not_a_node", 409, "this computer isn't a compute node yet (k2 compute local enable)".into()));
+        return Err(("not_a_node", 409, concat!("this computer isn't a compute node yet (", cli_name!(), " compute local enable)").into()));
     }
     let args = vec!["level".to_string(), level.to_string()];
     let el = elevation_with(&bin, "admin", &args, allow_prompt, false);
@@ -697,9 +698,9 @@ pub fn set_remote_admin(level: &str, by: &str, allow_prompt: bool) -> Result<ser
     Ok(serde_json::json!({
         "ok": true, "done": true, "mode": el.as_str(), "remoteAdmin": level,
         "message": match level {
-            "off" => "Remote admin is off: K2 can't update this node or keep it healthy.",
-            "policy" => "K2 keeps this node updated and healthy (remote admin: policy).",
-            _ => "K2 may also run admin actions as root here, each one approved by you (remote admin: full).",
+            "off" => concat!("Remote admin is off: ", product_name!(), " can't update this node or keep it healthy."),
+            "policy" => concat!(product_name!(), " keeps this node updated and healthy (remote admin: policy)."),
+            _ => concat!(product_name!(), " may also run admin actions as root here, each one approved by you (remote admin: full)."),
         },
     }))
 }
@@ -715,7 +716,7 @@ pub fn disable(by: &str, allow_prompt: bool) -> Result<serde_json::Value, Refuse
         return Ok(serde_json::json!({
             "ok": true, "done": false, "rootNeeded": true, "mode": "command",
             "command": command_line(&bin, "uninstall", &[]),
-            "message": "Run this once as an admin: it stops the node's jobs and removes the service, the hidden user and its home. Remove the node on its controller too (k2 compute node remove <name>).",
+            "message": concat!("Run this once as an admin: it stops the node's jobs and removes the service, the hidden user and its home. Remove the node on its controller too (", cli_name!(), " compute node remove <name>)."),
         }));
     }
     run_root(el, &bin, "uninstall", &[]).map_err(|e| ("uninstall_failed", 409, e))?;

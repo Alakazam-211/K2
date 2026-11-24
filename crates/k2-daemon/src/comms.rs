@@ -15,6 +15,7 @@
 
 use crate::cli_response::CliResponse;
 use crate::session_token::HookPrincipal;
+use k2_core::brand::CLI_NAME;
 
 /// Wire code for the local peer gate. CLI maps this (and `gated`) to
 /// exit 3 with teaching stderr — same family as mail/dns denials.
@@ -59,7 +60,7 @@ pub fn not_connected_hint(target_display: &str) -> String {
     let shown = if name.is_empty() { "<workspace>" } else { name };
     format!(
         "'{shown}' is not a local connection — add it with \
-         `k2 connections add {shown}` (or ask your human: Settings → \
+         `{CLI_NAME} connections add {shown}` (or ask your human: Settings → \
          Workspaces / Agents → <workspace> → Connections). Same-workspace is always allowed."
     )
 }

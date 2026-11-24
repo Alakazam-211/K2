@@ -331,6 +331,8 @@ use expect::{estimate_for, expect_from, status_line};
 #[path = "compute_routes_repo.rs"]
 mod repo_choice;
 pub(crate) use repo_choice::repo_pick;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 
 #[derive(Debug)]
@@ -406,7 +408,7 @@ pub fn dark() -> CliResponse {
     CliResponse {
         status: "404 Not Found",
         content_type: "application/json",
-        body: r#"{"error":{"code":"compute_disabled","hint":"compute nodes are a preview: the owner turns them on (k2 compute preview on, or K2_COMPUTE=1)"}}"#
+        body: concat!(r#"{"error":{"code":"compute_disabled","hint":"compute nodes are a preview: the owner turns them on ("#, cli_name!(), r#" compute preview on, or K2_COMPUTE=1)"}}"#)
             .to_string(),
     }
 }
@@ -415,8 +417,8 @@ pub(crate) fn owner_only() -> Refusal {
     no(
         codes::OWNER_ONLY,
         403,
-        "only the server's owner (or an admin, where noted) can do this, and not through an agent or a K2 terminal \
-         (those send the tab's passport). Use Settings or a terminal outside K2.",
+        concat!("only the server's owner (or an admin, where noted) can do this, and not through an agent or a ", product_name!(), " terminal \
+         (those send the tab's passport). Use Settings or a terminal outside ", product_name!(), "."),
     )
 }
 
@@ -544,7 +546,7 @@ pub(crate) fn no_workspace(req: &str) -> Refusal {
     no(
         "workspace_not_found",
         404,
-        format!("no workspace '{req}'; from a folder outside the workspace pass --workspace <handle> (k2 compute grants lists them)"),
+        format!("no workspace '{req}'; from a folder outside the workspace pass --workspace <handle> ({CLI_NAME} compute grants lists them)"),
     )
 }
 
@@ -622,7 +624,7 @@ pub(crate) fn node_or_404(token: Option<&str>) -> R<store::NodeRow> {
     let conn = db.lock();
     store::find_node(&conn, t)
         .filter(|n| n.state != "revoked")
-        .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' (k2 compute nodes)")))
+        .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' ({CLI_NAME} compute nodes)")))
 }
 
 /// A node-name prefix that matches more than one node the caller may see
@@ -653,7 +655,7 @@ pub(crate) fn resolve_node_for(who: &Who, token: Option<&str>, ws_id: Option<&st
     hits.sort_by(|a, b| a.name.cmp(&b.name));
     match hits.len() {
         1 => Ok(hits.remove(0)),
-        0 => Err(no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' (k2 compute nodes)"))),
+        0 => Err(no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' ({CLI_NAME} compute nodes)"))),
         _ => {
             let names: Vec<&str> = hits.iter().map(|n| n.name.as_str()).collect();
             Err(no(NODE_AMBIGUOUS, 400, format!("'{t}' matches {} nodes ({}): name one of them in full", names.len(), names.join(", "))))
@@ -687,7 +689,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
     // CI on compute (0.46.10, dark): its routes answer `ci_preview_off`
     // before anything is read or written.
     if is_ci_route(path) && !compute::ci_enabled() {
-        let what = if path.starts_with("/cli/ci/") { "k2 ci" } else { "k2 compute roster, lanes, seats, trust and owners" };
+        let what = if path.starts_with("/cli/ci/") { concat!(cli_name!(), " ci") } else { concat!(cli_name!(), " compute roster, lanes, seats, trust and owners") };
         return refusal_response(&ci_preview_off(what));
     }
     let mgr = crate::compute_manage::manager(&who, local);
@@ -785,7 +787,7 @@ fn controller_url(override_url: Option<&str>) -> String {
 fn enroll_code(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
     owner_or_manager(who, mgr)?;
     let v = json_body(body)?;
-    let name = s(&v, "name").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the node: k2 compute node add <name>"))?;
+    let name = s(&v, "name").ok_or_else(|| no(codes::BAD_REQUEST, 400, concat!("name the node: ", cli_name!(), " compute node add <name>")))?;
     if !compute::enroll::valid_name(name) {
         return Err(no(codes::BAD_REQUEST, 400, "node names are 1–32 of a-z, 0-9 and '-'"));
     }
@@ -829,7 +831,7 @@ fn enroll_code(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
             // A machine that is already a node for another K2 server.
             "servers": format!("sudo k2-node servers add --url {url} --code - < code-file"),
         },
-        "confirm": format!("k2 compute node confirm {name} <code shown on the node>"),
+        "confirm": format!("{CLI_NAME} compute node confirm {name} <code shown on the node>"),
     }))
 }
 
@@ -847,7 +849,7 @@ fn node_confirm(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::
         return Err(no(
             "sas_mismatch",
             409,
-            "the code doesn't match what this server computed. Don't confirm: remove the node and enroll again (k2 compute node remove <name>)",
+            concat!("the code doesn't match what this server computed. Don't confirm: remove the node and enroll again (", cli_name!(), " compute node remove <name>)"),
         ));
     }
     let (auto_granted, joined_lists) = {
@@ -872,9 +874,9 @@ fn node_confirm(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::
     }
     let handles: Vec<String> = auto_granted.iter().map(|w| ws_handle(w)).collect();
     let next = if handles.is_empty() {
-        format!("k2 compute grant {} --workspace <ws> (no workspace may use it yet)", n.name)
+        format!("{CLI_NAME} compute grant {} --workspace <ws> (no workspace may use it yet)", n.name)
     } else {
-        format!("granted to every workspace with compute on ({}); k2 compute grant {} --workspace <ws> for others", handles.join(", "), n.name)
+        format!("granted to every workspace with compute on ({}); {CLI_NAME} compute grant {} --workspace <ws> for others", handles.join(", "), n.name)
     };
     Ok(serde_json::json!({"ok": true, "node": n.name, "state": "active", "autoGranted": handles, "joinedLists": joined_lists, "next": next}))
 }
@@ -1082,8 +1084,8 @@ fn grants_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager
                     "forbidden",
                     403,
                     format!(
-                        "an agent sees only its own workspace's grants, not '{t}' (k2 compute grants with no --workspace); \
-                         the owner, an Admin or a person in a K2 shell tab sees any workspace's"
+                        "an agent sees only its own workspace's grants, not '{t}' ({CLI_NAME} compute grants with no --workspace); \
+                         the owner, an Admin or a person in a {PRODUCT_NAME} shell tab sees any workspace's"
                     ),
                 ));
             }
@@ -1144,7 +1146,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
             tiers::codes::CI_NOT_ALLOWED,
             403,
             format!(
-                "only the owner or an Admin turns CI on or off for a grant (CI jumps every queue): the owner runs k2 compute grant {} --workspace {} --ci",
+                "only the owner or an Admin turns CI on or off for a grant (CI jumps every queue): the owner runs {CLI_NAME} compute grant {} --workspace {} --ci",
                 n.name, ws.handle
             ),
         ));
@@ -1164,7 +1166,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         return Err(no(
             k2_core::compute::proto::gpu::codes::GPU_NEEDS_GRANT,
             403,
-            format!("only the owner or an Admin turns GPU jobs on or off for a grant: the owner runs k2 compute grant {} --workspace {} --gpu", n.name, ws.handle),
+            format!("only the owner or an Admin turns GPU jobs on or off for a grant: the owner runs {CLI_NAME} compute grant {} --workspace {} --gpu", n.name, ws.handle),
         )
         .with("node", n.name.clone()));
     }
@@ -1210,7 +1212,7 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         store::agents_can_use_compute(&conn, &ws.id)
     };
     Ok(serde_json::json!({"ok": true, "node": n.name, "workspace": ws.handle, "grant": g, "agentsCanUseCompute": switch_on, "resent": resent,
-        "note": if switch_on { "agents in this workspace can use the node now" } else { "agents also need \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → <agent> → Permissions → Compute (k2 compute access on --workspace <ws>)" }}))
+        "note": if switch_on { "agents in this workspace can use the node now" } else { concat!("agents also need \"Let this agent use compute nodes\" in Settings → Workspaces / Agents → <agent> → Permissions → Compute (", cli_name!(), " compute access on --workspace <ws>)") }}))
 }
 
 fn n_pos(v: &serde_json::Value, k: &str, lo: i64, hi: i64) -> R<Option<i64>> {
@@ -1447,7 +1449,7 @@ pub(crate) fn target_refusal_for(name: &str, offer: Option<&k2_core::compute::pr
             "node_upgrade_required",
             409,
             format!(
-                "'{name}' runs a k2-node older than 0.46.13, which can't add Rust targets (rust@<channel>+target:<triple>); update it (k2 compute node update {name}), pick another node, or send the job without a node name"
+                "'{name}' runs a k2-node older than 0.46.13, which can't add Rust targets (rust@<channel>+target:<triple>); update it ({CLI_NAME} compute node update {name}), pick another node, or send the job without a node name"
             ),
         ));
     }
@@ -1457,7 +1459,7 @@ pub(crate) fn target_refusal_for(name: &str, offer: Option<&k2_core::compute::pr
             needs::RUST_TARGET_UNSUPPORTED,
             409,
             format!(
-                "{}: '{name}' gets Rust from a system package with no rustup, so it can't add Rust targets. Send the job without a node name (K2 places it on a node with rustup), or name another node",
+                "{}: '{name}' gets Rust from a system package with no rustup, so it can't add Rust targets. Send the job without a node name ({PRODUCT_NAME} places it on a node with rustup), or name another node",
                 which.join(", ")
             ),
         ));
@@ -1658,7 +1660,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let (ask, never) = place::package_gaps(&states);
         if !never.is_empty() || states.iter().any(|x| x.state == place::NeedState::UnsupportedOnOs) {
             row["state"] = "cant_install".into();
-            row["note"] = format!("can't install {} there (no name for its distro, K2's deny list, or a Mac)", [never, states.iter().filter(|x| x.state == place::NeedState::UnsupportedOnOs).map(|x| x.need.clone()).collect()].concat().join(", ")).into();
+            row["note"] = format!("can't install {} there (no name for its distro, {PRODUCT_NAME}'s deny list, or a Mac)", [never, states.iter().filter(|x| x.state == place::NeedState::UnsupportedOnOs).map(|x| x.need.clone()).collect()].concat().join(", ")).into();
             rows.push(row);
             continue;
         }
@@ -1726,7 +1728,7 @@ fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let mut pkg_held = false;
     let request = if !dry && !ask_nodes.is_empty() {
         let session = who.passport().map(|(_, sid)| sid.to_string());
-        match crate::compute_pkg::file(who, &ws, session.as_deref(), &ws.handle, &ask_nodes, &ask_names, Some("k2 compute prewarm"), None) {
+        match crate::compute_pkg::file(who, &ws, session.as_deref(), &ws.handle, &ask_nodes, &ask_names, Some(concat!(cli_name!(), " compute prewarm")), None) {
             Ok(v) => {
                 pkg_held = v["pkgHeld"] == true;
                 v.get("request").cloned()
@@ -1816,7 +1818,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // argv (with `--strict`: under bash -euo pipefail) / env / cwd.
     let argv = crate::compute_strict::argv_of(v).map_err(|m| no(codes::BAD_REQUEST, 400, m))?;
     if argv.is_empty() || argv.len() > 256 || argv.iter().map(String::len).sum::<usize>() > 128 * 1024 || argv.iter().any(|a| a.contains('\0')) {
-        return Err(no(codes::BAD_REQUEST, 400, "pass the command after --: k2 compute run [<node>] -- <command…>"));
+        return Err(no(codes::BAD_REQUEST, 400, concat!("pass the command after --: ", cli_name!(), " compute run [<node>] -- <command…>")));
     }
     let env: BTreeMap<String, String> = v
         .get("env")
@@ -2053,7 +2055,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             "node_upgrade_required",
             409,
             format!(
-                "'{}' can't take --secret: it needs k2-node 0.46.4 on Linux with the job wall on, and this server's trust there must be 'own' (k2 compute info {} shows its features)",
+                "'{}' can't take --secret: it needs k2-node 0.46.4 on Linux with the job wall on, and this server's trust there must be 'own' ({CLI_NAME} compute info {} shows its features)",
                 node.name, node.name
             ),
         ));
@@ -2093,7 +2095,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             pcache::codes::NODE_TOO_OLD_FOR_CACHE,
             409,
             format!(
-                "'{}' runs a k2-node older than 0.46.6, which has no job caches; update it (k2 compute node update {}), pick another node, or run without --cache",
+                "'{}' runs a k2-node older than 0.46.6, which has no job caches; update it ({CLI_NAME} compute node update {}), pick another node, or run without --cache",
                 node.name, node.name
             ),
         ));
@@ -2103,7 +2105,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             "node_upgrade_required",
             409,
             format!(
-                "'{}' runs a k2-node older than 0.46.6, which can't lay out --with repos; update it (k2 compute node update {}), or pick another node",
+                "'{}' runs a k2-node older than 0.46.6, which can't lay out --with repos; update it ({CLI_NAME} compute node update {}), or pick another node",
                 node.name, node.name
             ),
         ));
@@ -2113,7 +2115,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             "node_upgrade_required",
             409,
             format!(
-                "'{}' runs a k2-node that doesn't sign receipt v2 (it needs protocol 9); update it (k2 compute node update {}), pick another node, or run without --receipt-v2",
+                "'{}' runs a k2-node that doesn't sign receipt v2 (it needs protocol 9); update it ({CLI_NAME} compute node update {}), pick another node, or run without --receipt-v2",
                 node.name, node.name
             ),
         ));
@@ -2142,7 +2144,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 "node_upgrade_required",
                 409,
                 format!(
-                    "'{}' runs a k2-node older than 0.46.7, which can't install Rust components (rust@<channel>+clippy); update it (k2 compute node update {}), pick another node, or drop the +components",
+                    "'{}' runs a k2-node older than 0.46.7, which can't install Rust components (rust@<channel>+clippy); update it ({CLI_NAME} compute node update {}), pick another node, or drop the +components",
                     node.name, node.name
                 ),
             ));
@@ -2163,7 +2165,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 "node_upgrade_required",
                 409,
                 format!(
-                    "'{}' runs a k2-node older than 0.46.9, which knows no profile: or sys:<manager>:<name> needs; update it (k2 compute node update {}), pick another node, or name Debian sys: packages",
+                    "'{}' runs a k2-node older than 0.46.9, which knows no profile: or sys:<manager>:<name> needs; update it ({CLI_NAME} compute node update {}), pick another node, or name Debian sys: packages",
                     node.name, node.name
                 ),
             ));
@@ -2172,7 +2174,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             return Err(no(
                 "node_upgrade_required",
                 409,
-                format!("'{}' runs a k2-node older than 0.46.9, where rust@<channel> is already minimal: drop +minimal, or update it (k2 compute node update {})", node.name, node.name),
+                format!("'{}' runs a k2-node older than 0.46.9, where rust@<channel> is already minimal: drop +minimal, or update it ({CLI_NAME} compute node update {})", node.name, node.name),
             ));
         }
         if crate::compute_place::plan_packages(&needs).len() > k2_core::compute::proto::profiles::MAX_PLAN_PACKAGES {
@@ -2190,7 +2192,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                     k2_core::compute::proto::pkgpolicy::codes::NO_PACKAGE_MAPPING,
                     409,
                     format!(
-                        "'{}' can't install {} ({} names it nothing, or K2 never installs it). It can't be requested: use a native name (sys:{mgr}:<name>), pick another distro (--distro ubuntu), or another node",
+                        "'{}' can't install {} ({} names it nothing, or {PRODUCT_NAME} never installs it). It can't be requested: use a native name (sys:{mgr}:<name>), pick another distro (--distro ubuntu), or another node",
                         node.name,
                         never.join(", "),
                         o.host.as_ref().map(|h| h.short()).unwrap_or_else(|| "this distro".into())
@@ -2205,7 +2207,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                     k2_core::compute::proto::pkgpolicy::codes::PACKAGE_NOT_APPROVED,
                     403,
                     format!(
-                        "'{}' needs its owner's approval to install {}: request {id} is filed for {to}. Run the job again once it's installed (k2 compute node packages requests shows it)",
+                        "'{}' needs its owner's approval to install {}: request {id} is filed for {to}. Run the job again once it's installed ({CLI_NAME} compute node packages requests shows it)",
                         node.name,
                         ask.join(", ")
                     ),
@@ -2226,7 +2228,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         return Err(no(
             codes::NOT_GRANTED,
             403,
-            format!("'{}' isn't granted to workspace {}: ask your owner (k2 compute grant {} --workspace {})", node.name, ws.handle, node.name, ws.handle),
+            format!("'{}' isn't granted to workspace {}: ask your owner ({CLI_NAME} compute grant {} --workspace {})", node.name, ws.handle, node.name, ws.handle),
         ));
     }
     // CI needs the node owner's share `gate` for this server and a grant
@@ -2240,7 +2242,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             pshare::codes::GATE_NOT_ALLOWED,
             409,
             format!(
-                "'{}': this server's share on the node doesn't allow CI jobs (gate); the node's owner allows it with k2 compute node servers {} limits <this server> --gate",
+                "'{}': this server's share on the node doesn't allow CI jobs (gate); the node's owner allows it with {CLI_NAME} compute node servers {} limits <this server> --gate",
                 node.name, node.name
             ),
         ));
@@ -2281,7 +2283,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         let asked = human_secs(timeout.max(0));
         let hint = match &grant {
             Some(g) => format!(
-                "--timeout {asked} is over this grant's {} per job on {} ({}). Ask your owner: k2 compute grant {} --workspace {} --max-time {asked}",
+                "--timeout {asked} is over this grant's {} per job on {} ({}). Ask your owner: {CLI_NAME} compute grant {} --workspace {} --max-time {asked}",
                 human_secs(max_secs),
                 node.name,
                 grant_line(g),
@@ -2303,7 +2305,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 codes::QUEUE_FULL,
                 409,
                 format!(
-                    "{queued} jobs from this workspace already wait on {} ({}). Wait for one to start (k2 compute jobs --node {} --state queued), or ask your owner: k2 compute grant {} --workspace {} --max-queued {}",
+                    "{queued} jobs from this workspace already wait on {} ({}). Wait for one to start ({CLI_NAME} compute jobs --node {} --state queued), or ask your owner: {CLI_NAME} compute grant {} --workspace {} --max-queued {}",
                     node.name,
                     grant_line(g),
                     node.name,
@@ -2323,7 +2325,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             return Err(no(
                 scheduler::EXCEEDS_NODE_CAPS,
                 400,
-                format!("'{}': {}; ask for less, or pick a bigger node (k2 compute nodes)", node.name, r.message),
+                format!("'{}': {}; ask for less, or pick a bigger node ({CLI_NAME} compute nodes)", node.name, r.message),
             ));
         }
     }
@@ -2378,7 +2380,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         notices.push(notice(
             tiers::codes::PRIORITY_CAP_REACHED,
             format!(
-                "workspace {} already has {} Priority jobs queued or running (the cap): this one runs as Standard. When one ends: k2 compute retier <job> --priority --why \"…\"",
+                "workspace {} already has {} Priority jobs queued or running (the cap): this one runs as Standard. When one ends: {CLI_NAME} compute retier <job> --priority --why \"…\"",
                 ws.handle,
                 tiers::PRIORITY_CAP
             ),
@@ -2407,7 +2409,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             let class = share::clamp_class(&view.limits, tier.class());
             let ask = share::ShareAsk { cpu_millis, mem_bytes, max_secs: timeout as u64, exclusive: want.exclusive, class };
             if let Some((code, msg)) = share::share_refusal(&view.limits, &ask) {
-                return Err(no(code, 409, format!("'{}': {msg} (k2 compute nodes shows your share)", node.name)));
+                return Err(no(code, 409, format!("'{}': {msg} ({CLI_NAME} compute nodes shows your share)", node.name)));
             }
             class
         }
@@ -2797,7 +2799,7 @@ fn own_caches_only(handle: &str, own: &str, named: Option<&str>, all: bool) -> R
         return Err(no(
             codes::OWNER_ONLY,
             403,
-            format!("an agent sees and clears only its own workspace's job caches ({handle}); another workspace's are for the owner, from Settings or a terminal outside K2. Run it without --workspace or --all for your own."),
+            format!("an agent sees and clears only its own workspace's job caches ({handle}); another workspace's are for the owner, from Settings or a terminal outside {PRODUCT_NAME}. Run it without --workspace or --all for your own."),
         ));
     }
     Ok(())
@@ -3021,7 +3023,7 @@ fn ci_not_allowed(node: &str, ws: &str, what: &str) -> Refusal {
         tiers::codes::CI_NOT_ALLOWED,
         403,
         format!(
-            "{what} on '{node}' needs a grant with CI allowed: CI jumps every queue. The owner or an Admin turns it on: k2 compute grant {node} --workspace {ws} --ci. Otherwise run it Normal (no flag)"
+            "{what} on '{node}' needs a grant with CI allowed: CI jumps every queue. The owner or an Admin turns it on: {CLI_NAME} compute grant {node} --workspace {ws} --ci. Otherwise run it Normal (no flag)"
         ),
     )
 }
@@ -3040,7 +3042,7 @@ fn exclusive_needs_grant(node: &str, ws: &str) -> Refusal {
         EXCLUSIVE_NEEDS_GRANT,
         403,
         format!(
-            "--exclusive on '{node}' needs a grant with CI allowed: an exclusive job holds the whole node while it runs. The owner or an Admin turns it on: k2 compute grant {node} --workspace {ws} --ci. Otherwise run it without --exclusive (--cpus/--mem reserve what it needs)"
+            "--exclusive on '{node}' needs a grant with CI allowed: an exclusive job holds the whole node while it runs. The owner or an Admin turns it on: {CLI_NAME} compute grant {node} --workspace {ws} --ci. Otherwise run it without --exclusive (--cpus/--mem reserve what it needs)"
         ),
     )
 }
@@ -3403,7 +3405,7 @@ fn pick_node(
                 tiers::codes::CI_NOT_ALLOWED,
                 403,
                 format!(
-                    "--tier ci: no node granted to workspace {} allows CI for it (a grant with --ci, and the node's share allows gate). The owner or an Admin: k2 compute grant <node> --workspace {} --ci",
+                    "--tier ci: no node granted to workspace {} allows CI for it (a grant with --ci, and the node's share allows gate). The owner or an Admin: {CLI_NAME} compute grant <node> --workspace {} --ci",
                     ws.handle, ws.handle
                 ),
             ));
@@ -3426,7 +3428,7 @@ fn pick_node(
             EXCLUSIVE_NEEDS_GRANT,
             403,
             format!(
-                "--exclusive: no node granted to workspace {} allows CI for it, which an exclusive job needs (it holds the whole node). The owner or an Admin: k2 compute grant <node> --workspace {} --ci. Otherwise run it without --exclusive",
+                "--exclusive: no node granted to workspace {} allows CI for it, which an exclusive job needs (it holds the whole node). The owner or an Admin: {CLI_NAME} compute grant <node> --workspace {} --ci. Otherwise run it without --exclusive",
                 ws.handle, ws.handle
             ),
         ));
@@ -3442,7 +3444,7 @@ fn pick_node(
             codes::NO_NODE_FITS,
             404,
             format!(
-                "every node granted to workspace {} that fits is paused, draining or unavailable right now ({}); k2 compute nodes says why",
+                "every node granted to workspace {} that fits is paused, draining or unavailable right now ({}); {CLI_NAME} compute nodes says why",
                 ws.handle,
                 place::skip_words(place::skip::UNAVAILABLE, report.cands.len() as u32, want)
             ),
@@ -3566,7 +3568,7 @@ pub(crate) fn pinned_now(who: &Who, ws: &Ws, want: &crate::compute_place::Want, 
         if !granted && !who.is_admin() {
             return Ok(());
         }
-        return Err(no(NOT_NOW, 409, format!("--now: {} can't take this job now (k2 compute nodes says why). Run without --now to queue there", n.name)));
+        return Err(no(NOT_NOW, 409, format!("--now: {} can't take this job now ({CLI_NAME} compute nodes says why). Run without --now to queue there", n.name)));
     };
     match c.tier(&pinned) {
         Some(Tier::Now) => Ok(()),
@@ -3585,7 +3587,7 @@ fn same_node_as(ws: &Ws, v: &serde_json::Value) -> R<Option<(store::NodeRow, Str
         (j, n)
     });
     let Some(j) = job else {
-        return Err(no(codes::JOB_NOT_FOUND, 404, format!("--same-node-as: no job '{t}' in workspace {} (k2 compute jobs)", ws.handle)));
+        return Err(no(codes::JOB_NOT_FOUND, 404, format!("--same-node-as: no job '{t}' in workspace {} ({CLI_NAME} compute jobs)", ws.handle)));
     };
     let short: String = j.id.chars().take(8).collect();
     match node.filter(|n| n.state == "active") {
@@ -3593,7 +3595,7 @@ fn same_node_as(ws: &Ws, v: &serde_json::Value) -> R<Option<(store::NodeRow, Str
         None => Err(no(
             codes::NODE_NOT_FOUND,
             404,
-            format!("--same-node-as {short}: the node that ran it is no longer active (k2 compute nodes)"),
+            format!("--same-node-as {short}: the node that ran it is no longer active ({CLI_NAME} compute nodes)"),
         )),
     }
 }
@@ -3604,23 +3606,23 @@ pub(crate) fn no_fit_hint(ws: &Ws, want: &crate::compute_place::Want, report: &c
     use crate::compute_place as place;
     if report.visible == 0 {
         return format!(
-            "no compute node is granted to workspace {}: K2 places jobs only on granted nodes (the owner's too; the owner may still name a node to pin a job there). Ask your owner: k2 compute grant <node> --workspace {} (k2 compute nodes)",
+            "no compute node is granted to workspace {}: {PRODUCT_NAME} places jobs only on granted nodes (the owner's too; the owner may still name a node to pin a job there). Ask your owner: {CLI_NAME} compute grant <node> --workspace {} ({CLI_NAME} compute nodes)",
             ws.handle, ws.handle
         );
     }
     let parts: Vec<String> = report.skipped.iter().map(|(k, n)| place::skip_words(k, *n, want)).collect();
     let mut hint = format!("no node granted to workspace {} can take this job: {}", ws.handle, parts.join(", "));
     if report.skipped.keys().all(|k| *k == place::skip::TOO_SMALL) {
-        hint.push_str("; ask for less --mem/--cpus (k2 compute nodes shows each node's caps)");
+        hint.push_str(concat!("; ask for less --mem/--cpus (", cli_name!(), " compute nodes shows each node's caps)"));
     } else if report.skipped.contains_key(place::skip::TIMEOUT_OVER_GRANT) {
-        hint.push_str(&format!("; ask for a shorter --timeout, or your owner: k2 compute grant <node> --workspace {} --max-time <D>", ws.handle));
+        hint.push_str(&format!("; ask for a shorter --timeout, or your owner: {CLI_NAME} compute grant <node> --workspace {} --max-time <D>", ws.handle));
     } else {
-        hint.push_str("; k2 compute nodes says why");
+        hint.push_str(concat!("; ", cli_name!(), " compute nodes says why"));
     }
     if report.skipped.contains_key(crate::compute_allow::SKIP) {
         let names = crate::compute_allow::names_of(&ws.id).unwrap_or_default();
         hint.push_str(&format!(
-            ". Jobs from {} go only to its node list: {} (k2 compute allow-nodes)",
+            ". Jobs from {} go only to its node list: {} ({CLI_NAME} compute allow-nodes)",
             ws.handle,
             if names.is_empty() { "nothing".to_string() } else { names.join(", ") }
         ));
@@ -3855,7 +3857,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         return Err(no(
             codes::BAD_REQUEST,
             400,
-            "put {shard} and {shards} in the command (e.g. cargo nextest run --partition hash:{shard}/{shards}), or use k2 compute test --shards N",
+            concat!("put {shard} and {shards} in the command (e.g. cargo nextest run --partition hash:{shard}/{shards}), or use ", cli_name!(), " compute test --shards N"),
         ));
     }
     let detach = b(v, "detach") == Some(true);
@@ -4040,7 +4042,7 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
         let idx: Option<u32> = prefix.strip_prefix("shard-").and_then(|x| x.parse().ok());
         let child = kids.iter().find(|(k, _)| k.ctl.shard.as_ref().map(|s| s.index) == idx).map(|(k, _)| k.clone());
         let Some(child) = child.filter(|_| !rest.is_empty()) else {
-            return Err(no("artifact_not_found", 404, format!("a split run's files are shard-<i>/<name> (k2 compute fetch {} lists them)", compute::message::short(&j.id))));
+            return Err(no("artifact_not_found", 404, format!("a split run's files are shard-<i>/<name> ({CLI_NAME} compute fetch {} lists them)", compute::message::short(&j.id))));
         };
         let mut p = params.clone();
         p.insert("job".into(), child.id.clone());
@@ -4059,7 +4061,7 @@ fn job_artifact(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Va
         return Ok(serde_json::json!({"job": j.id, "short": short, "attempt": pick.attempt, "generation": j.generation, "state": j.state, "artifacts": o.artifacts}));
     };
     let info = o.artifacts.iter().find(|a| a.name == name).ok_or_else(|| {
-        no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' (k2 compute fetch {short} lists them)"))
+        no("artifact_not_found", 404, format!("job {short} kept no artifact named '{name}' ({CLI_NAME} compute fetch {short} lists them)"))
     })?;
     // In use while it pulls and reads: retention leaves the folder alone.
     let _in_use = crate::compute_retention::use_artifacts(&j.id, j.generation);
@@ -4132,7 +4134,7 @@ fn job_retier(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     }
     let j = job_for(who, s(&v, "job"))?;
     if s(&v, "tier").is_none() && b(&v, "priority") != Some(true) && b(&v, "gate") != Some(true) {
-        return Err(no(codes::BAD_REQUEST, 400, "name a tier: k2 compute retier <job> --tier standard|priority|batch|ci (--priority needs --why \"…\")"));
+        return Err(no(codes::BAD_REQUEST, 400, concat!("name a tier: ", cli_name!(), " compute retier <job> --tier standard|priority|batch|ci (--priority needs --why \"…\")")));
     }
     let tier = tier_from(&v)?;
     let why = why_from(&v, tier)?;
@@ -4146,7 +4148,7 @@ fn job_retier(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         ));
     }
     if !j.ctl.shards.is_empty() {
-        return Err(no(codes::BAD_REQUEST, 400, format!("{short} is a split run: retier its shards (k2 compute get {short} lists them)")));
+        return Err(no(codes::BAD_REQUEST, 400, format!("{short} is a split run: retier its shards ({CLI_NAME} compute get {short} lists them)")));
     }
     let node = {
         let db = k2_core::db::shared();
@@ -4229,7 +4231,7 @@ fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let j = job_for(who, s(&v, "job"))?;
     if !j.is_terminal() {
         let short = compute::message::short(&j.id);
-        return Err(no("still_running", 409, format!("the job hasn't ended; k2 compute cancel {short} --force first")));
+        return Err(no("still_running", 409, format!("the job hasn't ended; {CLI_NAME} compute cancel {short} --force first")));
     }
     if !j.ctl.shards.is_empty() {
         // Re-run only the shards that didn't pass; the run reopens.

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::cli_response::CliResponse;
 use crate::sql::routes;
+use k2_core::cli_name;
 
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     if !(path.starts_with("/cli/db/") || path.starts_with("/cli/store/")) {
@@ -91,7 +92,7 @@ pub fn test_db_forbidden_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "forbidden",
-                "hint": "k2 db --test is owner or owning-workspace cell only — Connect members and grants cannot mint or fetch a migrator DSN",
+                "hint": concat!(cli_name!(), " db --test is owner or owning-workspace cell only — Connect members and grants cannot mint or fetch a migrator DSN"),
             },
         })
         .to_string(),
@@ -128,7 +129,7 @@ pub fn owner_only_response() -> CliResponse {
             "ok": false,
             "error": {
                 "code": "owner_only",
-                "hint": "requires owner/admin — ask your human (k2 db enable/disable/uninstall/doctor/bind are owner surfaces)",
+                "hint": concat!("requires owner/admin — ask your human (", cli_name!(), " db enable/disable/uninstall/doctor/bind are owner surfaces)"),
             },
         })
         .to_string(),

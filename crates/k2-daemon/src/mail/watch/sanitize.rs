@@ -1,6 +1,8 @@
 //! Mail text going near an agent (prd §4.7, vs-live W32–W34). Email is
 //! attacker-controlled and the inject path only strips ESC, so this is the
 //! real defence: one function for every mail-derived field.
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// Longest display name kept (W32).
 pub const NAME_CAP: usize = 64;
@@ -86,7 +88,7 @@ pub fn vip_line(v: VipLine<'_>) -> (String, String) {
     let addr = short_addr(v.from_addr, 64);
     let name = v.from_name.map(|n| sanitize(n, NAME_CAP)).filter(|n| !n.is_empty());
     let frame = format!("[from {stamp}] ");
-    let read = format!("k2 mail read {}", v.token);
+    let read = format!("{CLI_NAME} mail read {}", v.token);
     let render = |name: Option<&str>, subject: &str, read: &str| -> String {
         let who = match name {
             Some(n) => format!("{n} <{addr}>"),
@@ -107,7 +109,7 @@ pub fn vip_line(v: VipLine<'_>) -> (String, String) {
         text = render(None, "", &read);
     }
     if frame.len() + text.len() > MAX_LINE {
-        text = render(None, "", "k2 mail messages --unread");
+        text = render(None, "", concat!(cli_name!(), " mail messages --unread"));
     }
     (stamp, text)
 }

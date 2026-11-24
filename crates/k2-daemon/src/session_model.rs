@@ -38,6 +38,7 @@ use k2_core::sidecar::SidecarError;
 use serde_json::{json, Value};
 
 use crate::sidecar_routes::{err, Caller};
+use k2_core::brand::PRODUCT_NAME;
 
 pub const ROUTE: &str = "/cli/sessions/model";
 pub const OPTIONS_ROUTE: &str = "/cli/sessions/model/options";
@@ -121,7 +122,7 @@ pub(crate) fn busy_refusal(display: Option<Display>, who: &str) -> Result<(), Si
     Err(err(
         "agent_busy",
         409,
-        format!("{who} {why}, and K2 switches the model only at its prompt so its turn isn't cut into. Try again when it's done. Nothing was sent."),
+        format!("{who} {why}, and {PRODUCT_NAME} switches the model only at its prompt so its turn isn't cut into. Try again when it's done. Nothing was sent."),
     ))
 }
 
@@ -155,11 +156,11 @@ pub(crate) fn note_text(pick: &str, restore: &Result<Restore, String>) -> String
         Ok(Restore::Kept { model }) => format!("{head}; your default stays {model}."),
         Ok(Restore::AlreadyPick) => format!("{head}; your default stays {pick} (it already was)."),
         Ok(Restore::ChangedElsewhere { model }) => format!(
-            "{head}. Your saved default changed to {} by something else meanwhile, so K2 left it.",
+            "{head}. Your saved default changed to {} by something else meanwhile, so {PRODUCT_NAME} left it.",
             model.as_deref().unwrap_or("nothing")
         ),
         Ok(Restore::NotWritten) => format!("{head}; Claude didn't save it as your default."),
-        Err(e) => format!("{head}, but K2 couldn't put your default back: {e}"),
+        Err(e) => format!("{head}, but {PRODUCT_NAME} couldn't put your default back: {e}"),
     }
 }
 

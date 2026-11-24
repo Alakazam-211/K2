@@ -33,6 +33,8 @@ use super::grace::{target, Target};
 use super::routes::{audit_human, json_body, need_credential, no, Refusal, Who, R};
 use crate::app_pairing::links::{self, LinkFiles};
 use crate::app_push::owner_routes::{admin_human, app_agent_at, owner_in_person};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 pub const STATUS: &str = "/cli/app/links";
 pub const SET: &str = "/cli/app/links/set";
@@ -203,7 +205,7 @@ fn set(who: &Who, body: &[u8]) -> R<J> {
     );
     let mut out = status_json(&t)?;
     let mut warnings = vec![format!(
-        "K2 itself now answers /.well-known/apple-app-site-association and /.well-known/assetlinks.json on {}: the App's own files there are replaced",
+        "{PRODUCT_NAME} itself now answers /.well-known/apple-app-site-association and /.well-known/assetlinks.json on {}: the App's own files there are replaced",
         out["hosts"].as_array().map(|h| h.iter().filter_map(J::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default()
     )];
     if before.as_ref().is_some_and(|b| b.ios != cfg.ios || b.android != cfg.android) {
@@ -253,7 +255,7 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let t = links_target(who, s(&v, "app"))?;
     if !owner_in_person(who) && !matches!(who, Who::Shell { .. }) {
-        return Err(no("owner_only", 403, "checking an App's link files fetches them over the internet: the owner runs k2 app links check"));
+        return Err(no("owner_only", 403, concat!("checking an App's link files fetches them over the internet: the owner runs ", cli_name!(), " app links check")));
     }
     if crate::push_routes::airgap_blocks() {
         return Err(no("airgap", 503, "air-gap is on: nothing leaves this server"));
@@ -264,7 +266,7 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let files = links::get_files(&app_id);
     let pair = links::get(&app_id).filter(|_| crate::app_pairing::box_enabled());
     if files.is_none() && pair.is_none() {
-        return Err(no("links_off", 409, "K2 serves no link files for this App (k2 app links set)"));
+        return Err(no("links_off", 409, concat!(product_name!(), " serves no link files for this App (", cli_name!(), " app links set)")));
     }
     let results = {
         let mut f = fetcher().lock().unwrap_or_else(|e| e.into_inner());

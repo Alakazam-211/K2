@@ -51,8 +51,8 @@ use super::held::{error_of, route_floor, text_param};
 use super::vault::{own_service, OwnService};
 use super::{Answerer, Applied, Check, Ctx, Registered};
 use crate::compute_routes::Who;
-use k2_core::brand::CLI_NAME;
-use k2_core::cli_name;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// An answer the card's rules leave to the owner: the request goes back to
 /// open (`permission::answer`), so the owner can still allow it.
@@ -90,7 +90,7 @@ pub(crate) static CHAT_KEY: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "apps", path: concat!(cli_name!(), " app grant <app> --kind chat-key (a terminal outside K2)") },
+    settings: SettingsRef { page: "apps", path: concat!(cli_name!(), " app grant <app> --kind chat-key (a terminal outside ", product_name!(), ")") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: KEY_ROUTE,
@@ -205,7 +205,7 @@ fn key_words(ctx: &Ctx, out: &mut Ctx) {
             let what = if p.before.as_ref().is_some_and(|b| b.enabled) {
                 format!("Widen the chat key of {ws}'s App {n}: {ceiling}")
             } else {
-                format!("Give {ws}'s App {n} a chat key, so K2 signs chat passes for its users: {ceiling}")
+                format!("Give {ws}'s App {n} a chat key, so {PRODUCT_NAME} signs chat passes for its users: {ceiling}")
             };
             let owner = if p.admin_may {
                 String::new()
@@ -215,7 +215,7 @@ fn key_words(ctx: &Ctx, out: &mut Ctx) {
             (
                 what,
                 format!(
-                    "{n}'s own users get chat with no setup per person, within that ceiling. K2 keeps the key and signs every pass; {n} never sees it, so it can't leak. The App decides who is in which channel only in a Space a person switches to App-governed.{owner} To take it back: {CLI_NAME} app grant {n} --kind chat-key --revoke (Sew then ends {n}'s chat sessions)."
+                    "{n}'s own users get chat with no setup per person, within that ceiling. {PRODUCT_NAME} keeps the key and signs every pass; {n} never sees it, so it can't leak. The App decides who is in which channel only in a Space a person switches to App-governed.{owner} To take it back: {CLI_NAME} app grant {n} --kind chat-key --revoke (Sew then ends {n}'s chat sessions)."
                 ),
             )
         }
@@ -367,7 +367,7 @@ pub(crate) static SPACE_GOVERNANCE: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat app-space governance <app> <space> app|sew (a terminal outside K2)") },
+    settings: SettingsRef { page: "sew", path: concat!(cli_name!(), " hostchat app-space governance <app> <space> app|sew (a terminal outside ", product_name!(), ")") },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "person_only" },
         route_prefix: GOV_ROUTE,
@@ -432,7 +432,7 @@ fn gov_words(ctx: &Ctx, out: &mut Ctx) {
                 (
                     format!("Let {ws}'s App {n} govern the chat Space {label}: the App decides who is in which private channel there, and each person's level"),
                     format!(
-                        "Sew makes {n}'s service owner the Space's owner. Box users in it (the owner, admins) leave the Space first; their messages stay. From then on K2 keeps every App user's private channels and level in step with their role in {n}, and people can't change the Space's channels or roles in chat. Switch it back with: {CLI_NAME} hostchat app-space governance {n} {} sew.",
+                        "Sew makes {n}'s service owner the Space's owner. Box users in it (the owner, admins) leave the Space first; their messages stay. From then on {PRODUCT_NAME} keeps every App user's private channels and level in step with their role in {n}, and people can't change the Space's channels or roles in chat. Switch it back with: {CLI_NAME} hostchat app-space governance {n} {} sew.",
                         s.space
                     ),
                 )

@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use k2_core::log_debug;
+use k2_core::{log_debug, product_name};
 use k2_core::session::SessionId;
 use k2_core::terminal::sandbox::WorkspaceMountSpec;
 
@@ -132,7 +132,7 @@ const CELL_TMPDIR: &str = "/dev/shm/cc";
 /// Git identity DEFAULTS staged into the cell env (F2) so an in-cell `git init`
 /// + commit works without a global gitconfig (the ephemeral cwd has none). Used
 /// for BOTH author and committer name/email.
-const CELL_GIT_NAME: &str = "K2 Sandbox";
+const CELL_GIT_NAME: &str = concat!(product_name!(), " Sandbox");
 const CELL_GIT_EMAIL: &str = "sandbox@k2.local";
 
 /// Resolve the untrusted body + authenticated principal into a host-trusted

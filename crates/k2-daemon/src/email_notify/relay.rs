@@ -17,6 +17,8 @@ use serde_json::{json, Value as J};
 use k2_core::email_notify::{self as store, Relay};
 
 use super::{db_fail, fail, Fail, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// What `relay add` takes.
 #[derive(Clone, Default)]
@@ -107,7 +109,7 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
         return Err(e.to_fail());
     }
     super::audit_line("email-relay-add", actor, &format!("relay={} host={} port={}", row.id, row.host, row.port));
-    Ok(json!({ "ok": true, "relay": relay_json(&row), "next": format!("k2 notifications email sender add <address on {}> --relay {}", row.from_domain, row.id) }))
+    Ok(json!({ "ok": true, "relay": relay_json(&row), "next": format!("{CLI_NAME} notifications email sender add <address on {}> --relay {}", row.from_domain, row.id) }))
 }
 
 pub fn list() -> R<Vec<Relay>> {
@@ -125,7 +127,7 @@ pub fn remove(id: &str, actor: &str) -> R<J> {
             return Err(fail(404, "not_found", format!("no relay {id}")));
         }
         if store::relay_in_use(&conn, id).map_err(db_fail)? {
-            return Err(fail(409, "in_use", format!("relay {id} carries a sender; remove the sender first (k2 notifications email sender rm)")));
+            return Err(fail(409, "in_use", format!("relay {id} carries a sender; remove the sender first ({CLI_NAME} notifications email sender rm)")));
         }
     }
     super::engine::relay_creds().destroy(id).map_err(|e| e.to_fail())?;
@@ -164,13 +166,13 @@ pub fn test(relay_id: &str, from: &str, actor: &str, now: i64) -> R<J> {
         let relay = store::get_relay(&conn, relay_id).map_err(db_fail)?.ok_or_else(|| fail(404, "not_found", format!("no relay {relay_id}")))?;
         let sender = match store::find_sender(&conn, from).map_err(db_fail)? {
             Some(s) if s.is_live() && s.relay_id.as_deref() == Some(relay.id.as_str()) => s,
-            _ => return Err(usage(format!("--from is a sender on relay {relay_id} (k2 notifications email sender add <address> --relay {relay_id})"))),
+            _ => return Err(usage(format!("--from is a sender on relay {relay_id} ({CLI_NAME} notifications email sender add <address> --relay {relay_id})"))),
         };
         let owner = store::settings(&conn).map_err(db_fail)?.owner_email;
         (relay, sender, owner)
     };
     let Some(owner) = owner else {
-        return Err(fail(409, "no_owner_email", "set your own address first: k2 notifications email settings --owner-email you@example.com (tests only ever go there)"));
+        return Err(fail(409, "no_owner_email", concat!("set your own address first: ", cli_name!(), " notifications email settings --owner-email you@example.com (tests only ever go there)")));
     };
     let mid = crate::mail::send::new_message_id_for(&sender.address);
     let to = vec![owner.clone()];
@@ -181,7 +183,7 @@ pub fn test(relay_id: &str, from: &str, actor: &str, now: i64) -> R<J> {
             from: &sender.address,
             to: &to,
             cc: &[],
-            subject: "Test email from K2",
+            subject: concat!("Test email from ", product_name!()),
             text: Some(TEST_TEXT),
             html: None,
             reply_to: &[],
@@ -235,4 +237,4 @@ pub fn test(relay_id: &str, from: &str, actor: &str, now: i64) -> R<J> {
 }
 
 /// The fixed text of every K2 test email.
-pub const TEST_TEXT: &str = "This is a test email from K2. If it reached you, this sender works.\n\nNo reply is needed.";
+pub const TEST_TEXT: &str = concat!("This is a test email from ", product_name!(), ". If it reached you, this sender works.\n\nNo reply is needed.");

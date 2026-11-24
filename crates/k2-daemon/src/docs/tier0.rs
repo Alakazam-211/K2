@@ -46,7 +46,7 @@
 //! version to restore, nothing is restored for them. Purge stays off
 //! `k2 doc`.
 
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
@@ -67,6 +67,7 @@ use super::routes::{self, Call, VerbError};
 use super::target::{Target, Tier};
 use crate::cli_response::CliResponse;
 use k2_mpc_base::tools::exit;
+use k2_core::cli_name;
 
 /// The verbs that work on any tier-0 doc: the kit's registry for a blob
 /// doc with no index (`for_blob_pack(&AnyFile)`: tier 0 and comments).
@@ -112,7 +113,7 @@ pub fn not_a_text_doc(t: &Target, verb: &str) -> CliResponse {
         "error": {
             "code": "not_a_text_doc",
             "hint": format!(
-                "`{verb}` works on text docs; {} is an any-file doc (tier 0), which has: {}. k2 doc cat prints its bytes",
+                "`{verb}` works on text docs; {} is an any-file doc (tier 0), which has: {}. {CLI_NAME} doc cat prints its bytes",
                 t.rel,
                 offered_for(registry_for(t))
             ),
@@ -250,8 +251,8 @@ pub(super) fn stored_as_live_deck(rel: &str) -> CliResponse {
             "409 Conflict",
             "stored_as_live_deck",
             format!(
-                "{rel} was opened live by the Slides core, which is off now. Turn it on to use this deck in K2 again \
-                 (k2 doc cores on slides): its history is kept. The file itself is up to date and opens in your presentation app"
+                "{rel} was opened live by the Slides core, which is off now. Turn it on to use this deck in {PRODUCT_NAME} again \
+                 ({CLI_NAME} doc cores on slides): its history is kept. The file itself is up to date and opens in your presentation app"
             ),
         ),
         k2_mpc_base::tools::exit::REFUSED,
@@ -273,7 +274,7 @@ pub(super) fn stored_as_live_keyed(rel: &str, tier: Tier) -> CliResponse {
             "stored_as_live_doc",
             format!(
                 "{rel} was opened live by the {name}, which is off now. Turn it on to use this {what} in {PRODUCT_NAME} again \
-                 (k2 doc cores on {core}): its history is kept. The file itself is up to date and opens in {app}"
+                 ({CLI_NAME} doc cores on {core}): its history is kept. The file itself is up to date and opens in {app}"
             ),
         ),
         k2_mpc_base::tools::exit::REFUSED,
@@ -406,7 +407,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                     json!({
                         "exit": exit::USAGE,
                         "stdout": "",
-                        "stderr": format!("k2 doc cat: {} is an any-file doc: cat prints its bytes and takes no flags", t.rel),
+                        "stderr": format!("{CLI_NAME} doc cat: {} is an any-file doc: cat prints its bytes and takes no flags", t.rel),
                     }),
                 ));
             }
@@ -439,7 +440,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         // Claims on a blob doc name nodes of its index, through `run_tool`
         // (`k2 doc claim --node`); the text claim route has no lines here.
         routes::CLAIM => Err(VerbError::Response(routes::bad(format!(
-            "{} is an any-file doc: a claim names its layers, not lines: k2 doc claim --node <layer> {} (k2 doc outline lists them)",
+            "{} is an any-file doc: a claim names its layers, not lines: {CLI_NAME} doc claim --node <layer> {} ({CLI_NAME} doc outline lists them)",
             t.rel, t.rel
         )))),
         super::annotations::PURGE | super::annotations::ERASE => Ok(ok0(t, super::annotations::route(path, s, c)?)),
@@ -465,14 +466,14 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         routes::WRITE => {
             let base = input
                 .str("base")
-                .ok_or_else(|| VerbError::Response(routes::bad("base is required: the version you are replacing (k2 doc status)")))?;
+                .ok_or_else(|| VerbError::Response(routes::bad(concat!("base is required: the version you are replacing (", cli_name!(), " doc status)"))))?;
             if base.trim() == "live" {
                 return Err(VerbError::Response(routes::bad(
-                    "any-file docs never take --base live (a write never overwrites someone else's version unseen); give the version you are replacing (k2 doc status)",
+                    concat!("any-file docs never take --base live (a write never overwrites someone else's version unseen); give the version you are replacing (", cli_name!(), " doc status)"),
                 )));
             }
             let base: VersionId =
-                base.trim().parse().map_err(|_| VerbError::Response(routes::bad("base must be a version number (k2 doc status)")))?;
+                base.trim().parse().map_err(|_| VerbError::Response(routes::bad(concat!("base must be a version number (", cli_name!(), " doc status)"))))?;
             let bytes = body_bytes(c)?;
             let j = join(s, c, Stay::UntilIdle)?;
             let w = s.write_bytes_with(j.conn, &bytes, base, &blob_write_options(c))?;
@@ -504,7 +505,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             Ok(ok0(t, json!({ "log": rows.iter().map(|e| log_json(t, e)).collect::<Vec<_>>() })))
         }
         routes::SHOW => {
-            let v = version_param(c, "version", "a version id (k2 doc versions)")?;
+            let v = version_param(c, "version", concat!("a version id (", cli_name!(), " doc versions)"))?;
             let j = join(s, c, Stay::UntilIdle)?;
             let r = s.read_version(j.conn, v)?;
             let info = r.info.clone();
@@ -521,7 +522,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             ))
         }
         routes::RESTORE => {
-            let v = version_param(c, "version", "a version id from k2 doc versions")?;
+            let v = version_param(c, "version", concat!("a version id from ", cli_name!(), " doc versions"))?;
             let j = join(s, c, Stay::UntilIdle)?;
             let w = s.restore_with(j.conn, v, &blob_write_options(c))?;
             if w.changed {
@@ -565,7 +566,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         }
         // `approve` / `decline <version>`: only the person it was made for.
         routes::APPROVE => {
-            let v = version_param(c, "change", "the version (k2 doc log --pending)")?;
+            let v = version_param(c, "change", concat!("the version (", cli_name!(), " doc log --pending)"))?;
             let state = match input.str("state").as_deref().map(str::trim) {
                 Some("approved") | Some("approve") => ApprovalState::Approved,
                 Some("declined") | Some("decline") => ApprovalState::Declined,
@@ -763,7 +764,7 @@ pub(super) fn tool_refusal_json(argv: &[String], r: &k2_mpc_base::errors::ErrorR
     json!({
         "exit": r.exit(),
         "stdout": "",
-        "stderr": format!("k2 doc {verb}: {} ({}). {}", r.message(), r.id(), r.next()),
+        "stderr": format!("{CLI_NAME} doc {verb}: {} ({}). {}", r.message(), r.id(), r.next()),
         "error": report_value(r),
     })
 }
@@ -841,9 +842,9 @@ fn approval_reply(v: VersionId, approval: Value, state: ApprovalState, restore_t
         out["restoreTo"] = json!(restore_to);
         out["later"] = json!(later);
         out["hint"] = json!(match (restore_to, later.is_empty()) {
-            (Some(r), true) => format!("declined; to undo it: k2 doc restore --version {r}"),
+            (Some(r), true) => format!("declined; to undo it: {CLI_NAME} doc restore --version {r}"),
             (Some(r), false) => format!(
-                "declined; to undo it: k2 doc restore --version {r} (versions {} came after it and would be replaced too)",
+                "declined; to undo it: {CLI_NAME} doc restore --version {r} (versions {} came after it and would be replaced too)",
                 later.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
             ),
             (None, _) => "declined; there is no earlier version to restore".to_string(),

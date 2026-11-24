@@ -95,6 +95,8 @@ use crate::mail::access::{self, Level, Source};
 use crate::mail::calendar_share::{HostedAddr, ShareRights};
 use crate::mail::jmap::StalwartClient;
 use crate::mail::messages::ReadError;
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 // ── Limits ──────────────────────────────────────────────────────────────
 
@@ -272,8 +274,8 @@ pub(crate) fn calendars_enabled_gate() -> Result<(), CliResponse> {
         Ok(Some(p)) if p.calendars == crate::mail::dav::OnOff::Off => Err(error_response(
             "409 Conflict",
             "calendars_disabled",
-            "the owner turned calendars off for hosted addresses on this server — \
-             they can turn them back on with 'k2 hostmail calendar enable'; ask your human",
+            concat!("the owner turned calendars off for hosted addresses on this server — \
+             they can turn them back on with '", cli_name!(), " hostmail calendar enable'; ask your human"),
         )),
         Ok(_) => Ok(()),
         Err(e) => Err(engine_err(format!("reading the calendar policy: {e}"))),
@@ -353,8 +355,8 @@ pub fn resolve_target(
                     return Err(error_response(
                         "404 Not Found",
                         "not_found",
-                        "no hosted inbox in this workspace — name one you have access to \
-                         ('k2 mail inboxes'), or mint one with 'k2 hostmail create'",
+                        concat!("no hosted inbox in this workspace — name one you have access to \
+                         ('", cli_name!(), " mail inboxes'), or mint one with '", cli_name!(), " hostmail create'"),
                     ))
                 }
                 1 => owned.into_iter().next().unwrap_or_default(),
@@ -472,7 +474,7 @@ pub(crate) fn resolve_event_target(
     need: Level,
 ) -> Result<EventTarget, CliResponse> {
     let Some((address, id, owner)) = decode_event_ref(token) else {
-        return Err(usage("invalid event id — use an id from 'k2 calendar events'"));
+        return Err(usage(concat!("invalid event id — use an id from '", cli_name!(), " calendar events'")));
     };
     match resolve_target(project_id, Some(&address), need) {
         Ok(CalTarget::Linked(g)) => {
@@ -498,7 +500,7 @@ fn resolve_event(
     need: Level,
 ) -> Result<(CalInbox, String, Option<HostedAddr>), CliResponse> {
     let Some((address, jmap_id, owner)) = decode_event_ref(token) else {
-        return Err(usage("invalid event id — use an id from 'k2 calendar events'"));
+        return Err(usage(concat!("invalid event id — use an id from '", cli_name!(), " calendar events'")));
     };
     let inbox = match resolve_target(project_id, Some(&address), need) {
         Ok(CalTarget::Hosted(inbox)) => inbox,
@@ -1031,8 +1033,8 @@ fn share_rights_refused(what: &str) -> CliResponse {
         "403 Forbidden",
         "share_rights",
         &format!(
-            "{what} — this inbox's share of that calendar (or your `k2 mail access` level) \
-             doesn't allow it; ask your human (k2 hostmail calendar share … --write|--editor)"
+            "{what} — this inbox's share of that calendar (or your `{CLI_NAME} mail access` level) \
+             doesn't allow it; ask your human ({CLI_NAME} hostmail calendar share … --write|--editor)"
         ),
     )
 }
@@ -1491,7 +1493,7 @@ pub fn handle_show(params: &HashMap<String, String>) -> CliResponse {
         Err(r) => return r,
     };
     let Some(token) = crate::cli::opt_param(params, "id") else {
-        return usage("missing 'id' — an event id from 'k2 calendar events'");
+        return usage(concat!("missing 'id' — an event id from '", cli_name!(), " calendar events'"));
     };
     let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Read) {
         Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
@@ -1904,8 +1906,8 @@ pub fn wait_with(
                         return error_response(
                             "409 Conflict",
                             "state_expired",
-                            "the server can no longer list changes since that state — re-read \
-                             with 'k2 calendar events' and wait again without --since-state",
+                            concat!("the server can no longer list changes since that state — re-read \
+                             with '", cli_name!(), " calendar events' and wait again without --since-state"),
                         )
                     }
                     Err(e) => return engine_err(e),
@@ -1995,8 +1997,8 @@ fn wait_own(
                 return error_response(
                     "409 Conflict",
                     "state_expired",
-                    "the server can no longer list changes since that state — re-read with \
-                     'k2 calendar events' and wait again without --since-state",
+                    concat!("the server can no longer list changes since that state — re-read with \
+                     '", cli_name!(), " calendar events' and wait again without --since-state"),
                 )
             }
             Err(e) => return engine_err(e),
@@ -2145,7 +2147,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     if b.id.is_some() {
-        return usage("create takes no 'id' — use 'k2 calendar update <id>' to change an event");
+        return usage(concat!("create takes no 'id' — use '", cli_name!(), " calendar update <id>' to change an event"));
     }
     let inbox = match resolve_target(&project_id, b.address.as_deref(), Level::Draft) {
         Ok(CalTarget::Hosted(i)) => i,
@@ -2353,7 +2355,7 @@ pub fn handle_update(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     let Some(token) = b.id.clone().filter(|s| !s.trim().is_empty()) else {
-        return usage("update requires 'id' — an event id from 'k2 calendar events'");
+        return usage(concat!("update requires 'id' — an event id from '", cli_name!(), " calendar events'"));
     };
     if b.address.is_some() || b.calendar.is_some() {
         return usage("update takes the inbox from the event id — no 'address' or 'calendar'");
@@ -2606,7 +2608,7 @@ pub fn handle_delete(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     let Some(token) = b.id.clone().filter(|s| !s.trim().is_empty()) else {
-        return usage("delete requires 'id' — an event id from 'k2 calendar events'");
+        return usage(concat!("delete requires 'id' — an event id from '", cli_name!(), " calendar events'"));
     };
     let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Draft) {
         Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),

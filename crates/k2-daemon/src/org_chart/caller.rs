@@ -16,6 +16,7 @@ use k2_core::org_chart::store::Actor;
 use crate::cli_response::CliResponse;
 use crate::compute_routes::Who;
 use crate::session_token::HookPrincipal;
+use k2_core::cli_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrgCaller {
@@ -75,7 +76,7 @@ pub fn from_passport(session_id: &str, principal: &HookPrincipal) -> Result<OrgC
             Ok(OrgCaller::Agent { project_id, session_id, agent_address: principal.agent_address.clone(), label })
         }
         Who::Agent { .. } => Err(refusal("403 Forbidden", "forbidden", "this session's passport has no workspace")),
-        _ => Err(refusal("403 Forbidden", "wrong_credential", "this credential can't use k2 organization")),
+        _ => Err(refusal("403 Forbidden", "wrong_credential", concat!("this credential can't use ", cli_name!(), " organization"))),
     }
 }
 
@@ -90,7 +91,7 @@ pub fn from_tcp(path: &str, query: &str, bearer: Option<&str>, owner_token: &str
         return Err(CliResponse::forbidden());
     }
     if k2_core::skin::is_skin_token(presented) || presented.starts_with("k2sk_") {
-        return Err(refusal("403 Forbidden", "wrong_credential", "an App pass or API key can't use k2 organization"));
+        return Err(refusal("403 Forbidden", "wrong_credential", concat!("an App pass or API key can't use ", cli_name!(), " organization")));
     }
     if crate::routes::http::ct_eq_token(presented, owner_token) {
         return Ok(OrgCaller::Person { label: "owner".into(), admin: true });

@@ -58,6 +58,8 @@ use crate::mail::drafts;
 use crate::mail::jmap::{EmailFull, EmailSummary, MailAddr};
 use crate::mail::mailbox_guard::{self, Rule};
 use crate::mail::messages::{self, MailBackend, MailFolder};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// Read routes (GET).
 pub const READ_ROUTES: &[&str] = &[
@@ -100,8 +102,8 @@ const LOG_DEFAULT: usize = 100;
 const LOG_MAX: usize = 500;
 
 /// The refusal an agent gets on every reader route.
-pub const AGENT_HINT: &str = "the mail reader is a person's tool; agents use 'k2 mail' \
-     (messages, read, move, reply, send) on the inboxes their workspace can use";
+pub const AGENT_HINT: &str = concat!("the mail reader is a person's tool; agents use '", cli_name!(), " mail' \
+     (messages, read, move, reply, send) on the inboxes their workspace can use");
 
 /// Is `path` a mail reader route (any method)?
 pub fn is_reader_path(path: &str) -> bool {
@@ -139,7 +141,7 @@ fn inbox_not_found(address: &str) -> CliResponse {
     error_response(
         "404 Not Found",
         "not_found",
-        &format!("no inbox '{address}' you can open — 'k2 mail reader inboxes' lists the ones you can"),
+        &format!("no inbox '{address}' you can open — '{CLI_NAME} mail reader inboxes' lists the ones you can"),
     )
 }
 
@@ -148,7 +150,7 @@ fn message_not_found(token: &str) -> CliResponse {
     error_response(
         "404 Not Found",
         "not_found",
-        &format!("no message '{token}' you can open — ids come from 'k2 mail reader messages'"),
+        &format!("no message '{token}' you can open — ids come from '{CLI_NAME} mail reader messages'"),
     )
 }
 
@@ -394,7 +396,7 @@ fn open_address(raw: &str) -> Result<ReaderInbox, CliResponse> {
 /// Decode a message id and open its inbox. `(inbox, backend email id)`.
 fn open_message(token: &str) -> Result<(ReaderInbox, String), CliResponse> {
     let Some((address, email_id)) = messages::decode_message_id(token) else {
-        return Err(usage("invalid message id — use an id from 'k2 mail reader messages'"));
+        return Err(usage(concat!("invalid message id — use an id from '", cli_name!(), " mail reader messages'")));
     };
     let inbox = open(find_inbox(&address), message_not_found(token))?;
     Ok((inbox, email_id))
@@ -481,7 +483,7 @@ fn role_rank(role: Option<&str>) -> usize {
 }
 
 fn handle_folders(params: &HashMap<String, String>) -> CliResponse {
-    let raw = match required(params, "inbox", "missing 'inbox' — an address from 'k2 mail reader inboxes'") {
+    let raw = match required(params, "inbox", concat!("missing 'inbox' — an address from '", cli_name!(), " mail reader inboxes'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -553,7 +555,7 @@ fn now_secs() -> i64 {
 }
 
 fn handle_messages(params: &HashMap<String, String>) -> CliResponse {
-    let raw = match required(params, "inbox", "missing 'inbox' — an address from 'k2 mail reader inboxes'") {
+    let raw = match required(params, "inbox", concat!("missing 'inbox' — an address from '", cli_name!(), " mail reader inboxes'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -677,7 +679,7 @@ fn engine(hint: String) -> CliResponse {
 }
 
 fn handle_message(params: &HashMap<String, String>) -> CliResponse {
-    let token = match required(params, "id", "missing 'id' — a message id from 'k2 mail reader messages'") {
+    let token = match required(params, "id", concat!("missing 'id' — a message id from '", cli_name!(), " mail reader messages'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -707,7 +709,7 @@ fn handle_message(params: &HashMap<String, String>) -> CliResponse {
 }
 
 fn handle_thread(params: &HashMap<String, String>) -> CliResponse {
-    let token = match required(params, "id", "missing 'id' — a message id from 'k2 mail reader messages'") {
+    let token = match required(params, "id", concat!("missing 'id' — a message id from '", cli_name!(), " mail reader messages'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -874,7 +876,7 @@ fn draft_json_fetched(row: &drafts::DraftRow, account: &str, backend: &dyn messa
             }
             None
         }
-        Err(hint) => Some(draft_json(row, None, Some(&format!("K2 couldn't read this draft just now: {hint}")))),
+        Err(hint) => Some(draft_json(row, None, Some(&format!("{PRODUCT_NAME} couldn't read this draft just now: {hint}")))),
     }
 }
 
@@ -884,7 +886,7 @@ fn draft_not_found(token: &str) -> CliResponse {
     error_response(
         "404 Not Found",
         "not_found",
-        &format!("no draft '{token}' you can open — drafts show at the top of their thread, or in 'k2 mail reader drafts <inbox>'"),
+        &format!("no draft '{token}' you can open — drafts show at the top of their thread, or in '{CLI_NAME} mail reader drafts <inbox>'"),
     )
 }
 
@@ -902,7 +904,7 @@ fn open_draft(token: &str) -> Result<(drafts::DraftRow, ReaderInbox), CliRespons
 }
 
 fn handle_draft_open(params: &HashMap<String, String>) -> CliResponse {
-    let token = match required(params, "id", "missing 'id' — a draft id (d_…) from a thread or 'k2 mail reader drafts'") {
+    let token = match required(params, "id", concat!("missing 'id' — a draft id (d_…) from a thread or '", cli_name!(), " mail reader drafts'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -925,7 +927,7 @@ fn handle_draft_open(params: &HashMap<String, String>) -> CliResponse {
 }
 
 fn handle_drafts(params: &HashMap<String, String>) -> CliResponse {
-    let raw = match required(params, "inbox", "missing 'inbox' — an address from 'k2 mail reader inboxes'") {
+    let raw = match required(params, "inbox", concat!("missing 'inbox' — an address from '", cli_name!(), " mail reader inboxes'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -1030,7 +1032,7 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
     };
     mailbox_guard::set_reason(v.get("reason").and_then(|r| r.as_str()));
     let Some(token) = v.get("id").and_then(|i| i.as_str()).map(str::trim).filter(|s| !s.is_empty()) else {
-        return usage("missing 'id' — a draft id (d_…) from a thread or 'k2 mail reader drafts'");
+        return usage(concat!("missing 'id' — a draft id (d_…) from a thread or '", cli_name!(), " mail reader drafts'"));
     };
     let (row, inbox) = match open_draft(token) {
         Ok(x) => x,
@@ -1055,7 +1057,7 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
                 return r;
             }
             if let Err(e) = drafts::set_state(&row.id, drafts::STATE_DISCARDED, Some(&by), None, now) {
-                return error_response("503 Service Unavailable", "not_ready", &format!("the draft left Drafts, but K2 couldn't record that ({e})"));
+                return error_response("503 Service Unavailable", "not_ready", &format!("the draft left Drafts, but {PRODUCT_NAME} couldn't record that ({e})"));
             }
             drafts::tell_agent(&row, "discarded", &by);
             ok_json(serde_json::json!({
@@ -1078,7 +1080,7 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
                 Err(resp) => return resp,
             };
             if let Err(e) = drafts::set_edited(&row.id, new_ref.as_deref(), Some(&by), now) {
-                return error_response("503 Service Unavailable", "not_ready", &format!("the draft was saved, but K2 couldn't record it ({e})"));
+                return error_response("503 Service Unavailable", "not_ready", &format!("the draft was saved, but {PRODUCT_NAME} couldn't record it ({e})"));
             }
             if row.edited_by.is_none() {
                 drafts::tell_agent(&row, "edited", &by);
@@ -1144,7 +1146,7 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
 // ── GET attachment ──────────────────────────────────────────────────────
 
 fn handle_attachment(params: &HashMap<String, String>) -> CliResponse {
-    let token = match required(params, "id", "missing 'id' — a message id from 'k2 mail reader messages'") {
+    let token = match required(params, "id", concat!("missing 'id' — a message id from '", cli_name!(), " mail reader messages'")) {
         Ok(v) => v,
         Err(r) => return r,
     };
@@ -1288,7 +1290,7 @@ fn handle_log(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => error_response(
             "503 Service Unavailable",
             "audit_unavailable",
-            &format!("K2 couldn't read the mailbox access log ({e}); 'k2 doctor' checks the daemon's database"),
+            &format!("{PRODUCT_NAME} couldn't read the mailbox access log ({e}); '{CLI_NAME} doctor' checks the daemon's database"),
         ),
     }
 }
@@ -1341,8 +1343,8 @@ fn level_refusal(verb: &str, inbox: &ReaderInbox) -> Option<CliResponse> {
         "not_allowed",
         &format!(
             "the reader acts on '{}' as its workspace '{ws}', and '{ws}' may not {what}. An Owner or \
-             Admin can change that in Settings → Workspaces / Agents → <workspace> → Mail, or with 'k2 mail access set-level' / \
-             'k2 mail access set-manage'",
+             Admin can change that in Settings → Workspaces / Agents → <workspace> → Mail, or with '{CLI_NAME} mail access set-level' / \
+             '{CLI_NAME} mail access set-manage'",
             inbox.address
         ),
     ))
@@ -1356,7 +1358,7 @@ fn handle_write(verb: &str, body: &[u8]) -> CliResponse {
     };
     mailbox_guard::set_reason(v.get("reason").and_then(|r| r.as_str()));
     if v.get("attachments").is_some_and(|a| !a.is_null()) {
-        return usage("the mail reader can't attach files yet — send attachments with 'k2 mail send --attach' from the inbox's workspace");
+        return usage(concat!("the mail reader can't attach files yet — send attachments with '", cli_name!(), " mail send --attach' from the inbox's workspace"));
     }
     let id = v.get("id").and_then(|i| i.as_str()).map(str::trim).filter(|s| !s.is_empty());
     let inbox_arg = v.get("inbox").and_then(|i| i.as_str()).map(str::trim).filter(|s| !s.is_empty());
@@ -1368,7 +1370,7 @@ fn handle_write(verb: &str, body: &[u8]) -> CliResponse {
             return usage("send takes 'inbox', not 'id' — to answer a message use reply");
         }
         let Some(addr) = inbox_arg else {
-            return usage("missing 'inbox' — the address to send from (from 'k2 mail reader inboxes')");
+            return usage(concat!("missing 'inbox' — the address to send from (from '", cli_name!(), " mail reader inboxes')"));
         };
         match open_address(addr) {
             Ok(i) => i,
@@ -1376,7 +1378,7 @@ fn handle_write(verb: &str, body: &[u8]) -> CliResponse {
         }
     } else {
         let Some(token) = id else {
-            return usage("missing 'id' — a message id from 'k2 mail reader messages'");
+            return usage(concat!("missing 'id' — a message id from '", cli_name!(), " mail reader messages'"));
         };
         match open_message(token) {
             Ok((i, _)) => i,

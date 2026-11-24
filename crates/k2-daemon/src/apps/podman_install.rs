@@ -29,6 +29,8 @@ use serde_json::{json, Value as J};
 use super::routes::{actor, need_credential, no, Refusal, R};
 use crate::compute_routes::Who;
 use crate::root_helper;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// What the owner asked about Podman at prepare.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -130,7 +132,7 @@ pub fn bundle_json(arch: Option<&str>, k2app_uid: Option<u32>, userns_restricted
         "size": art.map(|a| a.size),
         "prefix": pb::PREFIX,
         "writes": writes,
-        "distroPodman": "a distro Podman already on the box is left as it is (only the k2app user runs K2's Podman)",
+        "distroPodman": concat!("a distro Podman already on the box is left as it is (only the k2app user runs ", product_name!(), "'s Podman)"),
     })
 }
 
@@ -162,7 +164,7 @@ pub fn planned_packages(pm: &str, bundle: bool, have: &BoxPodman, apparmor: bool
         match have {
             BoxPodman::Local(path) => {
                 return Err(format!(
-                    "customer_podman: a Podman K2 didn't install is at {path} and K2's Podman bundle isn't for this OS: prepare stops before installing anything"
+                    "customer_podman: a Podman {PRODUCT_NAME} didn't install is at {path} and {PRODUCT_NAME}'s Podman bundle isn't for this OS: prepare stops before installing anything"
                 ))
             }
             BoxPodman::Distro => base.iter().copied().filter(|p| *p != ap::PODMAN_PACKAGE).collect(),
@@ -253,10 +255,10 @@ pub fn packages_json(bundle: bool, apparmor: bool, probe: &PackageProbe) -> J {
         "installs the distro's Podman (the podman package): this box has none yet".to_string()
     } else {
         match &have {
-            BoxPodman::Distro if bundle => format!("the distro's Podman at {} stays as it is (only the k2app user runs K2's Podman)", ap::PODMAN),
-            BoxPodman::Distro => format!("the distro's Podman at {} stays as it is (K2 doesn't upgrade a Podman it didn't install)", ap::PODMAN),
+            BoxPodman::Distro if bundle => format!("the distro's Podman at {} stays as it is (only the k2app user runs {PRODUCT_NAME}'s Podman)", ap::PODMAN),
+            BoxPodman::Distro => format!("the distro's Podman at {} stays as it is ({PRODUCT_NAME} doesn't upgrade a Podman it didn't install)", ap::PODMAN),
             BoxPodman::Local(p) => format!("the Podman at {p} stays as it is"),
-            BoxPodman::None if bundle => "no distro Podman is installed: K2's Podman in /opt/k2/podman runs the k2app user".to_string(),
+            BoxPodman::None if bundle => concat!("no distro Podman is installed: ", product_name!(), "'s Podman in /opt/k2/podman runs the k2app user").to_string(),
             BoxPodman::None => "no Podman is installed".to_string(),
         }
     };
@@ -358,12 +360,12 @@ pub fn obtain(from: Option<&str>, art: &pb::PodmanArtifact, keys: &[k2_root_prot
             }
             let bytes = std::fs::read(d.join(art.asset)).map_err(|e| format!("{}: {e}", d.join(art.asset).display()))?;
             let sig_path = d.join(pb::signature_name(art));
-            let sig = std::fs::read_to_string(&sig_path).map_err(|e| format!("{}: {e} (the tarball's K2 signature goes beside it)", sig_path.display()))?;
+            let sig = std::fs::read_to_string(&sig_path).map_err(|e| format!("{}: {e} (the tarball's {PRODUCT_NAME} signature goes beside it)", sig_path.display()))?;
             let signer = verify(&bytes, &sig, art, keys)?;
             Ok(Obtained { bytes, signer, from: d.display().to_string() })
         }
         None if k2_core::airgap::enabled() => Err(format!(
-            "air-gapped: copy {} (sha256 {}) and {} from K2's mirror {} into a folder and prepare with --podman-from <folder>",
+            "air-gapped: copy {} (sha256 {}) and {} from {PRODUCT_NAME}'s mirror {} into a folder and prepare with --podman-from <folder>",
             art.asset,
             art.sha256,
             pb::signature_name(art),
@@ -382,7 +384,7 @@ pub fn obtain(from: Option<&str>, art: &pb::PodmanArtifact, keys: &[k2_root_prot
                     Err(e) => why.push(e),
                 }
             }
-            Err(format!("no K2 mirror gave a good {}: {}", art.asset, why.join("; ")))
+            Err(format!("no {PRODUCT_NAME} mirror gave a good {}: {}", art.asset, why.join("; ")))
         }
     }
 }
@@ -393,7 +395,7 @@ fn offer_refusal(have: Option<&str>, os: &str, uid: Option<u32>) -> Refusal {
         "podman_install_needed",
         409,
         format!(
-            "{os} ships Podman {}; Apps need 5+. Box prep can install K2's pinned Podman {} ({}) for the k2app user only: run k2 app box prepare --install-podman (or --dry-run to see every change first)",
+            "{os} ships Podman {}; Apps need 5+. Box prep can install {PRODUCT_NAME}'s pinned Podman {} ({}) for the k2app user only: run {CLI_NAME} app box prepare --install-podman (or --dry-run to see every change first)",
             have.unwrap_or("none"),
             pb::BUNDLE_VERSION,
             pb::BUNDLE_SOURCE
@@ -419,15 +421,15 @@ pub(crate) fn prepare_step(o: &PodmanOpts, d: &Decision, st: &root_helper::RootH
         return Err(no(
             "helper_needed",
             409,
-            root_helper::helper_needed("installing K2's Podman", PODMAN_INSTALL_MIN_PROTOCOL, st),
+            root_helper::helper_needed(concat!("installing ", product_name!(), "'s Podman"), PODMAN_INSTALL_MIN_PROTOCOL, st),
         ));
     }
-    let a = arch().ok_or_else(|| no("unsupported", 409, "no K2 Podman bundle for this CPU (x86_64, aarch64)"))?;
+    let a = arch().ok_or_else(|| no("unsupported", 409, concat!("no ", product_name!(), " Podman bundle for this CPU (x86_64, aarch64)")))?;
     let art = pb::artifact_for_arch(a).map_err(|e| no("unsupported", 409, e))?;
     let got = obtain(o.from.as_deref(), art, &keys()).map_err(|e| no("podman_download_failed", 409, e))?;
     if got.signer.flagged {
         k2_core::log_debug!(
-            "[apps] K2's Podman bundle from {} is signed with the BACKUP key {} (accepted; the primary key should sign the mirror)",
+            "[apps] {PRODUCT_NAME}'s Podman bundle from {} is signed with the BACKUP key {} (accepted; the primary key should sign the mirror)",
             got.from,
             got.signer.key_id
         );
@@ -467,7 +469,7 @@ pub(crate) fn audit(event: &str, who: &Who, outcome: &str) {
 pub(crate) fn uninstall_route(who: &Who, _body: &J) -> R<J> {
     need_credential(who)?;
     if !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
-        return Err(no("owner_only", 403, "removing K2's Podman is the owner's: run it from a terminal outside K2"));
+        return Err(no("owner_only", 403, concat!("removing ", product_name!(), "'s Podman is the owner's: run it from a terminal outside ", product_name!())));
     }
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "Apps run on Linux boxes only"));
@@ -477,11 +479,11 @@ pub(crate) fn uninstall_route(who: &Who, _body: &J) -> R<J> {
         return Err(no(
             "helper_needed",
             409,
-            root_helper::helper_needed("removing K2's Podman", PODMAN_INSTALL_MIN_PROTOCOL, &st),
+            root_helper::helper_needed(concat!("removing ", product_name!(), "'s Podman"), PODMAN_INSTALL_MIN_PROTOCOL, &st),
         ));
     }
     // 0.46.3 F9: never inside another root sequence.
-    let _held = root_helper::busy::try_hold("a K2 Podman removal").map_err(|e| no("root_busy", 409, e))?;
+    let _held = root_helper::busy::try_hold(concat!("a ", product_name!(), " Podman removal")).map_err(|e| no("root_busy", 409, e))?;
     let res = root_helper::call_text(&["apps".into(), "podman".into(), "uninstall".into()], None);
     root_helper::invalidate();
     match res {

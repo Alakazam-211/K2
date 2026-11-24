@@ -13,6 +13,7 @@ use rusqlite::params;
 use serde_json::{json, Value};
 
 use crate::compute_routes::{ci_gate, need_credential, no, passport_gate, target_ws, Who, R};
+use k2_core::cli_name;
 
 /// `GET /cli/compute/logs/search`.
 pub const PATH: &str = "/cli/compute/logs/search";
@@ -64,7 +65,7 @@ fn state_sql(s: &str) -> Option<&'static str> {
 pub(crate) fn handle(who: &Who, params_in: &HashMap<String, String>) -> R<Value> {
     need_credential(who)?;
     passport_gate(who)?;
-    ci_gate("k2 compute logs --search")?;
+    ci_gate(concat!(cli_name!(), " compute logs --search"))?;
     let ws = target_ws(who, params_in.get("workspace").map(String::as_str))?;
     let get = |k: &str| params_in.get(k).map(|s| s.as_str()).filter(|s| !s.trim().is_empty());
     let needle = get("search").ok_or_else(|| no(BAD, 400, "--search 'TEXT': the text to find (2-200 characters)"))?;

@@ -30,6 +30,8 @@ use k2_core::compute::proto::ci_config::{CiConfig, CI_CONFIG_PATH};
 use crate::ci_engine::{self as engine, Start};
 use crate::compute_manage::Manager;
 use crate::compute_routes::{audit, b, grant_target_ws, json_body, n, need_admin, need_credential, no, passport_gate, s, target_ws, Who, Ws, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 /// prd-compute-blacksmith-class-v1 B2 (§4.1.5): `k2 ci cache trust`
 /// (GET) and its change (POST).
@@ -229,7 +231,7 @@ fn status(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let conn = db.lock();
     if let Some(t) = params.get("run").map(|x| x.trim()).filter(|x| !x.is_empty()) {
         let r = ci::find_run(&conn, &ws.id, t)
-            .ok_or_else(|| no(codes::NO_RUN, 404, format!("no CI run '{t}' in workspace {} (k2 ci status lists them)", ws.handle)))?;
+            .ok_or_else(|| no(codes::NO_RUN, 404, format!("no CI run '{t}' in workspace {} ({CLI_NAME} ci status lists them)", ws.handle)))?;
         return Ok(serde_json::json!({ "workspace": ws.handle, "run": run_view(&conn, &r) }));
     }
     let limit = params.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(10).clamp(1, 50);
@@ -310,7 +312,7 @@ fn cache_trust_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             403,
             format!(
                 "adding {} to workspace {}'s trusted branches lets CI checks of that branch save the build cache every job here starts from, \
-                 so only a person does it: the owner or an Admin, from a terminal outside K2 (k2 ci cache trust --add {} --workspace {}). \
+                 so only a person does it: the owner or an Admin, from a terminal outside {PRODUCT_NAME} ({CLI_NAME} ci cache trust --add {} --workspace {}). \
                  An agent may only remove branches",
                 added.join(", "),
                 ws.handle,
@@ -329,7 +331,7 @@ fn cache_trust_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         return Err(no(
             codes::REMOTE_UNREACHABLE,
             409,
-            format!("can't read the git remote's URL in workspace {}'s repo (the trusted cache is pinned to it): check its remote (k2 ci watch shows which)", ws.handle),
+            format!("can't read the git remote's URL in workspace {}'s repo (the trusted cache is pinned to it): check its remote ({CLI_NAME} ci watch shows which)", ws.handle),
         ));
     }
     let stored = {
@@ -464,14 +466,14 @@ fn monitor(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value
     let v = json_body(body)?;
     let ws = changer(who, s(&v, "workspace"), mgr)?;
     let bad = |m: String| no(mc::INVALID, 400, m);
-    let name = s(&v, "name").ok_or_else(|| bad("name the monitor: k2 ci monitor add <name> --kind …".into()))?.to_string();
+    let name = s(&v, "name").ok_or_else(|| bad(concat!("name the monitor: ", cli_name!(), " ci monitor add <name> --kind …").into()))?.to_string();
     if !mon::valid_name(&name) {
         return Err(bad(format!("monitor name {name:?}: 1-40 of a-z 0-9 . _ -, starting with a letter or digit")));
     }
     let action = s(&v, "action").unwrap_or("add");
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let missing = || no(mc::NOT_FOUND, 404, format!("no monitor '{name}' in this workspace (k2 ci monitors)"));
+    let missing = || no(mc::NOT_FOUND, 404, format!("no monitor '{name}' in this workspace ({CLI_NAME} ci monitors)"));
     match action {
         "rm" | "remove" => {
             if !mon::remove(&conn, &ws.id, &name) {
@@ -560,7 +562,7 @@ fn monitor(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value
                     Some(addr) => {
                         let addr = if addr.is_empty() { ws.handle.as_str() } else { addr };
                         drop(conn);
-                        let owner = crate::overlay_routes::thread_project_of(addr).ok_or_else(|| bad(format!("--to thread:{addr}: no Thread at that address (k2 thread's address)")))?;
+                        let owner = crate::overlay_routes::thread_project_of(addr).ok_or_else(|| bad(format!("--to thread:{addr}: no Thread at that address ({CLI_NAME} thread's address)")))?;
                         if who.passport().is_some() && owner != ws.id {
                             return Err(no("forbidden", 403, "an agent's monitor may post only to its own workspace's Thread"));
                         }
@@ -709,7 +711,7 @@ fn file_watch(root: &Path) -> R<Option<k2_core::compute::proto::ci_config::Watch
 fn watch(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
     let v = json_body(body)?;
     let ws = changer(who, s(&v, "workspace"), mgr)?;
-    let on = b(&v, "on").ok_or_else(|| no("bad_request", 400, "on: true (k2 ci watch on) or false (k2 ci watch off)"))?;
+    let on = b(&v, "on").ok_or_else(|| no("bad_request", 400, concat!("on: true (", cli_name!(), " ci watch on) or false (", cli_name!(), " ci watch off)")))?;
     let by = who.label();
     let at = now();
     if !on {
@@ -815,7 +817,7 @@ fn init(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let root = o.repo_root(Path::new(&ws.path)).map_err(|e| not_a_repo(&ws, &e))?;
     let path = root.join(CI_CONFIG_PATH);
     if path.exists() && b(&v, "force") != Some(true) {
-        return Err(no(codes::CONFIG_EXISTS, 409, format!("{} already exists: edit it, or k2 ci init --force to replace it", path.display())));
+        return Err(no(codes::CONFIG_EXISTS, 409, format!("{} already exists: edit it, or {CLI_NAME} ci init --force to replace it", path.display())));
     }
     let num = |k: &str, max: i64| -> R<Option<i64>> {
         match n(&v, k) {

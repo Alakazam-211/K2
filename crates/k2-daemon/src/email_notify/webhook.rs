@@ -55,6 +55,8 @@ use k2_core::email_outcomes as oc;
 use super::engine::CredError;
 use super::{fail, Fail};
 use crate::cli_response::CliResponse;
+#[cfg(not(test))]
+use k2_core::product_name;
 
 pub const EVENTS_PATH: &str = "/cli/email/events";
 /// A batch is at most this many bytes.
@@ -684,7 +686,7 @@ fn run_live(reason: &'static str) {
             Ok(c) => c,
             Err(e) => {
                 k2_core::log_debug!("[email-notify] webhook setup skipped ({reason}): no management client: {e}");
-                crate::mail::forward_outcomes::webhook_health(Some("K2 has no way to manage the mail server"));
+                crate::mail::forward_outcomes::webhook_health(Some(concat!(product_name!(), " has no way to manage the mail server")));
                 return;
             }
         };

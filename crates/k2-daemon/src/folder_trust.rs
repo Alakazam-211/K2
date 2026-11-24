@@ -43,9 +43,10 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value as J};
 
 use k2_core::cli_folder_trust::gate::{self, Actor, Ask, Asked, Decision, DecideError, Door, Outcome, Presenter, Refusal, Seen};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// The action card id (`kd/action_cards.rs` `run`).
 pub const CARD_ACTION: &str = "folder.trust";
@@ -283,7 +284,7 @@ pub fn card_prompt_for(caller: &str, for_workspace: Option<&str>, eval: &gate::E
         )
     } else if actor.changed_live {
         format!(
-            "**The settings in {folder} changed while {caller} was running.** K2 stopped its sessions there until you decide. \
+            "**The settings in {folder} changed while {caller} was running.** {PRODUCT_NAME} stopped its sessions there until you decide. \
              {n} setting{} run commands or send your logins elsewhere when programs start here (Claude picks up new hooks without a restart):\n",
             if n == 1 { "" } else { "s" }
         )
@@ -299,7 +300,7 @@ pub fn card_prompt_for(caller: &str, for_workspace: Option<&str>, eval: &gate::E
     let truncated = shown.iter().any(|l| l.ends_with('…'));
     s.push_str(&md_code_block(&shown));
     s.push('\n');
-    let status_cmd = md_code_inline(&format!("k2 workspace trust status {}", gate::shell_quote(&eval.path)));
+    let status_cmd = md_code_inline(&format!("{CLI_NAME} workspace trust status {}", gate::shell_quote(&eval.path)));
     if n > CARD_LINES {
         s.push_str(&format!("{} more finding{} not shown: {status_cmd}\n", n - CARD_LINES, if n - CARD_LINES == 1 { "" } else { "s" }));
     }
@@ -313,7 +314,7 @@ pub fn card_prompt_for(caller: &str, for_workspace: Option<&str>, eval: &gate::E
         // Review round 2 M2: trust K2 didn't write (or can't tell from
         // yours) still covers this folder whatever you choose here.
         let shown: Vec<String> = leftover.iter().take(CARD_LINES).cloned().collect();
-        s.push_str("Trust K2 didn't write still covers this folder in these tools, whatever you choose:\n");
+        s.push_str(concat!("Trust ", product_name!(), " didn't write still covers this folder in these tools, whatever you choose:\n"));
         s.push_str(&md_code_block(&shown));
         s.push('\n');
         s.push_str(&format!("To remove it: {}\n", md_code_inline(&gate::forget_hint(&eval.path))));
@@ -471,16 +472,16 @@ fn present(ask: &Ask<'_>) -> Asked {
     let q = gate::shell_quote(&eval.path);
     let commands = md_code_block(&[
         "# Trust it (this version):".to_string(),
-        format!("k2 workspace trust {q} --yes --fingerprint {fp}"),
+        format!("{CLI_NAME} workspace trust {q} --yes --fingerprint {fp}"),
         "# Always trust this folder:".to_string(),
-        format!("k2 workspace trust {q} --always --fingerprint {fp}"),
+        format!("{CLI_NAME} workspace trust {q} --always --fingerprint {fp}"),
         "# Don't trust:".to_string(),
-        format!("k2 workspace trust {q} --no --fingerprint {fp}"),
+        format!("{CLI_NAME} workspace trust {q} --no --fingerprint {fp}"),
     ]);
     let body = format!(
-        "{prompt}\n\nThere is no Thread to put a card on, so K2 filed this ticket. Choose one (owner):\n\n{commands}\n\n\
-         If these settings change, K2 refuses these commands and files a new ticket. \
-         Until then K2 starts no program in this folder but a plain terminal. Settings → Workspaces → Folder trust shows it too."
+        "{prompt}\n\nThere is no Thread to put a card on, so {PRODUCT_NAME} filed this ticket. Choose one (owner):\n\n{commands}\n\n\
+         If these settings change, {PRODUCT_NAME} refuses these commands and files a new ticket. \
+         Until then {PRODUCT_NAME} starts no program in this folder but a plain terminal. Settings → Workspaces → Folder trust shows it too."
     );
     match crate::feedback_routes::file_owners_only_notice(project, &agent_name_of(project), &title, &body) {
         Ok(item) => Asked { ticket: Some(item.id), project: Some(project.clone()), ..Default::default() },
@@ -769,11 +770,11 @@ pub fn run_card(params: &J, answer: &str, by: &str) -> Result<J, String> {
             log_debug!("[folder-trust] card: {by} chose {} for {path}: refused, changed: {why}", decision.as_str());
             let fresh = gate::request(path, &Actor { by: "recheck".into(), caller: Some("K2".into()), ..Default::default() });
             let next = match fresh {
-                Outcome::Held(r) if r.card.is_some() => "K2 posted a new card for what's there now.".to_string(),
-                Outcome::Held(_) => "Decide on what's there now: k2 workspace trust status shows it.".to_string(),
+                Outcome::Held(r) if r.card.is_some() => concat!(product_name!(), " posted a new card for what's there now.").to_string(),
+                Outcome::Held(_) => concat!("Decide on what's there now: ", cli_name!(), " workspace trust status shows it.").to_string(),
                 Outcome::Granted { .. } => "There's nothing risky to decide now.".to_string(),
                 Outcome::Denied(_) => "The folder is already not trusted.".to_string(),
-                Outcome::Skipped(why) => format!("K2 can't check it now ({why})."),
+                Outcome::Skipped(why) => format!("{PRODUCT_NAME} can't check it now ({why})."),
             };
             return Err(format!("Nothing was decided: {why}. {next}"));
         }
@@ -816,11 +817,11 @@ fn finish_decision(r: &gate::DecideResult, decision: Decision) -> (usize, usize,
     }
     if restarting > 0 {
         message.push_str(&format!(
-            " Starting the {restarting} session{} K2 held here again.",
+            " Starting the {restarting} session{} {PRODUCT_NAME} held here again.",
             if restarting == 1 { "" } else { "s" }
         ));
     } else if r.granted && decision != Decision::Deny {
-        message.push_str(" A session K2 stopped here starts again when you open its tab.");
+        message.push_str(concat!(" A session ", product_name!(), " stopped here starts again when you open its tab."));
     }
     (stopped, restarting, message)
 }
@@ -843,7 +844,7 @@ pub fn decision_words(d: Decision, by: Option<&str>, at: Option<i64>) -> String 
     };
     let who = match by.map(str::trim).filter(|b| !b.is_empty()) {
         Some(b) if crate::session_author::is_owner_token(b) => " by the owner".to_string(),
-        Some("upgrade") => " by K2's 0.46.4 upgrade".to_string(),
+        Some("upgrade") => concat!(" by ", product_name!(), "'s 0.46.4 upgrade").to_string(),
         Some(b) => format!(" by {b}"),
         None => String::new(),
     };
@@ -1178,7 +1179,7 @@ fn decide_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliR
         return err(
             "400 Bad Request",
             "usage",
-            "fingerprint required: the CLI sends the one `k2 workspace trust status` showed (or the ticket's)",
+            concat!("fingerprint required: the CLI sends the one `", cli_name!(), " workspace trust status` showed (or the ticket's)"),
         );
     };
     let fp = (fp != "none").then_some(fp);
@@ -1207,7 +1208,7 @@ fn decide_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliR
                 content_type: "application/json",
                 body: json!({
                     "error": CHANGED,
-                    "message": format!("Nothing was decided: {why}. Look again: k2 workspace trust status {}", gate::shell_quote(&folder)),
+                    "message": format!("Nothing was decided: {why}. Look again: {CLI_NAME} workspace trust status {}", gate::shell_quote(&folder)),
                     "current": current,
                 })
                 .to_string(),
@@ -1300,7 +1301,7 @@ fn forget_route(params: &HashMap<String, String>, body: &[u8], by: &str) -> CliR
             let mut v = serde_json::to_value(&f).unwrap_or(J::Null);
             v["ok"] = json!(false);
             v["error"] = json!("forget_incomplete");
-            v["message"] = json!(format!("K2 couldn't change: {}", f.errors.join("; ")));
+            v["message"] = json!(format!("{PRODUCT_NAME} couldn't change: {}", f.errors.join("; ")));
             CliResponse { status: "500 Internal Server Error", content_type: "application/json", body: v.to_string() }
         }
         Err(e) => err("400 Bad Request", "usage", e),
@@ -1325,18 +1326,18 @@ fn file_upgrade_summary(folders: &[gate::UpgradedFolder]) {
         log_debug!("[folder-trust] upgrade summary: no workspace to file it on");
         return;
     };
-    let title = "Folders trusted before K2 checked them".to_string();
+    let title = concat!("Folders trusted before ", product_name!(), " checked them").to_string();
     let mut body = String::from(
-        "K2 now looks inside a folder before it tells Claude, Codex, Grok, Gemini or Cursor to trust it. \
-         These folders were trusted before K2 checked, and they have settings that run commands when the AI tools start. \
-         They stay trusted as they are; K2 asks again if these settings change.\n",
+        concat!(product_name!(), " now looks inside a folder before it tells Claude, Codex, Grok, Gemini or Cursor to trust it. \
+         These folders were trusted before ", product_name!(), " checked, and they have settings that run commands when the AI tools start. \
+         They stay trusted as they are; ", product_name!(), " asks again if these settings change.\n"),
     );
     for f in folders {
         body.push_str(&format!("\n{}\n", md_text(&f.path, 300)));
         let lines: Vec<String> = f.findings.iter().take(CARD_LINES).map(|l| format!("{}: {}", l.file, l.detail)).collect();
         body.push_str(&md_code_block(&lines));
         body.push('\n');
-        let status_cmd = md_code_inline(&format!("k2 workspace trust status {}", gate::shell_quote(&f.path)));
+        let status_cmd = md_code_inline(&format!("{CLI_NAME} workspace trust status {}", gate::shell_quote(&f.path)));
         if f.findings.len() > CARD_LINES || f.more > 0 {
             body.push_str(&format!("More: {status_cmd}\n"));
         }
@@ -1352,7 +1353,7 @@ fn file_upgrade_summary(folders: &[gate::UpgradedFolder]) {
             .unwrap_or_default();
         if !leftover.is_empty() {
             let shown: Vec<String> = leftover.iter().take(CARD_LINES).cloned().collect();
-            body.push_str("Trust K2 didn't write (or can't tell from yours) stays whatever you decide:\n");
+            body.push_str(concat!("Trust ", product_name!(), " didn't write (or can't tell from yours) stays whatever you decide:\n"));
             body.push_str(&md_code_block(&shown));
             body.push_str(&format!("\nTo remove it: {}\n", md_code_inline(&gate::forget_hint(&f.path))));
         }

@@ -36,7 +36,7 @@ use serde_json::{json, Value};
 
 use super::supervisor::{self as sup, no, Env, Fail, R};
 use crate::cli_response::CliResponse;
-use k2_core::cli_name;
+use k2_core::{cli_name, product_name};
 pub use crate::compute_routes::Who;
 
 pub const MAX_BODY: usize = 64 * 1024;
@@ -201,8 +201,8 @@ pub fn need_manage(who: &Who) -> R<()> {
                 Err(no(
                     "chat_manage_off",
                     403,
-                    "\"Manage chat and voice\" is off for this workspace: ask your owner or an admin to run \
-                     k2 agent access set <workspace> chat_manage on",
+                    concat!("\"Manage chat and voice\" is off for this workspace: ask your owner or an admin to run \
+                     ", cli_name!(), " agent access set <workspace> chat_manage on"),
                 ))
             }
         }
@@ -231,8 +231,8 @@ pub fn need_person(who: &Who, body: &Value, action: &str, secret_id: &str, floor
         return Err(no(
             "person_only",
             403,
-            "a person does this, never an agent or a K2 terminal (Manage chat and voice does not cover it): Settings → Cores → Chat / Voice, or \
-             k2 hostchat from a terminal outside K2",
+            concat!("a person does this, never an agent or a ", product_name!(), " terminal (Manage chat and voice does not cover it): Settings → Cores → Chat / Voice, or \
+             ", cli_name!(), " hostchat from a terminal outside ", product_name!()),
         ));
     }
     match floor {
@@ -295,9 +295,9 @@ fn rollback_accept_data_loss(env: &Env, who: &Who, v: &Value, req: &sup::Rollbac
             ROLLBACK_NEEDS_PERSON,
             403,
             concat!("nothing changed: only the owner can roll Sew back across a schema change (chat written since the upgrade \
-             leaves the live chat; K2 backs it up first). Ask the owner on a permission card: ", cli_name!(), " permission request \
+             leaves the live chat; ", product_name!(), " backs it up first). Ask the owner on a permission card: ", cli_name!(), " permission request \
              sew.rollback-data-loss --why \"<why>\". The owner may instead run \
-             k2 hostchat rollback --accept-data-loss in a terminal outside K2"),
+             ", cli_name!(), " hostchat rollback --accept-data-loss in a terminal outside ", product_name!()),
         );
         f.extra = plan.map(|p| json!({"to": p["to"], "since": p["since"], "bundle": p["bundle"]}));
         return Err(f);
@@ -508,7 +508,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
                             }
                         })
                         .map_err(|e| no("spawn", 500, e.to_string()))?;
-                    Ok(json!({"ok": true, "state": "installing", "voice": with_voice, "hint": "poll GET /cli/sew/status (k2 hostchat status)"}))
+                    Ok(json!({"ok": true, "state": "installing", "voice": with_voice, "hint": concat!("poll GET /cli/sew/status (", cli_name!(), " hostchat status)")}))
                 }
                 Ok(latch) => {
                     let r = sup::enable_machine(&env, &req);
@@ -598,7 +598,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
                 return Err(no(
                     "confirm_required",
                     409,
-                    "Uninstall voice? Live calls end. Send {\"confirm\": true} (k2 hostchat media uninstall --yes)",
+                    concat!("Uninstall voice? Live calls end. Send {\"confirm\": true} (", cli_name!(), " hostchat media uninstall --yes)"),
                 ));
             }
             super::voice::uninstall(&env)
@@ -760,7 +760,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
                 return Err(no(
                     "owner_only",
                     403,
-                    "only the server's owner adopts a running Sew (k2 hostchat adopt from a terminal outside K2, or an Owner login)",
+                    concat!("only the server's owner adopts a running Sew (", cli_name!(), " hostchat adopt from a terminal outside ", product_name!(), ", or an Owner login)"),
                 ));
             }
             match super::adopt::adopt(&env) {

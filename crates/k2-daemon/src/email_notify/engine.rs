@@ -11,6 +11,7 @@ use crate::mail::jmap::StalwartClient;
 use k2_core::email_notify::Relay;
 
 use super::{fail, Fail};
+use k2_core::product_name;
 
 /// One hosted submission (E8): what the JMAP request carries.
 #[derive(Debug, Clone)]
@@ -184,7 +185,7 @@ pub enum CredError {
 impl CredError {
     pub fn to_fail(&self) -> Fail {
         match self {
-            CredError::VaultClosed => fail(503, "vault_closed", "the vault isn't open yet (K2 is still starting); try again shortly"),
+            CredError::VaultClosed => fail(503, "vault_closed", concat!("the vault isn't open yet (", product_name!(), " is still starting); try again shortly")),
             CredError::Vault(c) => fail(500, "failed", format!("the vault refused ({c})")),
         }
     }

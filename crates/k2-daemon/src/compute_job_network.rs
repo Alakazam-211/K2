@@ -14,7 +14,7 @@
 //!   `job_network_needs_update` (409, exit 3). Never a job queued where it
 //!   would run with more network.
 
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use k2_core::compute::proto::frames::Offer;
 use k2_core::compute::proto::jobnet::{self, codes as jn, JobNet, JobNetMode};
 use k2_core::compute::store::GrantRow;
@@ -40,7 +40,7 @@ pub(crate) fn from_body(v: &serde_json::Value) -> R<Option<JobNet>> {
                 return Err(no(
                     jn::JOB_NETWORK_INVALID,
                     400,
-                    format!("--network {m}: a job can only narrow its network, so the one value is --network none (no network, loopback only). Its node's owner decides how much network jobs get there (k2 compute node servers limits <server> --network)"),
+                    format!("--network {m}: a job can only narrow its network, so the one value is --network none (no network, loopback only). Its node's owner decides how much network jobs get there ({CLI_NAME} compute node servers limits <server> --network)"),
                 ))
             }
             None => return Err(no(jn::JOB_NETWORK_INVALID, 400, format!("--network {m:?}: the one value is none (no network, loopback only)"))),

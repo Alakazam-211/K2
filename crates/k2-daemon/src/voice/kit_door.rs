@@ -70,6 +70,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::bff::{self, Refusal};
 use crate::chat_pass::identity::{Provenance, Refusal as IdRefusal};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::product_name;
 
 /// The kit's request bodies are a few small fields.
 pub const MAX_BODY: usize = 16 * 1024;
@@ -331,7 +333,7 @@ fn identity_refusal(r: IdRefusal) -> Refusal {
             Refusal::new(403, "tied_pending_reset", crate::chat_pass::mint::TIED_PENDING_RESET_MESSAGE)
         }
         IdRefusal::NoChatCaps { .. } => Refusal::new(403, "no_chat_caps", "this person's App role holds no chat cap the App may hand out"),
-        IdRefusal::Unavailable(e) => Refusal::new(503, "chat_unavailable", format!("K2's user store is unavailable: {e}")).retry(RETRY_SECS),
+        IdRefusal::Unavailable(e) => Refusal::new(503, "chat_unavailable", format!("{PRODUCT_NAME}'s user store is unavailable: {e}")).retry(RETRY_SECS),
     }
 }
 
@@ -341,7 +343,7 @@ fn app_service_id(app_id: &str) -> Result<String, Refusal> {
     match k2_core::deploy::store::get_app(&conn, app_id) {
         Ok(Some(app)) => Ok(app.service_id),
         Ok(None) => Err(Refusal::new(404, "not_found", "no such App on this server")),
-        Err(e) => Err(Refusal::new(503, "voice_unavailable", format!("K2 could not read the App: {e}")).retry(RETRY_SECS)),
+        Err(e) => Err(Refusal::new(503, "voice_unavailable", format!("{PRODUCT_NAME} could not read the App: {e}")).retry(RETRY_SECS)),
     }
 }
 
@@ -390,7 +392,7 @@ fn app_pass(bearer: &str) -> Result<String, Refusal> {
         }
     }
     let code = body.pointer("/error/code").and_then(Value::as_str).unwrap_or("chat_unavailable");
-    let hint = body.pointer("/error/hint").and_then(Value::as_str).unwrap_or("K2 could not mint this person's chat pass");
+    let hint = body.pointer("/error/hint").and_then(Value::as_str).unwrap_or(concat!(product_name!(), " could not mint this person's chat pass"));
     let mut r = Refusal::new(if status >= 400 { status } else { 502 }, code, hint);
     if let Some(s) = reply.retry_after_secs {
         r = r.retry(u64::try_from(s).unwrap_or(RETRY_SECS));
@@ -522,7 +524,7 @@ async fn sew_call(addr: &str, method: &str, target: &str, bearer: &str, body: Op
 
 fn unreachable(e: String) -> Refusal {
     k2_core::log_debug!("[voice/kit-door] Sew: {e}");
-    Refusal::new(503, "voice_unavailable", "K2 could not reach this server's Sew").retry(RETRY_SECS)
+    Refusal::new(503, "voice_unavailable", concat!(product_name!(), " could not reach this server's Sew")).retry(RETRY_SECS)
 }
 
 /// One Sew request as the person. A 401 means their Sew session is gone:

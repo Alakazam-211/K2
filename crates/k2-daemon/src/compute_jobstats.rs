@@ -14,6 +14,8 @@ use k2_core::compute::{job_stats, store};
 use serde_json::{json, Value};
 
 use crate::compute_routes::{ci_gate, job_for, Who, R};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// `GET /cli/compute/stats?job=<id>`.
 pub const PATH: &str = "/cli/compute/stats";
@@ -21,7 +23,7 @@ pub const PATH: &str = "/cli/compute/stats";
 /// `GET /cli/compute/stats?job=<id>`: the job's series, peaks, IO, held
 /// time with what to ask for, OOM kills.
 pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<Value> {
-    ci_gate("k2 compute stats")?;
+    ci_gate(concat!(cli_name!(), " compute stats"))?;
     let j = job_for(who, params.get("job").map(String::as_str))?;
     let (stored, node) = {
         let db = k2_core::db::shared();
@@ -59,10 +61,10 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<Value> {
         None => {
             out["stats"] = Value::Null;
             out["why"] = json!(if !ended {
-                "it hasn't ended yet: the node sends the series with the job's end (k2 compute wait <job>, then ask again)".to_string()
+                concat!("it hasn't ended yet: the node sends the series with the job's end (", cli_name!(), " compute wait <job>, then ask again)").to_string()
             } else {
                 format!(
-                    "no series for it: its node's k2-node is older than protocol 10 (k2 compute node update {}), or it ended more than {} days ago",
+                    "no series for it: its node's k2-node is older than protocol 10 ({CLI_NAME} compute node update {}), or it ended more than {} days ago",
                     node.as_deref().unwrap_or("<node>"),
                     job_stats::KEEP_SECS / 86_400
                 )

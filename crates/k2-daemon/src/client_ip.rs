@@ -105,6 +105,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{watch, Notify};
 
 use crate::front443::proxy_v2;
+use k2_core::product_name;
 
 /// The one header Apps should trust for the client address.
 pub const HEADER: &str = "X-K2-Client-IP";
@@ -777,7 +778,7 @@ pub fn too_many(retry_after: u64) -> Vec<u8> {
 
 /// K2's own answer to a request it won't forward.
 fn refusal(status: &str) -> Vec<u8> {
-    let body = "K2 could not forward this request.\r\n";
+    let body = concat!(product_name!(), " could not forward this request.\r\n");
     format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
         body.len(),

@@ -61,6 +61,8 @@ use tokio::net::TcpStream;
 use tokio::sync::watch;
 
 use crate::egress::EgressError;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// Concurrent connections per App.
 pub const MAX_CONNS: usize = 64;
@@ -309,7 +311,7 @@ pub fn check(app: &str, host: &str, port: u16) -> Result<Verdict, Refused> {
         return Err(refused(
             403,
             codes::SELF,
-            format!("{host} is this box: an App reaches K2 through its gateway (K2_GATEWAY_URL), never through the egress proxy"),
+            format!("{host} is this box: an App reaches {PRODUCT_NAME} through its gateway (K2_GATEWAY_URL), never through the egress proxy"),
         ));
     }
     if let Some(r) = build_allows(app, host, port) {
@@ -321,7 +323,7 @@ pub fn check(app: &str, host: &str, port: u16) -> Result<Verdict, Refused> {
             403,
             codes::DENIED,
             format!(
-                "{} isn't on App {app}'s egress allowlist. Ask for it (the owner approves): k2 app egress add {app} {}",
+                "{} isn't on App {app}'s egress allowlist. Ask for it (the owner approves): {CLI_NAME} app egress add {app} {}",
                 HostSpec { host: host.into(), port }.display(),
                 HostSpec { host: host.into(), port }.display()
             ),
@@ -413,7 +415,7 @@ fn record_db(app: &str, host: &str, port: u16, through: bool, rule: Option<&Host
                 &ws,
                 &format!(
                     "[k2 apps] App {app} tried to reach {spec}, which isn't on its egress allowlist (refused). \
-                     If it needs it: k2 app egress add {app} {spec} — the owner approves. See k2 app egress {app}."
+                     If it needs it: {CLI_NAME} app egress add {app} {spec} — the owner approves. See {CLI_NAME} app egress {app}."
                 ),
             );
         }
@@ -506,7 +508,7 @@ fn start_listener(app: &str, port: u16) -> Result<(), String> {
             Ok(l) => l,
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && crate::handoff::predecessor_alive() => {
                 retry_while_predecessor_drains(app, port);
-                return Err(format!("egress proxy for {app} on 127.0.0.1:{port}: held by the previous K2 daemon while it drains; retrying"));
+                return Err(format!("egress proxy for {app} on 127.0.0.1:{port}: held by the previous {PRODUCT_NAME} daemon while it drains; retrying"));
             }
             Err(e) => return Err(format!("egress proxy for {app} on 127.0.0.1:{port}: {e}")),
         },
@@ -710,7 +712,7 @@ pub(crate) fn parse_head(head: &str) -> Result<Head, Refused> {
         return Err(refused(
             400,
             codes::BAD_REQUEST,
-            "this is the App's egress proxy: send absolute http:// URLs or CONNECT host:port (K2 itself is the gateway, K2_GATEWAY_URL)",
+            concat!("this is the App's egress proxy: send absolute http:// URLs or CONNECT host:port (", product_name!(), " itself is the gateway, K2_GATEWAY_URL)"),
         ));
     }
     let lower = target.to_ascii_lowercase();

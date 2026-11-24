@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use k2_core::app_audit::{self as store, Failure};
 use k2_core::deploy::backoff::{BREAKER_RESTARTS, BREAKER_WINDOW_SECS};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// Crashes wake once per this window (the breaker's).
 pub const CRASH_WINDOW: Duration = Duration::from_secs(BREAKER_WINDOW_SECS as u64);
@@ -148,7 +149,7 @@ pub fn crash(c: &Crash<'_>) -> Option<Said> {
     let reason = match c.restart_in_secs {
         Some(0) => format!("{what}; restarted at once"),
         Some(n) => format!("{what}; restart in {n}s"),
-        None => format!("{what}; crash-looping, K2 stopped restarting it"),
+        None => format!("{what}; crash-looping, {PRODUCT_NAME} stopped restarting it"),
     };
     store_row(&Failure {
         at_ms: now_ms(),
@@ -174,9 +175,9 @@ pub fn crash(c: &Crash<'_>) -> Option<Said> {
     say(
         app,
         format!(
-            "[k2 apps] App {app} crashed: it {what} (deployment {dep}). K2 restarts it {when} (restart {} of {BREAKER_RESTARTS} \
-             allowed in an hour; more crashes this hour won't wake you, and at {BREAKER_RESTARTS} K2 stops and tells you). \
-             Last lines: k2 app logs {app} --deployment {dep} --tail 20 ; every failure: k2 app errors {app} --kind crash",
+            "[k2 apps] App {app} crashed: it {what} (deployment {dep}). {PRODUCT_NAME} restarts it {when} (restart {} of {BREAKER_RESTARTS} \
+             allowed in an hour; more crashes this hour won't wake you, and at {BREAKER_RESTARTS} {PRODUCT_NAME} stops and tells you). \
+             Last lines: {CLI_NAME} app logs {app} --deployment {dep} --tail 20 ; every failure: {CLI_NAME} app errors {app} --kind crash",
             c.restart_count
         ),
     )
@@ -253,7 +254,7 @@ pub fn deploy_failed(d: &DeployFail<'_>) -> Option<Said> {
         app,
         format!(
             "[k2 apps] App {app}: {} {dep} by {} {failed}: {reason}.{exit} It never went live, so nothing was rolled back; {serving}. \
-             Last lines: k2 app logs {app} --deployment {dep} --tail 20 ; every failure: k2 app errors {app} --kind {kind}",
+             Last lines: {CLI_NAME} app logs {app} --deployment {dep} --tail 20 ; every failure: {CLI_NAME} app errors {app} --kind {kind}",
             d.deploy_kind, d.actor
         ),
     )
@@ -296,7 +297,7 @@ pub fn build_failed(b: &BuildFail<'_>) -> Option<Said> {
     }
     let app = b.app_id;
     let out = match b.log {
-        Some(l) => format!("Build output: k2 app logs {app} --deployment {l}"),
+        Some(l) => format!("Build output: {CLI_NAME} app logs {app} --deployment {l}"),
         None => "It stopped before the build printed anything".to_string(),
     };
     let serving = if super::router::live(app).is_some() { "the live version keeps serving" } else { "nothing is live" };
@@ -304,7 +305,7 @@ pub fn build_failed(b: &BuildFail<'_>) -> Option<Said> {
         app,
         format!(
             "[k2 apps] App {app}: a build for a deploy by {} failed ({reason}). Nothing was deployed; {serving}. \
-             {out} ; every failure: k2 app errors {app} --kind build",
+             {out} ; every failure: {CLI_NAME} app errors {app} --kind build",
             b.actor
         ),
     )

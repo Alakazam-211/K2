@@ -33,6 +33,7 @@
 //! owner notice).
 
 use crate::compute_routes::Who;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// A local agent (or K2 shell tab) passport acting under the switch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,11 +124,11 @@ fn notice_workspace(m: &Manager) -> Option<String> {
 /// `computeNotice` settings event. `verb` is `added` or `confirmed`.
 pub fn owner_notice(m: &Manager, verb: &str, node: &str) {
     let title = format!("Agent {} {verb} compute node {node}", m.handle);
-    let undo = format!("k2 compute node remove {node}");
+    let undo = format!("{CLI_NAME} compute node remove {node}");
     let text = format!(
         "{title}.\n\nIt acted under \"Let this agent manage compute nodes\" (Settings → Workspaces / Agents → {} → Permissions → Compute), session {}.\n\
-         Every act is in Settings → Logs → Access Audit. To undo, from a terminal outside K2: {undo}\n\
-         To stop it: turn the switch off, or k2 compute manage off --workspace {}",
+         Every act is in Settings → Logs → Access Audit. To undo, from a terminal outside {PRODUCT_NAME}: {undo}\n\
+         To stop it: turn the switch off, or {CLI_NAME} compute manage off --workspace {}",
         m.handle, m.session_id, m.handle
     );
     if let Some(path) = notice_workspace(m) {

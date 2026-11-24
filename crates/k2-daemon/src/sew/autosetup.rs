@@ -38,6 +38,8 @@ use serde_json::{json, Value};
 
 use super::store::{self, Row};
 use super::supervisor::{self as sup, EnableRequest, Env, GIB};
+use k2_core::brand::PRODUCT_NAME;
+use k2_core::{cli_name, product_name};
 
 /// K2's record of the automatic set-up (`~/.k2/sew/autosetup.json`).
 pub const RECORD: &str = "autosetup";
@@ -101,7 +103,7 @@ pub fn floor(mem: Option<u64>, disk: Option<u64>) -> Floor {
             chat: false,
             voice: false,
             code: "unreadable",
-            line: Some("K2 couldn't read this box's memory or free disk; it checks again later.".into()),
+            line: Some(concat!(product_name!(), " couldn't read this box's memory or free disk; it checks again later.").into()),
         };
     };
     if disk < DISK_FLOOR {
@@ -291,7 +293,7 @@ pub const SET_UP_LINE: &str = "Set up · waiting for Pro";
 fn opt_out_line(why: &str) -> String {
     match why {
         "env" => format!("Not set up: turned off on this box ({OPT_OUT_ENV}=off)"),
-        "purge" => "Not set up: the owner purged chat and voice (k2 hostchat enable sets it up again)".into(),
+        "purge" => concat!("Not set up: the owner purged chat and voice (", cli_name!(), " hostchat enable sets it up again)").into(),
         other => format!("Not set up: turned off ({other})"),
     }
 }
@@ -305,7 +307,7 @@ pub fn run(env: &Env, action: Action) -> Value {
         let now = env.ops.now();
         let state = if action == Action::SetUp { "failed" } else { "start_failed" };
         let line = format!(
-            "{}: {why}; K2 tries again on its own",
+            "{}: {why}; {PRODUCT_NAME} tries again on its own",
             if action == Action::SetUp { "Not set up yet" } else { "Set up, not started yet" }
         );
         save(env, json!({"state": state, "line": line, "error": why, "nextTryAt": now + retry}), now);

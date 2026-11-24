@@ -39,7 +39,7 @@ use k2_core::compute::proto::share::{self as pshare, QueueView};
 use k2_core::compute::proto::tiers::{self, Tier};
 use k2_core::compute::share::{self, pending};
 use k2_core::compute::{self as compute, logs, scheduler, store};
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -641,7 +641,7 @@ pub async fn serve_attach(stream: &mut TcpStream, ingress: Ingress) {
         return refuse(&mut ws, "protocol_error", "expected hello").await;
     };
     if hello.protocol < frames::MIN_PROTOCOL {
-        return refuse(&mut ws, "node_upgrade_required", "update K2 on this computer (k2-node is too old)").await;
+        return refuse(&mut ws, "node_upgrade_required", concat!("update ", product_name!(), " on this computer (k2-node is too old)")).await;
     }
     let row = {
         let db = k2_core::db::shared();
@@ -2006,7 +2006,7 @@ pub fn stall_warning_text(job_id: &str, quiet_secs: i64, stall_secs: i64, cpu_ru
         format!("it ends at {} of silence", compute::message::duration(stall_secs))
     };
     format!(
-        "[compute] job {id} has printed nothing for about {}; {ends}. A quiet job that is still working: pass --stall-timeout off (or a longer one) next time. k2 compute get {id}",
+        "[compute] job {id} has printed nothing for about {}; {ends}. A quiet job that is still working: pass --stall-timeout off (or a longer one) next time. {CLI_NAME} compute get {id}",
         compute::message::duration(quiet_secs)
     )
 }
@@ -3760,7 +3760,7 @@ fn secret_feature_wait() -> frames::Refusal {
 pub(crate) fn receipt_v2_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
         RECEIPT_V2_WAIT,
-        "the node's k2-node doesn't sign receipt v2 yet (protocol 9; k2 compute node update <node>)",
+        concat!("the node's k2-node doesn't sign receipt v2 yet (protocol 9; ", cli_name!(), " compute node update <node>)"),
     )
 }
 
@@ -3774,7 +3774,7 @@ pub(crate) fn job_network_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
         k2_core::compute::proto::jobnet::codes::JOB_NETWORK_NEEDS_UPDATE,
         format!(
-            "the node can't run this job at its --network none (or make its --netns-dummy interfaces) now: it needs k2-node {} and its job wall (k2 compute node update <node>)",
+            "the node can't run this job at its --network none (or make its --netns-dummy interfaces) now: it needs k2-node {} and its job wall ({CLI_NAME} compute node update <node>)",
             crate::compute_job_network::NODE_VERSION
         ),
     )
@@ -3783,7 +3783,7 @@ pub(crate) fn job_network_feature_wait() -> frames::Refusal {
 fn cache_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
         pcache::codes::NODE_TOO_OLD_FOR_CACHE,
-        "the node's k2-node is older than 0.46.6 (--cache and --with need it; k2 compute node update <node>)",
+        concat!("the node's k2-node is older than 0.46.6 (--cache and --with need it; ", cli_name!(), " compute node update <node>)"),
     )
 }
 

@@ -37,12 +37,13 @@ use tokio::sync::watch;
 
 use crate::cli_response::CliResponse;
 use k2_core::skin::SkinPass;
+use k2_core::product_name;
 
 /// Error code for every refused public-chat request (CLI exit 3).
 pub const PUBLIC_CHAT_UNAVAILABLE: &str = "public_chat_unavailable";
 /// Visitor- and owner-facing reason public chat is off.
 pub const PUBLIC_CHAT_UNAVAILABLE_HINT: &str =
-    "Public chat is coming back with the K2 runtime. It is off on every workspace for now.";
+    concat!("Public chat is coming back with the ", product_name!(), " runtime. It is off on every workspace for now.");
 
 // ── Serve state (process-wide, per workspace) ──────────────────────────
 
@@ -1230,14 +1231,14 @@ fn percent_decode(s: &str) -> String {
 ///   to re-scatter nodes every 2s.
 /// - Merge by node id so positions survive polls; only reheat on structure
 ///   change. Simulation cools down so layout settles instead of thrashing.
-const SITE_HTML: &str = r#"<!DOCTYPE html>
+const SITE_HTML: &str = concat!(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>K2 Wiki</title>
+<title>"#, product_name!(), r#" Wiki</title>
 <style>
-  /* K2 dark system tokens (mirrors app --color-* defaults) */
+  /* "#, product_name!(), r#" dark system tokens (mirrors app --color-* defaults) */
   :root {
     color-scheme: dark;
     --bg: #0a0a0a;
@@ -1440,7 +1441,7 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1>K2 Wiki</h1>
+  <h1>"#, product_name!(), r#" Wiki</h1>
   <div class="search-wrap">
     <input type="search" id="q" placeholder="Search notes…" />
     <div class="meta" id="meta">
@@ -2407,7 +2408,7 @@ const SITE_HTML: &str = r#"<!DOCTYPE html>
 </script>
 </body>
 </html>
-"#;
+"#);
 
 #[cfg(test)]
 mod tests {

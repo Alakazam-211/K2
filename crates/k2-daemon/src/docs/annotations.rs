@@ -24,7 +24,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use k2_core::log_debug;
+use k2_core::{cli_name, log_debug, product_name};
 use k2_mpc_base::annot::{AnnotPurge, ThreadId};
 use k2_mpc_base::session::{BlobSession, NotReached, PurgeOutcome, Stay};
 use k2_mpc_base::store::DocKey;
@@ -34,6 +34,7 @@ use super::host::{key_label, Principal};
 use super::routes::{self, Call, VerbError};
 use crate::cli_response::CliResponse;
 use k2_mpc_base::tools::exit;
+use k2_core::brand::CLI_NAME;
 
 /// The owner's purge of comments.
 pub const PURGE: &str = "/cli/docs/comments/purge";
@@ -86,7 +87,7 @@ fn notify(m: Mention) {
         };
         let Some(path) = path else { continue };
         let (title, text) = mention_note(&m, &by_label, for_whom.as_deref(), body.as_deref());
-        if let Err(e) = k2_core::inbox::compose(Path::new(&path), &title, &text, Some("normal"), Some("docs"), Some("k2 doc")) {
+        if let Err(e) = k2_core::inbox::compose(Path::new(&path), &title, &text, Some("normal"), Some("docs"), Some(concat!(cli_name!(), " doc"))) {
             log_debug!("[docs] WARN: mention note for {} on {}: {e}", pid, key_label(&m.key));
         }
     }
@@ -126,7 +127,7 @@ pub fn mention_note(m: &Mention, by: &str, for_whom: Option<&str>, body: Option<
             text.push_str("> …\n");
         }
     }
-    text.push_str(&format!("\nRead the thread: k2 doc comments {} · reply: k2 doc reply {} --body \"…\" {}", m.key.path, m.thread, m.key.path));
+    text.push_str(&format!("\nRead the thread: {CLI_NAME} doc comments {} · reply: {CLI_NAME} doc reply {} --body \"…\" {}", m.key.path, m.thread, m.key.path));
     (title, text)
 }
 
@@ -194,7 +195,7 @@ pub fn outcome_json(o: &PurgeOutcome) -> Value {
         .map(|n| {
             let mut v = json!({ "what": format!("{n:?}"), "describe": n.describe() });
             if *n == NotReached::SentNotifications {
-                v["k2"] = json!("K2's inbox notes for the people and agents these comments mentioned are copies; remove them from those inboxes");
+                v["k2"] = json!(concat!(product_name!(), "'s inbox notes for the people and agents these comments mentioned are copies; remove them from those inboxes"));
             }
             v
         })

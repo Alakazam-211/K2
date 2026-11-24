@@ -14,6 +14,7 @@ use k2_core::desktop::wire::Display;
 use k2_core::desktop::MachineState;
 
 pub use super::permission::{Ask, Permission};
+use k2_core::product_name;
 
 /// What the routes need from deskd.
 pub trait Deskd: Send + Sync {
@@ -77,7 +78,7 @@ impl Deskd for NotBuilt {
         let why = if cfg!(windows) {
             "Remote desktop isn't on Windows yet."
         } else {
-            "K2 Screen isn't in this build of K2 yet, so there is no picture to show."
+            concat!("K2 Screen isn't in this build of ", product_name!(), " yet, so there is no picture to show.")
         };
         MachineState::Unavailable(why.into())
     }

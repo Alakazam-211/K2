@@ -44,6 +44,7 @@ use serde_json::{json, Value as J};
 
 use super::grace::{target, Target};
 use super::routes::{actor, agent_ws, json_body, need_credential, no, s, ws_handle, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// `k2 app grant copy-host <app>`, the passport-aware door (the owner's
 /// older `POST /cli/skin/grants/copy-host` stays as it was).
@@ -70,7 +71,7 @@ pub(crate) fn users_off(what: &str) -> Refusal {
         403,
         format!(
             "{what} needs \"{SWITCH_NAME}\" for this agent (off): ask your owner to turn it on (Settings → Workspaces / Agents → \
-             <this agent> → Permissions → Apps, or k2 app access <ws> --users on from a terminal outside K2)"
+             <this agent> → Permissions → Apps, or {CLI_NAME} app access <ws> --users on from a terminal outside {PRODUCT_NAME})"
         ),
     )
 }
@@ -196,7 +197,7 @@ pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
             "too_many_pending",
             429,
             format!(
-                "{open} requests like this already wait for the owner (at most {MAX_PENDING_PER_KIND}): withdraw one (k2 app deny <id>) or wait for the owner"
+                "{open} requests like this already wait for the owner (at most {MAX_PENDING_PER_KIND}): withdraw one ({CLI_NAME} app deny <id>) or wait for the owner"
             ),
         ));
     }
@@ -223,8 +224,8 @@ pub(crate) fn hold(step: Step<'_>, switch_hint: bool) -> R<J> {
     };
     out["card"] = card;
     out["hint"] = json!(format!(
-        "held for the owner: {shown}. They approve it once, in person (or k2 app approve {} from a terminal outside K2); \
-         you get a k2 msg when it's decided.{}",
+        "held for the owner: {shown}. They approve it once, in person (or {CLI_NAME} app approve {} from a terminal outside {PRODUCT_NAME}); \
+         you get a {CLI_NAME} msg when it's decided.{}",
         r.id,
         if switch_hint {
             format!(" With \"{SWITCH_NAME}\" on for this agent you do this yourself (Settings → Workspaces / Agents → <this agent> → Permissions → Apps); the card's Always allow turns it on.")
@@ -429,7 +430,7 @@ pub(crate) fn guest_rooms_agent(who: &Who, ws: &str, t: &Target, rooms: &[String
             lines: vec![
                 format!("let {handle}'s own code set its guests' rooms (guests-rooms): {shown}"),
                 format!(
-                    "then {handle}'s code can give its guests {shown}. Take it back with k2 app grant {handle} --kind guests-rooms --revoke: its code can't hand out more, and rooms already on a login or role stay until they're changed"
+                    "then {handle}'s code can give its guests {shown}. Take it back with {CLI_NAME} app grant {handle} --kind guests-rooms --revoke: its code can't hand out more, and rooms already on a login or role stay until they're changed"
                 ),
             ],
             summary: format!("guests-rooms for {handle}: {shown}"),
@@ -460,7 +461,7 @@ pub(crate) struct TestGuestAsk<'a> {
 /// the owner's card say it; 0.46.5, item 15): the request never keeps a
 /// password, so the agent sets it once.
 pub(crate) fn test_guest_after_approval(username: &str) -> String {
-    format!("Held for the owner. After approval, set its password once: k2 app user password {username} --test --password-stdin.")
+    format!("Held for the owner. After approval, set its password once: {CLI_NAME} app user password {username} --test --password-stdin.")
 }
 
 /// An agent's test guest without "Let this agent manage its Apps' users":
@@ -497,7 +498,7 @@ pub(crate) fn test_guest_held(who: &Who, ws: &str, app: &super::test_guests::Gue
                 format!("make the {what}"),
                 "it signs in only through the App's link, ends on its own and is tied to the agent".into(),
                 format!(
-                    "no password is kept with this request: after approval the agent sets it once (k2 app user password {} --test --password-stdin)",
+                    "no password is kept with this request: after approval the agent sets it once ({CLI_NAME} app user password {} --test --password-stdin)",
                     a.username
                 ),
             ],

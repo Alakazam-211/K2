@@ -23,6 +23,7 @@ use super::{deps, now_secs};
 use crate::cli_response::CliResponse;
 use crate::voice::bff::{Refusal, SewAnswer};
 use crate::voice::routes::refuse;
+use k2_core::cli_name;
 
 pub const EVENTS: &str = "/cli/home-chat/events";
 
@@ -104,7 +105,7 @@ pub fn dark() -> CliResponse {
     refuse(&Refusal::new(
         404,
         "home_chat_off",
-        "people and channels on Home are off on this server (the owner turns them on: k2 settings set homeChat true, or K2_HOME_CHAT=1)",
+        concat!("people and channels on Home are off on this server (the owner turns them on: ", cli_name!(), " settings set homeChat true, or K2_HOME_CHAT=1)"),
     ))
 }
 

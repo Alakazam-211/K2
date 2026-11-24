@@ -22,6 +22,8 @@ use super::routes::{need_credential, no, Refusal, R};
 use crate::compute_routes::Who;
 use crate::root_helper::{self, Kind, RootHelperState};
 use k2_core::connect_users::Role;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Everything the doctor looks at.
 #[derive(Debug, Clone, Default)]
@@ -106,11 +108,11 @@ fn c(
     }
 }
 
-const PREPARE: &str = "k2 app box prepare (owner)";
+const PREPARE: &str = concat!(cli_name!(), " app box prepare (owner)");
 /// The engine rows' fix (Settings → Apps → This server → Install App engine).
-const ENGINE_FIX: &str = "k2 app engine install (owner)";
+const ENGINE_FIX: &str = concat!(cli_name!(), " app engine install (owner)");
 /// Lane P: the fix on a box K2's Podman bundle is for.
-const PREPARE_PODMAN: &str = "k2 app box prepare --install-podman (owner; --dry-run first to see every change)";
+const PREPARE_PODMAN: &str = concat!(cli_name!(), " app box prepare --install-podman (owner; --dry-run first to see every change)");
 
 /// The MAC row (§4.2 item 4) from `apps status`'s `mac`. AppArmor on but
 /// the `k2-app` profile not applied is a gate failure: Apps would start
@@ -193,13 +195,13 @@ pub fn doctor(f: &Facts) -> J {
             "helper",
             "fail",
             format!("{helper_detail}; Apps need protocol {APPS_MIN_PROTOCOL}"),
-            Some("k2 root-helper update"),
+            Some(concat!(cli_name!(), " root-helper update")),
         ),
         _ => c(
             "helper",
             "fail",
             helper_detail,
-            Some("k2 root-helper status (the install command)"),
+            Some(concat!(cli_name!(), " root-helper status (the install command)")),
         ),
     });
     if let Some(e) = &f.helper_status_error {
@@ -261,7 +263,7 @@ pub fn doctor(f: &Facts) -> J {
     let bundle = f.podman_bundle || hs("/engine/podmanSource").as_str() == Some("k2");
     out.push(match podman.as_deref() {
         Some(v) if major(v).is_some_and(|m| m >= PODMAN_MIN_MAJOR) && bundle => {
-            c("podman", "ok", format!("{v} (K2's bundle, {}; a distro Podman, if any, is left as it is)", k2_root_proto::podman::PREFIX), None)
+            c("podman", "ok", format!("{v} ({PRODUCT_NAME}'s bundle, {}; a distro Podman, if any, is left as it is)", k2_root_proto::podman::PREFIX), None)
         }
         Some(v) if major(v).is_some_and(|m| m >= PODMAN_MIN_MAJOR) => {
             c("podman", "ok", v.to_string(), None)
@@ -270,7 +272,7 @@ pub fn doctor(f: &Facts) -> J {
             "podman",
             "fail",
             format!(
-                "Podman {v}: Apps need {PODMAN_MIN_MAJOR}+; box prep can install K2's pinned Podman {} for the k2app user",
+                "Podman {v}: Apps need {PODMAN_MIN_MAJOR}+; box prep can install {PRODUCT_NAME}'s pinned Podman {} for the k2app user",
                 k2_root_proto::podman::BUNDLE_VERSION
             ),
             Some(PREPARE_PODMAN),
@@ -536,7 +538,7 @@ pub fn doctor(f: &Facts) -> J {
                 "engine",
                 "warn",
                 &format!(
-                    "k2-app-engine speaks protocol {} and this daemon {} (k2 app engine install)",
+                    "k2-app-engine speaks protocol {} and this daemon {} ({CLI_NAME} app engine install)",
                     v["protocol"],
                     k2_root_proto::engine::ENGINE_PROTOCOL
                 ),
@@ -545,21 +547,21 @@ pub fn doctor(f: &Facts) -> J {
             (true, Some(Ok(v))) => c(
                 "engine",
                 "warn",
-                &format!("k2-app-engine {} answers; this daemon is {} (k2 app engine install)", v["version"].as_str().unwrap_or("?"), env!("CARGO_PKG_VERSION")),
+                &format!("k2-app-engine {} answers; this daemon is {} ({CLI_NAME} app engine install)", v["version"].as_str().unwrap_or("?"), env!("CARGO_PKG_VERSION")),
                 None,
             ),
-            (true, _) => c("engine", "warn", "k2-app-engine installed but not answering (k2 app engine install)", Some(ENGINE_FIX)),
+            (true, _) => c("engine", "warn", concat!("k2-app-engine installed but not answering (", cli_name!(), " app engine install)"), Some(ENGINE_FIX)),
             (false, _) => c(
                 "engine",
                 "warn",
-                "k2-app-engine not installed yet: guarded Apps can't run until it is (k2 app engine install)",
+                concat!("k2-app-engine not installed yet: guarded Apps can't run until it is (", cli_name!(), " app engine install)"),
                 Some(ENGINE_FIX),
             ),
         });
         out.push(if f.skopeo {
             c("skopeo", "ok", "skopeo present (fetches the pinned base image)", None)
         } else {
-            c("skopeo", "warn", "skopeo missing: guarded deploys can't fetch the base image (k2 app box prepare)", None)
+            c("skopeo", "warn", concat!("skopeo missing: guarded deploys can't fetch the base image (", cli_name!(), " app box prepare)"), None)
         });
     }
 
@@ -568,7 +570,7 @@ pub fn doctor(f: &Facts) -> J {
     if !f.disk_free.is_empty() {
         let have = f.disk_free.iter().map(|(p, b)| format!("{} free on {p}", k2_root_proto::apps::gib(*b))).collect::<Vec<_>>().join(", ");
         out.push(match k2_root_proto::apps::low_disk(&f.disk_free) {
-            Some(msg) => c("disk", "warn", msg.trim_start_matches("low_disk: ").to_string(), Some("free space on the box, then k2 app box prepare (owner)")),
+            Some(msg) => c("disk", "warn", msg.trim_start_matches("low_disk: ").to_string(), Some(concat!("free space on the box, then ", cli_name!(), " app box prepare (owner)"))),
             None => c(
                 "disk",
                 "ok",
@@ -610,7 +612,7 @@ pub fn doctor(f: &Facts) -> J {
                 "ownerConfirm",
                 "warn",
                 "no vault password and no Owner Connect login: App approvals stay held until one is set (AR43)",
-                Some("k2 vault password set"),
+                Some(concat!(cli_name!(), " vault password set")),
             )
         });
     }
@@ -623,7 +625,7 @@ pub fn doctor(f: &Facts) -> J {
 pub const SLICE_FIX: &str = "reboot the box tonight (or at a quiet time); killing every process the daemon's unit left \
      (systemctl kill --kill-whom=all, which ends every agent session) before a start also applies it";
 
-const GUARD_FIX: &str = "k2 app box prepare --cores-mem-min <MiB> (owner): it adds the restart guard (k2-delegate-subgroup.conf)";
+const GUARD_FIX: &str = concat!(cli_name!(), " app box prepare --cores-mem-min <MiB> (owner): it adds the restart guard (k2-delegate-subgroup.conf)");
 
 /// S17 / AR18 + 0.46.16: the agents' leaf (`k2_core::agents_leaf::
 /// doctor_json`). Never part of readiness. Not ok when a restart of the
@@ -656,7 +658,7 @@ fn agents_leaf_check(v: Option<&J>) -> Check {
             "agentsLeaf",
             "warn",
             format!("agent sessions share the daemon's memory: {}", v["why"].as_str().unwrap_or("?")),
-            Some("k2 app box prepare --cores-mem-min <MiB> (owner), then restart the daemon"),
+            Some(concat!(cli_name!(), " app box prepare --cores-mem-min <MiB> (owner), then restart the daemon")),
         );
     }
     let leaf = v["leaf"].as_str().unwrap_or("?");
@@ -672,7 +674,7 @@ fn agents_leaf_check(v: Option<&J>) -> Check {
                 n("sessionsInLeaf"),
                 n("sessions"),
             ),
-            Some("restart the daemon; if it stays, send the daemon log ([agents] lines) with k2 send-feedback"),
+            Some(concat!("restart the daemon; if it stays, send the daemon log ([agents] lines) with ", cli_name!(), " send-feedback")),
         );
     }
     let sessions = if live.is_object() { format!(", {} of {} sessions", n("sessionsInLeaf"), n("sessions")) } else { String::new() };
@@ -1083,8 +1085,8 @@ pub(crate) fn may_prepare(who: &Who) -> R<()> {
         Who::Agent { .. } | Who::Shell { .. } => Err(no(
             "owner_only",
             403,
-            "box prep is the owner's: ask your owner to run it (Settings → Cores → Apps → This server → Prepare this server, or \
-             k2 app box prepare from a terminal outside K2); you may run k2 app box prepare --dry-run to see what it would change",
+            concat!("box prep is the owner's: ask your owner to run it (Settings → Cores → Apps → This server → Prepare this server, or \
+             ", cli_name!(), " app box prepare from a terminal outside ", product_name!(), "); you may run ", cli_name!(), " app box prepare --dry-run to see what it would change"),
         )),
         _ => Err(no("owner_only", 403, "box prep is the owner's")),
     }
@@ -1247,7 +1249,7 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
                 (Some(t), _) => json!({
                     "action": "installed", "version": k2_root_proto::podman::BUNDLE_VERSION, "prefix": k2_root_proto::podman::PREFIX,
                     "from": t.from, "signedBy": t.signer.role, "keyId": t.signer.key_id,
-                    "warning": t.signer.flagged.then_some("signed with K2's BACKUP release key (accepted): the primary key should sign the mirror"),
+                    "warning": t.signer.flagged.then_some(concat!("signed with ", product_name!(), "'s BACKUP release key (accepted): the primary key should sign the mirror")),
                 }),
                 (None, pi::Decision::Keep { version, source }) => json!({"action": "keep", "have": version, "source": source}),
                 (None, _) => json!({"action": "distro"}),

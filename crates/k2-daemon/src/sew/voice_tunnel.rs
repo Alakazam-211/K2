@@ -52,6 +52,8 @@ use k2_root_proto::sew::{sew_takes_trusted_cidrs, MEDIA_BIND_ANY, MEDIA_BIND_LOO
 
 use super::supervisor::{self as sup, no, Env, Fail, R};
 use super::voice::{self, VoiceState, TIER_TUNNEL};
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 /// Sew's FEATURES flag for the relay-only passthrough tier (Sew 0.7.0).
 pub const FEATURE_TURN_RELAY_ONLY: &str = "turn_relay_only";
@@ -81,8 +83,8 @@ pub fn label(env: &Env) -> R<String> {
         no(
             "no_confirmed_label",
             409,
-            "the control plane has not confirmed this box's K2 Connect label yet (the tunnel needs to reach it once): \
-             k2 tunnel status, then try again",
+            concat!("the control plane has not confirmed this box's K2 Connect label yet (the tunnel needs to reach it once): \
+             ", cli_name!(), " tunnel status, then try again"),
         )
     })
 }
@@ -168,7 +170,7 @@ pub fn ready(env: &Env) -> R<()> {
         return Err(no(
             "voice_tunnel_preview_off",
             409,
-            "voice through the tunnel is a preview: the owner turns it on (k2 settings set voiceTunnelPreview true, or K2_VOICE_TUNNEL=1 in the daemon's environment)",
+            concat!("voice through the tunnel is a preview: the owner turns it on (", cli_name!(), " settings set voiceTunnelPreview true, or K2_VOICE_TUNNEL=1 in the daemon's environment)"),
         ));
     }
     // §7.3: a box under the voice floor runs chat only.
@@ -270,7 +272,7 @@ pub fn config_refusal(line: &str) -> Fail {
             format!(
                 "Sew refused the tunnel tier's settings (exit {x}): voice.ops.bind_v6 in Sew's media settings is set by \
                  hand to an address that isn't loopback. Voice through the tunnel allows only \"\" (IPv6 off) or \"::1\". \
-                 Set it back to \"\" or remove it, then run k2 hostchat media rebind. Nothing changed. Sew said: {line}"
+                 Set it back to \"\" or remove it, then run {CLI_NAME} hostchat media rebind. Nothing changed. Sew said: {line}"
             ),
         )
     } else if (line.contains("relay_only") || line.contains("relay-only")) && line.contains("passthrough") {
@@ -294,7 +296,7 @@ pub fn config_refusal(line: &str) -> Fail {
 fn note_old_sew(mut f: Fail, sew: &TunnelSew) -> Fail {
     if f.code == "sew_config_refused" && !sew.clears && f.hint.contains("node_ip") {
         f.hint.push_str(&format!(
-            " Sew {} can't clear the node IP direct mode left: run k2 hostchat upgrade (Sew {TUNNEL_CLEARS_MIN_SEW} or later), then try again.",
+            " Sew {} can't clear the node IP direct mode left: run {CLI_NAME} hostchat upgrade (Sew {TUNNEL_CLEARS_MIN_SEW} or later), then try again.",
             if sew.version.is_empty() { "?" } else { &sew.version }
         ));
     }
@@ -368,7 +370,7 @@ fn lane_and_served(env: &Env, h: &str, leaf: Option<&str>, warnings: &mut Vec<St
     }
     if !wait_lane(env, LANE_WAIT_SECS) {
         warnings.push(format!(
-            "the voice lane (frpc-voice) is not up after {LANE_WAIT_SECS} s: k2 tunnel status shows why (the relay must allow turn.<label> for this Pro label)"
+            "the voice lane (frpc-voice) is not up after {LANE_WAIT_SECS} s: {CLI_NAME} tunnel status shows why (the relay must allow turn.<label> for this Pro label)"
         ));
     }
     let s = served(env, h, leaf);
@@ -389,7 +391,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     }
     match env.ops.confirmed_label() {
         Some(l) => c.push(check("tunnel_label", "ok", format!("TURN host {}", host(&l)), "")),
-        None => c.push(check("tunnel_label", "fail", "no confirmed K2 Connect label".into(), "the tunnel must reach the control plane once (k2 tunnel status)")),
+        None => c.push(check("tunnel_label", "fail", "no confirmed K2 Connect label".into(), concat!("the tunnel must reach the control plane once (", cli_name!(), " tunnel status)"))),
     }
     // The cached plan (never the network here); unknown is only a note: the
     // cert broker's `403 tier_required` is the firm answer.
@@ -402,7 +404,7 @@ pub fn preflight(env: &Env) -> Vec<Value> {
             format!("K2 Connect {}", r.tier.as_deref().unwrap_or("plan not reported")),
             "voice through the tunnel needs K2 Connect Pro (nested names)",
         )),
-        None => c.push(check("pro", "info", "K2 doesn't know this box's plan yet".into(), "the TURN certificate is refused below Pro")),
+        None => c.push(check("pro", "info", concat!(product_name!(), " doesn't know this box's plan yet").into(), "the TURN certificate is refused below Pro")),
     }
     if env.ops.tunnel_e2e() {
         c.push(check("e2e", "ok", "the tunnel is end-to-end encrypted".into(), ""));
@@ -489,7 +491,7 @@ pub fn install_steps(env: &Env, label: &str, url: &str, mut st: VoiceState) -> R
         "iceServers": [ice_url(label)],
         "ports": {"public": []},
         "warnings": warnings,
-        "next": "test a call from another network (relay-only TURN over the tunnel), then k2 hostchat media probe --udp ok --tcp ok --turn-tls ok",
+        "next": concat!("test a call from another network (relay-only TURN over the tunnel), then ", cli_name!(), " hostchat media probe --udp ok --tcp ok --turn-tls ok"),
     }))
 }
 
@@ -672,7 +674,7 @@ pub fn rebind(env: &Env) -> R<Value> {
     }
     let st = voice::load(env);
     if !st.installed {
-        return Err(no("voice_not_installed", 409, "voice is not installed: k2 hostchat media install"));
+        return Err(no("voice_not_installed", 409, concat!("voice is not installed: ", cli_name!(), " hostchat media install")));
     }
     let tier = voice::tier(&st).to_string();
     if tier != TIER_TUNNEL {

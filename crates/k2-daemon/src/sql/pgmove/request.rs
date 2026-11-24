@@ -13,6 +13,7 @@
 use serde_json::Value;
 
 use super::Major;
+use k2_core::product_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
@@ -81,7 +82,7 @@ pub fn parse(body: &[u8]) -> Result<UpgradeRequest, String> {
         let flag = || val.as_bool().ok_or_else(|| format!("'{k}' must be true or false"));
         match k.as_str() {
             "db" => {
-                let s = val.as_str().filter(|s| db_name_ok(s)).ok_or("'db' must be a K2 database name ([a-z0-9_], ≤ 63)")?;
+                let s = val.as_str().filter(|s| db_name_ok(s)).ok_or(concat!("'db' must be a ", product_name!(), " database name ([a-z0-9_], ≤ 63)"))?;
                 r.scope = Some(Scope::Db(s.into()));
                 scopes += 1;
             }

@@ -19,6 +19,7 @@ use k2_mpc_base::session::{Participant, ParticipantKind};
 use super::host::{Principal, AGENT_PREFIX, PERSON_PREFIX};
 use crate::cli_response::CliResponse;
 use crate::session_token::HookPrincipal;
+use k2_core::cli_name;
 
 /// How a person or agent reached the route (logged per change as `via`).
 pub const VIA_CLI: &str = "cli";
@@ -170,7 +171,7 @@ pub fn from_passport(session_id: &str, principal: &HookPrincipal) -> Result<DocC
         Caller::WrongCredential => Err(refusal(
             "403 Forbidden",
             "wrong_credential",
-            "this session's passport can't use k2 doc",
+            concat!("this session's passport can't use ", cli_name!(), " doc"),
         )),
         Caller::Owner | Caller::Login { .. } | Caller::Invalid => Err(CliResponse::forbidden()),
     }

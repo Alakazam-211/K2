@@ -37,6 +37,7 @@ use k2_vault::redact::Redactor;
 use k2_vault::{Actor, Consumer, Requester, Scope, ScopeKind, SecretStore, Selector, Use, VaultError};
 
 use crate::compute_routes::{no, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 // ── consumers (`k2 vault grant --to compute:…`) ──────────────────────
 
@@ -94,7 +95,7 @@ pub fn consumer(spec: &str, caller_ws: Option<&str>) -> Result<Consumer, VaultEr
         store::find_node(&conn, node_tok)
             .filter(|n| n.state != "revoked")
             .map(|n| n.id)
-            .ok_or_else(|| VaultError::not_found(format!("no compute node '{node_tok}' (k2 compute nodes)")))?
+            .ok_or_else(|| VaultError::not_found(format!("no compute node '{node_tok}' ({CLI_NAME} compute nodes)")))?
     };
     let c = Consumer::compute(&ws_id, &node_id);
     if c.compute_parts().is_none() {
@@ -212,7 +213,7 @@ pub(crate) fn find(ws_id: &str, ws_handle: &str, admin: bool, asks: &[Ask]) -> R
         } else {
             Selector::user(Scope::workspace(ws_id), a.name.clone())
         };
-        let missing = || no("secret_not_found", 404, format!("--secret {}: no such secret in workspace {ws_handle}'s vault (k2 vault list)", a.name));
+        let missing = || no("secret_not_found", 404, format!("--secret {}: no such secret in workspace {ws_handle}'s vault ({CLI_NAME} vault list)", a.name));
         let m = match vault.meta(&sel, &Actor::System("compute".into())) {
             Ok(m) => m,
             Err(_) => {
@@ -417,7 +418,7 @@ pub(crate) fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node
     };
     let cmds: Vec<String> = missing
         .iter()
-        .map(|(f, env, _)| format!("k2 vault grant {} --scope {} --to compute:{ws_handle}/{target} --as env --env-name {env}", f.secret_name, f.scope_arg))
+        .map(|(f, env, _)| format!("{CLI_NAME} vault grant {} --scope {} --to compute:{ws_handle}/{target} --as env --env-name {env}", f.secret_name, f.scope_arg))
         .collect();
     Some(no(
         scodes::NOT_GRANTED,
@@ -437,7 +438,7 @@ pub(crate) fn not_granted(found: &[(Found, String, bool)], ws_handle: &str, node
 pub fn tenant_warning(node: &NodeRow) -> Option<String> {
     (!node.owned_for_secrets()).then(|| {
         format!(
-            "Warning: '{}' belongs to another K2 server ({}); that machine's admin (root) and its k2-node user can read the value",
+            "Warning: '{}' belongs to another {PRODUCT_NAME} server ({}); that machine's admin (root) and its k2-node user can read the value",
             node.name,
             node.owner_label.as_deref().unwrap_or("its owner")
         )

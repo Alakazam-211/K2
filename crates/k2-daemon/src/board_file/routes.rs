@@ -25,6 +25,7 @@ use crate::docs::caller::{refusal, DocCaller};
 use crate::docs::host::DocRights;
 use crate::docs::target::{self, Target};
 use save::{Me, SaveFail, SaveInput};
+use k2_core::{cli_name, product_name};
 
 pub const PREFIX: &str = "/cli/board/file/";
 pub const INFO: &str = "/cli/board/file/info";
@@ -267,7 +268,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         return CliResponse::not_found();
     }
     if !k2_core::board_preview::enabled() {
-        return refusal("404 Not Found", "not_enabled", "Board files are a preview: the owner turns them on (k2 settings set boardFilePreview true, or K2_BOARD_FILE=1)");
+        return refusal("404 Not Found", "not_enabled", concat!("Board files are a preview: the owner turns them on (", cli_name!(), " settings set boardFilePreview true, or K2_BOARD_FILE=1)"));
     }
     let is_post = method.eq_ignore_ascii_case("POST");
     // Mutating routes are POST only (feedback_post_only_route_guards).
@@ -832,7 +833,7 @@ fn held_error(e: held::HeldError) -> CliResponse {
     match e {
         held::HeldError::Full => refusal("413 Payload Too Large", "held_full", "too many edits are held: resolve some first"),
         held::HeldError::NotFound => refusal("404 Not Found", "not_found", "that held edit is gone"),
-        held::HeldError::BadId => bad("heldId isn't one of K2's"),
+        held::HeldError::BadId => bad(concat!("heldId isn't one of ", product_name!(), "'s")),
         held::HeldError::Io(e) => io_refusal(&e),
     }
 }

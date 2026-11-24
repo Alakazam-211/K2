@@ -61,6 +61,8 @@ use k2_core::zen::{ZenError, ZenFile, ZenFiles};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// Request bodies over this are refused with 413 (Z15). Room for one
 /// widget code file (1 MiB since 0.46.5, `agent_edit::MAX_PUT_BYTES`) in a
@@ -202,7 +204,7 @@ pub fn local_only() -> CliResponse {
         "403 Forbidden",
         json!({
             "error": "zen_local_only",
-            "message": "Zen belongs to the person on this computer. Only this computer's own K2 can read or change it.",
+            "message": concat!("Zen belongs to the person on this computer. Only this computer's own ", product_name!(), " can read or change it."),
         }),
     )
 }
@@ -529,7 +531,7 @@ fn handle_doctor() -> J {
             "detail": if crate::zen_watch::is_running() {
                 "watching zen.toml, gardens/, themes/ and widgets/ (250 ms debounce)"
             } else {
-                "not running; edits apply on the next k2 zen reload or Zen open"
+                concat!("not running; edits apply on the next ", cli_name!(), " zen reload or Zen open")
             },
         }));
     }
@@ -919,7 +921,7 @@ fn live_hash(f: &ZenFiles, widget: &str, clean: bool) -> Result<String, ZenError
     }
     if clean && st.state != WidgetState::Ok {
         return Err(ZenError::WidgetBroken(format!(
-            "{widget} has errors; fix them (k2 zen validate --widget {widget}) and sign again"
+            "{widget} has errors; fix them ({CLI_NAME} zen validate --widget {widget}) and sign again"
         )));
     }
     match st.bundle.as_ref() {
@@ -990,14 +992,14 @@ pub(crate) fn with_made_by(v: &mut J) -> Result<(), ZenError> {
 /// lock-checked: a widget folder isn't a Garden.
 pub const AGENT_WIDGET_WRITES: &[&str] = &["/cli/zen/widget/errors/clear", "/cli/zen/widget/new", "/cli/zen/widget/sign"];
 
-const CLAIM_OWNER_ONLY: &str = "Only you can claim a widget (It's mine), in Settings \u{2192} Gardens \u{2192} Local Data or from a terminal outside K2. Agents and K2 terminals can't.";
+const CLAIM_OWNER_ONLY: &str = concat!("Only you can claim a widget (It's mine), in Settings \u{2192} Gardens \u{2192} Local Data or from a terminal outside ", product_name!(), ". Agents and ", product_name!(), " terminals can't.");
 
 /// Requests only a person may make: resuming a paused widget.
 fn person_only(path: &str) -> bool {
     path == "/cli/zen/widget/resume"
 }
 
-const OWNER_ONLY: &str = "Only you can resume a paused widget, in the K2 app: click Resume on it. Agents, K2 terminals, Connect logins and app passes can't.";
+const OWNER_ONLY: &str = concat!("Only you can resume a paused widget, in the ", product_name!(), " app: click Resume on it. Agents, ", product_name!(), " terminals, Connect logins and app passes can't.");
 
 // ── GardenOwner (prd-agent-settings-cards-v1 rev 3.1 §5.2.1, Rosson Q2) ──
 
@@ -1088,7 +1090,7 @@ pub(crate) fn garden_card_caller(session_author: &str) -> Option<crate::sidecar_
 pub(crate) fn widget_live_version(widget: &str) -> Result<(String, k2_core::garden_data::MadeBy), String> {
     let widget = widget.trim();
     if authors::is_builtin(widget) {
-        return Err(format!("{widget} is a built-in widget; it is K2's, there is nothing to keep"));
+        return Err(format!("{widget} is a built-in widget; it is {PRODUCT_NAME}'s, there is nothing to keep"));
     }
     let f = files();
     set_up(&f).map_err(|e| e.to_string())?;
@@ -1139,7 +1141,7 @@ pub(crate) fn claim_entry(caller: &Caller, widget: &str, version: Option<&str>, 
 /// `POST /cli/zen/garden/lock {garden, locked}`: the person only.
 pub const LOCK_ROUTE: &str = "/cli/zen/garden/lock";
 
-const LOCK_OWNER_ONLY: &str = "Only the person can lock or unlock a Garden, in Settings \u{2192} Gardens. Agents and K2 terminals can't, either way.";
+const LOCK_OWNER_ONLY: &str = concat!("Only the person can lock or unlock a Garden, in Settings \u{2192} Gardens. Agents and ", product_name!(), " terminals can't, either way.");
 
 /// The Garden writes a session passport may make (`k2 zen garden …`,
 /// `k2 zen reset`, `k2 zen theme set|next|prev` from inside a K2

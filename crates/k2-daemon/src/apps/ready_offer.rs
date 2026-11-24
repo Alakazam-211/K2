@@ -55,7 +55,7 @@ use super::box_prep::PrepareOpts;
 use super::podman_install::PodmanOpts;
 use super::routes::{need_credential, no, R};
 use crate::compute_routes::Who;
-use k2_core::brand::PRODUCT_NAME;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 use k2_core::connect_users::Role;
 
 pub const ROUTE: &str = "/cli/app/box/ready-offer";
@@ -649,7 +649,7 @@ fn sleep_or_wake(secs: Option<u64>) {
 fn fire_restart() -> Result<(), String> {
     let tx = RESTARTER
         .get()
-        .ok_or_else(|| format!("this {PRODUCT_NAME} can't restart itself here: run k2 daemon restart (or sudo systemctl restart k2-daemon)"))?;
+        .ok_or_else(|| format!("this {PRODUCT_NAME} can't restart itself here: run {CLI_NAME} daemon restart (or sudo systemctl restart k2-daemon)"))?;
     let tx = tx.clone();
     // Let the answer reach the app first.
     std::thread::Builder::new()

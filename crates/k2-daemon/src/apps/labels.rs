@@ -48,6 +48,7 @@ use k2_core::published_services as ps;
 use serde_json::{json, Value as J};
 
 use super::routes::{actor, app_for, db_err, json_body, need_build, no, s, Refusal, Who, R};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 pub const ROUTES: &[&str] = &["/cli/app/label/return", "/cli/app/label/take"];
 
@@ -99,7 +100,7 @@ pub(super) fn may_repoint(who: &Who, ws: &str, label: &str, transfer: bool) -> R
             403,
             format!(
                 "'{label}' already serves something on this box and isn't your workspace's: an agent never repoints it. \
-                 Pick a new label, or ask your owner to move it deliberately (--transfer, from a terminal outside K2)"
+                 Pick a new label, or ask your owner to move it deliberately (--transfer, from a terminal outside {PRODUCT_NAME})"
             ),
         ));
     }
@@ -372,7 +373,7 @@ pub(super) fn healthy(app: &AppRow) -> Result<u16, String> {
 pub(super) fn foreign_refusal(label: &str, holder: &str) -> Refusal {
     let m = super::coordination::maintainer_of(holder);
     let ask = match (&m.address, m.kind) {
-        (Some(a), "agent") => format!(" Ask it: k2 msg {a} \"…\""),
+        (Some(a), "agent") => format!(" Ask it: {CLI_NAME} msg {a} \"…\""),
         _ => String::new(),
     };
     let mut r = no(
@@ -409,7 +410,7 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim, expect: Option<&[Str
         if let Some(holder) = foreign {
             return Err(foreign_refusal(label, &holder));
         }
-        return Err(no(codes::APP_NOT_FOUND, 404, format!("your workspace has no published service named '{label}' (k2 publish list)")));
+        return Err(no(codes::APP_NOT_FOUND, 404, format!("your workspace has no published service named '{label}' ({CLI_NAME} publish list)")));
     };
     if !super::legacy::label_movable(&row) {
         return Err(no(codes::BAD_REQUEST, 409, format!("'{label}' is an App's own service: nothing to take over")));
@@ -438,7 +439,7 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim, expect: Option<&[Str
         no(
             NOT_HEALTHY,
             409,
-            format!("{why}: deploy it and wait until it's live before it takes '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
+            format!("{why}: deploy it and wait until it's live before it takes '{label}' ({CLI_NAME} app deployment {} ; {CLI_NAME} app logs {})", app.app_id, app.app_id),
         )
     })?;
     // The label becomes the workspace's only now, after the App answered.
@@ -489,8 +490,8 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim, expect: Option<&[Str
         "from": { "service": row.id, "port": row.port, "running": "yes, unrouted" },
         "note": format!(
             "https://{label}.<your box>.k2.dev now serves {}. {label} keeps running without a public label; stop it when you're sure \
-             (k2 publish stop {label}), or move the label back: k2 app label return {} {label}. The App sees the label in K2_APP_ORIGINS \
-             from its next start (k2 app restart {}).",
+             ({CLI_NAME} publish stop {label}), or move the label back: {CLI_NAME} app label return {} {label}. The App sees the label in K2_APP_ORIGINS \
+             from its next start ({CLI_NAME} app restart {}).",
             app.app_id, app.app_id, app.app_id
         ),
     }))
@@ -499,7 +500,7 @@ fn take(who: &Who, app: &AppRow, label: &str, claim: Claim, expect: Option<&[Str
 fn give_back(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
     let mut cfg = load_cfg(&app.app_id)?;
     let Some(i) = cfg.labels.iter().position(|l| l.label == label) else {
-        return Err(no(NOT_TAKEN, 404, format!("{} doesn't serve '{label}' (k2 app label take {} {label} moved one)", app.app_id, app.app_id)));
+        return Err(no(NOT_TAKEN, 404, format!("{} doesn't serve '{label}' ({CLI_NAME} app label take {} {label} moved one)", app.app_id, app.app_id)));
     };
     let t = cfg.labels[i].clone();
     let row = {
@@ -510,7 +511,7 @@ fn give_back(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
     .ok_or_else(|| no(LEGACY_DOWN, 409, format!("the legacy service '{label}' was removed: the label stays with {}", app.app_id)))?;
     let port = u16::try_from(row.port).unwrap_or(t.legacy_port);
     if !accepts(port) {
-        return Err(no(LEGACY_DOWN, 409, format!("'{label}' isn't answering on port {port}: start it first (k2 publish start {label}), then move the label back")));
+        return Err(no(LEGACY_DOWN, 409, format!("'{label}' isn't answering on port {port}: start it first ({CLI_NAME} publish start {label}), then move the label back")));
     }
     do_claim(&claim, label, &app.owner_workspace, &actor(who))?;
     point(&app.owner_workspace, label, port).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves {}: {e}", app.app_id)))?;
@@ -530,7 +531,7 @@ fn give_back(who: &Who, app: &AppRow, label: &str, claim: Claim) -> R<J> {
         out["site"] = json!(true);
         out["note"] = json!(format!(
             "{label} serves the --skin site again; its guests sign in there as before (nothing on the site changed). \
-             The guests copied onto {} keep their access there (k2 app grant list shows them; k2 app grant rm --id <grant-id> removes one).",
+             The guests copied onto {} keep their access there ({CLI_NAME} app grant list shows them; {CLI_NAME} app grant rm --id <grant-id> removes one).",
             app.app_id
         ));
     }

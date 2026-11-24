@@ -36,6 +36,7 @@ pub mod worker;
 pub(crate) mod test_keys;
 
 use k2_core::skin::{self, app_push as store};
+use k2_core::cli_name;
 
 /// The vault confirm action for turning an App's push on or raising its
 /// device ceiling (`secretId` = the App's service id).
@@ -204,7 +205,7 @@ pub(crate) fn refusal_with(
 pub(crate) fn off_response(off: Off) -> crate::cli_response::CliResponse {
     match off {
         Off::Host => refusal("400 Bad Request", "not_for_host", "push is for a published App's own users, never the box login (host)"),
-        _ => refusal("403 Forbidden", "push_off", "this App doesn't send notifications (the owner turns them on: k2 app push on <app>)"),
+        _ => refusal("403 Forbidden", "push_off", concat!("this App doesn't send notifications (the owner turns them on: ", cli_name!(), " app push on <app>)")),
     }
 }
 

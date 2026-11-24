@@ -35,6 +35,7 @@ use k2_core::notify_prefs::{self, Effective, People, PrefsSnapshot, DEFAULT_PRIN
 use rusqlite::{params, Connection};
 
 use crate::cli_response::CliResponse;
+use k2_core::product_name;
 
 pub const PREFS_PATH: &str = "/cli/notify/prefs";
 pub const ADMIN_PATH: &str = "/cli/notify/admin";
@@ -81,7 +82,7 @@ fn reserved_login_refusal() -> CliResponse {
     error(
         "403 Forbidden",
         "reserved_login",
-        "this login's name is one K2 uses for the server's owner and its agents, so it can't use notices or profiles; the owner can remove it in Settings → Admin Access and add the person under another name",
+        concat!("this login's name is one ", product_name!(), " uses for the server's owner and its agents, so it can't use notices or profiles; the owner can remove it in Settings → Admin Access and add the person under another name"),
     )
 }
 

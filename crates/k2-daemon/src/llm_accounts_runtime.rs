@@ -24,6 +24,8 @@ use k2_core::llm_accounts::{self as wallet_core, state, store, wallet, Entry, To
 use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession, ScanRow, VisibleRow};
 use serde::Serialize;
 use serde_json::{json, Value};
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Finished logins stay visible to `login/status` this long.
@@ -45,9 +47,9 @@ pub fn adopted_notice(a: &wallet::Adopted) -> Option<(String, String)> {
         return None;
     }
     let tool = Tool::parse(&a.tool).map(Tool::display).unwrap_or("an LLM tool");
-    let title = format!("{tool} sign-in made outside K2, saved as \"{}\"", a.label);
+    let title = format!("{tool} sign-in made outside {PRODUCT_NAME}, saved as \"{}\"", a.label);
     let mut body = format!(
-        "Someone signed in to {tool} as {} outside K2. K2 saved it as a new token \"{}\".",
+        "Someone signed in to {tool} as {} outside {PRODUCT_NAME}. {PRODUCT_NAME} saved it as a new token \"{}\".",
         a.account, a.label
     );
     if a.found_in == "slot" {
@@ -63,7 +65,7 @@ pub fn adopted_notice(a: &wallet::Adopted) -> Option<(String, String)> {
     }
     body.push_str(&format!(
         "\n\nKeep: nothing to do; it is in Settings → Language Models → Subs / Tokens.\n\
-         Remove: Remove it there, or `k2 llm tokens remove {} \"{}\"` (it goes to Trash).",
+         Remove: Remove it there, or `{CLI_NAME} llm tokens remove {} \"{}\"` (it goes to Trash).",
         a.tool, a.label
     ));
     Some((title, body))
@@ -678,7 +680,7 @@ pub(crate) fn write_browser_script(dir: &Path, mode: LoginMode) -> std::io::Resu
         LoginMode::OtherDevice => "",
     };
     let body = format!(
-        "#!/bin/sh\n# K2 login terminal: hand the sign-in URL to the daemon.\nprintf '%s\\n' \"$1\" >> '{}'\n{}exit 0\n",
+        "#!/bin/sh\n# {PRODUCT_NAME} login terminal: hand the sign-in URL to the daemon.\nprintf '%s\\n' \"$1\" >> '{}'\n{}exit 0\n",
         urls.to_string_lossy().replace('\'', "'\\''"),
         open_line
     );
@@ -2206,7 +2208,7 @@ pub fn set_storage(target: Storage, by: &str, ingress: &str) -> Result<Value, (u
                 503,
                 "vault_unavailable",
                 format!(
-                    "{} saved login(s) exist only in the K2 vault and it couldn't be read, so K2 kept the vault as the store. Open the vault (Settings → Vault), then try again.",
+                    "{} saved login(s) exist only in the {PRODUCT_NAME} vault and it couldn't be read, so {PRODUCT_NAME} kept the vault as the store. Open the vault (Settings → Vault), then try again.",
                     r.failed.len()
                 ),
             ));
@@ -2234,7 +2236,7 @@ pub fn storage_status(items: bool) -> Value {
     let nudge = (storage == Storage::Vault && recovery == Some(false)).then_some(slots::RECOVERY_NUDGE);
     let banner = match (storage, &open) {
         (Storage::Vault, Err(_)) => Some(
-            "The K2 vault isn't open, so saved logins that only it holds can't be used. The server default keeps working, and new sign-ins wait to be sealed. Check Settings → Vault.",
+            concat!("The ", product_name!(), " vault isn't open, so saved logins that only it holds can't be used. The server default keeps working, and new sign-ins wait to be sealed. Check Settings → Vault."),
         ),
         _ => None,
     };

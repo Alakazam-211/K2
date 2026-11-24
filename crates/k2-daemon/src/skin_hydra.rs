@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde_json::json;
+use k2_core::brand::PRODUCT_NAME;
 
 /// Loopback OIDC public port.
 pub const PUBLIC_PORT: u16 = 4444;
@@ -310,8 +311,8 @@ fn system_secret() -> String {
 /// Hydra YAML: loopback only, memory DSN, no users. `subject` = skin principal id.
 fn hydra_yml(secret: &str) -> String {
     format!(
-        r#"# Ory Hydra sidecar for this K2 box (loopback only).
-# subject = K2 skin principal id (SQLite). Hydra stores no users or passwords.
+        r#"# Ory Hydra sidecar for this {PRODUCT_NAME} box (loopback only).
+# subject = {PRODUCT_NAME} skin principal id (SQLite). Hydra stores no users or passwords.
 # Issuer URL placeholder: {PUBLIC_URL} — public OIDC on :443 is a Caddy Host follow-up.
 # Login/consent app is deferred (not this slice).
 #

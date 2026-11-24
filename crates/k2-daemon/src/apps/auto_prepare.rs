@@ -51,6 +51,8 @@ use serde_json::{json, Value as J};
 use super::routes::{need_credential, no, R};
 use crate::compute_routes::Who;
 use k2_core::connect_users::Role;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The helper protocol the whole prep needs (K2's Podman bundle install is
 /// protocol 8; the rest is 6).
@@ -212,7 +214,7 @@ pub fn permanent_from_doctor(doctor: &J) -> Option<(&'static str, String)> {
     if let Some(c) = fail("podman").filter(|c| c["fix"].is_null()) {
         return Some((
             "distro_unsupported",
-            format!("{}; K2's own Podman covers Ubuntu 24.04 and Debian 12 only", detail(c)),
+            format!("{}; {PRODUCT_NAME}'s own Podman covers Ubuntu 24.04 and Debian 12 only", detail(c)),
         ));
     }
     None
@@ -241,7 +243,7 @@ fn needs(doctor: &J) -> (bool, bool) {
     let not_ok = |c: &J| c["status"].as_str() != Some("ok");
     let prepare = checks
         .iter()
-        .any(|c| not_ok(c) && c["fix"].as_str().is_some_and(|f| f.starts_with("k2 app box prepare")));
+        .any(|c| not_ok(c) && c["fix"].as_str().is_some_and(|f| f.starts_with(concat!(cli_name!(), " app box prepare"))));
     let engine = checks.iter().any(|c| c["id"] == "engine" && not_ok(c));
     (prepare, engine)
 }
@@ -269,20 +271,20 @@ pub fn run_once(ops: &dyn Ops) -> Outcome {
     if ops.undone() {
         return blocked(
             "owner_undid",
-            "the owner undid the box setup (Undo box setup / k2 app box unprep); automatic prep waits until the owner presses Retry",
+            concat!("the owner undid the box setup (Undo box setup / ", cli_name!(), " app box unprep); automatic prep waits until the owner presses Retry"),
         );
     }
     match ops.helper_protocol() {
         None => {
             return skip(
                 "no_helper",
-                "K2's root helper isn't installed: the owner installs it once (Settings → Cores → Apps → This server → Set up this server), or prepares the box by hand",
+                concat!(product_name!(), "'s root helper isn't installed: the owner installs it once (Settings → Cores → Apps → This server → Set up this server), or prepares the box by hand"),
             )
         }
         Some(p) if p < MIN_PROTOCOL => {
             return skip(
                 "helper_old",
-                format!("the root helper speaks protocol {p}; automatic prep needs {MIN_PROTOCOL} (it updates itself after a K2 update)"),
+                format!("the root helper speaks protocol {p}; automatic prep needs {MIN_PROTOCOL} (it updates itself after a {PRODUCT_NAME} update)"),
             )
         }
         Some(_) => {}
@@ -291,7 +293,7 @@ pub fn run_once(ops: &dyn Ops) -> Outcome {
     // Before `needs`: a kernel or cgroup row has no prep fix, so a box that
     // can never run Apps would otherwise read as "nothing to prepare".
     if let Some((code, why)) = permanent_from_doctor(&doctor) {
-        return blocked(code, format!("{why}. Prep can't fix this box; K2 won't try again until you press Retry or K2 updates"));
+        return blocked(code, format!("{why}. Prep can't fix this box; {PRODUCT_NAME} won't try again until you press Retry or {PRODUCT_NAME} updates"));
     }
     let (prepare, engine) = needs(&doctor);
     if !prepare && !engine {
@@ -301,13 +303,13 @@ pub fn run_once(ops: &dyn Ops) -> Outcome {
     if let Some(c) = subid_conflict(&subuid, &subgid) {
         return blocked(
             "subid_overlap",
-            format!("{c}. K2 changes nothing on a box whose sub-ids already overlap (rootless Docker, a hand-made range): fix them, then press Retry"),
+            format!("{c}. {PRODUCT_NAME} changes nothing on a box whose sub-ids already overlap (rootless Docker, a hand-made range): fix them, then press Retry"),
         );
     }
     if ops.airgap() {
         return skip(
             "airgap",
-            "air-gapped: K2 can't fetch its Podman or the App engine; the owner prepares with k2 app box prepare --podman-from and k2 app engine install --from",
+            concat!("air-gapped: ", product_name!(), " can't fetch its Podman or the App engine; the owner prepares with ", cli_name!(), " app box prepare --podman-from and ", cli_name!(), " app engine install --from"),
         );
     }
     if let Some(msg) = k2_root_proto::apps::low_disk(&ops.disk_free()) {
@@ -316,14 +318,14 @@ pub fn run_once(ops: &dyn Ops) -> Outcome {
     if !ops.begin_busy() {
         return skip(
             "busy",
-            "another root sequence (a hosted-mail enable or upgrade, the root helper's update, an owner's prep) is running; K2 tries again in 5 minutes",
+            concat!("another root sequence (a hosted-mail enable or upgrade, the root helper's update, an owner's prep) is running; ", product_name!(), " tries again in 5 minutes"),
         );
     }
     let _release = Release(ops);
     let out = steps(ops, prepare, engine);
     match out {
         Outcome::Failed { step, error } => match permanent_from_error(&error) {
-            Some(code) => blocked(code, format!("{step}: {error}. K2 won't try again until you press Retry or K2 updates")),
+            Some(code) => blocked(code, format!("{step}: {error}. {PRODUCT_NAME} won't try again until you press Retry or {PRODUCT_NAME} updates")),
             None => Outcome::Failed { step, error },
         },
         o => o,
@@ -338,7 +340,7 @@ fn steps(ops: &dyn Ops, prepare: bool, engine: bool) -> Outcome {
             Ok(v) => {
                 if v["podman"]["action"] == "installed" {
                     changed.push(format!(
-                        "installed K2's Podman {} in {} for the k2app user (k2 app box podman uninstall removes it)",
+                        "installed {PRODUCT_NAME}'s Podman {} in {} for the k2app user ({CLI_NAME} app box podman uninstall removes it)",
                         v["podman"]["version"].as_str().unwrap_or("?"),
                         v["podman"]["prefix"].as_str().unwrap_or("/opt/k2/podman")
                     ));
@@ -361,7 +363,7 @@ fn steps(ops: &dyn Ops, prepare: bool, engine: bool) -> Outcome {
     if engine_now {
         match ops.install_engine() {
             Ok(v) => changed.push(format!(
-                "installed the App engine {} (k2-app-engine, signed for this K2 version)",
+                "installed the App engine {} (k2-app-engine, signed for this {PRODUCT_NAME} version)",
                 v["engine"]["version"].as_str().or(v["checked"]["version"].as_str()).unwrap_or("")
             )),
             Err(e) => return Outcome::Failed { step: "apps install-engine".into(), error: e },
@@ -369,10 +371,10 @@ fn steps(ops: &dyn Ops, prepare: bool, engine: bool) -> Outcome {
     }
     if !changed.is_empty() {
         ops.note_owner(
-            "K2 prepared this server for Apps",
+            concat!(product_name!(), " prepared this server for Apps"),
             &format!(
-                "\"Keep this server set up\" is on, so after the update K2 set this server up for walled Apps through its \
-                 root helper:\n\n- {}\n\nUndo: k2 app box podman uninstall (K2's Podman) and k2 app box unprep (the rest: Settings → \
+                "\"Keep this server set up\" is on, so after the update {PRODUCT_NAME} set this server up for walled Apps through its \
+                 root helper:\n\n- {}\n\nUndo: {CLI_NAME} app box podman uninstall ({PRODUCT_NAME}'s Podman) and {CLI_NAME} app box unprep (the rest: Settings → \
                  Cores → Apps → This server → Undo the setup). Turn automatic prep off in Settings → Cores → Apps → This server (\"Keep this server set up\").",
                 changed.join("\n- ")
             ),

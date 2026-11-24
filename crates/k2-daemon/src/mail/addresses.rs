@@ -71,6 +71,8 @@ use rusqlite::Connection;
 use super::domains;
 use super::jmap::StalwartClient;
 use super::secrets::{self, SecretStore};
+use k2_core::brand::CLI_NAME;
+use k2_core::cli_name;
 
 /// §12: retired-address data (and the address-string reservation) is
 /// kept this many days, then purged — by the later purge slice, per
@@ -423,7 +425,7 @@ pub fn pick_mint_domain(
             k2_core::mail_domain::normalize_mail_domain(raw).map_err(AddrError::Usage)?;
         let Some(row) = all.iter().find(|d| d.domain == domain) else {
             return Err(AddrError::NotFound(format!(
-                "domain '{domain}' is not hosted here — see 'k2 mail domains' for what you \
+                "domain '{domain}' is not hosted here — see '{CLI_NAME} mail domains' for what you \
                  can mint on"
             )));
         };
@@ -461,8 +463,8 @@ pub fn pick_mint_domain(
 /// §11.1.5 BINDING cap-hit error text, verbatim (dynamic counts).
 fn cap_error(used: u32, cap: u32) -> AddrError {
     AddrError::CapReached(format!(
-        "address cap reached ({used}/{cap}). Retire one with 'k2 mail delete <addr>' \
-         (frees its slot) or ask your human to raise the cap (k2 hostmail config --workspace <workspace> --address-cap <n>)."
+        "address cap reached ({used}/{cap}). Retire one with '{CLI_NAME} mail delete <addr>' \
+         (frees its slot) or ask your human to raise the cap ({CLI_NAME} hostmail config --workspace <workspace> --address-cap <n>)."
     ))
 }
 
@@ -555,8 +557,8 @@ fn client_block(hostname: &str, username: &str, password: &str) -> serde_json::V
 /// replaces the account's whole credential list, so app passwords stop
 /// working too (an earlier note said they did not); API keys are also
 /// revoked explicitly after the write.
-const ROTATE_NOTE: &str = "IMAP/SMTP sessions on the old password die. The mailbox's API keys \
-     and app passwords stop working too; add app passwords again with `k2 hostmail app-password`.";
+const ROTATE_NOTE: &str = concat!("IMAP/SMTP sessions on the old password die. The mailbox's API keys \
+     and app passwords stop working too; add app passwords again with `", cli_name!(), " hostmail app-password`.");
 
 // ── Operations ──────────────────────────────────────────────────────────
 
@@ -921,7 +923,7 @@ pub fn rotate_address_password(
     if let Some(e) = revoke.error {
         v["apiKeysWarning"] = serde_json::Value::String(format!(
             "API keys on this mailbox may still work: {e}. Rotate again, or check with \
-             `k2 hostmail audit-sieve`."
+             `{CLI_NAME} hostmail audit-sieve`."
         ));
     }
     Ok(v)

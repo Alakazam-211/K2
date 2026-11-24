@@ -30,6 +30,8 @@ use k2_core::deploy::static_site::Site;
 use k2_core::deploy::codes;
 
 use crate::static_files::Served;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::product_name;
 
 /// How `k2 app inspect` / `status` name a static App's wall.
 pub const ISOLATION_NOTE: &str = "none (static: no App code)";
@@ -84,7 +86,7 @@ fn runtime() -> Result<&'static tokio::runtime::Runtime> {
             .ok()
     })
     .as_ref()
-    .ok_or_else(|| EngineError::new(codes::ENGINE_UNAVAILABLE, "K2's static file runtime couldn't start"))
+    .ok_or_else(|| EngineError::new(codes::ENGINE_UNAVAILABLE, concat!(product_name!(), "'s static file runtime couldn't start")))
 }
 
 /// The App's frame policy header lines (its published service row; K2's
@@ -100,7 +102,7 @@ fn frame_lines(service_id: &str) -> Result<String> {
         None => Ok(k2_core::frame_policy::FramePolicy::app_default().header_lines()),
         Some(r) => k2_core::frame_policy::FramePolicy::from_stored(&r.frame_ancestors)
             .map(|p| p.header_lines())
-            .map_err(|e| EngineError::new(codes::SEED_INVALID, format!("the App's frame policy: {e} (k2 publish frame {} --reset)", r.name))),
+            .map_err(|e| EngineError::new(codes::SEED_INVALID, format!("the App's frame policy: {e} ({CLI_NAME} publish frame {} --reset)", r.name))),
     }
 }
 
@@ -223,7 +225,7 @@ impl RuntimeEngine for StaticEngine {
     fn exec(&self, h: &RunHandle, _argv: &[String], _tty: bool) -> Result<ExecStream> {
         Err(EngineError::new(
             codes::BAD_REQUEST,
-            format!("{} is a static App: K2 serves its files and runs no App code, so there is nothing to exec into", h.app_id),
+            format!("{} is a static App: {PRODUCT_NAME} serves its files and runs no App code, so there is nothing to exec into", h.app_id),
         ))
     }
 

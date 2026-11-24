@@ -28,6 +28,7 @@
 use std::net::SocketAddr;
 
 use k2_core::compute::proto::share::{TENANT_UID_FIRST, TENANT_UID_LAST, TENANT_USER_PREFIX};
+use k2_core::product_name;
 
 /// Why a connection is refused (local = the daemon's end), or `None`
 /// when it may be served: `Some` for a compute tenant's job user, and on
@@ -81,7 +82,7 @@ fn user_name(uid: u32) -> Option<String> {
 
 /// The refusal a tenant peer gets (never served, never `Local`).
 pub fn refusal_response() -> Vec<u8> {
-    let body = r#"{"error":{"code":"compute_tenant_refused","hint":"a compute job of another K2 server can't use this K2 server; it runs walled on this machine"}}"#;
+    let body = concat!(r#"{"error":{"code":"compute_tenant_refused","hint":"a compute job of another "#, product_name!(), r#" server can't use this "#, product_name!(), r#" server; it runs walled on this machine"}}"#);
     format!(
         "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{body}",
         body.len(),

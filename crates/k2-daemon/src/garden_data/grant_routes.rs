@@ -28,6 +28,7 @@ use super::audit;
 use super::budget::{self, BudgetKey, Spend};
 use super::{notify_changed, refused, store};
 use crate::zen_data_routes::DataWho;
+use k2_core::cli_name;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -274,7 +275,7 @@ fn revoke(who: &DataWho, body: &[u8]) -> Result<Value, DataError> {
         return Err(refused(
             "use_admin_revoke",
             409,
-            "that's a grant admin; the person ends it with `k2 zen data unadmin` (its grants go with it)",
+            concat!("that's a grant admin; the person ends it with `", cli_name!(), " zen data unadmin` (its grants go with it)"),
         ));
     }
     if let Some(caller) = who.project_id() {

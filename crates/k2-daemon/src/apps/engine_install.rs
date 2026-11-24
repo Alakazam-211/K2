@@ -29,6 +29,8 @@ use serde_json::{json, Value as J};
 use super::routes::{need_credential, no, R};
 use crate::compute_routes::Who;
 use crate::root_helper;
+use k2_core::brand::CLI_NAME;
+use k2_core::{cli_name, product_name};
 
 fn arch() -> Option<&'static str> {
     match std::env::consts::ARCH {
@@ -87,7 +89,7 @@ fn obtain(from: Option<&str>, arch: &str) -> Result<(Vec<u8>, String), String> {
         return Ok((bin, sig));
     }
     if k2_core::airgap::enabled() {
-        return Err(format!("air-gapped: copy {name} and {name}.sig from the release into a folder and run k2 app engine install --from <folder>"));
+        return Err(format!("air-gapped: copy {name} and {name}.sig from the release into a folder and run {CLI_NAME} app engine install --from <folder>"));
     }
     let url = format!("{}/v{}/{name}", root_helper::RELEASE_DOWNLOAD_BASE, env!("CARGO_PKG_VERSION"));
     let bin = fetch(&url)?;
@@ -99,7 +101,7 @@ fn obtain(from: Option<&str>, arch: &str) -> Result<(Vec<u8>, String), String> {
 pub(crate) fn install_route(who: &Who, body: &J) -> R<J> {
     need_credential(who)?;
     if !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
-        return Err(no("owner_only", 403, "installing the App engine is the owner's: ask your owner to run it (Settings → Cores → Apps → This server → Install App runtime, or k2 app engine install from a terminal outside K2)"));
+        return Err(no("owner_only", 403, concat!("installing the App engine is the owner's: ask your owner to run it (Settings → Cores → Apps → This server → Install App runtime, or ", cli_name!(), " app engine install from a terminal outside ", product_name!(), ")")));
     }
     let from = body.get("from").and_then(J::as_str).map(str::trim).filter(|s| !s.is_empty());
     if !cfg!(target_os = "linux") {

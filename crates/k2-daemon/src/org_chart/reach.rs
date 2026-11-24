@@ -26,6 +26,8 @@ use serde_json::{json, Map, Value};
 use super::caller::refusal;
 use super::routes::fail;
 use crate::cli_response::CliResponse;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::cli_name;
 
 fn s<'a>(m: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
     m.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty())
@@ -50,7 +52,7 @@ fn target(token: &str) -> Result<(Org, String), CliResponse> {
                     "400 Bad Request",
                     "not_a_head",
                     &format!(
-                        "{} doesn't head an org. Reach an org by name (k2 organization bulletin lists them and their heads).",
+                        "{} doesn't head an org. Reach an org by name ({CLI_NAME} organization bulletin lists them and their heads).",
                         store::agent_name(&conn, &agent)
                     ),
                 )
@@ -61,20 +63,20 @@ fn target(token: &str) -> Result<(Org, String), CliResponse> {
         return Err(refusal(
             "409 Conflict",
             "no_head",
-            &format!("{} has no head yet. Ask your person, or an Owner or Admin sets one (k2 organization head {} <agent>).", org.name, org.name),
+            &format!("{} has no head yet. Ask your person, or an Owner or Admin sets one ({CLI_NAME} organization head {} <agent>).", org.name, org.name),
         ));
     };
     Ok((org, head))
 }
 
 fn msg_line(head: &str) -> String {
-    format!("k2 msg {head} \"<your message>\"")
+    format!("{CLI_NAME} msg {head} \"<your message>\"")
 }
 
 /// `POST /cli/organization/reach` for the agent `from`.
 pub fn reach(from: &str, session_id: &str, m: &Map<String, Value>, now: i64) -> Result<CliResponse, CliResponse> {
     let token = s(m, "org").or_else(|| s(m, "head")).or_else(|| s(m, "to")).ok_or_else(|| {
-        refusal("400 Bad Request", "usage", "name the org (or its head): k2 organization reach <org> --why \"<one line>\"")
+        refusal("400 Bad Request", "usage", concat!("name the org (or its head): ", cli_name!(), " organization reach <org> --why \"<one line>\""))
     })?;
     let why = text::capped(s(m, "why").unwrap_or(""), text::WHY_MAX_CHARS, "--why", "why_required").map_err(|e| {
         fail(&OrgError::new(e.status, e.code, format!("{} Say in one line why you need them: --why \"…\"", e.hint)))
@@ -110,7 +112,7 @@ pub fn reach(from: &str, session_id: &str, m: &Map<String, Value>, now: i64) -> 
             "open",
             json!({
                 "via": r.via, "reachId": r.id, "since": r.created_at,
-                "text": format!("You already asked to be connected to {head_name} ({}'s head). K2 tells you when it's done; don't ask again.", org.name),
+                "text": format!("You already asked to be connected to {head_name} ({}'s head). {PRODUCT_NAME} tells you when it's done; don't ask again.", org.name),
             }),
         ));
     }
@@ -133,7 +135,7 @@ pub fn reach(from: &str, session_id: &str, m: &Map<String, Value>, now: i64) -> 
                 "card",
                 json!({
                     "via": "card", "reachId": row.id, "request": v,
-                    "text": format!("Asked an Admin to connect you to {head_name} ({}'s head) on a permission card. K2 tells you when it's done; you don't need to ask again.", org.name),
+                    "text": format!("Asked an Admin to connect you to {head_name} ({}'s head) on a permission card. {PRODUCT_NAME} tells you when it's done; you don't need to ask again.", org.name),
                 }),
             ));
         }
@@ -142,7 +144,7 @@ pub fn reach(from: &str, session_id: &str, m: &Map<String, Value>, now: i64) -> 
     // 3. A ticket for the server's Owner and Admins.
     let title = format!("Connect {me} to {head_name} (head of {})", org.name);
     let body = format!(
-        "{me} needs to reach {head_name}, the head of {} on the Org Chart, and the two aren't connected.\n\nWhy: {why}\n\nTo allow it, add the connection in Settings → Workspaces / Agents → {me} → Connections, or run `k2 connections add {head_name} --workspace {me}`. K2 tells {me} once it's done. Org membership never connects agents by itself.",
+        "{me} needs to reach {head_name}, the head of {} on the Org Chart, and the two aren't connected.\n\nWhy: {why}\n\nTo allow it, add the connection in Settings → Workspaces / Agents → {me} → Connections, or run `{CLI_NAME} connections add {head_name} --workspace {me}`. {PRODUCT_NAME} tells {me} once it's done. Org membership never connects agents by itself.",
         org.name
     );
     let item = crate::feedback_routes::file_owner_notice(from, &me, &title, &body)
@@ -157,7 +159,7 @@ pub fn reach(from: &str, session_id: &str, m: &Map<String, Value>, now: i64) -> 
         "ticket",
         json!({
             "via": "ticket", "reachId": row.id, "ticket": item.id,
-            "text": format!("Asked an Admin (a ticket) to connect you to {head_name} ({}'s head). K2 tells you when it's done; you don't need to ask again.", org.name),
+            "text": format!("Asked an Admin (a ticket) to connect you to {head_name} ({}'s head). {PRODUCT_NAME} tells you when it's done; you don't need to ask again.", org.name),
         }),
     ))
 }

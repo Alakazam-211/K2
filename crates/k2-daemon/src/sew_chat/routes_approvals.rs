@@ -38,6 +38,7 @@ use super::routes::{
 };
 use super::sew::{self, ActAs, NewMessage};
 use crate::compute_routes::Who;
+use k2_core::{cli_name, product_name};
 
 /// Who is deciding.
 #[derive(Debug, Clone)]
@@ -73,8 +74,8 @@ fn decider(who: &Who) -> R<Decider> {
                 return Err(ChatErr::new(
                     "chat_manage_off",
                     403,
-                    "the chat approval queue needs the Manage chat and voice switch on this workspace — your owner turns it on \
-                     (k2 agent access set <workspace> chat_manage on)",
+                    concat!("the chat approval queue needs the Manage chat and voice switch on this workspace — your owner turns it on \
+                     (", cli_name!(), " agent access set <workspace> chat_manage on)"),
                 ));
             }
             Ok(Decider::Agent { project_id: project_id.clone(), label: format!("agent:{}", crate::compute_routes::ws_handle(project_id)) })
@@ -87,7 +88,7 @@ fn owner_only() -> ChatErr {
     ChatErr::new(
         "owner_only",
         403,
-        "only the owner or an admin decides this — Settings, or k2 hostchat approvals from a terminal outside K2",
+        concat!("only the owner or an admin decides this — Settings, or ", cli_name!(), " hostchat approvals from a terminal outside ", product_name!()),
     )
 }
 
@@ -133,7 +134,7 @@ fn may_approve(d: &Decider, by: ApprovalsBy, r: &store::OutboxRow) -> R<()> {
 }
 
 fn own_item() -> ChatErr {
-    ChatErr::new("own_item", 403, "nobody approves or denies their own post — cancel it with k2 chat outbox cancel <out_…>")
+    ChatErr::new("own_item", 403, concat!("nobody approves or denies their own post — cancel it with ", cli_name!(), " chat outbox cancel <out_…>"))
 }
 
 fn approval_json(r: &store::OutboxRow, d: &Decider, by: ApprovalsBy) -> Value {
@@ -219,8 +220,8 @@ pub(crate) fn take_confirm(stamp: &str, token: Option<&str>, action: &str, secre
         ChatErr::new(
             "confirm_required",
             403,
-            "this needs a fresh vault confirm from a person (Touch ID, your login or the vault password) — \
-             k2 hostchat asks for it from a terminal outside K2",
+            concat!("this needs a fresh vault confirm from a person (Touch ID, your login or the vault password) — \
+             ", cli_name!(), " hostchat asks for it from a terminal outside ", product_name!()),
         )
         .with("action", action)
         .with("secretId", secret_id)

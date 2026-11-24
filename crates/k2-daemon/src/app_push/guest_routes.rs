@@ -57,6 +57,7 @@ use serde_json::{json, Value};
 use super::budget::Limiter;
 use super::{off_response, refusal, refusal_with};
 use crate::cli_response::CliResponse;
+use k2_core::{cli_name, product_name};
 
 pub const REGISTER: &str = "/cli/skin/push/register";
 pub const UNREGISTER: &str = "/cli/skin/push/unregister";
@@ -192,7 +193,7 @@ pub fn register_parsed(pass: &SkinPass, reg: &store::Registration) -> Result<Val
             Err(refusal_with(
                 "409 Conflict",
                 "push_devices_full",
-                "this App holds as many push devices as its owner allows (k2 app push limit)",
+                concat!("this App holds as many push devices as its owner allows (", cli_name!(), " app push limit)"),
                 extra,
             ))
         }
@@ -410,7 +411,7 @@ fn push_server_only() -> CliResponse {
     refusal(
         "403 Forbidden",
         "push_server_only",
-        "this App takes push.register and push.viewing only from its own server: send the device token to your App's server, and it calls K2 as that person (k2.asGuest(pass).push.register); the App's owner or agent can change this with k2 app push set <app> --register any",
+        concat!("this App takes push.register and push.viewing only from its own server: send the device token to your App's server, and it calls ", product_name!(), " as that person (k2.asGuest(pass).push.register); the App's owner or agent can change this with ", cli_name!(), " app push set <app> --register any"),
     )
 }
 

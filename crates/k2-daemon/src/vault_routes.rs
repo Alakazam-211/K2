@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 use crate::cli_response::CliResponse;
 use crate::vault::actor::{Channel, VaultCaller};
 use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+use k2_core::{cli_name, product_name};
 
 /// The computer's own user check for the vault's first-setup steps.
 pub(crate) mod presence;
@@ -276,18 +277,18 @@ fn grant_out_of_reach(c: &VaultCaller, body: &[u8], e: &VaultError) -> Option<Cl
         let mut to_flag = format!(" --to ws:{to}");
         to_flag.push_str(&as_flag);
         let hint = format!(
-            "no secret named {name} in your workspace (one sent to you may still be waiting: k2 vault incoming). If a person keeps {name} on the server, ask for it: k2 vault grant {name} --scope server{to_flag}"
+            "no secret named {name} in your workspace (one sent to you may still be waiting: {CLI_NAME} vault incoming). If a person keeps {name} on the server, ask for it: {CLI_NAME} vault grant {name} --scope server{to_flag}"
         );
         return Some(CliResponse { status: status_line(404), content_type: "application/json", body: json!({ "error": { "code": "not_found", "hint": hint } }).to_string() });
     }
     let label = crate::vault::workspace_label(own);
     let hint = if k2_core::permission::gate::enabled_for(own) {
         format!(
-            "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret (K2 doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. A person can share it with you on a card: run the line below. Then K2 says how to use it."
+            "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret ({PRODUCT_NAME} doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. A person can share it with you on a card: run the line below. Then {PRODUCT_NAME} says how to use it."
         )
     } else {
         format!(
-            "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret (K2 doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. Ask your person (an Owner or Admin) to share it with you: in Settings → Vault, Share on {name}, with {label}; or from their own terminal (Terminal or iTerm, not a K2 terminal): k2 vault grant {name} --scope server --to ws:{label}{as_flag}"
+            "you can't see a server secret named {name}: it isn't shared with you, or there is no such secret ({PRODUCT_NAME} doesn't say which). If {name} is in your own workspace, it's yours already: leave out --scope server. Ask your person (an Owner or Admin) to share it with you: in Settings → Vault, Share on {name}, with {label}; or from their own terminal (Terminal or iTerm, not a {PRODUCT_NAME} terminal): {CLI_NAME} vault grant {name} --scope server --to ws:{label}{as_flag}"
         )
     };
     let mut error = json!({ "code": GRANT_OUT_OF_REACH, "hint": hint, "secret": name });
@@ -411,7 +412,7 @@ pub fn selector(c: &VaultCaller, s: &Sel) -> Result<Selector, VaultError> {
 }
 
 fn decode_value(b64: Option<&str>) -> Result<SecretBytes, VaultError> {
-    let s = b64.ok_or_else(|| err("value_required", 400, "send the value on stdin (k2 vault set NAME < file)"))?;
+    let s = b64.ok_or_else(|| err("value_required", 400, concat!("send the value on stdin (", cli_name!(), " vault set NAME < file)")))?;
     let v = base64::engine::general_purpose::STANDARD
         .decode(s.trim())
         .map_err(|_| err("bad_value", 400, "valueB64 isn't base64"))?;
@@ -495,7 +496,7 @@ fn status_json(st: &VaultStatus) -> Value {
         }
         o.insert(
             "legacyCopies".into(),
-            json!("older copies of secrets K2 kept before 0.45.2 may remain in snapshots and backups made before the move"),
+            json!(concat!("older copies of secrets ", product_name!(), " kept before 0.45.2 may remain in snapshots and backups made before the move")),
         );
         if st.recovery != "confirmed" {
             o.insert(
@@ -523,21 +524,21 @@ pub fn newer_rows_line(c: &k2_vault::vault::Counts) -> Option<String> {
     }
     let need = if c.newer_secrets + c.newer_grants == 1 { "needs" } else { "need" };
     Some(format!(
-        "{} {need} a newer K2: a newer version wrote them, so this one skips them (not listed, not delivered). Update K2 to use them.",
+        "{} {need} a newer {PRODUCT_NAME}: a newer version wrote them, so this one skips them (not listed, not delivered). Update {PRODUCT_NAME} to use them.",
         parts.join(" and ")
     ))
 }
 
 /// Who sets up the recovery key, and where (VS2). People only.
-pub const RECOVERY_HINT: &str = "Only you should do this: in the K2 app, Settings → Vault → Set up recovery key, or from your own SSH login or a terminal outside K2: k2 vault recovery show-once. Agents: don't run it; tell your owner.";
+pub const RECOVERY_HINT: &str = concat!("Only you should do this: in the ", product_name!(), " app, Settings → Vault → Set up recovery key, or from your own SSH login or a terminal outside ", product_name!(), ": ", cli_name!(), " vault recovery show-once. Agents: don't run it; tell your owner.");
 
 /// §18 / VS21 per-mode copy.
 pub fn honest_line(key_home: &str) -> &'static str {
     match key_home {
         "keychain" => "Secrets are encrypted and never shown to guests, apps or other servers. A secret bound to a site is only ever sent to that site. Every use is logged. The vault's key is in your Mac's Keychain.",
         "keeper" | "keeper+tpm" => "Secrets are encrypted and never shown to guests, apps or other servers. A secret bound to a site is only ever sent to that site. Every use is logged. The vault's key is held by this server's root helper; agents with admin rights can still reach it.",
-        "systemd-creds" => "Secrets are encrypted and never shown to guests, apps or other servers. A secret bound to a site is only ever sent to that site. Every use is logged. The vault's key is a system credential, not a file in the home folder; agents on this server can still read it while K2 runs.",
-        _ => "Secrets are encrypted and never shown to guests, apps or other servers. A secret bound to a site is only ever sent to that site. Every use is logged. The vault's key is a file on this server that agents can read, and full-disk copies include it. Secrets stay out of chats, logs and copies K2 makes.",
+        "systemd-creds" => concat!("Secrets are encrypted and never shown to guests, apps or other servers. A secret bound to a site is only ever sent to that site. Every use is logged. The vault's key is a system credential, not a file in the home folder; agents on this server can still read it while ", product_name!(), " runs."),
+        _ => concat!("Secrets are encrypted and never shown to guests, apps or other servers. A secret bound to a site is only ever sent to that site. Every use is logged. The vault's key is a file on this server that agents can read, and full-disk copies include it. Secrets stay out of chats, logs and copies ", product_name!(), " makes."),
     }
 }
 
@@ -579,7 +580,7 @@ fn refuse_widget_origin(path: &str, c: &VaultCaller, body: &[u8], params: &HashM
     Some(refuse(&err(
         "handoff_person_only",
         403,
-        "a Garden widget's own code never answers this card; answer it in the agent's Thread (on Home, in K2's conversation widget, or on its server)",
+        concat!("a Garden widget's own code never answers this card; answer it in the agent's Thread (on Home, in ", product_name!(), "'s conversation widget, or on its server)"),
     )))
 }
 
@@ -655,7 +656,7 @@ pub fn handle_on(
         return refuse(&err(
             "owner_only",
             403,
-            "this is for the owner, from Settings → Vault or a terminal outside K2; agents can't do it",
+            concat!("this is for the owner, from Settings → Vault or a terminal outside ", product_name!(), "; agents can't do it"),
         ));
     }
     // A `k2 job` run (item 5) uses secrets; it never manages them. Granting
@@ -664,7 +665,7 @@ pub fn handle_on(
         return refuse(&err(
             "job_use_only",
             403,
-            "a job uses its granted secrets (k2 vault fetch, env-file, get); managing them is for its workspace's agent or a person",
+            concat!("a job uses its granted secrets (", cli_name!(), " vault fetch, env-file, get); managing them is for its workspace's agent or a person"),
         ));
     }
     if let Some(r) = refuse_widget_origin(path, &c, body, params, ingress) {
@@ -709,7 +710,7 @@ pub fn handle_on(
         DOCTOR => match params.get("transcripts").map(String::as_str) {
             None => doctor(vault, &c),
             Some("1") => crate::vault::transcripts::doctor(vault, &c),
-            Some(_) => Err(err("bad_transcripts_flag", 400, "the only value of transcripts is 1 (k2 vault doctor --transcripts)")),
+            Some(_) => Err(err("bad_transcripts_flag", 400, concat!("the only value of transcripts is 1 (", cli_name!(), " vault doctor --transcripts)"))),
         },
         AUDIT => audit(vault, &c, params),
         PRESETS => Ok(json!({ "presets": inject::PRESETS })),
@@ -816,7 +817,7 @@ fn list(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -
 
 /// Why `k2 vault list --system` shows an agent (or a Member) no K2 system
 /// secrets.
-pub const SYSTEM_HIDDEN_WHY: &str = "K2's own secrets (mail and database passwords, login slots, signing keys) are used by the daemon only; agents never see them, not even their names, and can't use, grant or change them. The owner or an Admin can list the names from their own terminal (not a K2 terminal): k2 vault list --system";
+pub const SYSTEM_HIDDEN_WHY: &str = concat!(product_name!(), "'s own secrets (mail and database passwords, login slots, signing keys) are used by the daemon only; agents never see them, not even their names, and can't use, grant or change them. The owner or an Admin can list the names from their own terminal (not a ", product_name!(), " terminal): ", cli_name!(), " vault list --system");
 
 pub(crate) fn sel_from_params(params: &HashMap<String, String>) -> Sel {
     Sel {
@@ -999,7 +1000,7 @@ pub fn downgrade_finding(b: &k2_vault::vault::DowngradeBlockers) -> Option<Value
     Some(json!({
         "level": "warning",
         "code": "downgrade_breaks_0463",
-        "message": format!("Don't go back to K2 0.46.3: this vault has {}.{why} Stay on 0.46.4 or later.", parts.join(", ")),
+        "message": format!("Don't go back to {PRODUCT_NAME} 0.46.3: this vault has {}.{why} Stay on 0.46.4 or later.", parts.join(", ")),
         "counts": b,
     }))
 }
@@ -1067,7 +1068,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             }
         }
         if m.inject.as_ref().and_then(|i| i.sign.as_ref()).is_some_and(Sign::is_oauth_refresh) && vault.oauth_status(&m.id).is_ok_and(|s| s.is_some_and(|s| s.is_expired())) {
-            findings.push(json!({ "level": "warning", "code": "oauth_expired", "message": format!("{}: expired: sign in again (k2 vault rotate {} < sign-in.json, or the reconnect card in its Thread)", m.name, m.name), "secret": m.id }));
+            findings.push(json!({ "level": "warning", "code": "oauth_expired", "message": format!("{}: expired: sign in again ({CLI_NAME} vault rotate {} < sign-in.json, or the reconnect card in its Thread)", m.name, m.name), "secret": m.id }));
         }
     }
     for (name, notice) in legacy_env_services(c) {
@@ -1100,7 +1101,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             "level": "warning",
             "code": "plaintext_env",
             "path": f.path,
-            "message": format!("{} holds {} in plain text; move it in with: k2 vault import {}", f.path, what.join(", "), f.path),
+            "message": format!("{} holds {} in plain text; move it in with: {CLI_NAME} vault import {}", f.path, what.join(", "), f.path),
         }));
     }
     if let Some(n) = scan.stopped_after {
@@ -1123,7 +1124,7 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
 }
 
 /// Which `.env` names the doctor flags, in one line (JSON and CLI text).
-pub const DOCTOR_CHECKED_NAMES: &str = "checked names: *SECRET*, *TOKEN*, *PASSWORD*, *_KEY, DATABASE_URL, *_DSN (not NEXT_PUBLIC_*, *_PUBLISHABLE_KEY, *_ANON_KEY), plus any value that looks like a known provider's key (sk_live_, sk-ant-, ghp_, …, see k2 vault presets) under any name. It reads .env files in each workspace folder and one level of subfolders (not node_modules, .git, target), and lists CLI login files (gh, vercel, npm, ovh.conf, ~/.ssh/id_*). Other names aren't flagged; check them yourself.";
+pub const DOCTOR_CHECKED_NAMES: &str = concat!("checked names: *SECRET*, *TOKEN*, *PASSWORD*, *_KEY, DATABASE_URL, *_DSN (not NEXT_PUBLIC_*, *_PUBLISHABLE_KEY, *_ANON_KEY), plus any value that looks like a known provider's key (sk_live_, sk-ant-, ghp_, …, see ", cli_name!(), " vault presets) under any name. It reads .env files in each workspace folder and one level of subfolders (not node_modules, .git, target), and lists CLI login files (gh, vercel, npm, ovh.conf, ~/.ssh/id_*). Other names aren't flagged; check them yourself.");
 
 /// The doctor's name rule: does this `.env` name look like a secret?
 /// Wider than [`k2_vault::delivery::is_sensitive_name`], which stays strict
@@ -1272,7 +1273,7 @@ pub fn cli_credential_files(home: &std::path::Path, roots: &[std::path::PathBuf]
     }
     for gh in gh_files {
         if read_small(&gh).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("oauth_token:"))) {
-            push(gh, "holds a gh login token", "use env delivery instead (GH_TOKEN): k2 study vault, CLI TOOLS");
+            push(gh, "holds a gh login token", concat!("use env delivery instead (GH_TOKEN): ", cli_name!(), " study vault, CLI TOOLS"));
         }
     }
     let mut vercel_files = vec![
@@ -1285,7 +1286,7 @@ pub fn cli_credential_files(home: &std::path::Path, roots: &[std::path::PathBuf]
     }
     for v in vercel_files {
         if read_small(&v).is_some_and(|t| t.contains("\"token\"")) {
-            push(v, "holds a vercel login token", "use env delivery instead (VERCEL_TOKEN): k2 study vault, CLI TOOLS");
+            push(v, "holds a vercel login token", concat!("use env delivery instead (VERCEL_TOKEN): ", cli_name!(), " study vault, CLI TOOLS"));
         }
     }
     let npmrc = home.join(".npmrc");
@@ -1298,13 +1299,13 @@ pub fn cli_credential_files(home: &std::path::Path, roots: &[std::path::PathBuf]
             })
         })
     }) {
-        push(npmrc, "holds an npm token in plain text", "write _authToken=${NPM_TOKEN} and give NPM_TOKEN env delivery: k2 study vault, CLI TOOLS");
+        push(npmrc, "holds an npm token in plain text", concat!("write _authToken=${NPM_TOKEN} and give NPM_TOKEN env delivery: ", cli_name!(), " study vault, CLI TOOLS"));
     }
     let mut ovh = vec![home.join(".ovh.conf")];
     ovh.extend(roots.iter().map(|r| r.join("ovh.conf")));
     for o in ovh {
         if read_small(&o).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("application_secret"))) {
-            push(o, "holds OVH API keys", "store them as one signed secret: k2 vault set NAME --sign ovh --preset ovh-eu < keys.json (k2 vault set --help)");
+            push(o, "holds OVH API keys", concat!("store them as one signed secret: ", cli_name!(), " vault set NAME --sign ovh --preset ovh-eu < keys.json (", cli_name!(), " vault set --help)"));
         }
     }
     if let Ok(rd) = std::fs::read_dir(home.join(".ssh")) {
@@ -1319,7 +1320,7 @@ pub fn cli_credential_files(home: &std::path::Path, roots: &[std::path::PathBuf]
             .collect();
         keys.sort();
         for k in keys {
-            push(k, "is an SSH private key", "k2 vault set NAME --kind ssh_key < key (file delivery), then delete the file");
+            push(k, "is an SSH private key", concat!(cli_name!(), " vault set NAME --kind ssh_key < key (file delivery), then delete the file"));
         }
     }
     out
@@ -1540,7 +1541,7 @@ pub fn request_delivery(s: &str) -> Result<Delivery, VaultError> {
 /// Preset hosts + inject for a named provider (VS3: people confirm).
 fn apply_preset(preset: Option<&str>, hosts: &mut Vec<String>, inject: &mut Option<Inject>) -> Result<(), VaultError> {
     if let Some(p) = preset.filter(|p| !p.is_empty()) {
-        let p = inject::preset(p).ok_or_else(|| err("unknown_preset", 400, format!("no preset {p}; see k2 vault presets")))?;
+        let p = inject::preset(p).ok_or_else(|| err("unknown_preset", 400, format!("no preset {p}; see {CLI_NAME} vault presets")))?;
         if hosts.is_empty() {
             *hosts = p.host_list();
         }
@@ -1620,20 +1621,20 @@ fn set(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultE
 pub fn use_hint(m: &SecretMeta) -> String {
     match m.default_delivery {
         Delivery::Proxy if !m.hosts.is_empty() => {
-            format!("k2 vault proxy-url {} prints a placeholder key and base URL for this session; new sessions get them in their env", m.name)
+            format!("{CLI_NAME} vault proxy-url {} prints a placeholder key and base URL for this session; new sessions get them in their env", m.name)
         }
         Delivery::Fetch | Delivery::Proxy if !m.hosts.is_empty() => {
-            format!("k2 vault fetch --secret {} https://{}/…", m.name, m.hosts[0].split("://").nth(1).and_then(|h| h.rsplit_once(':')).map(|h| h.0).unwrap_or(""))
+            format!("{CLI_NAME} vault fetch --secret {} https://{}/…", m.name, m.hosts[0].split("://").nth(1).and_then(|h| h.rsplit_once(':')).map(|h| h.0).unwrap_or(""))
         }
-        Delivery::Fetch | Delivery::Proxy => "add a site first: ask the owner, or k2 vault hosts".into(),
+        Delivery::Fetch | Delivery::Proxy => concat!("add a site first: ask the owner, or ", cli_name!(), " vault hosts").into(),
         Delivery::Agent => format!("$SSH_AUTH_SOCK in new sessions: ssh and git sign with {}; nobody sees the key", m.name),
         Delivery::File => format!(
-            "$K2_SECRETS_DIR/{} (read the file; a running session gets it within a minute, or now with k2 vault sync), or k2 vault file --secret {} for a 0600 copy now",
+            "$K2_SECRETS_DIR/{} (read the file; a running session gets it within a minute, or now with {CLI_NAME} vault sync), or {CLI_NAME} vault file --secret {} for a 0600 copy now",
             m.name, m.name
         ),
         // The name the spawn really uses (SC-A7): `hetzner-robot` → `$HETZNER_ROBOT`.
         Delivery::Env => format!("${} in new sessions ({})", k2_vault::delivery::default_env_name(&m.name), crate::vault::spawn::RESTART_TO_RECEIVE),
-        Delivery::Api => format!("k2 vault get {}", m.name),
+        Delivery::Api => format!("{CLI_NAME} vault get {}", m.name),
         Delivery::None => "not delivered".into(),
     }
 }
@@ -1641,7 +1642,7 @@ pub fn use_hint(m: &SecretMeta) -> String {
 /// VS11: an agent replaced a person's value. The owner sees it, with undo.
 fn owner_notice(actor: &Actor, m: &SecretMeta) {
     let who = actor.stamp();
-    crate::vault::auth_audit("vault-agent-rotate", &who, &format!("ok {} v{} (undo: k2 vault rollback {} --to {})", m.name, m.latest_version, m.name, m.latest_version.saturating_sub(1)), "-");
+    crate::vault::auth_audit("vault-agent-rotate", &who, &format!("ok {} v{} (undo: {CLI_NAME} vault rollback {} --to {})", m.name, m.latest_version, m.name, m.latest_version.saturating_sub(1)), "-");
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::SyncProjects,
         json!({ "vaultNotice": { "secret": m.id, "name": m.name, "by": who, "version": m.latest_version } }),
@@ -1698,7 +1699,7 @@ fn policy(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vau
     let mut inject = b.inject.as_ref().map(InjectBody::build).transpose()?.flatten();
     if let Some(sv) = &b.sign {
         if inject.is_some() || b.preset.is_some() {
-            return Err(err("bad_inject", 400, "change the signer on its own (k2 vault sign), not with --inject-* or --preset"));
+            return Err(err("bad_inject", 400, concat!("change the signer on its own (", cli_name!(), " vault sign), not with --inject-* or --preset")));
         }
         let sign = match sv {
             Value::String(s) if s == "none" => None,
@@ -1880,7 +1881,7 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
                     "vault_confirm_required",
                     403,
                     format!(
-                        "sharing {} with {} as {} lets them read the value, so a person confirms it first (Touch ID or the vault password), as for k2 vault reveal. Share it in Settings → Vault, or run k2 vault grant from your own terminal outside K2 (a K2 terminal can't confirm). Agents: don't retry; tell your owner.",
+                        "sharing {} with {} as {} lets them read the value, so a person confirms it first (Touch ID or the vault password), as for {CLI_NAME} vault reveal. Share it in Settings → Vault, or run {CLI_NAME} vault grant from your own terminal outside {PRODUCT_NAME} (a {PRODUCT_NAME} terminal can't confirm). Agents: don't retry; tell your owner.",
                         m.name,
                         consumer_label(c, &consumer),
                         delivery.as_str()
@@ -1981,7 +1982,7 @@ fn service_share_refusal(
         e.code,
         e.status,
         format!(
-            "{reason}. {how} (Terminal or iTerm, not a K2 terminal; it asks for Touch ID or the vault password; --scope is there because their default scope is server): k2 publish secret add {service} {} --scope {scope} --as {}{env}",
+            "{reason}. {how} (Terminal or iTerm, not a {PRODUCT_NAME} terminal; it asks for Touch ID or the vault password; --scope is there because their default scope is server): {CLI_NAME} publish secret add {service} {} --scope {scope} --as {}{env}",
             m.name,
             delivery.as_str()
         ),
@@ -2013,7 +2014,7 @@ pub(crate) fn grant_reach(vault: &LocalVault, consumer: &k2_vault::Consumer, del
         Delivery::File => {
             let n = crate::vault::spawn::top_up_all(vault);
             Some(format!(
-                "running sessions get the file in $K2_SECRETS_DIR now ({n} written); one started before 0.46.5 may have no $K2_SECRETS_DIR: {restart} (k2 vault sync says)"
+                "running sessions get the file in $K2_SECRETS_DIR now ({n} written); one started before 0.46.5 may have no $K2_SECRETS_DIR: {restart} ({CLI_NAME} vault sync says)"
             ))
         }
         Delivery::Env => Some(format!("env arrives in new sessions only: {restart}")),
@@ -2050,14 +2051,14 @@ fn session_can_receive(c: &VaultCaller, id: &str) -> Result<(), VaultError> {
         k2_core::workspace_session_handles::project_id_for_session_id(&conn, id).ok().flatten().is_some()
     };
     let what = if is_a_chat {
-        format!("{id} is a chat's id (the one k2 whoami shows), not a running session's")
+        format!("{id} is a chat's id (the one {CLI_NAME} whoami shows), not a running session's")
     } else {
         format!("no running session has the id {id}")
     };
     Err(err(
         "session_not_running",
         400,
-        format!("{what}, so this share would reach nothing. Share with ws:<name>, or ask the owner for the id (k2 sessions live <workspace>, owner only)"),
+        format!("{what}, so this share would reach nothing. Share with ws:<name>, or ask the owner for the id ({CLI_NAME} sessions live <workspace>, owner only)"),
     ))
 }
 
@@ -2080,7 +2081,7 @@ pub(crate) fn session_self_grant(actor: &Actor, scope: ScopeKind, session_ws: Op
         )),
         None => Err(VaultError::forbidden(
             "vault_self_grant",
-            "K2 can't tell which workspace that session belongs to; grant to ws:<name> instead",
+            concat!(product_name!(), " can't tell which workspace that session belongs to; grant to ws:<name> instead"),
         )),
     }
 }
@@ -2172,35 +2173,35 @@ fn recall_files(vault: &LocalVault, secret_ids: &[String], names: &[String], sha
     let mut words: Vec<String> = vec![];
     if removed > 0 {
         let who = if share_only { " that no longer get it" } else { "" };
-        words.push(format!("K2 removed its file from {}{who}.", running_sessions(removed)));
+        words.push(format!("{PRODUCT_NAME} removed its file from {}{who}.", running_sessions(removed)));
     } else if not_removed + unchecked + untracked + jobs == 0 {
         words.push(if share_only { "No file had to be removed from a running session." } else { "No running session had it as a file." }.to_string());
     }
     if not_removed > 0 {
         words.push(format!(
-            "K2 couldn't remove its file from {}: K2 tries again within a minute. Until then the file can still be read in $K2_SECRETS_DIR there.",
+            "{PRODUCT_NAME} couldn't remove its file from {}: {PRODUCT_NAME} tries again within a minute. Until then the file can still be read in $K2_SECRETS_DIR there.",
             running_sessions(not_removed)
         ));
     }
     if let Some(code) = unchecked_here.first() {
         words.push(format!(
-            "K2 couldn't check {} ({code}), so its file may still be in $K2_SECRETS_DIR there. K2 tries again within a minute. To be sure now, delete the file there, or restart those sessions.",
+            "{PRODUCT_NAME} couldn't check {} ({code}), so its file may still be in $K2_SECRETS_DIR there. {PRODUCT_NAME} tries again within a minute. To be sure now, delete the file there, or restart those sessions.",
             running_sessions(unchecked)
         ));
     }
     if untracked > 0 {
         words.push(format!(
-            "K2 has no record of the files in {} (they started before this K2 update), so it left them alone. A file in $K2_SECRETS_DIR there named after this secret may be its copy: delete it, or restart those sessions.",
+            "{PRODUCT_NAME} has no record of the files in {} (they started before this {PRODUCT_NAME} update), so it left them alone. A file in $K2_SECRETS_DIR there named after this secret may be its copy: delete it, or restart those sessions.",
             running_sessions(untracked)
         ));
     }
     if jobs > 0 {
-        words.push(format!("{jobs} running k2 job run{} keep{} its file until {} ended.", if jobs == 1 { "" } else { "s" }, if jobs == 1 { "s" } else { "" }, if jobs == 1 { "it has" } else { "they have" }));
+        words.push(format!("{jobs} running {CLI_NAME} job run{} keep{} its file until {} ended.", if jobs == 1 { "" } else { "s" }, if jobs == 1 { "s" } else { "" }, if jobs == 1 { "it has" } else { "they have" }));
     }
     if share_only {
         words.push("Sessions it is still shared with keep their file.".to_string());
     }
-    words.push("K2 can't take back a value a session already read or copied, or an environment variable in a running session (it stays until that session restarts). Copies made with k2 vault file or env-file can stay for up to an hour. If the key may have leaked, change it at the provider.".to_string());
+    words.push(concat!(product_name!(), " can't take back a value a session already read or copied, or an environment variable in a running session (it stays until that session restarts). Copies made with ", cli_name!(), " vault file or env-file can stay for up to an hour. If the key may have leaked, change it at the provider.").to_string());
     out["filesRemoved"] = json!(removed);
     out["filesNotRemoved"] = json!(not_removed);
     out["sessionsUnchecked"] = json!(unchecked);
@@ -2216,7 +2217,7 @@ fn revoked_json(done: &[String], running: Vec<Value>) -> Value {
     let mut v = json!({ "ok": true, "revoked": done });
     if !running.is_empty() {
         v["stillRunning"] = Value::Array(running);
-        v["note"] = "these jobs already have the value in their environment; revoking stops the next attempt, not them (k2 compute cancel <job> stops one)".into();
+        v["note"] = concat!("these jobs already have the value in their environment; revoking stops the next attempt, not them (", cli_name!(), " compute cancel <job> stops one)").into();
     }
     v
 }
@@ -2258,7 +2259,7 @@ fn status_change(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8]) -
 fn get_value(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
     let b: Sel = parse(body)?;
     if c.actor.agent().is_none() {
-        return Err(err("use_reveal", 403, "people see a value with reveal (it needs a confirm): k2 vault reveal NAME from a terminal outside K2"));
+        return Err(err("use_reveal", 403, concat!("people see a value with reveal (it needs a confirm): ", cli_name!(), " vault reveal NAME from a terminal outside ", product_name!())));
     }
     let sel = selector(c, &b)?;
     let who = c.requester()?;
@@ -2270,7 +2271,7 @@ fn get_value(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, 
     Ok(json!({
         "valueB64": base64::engine::general_purpose::STANDARD.encode(r.value.expose()),
         "version": r.version,
-        "note": "this value is now in your transcript; prefer k2 vault fetch",
+        "note": concat!("this value is now in your transcript; prefer ", cli_name!(), " vault fetch"),
     }))
 }
 
@@ -2621,7 +2622,7 @@ fn confirm_start_here(vault: &LocalVault, c: &VaultCaller, action: &str, b: &Con
         return Err(err(
             "no_confirm_method",
             409,
-            "set a vault password first (Settings → Vault, or k2 vault confirm-password set from a terminal outside K2)",
+            concat!("set a vault password first (Settings → Vault, or ", cli_name!(), " vault confirm-password set from a terminal outside ", product_name!(), ")"),
         ));
     }
     let mut owners = None;
@@ -2868,7 +2869,7 @@ fn confirm_check_as(
             Actor::Login { username, .. } => check_connect_password(vault, username, password.unwrap_or("")),
             _ => Err(err("bad_method", 400, "connect-password is for a Connect login")),
         },
-        "local-auth" => local_auth(&format!("K2 vault: {}", reason.chars().filter(|ch| !ch.is_control()).take(160).collect::<String>())),
+        "local-auth" => local_auth(&format!("{PRODUCT_NAME} vault: {}", reason.chars().filter(|ch| !ch.is_control()).take(160).collect::<String>())),
         presence::OWNER_LOGIN_PASSWORD if owner_password_ok(vault, c, action) => {
             presence::owner_login_check(vault, action, username, password.unwrap_or(""))
         }
@@ -2960,7 +2961,7 @@ pub mod test_hooks {
 }
 
 pub(crate) fn take_proof(vault: &LocalVault, c: &VaultCaller, action: &str, secret: Option<&str>, token: Option<&str>) -> Result<HumanProof, VaultError> {
-    let t = token.ok_or_else(|| err("vault_confirm_required", 403, "this needs a confirm first (k2 vault confirm)"))?;
+    let t = token.ok_or_else(|| err("vault_confirm_required", 403, concat!("this needs a confirm first (", cli_name!(), " vault confirm)")))?;
     vault.confirm.take(t, action, secret, &c.actor.stamp())
 }
 
@@ -3006,12 +3007,12 @@ fn require_person(c: &VaultCaller, not_person: Option<&'static str>) -> Result<(
     if c.channel.is_person() {
         return Ok(());
     }
-    let why = not_person.unwrap_or("it came from a K2 token, not from a person");
+    let why = not_person.unwrap_or(concat!("it came from a ", product_name!(), " token, not from a person"));
     Err(err(
         "person_required",
         403,
         format!(
-            "only a person can do this ({why}). Run it from your own SSH login or a terminal outside K2, or sign in to K2 Connect. Agents: don't run it; tell your owner."
+            "only a person can do this ({why}). Run it from your own SSH login or a terminal outside {PRODUCT_NAME}, or sign in to K2 Connect. Agents: don't run it; tell your owner."
         ),
     ))
 }
@@ -3054,7 +3055,7 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
                 return Err(err(
                     "person_required",
                     403,
-                    "only a person can do this. In the K2 app use Settings → Vault → Set up recovery key (it asks you to confirm), or run k2 vault recovery show-once from your own SSH login or a terminal outside K2. Agents: don't run it; tell your owner.",
+                    concat!("only a person can do this. In the ", product_name!(), " app use Settings → Vault → Set up recovery key (it asks you to confirm), or run ", cli_name!(), " vault recovery show-once from your own SSH login or a terminal outside ", product_name!(), ". Agents: don't run it; tell your owner."),
                 ));
             }
         }
@@ -3070,7 +3071,7 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
             return Err(err(
                 "recovery_exists",
                 409,
-                "a recovery key is already confirmed; to replace it run k2 vault recovery rotate (needs a confirm)",
+                concat!("a recovery key is already confirmed; to replace it run ", cli_name!(), " vault recovery rotate (needs a confirm)"),
             ));
         }
         take_proof(vault, c, "recovery-rotate", None, b.confirm_token.as_deref()).map_err(deny)?;
@@ -3082,7 +3083,7 @@ fn recovery_show(vault: &LocalVault, c: &VaultCaller, path: &str, body: &[u8], i
         "phrase": ch.phrase.expose_str().unwrap_or_default(),
         "checkWords": ch.check_words,
         "recipient": ch.recipient,
-        "note": "Write these 24 words down and keep them offline. K2 keeps only the public half. Then type back words 3, 11 and 20.",
+        "note": concat!("Write these 24 words down and keep them offline. ", product_name!(), " keeps only the public half. Then type back words 3, 11 and 20."),
     }))
 }
 
@@ -3138,7 +3139,7 @@ fn confirm_password_set(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingres
     let pw = b.password.as_deref().ok_or_else(|| err("password_required", 400, "type the new vault password"))?;
     vault.set_confirm_password(pw, &c.actor)?;
     crate::vault::auth_audit("vault-confirm-password", &stamp, "ok set", ingress);
-    Ok(json!({ "ok": true, "note": "K2 only asks for your vault password inside the K2 window or your own terminal." }))
+    Ok(json!({ "ok": true, "note": concat!(product_name!(), " only asks for your vault password inside the ", product_name!(), " window or your own terminal.") }))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3308,7 +3309,7 @@ fn restore(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str, not_
         return Err(err(
             "restore_from_backup",
             400,
-            "to restore a vault from a backup: k2 vault restore --from <dir> (with the recovery phrase), from a terminal outside K2",
+            concat!("to restore a vault from a backup: ", cli_name!(), " vault restore --from <dir> (with the recovery phrase), from a terminal outside ", product_name!()),
         ));
     }
     let proof = take_proof(vault, c, "restore", None, b.confirm_token.as_deref())?;

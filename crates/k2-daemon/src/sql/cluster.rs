@@ -30,6 +30,7 @@ use k2_root_proto::pg_major;
 use serde::Serialize;
 
 use super::sysops::SystemOps;
+use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
 
 /// One cluster K2 knows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -211,7 +212,7 @@ impl Cluster {
     ) -> Result<String, String> {
         if !self.is_primary() && self.major == 0 {
             return Err(format!(
-                "cluster on port {} has no recorded major — run `k2 db clusters` (the doctor re-reads them)",
+                "cluster on port {} has no recorded major — run `{CLI_NAME} db clusters` (the doctor re-reads them)",
                 self.port
             ));
         }
@@ -387,10 +388,10 @@ pub fn for_db_in(conn: &rusqlite::Connection, db_name: &str) -> Result<Cluster, 
     if let Some(n) = db_cluster_name_in(conn, db_name) {
         let m = db_major_in(conn, db_name).unwrap_or(0);
         let c = for_named_in(conn, m, &n).ok_or_else(|| {
-            format!("database {db_name} lives in the named cluster {m}/{n}, but K2 has no record of it — see `k2 db clusters`")
+            format!("database {db_name} lives in the named cluster {m}/{n}, but {PRODUCT_NAME} has no record of it — see `{CLI_NAME} db clusters`")
         })?;
         if c.role != "k2" {
-            return Err(format!("database {db_name} lives in {m}/{n}, which K2 no longer counts as its own — see `k2 db clusters`"));
+            return Err(format!("database {db_name} lives in {m}/{n}, which {PRODUCT_NAME} no longer counts as its own — see `{CLI_NAME} db clusters`"));
         }
         return Ok(c);
     }
@@ -398,7 +399,7 @@ pub fn for_db_in(conn: &rusqlite::Connection, db_name: &str) -> Result<Cluster, 
         None => Ok(primary_in(conn)),
         Some(m) => for_major_in(conn, m).ok_or_else(|| {
             format!(
-                "database {db_name} lives on Postgres {m}, but K2 has no record of a {m} cluster — see `k2 db clusters`"
+                "database {db_name} lives on Postgres {m}, but {PRODUCT_NAME} has no record of a {m} cluster — see `{CLI_NAME} db clusters`"
             )
         }),
     }
@@ -459,7 +460,7 @@ pub fn record_primary_major(conn: &rusqlite::Connection, major: u32) -> Result<C
     if !existing.synthesized && existing.major != major {
         // Live ≠ recorded (V6): never rewrite silently; the doctor fails.
         return Err(format!(
-            "the 5432 cluster answers Postgres {major}, but K2 recorded {} — run `k2 db doctor`",
+            "the 5432 cluster answers Postgres {major}, but {PRODUCT_NAME} recorded {} — run `{CLI_NAME} db doctor`",
             existing.major
         ));
     }
@@ -676,13 +677,13 @@ pub fn ensure_cluster(ops: &dyn SystemOps, major: u32, preview: bool) -> Result<
     let mut c = parse_helper_cluster(&v).map_err(EnsureError::Helper)?;
     if c.major != major || c.role != "k2" {
         return Err(EnsureError::Helper(format!(
-            "ensure-cluster {major} answered {}/{} in {} — not K2's layout",
+            "ensure-cluster {major} answered {}/{} in {} — not {PRODUCT_NAME}'s layout",
             c.major, c.name, c.data_dir
         )));
     }
     if !pg_major::in_band(c.port) {
         return Err(EnsureError::Helper(format!(
-            "ensure-cluster {major} answered port {}, outside K2's band {}-{}",
+            "ensure-cluster {major} answered port {}, outside {PRODUCT_NAME}'s band {}-{}",
             c.port,
             pg_major::BAND.0,
             pg_major::BAND.1
@@ -692,7 +693,7 @@ pub fn ensure_cluster(ops: &dyn SystemOps, major: u32, preview: bool) -> Result<
     let conn = db.lock();
     if let Some(other) = list_in(&conn).into_iter().find(|k| k.port == c.port && k.major != major) {
         return Err(EnsureError::Helper(format!(
-            "ensure-cluster {major} answered port {}, which K2 recorded for the {} cluster",
+            "ensure-cluster {major} answered port {}, which {PRODUCT_NAME} recorded for the {} cluster",
             c.port, other.major
         )));
     }
@@ -709,12 +710,12 @@ pub fn ensure_cluster(ops: &dyn SystemOps, major: u32, preview: bool) -> Result<
 pub fn not_k2_cluster_hint(c: &Cluster) -> String {
     let dir = if c.data_dir.is_empty() { "unknown".to_string() } else { c.data_dir.clone() };
     format!(
-        "{major}/{name} on this box is a cluster K2 didn't make (port {port}, data {dir}; recorded {role}). \
-K2 never creates databases in, takes over or removes a cluster made outside K2. \
-Create on a cluster K2 runs instead (`k2 db clusters` lists them; without --major K2 uses the box default), \
-or make one of K2's own beside it: `k2 db cluster create {major} --name <name>`. \
-K2 has no command to take this cluster over or forget it, and removing it by hand isn't enough today (K2 keeps its record and still refuses): \
-ask for it with `k2 feedback ask`.",
+        "{major}/{name} on this box is a cluster {PRODUCT_NAME} didn't make (port {port}, data {dir}; recorded {role}). \
+{PRODUCT_NAME} never creates databases in, takes over or removes a cluster made outside {PRODUCT_NAME}. \
+Create on a cluster {PRODUCT_NAME} runs instead (`{CLI_NAME} db clusters` lists them; without --major {PRODUCT_NAME} uses the box default), \
+or make one of {PRODUCT_NAME}'s own beside it: `{CLI_NAME} db cluster create {major} --name <name>`. \
+{PRODUCT_NAME} has no command to take this cluster over or forget it, and removing it by hand isn't enough today ({PRODUCT_NAME} keeps its record and still refuses): \
+ask for it with `{CLI_NAME} feedback ask`.",
         major = c.major,
         name = c.name,
         port = c.port,
@@ -743,13 +744,13 @@ pub fn ensure_named_cluster(
     pg_major::check_target(major, false, pg_major::today_days()).map_err(EnsureError::Policy)?;
     let Some(n) = ClusterName::parse(name) else {
         return Err(EnsureError::Usage(format!(
-            "{name:?} is not a cluster name K2 makes: 2-24 of a-z, 0-9 and _, starting with a letter, never main"
+            "{name:?} is not a cluster name {PRODUCT_NAME} makes: 2-24 of a-z, 0-9 and _, starting with a letter, never main"
         )));
     };
     if let Some(p) = port {
         if p == pg_major::PRIMARY_PORT || !pg_major::in_band(p) {
             return Err(EnsureError::Usage(format!(
-                "--port {p}: a named cluster takes a port in K2's band {}-{} other than {}",
+                "--port {p}: a named cluster takes a port in {PRODUCT_NAME}'s band {}-{} other than {}",
                 pg_major::BAND.0 + 1,
                 pg_major::BAND.1,
                 pg_major::PRIMARY_PORT
@@ -811,7 +812,7 @@ pub fn ensure_named_cluster(
     let conn = db.lock();
     if let Some(other) = list_in(&conn).into_iter().find(|k| k.port == c.port && !(k.major == major && k.name == name)) {
         return Err(EnsureError::Helper(format!(
-            "ensure-cluster {token} answered port {}, which K2 recorded for {}",
+            "ensure-cluster {token} answered port {}, which {PRODUCT_NAME} recorded for {}",
             c.port,
             other.label()
         )));
@@ -828,7 +829,7 @@ pub fn ensure_named_cluster(
 /// any workspace's): its record, `k2`, `created`, the caller's.
 pub fn named_target(spec: &str, project: Option<&str>) -> Result<Cluster, EnsureError> {
     let c = for_name(spec).ok_or_else(|| {
-        EnsureError::NotFound(format!("no named cluster {spec} on this box (`k2 db clusters`; `k2 db cluster create <M> --name <name>`)"))
+        EnsureError::NotFound(format!("no named cluster {spec} on this box (`{CLI_NAME} db clusters`; `{CLI_NAME} db cluster create <M> --name <name>`)"))
     })?;
     if c.role != "k2" || c.origin != "created" {
         return Err(EnsureError::Refused(not_k2_cluster_hint(&c)));

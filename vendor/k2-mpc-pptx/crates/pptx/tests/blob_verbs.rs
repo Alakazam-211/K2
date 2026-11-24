@@ -11,7 +11,7 @@ use common::blob_rows::{
     join, leased, open, res, revert,
 };
 use common::live::fx;
-use common::{entries, limits};
+use common::{deflated, entries, limits};
 use k2_mpc_base::errors::{capabilities, Value};
 use k2_mpc_base::index::NodeKey;
 use k2_mpc_base::parity::Registry;
@@ -297,5 +297,154 @@ fn undo_and_redo_keep_a_later_edit() {
          kept; redo puts it back (undo {}; redo {})",
         res(&u).to_json(),
         res(&r).to_json()
+    );
+}
+
+/// The person's later edit to another shape of the agent's slide (258): the picture moved.
+const SIBLING: &[&str] = &["shape", "move", "@sld:258/sp:7", "--x", "900000"];
+
+/// The sibling's edit alone on the sample deck, by the file verb.
+fn sibling_alone(bytes: &[u8]) -> Vec<u8> {
+    let e = Edit::MoveShape {
+        slide: 258,
+        shape: 7,
+        x: Some(900_000),
+        y: None,
+        w: None,
+        h: None,
+    };
+    apply(bytes, &e, &limits())
+        .expect("the file verb moves the picture")
+        .bytes
+}
+
+/// The keys a refusal's `conflicts` name.
+fn conflict_keys(o: &k2_mpc_base::tools::ToolOutput) -> Vec<String> {
+    match res(o).get("conflicts") {
+        Some(Value::List(l)) => l
+            .iter()
+            .filter_map(|c| c.get("key").and_then(Value::as_str).map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// revert_keeps_a_sibling_edit: the agent moves a shape (version K), then a person moves
+/// another shape of the same slide. The slide's record holds both shapes, but its own record
+/// (the index's format 3) didn't change: reverting K is the agent's version with `reverts: K`,
+/// its bytes the person's move alone on the deck as it was before K, by the file verb, and the
+/// `zip` crate reads every part of it as that deck's. Plant: `container-always-counted`.
+#[test]
+fn revert_keeps_a_sibling_edit() {
+    let f = fx("blob-revert-sibling", |_| {});
+    let bytes = testgen::deck(&testgen::sample());
+    let s = open(&f, "sibling.pptx", &bytes);
+    let bot = join(&s, "bot", ParticipantKind::Agent);
+    let ann = join(&s, "ann", ParticipantKind::Person);
+    let moved = leased(&s, bot, &argv(MOVE));
+    assert_eq!(err_id(&moved), None, "setup: the agent's move lands");
+    let k = head_version(&s);
+    let later = leased(&s, ann, &argv(SIBLING));
+    assert_eq!(
+        err_id(&later),
+        None,
+        "setup: the person's move of a sibling lands"
+    );
+    let want = sibling_alone(&bytes);
+    let o = revert(&s, bot, RevertWhat::Version(k));
+    let got = head_bytes(&s, bot);
+    assert_eq!(
+        (
+            err_id(&o),
+            head_entry(&s, bot),
+            entries(&got) == entries(&want),
+            got == want
+        ),
+        (None, (Some("revert".to_owned()), Some(k)), true, true),
+        "revert_keeps_a_sibling_edit: K's move taken away, the later move of another shape on \
+         the same slide kept, byte for byte ({})",
+        res(&o).to_json()
+    );
+}
+
+/// The deck `bytes` with the picture (shape 7) and the table (shape 8) of slide 258 swapped in
+/// its shape tree: a change of the slide's own (its shapes' order), each shape's XML as it was.
+fn picture_and_table_swapped(bytes: &[u8]) -> Vec<u8> {
+    let parts = entries(bytes);
+    let (name, xml) = parts
+        .iter()
+        .filter(|(n, _)| n.starts_with("ppt/slides/slide"))
+        .map(|(n, c)| (n.clone(), String::from_utf8(c.clone()).expect("utf-8")))
+        .find(|(_, x)| x.contains("descr=\"A small square\""))
+        .expect("slide 258's part");
+    let one = |open: &str, close: &str| {
+        assert_eq!(
+            (xml.matches(open).count(), xml.matches(close).count()),
+            (1, 1),
+            "setup: one {open} on slide 258"
+        );
+        let a = xml.find(open).expect("its start");
+        let b = xml.find(close).expect("its end") + close.len();
+        (a, b)
+    };
+    let (pa, pb) = one("<p:pic>", "</p:pic>");
+    let (ga, gb) = one("<p:graphicFrame>", "</p:graphicFrame>");
+    assert!(pb <= ga, "setup: the picture comes before the table");
+    let swapped = format!(
+        "{}{}{}{}{}",
+        &xml[..pa],
+        &xml[ga..gb],
+        &xml[pb..ga],
+        &xml[pa..pb],
+        &xml[gb..]
+    );
+    let parts: Vec<(String, Vec<u8>)> = parts
+        .into_iter()
+        .map(|(n, c)| {
+            if n == name {
+                (n, swapped.clone().into_bytes())
+            } else {
+                (n, c)
+            }
+        })
+        .collect();
+    deflated(&parts)
+}
+
+/// revert_refused_when_the_slide_order_changed: the agent moves a shape (version K), then a
+/// person's write swaps two other shapes of the same slide (the picture and the table; the
+/// agent's shape and every shape's XML as they were). The slide's own record changed: reverting
+/// K is refused (`MPC-E731`), its conflicts naming the slide; head and its bytes are unchanged.
+/// Plant: `container-never-counted`.
+#[test]
+fn revert_refused_when_the_slide_order_changed() {
+    let f = fx("blob-revert-order", |_| {});
+    let bytes = testgen::deck(&testgen::sample());
+    let s = open(&f, "order.pptx", &bytes);
+    let bot = join(&s, "bot", ParticipantKind::Agent);
+    let ann = join(&s, "ann", ParticipantKind::Person);
+    let moved = leased(&s, bot, &argv(MOVE));
+    assert_eq!(err_id(&moved), None, "setup: the agent's move lands");
+    let k = head_version(&s);
+    let swapped = picture_and_table_swapped(&head_bytes(&s, bot));
+    s.write_bytes(ann, &swapped, k)
+        .expect("setup: the person's write lands");
+    if let Some(j) = s.index_job(None).expect("an index job") {
+        j.run().expect("the index job runs");
+    }
+    let h = head_version(&s);
+    let before = head_bytes(&s, bot);
+    let o = revert(&s, bot, RevertWhat::Version(k));
+    assert_eq!(
+        (
+            err_id(&o),
+            conflict_keys(&o).contains(&"@sld:258".to_owned()),
+            head_version(&s),
+            head_bytes(&s, bot) == before
+        ),
+        (Some("MPC-E731".to_owned()), true, h, true),
+        "revert_refused_when_the_slide_order_changed: the slide's own change since K refuses, \
+         naming the slide; nothing written ({})",
+        res(&o).to_json()
     );
 }

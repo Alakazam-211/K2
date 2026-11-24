@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.1.11: pairs with kit v0.24.0 and k2-mpc-ooxml v0.1.2
+
+**Requires `k2-mpc-base` v0.24.0** (its row format 3: `DraftNode::own`,
+`IndexSpec::with_own_records`) **and `k2-mpc-ooxml` v0.1.2**, each checked out beside this repo.
+The crate version is `0.1.11`; `Cargo.lock` and `fuzz/Cargo.lock` record k2-mpc-base 0.24.0 and
+k2-mpc-opc 0.1.2. As for v0.1.10, the tag is a cut commit that leaves out `fuzz/`.
+
+- **Reverting one shape's edit keeps a later edit to another shape of the same slide.** A
+  slide's record holds all its shapes, so a revert, or a write with `--base`, was refused as a
+  conflict (`MPC-E731` for a revert) whenever another shape of that slide had changed since.
+  Each slide and group shape now also carries the digest of its own part (`DraftNode::own`,
+  declared with `IndexSpec::with_own_records`): its XML with each child shape replaced by a
+  stand-in naming it. The kit then compares the slide's shapes one by one
+  (`revert_keeps_a_sibling_edit`). A change to the slide itself (its shapes' order, a shape
+  added or removed, its background, transition or timing) still conflicts
+  (`revert_refused_when_the_slide_order_changed`).
+- **Each deck is indexed once more.** The kit stores these rows under its own format for a pack
+  that declares own records (this pack's index format stays 2), which an older kit doesn't
+  read. A version indexed before reads without the own digests (its slides count as changed
+  whenever a shape is, as before) until the next index job.
+- **Known limit:** a slide's name is its title's text, so a title edit renames the slide, and
+  reverting it still conflicts with a later edit to another shape of that slide.
+- Pairs with kit v0.24.0: `Cargo.toml`'s pin comment and `README.md` name its public cut.
+  The kit's other changes are the host's and the native engine's (off).
+
 ## v0.1.10: pairs with kit v0.23.0 and k2-mpc-ooxml v0.1.2
 
 **Requires `k2-mpc-base` v0.23.0 and `k2-mpc-ooxml` v0.1.2** (its `OpcPackage::write_plan`), each

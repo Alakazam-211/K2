@@ -310,9 +310,10 @@ fn the_pack_indexes_through_the_kit_interface() {
     let pack = PptxPack::default();
     let spec = pack.index_spec().expect("an index");
     assert_eq!(
-        (spec.pack, spec.format, spec.older_format),
-        ("pptx", 2, Some(1)),
-        "format 2 (the view items) reads format 1's rows"
+        (spec.pack, spec.format, spec.older_format, spec.own_records),
+        ("pptx", 2, Some(1), true),
+        "format 2 (the view items) reads format 1's rows; own records declared (the kit stores \
+         them under its offset format)"
     );
     let d = pack
         .index(&mut bytes.as_slice(), bytes.len() as u64, &ilimits())
@@ -351,4 +352,83 @@ fn repeated_shape_ids_are_left_to_the_kit_to_mint() {
         .map(|(i, _)| i)
         .collect();
     assert_eq!(twice.len(), 2);
+}
+
+/// A slide's and a group's own record digest (index format 3): unchanged by an edit inside one
+/// of their shapes (the record changes), changed by their shapes' order; a shape with no
+/// children has none.
+#[test]
+fn a_container_s_own_record_leaves_out_its_shapes_but_not_their_order() {
+    use k2_mpc_pptx::verbs::{apply, Edit};
+    let pack = PptxPack::default();
+    let read = |b: &[u8]| {
+        let d = pack
+            .index(&mut &b[..], b.len() as u64, &ilimits())
+            .expect("indexes");
+        let get = |k: &str| {
+            d.nodes
+                .iter()
+                .find(|n| n.key.as_deref() == Some(k))
+                .map(|n| (n.record, n.own))
+                .unwrap_or_else(|| panic!("no node {k}"))
+        };
+        (get("@sld:258"), get("@sld:258/sp:9"), get("@sld:258/sp:4"))
+    };
+    let base = testgen::deck(&testgen::sample());
+    let (slide, group, shape) = read(&base);
+    assert!(
+        slide.1.is_some() && group.1.is_some() && shape.1.is_none(),
+        "a slide and a group have an own digest, a plain shape none"
+    );
+    let moved = apply(
+        &base,
+        &Edit::MoveShape {
+            slide: 258,
+            shape: 4,
+            x: Some(100),
+            y: None,
+            w: None,
+            h: None,
+        },
+        &limits(),
+    )
+    .expect("moves")
+    .bytes;
+    let (s2, g2, _) = read(&moved);
+    let in_group = apply(
+        &base,
+        &Edit::SetText {
+            slide: 258,
+            shape: 10,
+            text: "Grouped".into(),
+        },
+        &limits(),
+    )
+    .expect("sets the text")
+    .bytes;
+    let (s3, g3, _) = read(&in_group);
+    let mut spec = testgen::sample();
+    let mix = spec
+        .slides
+        .iter_mut()
+        .find(|x| x.id == 258)
+        .expect("slide 258");
+    mix.shapes.swap(4, 5);
+    let (s4, g4, _) = read(&testgen::deck(&spec));
+    assert_eq!(
+        (
+            (s2.0 != slide.0, s2.1 == slide.1, g2 == group),
+            (
+                s3.0 != slide.0,
+                s3.1 == slide.1,
+                g3.0 != group.0,
+                g3.1 == group.1
+            ),
+            (s4.1 != slide.1, g4.1 == group.1)
+        ),
+        ((true, true, true), (true, true, true, true), (true, true)),
+        "own digests: a shape's move changes the slide's record, not its own; a text edit in the \
+         group changes the group's and slide's records, not their own; the shapes' order changes \
+         the slide's own"
+    );
 }

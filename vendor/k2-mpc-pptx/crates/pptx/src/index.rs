@@ -21,6 +21,15 @@
 //! and index, alt text; the record digest is the shape's XML, and a picture's content digest
 //! its image's bytes. A slide's `creation_id` is a weak id. Nothing a node holds is styling.
 //!
+//! **A container's own record** (the kit's row format 3, declared with
+//! `IndexSpec::with_own_records`, stored under the kit's offset format): a slide's record
+//! digest is its whole XML and a group's its whole `p:grpSp`, children included, so each also
+//! carries its own record's digest ([`DraftNode::own`]): that XML with each child shape's
+//! element replaced by a stand-in naming the child (its id, else its place). An edit to one
+//! shape then leaves its slide's own record as it was, and the kit's overlap checks (a revert,
+//! `--base`) compare the shapes themselves; a change of the slide's own (the shapes' order, an
+//! added or removed shape, its background, transition or timing) changes it.
+//!
 //! **The view items** (the kit's row format 2, from [`FORMAT`] 2): what the view index of a
 //! version draws that the fields above don't say, worked out here, where the file is parsed
 //! (a host's index worker), by the same code the live tier's derive hook uses
@@ -55,7 +64,9 @@ use crate::{Decline, Limits};
 /// The pack's name in the index's key.
 pub const PACK: &str = "pptx";
 /// The reader's output format: bump when what a file reads to changes, and the kit recomputes.
-/// 2: the view items (the kit's row format 2).
+/// 2: the view items (the kit's row format 2). The own record digests (the kit's row format 3)
+/// need no bump: the spec declares them (`IndexSpec::with_own_records`) and the kit stores them
+/// under its offset format, where no older kit reads.
 pub const FORMAT: u32 = 2;
 /// The format before the view items, whose rows (the same nodes) format 2 reads with the items
 /// absent until a version is indexed again ([`k2_mpc_base::index::IndexSpec::with_older_format`]).
@@ -188,6 +199,7 @@ pub fn draft(p: &Pptx<'_>, limits: &IndexLimits, pl: &Limits) -> Result<IndexDra
             Digest::of(text.as_bytes()),
         );
         n.key = Some(format!("@sld:{}", s.id));
+        n.own = own_digest(text, 0..text.len(), &shapes);
         n.visible = !s.hidden;
         attr(&mut n, "position", &(pos + 1).to_string());
         attr(&mut n, "part", &s.name);
@@ -372,6 +384,33 @@ fn add_view_items(p: &Pptx<'_>, d: &mut IndexDraft, limits: &IndexLimits, pl: &L
         .collect();
 }
 
+/// A container's own record ([`DraftNode::own`]): `span` of `text` (a slide's XML, a group's
+/// element) with each of its child shapes' elements replaced by a stand-in naming the child (its
+/// id, else its place among them), in document order. `None` when a child's element doesn't lie
+/// inside `span`, one after another: the kit then counts any change to the record as the
+/// container's own.
+fn own_digest(text: &str, span: std::ops::Range<usize>, kids: &[ShapeInfo]) -> Option<Digest> {
+    let mut ks: Vec<(usize, &ShapeInfo)> = kids.iter().enumerate().collect();
+    ks.sort_by_key(|(_, k)| k.range.start);
+    let mut d = Digest::stream();
+    let mut at = span.start;
+    for (place, k) in ks {
+        let r = &k.range;
+        if r.start < at || r.end > span.end || r.start > r.end {
+            return None;
+        }
+        d.update(text.get(at..r.start)?.as_bytes());
+        let stand_in = match k.id {
+            Some(id) => format!("\u{0}sp:{id}\u{0}"),
+            None => format!("\u{0}#{place}\u{0}"),
+        };
+        d.update(stand_in.as_bytes());
+        at = r.end;
+    }
+    d.update(text.get(at..span.end)?.as_bytes());
+    Some(d.finish())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn add_shape(
     b: &mut Builder<'_>,
@@ -390,6 +429,9 @@ fn add_shape(
         Digest::of(xml.as_bytes()),
     );
     n.key = sh.id.map(|id| format!("@sld:{sld}/sp:{id}"));
+    if !sh.children.is_empty() {
+        n.own = own_digest(text, sh.range.clone(), &sh.children);
+    }
     n.parent = Some(parent);
     n.visible = !sh.hidden;
     n.bounds = sh.xfrm.as_ref().map(rect);

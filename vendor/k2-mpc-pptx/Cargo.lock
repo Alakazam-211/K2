@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "libc",
  "redb",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-pptx"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-opc",

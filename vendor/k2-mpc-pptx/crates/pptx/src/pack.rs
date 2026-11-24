@@ -122,9 +122,14 @@ impl BlobPack for PptxPack {
     }
 
     /// Format 2 carries the view items, and reads format 1's rows (the same nodes) until a
-    /// version is indexed again ([`crate::index::FORMAT`]).
+    /// version is indexed again ([`crate::index::FORMAT`]); slides and groups carry their own
+    /// record digests, declared, so the kit stores the rows under its offset format.
     fn index_spec(&self) -> Option<IndexSpec> {
-        Some(IndexSpec::new(PACK, FORMAT, &VERBS).with_older_format(OLDER_FORMAT))
+        Some(
+            IndexSpec::new(PACK, FORMAT, &VERBS)
+                .with_older_format(OLDER_FORMAT)
+                .with_own_records(),
+        )
     }
 
     fn index(

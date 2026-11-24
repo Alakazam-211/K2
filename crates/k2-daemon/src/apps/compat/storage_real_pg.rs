@@ -205,7 +205,7 @@ pub async fn call(app_id: &str, raw: Vec<u8>) -> (u16, HashMap<String, String>, 
 }
 
 pub fn req(method: &str, path: &str, auth: Option<&str>, extra: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
-    let mut h = format!("{method} /storage/v1{path} HTTP/1.1\r\nHost: jobs.box.k2.dev\r\n");
+    let mut h = format!("{method} /storage/v1{path} HTTP/1.1\r\nHost: jobs.box.example.com\r\n");
     if let Some(a) = auth {
         h.push_str(&format!("Authorization: Bearer {a}\r\n"));
     }

@@ -270,8 +270,8 @@ pub struct Prep {
 }
 
 /// The checks before a control-plane verb: `None` hands the line to the
-/// shell (a base or a proxy setting the binary doesn't send through
-/// itself, when it may have to call the control plane itself).
+/// shell (a base the binary doesn't send to itself, when it may have to
+/// call the control plane itself).
 pub fn prep(home: &Path) -> Option<Prep> {
     let base = connect_base();
     let (state, file) = crate::airgap::state(&crate::offline::Env::current())?;
@@ -280,9 +280,6 @@ pub fn prep(home: &Path) -> Option<Prep> {
         && state == State::Off
         && wp::tunnel_token(&home.join("tunnel.json")).is_some()
     {
-        if base.ends_with('/') {
-            return None;
-        }
         control = Some(remote::routed(&base)?);
     }
     Some(Prep {
@@ -509,7 +506,14 @@ impl Run<'_> {
         };
         let mut cp = Client::new(&base.host, base.port, "", Auth::Owner(token.clone()));
         remote::apply(&mut cp, base, token);
-        match cp.control_plane_as(method, endpoint, body.as_bytes()) {
+        // A base ending in `/` is curl's URL as written: `<base>/` then
+        // the endpoint, so the path starts `//`.
+        let slash = if self.prep.base.ends_with('/') {
+            "/"
+        } else {
+            ""
+        };
+        match cp.control_plane_as(method, &format!("{slash}{endpoint}"), body.as_bytes()) {
             Ok(r) => Ok(wp::control_plane_raw(r.status, &r.body)),
             Err(_) => {
                 out::stderr_line(&format!(

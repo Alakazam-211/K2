@@ -452,14 +452,11 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         connect.airgap_off = state == crate::airgap::State::Off;
         // With no daemon to make the call, the shell calls the control
         // plane itself with `tunnel.json`'s token, through the person's
-        // proxy when one is set for it. A base or a proxy setting the
-        // binary doesn't read is the shell's.
+        // proxy when one is set for it. A base the binary doesn't read is
+        // the shell's.
         if connect.airgap_off {
             if let Some(token) = publish::tunnel_token(&settings.home.join("tunnel.json")) {
                 let url = connect_base();
-                if url.ends_with('/') {
-                    return None;
-                }
                 connect.control = Some((crate::transport::remote::routed(&url)?, token));
             }
         }
@@ -907,7 +904,20 @@ impl Run {
         let mut cp = Client::new(&base.host, base.port, "", Auth::Owner(token.clone()));
         crate::transport::remote::apply(&mut cp, base, token.clone());
         Ok(
-            match cp.control_plane(method == "PUT", endpoint, body.as_bytes()) {
+            // A base ending in `/` is curl's URL as written: the path
+            // starts `//`.
+            match cp.control_plane(
+                method == "PUT",
+                &format!(
+                    "{}{endpoint}",
+                    if connect_base().ends_with('/') {
+                        "/"
+                    } else {
+                        ""
+                    }
+                ),
+                body.as_bytes(),
+            ) {
                 Ok(r) => Some(publish::control_plane_raw(r.status, &r.body)),
                 Err(_) => None,
             },

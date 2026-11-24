@@ -888,6 +888,25 @@ fn the_control_plane_itself_when_no_daemon_makes_the_call() {
         ));
         same_requests(&seen, first);
     }
+    // A base ending in `/`: curl's URL as written, so the path starts
+    // `//` (it used to be the shell's).
+    let (port, seen) = control_plane(
+        "200 OK",
+        r#"{"subdomains":[{"label":"acme","tier":"pro"}]}"#,
+    );
+    rig.check(&with(
+        vec![("K2_CONNECT_BASE", format!("http://127.0.0.1:{port}/"))],
+        case(
+            "list: GET, a base ending in /",
+            &["subdomain", "list"],
+            &[],
+            vec![Reply::Answer(404, "not found".into())],
+            tunnel_token,
+            0,
+            1,
+        ),
+    ));
+    same_requests(&seen, "GET //subdomains HTTP/1.1\r\n");
     // The control plane's own error, and no control plane at all.
     let (port, seen) = control_plane("401 Unauthorized", r#"{"error":"invalid_token"}"#);
     rig.check(&with(

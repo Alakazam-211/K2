@@ -14,9 +14,11 @@
 # Reasons: `keeper:` stays on purpose (who reads it); `debt:` should move
 # to the brand module. Seeded 2026-11-16 from the tree as it was.
 
+22 K2 crates/k2-root-proto/src/apps.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 17 K2 crates/k2-daemon/src/desktop/deskd_link.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 16 K2 crates/k2-daemon/src/mail/sieve_lockdown_live.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 16 K2 crates/k2-root-helper/src/apps.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+15 K2 crates/k2-root-proto/src/pg_major.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 13 K2 src/renderer/lib/context-stack.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
 11 K2 crates/k2-root-helper/src/creds.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 10 K2 crates/k2-core/src/contract/gen.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -25,6 +27,7 @@
 10 K2 crates/k2-vault/src/vault.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 9 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-daemon/src/sql/sysops.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+9 K2 crates/k2-root-proto/src/templates.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 8 K2 crates/k2-daemon/src/desktop/permission.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 8 K2 src-tauri/src/commands/linux_pkg_update.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 src-tauri/src/commands/settings.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -48,7 +51,8 @@
 4 K2 crates/k2-daemon/src/docs/host.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-root-helper/src/core.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 4 K2 crates/k2-root-helper/src/sew.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-4 K2 crates/k2-root-proto/src/apps.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+4 K2 crates/k2-root-proto/src/creds.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+4 K2 crates/k2-root-proto/src/podman.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 4 K2 crates/k2-vault/src/policy.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 crates/k2-core/src/app_templates/doctor.rs keeper: K2's patched copy, the upstream repo that holds the wry patch (a fact, the same in every brand), and the WryPatch::K2 variant (code)
 3 K2 crates/k2-core/src/desktop/mod.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
@@ -68,6 +72,8 @@
 3 K2 crates/k2-release-keys/src/lib.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 crates/k2-root-helper/src/desktop.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 crates/k2-root-helper/src/front.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+3 K2 crates/k2-root-proto/src/engine.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+3 K2 crates/k2-root-proto/src/sew.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 3 K2 src-tauri/src/native_voice/provider.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 src-tauri/src/tray.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-app-engine/src/quadlet.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -91,7 +97,9 @@
 2 K2 crates/k2-rest/src/error.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-helper/examples/unix/creds_live.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-root-proto/src/agent_scope_policy.rs keeper: stored; comments inside the D-Bus policy and the daemon unit drop-in the root helper writes for agent scopes (k2-root-proto links no brand)
-2 K2 crates/k2-root-proto/src/templates.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+2 K2 crates/k2-root-proto/src/pg_dual.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+2 K2 crates/k2-root-proto/src/pg_named.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+2 K2 crates/k2-root-proto/src/sew_recording.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 2 K2 crates/k2-transfer-client/src/lib.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-vault/src/vault/agent_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-vault/src/vault/oauth_store.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -181,11 +189,10 @@
 1 K2 crates/k2-rest/src/oracle.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-root-helper/src/pg_dual.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-root-helper/src/sew_teardown.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-root-proto/src/engine.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-root-proto/src/paths.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-root-proto/src/pg_major.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-root-proto/src/podman.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-root-proto/src/sew.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+1 K2 crates/k2-root-proto/src/desktop.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+1 K2 crates/k2-root-proto/src/k2_db.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+1 K2 crates/k2-root-proto/src/paths.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
+1 K2 crates/k2-root-proto/src/stalwart.rs keeper: our root helper writes and shows this text in every brand's build (partner builds ship ours), and the daemon reads some of it back; the brand-neutral rewrite with dual reads is its own branch after 0.46.18 (.k2 readback brief)
 1 K2 crates/k2-signer/src/provenance.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-simvideo/src/lib.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-vault/src/db.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first

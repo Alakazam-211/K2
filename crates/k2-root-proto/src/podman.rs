@@ -33,7 +33,6 @@
 //! PATH is never changed for anyone.
 
 use std::path::Path;
-use k2_brand::PRODUCT_NAME;
 
 /// The pinned Podman release (upstream `containers/podman` v5.8.8, built
 /// by podman-static v5.8.8, released 2026-09-30). The 5.x line: the
@@ -108,7 +107,7 @@ pub fn artifact_for_arch(arch: &str) -> Result<&'static PodmanArtifact, String> 
     let a = BUNDLE
         .iter()
         .find(|a| a.arch == arch)
-        .ok_or_else(|| format!("no {PRODUCT_NAME} Podman bundle for CPU architecture '{arch}' (x86_64, aarch64)"))?;
+        .ok_or_else(|| format!("no K2 Podman bundle for CPU architecture '{arch}' (x86_64, aarch64)"))?;
     if checksum_is_placeholder(a) {
         return Err(format!(
             "refusing to install: the pinned sha256 for {arch} is a placeholder; this build cannot verify the Podman download"
@@ -446,7 +445,7 @@ pub fn rootless_conf_dir(uid: u32) -> String {
 /// The k2app-only Podman config.
 pub fn rootless_conf() -> String {
     format!(
-        "# {PRODUCT_NAME}: Podman for the k2app user comes from {PRODUCT_NAME}'s bundle ({PREFIX}).\n\
+        "# K2: Podman for the k2app user comes from K2's bundle ({PREFIX}).\n\
          # Written by k2-root-helper `apps podman install`; edits are overwritten.\n\
          [engine]\n\
          helper_binaries_dir = [\"{PREFIX}/lib/podman\", \"{PREFIX}/libexec/podman\", \"{PREFIX}/bin\"]\n\
@@ -506,7 +505,7 @@ pub const APPARMOR_USERNS_PROFILES: &[&str] = &["k2-podman", "k2-crun", "k2-past
 /// (AppArmor 4 ABI). The k2-app profile allows signals from `k2-crun`.
 pub fn apparmor_userns_profiles() -> String {
     format!(
-        "# {PRODUCT_NAME} Podman bundle: user namespaces for {PRODUCT_NAME}'s podman, crun and pasta,\n\
+        "# K2 Podman bundle: user namespaces for K2's podman, crun and pasta,\n\
          # like Ubuntu's own profiles for the distro copies.\n\
          # Written by k2-root-helper `apps podman install`; edits are overwritten.\n\
          abi <abi/4.0>,\n\

@@ -22,7 +22,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::pg_major::PgMajor;
-use k2_brand::PRODUCT_NAME;
 
 /// The helper's list of the named clusters it created.
 pub const NAMED_STATE: &str = "/var/lib/k2-root-helper/pg-named.json";
@@ -106,8 +105,8 @@ pub fn wal_spool(m: u32, n: &str) -> String {
 pub fn wal_archive_conf(m: u32, n: &str) -> String {
     let d = wal_spool(m, n);
     format!(
-        "# {PRODUCT_NAME} WAL archive for {m}/{n}. Written by k2-root-helper `pg ensure-cluster --wal-archive`.\n\
-         # {PRODUCT_NAME} Backups ships {d} off the box and prunes it.\n\
+        "# K2 WAL archive for {m}/{n}. Written by k2-root-helper `pg ensure-cluster --wal-archive`.\n\
+         # K2 Backups ships {d} off the box and prunes it.\n\
          archive_mode = on\n\
          archive_command = 'test ! -f {d}/%f && cp %p {d}/%f'\n\
          archive_timeout = {ARCHIVE_TIMEOUT_SECS}\n"

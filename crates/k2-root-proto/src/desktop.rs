@@ -14,7 +14,6 @@
 //! and the DejaVu fonts come from the distro's own repositories and run
 //! as separate programs; K2 never links, bundles, copies or patches them.
 //! Any other package goes back to the Steward first.
-use k2_brand::product_name;
 
 /// The list for each package manager K2 knows, in the order K2 asks for
 /// them. The one place to change a name.
@@ -85,7 +84,7 @@ pub fn apt_sim_installs(sim: &str) -> Vec<String> {
 /// only; nothing is run.
 pub fn manual_command(pm: Option<&str>) -> String {
     let Some((pm, list)) = pm.and_then(|p| packages_for(p).map(|l| (p, l))) else {
-        return concat!(product_name!(), " has no package list for this computer's package manager. Install Xvfb, IceWM and a DejaVu font with it, then try again.").to_string();
+        return "K2 has no package list for this computer's package manager. Install Xvfb, IceWM and a DejaVu font with it, then try again.".to_string();
     };
     let names = list.join(" ");
     match pm {

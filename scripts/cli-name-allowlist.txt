@@ -77,6 +77,8 @@
 1 cli crates/k2-root-helper/src/apps.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-root-helper/src/front.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-root-helper/src/pg_dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+1 cli crates/k2-root-proto/src/creds.rs debt: the command name typed out; use CLI_NAME or cli_name!()
+1 cli crates/k2-root-proto/src/pg_dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/policy.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/vault/handoff_store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli src/renderer/components/Settings/sections/GeneralSection.tsx keeper: the k5 beta switch's search entry names the k5 program (k2-client's cli_install runs it), not this build's command
@@ -245,7 +247,6 @@
 1 value crates/k2-daemon/src/zen_routes.rs keeper: wire; madeBy, in the widget sign answer
 1 value crates/k2-daemon/src/zen_sign_cards.rs keeper: stored; the permission audit's actor
 1 value crates/k2-release-keys/build.rs keeper: stored; the default brand folder brand/k2, as crates/k2-brand/build.rs reads it
-1 value crates/k2-release-keys/src/brand_keys.rs keeper: stored; the brand ids (brand/k2, brand/k5) whose builds ship the ceremony's update keys
 1 value crates/k2-root-helper/src/apps.rs keeper: wire; the podmanSource the daemon reads
 1 value crates/k2-root-helper/src/pg_major.rs keeper: wire; the source the daemon reads in the helper's answer
 1 value crates/k2-root-helper/src/sew.rs keeper: wire; Sew's --from flag

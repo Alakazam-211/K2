@@ -12,8 +12,6 @@
 //!
 //! Nothing here comes from argv except validated numbers, port ranges, an
 //! App id (`^[a-z][a-z0-9-]{0,31}$`) and the OCI runtime enum.
-use k2_brand::PRODUCT_NAME;
-use k2_brand::product_name;
 
 /// The App user.
 pub const APP_USER: &str = "k2app";
@@ -178,7 +176,7 @@ pub fn box_port_refusal(p: u16) -> Option<&'static str> {
         return Some("a system port (below 1024: ssh, mail, DNS and the like are never forwarded)");
     }
     if (RESERVED_PORTS.0..=RESERVED_PORTS.1).contains(&p) {
-        return Some(concat!(product_name!(), "'s App range (every App's gateway link and egress proxy)"));
+        return Some("K2's App range (every App's gateway link and egress proxy)");
     }
     if (DB_PORTS.lo..=DB_PORTS.hi).contains(&p) {
         return Some("Postgres (5432-5449, every major's cluster: an App reaches its own database through its database door, never a raw forward)");
@@ -526,7 +524,7 @@ pub fn hba_dual_lines(db: &str, id: &str) -> [String; 2] {
 /// [`crate::verbs::DbName`] and a 12-hex id); anything else refuses.
 pub fn hba_dual(text: &str, db: &str, id: &str, add: bool) -> Result<Option<String>, &'static str> {
     if crate::verbs::DbName::parse(db).is_none() || db == "postgres" || !crate::pg_dual::dual_id_ok(id) {
-        return Err(concat!("pg_hba.conf: not a ", product_name!(), " database name and run id"));
+        return Err("pg_hba.conf: not a K2 database name and run id");
     }
     let mut changes: Vec<(String, bool)> = Vec::new();
     if add {
@@ -587,7 +585,7 @@ fn hba_block_apply(text: &str, changes: &[(String, bool)]) -> Result<Option<Stri
     let block = match (begins.as_slice(), ends.as_slice()) {
         ([], []) => None,
         ([b], [e]) if b < e => Some((*b, *e)),
-        _ => return Err(concat!("pg_hba.conf: the ", product_name!(), " Apps block is damaged (fix or remove it by hand)")),
+        _ => return Err("pg_hba.conf: the K2 Apps block is damaged (fix or remove it by hand)"),
     };
     let mut inside: Vec<String> = match block {
         None => Vec::new(),
@@ -596,7 +594,7 @@ fn hba_block_apply(text: &str, changes: &[(String, bool)]) -> Result<Option<Stri
     // Only canned lines live in the block.
     for l in &inside {
         if !block_line_ok(l) {
-            return Err(concat!("pg_hba.conf: the ", product_name!(), " Apps block holds a line ", product_name!(), " didn't write"));
+            return Err("pg_hba.conf: the K2 Apps block holds a line K2 didn't write");
         }
     }
     let before = inside.clone();
@@ -657,18 +655,18 @@ fn hba_block_apply(text: &str, changes: &[(String, bool)]) -> Result<Option<Stri
 /// lives here and covers every App together (Linux e2e: on the Quadlet
 /// unit it was ignored; here a 20000-line burst was suppressed).
 pub fn delegate_dropin() -> &'static str {
-    concat!("# ", product_name!(), " App runtime box prep (k2-root-helper `apps delegate on`).\n\
+    "# K2 App runtime box prep (k2-root-helper `apps delegate on`).\n\
      [Service]\n\
      Delegate=cpu cpuset io memory pids\n\
      LogRateLimitIntervalSec=30s\n\
-     LogRateLimitBurst=5000\n")
+     LogRateLimitBurst=5000\n"
 }
 
 /// `user@<k2app uid>.service.d/k2-budget.conf`: the aggregate cap for every
 /// container App.
 pub fn budget_dropin(mem_max_mib: u64, tasks_max: u64) -> String {
     format!(
-        "# {PRODUCT_NAME} App runtime box prep (k2-root-helper `apps budget`).\n\
+        "# K2 App runtime box prep (k2-root-helper `apps budget`).\n\
          [Service]\n\
          MemoryAccounting=yes\n\
          MemoryMax={mem_max_mib}M\n\
@@ -681,7 +679,7 @@ pub fn budget_dropin(mem_max_mib: u64, tasks_max: u64) -> String {
 /// `/etc/systemd/system/k2cores.slice`: the cores' protected floor.
 pub fn cores_slice_unit(mem_min_mib: u64) -> String {
     format!(
-        "# {PRODUCT_NAME} cores (daemon, Postgres, Stalwart): protected memory floor.\n\
+        "# K2 cores (daemon, Postgres, Stalwart): protected memory floor.\n\
          # Written by k2-root-helper `apps cores-slice`.\n\
          [Unit]\n\
          Description=K2 cores\n\
@@ -709,27 +707,27 @@ pub fn cores_dropin(core: Core) -> &'static str {
         // `agents/` leaf (S17). Never alone: `daemon_subgroup_dropin` is
         // what lets the unit start again once the daemon has split it.
         Core::Daemon => {
-            concat!("# ", product_name!(), " cores slice (k2-root-helper `apps cores-slice`).\n\
+            "# K2 cores slice (k2-root-helper `apps cores-slice`).\n\
              [Service]\n\
              Slice=k2cores.slice\n\
              OOMScoreAdjust=-900\n\
              CPUWeight=400\n\
              ManagedOOMPreference=omit\n\
-             Delegate=yes\n")
+             Delegate=yes\n"
         }
         Core::Postgres => {
-            concat!("# ", product_name!(), " cores slice (k2-root-helper `apps cores-slice`).\n\
+            "# K2 cores slice (k2-root-helper `apps cores-slice`).\n\
              [Service]\n\
              Slice=k2cores.slice\n\
-             OOMScoreAdjust=-800\n")
+             OOMScoreAdjust=-800\n"
         }
         Core::Stalwart => {
-            concat!("# ", product_name!(), " cores slice (k2-root-helper `apps cores-slice`).\n\
+            "# K2 cores slice (k2-root-helper `apps cores-slice`).\n\
              [Service]\n\
              Slice=k2cores.slice\n\
              OOMScoreAdjust=-700\n\
              CPUWeight=200\n\
-             IOWeight=200\n")
+             IOWeight=200\n"
         }
     }
 }
@@ -789,9 +787,9 @@ pub fn daemon_subgroup_dropin(systemd: Option<u32>) -> String {
 /// (`IPAddressAllow=localhost`; the `inet k2app` table narrows that to
 /// its gateway port, the proxy and Postgres), no devices unless granted.
 pub fn process_unit() -> &'static str {
-    concat!("# ", product_name!(), " App runtime: the `process` exception (prd-k2-app-runtime-v1 §4.3).\n\
+    "# K2 App runtime: the `process` exception (prd-k2-app-runtime-v1 §4.3).\n\
      # Written by k2-root-helper `apps process-unit on`. One instance per App\n\
-     # (k2app-process@<app-id>.service), started only by the ", product_name!(), " daemon.\n\
+     # (k2app-process@<app-id>.service), started only by the K2 daemon.\n\
      [Unit]\n\
      Description=K2 App %i (process)\n\
      After=network.target\n\
@@ -843,13 +841,13 @@ pub fn process_unit() -> &'static str {
      OOMPolicy=kill\n\
      LimitNOFILE=4096\n\
      LogRateLimitIntervalSec=30s\n\
-     LogRateLimitBurst=1000\n")
+     LogRateLimitBurst=1000\n"
 }
 
 /// `/etc/sysctl.d/90-k2-apps.conf`.
 pub fn sysctl_conf() -> String {
     format!(
-        "# {PRODUCT_NAME} App runtime: keep the App gateway ports out of the ephemeral range.\n\
+        "# K2 App runtime: keep the App gateway ports out of the ephemeral range.\n\
          # Written by k2-root-helper `apps reserve-ports on`.\n\
          net.ipv4.ip_local_reserved_ports = {}-{}\n",
         RESERVED_PORTS.0, RESERVED_PORTS.1
@@ -860,7 +858,7 @@ pub fn sysctl_conf() -> String {
 /// `CONTAINERS_CONF_OVERRIDE`).
 pub fn containers_conf(rt: OciRuntime) -> String {
     format!(
-        "# {PRODUCT_NAME} App runtime: the OCI runtime for Apps.\n\
+        "# K2 App runtime: the OCI runtime for Apps.\n\
          # Written by k2-root-helper `apps runtime {rt}`.\n\
          [engine]\n\
          runtime = \"{rt}\"\n",
@@ -1085,8 +1083,8 @@ pub const PROCESS_CAPS_DROPIN: &str = "k2-caps.conf";
 
 pub fn process_caps_dropin(mem_mib: u64, io: &IoMax, devices: &[DeviceGrant]) -> String {
     let mut s = String::from(
-        concat!("# ", product_name!(), " App runtime: this App's caps (k2-root-helper `apps process caps`).\n\
-         [Service]\n"),
+        "# K2 App runtime: this App's caps (k2-root-helper `apps process caps`).\n\
+         [Service]\n",
     );
     s.push_str(&format!("MemoryMax={mem_mib}M\n"));
     for l in io.unit_lines() {
@@ -1188,10 +1186,10 @@ pub fn mac_marker() -> &'static str {
 
 /// `k2app-process@.service.d/k2-apparmor.conf`.
 pub fn process_apparmor_dropin() -> &'static str {
-    concat!("# ", product_name!(), " App runtime: the process exception runs under the k2-app AppArmor\n\
+    "# K2 App runtime: the process exception runs under the k2-app AppArmor\n\
      # profile. Written by k2-root-helper `apps apparmor on`.\n\
      [Service]\n\
-     AppArmorProfile=k2-app\n")
+     AppArmorProfile=k2-app\n"
 }
 
 /// `/etc/apparmor.d/k2-app`: the container-shaped profile every App runs
@@ -1204,7 +1202,7 @@ pub fn process_apparmor_dropin() -> &'static str {
 /// host's tree — the engine's state, other users' homes and the engine
 /// socket.
 pub fn apparmor_profile() -> &'static str {
-    concat!("# ", product_name!(), " App runtime: the MAC layer for Apps (prd-k2-app-runtime-v1 §4.2 item 4).\n\
+    "# K2 App runtime: the MAC layer for Apps (prd-k2-app-runtime-v1 §4.2 item 4).\n\
      # Written by k2-root-helper `apps apparmor on`; edits are overwritten.\n\
      abi <abi/3.0>,\n\
      include <tunables/global>\n\
@@ -1261,7 +1259,7 @@ pub fn apparmor_profile() -> &'static str {
      \x20 signal (send,receive) peer=\"crun//&k2-app\",\n\
      \x20 signal (receive) peer=unconfined,\n\
      \x20 signal (receive) peer=crun,\n\
-     \x20 # ", product_name!(), "'s Podman bundle (Ubuntu 24.04) runs its crun as k2-crun, and the\n\
+     \x20 # K2's Podman bundle (Ubuntu 24.04) runs its crun as k2-crun, and the\n\
      \x20 # App's tasks (podman-init too) carry the stack k2-app//&k2-crun: the\n\
      \x20 # kernel writes a stack's names in sorted order, the only spelling a\n\
      \x20 # rule matches. Like crun//&k2-app above: any signal between the\n\
@@ -1270,7 +1268,7 @@ pub fn apparmor_profile() -> &'static str {
      \x20 signal (send,receive) peer=\"k2-app//&k2-crun\",\n\
      \x20 signal (receive) peer=k2-crun,\n\
      \x20 ptrace (trace,read,tracedby,readby) peer=k2-app,\n\
-     }\n")
+     }\n"
 }
 
 /// One per-App accept: sockets in `cgroup` (a path under

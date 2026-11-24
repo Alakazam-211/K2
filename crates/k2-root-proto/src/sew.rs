@@ -294,8 +294,6 @@ mod pin_0_11_3;
 mod pin_0_11_4;
 mod pin_0_9_3;
 pub use dfn3::{DFN3_BUNDLE_FILES, DFN3_WEIGHTS_PATH, SEW_DFN3, SewDfn3};
-use k2_brand::PRODUCT_NAME;
-use k2_brand::product_name;
 
 /// Every Sew release K2 has ever pinned, oldest first. The LAST entry is
 /// the pin. A pin bump appends: old entries stay so the helper still
@@ -2148,7 +2146,7 @@ pub fn passthrough_unsupported_message(version: &str) -> String {
 /// the daemon's `/cli/sew/*` routes, `k2 hostchat` and the root helper.
 pub const SEW_NOT_RELEASED: &str = "sew_not_released";
 pub const SEW_NOT_RELEASED_MESSAGE: &str =
-    concat!("Chat / Voice Hosting isn't available in this ", product_name!(), " release yet. It will be turned on in a later ", product_name!(), " update.");
+    "Chat / Voice Hosting isn't available in this K2 release yet. It will be turned on in a later K2 update.";
 
 /// True when `rel` pins at least one real artifact (not every entry is a
 /// placeholder).
@@ -2218,7 +2216,7 @@ pub fn release(version: &str) -> Option<&'static SewRelease> {
 /// The `sew-media` (version, artifact) that Sew release `core_version`
 /// pins for `arch`: what a rollback to that core reinstalls.
 pub fn media_artifact_of(core_version: &str, arch: &str) -> Result<(&'static str, &'static SewArtifact), String> {
-    let rel = release(core_version).ok_or_else(|| format!("Sew {core_version} is not a release this {PRODUCT_NAME} knows"))?;
+    let rel = release(core_version).ok_or_else(|| format!("Sew {core_version} is not a release this K2 knows"))?;
     let m = rel.media.as_ref().ok_or_else(|| format!("Sew {core_version} pins no sew-media (voice) release"))?;
     let a = m
         .artifacts

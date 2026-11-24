@@ -24,7 +24,6 @@ use crate::apps::{AppId, IoMax, APP_HOME, GATEWAY_PORTS, RESERVED_PORTS};
 use crate::keys::{key_id_of, TrustedKey};
 use crate::sig::parse_trusted_comment;
 use crate::version::{arch_ok, elf_matches, Semver};
-use k2_brand::product_name;
 
 // ── paths ───────────────────────────────────────────────────────────────
 
@@ -263,7 +262,7 @@ pub fn verify_engine_build(bytes: &[u8], sig_text: &str, keys: &[TrustedKey], ar
 /// "write to uid_map failed: Operation not permitted"). The Apps
 /// themselves always run with no-new-privileges (the Quadlet floor).
 pub fn user_unit() -> &'static str {
-    concat!("# ", product_name!(), " App engine (prd-k2-app-runtime-v1 §10.6). Written by\n\
+    "# K2 App engine (prd-k2-app-runtime-v1 §10.6). Written by\n\
      # k2-root-helper `apps install-engine`. Runs only in k2app's manager.\n\
      [Unit]\n\
      Description=K2 App engine\n\
@@ -279,15 +278,15 @@ pub fn user_unit() -> &'static str {
      LimitNOFILE=8192\n\
      \n\
      [Install]\n\
-     WantedBy=default.target\n")
+     WantedBy=default.target\n"
 }
 
 /// `/etc/tmpfiles.d/k2app.conf`: the socket dir, traversable only by
 /// `k2app` and each configured daemon user (ACL), recreated every boot.
 pub fn tmpfiles_conf(daemon_users: &[&str]) -> String {
     let mut s = String::from(
-        concat!("# ", product_name!(), " App engine socket dir. Written by k2-root-helper `apps install-engine`.\n\
-         d /run/k2app 0750 k2app k2app -\n"),
+        "# K2 App engine socket dir. Written by k2-root-helper `apps install-engine`.\n\
+         d /run/k2app 0750 k2app k2app -\n",
     );
     for u in daemon_users {
         s.push_str(&format!("a+ /run/k2app - - - - u:{u}:x\n"));

@@ -1259,8 +1259,12 @@ pub fn apparmor_profile() -> &'static str {
      \x20 signal (send,receive) peer=\"crun//&k2-app\",\n\
      \x20 signal (receive) peer=unconfined,\n\
      \x20 signal (receive) peer=crun,\n\
-     \x20 # K2's Podman bundle (Ubuntu 24.04) runs its crun as k2-crun.\n\
-     \x20 signal (send,receive) peer=\"k2-crun//&k2-app\",\n\
+     \x20 # K2's Podman bundle (Ubuntu 24.04) runs its crun as k2-crun, and the\n\
+     \x20 # App's tasks (podman-init too) carry the stack k2-app//&k2-crun: the\n\
+     \x20 # kernel writes a stack's names in sorted order, the only spelling a\n\
+     \x20 # rule matches. podman-init passes the stop signal (TERM) on to the\n\
+     \x20 # App; no other signal crosses inside the stack.\n\
+     \x20 signal (send) set=(term) peer=\"k2-app//&k2-crun\",\n\
      \x20 signal (receive) peer=k2-crun,\n\
      \x20 ptrace (trace,read,tracedby,readby) peer=k2-app,\n\
      }\n"
@@ -1800,7 +1804,6 @@ mod tests {
             "  signal (send,receive) peer=\"crun//&k2-app\",\n",
             // K2's Podman bundle (Ubuntu 24.04): its crun runs as k2-crun.
             "  signal (receive) peer=k2-crun,\n",
-            "  signal (send,receive) peer=\"k2-crun//&k2-app\",\n",
         ] {
             assert!(p.contains(want), "missing {want:?}");
         }
@@ -1816,6 +1819,39 @@ mod tests {
         assert_eq!(mac_marker(), "k2-app\n");
         assert_eq!(MAC_MARKER, format!("{APP_ETC}/{MAC_MARKER_FILE}"));
         assert_eq!(APPARMOR_FILE, format!("{APPARMOR_DIR}/{APPARMOR_PROFILE}"));
+    }
+
+    /// 0.46.18 (Ubuntu 24.04 field test): the kernel logged
+    /// `apparmor="DENIED" operation="signal" profile="k2-app"
+    /// peer="k2-app//&k2-crun"` when podman-init passed the stop signal on
+    /// to the App. The one rule that lets it is TERM only, send only, to
+    /// exactly that stack (spelt as the kernel writes it), and nothing
+    /// else inside the stack or toward an unconfined peer can send.
+    #[test]
+    fn podman_init_may_pass_on_term_and_nothing_wider() {
+        let p = apparmor_profile();
+        let rules: Vec<&str> = p.lines().map(str::trim).filter(|l| !l.starts_with('#') && l.starts_with("signal")).collect();
+        let term = "signal (send) set=(term) peer=\"k2-app//&k2-crun\",";
+        assert_eq!(rules.iter().filter(|l| **l == term).count(), 1, "the TERM rule, once: {rules:#?}");
+        // The old spelling (names out of the kernel's order) never matched,
+        // and allowed every signal: gone.
+        assert!(!p.contains("k2-crun//&k2-app"), "{p}");
+        // No bare `signal,` and no rule without a peer.
+        assert!(rules.iter().all(|l| l.contains("peer=")), "{rules:#?}");
+        // Only the TERM rule names a signal set, and its set is TERM alone.
+        let with_set: Vec<&&str> = rules.iter().filter(|l| l.contains("set=")).collect();
+        assert_eq!(with_set, vec![&term], "{rules:#?}");
+        // Every rule that reaches the k2-crun stack: receive from crun
+        // itself, or the TERM rule.
+        let crun: Vec<&&str> = rules.iter().filter(|l| l.contains("k2-crun")).collect();
+        assert_eq!(crun, vec![&term, &"signal (receive) peer=k2-crun,"], "{rules:#?}");
+        // Unconfined and distro-crun peers may only signal the App, never
+        // be signalled by it.
+        for l in &rules {
+            if l.contains("peer=unconfined") || l.ends_with("peer=crun,") || l.ends_with("peer=k2-crun,") {
+                assert!(l.starts_with("signal (receive)"), "{l}");
+            }
+        }
     }
 
     #[test]

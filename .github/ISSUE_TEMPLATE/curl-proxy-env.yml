@@ -1,0 +1,39 @@
+name: curl-proxy-env
+description: A bug, a proxy setting read differently from curl, or a question about the curl-proxy-env crate.
+title: "curl-proxy-env: "
+labels: ["curl-proxy-env"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Never paste a proxy password: replace it with `PASSWORD`. A way to send credentials to the wrong host, or to skip a proxy that is set, is a security issue: please report it privately with "Report a vulnerability" on the Security tab instead of here.
+  - type: input
+    id: version
+    attributes:
+      label: Crate version
+      description: From your Cargo.lock, for example 0.1.0.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and target triple.
+      placeholder: "Linux, x86_64-unknown-linux-gnu"
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: The settings
+      description: The proxy variables you set (http_proxy, https_proxy, all_proxy, no_proxy and their upper-case forms) and the URL, with any password replaced.
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What curl did (its version from `curl --version`, and its exit code), and what the crate did instead.
+    validations:
+      required: true

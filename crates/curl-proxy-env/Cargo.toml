@@ -1,0 +1,44 @@
+[package]
+name = "curl-proxy-env"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+description = "Pick a proxy from the environment as the curl command does (http_proxy, https_proxy, all_proxy, no_proxy) and open a tunnel through it: HTTP CONNECT, an https:// proxy, SOCKS4, SOCKS4a, SOCKS5 and SOCKS5h."
+authors = ["Alakazam Labs"]
+readme = "README.md"
+homepage = "https://github.com/Alakazam-211/K2/tree/main/crates/curl-proxy-env"
+documentation = "https://docs.rs/curl-proxy-env"
+repository = "https://github.com/Alakazam-211/K2"
+keywords = ["proxy", "socks5", "no-proxy", "http-connect", "curl"]
+categories = ["network-programming", "web-programming::http-client"]
+# What the .crate holds: the source, README, CHANGELOG, PROVENANCE and the
+# licences. The tests (and their stub proxies and curl table), the fuzz
+# workspace and the examples stay in the repository.
+include = ["/src/**/*.rs", "/README.md", "/CHANGELOG.md", "/PROVENANCE.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+
+[lib]
+name = "curl_proxy_env"
+
+[features]
+default = ["rustls"]
+# An https:// proxy: TLS to the proxy itself, with the caller's
+# rustls::ClientConfig. No crypto provider is compiled in: the caller's
+# config brings its own.
+rustls = ["dep:rustls"]
+
+[dependencies]
+rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
+
+# The tests' stub proxies: a throwaway CA and certificate minted at run
+# time (no key is committed), and ring as the provider of both sides.
+[dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

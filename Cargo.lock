@@ -1760,6 +1760,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "curl-proxy-env"
+version = "0.1.0"
+dependencies = [
+ "rcgen 0.13.2",
+ "rustls",
+]
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

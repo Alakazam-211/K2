@@ -1,0 +1,26 @@
+[package]
+name = "curl-proxy-env-fuzz"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for curl-proxy-env: the proxy variables, the proxy URL and the no_proxy list as any bytes. A panic is a finding; so is a URL that reads but prints back as one that doesn't."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repository's, so a normal build
+# doesn't pull libFuzzer.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+libfuzzer-sys = "0.4"
+curl-proxy-env = { path = "..", default-features = false }
+
+[[bin]]
+name = "env"
+path = "fuzz_targets/env.rs"
+test = false
+doc = false
+bench = false

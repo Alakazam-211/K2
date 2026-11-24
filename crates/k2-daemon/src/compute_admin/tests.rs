@@ -1591,6 +1591,28 @@ fn a_waited_node_answer_keeps_its_hint_and_template_together() {
     assert!(!body.to_string().contains("hintTemplate"), "a hint the server words goes with no template: {body}");
 }
 
+/// A node's refusal, as this server wraps it for the CLI, says no other
+/// brand's name (B7 guard 3, K2's ruling): the wrapper is this server's,
+/// the node's message crosses as data. Brand-free, so it holds under any
+/// brand (the xy build runs it by its name).
+#[test]
+fn brand_free_a_relayed_node_refusal_names_no_other_brand() {
+    use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+    let f = fx("relay-brand", true);
+    let responder = answer_with(f.node.clone(), FRAME_REFUSED);
+    let e = handle(NODE_WALL, &agent(&f), json!({"node": f.node_name}).to_string().as_bytes(), &HashMap::new(), None).expect_err("the node refused");
+    assert_eq!(responder.join().unwrap().as_deref(), Some("wall.enable"));
+    let body: Value = serde_json::from_str(&crate::compute_routes::refusal_response(&e).body).unwrap();
+    let hint = body["error"]["hint"].as_str().expect("a hint").to_string();
+    assert!(hint.ends_with(": the job user is missing"), "the node's message crosses as data: {hint}");
+    for other in ["k2", "k5", "xy"].into_iter().filter(|n| *n != CLI_NAME) {
+        assert!(!hint.contains(&format!("{other} ")), "another brand's command ({other}): {hint}");
+    }
+    if PRODUCT_NAME != "K2" {
+        assert!(!body.to_string().contains("K2"), "our product's name in another brand's answer: {body}");
+    }
+}
+
 /// A held request's answer, stored and listed (`k2 compute node admin
 /// requests`): the node's `result` is kept as sent, both or neither.
 #[test]

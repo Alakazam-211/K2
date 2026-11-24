@@ -724,6 +724,39 @@ fn node_upgrade_required_names_the_side_and_who_updates_it() {
     test_detach("n-old");
 }
 
+/// A node's refusal relayed to the CLI is worded by this server, in this
+/// server's names (B7 guard 3, K2's ruling): the node's own version and
+/// name cross as data; the product and the command around them are this
+/// build's, and no other brand's name is in the line. Brand-free, so it
+/// holds under any brand (the xy build runs it by its name).
+#[test]
+fn brand_free_a_relayed_node_refusal_is_worded_in_this_servers_names() {
+    use k2_core::brand::{CLI_NAME, PRODUCT_NAME};
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::insert_pending_node(&conn, "n-own-old", "own-box", "fp-own-old", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+    }
+    let (j, info) = flow_job("01d01d010123456789abcdef01234568", "n-own-old", b"x");
+    let mut o = offer_with(&[]);
+    o.node_version = "0.40.1".into();
+    let _rx = conn_with("n-own-old", Some(o));
+    let (code, hint) = fetch_artifact(&j, &info, false, Duration::from_secs(5)).expect_err("too old");
+    assert_eq!(code, "node_upgrade_required");
+    assert!(hint.contains("node 'own-box' runs k2-node 0.40.1"), "the node's facts cross as data: {hint}");
+    assert!(hint.contains(&format!("this server runs {PRODUCT_NAME} {}", env!("CARGO_PKG_VERSION"))), "{hint}");
+    assert!(hint.contains(&format!("({CLI_NAME} compute node update own-box)")), "{hint}");
+    for other in ["k2", "k5", "xy"].into_iter().filter(|n| *n != CLI_NAME) {
+        assert!(!hint.contains(&format!("{other} compute")), "another brand's command ({other}): {hint}");
+    }
+    if PRODUCT_NAME != "K2" {
+        assert!(!hint.replace("k2-node", "").contains("K2"), "our product's name in another brand's line: {hint}");
+    }
+    test_detach("n-own-old");
+}
+
 /// A node one release behind (this release's feature set, an older
 /// version string) still serves a paced fetch.
 #[cfg(unix)]

@@ -92,6 +92,9 @@ pub struct HireArgs {
     pub params: Vec<(String, String)>,
     /// `--answer`: the key stripped, each once.
     pub answers: Vec<(String, String)>,
+    /// `--decline` / `--allow` (T3): permission ids from the plan, as given.
+    pub declines: Vec<String>,
+    pub allows: Vec<String>,
     /// `--db-access read|write` from a session with a passport: the
     /// shell's `_cli_refuse_agent_self_grant`, before anything after it.
     pub self_grant: bool,
@@ -132,6 +135,22 @@ fn parse_words(rest: &[&str], agent_passport: bool) -> Result<Option<HireArgs>, 
         let mut two = true;
         match w {
             "--name" => a.name = value(rest, i, "--name requires a value")?.to_string(),
+            "--decline" => a.declines.push(
+                value(
+                    rest,
+                    i,
+                    &format!("--decline requires a permission id from the plan (see: {cli} agent hire --template <id> --dry-run)"),
+                )?
+                .to_string(),
+            ),
+            "--allow" => a.allows.push(
+                value(
+                    rest,
+                    i,
+                    &format!("--allow requires a permission id from the plan (see: {cli} agent hire --template <id> --dry-run)"),
+                )?
+                .to_string(),
+            ),
             "--agent" => {
                 a.agent_preset = value(
                     rest,
@@ -282,6 +301,12 @@ fn parse_words(rest: &[&str], agent_passport: bool) -> Result<Option<HireArgs>, 
     }
     if !answers.is_empty() && a.template.is_empty() {
         return Err("--answer goes with --template <id>".to_string());
+    }
+    if !a.declines.is_empty() && a.template.is_empty() {
+        return Err("--decline goes with --template <id>".to_string());
+    }
+    if !a.allows.is_empty() && a.template.is_empty() {
+        return Err("--allow goes with --template <id>".to_string());
     }
     // `[ ! -f ] || [ ! -r ]`.
     if !a.persona.is_empty() && !(is_file(&a.persona) && std::fs::File::open(&a.persona).is_ok()) {
@@ -731,6 +756,12 @@ impl Hire<'_> {
         ]);
         if !self.a.answers.is_empty() {
             act::set(&mut b, "answers", pairs(&self.a.answers));
+        }
+        if !self.a.declines.is_empty() {
+            act::set(&mut b, "declinePermissions", strs(&self.a.declines));
+        }
+        if !self.a.allows.is_empty() {
+            act::set(&mut b, "allowPermissions", strs(&self.a.allows));
         }
         if !self.a.name.is_empty() {
             act::set(&mut b, "name", s(&self.a.name));

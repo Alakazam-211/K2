@@ -1,7 +1,7 @@
 //! The block from the folder to the plan (`<stdin>` lines 144 to 626),
 //! and the dry run (lines 802 to 861).
 
-use super::super::{abs_user, cli, expanduser, obj, product, py_strip, s};
+use super::super::{abs_user, cli, expanduser, obj, py_strip, s};
 use super::color::normalize;
 use super::{act, dumps_head, exit_of, lower, or, pget, ptrue, raise, Frame, Hire, R};
 use crate::exit::Exit;
@@ -44,7 +44,7 @@ pub fn template_exit(code: &Value, fr: &[Frame]) -> Result<i64, crate::families:
         "usage" | "bad_template" => 2,
         "unknown_template" | "not_found" => 4,
         "template_conflict" | "folder_exists" | "owner_only" | "system_template" | "hire_off"
-        | "main_only" => 3,
+        | "main_only" | "outside_hire_root" => 3,
         _ => 1,
     })
 }
@@ -56,7 +56,7 @@ pub fn exit_code_for(code: &Value, fr: &[Frame]) -> Result<i64, crate::families:
     Ok(match code_word(code, &f)?.as_str() {
         "bad_usage" | "path_escape" | "catalog_unknown" | "usage" => 2,
         "duplicate_layer" | "refused" | "precondition" | "owner_only" | "hire_off"
-        | "main_only" => 3,
+        | "main_only" | "outside_hire_root" => 3,
         "not_found" | "ambiguous" => 4,
         _ => 1,
     })
@@ -984,13 +984,11 @@ pub fn is_file(p: &str) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file())
 }
 
-/// `TEMPLATE_PERMS_NOTE`.
-pub fn perms_note() -> String {
-    format!(
-        "suggested switches are not turned on by this {}: a person turns them on (Settings \u{2192} Workspaces / Agents \u{2192} the agent \u{2192} Permissions), or the agent asks on a card",
-        product()
-    )
-}
+/// `CARDS_WAIT_NOTE` (T3).
+const CARDS_WAIT_NOTE: &str = "card: an owner or admin answers it on the new agent's Thread (at its first start if it has none yet); tell your person it is waiting";
+/// `TEMPLATE_PERMS_NOTE` (T3).
+const TEMPLATE_PERMS_NOTE: &str =
+    "refused permissions stay off; the hire goes ahead. Tell your person which, and who can turn each on (the line under it)";
 
 /// `take_template_rows(a, resp, applied)`, called from module line `from`.
 pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, from: u32) -> R<()> {
@@ -1007,10 +1005,28 @@ pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, f
     if let Some(hs @ Value::Object(_)) = act::get(resp, "hireSwitch") {
         act::set(a, "hireSwitch", hs.clone());
     }
-    let note = (ptrue(&perms, "suggested", &fr(792))? || ptrue(&perms, "cards", &fr(792))?)
-        && !ptrue(&perms, "granted", &fr(792))?;
-    if note {
-        act::set(a, "permissionsNote", s(&perms_note()));
+    // T3: a card waiting, and refused permissions, each have their note.
+    let mut notes: Vec<&str> = Vec::new();
+    let mut card = false;
+    for r in py_iter(&rows, 792).map_err(|mut e| {
+        e.frames = fr(792).to_vec();
+        e
+    })? {
+        let step = pget(&r, "step", &fr(792))?.cloned().unwrap_or(Value::Null);
+        let st = pget(&r, "status", &fr(792))?.cloned().unwrap_or(Value::Null);
+        if ops::py_eq(&step, &s("permission")) && ops::py_eq(&st, &s("card")) {
+            card = true;
+            break;
+        }
+    }
+    if card {
+        notes.push(CARDS_WAIT_NOTE);
+    }
+    if ptrue(&perms, "refused", &fr(792))? {
+        notes.push(TEMPLATE_PERMS_NOTE);
+    }
+    if !notes.is_empty() {
+        act::set(a, "permissionsNote", s(&notes.join("\n      ")));
     }
     let mut busy = false;
     for r in py_iter(&rows, 794).map_err(|mut e| {
@@ -1020,7 +1036,7 @@ pub fn take_template_rows(h: &mut Hire, i: usize, resp: &Value, applied: bool, f
         let st = pget(&r, "status", &fr(794))?
             .cloned()
             .unwrap_or(Value::Null);
-        if ops::py_eq(&st, &s("write")) || ops::py_eq(&st, &s("done")) {
+        if ops::py_eq(&st, &s("write")) || ops::py_eq(&st, &s("done")) || ops::py_eq(&st, &s("grant")) {
             let step = pget(&r, "step", &fr(794))?.cloned().unwrap_or(Value::Null);
             if !(ops::py_eq(&step, &s("folder")) || ops::py_eq(&step, &s("register"))) {
                 busy = true;

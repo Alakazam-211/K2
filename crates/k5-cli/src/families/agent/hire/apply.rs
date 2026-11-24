@@ -166,7 +166,7 @@ pub fn apply(h: &mut Hire) -> R<()> {
                     .expect("the core runs for a pending step or a template"),
             };
             // In a session a refusal (403) exits 3 whatever its code.
-            let refused = ["owner_only", "hire_off", "main_only"]
+            let refused = ["owner_only", "hire_off", "main_only", "outside_hire_root"]
                 .iter()
                 .any(|c| ops::py_eq(&code, &s(c)))
                 || is_403(act::get(&resp, "httpStatus"));

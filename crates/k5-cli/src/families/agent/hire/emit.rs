@@ -274,7 +274,19 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
             txt.push_str(&format!("  ({})", line_of(act::get(r, "reason"))));
         }
         let st = act::get(r, "status").cloned().unwrap_or(Value::Null);
+        // T3: a permission line says what happens to that switch.
+        let perm = ops::py_eq(&step, &s("permission"));
         let word = match &st {
+            Value::Str(t) if perm => match t.as_str() {
+                Some("grant") => "would grant".to_string(),
+                Some("done") => "granted".to_string(),
+                Some("card") => "card".to_string(),
+                Some("refused") => "refused".to_string(),
+                Some("skip") => "skip".to_string(),
+                Some("declined") => "declined".to_string(),
+                Some("suggest") => "suggested".to_string(),
+                _ => py::str_of(&st),
+            },
             Value::Str(t) => match t.as_str() {
                 Some("write") => "would write".to_string(),
                 Some("done") => "wrote".to_string(),
@@ -294,6 +306,13 @@ fn template_rows(h: &mut Hire, a: &Value, fr: &dyn Fn(u32) -> Vec<Frame>) -> R<(
         };
         h.stdout
             .push_str(&format!("      {} {txt}\n", ljust(&word, 12)));
+        if perm && act::get(r, "hint").is_some_and(py::truthy) {
+            h.stdout.push_str(&format!(
+                "      {} {}\n",
+                ljust("", 12),
+                line_of(act::get(r, "hint"))
+            ));
+        }
     }
     if act::get(a, "permissionsNote").is_some_and(py::truthy) {
         h.stdout.push_str(&format!(

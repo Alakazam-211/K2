@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.13: pairs with kit v0.24.0
+
+**Requires `k2-mpc-base` v0.24.0**. PSD and PSB files behave as in v0.1.12.
+
+- Pairs with kit v0.24.0. Its one pack API addition is opt-in: a container's own record
+  (`DraftNode::own`, declared with `IndexSpec::with_own_records`; index row format 3). Its other
+  changes are the host's (a person's edit never waits behind an agent flood; the store checks a log
+  entry's engine, `MPC-E527`; commit durability changed live; memory: shared texts, the undo
+  history's size, freed memory after write-backs) and the native engine's (off).
+- `crates/psd/Cargo.toml`'s kit comment names v0.24.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.24.0 and the crate version 0.1.13. As for v0.1.12, the tag is a cut commit that
+  leaves out `fuzz/` and `scripts/oracle/`.
+
 ## v0.1.12: pairs with kit v0.23.0
 
 **Requires `k2-mpc-base` v0.23.0**. PSD and PSB files behave as in v0.1.11.

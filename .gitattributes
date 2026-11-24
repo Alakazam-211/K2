@@ -7,9 +7,10 @@
 # files there mix CRLF and LF).
 src/renderer/zen-lib/** -text
 
-# The shiki grammars' licence texts keep their exact upstream bytes (NOTICE.md
-# records each one's sha256; seven end without a newline).
-resources/notices/shiki-*-LICENSE -text -whitespace
+# The shiki grammars' licence texts and the MPL ones' source files keep their
+# exact upstream bytes (NOTICE.md records each one's sha256; seven of the
+# texts end without a newline).
+resources/notices/shiki-* -text -whitespace
 
 # The scene preview fixture is checked byte for byte: its K2SCENE1 is a JSON
 # header then floats, never text to normalise.

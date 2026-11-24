@@ -887,9 +887,12 @@ ENVIRONMENT (0.46.9: what each machine is, and its system packages)
       tauri-linux    build-base, plus WebKitGTK, GTK and the GUI test set
                      for a Tauri app on Linux (system packages only: add
                      rust@stable, and node@22 for the front end)
-      rust-gui-ci    build-base, plus the X11/Wayland/GL/font/audio dev
-                     set, xvfb, and the tools rust@stable+clippy+rustfmt
-                     and cargo-nextest (don't name those again)
+      rust-gui-ci    build-base, plus the X11/Wayland/GL/font/audio dev set,
+                     xvfb, cargo-nextest, and Rust with clippy and rustfmt
+                     (don't name those again): a repo's
+                     rust-toolchain(.toml) pin, else rust@stable.
+                     k2-node before 0.46.18 uses stable instead of the pin.
+                     --plan shows rust@stable; the node uses the pin.
       k2-workspace   what K2's own cargo --workspace build needs
       gpu-headless   GPU tests without a display (with --gpu): EGL, GBM, the
                      Vulkan loader and Mesa's GPU drivers, eglinfo,

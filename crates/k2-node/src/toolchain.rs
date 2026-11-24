@@ -658,24 +658,7 @@ impl Toolchains {
     pub async fn resolve(&self, explicit: &[Need], repo: &[(Need, String)], rust_file: Option<&RustToolchain>, log: &mut (dyn FnMut(&str) + Send)) -> Result<Resolved, Fail> {
         let _installing = Installing::start(&self.root);
         let mut out = Resolved::default();
-        // Profiles (protocol 7): their tools join the explicit needs (an
-        // explicit need for the same tool wins), their system names the
-        // package list. This node's own copy decides what a profile holds.
-        let mut explicit: Vec<Need> = explicit.to_vec();
-        let mut profile_sys: Vec<String> = Vec::new();
-        for n in explicit.clone() {
-            if let Need::Profile { name, version } = &n {
-                let p = k2_node_proto::profiles::get(name, *version)
-                    .ok_or_else(|| (k2_node_proto::profiles::PROFILE_UNKNOWN, k2_node_proto::profiles::resolve(&n.token()["profile:".len()..]).err().unwrap_or_default()))?;
-                profile_sys.extend(p.all_sys());
-                for t in p.all_tools() {
-                    let tn = needs::parse(&t).map_err(|e| (codes::TOOL_INSTALL_FAILED, format!("{}: {e}", n.token())))?;
-                    if !explicit.iter().any(|x| x.key() == tn.key()) {
-                        explicit.push(tn);
-                    }
-                }
-            }
-        }
+        let ProfileTools { needs: explicit, sys: profile_sys, pin } = expand_profiles(explicit, rust_file)?;
         let explicit = &explicit[..];
         let explicit_keys: Vec<String> = explicit.iter().map(Need::key).collect();
         let mut work: Vec<(Need, Option<String>)> = explicit.iter().cloned().map(|n| (n, None)).collect();
@@ -820,12 +803,24 @@ impl Toolchains {
         }
         // rust-toolchain(.toml): rustup honours it by itself; install it
         // up front so the first cargo call isn't a silent download (and
-        // works with rustup versions that no longer auto-install).
+        // works with rustup versions that no longer auto-install). A
+        // profile's Rust folded into the pin makes it required.
         if let Some(rt) = rust_file {
             if rust_env.is_none() && !explicit_keys.iter().any(|k| k == "rust") {
-                match self.ensure_rust(rt, log).await {
+                let rt = match &pin {
+                    Some(p) => {
+                        let rt = p.apply(rt);
+                        out.notes.push(format!("{}: Rust is the repo's rust-toolchain pin ({}), with {}, not its own rust need", p.profile, rt.channel, rt.components.join(", ")));
+                        rt
+                    }
+                    None => rt.clone(),
+                };
+                match self.ensure_rust(&rt, log).await {
                     Ok(did) => out.installed_any |= did,
-                    Err(e) => out.notes.push(format!("warning: rust-toolchain file ({}): {e}", rt.channel)),
+                    Err(e) => match &pin {
+                        Some(p) => return Err((codes::TOOL_INSTALL_FAILED, format!("{}: rust@{} (rust-toolchain): {e}", p.profile, rt.channel))),
+                        None => out.notes.push(format!("warning: rust-toolchain file ({}): {e}", rt.channel)),
+                    },
                 }
             }
         }
@@ -1539,6 +1534,90 @@ pub struct RustToolchain {
     pub targets: Vec<String>,
 }
 
+/// A job's needs with its profiles expanded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileTools {
+    /// The explicit needs plus each profile's tools (an explicit need for
+    /// the same tool wins).
+    pub needs: Vec<Need>,
+    /// The profiles' system names.
+    pub sys: Vec<String>,
+    /// A profile's Rust that goes to the repo's pin instead.
+    pub pin: Option<PinExtras>,
+}
+
+/// What a profile's Rust need adds to a repo's rust-toolchain pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinExtras {
+    /// The profile that asked (`profile:rust-gui-ci`).
+    pub profile: String,
+    pub components: Vec<String>,
+    pub targets: Vec<String>,
+}
+
+impl PinExtras {
+    /// The pin with these components and targets added.
+    pub fn apply(&self, rt: &RustToolchain) -> RustToolchain {
+        let mut out = rt.clone();
+        for c in &self.components {
+            if !out.components.contains(c) {
+                out.components.push(c.clone());
+            }
+        }
+        for t in &self.targets {
+            if !out.targets.contains(t) {
+                out.targets.push(t.clone());
+            }
+        }
+        out
+    }
+}
+
+/// Profiles (protocol 7): their tools join the explicit needs (an
+/// explicit need for the same tool wins), their system names the package
+/// list. This node's own copy decides what a profile holds.
+///
+/// A profile never moves a repo off its rust-toolchain pin: with a pin
+/// file and no explicit rust need, a profile's rust need (rust-gui-ci's
+/// `rust@stable+clippy+rustfmt`) is left out and its components go to the
+/// pinned toolchain. A rust need would set RUSTUP_TOOLCHAIN and override
+/// the file.
+pub fn expand_profiles(explicit: &[Need], rust_file: Option<&RustToolchain>) -> Result<ProfileTools, Fail> {
+    let named_rust = explicit.iter().any(|x| matches!(x, Need::Rust { .. }));
+    let mut out = ProfileTools { needs: explicit.to_vec(), sys: Vec::new(), pin: None };
+    for n in explicit {
+        let Need::Profile { name, version } = n else { continue };
+        let p = k2_node_proto::profiles::get(name, *version)
+            .ok_or_else(|| (k2_node_proto::profiles::PROFILE_UNKNOWN, k2_node_proto::profiles::resolve(&n.token()["profile:".len()..]).err().unwrap_or_default()))?;
+        out.sys.extend(p.all_sys());
+        for t in p.all_tools() {
+            let tn = needs::parse(&t).map_err(|e| (codes::TOOL_INSTALL_FAILED, format!("{}: {e}", n.token())))?;
+            if let (Need::Rust { components, targets, .. }, Some(_), false) = (&tn, rust_file, named_rust) {
+                let pin = out.pin.get_or_insert_with(|| PinExtras { profile: n.token(), components: Vec::new(), targets: Vec::new() });
+                let mut comps: Vec<String> = components.iter().filter(|c| *c != needs::RUST_MINIMAL).cloned().collect();
+                if tn.rust_wants_defaults() {
+                    comps.extend(needs::DEFAULT_RUST_COMPONENTS.iter().map(|c| c.to_string()));
+                }
+                for c in comps {
+                    if !pin.components.contains(&c) {
+                        pin.components.push(c);
+                    }
+                }
+                for x in targets {
+                    if !pin.targets.contains(x) {
+                        pin.targets.push(x.clone());
+                    }
+                }
+                continue;
+            }
+            if !out.needs.iter().any(|x| x.key() == tn.key()) {
+                out.needs.push(tn);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn small_read(p: &Path) -> Option<String> {
     let m = std::fs::symlink_metadata(p).ok()?;
     if !m.is_file() || m.len() > 64 * 1024 {
@@ -1786,6 +1865,54 @@ mod tests {
         assert_eq!(rt.channel, "nightly-2026-09-01");
         assert_eq!(rt.components, vec!["clippy", "rustfmt"]);
         assert_eq!(rt.targets, vec!["wasm32-unknown-unknown"]);
+    }
+
+    /// 0.46.18: rust-gui-ci's rust@stable overrode a repo's
+    /// rust-toolchain.toml (RUSTUP_TOOLCHAIN=stable), so clippy ran on a
+    /// newer Rust than the pin. With a pin, the profile's Rust is the pin
+    /// plus clippy and rustfmt; without one, it stays rust@stable.
+    #[test]
+    fn a_profile_keeps_a_repos_rust_pin() {
+        let rust = |n: &[Need]| n.iter().filter(|x| matches!(x, Need::Rust { .. })).map(Need::token).collect::<Vec<_>>();
+        let job = needs::parse_all(&["profile:rust-gui-ci", "node@22"]).unwrap();
+        let d = crate::util::temp_dir("tc-profile-pin");
+
+        // No pin file: the profile's own Rust.
+        let none = expand_profiles(&job, rust_toolchain_file(&d).as_ref()).unwrap();
+        assert_eq!(rust(&none.needs), vec!["rust@stable+clippy+rustfmt"]);
+        assert_eq!(none.pin, None);
+        assert!(none.needs.contains(&Need::Nextest) && none.sys.iter().any(|s| s == "xvfb"));
+
+        // A pin: no rust need (nothing sets RUSTUP_TOOLCHAIN); clippy and
+        // rustfmt join the pinned toolchain, after the file's own.
+        write(&d, "rust-toolchain.toml", "[toolchain]\nchannel = \"1.99.1\"\ncomponents = [\"rust-src\", \"clippy\"]\n");
+        let rt = rust_toolchain_file(&d).unwrap();
+        let pinned = expand_profiles(&job, Some(&rt)).unwrap();
+        assert_eq!(rust(&pinned.needs), Vec::<String>::new());
+        assert!(pinned.needs.contains(&Need::Nextest), "the profile's other tools stay: {:?}", pinned.needs);
+        assert_eq!(pinned.sys, none.sys);
+        let p = pinned.pin.clone().unwrap();
+        assert_eq!(p.profile, "profile:rust-gui-ci");
+        let applied = p.apply(&rt);
+        assert_eq!(applied.channel, "1.99.1");
+        assert_eq!(applied.components, vec!["rust-src", "clippy", "rustfmt"]);
+
+        // A plain rust-toolchain file counts too.
+        let plain = RustToolchain { channel: "1.99.1".into(), components: vec![], targets: vec![] };
+        assert_eq!(expand_profiles(&job, Some(&plain)).unwrap().pin.unwrap().apply(&plain).components, vec!["clippy", "rustfmt"]);
+
+        // A rust need the job names still wins over the pin and the profile.
+        let named = needs::parse_all(&["profile:rust-gui-ci", "rust@1.98+minimal"]).unwrap();
+        let e = expand_profiles(&named, Some(&rt)).unwrap();
+        assert_eq!((rust(&e.needs), e.pin), (vec!["rust@1.98+minimal".to_string()], None));
+
+        // A profile without Rust changes nothing.
+        let tauri = expand_profiles(&needs::parse_all(&["profile:tauri-linux"]).unwrap(), Some(&rt)).unwrap();
+        assert_eq!((rust(&tauri.needs), tauri.pin), (Vec::<String>::new(), None));
+
+        // An unknown profile is still refused.
+        let unknown = expand_profiles(&[Need::Profile { name: "nope".into(), version: None }], Some(&rt)).unwrap_err();
+        assert_eq!(unknown.0, k2_node_proto::profiles::PROFILE_UNKNOWN);
     }
 
     /// CE-A10: a toolchain's `components` list → the names a need uses

@@ -34,7 +34,9 @@ pub struct Profile {
     pub includes: &'static [&'static str],
     /// Canonical system names.
     pub sys: &'static [&'static str],
-    /// Tool needs (`rust@stable+clippy+rustfmt`, `cargo-nextest`).
+    /// Tool needs (`rust@stable+clippy+rustfmt`, `cargo-nextest`). On a
+    /// node, a repo's rust-toolchain pin takes a profile's Rust channel
+    /// (its components join the pin); see k2-node's `expand_profiles`.
     pub tools: &'static [&'static str],
     /// One line for `k2 compute profiles` and the docs.
     pub about: &'static str,
@@ -115,7 +117,7 @@ pub const PROFILES: &[Profile] = &[
             "xvfb",
         ],
         tools: &["rust@stable+clippy+rustfmt", "cargo-nextest"],
-        about: "build-base plus the X11/Wayland/GL/font/audio dev set, Rust with clippy and rustfmt, and nextest",
+        about: "build-base plus the X11/Wayland/GL/font/audio dev set, Rust with clippy and rustfmt (a repo's rust-toolchain pin, else stable), and nextest",
     },
     Profile {
         name: "gpu-headless",

@@ -69,11 +69,18 @@ struct Box1 {
 }
 
 fn setup(on: bool) -> (Box1, crate::postal_routes::SwitchGuard) {
+    // TempHome holds the process-wide env lock for the whole test, so the
+    // resets below can't race another Postal test. Under `cargo test` every
+    // test shares one process: the test vault, the owner notices and the
+    // audit sink outlive each test (nextest's process per test hid that).
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
     let vault = crate::vault::ensure_test_vault();
     crate::vault::postal::install();
     k2_core::postal::keys::clear_decide_token(LABEL).expect("a clean slate");
+    assert_eq!(stored(), None, "the slate is clean");
+    OWNER_NOTICES.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    crate::hire_routes::AUDIT_SINK.lock().unwrap_or_else(|p| p.into_inner()).retain(|a| a.0 != "postal-decide-token");
     let guard = crate::postal_routes::switch_for_test(on);
     reset_for_test();
     let stub = Arc::new(Stub::default());
@@ -185,6 +192,27 @@ fn the_owners_switch_off_revokes_it_and_removes_it() {
     assert_eq!(b.stub.calls(), ["/decide-token/revoke"]);
     assert_eq!(stored(), None, "gone from the vault");
     assert_eq!(audits()[0].2, "label=initech revoked (1 on the network) and removed");
+}
+
+#[test]
+fn a_second_switch_off_with_no_token_here_still_removes_cleanly() {
+    // On, off (the token is destroyed in the vault), on while the plane
+    // rate-limits (nothing minted), off again: the vault already destroyed
+    // that name, and removing it again is not a failure.
+    let (b, _g) = setup(true);
+    k2_core::postal::keys::set_decide_token(LABEL, TOKEN_A).expect("stored");
+    b.stub.script("/decide-token/revoke", vec![(200, json!({ "revoked": 1 })), (200, json!({ "revoked": 0 }))]);
+    b.stub.script("/decide-token", vec![plane_error(429, "rate_limited")]);
+    let v = switch(false);
+    assert_eq!(v["decideToken"]["state"], "revoked", "{v}");
+    switch(true);
+    assert_eq!(stored(), None, "nothing was minted");
+    let v = switch(false);
+    assert_eq!((v["enabled"].as_bool(), v["decideToken"]["state"].as_str()), (Some(false), Some("revoked")), "{v}");
+    assert_eq!(b.stub.calls(), ["/decide-token/revoke", "/decide-token", "/decide-token/revoke"]);
+    assert_eq!(stored(), None);
+    let a = audits();
+    assert_eq!(a.last().map(|a| a.2.as_str()), Some("label=initech revoked (0 on the network) and removed"), "{a:?}");
 }
 
 #[test]

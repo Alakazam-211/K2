@@ -64,10 +64,15 @@ impl VaultRefStore {
         }
     }
 
+    /// Remove a ref. Idempotent: a ref never stored (404) or already
+    /// destroyed is gone, so that's Ok. The vault keeps a destroyed system
+    /// secret's row (its name comes back on the next `put_exact`) and
+    /// answers a second destroy `secret_destroyed`; without this a second
+    /// removal (Postal switched off twice, a mailbox deleted twice) failed.
     pub fn delete(&self, sref: &str) -> Result<(), String> {
         match self.vault.destroy(&self.sel(sref), &self.actor()) {
             Ok(()) => Ok(()),
-            Err(e) if e.status == 404 => Ok(()),
+            Err(e) if e.status == 404 || e.code == "secret_destroyed" => Ok(()),
             Err(e) => Err(format!("vault: {}", e.code)),
         }
     }

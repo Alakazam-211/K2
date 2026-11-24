@@ -10118,31 +10118,9 @@ async fn handle_one_request(
             } else {
                 crate::session_author::for_request(&query, state.token.as_str(), crate::session_author::OWNER_TOKEN)
             };
-            // Settings → Getting started: a person's yes to a Member's ask
-            // (the owner token or a login, read from the credential as the
-            // first-run arm reads it; an App pass never).
-            let ticket_actor = if skin_pass.is_some() {
-                None
-            } else if super::http::token_is_owner(&query, state.token.as_str()) {
-                Some(crate::notify_routes::Actor::owner_token())
-            } else {
-                super::http::extract_token(&query)
-                    .filter(|t| !t.is_empty())
-                    .and_then(k2_core::connect_users::validate_session)
-                    .map(|u| crate::notify_routes::Actor::login(&u))
-            };
+            let ticket_actor = crate::first_run_routes::ticket_actor(&query, state.token.as_str(), skin_pass.is_some());
             let result = tokio::task::spawn_blocking(move || {
-                let r = crate::feedback_routes::dispatch_post_as_gated(
-                    &p_owned,
-                    &body_bytes,
-                    &session_author,
-                    skin_pass,
-                    door,
-                );
-                if let Some(actor) = &ticket_actor {
-                    crate::first_run_routes::after_ticket_write(&p_owned, &body_bytes, &r, actor);
-                }
-                r
+                crate::first_run_routes::feedback_post(&p_owned, &body_bytes, &session_author, skin_pass, door, ticket_actor.as_ref())
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

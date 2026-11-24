@@ -538,6 +538,40 @@ fn ask_the_owner(actor: &Actor) -> CliResponse {
 /// Resolved) and `actor` is the owner token, an Owner or an Admin: the
 /// setup list goes on, that Member's setup starts again, and the ticket
 /// closes with a note. Anything else: nothing.
+/// Settings → Getting started: who answers a Member's ask through a
+/// ticket write: the owner token or a login, read from the credential as
+/// the first-run arm reads it; an App pass never. (Moved out of the
+/// dispatcher as it was, 0.46.18 queue, ratchet.)
+pub(crate) fn ticket_actor(query: &str, owner_token: &str, app_pass: bool) -> Option<Actor> {
+    if app_pass {
+        None
+    } else if crate::routes::http::token_is_owner(query, owner_token) {
+        Some(Actor::owner_token())
+    } else {
+        crate::routes::http::extract_token(query)
+            .filter(|t| !t.is_empty())
+            .and_then(k2_core::connect_users::validate_session)
+            .map(|u| Actor::login(&u))
+    }
+}
+
+/// A ticket write (`/cli/feedback/*`), then [`after_ticket_write`] when a
+/// person made it (the dispatcher's blocking call, moved here as it was).
+pub(crate) fn feedback_post(
+    path: &str,
+    body: &[u8],
+    session_author: &str,
+    skin: Option<k2_core::skin::SkinPass>,
+    door: crate::feedback_routes::CreateDoor,
+    actor: Option<&Actor>,
+) -> CliResponse {
+    let r = crate::feedback_routes::dispatch_post_as_gated(path, body, session_author, skin, door);
+    if let Some(actor) = actor {
+        after_ticket_write(path, body, &r, actor);
+    }
+    r
+}
+
 pub fn after_ticket_write(path: &str, body: &[u8], resp: &CliResponse, actor: &Actor) {
     if !resp.status.starts_with('2')
         || !matches!(path, "/cli/feedback/answer" | "/cli/feedback/comment" | "/cli/feedback/resolve")

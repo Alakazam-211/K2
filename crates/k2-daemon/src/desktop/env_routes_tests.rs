@@ -329,3 +329,92 @@ fn a_waiting_desktop_says_so_with_no_display() {
     assert_eq!(r["env"], json!({}));
     assert!(r["message"].as_str().unwrap().contains("Waiting"), "{r}");
 }
+
+// ── 0.46.18: a terminal the daemon spawned for an agent ──────────────
+
+/// A real passport in the process registry (this test's temp home).
+fn passport(workspace: &str, agent_address: &str) -> String {
+    let sid = k2_core::session::SessionId::new();
+    crate::session_token::mint_session_token(
+        &sid,
+        &sid.to_string(),
+        crate::session_token::HookPrincipal { workspace_uuid: workspace.into(), agent_address: agent_address.into() },
+        crate::session_token::CredMode::ApiKey,
+        crate::session_token::Provider::Anthropic,
+    );
+    sid.to_string()
+}
+
+fn shell(ws: &str, session: &str) -> Who {
+    Who::Shell { project_id: ws.into(), session_id: session.into() }
+}
+
+/// The rule, pure: the passport's own workspace and agent, and the name its
+/// session was spawned under, never the program it runs.
+#[test]
+fn a_passport_names_an_agent_only_for_the_session_spawned_as_that_agent() {
+    use crate::session_token::HookPrincipal;
+    let p = |ws: &str, a: &str| HookPrincipal { workspace_uuid: ws.into(), agent_address: a.into() };
+    // `k2 terminal spawn --agent builder`: spawned as builder, passport for builder.
+    assert_eq!(passport_agent("w1", Some(&p("w1", "builder")), Some("builder")).as_deref(), Some("builder"));
+    // The workspace's canonical slot (its own id).
+    let ws = "0b5f6f2e-6c1d-4c38-9a8e-3f1d2b7c9e01";
+    assert_eq!(passport_agent(ws, Some(&p(ws, ws)), Some(ws)).as_deref(), Some(ws));
+    for (why, principal, spawned) in [
+        ("a person's shell tab (v2 spawn: the passport names the workspace)", p("w1", "scientist"), "tab-7d1f"),
+        ("a person's tab, even if the passport said tab-*", p("w1", "tab-7d1f"), "tab-7d1f"),
+        ("a terminal spawned with no agent", p("w1", "terminal-0a1b2c3d"), "terminal-0a1b2c3d"),
+        ("a remote-session shell", p("w1", "remote-shell-g1-ab12"), "remote-shell-g1-ab12"),
+        ("a /v1 host session", p("w1", "api-x-1"), "api-x-1"),
+        ("a renderer terminal's bare id", p("w1", "5e0c1a9b-2f3d-4e5f-8a7b-6c5d4e3f2a1b"), "5e0c1a9b-2f3d-4e5f-8a7b-6c5d4e3f2a1b"),
+        ("another workspace's passport", p("w2", "builder"), "builder"),
+        ("a passport for another agent than its session", p("w1", "builder"), "atlas"),
+        ("an empty name", p("w1", ""), ""),
+    ] {
+        assert_eq!(passport_agent("w1", Some(&principal), Some(spawned)), None, "{why}");
+    }
+    assert_eq!(passport_agent("w1", None, Some("builder")), None, "no live passport");
+    assert_eq!(passport_agent("w1", Some(&p("w1", "builder")), None), None, "no live session");
+    // An agent may be called terminal-<anything but 8 hex>.
+    assert!(names_an_agent("terminal-runner", "w1"));
+}
+
+/// 0.46.18 field report: `k2 desktop env` from a shell the daemon spawned
+/// for an agent (`k2 terminal spawn --agent builder --command bash`) was
+/// refused as a person's (`desktop_env_agents_only`). It is that agent now;
+/// a person's own shell tab is still refused.
+#[test]
+fn a_shell_spawned_for_an_agent_gets_its_desktop_and_a_persons_shell_tab_is_refused() {
+    let _e = env();
+    let built = passport("w1", "builder");
+    let tab = passport("w1", "scientist");
+    let other = passport("w2", "builder");
+    let gone = k2_core::session::SessionId::new().to_string();
+    let _spawns = spawns_for_test(HashMap::from([
+        (built.clone(), "builder".to_string()),
+        (tab.clone(), "tab-7d1f".to_string()),
+        (other.clone(), "builder".to_string()),
+        (gone.clone(), "builder".to_string()),
+    ]));
+    for (why, who) in [
+        ("a person's own shell tab", shell("w1", &tab)),
+        ("another workspace's passport", shell("w1", &other)),
+        ("no live passport", shell("w1", &gone)),
+    ] {
+        let (s, r) = env_call(&who, json!({}));
+        assert_eq!((s, code(&r)), (403, "desktop_env_agents_only"), "{why}: {r}");
+    }
+    let (s, r) = env_call(&shell("w1", &built), json!({}));
+    assert_eq!((s, r["state"].as_str()), (200, Some("ready")), "{r}");
+    assert_eq!(r["desktop"], "virtual:w1", "its own workspace's desktop: {r}");
+    // Still its own desktop only, and the same switch applies.
+    let (s, r) = env_call(&shell("w1", &built), json!({"desktop": "virtual:w2"}));
+    assert_eq!((s, code(&r)), (403, "not_your_desktop"), "{r}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_agents_can_use_desktop(&conn, "w1", false).unwrap();
+    }
+    let (s, r) = env_call(&shell("w1", &built), json!({}));
+    assert_eq!((s, code(&r)), (403, "desktop_switch_off"), "{r}");
+}

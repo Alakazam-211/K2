@@ -5,6 +5,10 @@
 //!   every other Desktop route gives an agent: an agent passport, the
 //!   Owner's `virtual` switch, and its workspace's "Allow a virtual desktop"
 //!   (0301). People, App passes and API keys get `desktop_env_agents_only`.
+//!   A terminal the daemon spawned for an agent counts as that agent
+//!   whatever program it runs: the passport names the agent its session
+//!   was spawned under (`passport_agent`, 0.46.18). A person's own shell
+//!   tab is still refused.
 //! - **Always the caller's own desktop** (LD-33, LD-34):
 //!   `virtual:<its workspace id>`, from the passport. A sidecar carries its
 //!   workspace's passport, so it resolves to the same desktop (LD-39).
@@ -84,6 +88,68 @@ fn until_words(until: i64, now: i64) -> String {
     format!("{at} (in {mins} min)")
 }
 
+// ── an agent's own terminal (0.46.18) ────────────────────────────────
+
+static SPAWNS_FOR_TEST: RwLock<Option<HashMap<String, String>>> = RwLock::new(None);
+
+/// Tests: session id → the name its live session was spawned under, until
+/// the guard drops.
+pub fn spawns_for_test(m: HashMap<String, String>) -> SpawnGuard {
+    *SPAWNS_FOR_TEST.write().unwrap_or_else(|p| p.into_inner()) = Some(m);
+    SpawnGuard
+}
+
+pub struct SpawnGuard;
+
+impl Drop for SpawnGuard {
+    fn drop(&mut self) {
+        *SPAWNS_FOR_TEST.write().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+
+/// The name the live session `session_id` was spawned under (its session
+/// map key: `tab-<id>` for a person's tab, the agent's name for a terminal
+/// the daemon spawned for an agent).
+fn spawn_name(session_id: &str) -> Option<String> {
+    if let Some(m) = SPAWNS_FOR_TEST.read().unwrap_or_else(|p| p.into_inner()).as_ref() {
+        return m.get(session_id).cloned();
+    }
+    k2_core::session::SessionId::parse(session_id).and_then(|id| crate::v2_session_map::agent_name_for_session_id(&id))
+}
+
+/// Does a session's spawn name name an agent? Not a person's own tab
+/// (`tab-*`), a terminal spawned with no agent named (`terminal-<8 hex>`),
+/// a remote-session shell, a `/v1` host session, or a bare id other than
+/// the workspace's own (its canonical slot).
+pub(crate) fn names_an_agent(name: &str, project_id: &str) -> bool {
+    use k2_core::workspace_session_handles as h;
+    let unnamed_terminal = name.strip_prefix("terminal-").is_some_and(|r| r.len() == 8 && r.bytes().all(|b| b.is_ascii_hexdigit()));
+    !name.trim().is_empty()
+        && !h::is_tab_agent_name(name)
+        && !h::is_api_agent_name(name)
+        && !h::is_remote_shell_agent_name(name)
+        && !unnamed_terminal
+        && (!h::is_uuid_shape(name) || h::is_canonical_agent_name(name, project_id))
+}
+
+/// The agent a passport was minted for, read from the passport itself, not
+/// from the program its session runs (0.46.18 field report: a shell the
+/// daemon spawned for an agent, `k2 terminal spawn --agent <name>`, was
+/// refused as a person's shell). It names an agent when the passport is for
+/// this workspace, its agent is the name its session was spawned under,
+/// and that name is an agent's ([`names_an_agent`]). A person's own shell
+/// tab (`tab-*`, the passport naming the workspace) names none.
+pub(crate) fn passport_agent(project_id: &str, principal: Option<&crate::session_token::HookPrincipal>, spawned_as: Option<&str>) -> Option<String> {
+    let (p, name) = (principal?, spawned_as?);
+    (p.workspace_uuid == project_id && p.agent_address == name && names_an_agent(name, project_id)).then(|| name.to_string())
+}
+
+/// A K2 terminal's passport that a daemon spawn minted for an agent.
+fn shell_is_an_agents(project_id: &str, session_id: &str) -> bool {
+    let principal = crate::session_token::principal_for_session(session_id);
+    passport_agent(project_id, principal.as_ref(), spawn_name(session_id).as_deref()).is_some()
+}
+
 fn agents_only() -> CliResponse {
     refuse(
         403,
@@ -106,6 +172,9 @@ fn log_line(l: &AuditLine) {
 pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
     let (project_id, session_id) = match who {
         Who::Agent { project_id, session_id } => (project_id.as_str(), session_id.as_str()),
+        // A terminal the daemon spawned for an agent, with that agent's
+        // passport: that agent (whatever program it runs).
+        Who::Shell { project_id, session_id } if shell_is_an_agents(project_id, session_id) => (project_id.as_str(), session_id.as_str()),
         Who::Invalid => return CliResponse::forbidden(),
         _ => return agents_only(),
     };

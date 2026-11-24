@@ -1911,6 +1911,14 @@ pub fn workspace_for_session(session_id: &str) -> Option<String> {
     g.records.get(session_id.trim()).map(|r| r.principal.workspace_uuid.clone())
 }
 
+/// The principal a live passport for `session_id` was minted with (its
+/// workspace and the agent it names). `None` when no live passport names
+/// the session.
+pub fn principal_for_session(session_id: &str) -> Option<HookPrincipal> {
+    let g = registry().lock().unwrap_or_else(|e| e.into_inner());
+    g.records.get(session_id.trim()).map(|r| r.principal.clone())
+}
+
 /// Revoke one session's token via the process registry + persist. Phase 1
 /// calls this on cell teardown/kill (the child-exit observer) so a dead
 /// cell's token 403s immediately, no daemon restart.

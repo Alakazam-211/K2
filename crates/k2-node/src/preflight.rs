@@ -24,8 +24,8 @@ pub const DEFAULT_PATH: &str = "/bin:/usr/bin";
 pub fn cwd_ready(cwd: &Path) -> Result<(), String> {
     match std::fs::metadata(cwd) {
         Ok(m) if m.is_dir() => Ok(()),
-        Ok(_) => Err(format!("working directory {} is not a folder", cwd.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!("working directory {} is missing", cwd.display())),
+        Ok(_) => Err(format!("working folder {} is not a folder", cwd.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!("working folder {} is missing", cwd.display())),
         // Anything else (a folder on the way it may not search) is the
         // spawn's to report.
         Err(_) => Ok(()),
@@ -94,13 +94,13 @@ mod tests {
     fn a_missing_working_directory_is_named_not_the_program() {
         let d = crate::util::temp_dir("preflight-cwd");
         let gone = d.join("src");
-        assert_eq!(cwd_ready(&gone), Err(format!("working directory {} is missing", gone.display())));
+        assert_eq!(cwd_ready(&gone), Err(format!("working folder {} is missing", gone.display())));
         // `/bin/sh` is there; the folder isn't: the folder is what's named.
-        assert_eq!(spawn_ready("/bin/sh", &gone, Some("/usr/bin:/bin")), Err(format!("working directory {} is missing", gone.display())));
-        assert_eq!(spawn_ready("sh", &gone, None), Err(format!("working directory {} is missing", gone.display())));
+        assert_eq!(spawn_ready("/bin/sh", &gone, Some("/usr/bin:/bin")), Err(format!("working folder {} is missing", gone.display())));
+        assert_eq!(spawn_ready("sh", &gone, None), Err(format!("working folder {} is missing", gone.display())));
         let file = d.join("f");
         std::fs::write(&file, "").unwrap();
-        assert_eq!(cwd_ready(&file), Err(format!("working directory {} is not a folder", file.display())));
+        assert_eq!(cwd_ready(&file), Err(format!("working folder {} is not a folder", file.display())));
         std::fs::create_dir_all(&gone).unwrap();
         assert_eq!(cwd_ready(&gone), Ok(()));
         assert_eq!(spawn_ready("/bin/sh", &gone, None), Ok(()));
@@ -121,7 +121,7 @@ mod tests {
         assert!(program_ready("", &d, None).is_err());
         // The folder first: a missing one is the reason even when the
         // program is missing too.
-        assert_eq!(spawn_ready("/no/such/bash", &d.join("gone"), None), Err(format!("working directory {} is missing", d.join("gone").display())));
+        assert_eq!(spawn_ready("/no/such/bash", &d.join("gone"), None), Err(format!("working folder {} is missing", d.join("gone").display())));
         // A file that isn't executable is the spawn's to report (EACCES).
         std::fs::write(d.join("plain"), "").unwrap();
         assert!(program_ready("plain", &d, Some(&d.display().to_string())).is_ok());
@@ -132,7 +132,7 @@ mod tests {
         let d = crate::util::temp_dir("preflight-err");
         let enoent = std::io::Error::from_raw_os_error(libc::ENOENT);
         let gone = d.join("src");
-        assert_eq!(spawn_error("/bin/sh", &gone, None, &enoent), format!("working directory {} is missing", gone.display()));
+        assert_eq!(spawn_error("/bin/sh", &gone, None, &enoent), format!("working folder {} is missing", gone.display()));
         // Both there: the spawn's own words.
         assert_eq!(spawn_error("/bin/sh", &d, None, &enoent), "run /bin/sh: No such file or directory (os error 2)");
         let eacces = std::io::Error::from_raw_os_error(libc::EACCES);

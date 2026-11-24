@@ -1787,7 +1787,7 @@ mod tests {
             };
             let p = write_exec_spec(&d, &s).unwrap();
             let ShimEnd::Failed(e) = job_exec(&p) else { panic!("nothing runs without its working folder") };
-            assert_eq!(e, format!("k2-node job-exec: working directory {} is missing", gone.display()), "{argv0}");
+            assert_eq!(e, format!("k2-node job-exec: working folder {} is missing", gone.display()), "{argv0}");
             assert_eq!(read_rc(&d.join(EXEC_RC)), Some(k2_node_proto::frames::ExitInfo { code: Some(127), signal: None }), "recorded like a failed spawn");
             let _ = std::fs::remove_file(d.join(EXEC_RC));
         }

@@ -268,6 +268,12 @@ mod tests {
         ("home_chat_push_prefs", "a person's Home chat push choices"),
         ("app_push_devices", "push devices"),
         ("app_test_guests", "marks test guests"),
+        // The Supabase-compatible layer (prd-app-supabase-compat-v1 §6.1):
+        // which App user a third-party ID token's (issuer, sub) was first
+        // seen as. A third-party token is no pass: the doors check it, and
+        // read this row, on every request, so an unlink counts on the next
+        // request with no walk. A pass resolve never reads it.
+        ("identity_links", "a third-party token's recorded (issuer, sub) → App user, read by the doors on every request; no pass resolve reads it"),
         // 0.46.9: account deletion. A request turns the person's grants off
         // and ends their sessions through the access writers; its own rows
         // only remember the request.

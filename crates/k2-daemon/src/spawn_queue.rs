@@ -639,6 +639,8 @@ fn run_spawn(principal: &V1Principal, job: &SpawnJob) -> Result<String, (String,
         }
     }
 
+    // Checked at the door too; a job queued before that check is refused here.
+    crate::v1_host_sessions::check_model(job.model.as_deref()).map_err(|e| ("bad-model".to_string(), e))?;
     let req = ApiHostSessionRequest {
         prompt: job.prompt.clone(),
         cols: job.cols,

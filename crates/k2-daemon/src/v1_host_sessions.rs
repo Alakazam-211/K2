@@ -299,13 +299,31 @@ fn lookup_live_host_session(
 }
 
 /// Parse the UNTRUSTED body into hints. Empty/whitespace → all defaults;
-/// malformed JSON → `Err(400)` (mirror of the sandbox doors).
+/// malformed JSON → `Err(400)` (mirror of the sandbox doors); a `model`
+/// that isn't a model id → `Err(400)` ([`check_model`]).
 fn parse_body(body: &[u8]) -> Result<ApiHostSessionRequest, CliResponse> {
     if body.iter().all(|b| b.is_ascii_whitespace()) {
         return Ok(ApiHostSessionRequest::default());
     }
-    serde_json::from_slice(body)
-        .map_err(|e| CliResponse::bad_request(format!("invalid JSON body: {e}")))
+    let req: ApiHostSessionRequest = serde_json::from_slice(body)
+        .map_err(|e| CliResponse::bad_request(format!("invalid JSON body: {e}")))?;
+    check_model(req.model.as_deref()).map_err(CliResponse::bad_request)?;
+    Ok(req)
+}
+
+/// The `model` a caller asked for, checked before anything starts: absent
+/// or blank is no model; anything else must be a model id K2 puts on a
+/// command line ([`k2_core::app_settings::valid_model_id`]: 1 to 128
+/// letters, digits and `. _ - : / @ [ ]`, not starting with `-`).
+pub(crate) fn check_model(model: Option<&str>) -> Result<(), String> {
+    match model.map(str::trim) {
+        None | Some("") => Ok(()),
+        Some(m) if k2_core::app_settings::valid_model_id(m) => Ok(()),
+        Some(_) => Err(
+            "model must be a model id: 1 to 128 letters, digits and . _ - : / @ [ ], not starting with - (for example claude-opus-5-5, sonnet[1m], gpt-5.3-codex)"
+                .to_string(),
+        ),
+    }
 }
 
 /// Is `session_id` a resumable HOST session of the workspace at `ws_path`?
@@ -1990,6 +2008,85 @@ mod tests {
         insert_project("v1host-badjson", "/tmp/k2-v1host-badjson");
         let r = handle_v1_host_new(&V1Principal::Owner, "v1host-badjson", b"{not json");
         assert_eq!(r.status, "400 Bad Request", "body={}", r.body);
+    }
+
+    /// `model` values that aren't a model id: cmd.exe and shell operators,
+    /// quotes, spaces, line breaks, a leading `-`, too long.
+    fn bad_models() -> Vec<String> {
+        let mut v: Vec<String> = [
+            "opus & echo SECOND", "a&b", "a|b", "%PATH%", "a^b", "<x>", "a>b", "x\"y", "x'y", "a b", "a\tb", "a\nb",
+            "a\r\nb", "a\0b", "a;b", "$(id)", "`id`", "a,b", "a=b", "a!b", "(x)", "-x", "--dangerously-skip-permissions",
+            "tail\\", "a\\b", "é", "opus\u{200b}",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        v.push("a".repeat(129));
+        v
+    }
+
+    /// A `model` that isn't a model id is refused with a plain 400 before
+    /// anything starts (parse only: nothing is spawned).
+    #[test]
+    fn a_model_that_is_not_a_model_id_is_refused() {
+        for bad in bad_models() {
+            let body = serde_json::json!({ "model": bad, "prompt": "hi" }).to_string();
+            let r = match parse_body(body.as_bytes()) {
+                Ok(_) => panic!("{bad:?} was accepted"),
+                Err(r) => r,
+            };
+            assert_eq!(r.status, "400 Bad Request", "{bad:?}: {}", r.body);
+            assert!(r.body.contains("model must be a model id"), "{bad:?}: {}", r.body);
+            assert!(check_model(Some(&bad)).is_err(), "{bad:?}");
+        }
+        // No model, or a blank one, is no model.
+        for none in [None, Some(""), Some("   ")] {
+            assert_eq!(check_model(none), Ok(()), "{none:?}");
+        }
+        assert!(parse_body(b"{}").is_ok());
+        assert!(parse_body(br#"{"model": "  "}"#).is_ok());
+    }
+
+    /// The same refusal at the door: a 400, nothing queued or spawned.
+    #[test]
+    fn new_refuses_a_bad_model_before_anything_starts() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        insert_project("v1host-badmodel", "/tmp/k2-v1host-badmodel");
+        for bad in ["opus & echo SECOND", "%PATH%", "x\"y", "-x"] {
+            let body = serde_json::json!({ "model": bad }).to_string();
+            let r = handle_v1_host_new(&V1Principal::Owner, "v1host-badmodel", body.as_bytes());
+            assert_eq!(r.status, "400 Bad Request", "{bad:?}: {}", r.body);
+            assert!(r.body.contains("model must be a model id"), "{bad:?}: {}", r.body);
+        }
+    }
+
+    /// Every model id K2 knows passes: the bundled price table (every
+    /// provider's ids), the Claude `[1m]` forms, the CLI aliases, and the
+    /// provider spellings (Bedrock, Vertex, OpenRouter, Ollama, pi).
+    #[test]
+    fn every_model_id_k2_knows_passes() {
+        let prices: serde_json::Value =
+            serde_json::from_str(include_str!("../../k2-core/data/llm_prices.json")).expect("bundled price table");
+        let table = prices["models"].as_object().expect("models is an object");
+        assert!(table.len() > 100, "the price table lists {} models", table.len());
+        let mut ids: Vec<String> = table.keys().cloned().collect();
+        ids.extend(table.keys().filter(|k| k.starts_with("claude-")).map(|k| format!("{k}[1m]")));
+        for id in [
+            "opus", "sonnet", "haiku", "fable", "opusplan", "default", "best", "sonnet[1m]", "opus[1m]", "claude-opus-5-5[1m]",
+            "gpt-5.3-codex", "gpt-5.5", "o3", "o4-mini", "gemini-2.5-pro", "gemini-3-pro-preview", "grok-4", "grok-code-fast-1",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "claude-sonnet-4-5@20250929", "openai/gpt-5", "anthropic/claude-sonnet-4", "qwen3-coder:30b",
+            "deepseek-r1:70b", "sonnet-4.5-thinking", "auto", "composer-1",
+        ] {
+            ids.push(id.to_string());
+        }
+        for id in &ids {
+            assert_eq!(check_model(Some(id)), Ok(()), "{id:?}");
+            let body = serde_json::json!({ "model": id }).to_string();
+            let req = parse_body(body.as_bytes()).unwrap_or_else(|r| panic!("{id:?}: {}", r.body));
+            assert_eq!(req.model.as_deref(), Some(id.as_str()));
+        }
     }
 
     /// Resume guards: a canonical id, a non-UUID id, and an id this family

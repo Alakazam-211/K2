@@ -854,3 +854,51 @@ async fn a_job_makes_no_user_namespace_unless_userns_and_its_limit_is_its_own() 
     drop(n);
 }
 
+/// 0.46.18: what `--userns` is for, end to end in a real unit. Rootless
+/// Podman runs a container: crun and runc call keyctl for a session
+/// keyring, which every job is refused, so the run is tried as it comes
+/// and with `keyring = false` in the job's containers.conf; the second
+/// must work, the first is reported (crun's own fallback). Chromium's
+/// namespace sandbox starts (no `--no-sandbox`: Chrome won't run without a
+/// sandbox). Needs podman on the box and `K2_E2E_CHROME` = a Chrome
+/// headless shell outside /tmp and /home (scripts/ci/node-userns-root-e2e.sh
+/// sets both up and takes them away).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "root + systemd + podman + K2_E2E_CHROME: run on a Linux box with --ignored (scripts/ci/node-userns-root-e2e.sh)"]
+async fn a_userns_job_runs_rootless_podman_and_chromiums_sandbox() {
+    let chrome = std::env::var("K2_E2E_CHROME").expect("K2_E2E_CHROME names a Chrome headless shell");
+    assert!(Path::new(&chrome).is_file(), "{chrome}");
+    assert!(std::process::Command::new("podman").arg("--version").status().unwrap().success(), "podman is on this box");
+    let r = rig("podman");
+    let mut fake = Fake::start().await;
+    let n = walled_node(&fake, &r, "").await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let script = format!(
+        r#"export HOME="$PWD/h" XDG_RUNTIME_DIR="$PWD/r" XDG_CONFIG_HOME="$PWD/c" XDG_DATA_HOME="$PWD/d"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"; chmod 700 "$XDG_RUNTIME_DIR"
+P="podman --root $PWD/store --runroot $PWD/run --cgroup-manager=cgroupfs --events-backend=none"
+IMG=docker.io/library/alpine:3.20
+$P pull -q $IMG >/dev/null 2>pull.err; echo "pull=$?"; tail -2 pull.err
+$P run --rm --network=none --cgroups=disabled $IMG true 2>default.err; echo "default=$?"; tail -3 default.err
+printf '[containers]\nkeyring = false\n' > "$PWD/keyring-off.conf"
+CONTAINERS_CONF="$PWD/keyring-off.conf" $P run --rm --network=none --cgroups=disabled $IMG true 2>nokeyring.err; echo "nokeyring=$?"; tail -3 nokeyring.err
+"{chrome}" --headless --disable-gpu --dump-dom about:blank >/dev/null 2>chrome.err; echo "chrome=$?"; grep -i -m3 "sandbox" chrome.err
+"#
+    );
+    let mut p = plan("pod1", &["/bin/sh", "-c", &script]);
+    p.userns = true;
+    p.limits.max_secs = 600;
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "pod1").await;
+    let out = text(&logs_of(&fr, "pod1"), LogStream::Out);
+    let err = text(&logs_of(&fr, "pod1"), LogStream::Err);
+    eprintln!("--- the --userns job's report ---\n{out}\n--- stderr ---\n{err}");
+    assert_eq!(last(&fr, "pod1").state, JobState::Done, "{out} {err}");
+    assert!(out.contains("pull=0\n"), "podman pulls the image: {out}");
+    assert!(out.contains("nokeyring=0\n"), "rootless podman runs a container with keyring = false: {out}");
+    assert!(out.contains("chrome=0\n"), "Chromium starts with its namespace sandbox: {out}");
+    assert!(!out.to_lowercase().contains("no usable sandbox"), "{out}");
+    drop(n);
+}
+

@@ -620,7 +620,9 @@ fn status_text(s: u16) -> &'static str {
 
 /// The response head for `f` (no line break can come from a value).
 pub fn head_of(f: &Fetched) -> String {
-    let mut h = format!("HTTP/1.1 {}\r\n", status_text(f.status));
+    // The frame headers ride the status line's statement, where
+    // routes/frame_walk.rs looks for them (every raw response carries them).
+    let mut h = format!("HTTP/1.1 {}\r\n{}", status_text(f.status), k2_core::frame_policy::CONNECT_HEADER_LINES);
     for (k, v) in &f.headers {
         if v.chars().any(|c| c == '\r' || c == '\n') {
             continue;
@@ -628,7 +630,6 @@ pub fn head_of(f: &Fetched) -> String {
         h.push_str(&format!("{k}: {v}\r\n"));
     }
     h.push_str("Access-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: *\r\n");
-    h.push_str(k2_core::frame_policy::CONNECT_HEADER_LINES);
     h.push_str("Connection: close\r\n\r\n");
     h
 }

@@ -272,6 +272,12 @@ fn a_file_streams_with_range_etag_and_safe_headers() {
     assert_eq!(header(&f, "content-disposition"), Some("attachment; filename=\"notes.pdf\"; filename*=UTF-8''notes.pdf"));
     let head = files::head_of(&f);
     assert!(head.starts_with("HTTP/1.1 206 Partial Content\r\n") && head.contains("Connection: close\r\n"), "{head}");
+    // The frame headers ride every download, beside the file's own
+    // nosniff, sandbox CSP and attachment headers.
+    assert!(head.contains(k2_core::frame_policy::CONNECT_HEADER_LINES), "{head}");
+    assert!(head.contains("x-content-type-options: nosniff\r\n"), "{head}");
+    assert!(head.contains(&format!("content-security-policy: {}\r\n", files::FILE_CSP)), "{head}");
+    assert!(head.contains("content-disposition: attachment; "), "{head}");
     // A clone: a guard held here would block the fake's next fetch.
     let path = api.fetches.lock().unwrap()[0].0.clone();
     assert_eq!(path, "/api/v1/files/7002?exp=1&sig=s", "fetched on Sew's loopback path");

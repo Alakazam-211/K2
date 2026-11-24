@@ -167,7 +167,7 @@ pub fn now_ms() -> i64 {
 pub fn clean_text(raw: &str) -> Result<String, (&'static str, String)> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(("text_required", "Write what you want to tell Alakazam Labs.".into()));
+        return Err(("text_required", format!("Write what you want to tell {}.", crate::brand::COMPANY_NAME)));
     }
     if raw.len() > MAX_TEXT_BYTES {
         return Err((

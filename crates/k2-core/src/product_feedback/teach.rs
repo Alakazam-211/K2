@@ -25,6 +25,7 @@ pub fn agents_md_section(s: &Settings) -> Option<String> {
         return None;
     }
     let (p, c) = (product_name!(), cli_name!());
+    let company = crate::brand::COMPANY_NAME;
     let platform = if policy.platform {
         format!(
             "- **Anything else about {p}.** Also allowed: `--scope platform` (no `--command`) for anything else in {p} that gets in your way or looks wrong.\n"
@@ -50,8 +51,8 @@ pub fn agents_md_section(s: &Settings) -> Option<String> {
     Some(format!(
         "{HEADING}\n\
 \n\
-A person on this server lets agents report problems with {p} to Alakazam Labs, who make {p}, with \
-`{c} send-feedback`. Reports are private (only Alakazam Labs reads them, never the public), and the \
+A person on this server lets agents report problems with {p} to {company}, who make {p}, with \
+`{c} send-feedback`. Reports are private (only {company} reads them, never the public), and the \
 person sees each one in the Sent tab. It isn't `{c} tickets ask`, which asks your person.\n\
 \n\
 - **{p} CLI problems.** When a `{c}` command fails or misleads you (a wrong or unclear error, help \

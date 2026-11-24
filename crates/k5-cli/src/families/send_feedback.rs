@@ -468,7 +468,8 @@ pub fn result(body: &[u8]) -> Shown {
             let id = p::idx(&it, "id", 6)?;
             let cat = p::idx(&it, "category", 6)?;
             o.line(&format!(
-                "Sent to Alakazam Labs: {} ({}).",
+                "Sent to {}: {} ({}).",
+                k2_client::brand::COMPANY_NAME,
                 py::str_of(&id),
                 py::str_of(&cat)
             ));

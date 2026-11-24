@@ -768,7 +768,7 @@ fn send(c: &Caller, body: &[u8]) -> CliResponse {
         "id": row.id,
         "state": row.state.as_str(),
         "service": service_json(),
-        "message": "Saved on this server; it sends to Alakazam Labs as soon as it can.",
+        "message": format!("Saved on this server; it sends to {} as soon as it can.", k2_core::brand::COMPANY_NAME),
     }))
 }
 

@@ -1338,10 +1338,21 @@ row("tmp_dotdot", conn(tmp + "/../outside.sock"))
 deep = tmp + "/.." * (tmp.strip("/").count("/") + 1) + bus
 row("tmp_dotdot_bus", conn(deep) if len(deep.encode()) <= 107 else f"too long for sun_path ({len(deep.encode())} bytes)")
 h = os.path.join(tmp, "hard")
+if os.path.lexists(h): os.unlink(h)
 try:
     os.link(tmux, h); row("tmp_hardlink_made", "yes"); row("tmp_hardlink", conn(h))
 except OSError as e:
     row("tmp_hardlink_made", f"err {e.errno}")
+# The same, of the live socket beside the folder (same file system as it).
+h2 = os.path.join(tmp, "hard2")
+if os.path.lexists(h2): os.unlink(h2)
+try:
+    os.link(tmp + "/../outside.sock", h2); row("tmp_hardlink_beside_made", "yes"); row("tmp_hardlink_beside", conn(h2))
+except OSError as e:
+    row("tmp_hardlink_beside_made", f"err {e.errno}")
+# A hard link the owner made in the folder (the test, unfenced, before the
+# session): a socket with two names.
+row("tmp_hardlink_by_owner", conn(os.path.join(tmp, "hard_by_owner")))
 try:
     socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).close(); row("dgram", "ok")
 except OSError as e:
@@ -1414,6 +1425,47 @@ time.sleep(0.3)
 row("k4_sigint", (f"handler_after={hits[0] - t0:.2f}s" if hits else "handler_never") + f" connect_returned_after={t1 - t0:.2f}s connect={res}")
 "#;
 
+/// Row 6 on the box: 10k connects to the hook socket while a signal the
+/// program handles arrives every half millisecond. Prints `storm <failed>
+/// <errno counts>`; "already connected" (106) would be the wait-killable
+/// flag missing. Python only (no Go or tokio on the box).
+const SOCKBLOCK_STORM: &str = r#"import os, signal, socket, sys, threading, time
+sock = sys.argv[1]
+signal.signal(signal.SIGUSR1, lambda *a: None)
+stop = []
+def ping():
+    while not stop:
+        os.kill(os.getpid(), signal.SIGUSR1)
+        time.sleep(0.0005)
+t = threading.Thread(target=ping); t.start()
+bad = {}
+for i in range(10000):
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(sock)
+    except OSError as e:
+        bad[e.errno] = bad.get(e.errno, 0) + 1
+    s.close()
+stop.append(1); t.join()
+print("storm", sum(bad.values()), sorted(bad.items()), flush=True)
+"#;
+
+/// The kill row's background loop: connects to the hook socket every
+/// quarter second for 20 s, one `<time> ok|err <errno>` line each.
+const SOCKBLOCK_LOOP: &str = r#"import socket, sys, time
+sock, out = sys.argv[1], sys.argv[2]
+for i in range(80):
+    s = socket.socket(socket.AF_UNIX)
+    try:
+        s.connect(sock); r = "ok"
+    except OSError as e:
+        r = f"err {e.errno}"
+    s.close()
+    with open(out, "a") as f:
+        f.write(f"{time.time():.3f} {r}\n")
+    time.sleep(0.25)
+"#;
+
 /// The shell side of the block's rows in a fenced session (rows 4, P2, P7
 /// and the review's section 7), then `probe.py`, then (when `prlimit`) the
 /// supervisor's open-file limit set to zero and one more connect.
@@ -1441,6 +1493,11 @@ else
   echo "node_hook no-node" >> $R; echo "node_tcp no-node" >> $R
 fi
 python3 {a}/probe.py "$TMPDIR" {bus} {tmux} $PPID {port} >> $R 2> {a}/probe.err; echo "probe_rc $? $(head -c 300 {a}/probe.err | tr '\n' ' ')" >> $R
+python3 {a}/storm.py "$K2_HOOK_SOCK" >> $R 2> {a}/storm.err; echo "storm_rc $? $(head -c 300 {a}/storm.err | tr '\n' ' ')" >> $R
+id > {a}/i1 2>&1; echo "inv_id $? $(head -c 100 {a}/i1)" >> $R
+getent passwd "$(id -un)" > {a}/i2 2>&1; echo "inv_passwd $? $(head -c 100 {a}/i2)" >> $R
+getent hosts localhost > {a}/i3 2>&1; echo "inv_hosts_local $? $(head -c 100 {a}/i3 | tr '\n' ' ')" >> $R
+getent hosts example.com > {a}/i4 2>&1; echo "inv_hosts_dns $? $(head -c 100 {a}/i4 | tr '\n' ' ')" >> $R
 if [ {prlimit} = 1 ]; then
   prlimit --pid $PPID --nofile=0:0 > {a}/o10 2>&1; echo "prlimit $? $(head -c 200 {a}/o10)" >> $R
   code=$(curl -s -o /dev/null -w '%{{http_code}}' --unix-socket "$K2_HOOK_SOCK" -H "Authorization: Bearer $K2_HOOK_TOKEN" http://localhost/cli/capabilities); echo "after_prlimit_hook $code" >> $R
@@ -1470,6 +1527,15 @@ fn sockblock_session(d: &mut Daemon, name: &str, bus: &Path, tmux: &Path, prlimi
     std::fs::create_dir_all(&beside).unwrap();
     let _ = std::fs::remove_file(beside.join("outside.sock"));
     std::mem::forget(UnixListener::bind(beside.join("outside.sock")).unwrap_or_else(|e| panic!("bind {}/outside.sock: {e}", beside.display())));
+    // The temp folder made first (as the daemon makes it, 0700), with a
+    // hard link the owner made of that socket: one socket, two names.
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(beside.join("tmp")).unwrap();
+    }
+    let _ = std::fs::remove_file(beside.join("tmp/hard_by_owner"));
+    std::fs::hard_link(beside.join("outside.sock"), beside.join("tmp/hard_by_owner")).expect("the owner's hard link of a socket");
+    std::fs::write(ws.join("storm.py"), SOCKBLOCK_STORM).unwrap();
     let script = sockblock_script(&ws, &d.k2.join("bin/k2"), bus, tmux, d.port, prlimit);
     d.spawn(&format!("tab-{name}"), &ws, &script);
     let r = results(&ws.join("results"), "done");
@@ -1504,63 +1570,141 @@ fn sockblock_enforced_rows_4_p2_p7_and_section_7() {
     let mut d = Daemon::new("sbenf");
     d.env.push(("K2_AGENT_SOCKBLOCK".into(), "enforce".into()));
     d.start();
+    // Every row is checked and listed; the test fails at the end with all
+    // that didn't hold (one row can't hide the ones after it).
+    let mut rows = Rows::default();
     let st = d.boot_status();
-    assert_eq!(st["agentIsolation"]["sockblock"]["mode"], "enforce", "/boot-status says the block's mode: {}", st["agentIsolation"]["sockblock"]);
-    assert_eq!(st["agentIsolation"]["sockblock"]["kernel"], "ok", "{}", st["agentIsolation"]["sockblock"]);
+    let sb = &st["agentIsolation"]["sockblock"];
+    rows.check(sb["mode"] == "enforce" && sb["running"] == true && sb["kernel"] == "ok", format!("/boot-status: the block runs in enforce: {sb}"));
     let (r, _ws, pid, sup) = sockblock_session(&mut d, "A", &bus, &tmux, true);
     println!("sockblock enforce: {r:?}");
+    let g = |k: &str| r.get(k).cloned().unwrap_or_else(|| "(missing)".into());
     // The supervisor is the program's parent, in the same cgroup.
-    assert_eq!(r["supervisor_comm"], "k2-daemon", "the exec helper stays as the supervisor");
-    assert_eq!(cgroup_of(sup), cgroup_of(pid), "the supervisor is in the session's cgroup");
+    rows.check(g("supervisor_comm") == "k2-daemon", format!("the exec helper stays as the supervisor: {}", g("supervisor_comm")));
+    rows.check(cgroup_of(sup) == cgroup_of(pid), "the supervisor is in the session's cgroup");
     // Rows 4, P2, P7: refused now.
     for row in ["system_bus", "user_bus", "user_run", "user_scope", "tmux_new_window"] {
-        assert_ne!(rc_of(&r[row]), "0", "{row} is refused under the block: {}", r[row]);
+        rows.check(!matches!(rc_of(&g(row)), "0" | ""), format!("{row} is refused under the block: {}", g(row)));
     }
-    assert_ne!(r["tmux_window_ran"], "0", "the owner's tmux ran nothing");
+    rows.check(g("tmux_window_ran") != "0", format!("the owner's tmux ran nothing: {}", g("tmux_window_ran")));
     // What it still reaches.
-    assert_eq!(r["hook"], "200", "its own hook socket");
+    rows.check(g("hook") == "200", format!("its own hook socket: {}", g("hook")));
     // `k2 whoami` can't classify a /bin/sh test tab (400 in every mode), so
     // the CLI row is `k2 capabilities --json`, which answers over the socket.
-    assert!(r["own_cli"].starts_with("0 {"), "k2 capabilities --json over its socket: {}", r["own_cli"]);
-    assert_eq!(r["doublefork"], "200", "a double-forked child still connects (row 7)");
-    assert_eq!(r["tmp_socket"], "ok", "a socket it made in its own temp folder (row 3; through /proc/self/fd, row 4)");
-    assert_eq!(r["tcp"], "ok", "TCP");
-    if r["node_hook"] != "no-node" {
-        assert_eq!((r["node_hook"].as_str(), r["node_tcp"].as_str()), ("ok", "ok"), "an event-loop client (row 10)");
+    rows.check(g("own_cli").starts_with("0 {"), format!("k2 capabilities --json over its socket: {}", g("own_cli")));
+    rows.check(g("doublefork") == "200", format!("a double-forked child still connects (row 7): {}", g("doublefork")));
+    rows.check(g("tmp_socket") == "ok", format!("a socket it made in its own temp folder (rows 3, 4): {}", g("tmp_socket")));
+    rows.check(g("tcp") == "ok", format!("TCP: {}", g("tcp")));
+    if g("node_hook") != "no-node" {
+        rows.check(g("node_hook") == "ok" && g("node_tcp") == "ok", format!("an event-loop client (row 10): {} {}", g("node_hook"), g("node_tcp")));
     }
-    // Section 7.
-    assert_eq!(rc_of(&r["probe_rc"]), "0", "the probes ran: {}", r["probe_rc"]);
-    assert_eq!(r["tmp_link"], "err 111", "a link in its temp folder to the bus (row 3)");
-    assert_eq!(r["tmp_dotdot"], "err 111", ".. out of its temp folder to a live socket (row 3)");
-    assert!(r["tmp_dotdot_bus"] == "err 111" || r["tmp_dotdot_bus"].starts_with("too long"), ".. to the bus: {}", r["tmp_dotdot_bus"]);
-    if r["tmp_hardlink_made"] == "yes" {
-        assert_eq!(r["tmp_hardlink"], "err 111", "a hard link of the owner's tmux socket");
+    rows.check(rc_of(&g("probe_rc")) == "0", format!("the probes ran: {}", g("probe_rc")));
+    // Row 3: the temp-folder forms.
+    rows.check(g("tmp_link") == "err 111", format!("a link in its temp folder to the bus: {}", g("tmp_link")));
+    rows.check(g("tmp_dotdot") == "err 111", format!(".. out of its temp folder to a live socket: {}", g("tmp_dotdot")));
+    rows.check(g("tmp_dotdot_bus") == "err 111" || g("tmp_dotdot_bus").starts_with("too long"), format!(".. to the bus: {}", g("tmp_dotdot_bus")));
+    rows.check(g("tmp_hardlink_by_owner") == "err 111", format!("a socket with two names in its temp folder (one made by the owner): {}", g("tmp_hardlink_by_owner")));
+    for row in ["tmp_hardlink_made", "tmp_hardlink_beside_made"] {
+        // The fence itself refuses the agent's hard link into the folder
+        // (Landlock: EXDEV for a link across its rules, or EACCES).
+        rows.check(g(row) == "err 18" || g(row) == "err 13", format!("{row}: the agent can't make the hard link (Landlock): {}", g(row)));
     }
-    println!("row 3 (hard link of the owner's tmux socket into the temp folder): {}", r["tmp_hardlink_made"]);
-    assert_eq!(r["dgram"], "err 1", "Unix datagram sockets can't be made (row 5)");
-    assert_eq!(r["uring"], "err 38", "io_uring_setup: ENOSYS (row 2)");
-    assert_eq!(r["s2_listener"], "err 1", "its own notification listener: refused (row 1)");
-    assert_eq!(r["unix_raw"], "err 1", "a raw Unix socket (a datagram one to the kernel) can't be made (K1)");
-    assert_eq!((r["unix_stream"].as_str(), r["unix_seqpacket"].as_str()), ("ok", "ok"), "stream and seq-packet Unix sockets can");
-    println!("row K4 (a handled Ctrl-C at 1 s during a blocking connect bounded at 4 s; under the block it waits for the connect): {}", r["k4_sigint"]);
+    // Rows 1, 2, 5 and K1.
+    rows.check(g("dgram") == "err 1", format!("Unix datagram sockets can't be made (row 5): {}", g("dgram")));
+    rows.check(g("unix_raw") == "err 1", format!("a raw Unix socket can't be made (K1): {}", g("unix_raw")));
+    rows.check(g("unix_stream") == "ok" && g("unix_seqpacket") == "ok", format!("stream and seq-packet Unix sockets can: {} {}", g("unix_stream"), g("unix_seqpacket")));
+    rows.check(g("uring") == "err 38", format!("io_uring_setup: ENOSYS (row 2): {}", g("uring")));
+    rows.check(g("s2_listener") == "err 1", format!("its own notification listener: refused (row 1): {}", g("s2_listener")));
+    // Row 8: the supervisor refuses being read.
     for row in ["ptrace_supervisor", "vm_read_supervisor", "environ_supervisor", "mem_supervisor", "fds_supervisor"] {
-        assert!(r[row].starts_with("err "), "{row}: the supervisor is non-dumpable (row 8): {}", r[row]);
+        rows.check(g(row).starts_with("err "), format!("{row}: the supervisor is non-dumpable (row 8): {}", g(row)));
     }
     // Row 9: nothing above 2 in the program (read from outside).
-    let fds: Vec<String> = std::fs::read_dir(format!("/proc/{pid}/fd")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-    assert!(fds.iter().all(|f| matches!(f.as_str(), "0" | "1" | "2")), "the program holds only 0-2: {fds:?}");
+    let fds: Vec<String> = std::fs::read_dir(format!("/proc/{pid}/fd")).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_else(|e| vec![format!("unreadable: {e}")]);
+    rows.check(fds.iter().all(|f| matches!(f.as_str(), "0" | "1" | "2")), format!("the program holds only 0-2 (row 9): {fds:?}"));
+    // Row 6 on the box: 10k connects with signals arriving.
+    rows.check(g("storm").starts_with("0 "), format!("10k hook connects with a handled signal every 0.5 ms (row 6): {} {}", g("storm"), g("storm_rc")));
+    // Inventory under enforce: the lookups fall back from refused sockets.
+    for row in ["inv_id", "inv_passwd", "inv_hosts_local"] {
+        rows.check(rc_of(&g(row)) == "0", format!("{row} works under enforce: {}", g(row)));
+    }
+    println!("inventory under enforce: DNS lookup: {}", g("inv_hosts_dns"));
+    println!("row K4 (a handled Ctrl-C at 1 s during a blocking connect bounded at 4 s; under the block it waits for the connect): {}", g("k4_sigint"));
     // Row 8: prlimit to zero, then nothing opens.
-    assert_eq!(rc_of(&r["prlimit"]), "0", "prlimit on the supervisor is allowed for the same user: {}", r["prlimit"]);
-    assert_eq!(r["after_prlimit_hook"], "000", "then even the hook socket is refused");
-    assert_eq!(r["after_prlimit_tcp"], "000", "and TCP");
+    rows.check(rc_of(&g("prlimit")) == "0", format!("prlimit on the supervisor is allowed for the same user: {}", g("prlimit")));
+    rows.check(g("after_prlimit_hook") == "000", format!("then even the hook socket is refused: {}", g("after_prlimit_hook")));
+    rows.check(g("after_prlimit_tcp") == "000", format!("and TCP: {}", g("after_prlimit_tcp")));
     let logs = sockblock_logs(&d.k2);
     println!("──── sockblock.log ────\n{logs}");
-    assert!(logs.contains("\"applied\":\"refused\"") && logs.contains("/bus"), "the refusals are in the owner's log");
-    // The supervisor killed: the session ends (the program goes with it).
-    let (_, _, pid_b, sup_b) = sockblock_session(&mut d, "B", &bus, &tmux, false);
+    rows.check(logs.contains("\"applied\":\"refused\"") && logs.contains("/bus"), "the refusals are in the owner's log");
+    // Row 8: the supervisor killed ends the session, and nothing of it
+    // connects after (a process it left behind gets ENOSYS).
+    kill_row(&mut d, &mut rows);
+    rows.done();
+}
+
+/// Every row checked; the failures listed together at the end.
+#[derive(Default)]
+struct Rows(Vec<String>);
+
+impl Rows {
+    fn check(&mut self, ok: bool, what: impl std::fmt::Display) {
+        println!("{} {what}", if ok { "holds:" } else { "FAILS:" });
+        if !ok {
+            self.0.push(what.to_string());
+        }
+    }
+
+    fn done(self) {
+        assert!(self.0.is_empty(), "{} row(s) didn't hold:\n  {}", self.0.len(), self.0.join("\n  "));
+    }
+}
+
+/// A fenced session whose background loop (a separate session, so the
+/// terminal's hang-up doesn't reach it) connects to the hook socket every
+/// quarter second; its supervisor is killed. The program ends, and the
+/// loop, if it outlives it, connects to nothing after.
+fn kill_row(d: &mut Daemon, rows: &mut Rows) {
+    let (id, ws) = d.workspace("K");
+    d.set_fence(&id, true);
+    std::fs::write(ws.join("loop.py"), SOCKBLOCK_LOOP).unwrap();
+    let script = format!(
+        r#"echo $$ > {c}/pid; echo $PPID > {c}/ppid
+setsid python3 {c}/loop.py "$K2_HOOK_SOCK" {c}/loop.out < /dev/null > /dev/null 2>&1 &
+echo $! > {c}/loop.pid
+exec sleep 3600
+"#,
+        c = ws.display()
+    );
+    d.spawn("tab-k", &ws, &script);
+    let out = ws.join("loop.out");
+    wait_for("the loop's first connects", Duration::from_secs(60), || {
+        let t = std::fs::read_to_string(&out).ok()?;
+        (t.lines().filter(|l| l.ends_with(" ok")).count() >= 2).then_some(())
+    });
+    let num = |f: &str| -> i32 { std::fs::read_to_string(ws.join(f)).unwrap().trim().parse().unwrap() };
+    let (pid, sup, lp) = (num("pid"), num("ppid"), num("loop.pid"));
+    d.pids.extend([pid, sup, lp]);
+    let killed_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
     // SAFETY: the test's own session's supervisor.
-    unsafe { libc::kill(sup_b, libc::SIGKILL) };
-    wait_for("the program to end with its supervisor", Duration::from_secs(10), || (!Path::new(&format!("/proc/{pid_b}")).exists()).then_some(()));
+    unsafe { libc::kill(sup, libc::SIGKILL) };
+    let t = Instant::now();
+    while Path::new(&format!("/proc/{pid}")).exists() && t.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    rows.check(!Path::new(&format!("/proc/{pid}")).exists(), "the program ends with its supervisor");
+    std::thread::sleep(Duration::from_secs(3));
+    let loop_alive = Path::new(&format!("/proc/{lp}")).exists();
+    let after: Vec<String> = std::fs::read_to_string(&out)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.split(' ').next().and_then(|t| t.parse::<f64>().ok()).is_some_and(|t| t > killed_at + 0.2))
+        .map(str::to_string)
+        .collect();
+    println!("kill row: the background loop {} after the kill; its connects since: {after:?}", if loop_alive { "lives on" } else { "ended" });
+    rows.check(after.iter().all(|l| !l.ends_with(" ok")), format!("nothing connects after the supervisor is gone: {after:?}"));
+    // SAFETY: the test's own background loop.
+    unsafe { libc::kill(lp, libc::SIGKILL) };
 }
 
 /// Every `sockblock.log` under `~/.k2/agents`.
@@ -1593,6 +1737,7 @@ fn sockblock_record_logs_and_off_is_the_bite() {
     assert_eq!(r["hook"], "200");
     assert_eq!(r["tmp_link"], "ok", "record lets the link through");
     assert_eq!(r["tmp_dotdot"], "ok", "and the .. form (to the live socket beside the folder)");
+    assert_eq!(r["tmp_hardlink_by_owner"], "ok", "and the socket with two names");
     let logs = sockblock_logs(&d.k2);
     println!("──── sockblock.log ────\n{logs}");
     let lines: Vec<Value> = logs.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{l}: {e}"))).collect();
@@ -1614,9 +1759,8 @@ fn sockblock_record_logs_and_off_is_the_bite() {
     assert_eq!(r["dgram"], "ok");
     assert_eq!(r["tmp_dotdot"], "ok", "the bite (row 3): the .. form connects without the block");
     assert_eq!(r["unix_raw"], "ok", "the bite (K1): a raw Unix socket can be made without the block");
-    if Path::new("/dev/log").exists() {
-        assert_eq!(r["raw_sendto_devlog"], "ok", "the bite (K1): and it sends to the log socket");
-    }
+    assert_eq!(r["raw_sendto_devlog"], "ok", "the bite (K1): and it sends to the log socket (/dev/log)");
+    assert_eq!(r["tmp_hardlink_by_owner"], "ok", "the bite (row 3): a socket with two names in the folder connects without the block");
     println!("row K4 without the block: {}", r["k4_sigint"]);
 }
 

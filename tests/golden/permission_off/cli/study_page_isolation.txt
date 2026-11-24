@@ -75,7 +75,9 @@ THE FOLDER FENCE (per agent, off by default, the owner's switch; experimental)
   only records each Unix-socket connect (in ~/.k2/agents/<workspace>/
   sockblock.log, which the owner reads; nothing is refused yet). Anything
   the session leaves running in the background ends when its first program
-  ends.
+  ends. While the supervisor handles a blocking connect, a signal the
+  program catches (a handled Ctrl-C, a timer) waits until the connect
+  returns.
 
   Not yet a boundary: Unix sockets (systemd's buses, your tmux or screen,
   an ssh-agent, a container socket) and, on kernels before 6.12, signals

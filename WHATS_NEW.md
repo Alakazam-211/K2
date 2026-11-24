@@ -93,6 +93,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A new agent from a template gets the permissions it suggests, as far as you can give them.** On the Review of Create an agent, each permission the type suggests is a checkbox: ticked ones are turned on when you create it, and you can untick any. One you can't turn on yourself is asked of someone who can, on a card in the new agent's Thread. With permission cards off, it stays off, and the Review says who can turn it on and how. In a terminal, `k2 agent hire --template <id>` prints the same for each one, and `--decline <permission>` leaves one off.
 - **An agent that hires passes on only what it has.** An agent with "Let this agent hire agents" on hires only inside the hire root, and gives a new agent only switches it has on itself, never database access or compute; a person is asked for the rest on a card. It can't hire into an existing workspace, its own included. Every permission a hire turns on, asks for or can't give is in the access audit.
 - An agent with only a ROLE.md now wakes with its real role, and teammates' roles show too.
+- **K2 now tells an agent session from your own shell tab by how K2 started it, not by the program it runs.** A session K2 starts for an agent (its chat, a heartbeat, a sidecar, `k2 terminal spawn`, a `k2 remote-session` shell) follows the agent's rules whatever its launch command is (`bash`, `npx`, a wrapper script). Only a plain shell tab you open in K2 counts as you, as before.
 
 ### Permission cards
 - **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
@@ -118,11 +119,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it.
 - **On a server with no owner login, purge now asks you to set an owner password first, then uses it.** `k2 app uninstall --purge` and `k2 hostchat purge` failed with `no_confirm_method` and no next step on a server with no owner login, vault password or Touch ID. They now refuse with the one command to run first, from your own terminal on that server: `k2 users add <your-name> --role owner --keep-password`. After that, each purge asks for that login's password. A server with a vault password or Touch ID uses it as before, and agents still can't purge.
 - **`k2 desktop env` works in terminals K2 opens for an agent** (`k2 terminal spawn --agent <name>`), whatever program they run. A person's own shell tab is still refused.
-## 0.46.18
-
-### Agents
-- **K2 now tells an agent session from your own shell tab by how K2 started it, not by the program it runs.** A session K2 starts for an agent (its chat, a heartbeat, a sidecar, `k2 terminal spawn`, a `k2 remote-session` shell) follows the agent's rules whatever its launch command is (`bash`, `npx`, a wrapper script). Only a plain shell tab you open in K2 counts as you, as before.
-
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

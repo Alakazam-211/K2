@@ -922,6 +922,14 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         permissions_by_door: req.permissions_by_door,
         ..Default::default()
     };
+    // A hire with no <dir> goes under the hire root: a root that isn't
+    // there yet is made the way the daemon makes one (the server user's,
+    // 0700), never left to the umask.
+    if req.path.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none() {
+        if let Some(parent) = Path::new(&path).parent() {
+            super::super::root::ensure_root(parent)?;
+        }
+    }
     let out = converge::converge(&creq, caller, auth)?;
     let applied = out
         .template

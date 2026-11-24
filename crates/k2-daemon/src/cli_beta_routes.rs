@@ -419,7 +419,15 @@ mod tests {
             let v = serde_json::to_value(&choice).expect("a choice is JSON");
             assert_eq!(v["runs"], runs, "{v}");
             if let Some(note) = v.get("note").and_then(Value::as_str) {
-                assert!(note.contains(CLI_NAME) && !says_k5(note), "{runs}: {note}");
+                // The binary's path is a fact, not prose: the shipped program is
+                // named k5-cli in every brand (machine.binary_prefix and
+                // scripts/brand/shipped-bins-linux.txt equal ours by design), so
+                // the path is taken out before the words are read.
+                let words = note.replace(&bin.display().to_string(), "");
+                assert!(
+                    note.contains(CLI_NAME) && !says_k5(&words),
+                    "{runs}: {note}"
+                );
             }
         }
     }

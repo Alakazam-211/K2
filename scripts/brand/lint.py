@@ -220,7 +220,12 @@ def text_hits(word, case):
     if key in _text_cache:
         return _text_cache[key]
     rx = word_rx(word, case)
-    needle = word if case else word.lower()
+    # The prefilter can only let through more lines than the rule, never
+    # fewer: TEXT_ESCAPE only puts spaces in place of escapes, so a word the
+    # rule finds is a literal run of the raw line; and without `case`,
+    # casefold() is wider than re.I (it folds the Kelvin sign to k and the
+    # long s to s, as re.I matches them).
+    needle = word if case else word.casefold()
     count, first = 0, None
     for place in TEXT_PLACES:
         top = os.path.join(HERE, place)
@@ -232,7 +237,7 @@ def text_hits(word, case):
             with open(path, encoding="utf-8", errors="replace") as f:
                 for n, line in enumerate(f, 1):
                     # The word's letters first (cheap), then the rule.
-                    if (needle in (line if case else line.lower())) and stands_in(rx, line):
+                    if (needle in (line if case else line.casefold())) and stands_in(rx, line):
                         count += 1
                         if first is None:
                             first = f"{os.path.relpath(path, HERE)}:{n}"

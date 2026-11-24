@@ -296,23 +296,28 @@ pub fn default_view_in(i: &ViewInputs, secrets: &[PathBuf]) -> Result<FenceView,
     let mut avoid: Vec<PathBuf> = [i.home, i.k2_home].iter().map(|p| canon(p)).collect();
     let roots: Vec<PathBuf> = secrets.iter().map(|p| canon(p)).collect();
     avoid.extend(roots.iter().cloned());
-    v.ro = carve_all(&v.ro, &avoid);
-    v.rw = carve_all(&v.rw, &avoid);
+    // Review V1 (and its re-review R1): the base rules go to the exec helper
+    // resolved, BEFORE the carve, so the helper can open each with no link
+    // followed; a carved folder's children stay as listed (never resolved
+    // again: one swapped for a link after the listing opens nothing).
+    v.ro = resolve_then_carve(&v.ro, &avoid);
+    v.rw = resolve_then_carve(&v.rw, &avoid);
+    v.required = v.required.iter().map(|r| s(&canon(Path::new(r)))).collect();
     let own = i.own_secrets.map(canon);
     if let Some(own) = own.filter(|o| roots.iter().any(|r| o.starts_with(r) && o != r)) {
         v.ro.push(s(&own));
     }
-    // Review V1: every rule goes to the exec helper resolved, so the helper
-    // can open each with no link followed (a link planted at a rule's path
-    // later opens nothing).
-    v.ro = v.ro.iter().map(|r| s(&canon(Path::new(r)))).collect();
-    v.rw = v.rw.iter().map(|r| s(&canon(Path::new(r)))).collect();
-    v.required = v.required.iter().map(|r| s(&canon(Path::new(r)))).collect();
     Ok(v)
 }
 
 fn canon(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// The base rules resolved first, then carved; carved children as listed.
+fn resolve_then_carve(rules: &[String], avoid: &[PathBuf]) -> Vec<String> {
+    let resolved: Vec<String> = rules.iter().map(|r| s(&canon(Path::new(r)))).collect();
+    carve_all(&resolved, avoid)
 }
 
 fn carve_all(rules: &[String], avoid: &[PathBuf]) -> Vec<String> {
@@ -1208,6 +1213,25 @@ mod tests {
             assert!(!rules.iter().any(|r| Path::new(r) == shm.join(link)), "{link} is a link, never a rule: {rules:?}");
         }
         assert!(!rules.iter().any(|r| canon(Path::new(r)).starts_with(canon(&home))), "{rules:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Re-review R1: a base rule that is a link is resolved before the carve;
+    /// the carved children are its real folder's, listed as they are, and a
+    /// child that is a link is left out (never resolved again).
+    #[test]
+    fn base_rules_resolve_before_the_carve() {
+        let root = canon(&std::env::temp_dir()).join(format!("k2-r1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let real = root.join("real");
+        let (keep, secret, elsewhere) = (real.join("keep"), real.join("k2-1000"), root.join("elsewhere"));
+        for d in [&keep, &secret, &elsewhere] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::os::unix::fs::symlink(&real, root.join("alias")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, real.join("swapped")).unwrap();
+        let rules = resolve_then_carve(&[root.join("alias").display().to_string()], &[secret.clone()]);
+        assert_eq!(rules, [keep.display().to_string()], "the real folder's own children, the link child out");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -1214,17 +1214,19 @@ echo "done" >> $R; exec sleep 3600
     assert!(ra["own_secret"].starts_with("0 A SECRET"), "A reads its own folder: {}", ra["own_secret"]);
 }
 
-/// Review V1: a link a fenced session plants in /dev/shm (writable for it)
-/// is never a rule for the next fenced start, so that start can't read what
-/// it points at (the owner's keys).
+/// Review V1 (re-review T1): on a box whose secrets root is under /dev/shm,
+/// /dev/shm is carved at each start. A link planted there (here by the test
+/// process: a fenced session can't make one, see the next test) is never a
+/// rule, so a fenced start can neither read nor write through it.
 #[test]
 #[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
 fn a_link_planted_in_dev_shm_opens_nothing_at_the_next_start() {
     let _unit = preflight();
     // SAFETY: no preconditions.
     let uid = unsafe { libc::geteuid() };
-    // The /dev/shm secrets root exists, so /dev/shm is carved at each start.
-    std::fs::create_dir_all(format!("/dev/shm/k2-{uid}")).unwrap();
+    let shm_root = PathBuf::from(format!("/dev/shm/k2-{uid}"));
+    let made_root = !shm_root.exists();
+    std::fs::create_dir_all(&shm_root).unwrap();
     let link = PathBuf::from(format!("/dev/shm/k2isotest-link-{}", std::process::id()));
     let _ = std::fs::remove_file(&link);
     let mut d = Daemon::new("shmlink");
@@ -1234,18 +1236,7 @@ fn a_link_planted_in_dev_shm_opens_nothing_at_the_next_start() {
     let ssh = d.home.join(".ssh");
     std::fs::create_dir_all(&ssh).unwrap();
     std::fs::write(ssh.join("id_test"), "PRIVATE KEY\n").unwrap();
-    let plant = format!(
-        r#"R={a}/r1; : > $R; echo $$ > {a}/pid1
-ln -s {ssh} {l} 2> {a}/e1; echo "planted $? $(cat {a}/e1)" >> $R
-echo "done" >> $R; exec sleep 3600
-"#,
-        a = a_ws.display(),
-        ssh = ssh.display(),
-        l = link.display(),
-    );
-    d.spawn("tab-a1", &a_ws, &plant);
-    let r1 = results(&a_ws.join("r1"), "done");
-    d.pids.push(std::fs::read_to_string(a_ws.join("pid1")).unwrap().trim().parse().unwrap());
+    std::os::unix::fs::symlink(&ssh, &link).unwrap();
     let read = format!(
         r#"R={a}/r2; : > $R; echo $$ > {a}/pid2
 cat {l}/id_test > {a}/o1 2>&1; echo "through_link $? $(head -c 120 {a}/o1)" >> $R
@@ -1259,10 +1250,57 @@ echo "done" >> $R; exec sleep 3600
     let r2 = results(&a_ws.join("r2"), "done");
     d.pids.push(std::fs::read_to_string(a_ws.join("pid2")).unwrap().trim().parse().unwrap());
     let _ = std::fs::remove_file(&link);
-    println!("shm link: {r1:?} {r2:?}");
-    assert!(r1["planted"].starts_with('0'), "a fenced session can make a link in /dev/shm (the case this guards): {}", r1["planted"]);
-    assert!(denied(&r2["through_link"]), "the next fenced start can't read through it: {}", r2["through_link"]);
+    if made_root {
+        let _ = std::fs::remove_dir(&shm_root);
+    }
+    println!("shm link: {r2:?}");
+    assert!(denied(&r2["through_link"]), "a fenced start can't read through the link: {}", r2["through_link"]);
     assert!(!r2["write_through_link"].starts_with('0') && !ssh.join("planted").exists(), "nor write: {}", r2["write_through_link"]);
+}
+
+/// Re-review T1, the opposite row: on a box whose secrets root is under
+/// /dev/shm, a fenced session can't create a top-level /dev/shm entry (a
+/// file, a folder or a link: /dev/shm is open only as the entries listed at
+/// its start).
+#[test]
+#[ignore = "needs a delegated cgroup v2 system unit on Linux: scripts/agent-isolation-kernel-tests.sh"]
+fn a_fenced_session_on_a_carved_box_makes_no_top_level_dev_shm_entry() {
+    let _unit = preflight();
+    // SAFETY: no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let shm_root = PathBuf::from(format!("/dev/shm/k2-{uid}"));
+    let made_root = !shm_root.exists();
+    std::fs::create_dir_all(&shm_root).unwrap();
+    let tag = format!("k2isotest-top-{}", std::process::id());
+    let mut d = Daemon::new("shmtop");
+    d.start();
+    let (a_id, a_ws) = d.workspace("A");
+    d.set_fence(&a_id, true);
+    let script = format!(
+        r#"R={a}/r; : > $R; echo $$ > {a}/pid
+echo x > /dev/shm/{t}-f 2> {a}/e1; echo "file $? $(cat {a}/e1)" >> $R
+mkdir /dev/shm/{t}-d 2> {a}/e2; echo "dir $? $(cat {a}/e2)" >> $R
+ln -s /tmp /dev/shm/{t}-l 2> {a}/e3; echo "link $? $(cat {a}/e3)" >> $R
+echo "done" >> $R; exec sleep 3600
+"#,
+        a = a_ws.display(),
+        t = tag,
+    );
+    d.spawn("tab-a", &a_ws, &script);
+    let r = results(&a_ws.join("r"), "done");
+    d.pids.push(std::fs::read_to_string(a_ws.join("pid")).unwrap().trim().parse().unwrap());
+    for suffix in ["-f", "-d", "-l"] {
+        let p = PathBuf::from(format!("/dev/shm/{tag}{suffix}"));
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_dir(&p);
+    }
+    if made_root {
+        let _ = std::fs::remove_dir(&shm_root);
+    }
+    println!("shm top: {r:?}");
+    for row in ["file", "dir", "link"] {
+        assert!(denied(&r[row]), "{row}: a fenced session can't make a top-level /dev/shm entry on a carved box: {}", r[row]);
+    }
 }
 
 // ── M2: the Unix-socket block (review-agent-isolation-m2-unix-socket-block) ──

@@ -59,6 +59,11 @@ ceiling "0 of 5117 probes fall through: V 0, H 0, F 0, E 0, P 0, R 0" "$(printf 
 tag v-rrow
 ceiling "1 of 5117 probes fall through: V 0, H 0, F 0, E 0, P 1, R 0" "$(printf 'P\tdb\tdb list')"
 tag v-p2
+# A long ceiling (the real one has thousands of R rows): a reader that
+# stops early must not kill the gate (SIGPIPE under pipefail).
+ceiling "5000 of 70000 probes fall through: V 0, H 0, F 0, E 0, P 0, R 5000" \
+    "$(for i in $(seq 1 5000); do printf 'R\tdoc\tdoc list x%s [tty]\n' "$i"; done)"
+tag v-long
 ceiling "0 of 5117 probes fall through: V 0, H 0, F 0, E 0, P 0"
 tag v-old
 git -C "$R" rm -q "$F" && git -C "$R" commit -qm gone && git -C "$R" tag v-gone
@@ -100,6 +105,10 @@ for t in v-r v-rcount v-rrow; do
             || die "$t --brand $b: R must count: $out"; ok
     done
 done
+gate --tag v-long "$R"; [ "$rc" = 0 ] && [[ "$out" == *"R 5000 run-time hand-off(s) listed, not counted"* ]] || die "v-long, default: rc $rc: $out"; ok
+gate --brand "$HERE/brand/xy" --tag v-long "$R"
+[ "$rc" = 1 ] && [[ "$out" == *"R 5000 run-time hand-off(s) would each be refused"* ]] && [[ "$out" == *"doc list x20 [tty]"* ]] \
+    && [[ "$out" != *"doc list x21 [tty]"* ]] || die "v-long, xy: rc $rc: $out"; ok
 case "$(bash "$G" --brand "$HERE/brand/xy" --tag v-r "$R" 2>&1 || true)" in
     *"talk <ws>@<host> [proxy-socks5]"*"doc list [locale-lc-all-latin1]"*) ok ;; *) die "the R refusal names no row" ;; esac
 gate --brand "$HERE/brand/xy" --tag v-zero "$R"

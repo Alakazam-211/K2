@@ -112,7 +112,9 @@ fell="${BASH_REMATCH[1]}" probes="${BASH_REMATCH[2]}" run_time="${BASH_REMATCH[8
 counts="V ${BASH_REMATCH[3]}, H ${BASH_REMATCH[4]}, F ${BASH_REMATCH[5]}, E ${BASH_REMATCH[6]}, P ${BASH_REMATCH[7]}"
 [ "$probes" -gt 0 ] || refuse "the ceiling names no probes at all"
 body="$(printf '%s\n' "$text" | grep -v '^#' | grep -v '^$' || true)"
-header="$(printf '%s\n' "$body" | head -n 1)"
+# Shell words, not `| head`: under pipefail a reader that stops early
+# kills the writer (SIGPIPE, exit 141) once the ceiling is long.
+header="${body%%$'\n'*}"
 [ "$header" = "$(printf 'class\tfamily\tform')" ] || refuse "the ceiling's header is not class, family, form: $header"
 rows="$(printf '%s\n' "$body" | tail -n +2)"
 r_rows="$(printf '%s\n' "$rows" | grep $'^R\t' || true)"
@@ -123,7 +125,7 @@ nother="$(printf '%s' "$other_rows" | grep -c . || true)"
 # V, H, F, E and P: for every brand.
 if [ "$counts" != "V 0, H 0, F 0, E 0, P 0" ] || [ "$nother" != 0 ]; then
     echo "ceiling-zero: $fell of $probes probes fall through ($counts, R $run_time), $nother row(s) besides R:" >&2
-    printf '%s\n' "$other_rows" | head -n 20 | sed 's/^/  /' >&2
+    printf '%s\n' "$other_rows" | awk 'NR <= 20 { print "  " $0 }' >&2
     refuse "every command line must be native before a brand other than ours is built"
 fi
 nallow="$(printf '%s\n' "$allow" | grep -c '^native_bar	' || true)"
@@ -136,7 +138,7 @@ fi
 if [ "$no_bash" = yes ]; then
     if [ "$run_time" != 0 ] || [ "$nr" != 0 ]; then
         echo "ceiling-zero: $brand_id has no shell CLI (cli.no_bash): R $run_time run-time hand-off(s) would each be refused (exit 70), $nr row(s):" >&2
-        printf '%s\n' "$r_rows" | head -n 20 | sed 's/^/  /' >&2
+        printf '%s\n' "$r_rows" | awk 'NR <= 20 { print "  " $0 }' >&2
         refuse "every command line must be native in every environment before a brand with no shell CLI is built"
     fi
     echo "ceiling-zero: $where: 0 of $probes probes fall through ($counts, R 0) for $brand_id, which has no shell CLI; build it"

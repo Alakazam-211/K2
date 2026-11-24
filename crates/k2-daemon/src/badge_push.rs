@@ -548,6 +548,18 @@ fn alert_note(event: &PushEvent) -> Option<(String, ReadKind, String, i64, Optio
 /// A project alert or permission card, past its budget, went out. Off the
 /// caller's thread: the tick holds this lock while it waits for the DB, so a
 /// note made under the DB lock could deadlock.
+/// project-chat-thread-v1: a project chat alert the Thread coalescer sent
+/// (it notes its own alerts; [`alert_sent`]'s rule for one).
+pub fn project_alert_sent(person: &str, group_id: &str, seq: i64, totals: Totals) {
+    let note: (String, ReadKind, String, i64, Option<Totals>) = (person.to_string(), ReadKind::Project, group_id.to_string(), seq, Some(totals));
+    #[cfg(test)]
+    test_read_capture::capture_alert(note.clone());
+    run_off_thread(move || {
+        let (person, kind, id, seq, totals) = note;
+        lock().note_alert_sent(&person, kind, &id, seq, totals);
+    });
+}
+
 pub fn alert_sent(event: &PushEvent) {
     let Some(note) = alert_note(event) else { return };
     #[cfg(test)]
@@ -1195,6 +1207,8 @@ mod tests {
             device_usernames: vec!["gina".into()],
             unread_total: "6".into(),
             waiting_total: "1".into(),
+            preview: String::new(),
+            count: 1,
         };
         assert_eq!(
             alert_note(&PushEvent::ProjectPost(project)),

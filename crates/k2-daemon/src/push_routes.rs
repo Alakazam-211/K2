@@ -721,23 +721,24 @@ pub fn notify_feedback_commented(feedback_id: &str, assignees: &[String]) {
 /// - only to people whose server bell is on, removed/disabled logins never;
 /// - each carries that person's `badgeKey` (never their name) and `unreadTotal` /
 ///   `waitingTotal` (strings), and the post's `seq`, so a phone can clear
-///   it once it's read. Content-free: project name + group id.
-pub fn notify_project_message_created(project_name: &str, group_id: &str, seq: i64, author_person: Option<&str>) {
+///   it once it's read.
+/// - project-chat-thread-v1: coalesced as a Thread's lines are, with a
+///   preview of the latest line when the owner's switch and the phone allow.
+pub fn notify_project_message_created(
+    project_name: &str,
+    group_id: &str,
+    msg: &k2_core::project_groups::ProjectGroupMessage,
+    author_person: Option<&str>,
+) {
     if airgap_blocks() {
         note_airgap_drop();
         return;
     }
-    for (person, logins, totals) in project_recipients(group_id, author_person) {
-        dispatch_push(PushEvent::ProjectPost(k2_core::push::ProjectPush {
-            project_name: project_name.to_string(),
-            group_id: group_id.to_string(),
-            seq,
-            principal: person,
-            device_usernames: logins,
-            unread_total: totals.total.to_string(),
-            waiting_total: totals.waiting_total.to_string(),
-        }));
-    }
+    // project-chat-thread-v1 (P6): through the Thread coalescer (one window
+    // per project and person, previews under the owner's switch and each
+    // phone's choice, viewing quiets it), with this audience.
+    debug_assert_eq!(msg.group_id, group_id);
+    crate::thread_push::on_project_line(project_name, msg, author_person);
 }
 
 /// Who gets a project chat push: (person, their device logins, their
@@ -1653,9 +1654,26 @@ mod tests {
         }
     }
 
+    /// A project line for the notify helper (project-chat-thread-v1: the
+    /// push is built from the stored line).
+    fn line(group_id: &str, seq: i64, body: &str) -> k2_core::project_groups::ProjectGroupMessage {
+        k2_core::project_groups::ProjectGroupMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            group_id: group_id.to_string(),
+            author: "cortana".into(),
+            body: body.into(),
+            created_at: 1,
+            seq,
+            author_kind: "agent".into(),
+            client_msg_id: None,
+            attachments: Vec::new(),
+            deleted: false,
+        }
+    }
+
     /// The notify helpers shape content-free events (IDs + names
     /// only) — asserted through the same capture sink the route
-    /// trigger tests use.
+    /// trigger tests use. (A project line with no text pushes no text.)
     #[test]
     fn notify_helpers_shape_content_free_events() {
         let _home = crate::test_support::TempHome::new();
@@ -1665,7 +1683,7 @@ mod tests {
         let gid = k2_core::project_groups::create_group(&format!("notify-{}", uuid::Uuid::new_v4())).expect("group").id;
         let mark = test_push_capture::mark();
         notify_feedback_created("cortana", &fid, &[]);
-        notify_project_message_created("Apollo", &gid, 12, None);
+        notify_project_message_created("Apollo", &gid, &line(&gid, 12, ""), None);
         let events = test_push_capture::since(mark);
         let mine: Vec<_> = events
             .iter()
@@ -1703,7 +1721,7 @@ mod tests {
         }
         let gid = k2_core::project_groups::create_group(&format!("alertnote-{}", uuid::Uuid::new_v4())).expect("group").id;
         let m = k2_core::project_groups::post_message_as(&gid, "cortana", "agent", "hi").expect("post");
-        notify_project_message_created("Apollo", &gid, m.seq, None);
+        notify_project_message_created("Apollo", &gid, &m, None);
         let mut notes = crate::badge_push::test_read_capture::alerts_for(&gid);
         notes.sort_by(|a, b| a.0.cmp(&b.0));
         let want = |person: &str, total: i64| {
@@ -1742,23 +1760,38 @@ mod tests {
             v
         };
         let mark = test_push_capture::mark();
-        notify_project_message_created("Apollo", &gid, m.seq, Some("prjalice"));
+        notify_project_message_created("Apollo", &gid, &m, Some("prjalice"));
         assert_eq!(
             principals(&test_push_capture::since(mark)),
             vec![("owner".to_string(), "1".to_string()), ("prjbob".to_string(), "1".to_string())],
             "alice never gets her own post; the others have it unread (the chat is newer than them)"
         );
         assert_eq!(m.seq, 1);
+        // project-chat-thread-v1: lines coalesce per (project, person), so
+        // the mute is shown on a second project's first line.
+        let gid2 = k2_core::project_groups::create_group(&format!("selfpush2-{}", uuid::Uuid::new_v4())).expect("group 2").id;
+        let m2 = k2_core::project_groups::post_message_as(&gid2, "cortana", "agent", "status").expect("post 2");
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::read_state::set_mute(&conn, "owner", k2_core::read_state::KIND_PROJECT, &gid, true, None).expect("mute");
+            k2_core::read_state::set_mute(&conn, "owner", k2_core::read_state::KIND_PROJECT, &gid2, true, None).expect("mute");
         }
+        let principals2 = |events: &[PushEvent]| -> Vec<(String, String)> {
+            let mut v: Vec<(String, String)> = events
+                .iter()
+                .filter_map(|e| match e {
+                    PushEvent::ProjectPost(p) if p.group_id == gid2 => Some((p.principal.clone(), p.unread_total.clone())),
+                    _ => None,
+                })
+                .collect();
+            v.sort();
+            v
+        };
         let mark = test_push_capture::mark();
-        notify_project_message_created("Apollo", &gid, m.seq, None);
+        notify_project_message_created("Apollo", &gid2, &m2, None);
         assert_eq!(
-            principals(&test_push_capture::since(mark)),
-            vec![("prjalice".to_string(), "0".to_string()), ("prjbob".to_string(), "1".to_string())],
+            principals2(&test_push_capture::since(mark)),
+            vec![("prjalice".to_string(), "1".to_string()), ("prjbob".to_string(), "2".to_string())],
             "a muted chat never pushes; an agent's line goes to every other person"
         );
     }
@@ -1872,7 +1905,7 @@ mod tests {
         set_test_airgap(true);
         let mark = test_push_capture::mark();
         notify_feedback_commented(&fid, &[]);
-        notify_project_message_created("Apollo", &fid, 1, None);
+        notify_project_message_created("Apollo", &fid, &line(&fid, 1, "x"), None);
         set_test_airgap(false);
         let after: Vec<_> = test_push_capture::since(mark)
             .into_iter()

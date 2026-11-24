@@ -350,6 +350,13 @@ pub struct ProjectPush {
     pub unread_total: String,
     /// `data.waitingTotal`: cards waiting on the person.
     pub waiting_total: String,
+    /// project-chat-thread-v1: the latest line's preview, under the owner's
+    /// previews switch and each phone's choice (the Thread coalescer's
+    /// rules); `""` = no text, the body stays "New message in <project>".
+    pub preview: String,
+    /// project-chat-thread-v1: lines this push announces (the coalescer's
+    /// held count; 1 = one line, as before).
+    pub count: u32,
 }
 
 /// One person's silent badge correction (thread-read-v1).
@@ -836,10 +843,10 @@ impl PushEvent {
                 format!("{agent_name} needs you on a ticket")
             }
             Self::FeedbackCommented { .. } => "New reply on a ticket".to_string(),
-            Self::ProjectMessageCreated { project_name, .. }
-            | Self::ProjectPost(ProjectPush { project_name, .. }) => {
+            Self::ProjectMessageCreated { project_name, .. } => {
                 format!("New message in {project_name}")
             }
+            Self::ProjectPost(p) => project_body(p),
             Self::Badge(_) => String::new(),
             // The Settings label, whatever the previews switches say: it is
             // K2's own words, never the agent's or a note (§17.7).
@@ -1217,6 +1224,16 @@ impl PushEvent {
 ///   [`preview::PREVIEW_MAX_CHARS`].
 /// - No preview (previews off, empty after stripping): the fixed line by
 ///   kind. A secret card NEVER shows a preview, whatever is passed.
+/// A project chat push's body (project-chat-thread-v1): `New message in
+/// <project>` for one line with no preview (as before), else
+/// `<project>: ` and the Thread's own body (`N new messages · <preview>`).
+pub fn project_body(p: &ProjectPush) -> String {
+    if p.count <= 1 && p.preview.trim().is_empty() {
+        return format!("New message in {}", p.project_name);
+    }
+    format!("{}: {}", p.project_name, thread_body(ThreadMsgKind::Text, p.count, Some(p.preview.as_str())))
+}
+
 pub fn thread_body(kind: ThreadMsgKind, count: u32, preview: Option<&str>) -> String {
     let preview = match kind {
         ThreadMsgKind::Secret => None,
@@ -3220,6 +3237,8 @@ mod tests {
             device_usernames: vec![principal.into()],
             unread_total: "7".into(),
             waiting_total: "2".into(),
+            preview: String::new(),
+            count: 1,
         })
     }
 

@@ -157,6 +157,8 @@ fn canary_events() -> Vec<PushEvent> {
             device_usernames: vec!["owner".into()],
             unread_total: "7".into(),
             waiting_total: "2".into(),
+            preview: String::new(),
+            count: 1,
         }),
         PushEvent::Badge(BadgePush {
             principal: "owner".into(),
@@ -1192,6 +1194,8 @@ fn alert_truncation_rule() {
         device_usernames: vec!["owner".into()],
         unread_total: "7".into(),
         waiting_total: "2".into(),
+        preview: String::new(),
+        count: 1,
     });
     let v = e2e::alert_plaintext(&project, &ctx).expect("v");
     let bytes = e2e::fit_alert(&v).expect("fit");
@@ -2261,6 +2265,8 @@ fn sealed_alerts_keep_kind_inside_data() {
         device_usernames: vec!["owner".into()],
         unread_total: "7".into(),
         waiting_total: "2".into(),
+        preview: String::new(),
+        count: 1,
     });
     let PushEvent::ThreadPost(mut long_thread) = msg_thread(&long) else { unreachable!("a thread push") };
     long_thread.agent_name = long.clone();

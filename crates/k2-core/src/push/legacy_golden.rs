@@ -132,6 +132,8 @@ pub(crate) fn golden_events() -> Vec<(String, PushEvent)> {
                 device_usernames: vec!["owner".into()],
                 unread_total: "7".into(),
                 waiting_total: "2".into(),
+                preview: String::new(),
+                count: 1,
             }),
         ),
         (

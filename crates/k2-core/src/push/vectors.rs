@@ -108,6 +108,8 @@ pub(crate) fn build() -> serde_json::Value {
                     device_usernames: vec!["owner".into()],
                     unread_total: "7".into(),
                     waiting_total: "2".into(),
+                    preview: String::new(),
+                    count: 1,
                 }),
                 &ctx(1_760_960_000_126),
             )
@@ -126,6 +128,8 @@ pub(crate) fn build() -> serde_json::Value {
                     device_usernames: vec!["owner".into()],
                     unread_total: "7".into(),
                     waiting_total: "2".into(),
+                    preview: String::new(),
+                    count: 1,
                 }),
                 &ctx(1_760_960_000_127),
             )

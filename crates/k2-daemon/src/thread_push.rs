@@ -83,6 +83,21 @@ pub struct Post {
     /// text is held only up to [`k2_core::push::ThreadMsg::HOLD_MAX_CHARS`],
     /// and only while the window is open.
     pub msg: Option<k2_core::push::ThreadMsg>,
+    /// project-chat-thread-v1: a project chat line (`conversation_id` is
+    /// `project:<group id>`): its audience is the project's (every person
+    /// but the author, bell on, muted left out) and its push is the
+    /// project's (`kind: project`, `groupId`, `seq`). `None` for a Thread.
+    pub project: Option<ProjectTarget>,
+}
+
+/// A project chat line's push target (project-chat-thread-v1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectTarget {
+    pub group_id: String,
+    pub project_name: String,
+    /// The author's person key (never pushed to); `None` for an agent's or
+    /// a guest's line.
+    pub author_person: Option<String>,
 }
 
 /// How one person's phones split on previews right now.
@@ -104,6 +119,12 @@ pub trait PushEnv {
     /// Everyone who would get a push for `project_id` right now, ignoring
     /// who is viewing (§6.2 steps 1–3).
     fn recipients(&self, project_id: &str) -> Vec<Recipient>;
+    /// Everyone who gets a project chat line's push (project-chat-thread-v1):
+    /// every person but the author, bell on. Muted people are left out by
+    /// [`PushEnv::muted`] as on a Thread.
+    fn project_recipients(&self, target: &ProjectTarget) -> Vec<Recipient> {
+        self.recipients(&target.group_id)
+    }
     /// Is `person` looking at `conversation_id` at `now`? (TP26, TP28)
     fn viewing(&self, person: &str, conversation_id: &str, now: Instant) -> bool;
     /// Take `calls` gateway calls from the Thread budget at `now`, all or
@@ -163,7 +184,11 @@ impl Coalescer {
         if env.airgap() {
             return;
         }
-        for r in env.recipients(&post.project_id) {
+        let recipients = match &post.project {
+            Some(t) => env.project_recipients(t),
+            None => env.recipients(&post.project_id),
+        };
+        for r in recipients {
             if env.muted(&r.person, &post.conversation_id) {
                 // Muted: never an alert, but the phone's copy is stale.
                 env.stale(&r.person, &post.conversation_id);
@@ -312,7 +337,21 @@ impl Coalescer {
         let len = if w.last_push.is_some() && !w.viewed_since_push { BACKOFF } else { WINDOW };
         let totals = env.totals(person);
         let seq = w.post.seq;
-        let event = PushEvent::ThreadPost(ThreadPush {
+        let event = match &w.post.project {
+            // project-chat-thread-v1: the project's push, with the Thread's
+            // preview and count.
+            Some(t) => PushEvent::ProjectPost(k2_core::push::ProjectPush {
+                project_name: t.project_name.clone(),
+                group_id: t.group_id.clone(),
+                seq,
+                principal: person.clone(),
+                device_usernames: w.devices.clone(),
+                unread_total: totals.total.to_string(),
+                waiting_total: totals.waiting_total.to_string(),
+                preview,
+                count: w.pending,
+            }),
+            None => PushEvent::ThreadPost(ThreadPush {
             agent_name: w.post.agent_name.clone(),
             conversation_id: conversation.clone(),
             addr: w.post.addr.clone(),
@@ -333,7 +372,8 @@ impl Coalescer {
             // push), whatever the previews switches say.
             msg: w.post.msg.clone(),
             budget: k2_core::push::ThreadBudget::Thread,
-        });
+        }),
+        };
         w.pending = 0;
         w.last_push = Some(now);
         w.viewed_since_push = false;
@@ -375,6 +415,13 @@ impl PushEnv for DaemonEnv {
         k2_core::notify_prefs::recipients(&people, &prefs, &devices, project_id, &|_| false)
     }
 
+    fn project_recipients(&self, target: &ProjectTarget) -> Vec<Recipient> {
+        crate::push_routes::project_recipients(&target.group_id, target.author_person.as_deref())
+            .into_iter()
+            .map(|(person, device_usernames, _)| Recipient { person, device_usernames })
+            .collect()
+    }
+
     fn viewing(&self, person: &str, conversation_id: &str, now: Instant) -> bool {
         crate::thread_viewers::global().is_viewing(person, conversation_id, now)
     }
@@ -406,8 +453,8 @@ impl PushEnv for DaemonEnv {
         if !k2_core::read_state::tables_exist(&conn) {
             return false;
         }
-        k2_core::read_state::is_muted(&conn, person, k2_core::read_state::KIND_THREAD, conversation_id, k2_core::read_state::now_secs())
-            .unwrap_or(false)
+        let (kind, id) = read_key(conversation_id);
+        k2_core::read_state::is_muted(&conn, person, kind, id, k2_core::read_state::now_secs()).unwrap_or(false)
     }
 
     fn read_through(&self, person: &str, conversation_id: &str) -> i64 {
@@ -416,7 +463,8 @@ impl PushEnv for DaemonEnv {
         if !k2_core::read_state::tables_exist(&conn) {
             return 0;
         }
-        k2_core::read_state::read_through(&conn, person, k2_core::read_state::KIND_THREAD, conversation_id).unwrap_or(0)
+        let (kind, id) = read_key(conversation_id);
+        k2_core::read_state::read_through(&conn, person, kind, id).unwrap_or(0)
     }
 
     fn totals(&self, person: &str) -> k2_core::read_state::Totals {
@@ -436,14 +484,66 @@ impl PushEnv for DaemonEnv {
 
     fn alerted(&self, person: &str, conversation_id: &str, seq: i64, totals: k2_core::read_state::Totals) {
         crate::badge_push::note_alerted(person, conversation_id);
-        crate::badge_push::note_alert_sent(person, k2_core::push::ReadKind::Thread, conversation_id, seq, totals);
+        match k2_core::overlay::project::group_of(conversation_id) {
+            Some(gid) => crate::badge_push::project_alert_sent(person, gid, seq, totals),
+            None => crate::badge_push::note_alert_sent(person, k2_core::push::ReadKind::Thread, conversation_id, seq, totals),
+        }
     }
+}
+
+/// The read-state key of a coalescer conversation: a project chat
+/// (`project:<group id>`) is read as kind `project` by its group id, every
+/// other conversation as a Thread.
+fn read_key(conversation_id: &str) -> (&'static str, &str) {
+    match k2_core::overlay::project::group_of(conversation_id) {
+        Some(gid) => (k2_core::read_state::KIND_PROJECT, gid),
+        None => (k2_core::read_state::KIND_THREAD, conversation_id),
+    }
+}
+
+/// project-chat-thread-v1 (P6): a project chat line, from any author, goes
+/// through the coalescer: one window per (project, person), 45 s (5 min
+/// when the person hasn't looked since their last push), previews under
+/// the owner's switch and each phone's choice, a person viewing the
+/// project's chat quiets it. The audience is the project's: every person
+/// but the author, bell on, muted left out.
+pub fn on_project_line(project_name: &str, msg: &k2_core::project_groups::ProjectGroupMessage, author_person: Option<&str>) {
+    if crate::push_routes::airgap_blocks() {
+        return;
+    }
+    let conversation_id = k2_core::overlay::project::conversation_id(&msg.group_id);
+    let preview = post_preview(ThreadMsgKind::Text, &msg.body, msg.attachments.len());
+    let post = Post {
+        conversation_id: conversation_id.clone(),
+        project_id: msg.group_id.clone(),
+        addr: conversation_id,
+        agent_name: msg.author.clone(),
+        seq: msg.seq,
+        kind: ThreadMsgKind::Text,
+        avatar_rev: String::new(),
+        agent_color: String::new(),
+        preview,
+        msg: None,
+        project: Some(ProjectTarget {
+            group_id: msg.group_id.clone(),
+            project_name: project_name.to_string(),
+            author_person: author_person.map(str::to_string),
+        }),
+    };
+    ensure_ticker();
+    lock().post(&DaemonEnv, post, Instant::now());
 }
 
 /// The daemon-wide coalescer.
 pub fn global() -> &'static Mutex<Coalescer> {
     static C: std::sync::OnceLock<Mutex<Coalescer>> = std::sync::OnceLock::new();
     C.get_or_init(|| Mutex::new(Coalescer::new()))
+}
+
+/// Tests: close every window due by `now` on the daemon's coalescer.
+#[cfg(test)]
+pub(crate) fn flush_due_for_tests(now: Instant) {
+    lock().tick(&DaemonEnv, now);
 }
 
 fn lock() -> std::sync::MutexGuard<'static, Coalescer> {
@@ -643,6 +743,7 @@ fn enqueue(
         agent_color,
         preview,
         msg: Some(msg),
+        project: None,
     };
     ensure_ticker();
     lock().post(&DaemonEnv, post, Instant::now());
@@ -662,6 +763,8 @@ mod tests {
         viewers: RefCell<HashSet<(String, String)>>,
         budget: Cell<Option<u32>>,
         sent: RefCell<Vec<ThreadPush>>,
+        /// project-chat-thread-v1: project chat pushes, in order.
+        sent_projects: RefCell<Vec<k2_core::push::ProjectPush>>,
         airgap: Cell<bool>,
         /// The owner's master switch (`None` = default on).
         previews_off: Cell<bool>,
@@ -735,6 +838,7 @@ mod tests {
         fn send(&self, event: PushEvent) {
             match event {
                 PushEvent::ThreadPost(t) => self.sent.borrow_mut().push(t),
+                PushEvent::ProjectPost(p) => self.sent_projects.borrow_mut().push(p),
                 other => panic!("coalescer sent a non-thread event: {other:?}"),
             }
         }
@@ -879,6 +983,7 @@ mod tests {
             agent_color: "#22c55e".into(),
             preview: String::new(),
             msg: None,
+            project: None,
         }
     }
 
@@ -888,6 +993,59 @@ mod tests {
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    fn project_line(seq: i64, text: &str) -> Post {
+        Post {
+            conversation_id: "project:g1".into(),
+            project_id: "g1".into(),
+            addr: "project:g1".into(),
+            agent_name: "scout".into(),
+            preview: post_preview(ThreadMsgKind::Text, text, 0),
+            project: Some(ProjectTarget { group_id: "g1".into(), project_name: "Launch".into(), author_person: None }),
+            ..post("project:g1", seq, ThreadMsgKind::Text)
+        }
+    }
+
+    /// project-chat-thread-v1 (P6): a project line rides the coalescer as a
+    /// project push (`kind: project`, the group and seq): the first line at
+    /// once with its preview, the held ones as one trailing push that counts
+    /// them; previews off for the owner's switch; viewing quiets it.
+    #[test]
+    fn project_lines_coalesce_as_project_pushes() {
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, project_line(1, "kickoff at noon"), t0);
+        c.post(&env, project_line(2, "agenda"), t0 + secs(1));
+        c.post(&env, project_line(3, "bring the deck"), t0 + secs(2));
+        assert!(env.sent().is_empty(), "never a Thread push");
+        let sent = env.sent_projects.borrow().clone();
+        assert_eq!(sent.len(), 1, "the leading line only: {sent:?}");
+        assert_eq!((sent[0].group_id.as_str(), sent[0].seq, sent[0].count), ("g1", 1, 1));
+        assert_eq!(sent[0].preview, "kickoff at noon");
+        assert_eq!(PushEvent::ProjectPost(sent[0].clone()).body(), "Launch: kickoff at noon");
+        c.tick(&env, t0 + WINDOW);
+        let sent = env.sent_projects.borrow().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!((sent[1].seq, sent[1].count), (3, 2));
+        assert_eq!(PushEvent::ProjectPost(sent[1].clone()).body(), "Launch: 2 new messages · bring the deck");
+
+        // The owner's previews switch off: no text, the old body.
+        let env = Fake::with(&[("owner", &["owner"])]);
+        env.previews_off.set(true);
+        let mut c = Coalescer::new();
+        c.post(&env, project_line(1, "secret plans"), t0);
+        let sent = env.sent_projects.borrow().clone();
+        assert_eq!(sent[0].preview, "");
+        assert_eq!(PushEvent::ProjectPost(sent[0].clone()).body(), "New message in Launch");
+
+        // Viewing the project's chat quiets it.
+        let env = Fake::with(&[("owner", &["owner"])]);
+        env.viewers.borrow_mut().insert(("owner".into(), "project:g1".into()));
+        let mut c = Coalescer::new();
+        c.post(&env, project_line(1, "hi"), t0);
+        assert!(env.sent_projects.borrow().is_empty());
     }
 
     /// thread-read-v1: each push carries ITS person's totals as strings

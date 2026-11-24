@@ -7,14 +7,15 @@
 # 0. The name policy on brand/xy (scripts/brand.sh lint).
 # 1. cargo check of the workspace's crates (rust-check's list, and the k5
 #    binary) with K2_BRAND_DIR=brand/xy, every target, -D warnings.
-# 2. cargo build of the k5 binary, the daemon and the root helper for xy:
-#    k5's pages and its --schema are rewritten to the command xy when
-#    building (crates/k5-cli/build.rs), k5 and the daemon carry the xy
-#    brand mark (scripts/brand/check-brand-mark.py), and none of the three
-#    carries the shell CLI (brand/xy says cli.no_bash = true;
-#    scripts/brand/check-no-bash.py). The bite: the same k5 built from a
-#    copy of brand/xy that says no_bash = false carries it, and the check
-#    finds it.
+# 2. cargo build of every program a brand's Linux build ships, for xy
+#    (scripts/brand/shipped-bins-linux.txt): k5's pages and its --schema
+#    are rewritten to the command xy when building (crates/k5-cli/build.rs),
+#    the marked ones carry the xy brand mark
+#    (scripts/brand/check-brand-mark.py), and none carries the shell CLI
+#    (brand/xy says cli.no_bash = true; scripts/brand/check-no-bash.py
+#    --bins, which refuses a listed program that is not there). The bite:
+#    the same k5 built from a copy of brand/xy that says no_bash = false
+#    carries it, and the check finds it.
 # 3. What that binary prints for every help and study form
 #    (scripts/brand/collect-outputs.sh), read by the three output judges
 #    (scripts/brand/output-judges.py).
@@ -69,14 +70,25 @@ cargo check --locked -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2
     -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export \
     -p k2-deskd-proto -p k2-deskd -p k2-deckrender -p k2-scenerender -p k2-brand -p k5-cli --all-targets
 
-step "cargo build of the k5 binary, the daemon and the root helper, K2_BRAND_DIR=brand/xy"
-cargo build --locked -p k5-cli --bin k5-cli -p k2-daemon --bin k2-daemon -p k2-root-helper
+# The programs a brand's Linux build ships, from their one list. Each is
+# built on its own (`-p <crate> --bin <program>`): one cargo call with
+# several --bin flags builds only those bins of every -p, so a -p without
+# its own --bin builds no program at all (the root helper was left out
+# that way once).
+LIST=scripts/brand/shipped-bins-linux.txt
+SHIPPED="$(sed -e 's/#.*//' "$LIST" | awk 'NF { print $1 }')"
+MARKED="$(sed -e 's/#.*//' "$LIST" | awk '$2 == "marked" { print $1 }')"
+[ -n "$SHIPPED" ] || { echo "xy build: $LIST names no program" >&2; exit 1; }
+step "cargo build of every program the brand ships ($(echo $SHIPPED)), K2_BRAND_DIR=brand/xy"
+for b in $SHIPPED; do
+    cargo build --locked -p "$b" --bin "$b"
+done
 BIN="$XY_TARGET/debug/k5-cli"
-step "the xy binaries carry the xy brand mark, and only it"
-python3 scripts/brand/check-brand-mark.py --brand xy "$BIN" "$XY_TARGET/debug/k2-daemon"
+step "the marked programs carry the xy brand mark, and only it ($(echo $MARKED))"
+python3 scripts/brand/check-brand-mark.py --brand xy $(for b in $MARKED; do printf '%s ' "$XY_TARGET/debug/$b"; done)
 
-step "no xy binary carries the shell CLI (cli.no_bash = true)"
-python3 scripts/brand/check-no-bash.py --cli cli/k2 "$BIN" "$XY_TARGET/debug/k2-daemon" "$XY_TARGET/debug/k2-root-helper"
+step "no xy program carries the shell CLI (cli.no_bash = true): every one in $LIST"
+python3 scripts/brand/check-no-bash.py --cli cli/k2 --bins "$LIST" "$XY_TARGET/debug"
 
 step "what the xy binary prints"
 bash scripts/brand/collect-outputs.sh "$BIN" brand/xy "$W/corpus"

@@ -3,6 +3,12 @@
 carries no copy of the shell CLI (`cli/k2`), in any of its files.
 
     python3 scripts/brand/check-no-bash.py --cli <cli/k2> <file or folder>...
+    python3 scripts/brand/check-no-bash.py --cli <cli/k2> --bins <list> <folder>
+
+With --bins, the files are the programs the list names (one per line,
+the first word; # starts a comment), each in <folder>: every one must be
+there, and a missing one is refused by name with the list it came from,
+so a build step that left a program out can't pass by checking less.
 
 Beside scripts/brand/check-brand-mark.py, and like it, it reads bytes and
 runs nothing. A folder is read file by file (links are not followed). The
@@ -130,11 +136,45 @@ def files(paths):
             yield p
 
 
+def expected(list_path, folder):
+    """The programs `list_path` names, as paths in `folder`, and the missing ones."""
+    names = []
+    with open(list_path, encoding="utf-8") as f:
+        for line in f:
+            words = line.split("#", 1)[0].split()
+            if words:
+                names.append(words[0])
+    paths = [os.path.join(folder, n) for n in names]
+    return names, paths, [p for p in paths if not os.path.isfile(p)]
+
+
+USAGE = "usage: check-no-bash.py --cli <cli/k2> <file or folder>... | --cli <cli/k2> --bins <list> <folder>"
+
+
 def main(argv):
     if len(argv) < 3 or argv[0] != "--cli":
-        print("usage: check-no-bash.py --cli <cli/k2> <file or folder>...", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     script, paths = argv[1], argv[2:]
+    if paths[0] == "--bins":
+        if len(paths) != 3:
+            print(USAGE, file=sys.stderr)
+            return 2
+        list_path, folder = paths[1], paths[2]
+        try:
+            names, paths, missing = expected(list_path, folder)
+        except OSError as e:
+            print(f"check-no-bash: can't read the list {list_path} ({e.strerror})", file=sys.stderr)
+            return 2
+        if not names:
+            print(f"check-no-bash: the list {list_path} names no program", file=sys.stderr)
+            return 2
+        print(f"check-no-bash: expecting {len(names)} programs from {list_path}: {' '.join(names)}")
+        if missing:
+            for p in missing:
+                print(f"check-no-bash: {p}: expected (listed in {list_path}) but not there: the build did not make it", file=sys.stderr)
+            print("check-no-bash: REFUSED: a program the brand ships was not built, so it was not checked", file=sys.stderr)
+            return 1
     try:
         with open(script, "rb") as f:
             cli = f.read()

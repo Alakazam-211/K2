@@ -84,4 +84,27 @@ check --cli "$CLI" "$T/empty"
 check "$T/clean/k5-cli"
 [ "$rc" = 2 ] && [[ "$out" == usage:* ]] || die "usage: $out"; ok
 
+# --bins: every program the list names must be in the folder, and each is
+# checked; one the build left out is refused by name (fail closed), as is
+# one that carries the script. The repo's own list names the root helper.
+LIST="$HERE/scripts/brand/shipped-bins-linux.txt"
+grep -qx 'k2-root-helper unmarked' "$LIST" || die "the shipped list names the root helper, unmarked"; ok
+mkdir -p "$T/bins"
+for b in $(sed -e 's/#.*//' "$LIST" | awk 'NF { print $1 }'); do cp "$T/clean/k5-cli" "$T/bins/$b"; done
+check --cli "$CLI" --bins "$LIST" "$T/bins"
+[ "$rc" = 0 ] && [[ "$out" == *"expecting 5 programs from $LIST: k2-daemon k2-node k2-app-engine k5-cli k2-root-helper"* ]] \
+    && [[ "$out" == *"check-no-bash: 5 files, no copy of the shell CLI"* ]] || die "--bins, all there and clean: $out"; ok
+rm "$T/bins/k2-root-helper"
+check --cli "$CLI" --bins "$LIST" "$T/bins"
+[ "$rc" = 1 ] && [[ "$out" == *"bins/k2-root-helper: expected (listed in $LIST) but not there: the build did not make it"* ]] \
+    && [[ "$out" == *"REFUSED: a program the brand ships was not built, so it was not checked"* ]] || die "--bins, one missing: $out"; ok
+cp "$T/plain/k2-daemon" "$T/bins/k2-root-helper"
+check --cli "$CLI" --bins "$LIST" "$T/bins"
+[ "$rc" = 1 ] && [[ "$out" == *"bins/k2-root-helper: at byte 8213: the shell CLI's first two lines, as text"* ]] || die "--bins, one carries it: $out"; ok
+printf '# nothing\n' > "$T/empty.txt"
+check --cli "$CLI" --bins "$T/empty.txt" "$T/bins"
+[ "$rc" = 2 ] && [[ "$out" == *"names no program"* ]] || die "--bins, an empty list: $out"; ok
+check --cli "$CLI" --bins "$LIST"
+[ "$rc" = 2 ] && [[ "$out" == usage:* ]] || die "--bins, no folder: $out"; ok
+
 echo "no-bash check tests: $pass passed"

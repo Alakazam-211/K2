@@ -22,7 +22,7 @@ cleanup() {
 trap cleanup EXIT
 
 cat >"$FAKE_DIR/fake.py" <<'PY'
-import http.server, json, sys, urllib.parse
+import http.server, json, sys, time, urllib.parse
 log_path, port_path = sys.argv[1], sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def _any(self):
@@ -66,6 +66,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     out = dict(pre, ok=False, needsConfirm=True)
             elif op == "drop-drill":
+                if b.get("name") == "slow":
+                    time.sleep(2)
                 out = {"ok": True, "dropped": {"major": 17, "name": b.get("name"), "dropped": True, "from": "17/feedback"}}
         elif u.path == "/cli/app/cron/add":
             out = {"ok": True, "id": "c0123456789", "app": b.get("app"), "schedule": b.get("schedule"), "path": b.get("path"), "method": (b.get("method") or "GET").upper(),
@@ -158,6 +160,14 @@ last_body | grep -q '"to": *"-1h"' || fail "drill --to: $(last_body)"
 run db cluster drop-drill feedback_drill --major 17
 [ "$RC" = 0 ] || fail "drop-drill: $OUT"
 echo "$OUT" | grep -q 'removed 17/feedback_drill' || fail "drop-drill output: $OUT"
+# The wait is each verb's own: a _K2_DB_MAX_TIME in the caller's
+# environment doesn't cut it short (drop-drill waits up to 900 s; this
+# answer takes 2).
+export _K2_DB_MAX_TIME=1
+run db cluster drop-drill slow
+unset _K2_DB_MAX_TIME
+[ "$RC" = 0 ] || fail "a _K2_DB_MAX_TIME in the environment changed the wait (got $RC): $OUT"
+echo "$OUT" | grep -q 'removed 17/slow' || fail "drop-drill slow output: $OUT"
 
 # Switch: no --yes shows the moment, sends no confirm and exits 2 (no
 # terminal here); --yes confirms.

@@ -4960,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-av"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-cad-model",
@@ -4969,7 +4969,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "libc",
  "redb",
@@ -4980,7 +4980,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-blend"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "flate2",
  "k2-mpc-base",
@@ -4990,7 +4990,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-board"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "miniz_oxide",
  "sha2 0.10.9",
@@ -4998,7 +4998,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-board-bridge"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-board",
@@ -5006,14 +5006,14 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-cad-model"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "k2-mpc-base",
 ]
 
 [[package]]
 name = "k2-mpc-dwg"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-cad-model",
@@ -5021,7 +5021,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-dxf"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-cad-model",
@@ -5029,14 +5029,14 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-fab"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "k2-mpc-base",
 ]
 
 [[package]]
 name = "k2-mpc-markdown"
-version = "0.7.27"
+version = "0.7.28"
 dependencies = [
  "k2-mpc-base",
 ]
@@ -5052,7 +5052,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-pptx"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-opc",
@@ -5061,7 +5061,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-psd"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "k2-mpc-base",
  "photocraft-psd",
@@ -5069,7 +5069,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-text"
-version = "0.2.29"
+version = "0.2.30"
 dependencies = [
  "k2-mpc-base",
  "serde_json",
@@ -5077,7 +5077,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-timeline"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "flate2",
  "k2-mpc-base",

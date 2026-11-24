@@ -16,6 +16,10 @@
 //! `daemon.toml` names another daemon as the system owner is left alone.
 //! Reading the file never blocks (a FIFO at the path can't hang
 //! `GET /cli/root-helper/status`, which agents may call, or auto-heal).
+//!
+//! A build with no shell CLI (`k2_core::cli_stage::NO_BASH`) embeds none
+//! ([`daemon_cli`] is `None`): it never asks the helper to write one, and
+//! the status and the last pass say skipped, with [`NO_SHELL_CLI`].
 
 use std::sync::{Mutex, OnceLock};
 
@@ -45,6 +49,9 @@ pub struct CliFile {
     pub dir_problem: Option<String>,
 }
 
+/// Why a build with no shell CLI never asks for a refresh.
+pub const NO_SHELL_CLI: &str = "this build has no shell CLI";
+
 /// The CLI this daemon embeds: what the helper's copy must equal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonCli {
@@ -65,15 +72,30 @@ pub trait CliOps {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum CliOutcome {
     /// At (or above) the daemon's version; nothing to do.
-    Current { version: String },
+    Current {
+        version: String,
+    },
     /// Replaced through the root helper.
-    Refreshed { from: String, to: String },
+    Refreshed {
+        from: String,
+        to: String,
+    },
     /// Not K2's to refresh here (absent, a symlink, not the K2 CLI, owned
     /// by a user the daemon stages for itself, another daemon's).
-    NotManaged { reason: String },
+    NotManaged {
+        reason: String,
+    },
     /// Stale, and the helper can't refresh it yet.
-    NeedsHelper { reason: String },
-    Failed { reason: String },
+    NeedsHelper {
+        reason: String,
+    },
+    Failed {
+        reason: String,
+    },
+    /// Never asked: this build has no shell CLI ([`NO_SHELL_CLI`]).
+    Skipped {
+        reason: String,
+    },
 }
 
 /// The daemon.toml entry that owns `/usr/local/bin/k2` is the first
@@ -184,9 +206,16 @@ struct Last {
 
 static LAST: Mutex<Option<Last>> = Mutex::new(None);
 
-/// One pass; records the result for status and audits a refresh.
-pub fn run_once(ops: &dyn CliOps, want_cli: &DaemonCli, who: &str) -> CliOutcome {
-    let out = refresh_with(ops, want_cli);
+/// One pass; records the result for status and audits a refresh. With no
+/// CLI of the daemon's own (`want_cli` `None`, a build with no shell CLI)
+/// it reads nothing and asks nothing: skipped.
+pub fn run_once(ops: &dyn CliOps, want_cli: Option<&DaemonCli>, who: &str) -> CliOutcome {
+    let out = match want_cli {
+        Some(want) => refresh_with(ops, want),
+        None => CliOutcome::Skipped {
+            reason: NO_SHELL_CLI.to_string(),
+        },
+    };
     let audit = |outcome: String| {
         k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
             "root_helper_cli_refresh",
@@ -243,21 +272,36 @@ pub fn status_with(f: &CliFile, daemon_cli_version: &str) -> Value {
     })
 }
 
+/// [`status_with`] for a build with no shell CLI: what is on disk all the
+/// same, the state `skipped` and why, and no daemon CLI version.
+pub fn status_skipped(f: &CliFile, reason: &str) -> Value {
+    let mut v = status_with(f, "");
+    v["state"] = json!("skipped");
+    v["reason"] = json!(reason);
+    v["daemonCliVersion"] = Value::Null;
+    v
+}
+
 pub fn status_value() -> Value {
-    status_with(&LiveCliOps.inspect(), &daemon_cli().version)
+    let f = LiveCliOps.inspect();
+    match daemon_cli() {
+        Some(cli) => status_with(&f, &cli.version),
+        None => status_skipped(&f, NO_SHELL_CLI),
+    }
 }
 
 /// The CLI this daemon embeds (= the daemon's version in a release) and
-/// its sha256, computed once.
-pub fn daemon_cli() -> DaemonCli {
-    static CLI: OnceLock<DaemonCli> = OnceLock::new();
+/// its sha256, computed once. `None` in a build with no shell CLI.
+pub fn daemon_cli() -> Option<DaemonCli> {
+    static CLI: OnceLock<Option<DaemonCli>> = OnceLock::new();
     CLI.get_or_init(|| {
         use sha2::Digest;
-        let sha = sha2::Sha256::digest(k2_core::cli_stage::CLI_CONTENT.unwrap_or_default().as_bytes());
-        DaemonCli {
+        let cli = k2_core::cli_stage::CLI_CONTENT?;
+        let sha = sha2::Sha256::digest(cli.as_bytes());
+        Some(DaemonCli {
             version: k2_core::cli_stage::embedded_version().unwrap_or_default(),
             sha256: sha.iter().map(|b| format!("{b:02x}")).collect(),
-        }
+        })
     })
     .clone()
 }
@@ -573,9 +617,64 @@ mod tests {
     fn the_daemon_cli_is_the_embedded_one() {
         use sha2::Digest;
         let d = daemon_cli();
-        assert_eq!(d.version, env!("CARGO_PKG_VERSION"), "cli/k2 K2_CLI_VERSION = the daemon's version");
+        assert_eq!(
+            d.is_none(),
+            k2_core::cli_stage::NO_BASH,
+            "a daemon CLI exactly when the build carries the shell CLI"
+        );
+        let Some(d) = d else {
+            assert_eq!(k2_core::cli_stage::CLI_CONTENT, None);
+            return;
+        };
+        assert_eq!(
+            d.version,
+            env!("CARGO_PKG_VERSION"),
+            "cli/k2 K2_CLI_VERSION = the daemon's version"
+        );
         let sha = sha2::Sha256::digest(include_bytes!("../../../../cli/k2"));
-        assert_eq!(d.sha256, sha.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        assert_eq!(
+            d.sha256,
+            sha.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+    }
+
+    /// With no CLI of its own (a build with no shell CLI), a pass asks
+    /// nothing, even for a stale root-owned file the helper would refresh,
+    /// and says skipped (no audit line: nothing was done).
+    #[test]
+    fn no_bash_a_pass_never_asks_the_helper() {
+        let f = fake(
+            stale_root_file("0.40.148"),
+            helper(9, true, "0.46.3"),
+            Ok(json!({"result": "updated", "from": "0.40.148", "to": "0.46.3"})),
+        );
+        let out = run_once(&f, None, "daemon");
+        assert_eq!(
+            out,
+            CliOutcome::Skipped {
+                reason: NO_SHELL_CLI.into()
+            }
+        );
+        assert_eq!(f.calls.get(), 0, "no root call");
+        assert_eq!(
+            serde_json::to_value(&out).unwrap(),
+            json!({"result": "skipped", "reason": NO_SHELL_CLI})
+        );
+        // The doctor's line: what is on disk, skipped and why.
+        let v = status_skipped(&stale_root_file("0.40.148"), NO_SHELL_CLI);
+        assert_eq!(
+            (v["state"].as_str(), v["reason"].as_str()),
+            (Some("skipped"), Some(NO_SHELL_CLI))
+        );
+        assert_eq!(v["version"], "0.40.148");
+        assert_eq!(v["daemonCliVersion"], Value::Null);
+        // Ours: with the daemon's CLI it asks as before (refresh_with: a
+        // refresh through run_once would write the audit log).
+        assert!(matches!(
+            refresh_with(&f, &want()),
+            CliOutcome::Refreshed { .. }
+        ));
+        assert_eq!(f.calls.get(), 1);
     }
 
     /// The helper decides with `k2_root_proto::cli`, the daemon (and boot

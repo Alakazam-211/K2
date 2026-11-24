@@ -6,7 +6,7 @@
 use super::*;
 use k2_root_proto::verbs::Verb;
 
-use crate::core::{cli_refresh_with, cli_text, CliNames};
+use crate::core::{cli_refresh_carrying, cli_refresh_with, cli_text, CliNames, NO_SHELL_CLI};
 
 /// A helper built as `xy`: no aliases.
 const XY: CliNames = CliNames { name: "xy", aliases: &[] };
@@ -207,5 +207,67 @@ fn the_compiled_brand_tends_no_alias_today() {
     assert!(v.get("aliases").is_none(), "{v}");
     for (alias, _) in compiled.aliases {
         assert_eq!(target(&t, alias), CLI_PATH);
+    }
+}
+
+/// A helper built with no shell CLI: `cli-refresh` answers skipped before
+/// it opens anything, and writes nothing, for a stale CLI of the
+/// helper's own name and for an alias link beside it. Brand-free: the
+/// verb code runs with no CLI passed in.
+#[test]
+fn no_bash_cli_refresh_is_skipped_and_writes_nothing() {
+    for names in [XY, K5_TOMBSTONE] {
+        let t = box_for(names.name);
+        link(&t, "k2", names.name);
+        let v = cli_refresh_carrying(&t.ctx, &daemon(), &names, None).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"result": "skipped", "reason": NO_SHELL_CLI}),
+            "{}",
+            names.name
+        );
+        assert_eq!(
+            std::fs::read_to_string(bin(&t, names.name)).unwrap(),
+            STALE_CLI,
+            "{}",
+            names.name
+        );
+        assert_eq!(
+            target(&t, "k2"),
+            names.name,
+            "{}: the alias link stays",
+            names.name
+        );
+    }
+}
+
+/// This build's `helper version` and `cli-refresh`, through the verb
+/// table: ours carries the CLI (its version and hash); one with no shell
+/// CLI says null for both and skips.
+#[test]
+fn helper_version_and_cli_refresh_follow_this_build() {
+    let t = box_for(CliNames::compiled().name);
+    let v = super::cli_json(&t.call(&["helper", "version"]));
+    if cfg!(k2_no_bash) {
+        assert_eq!(
+            (&v["cliVersion"], &v["cliSha256"]),
+            (&serde_json::Value::Null, &serde_json::Value::Null),
+            "{v}"
+        );
+        let r = super::cli_json(&t.call(&["helper", "cli-refresh"]));
+        assert_eq!(
+            (r["result"].as_str(), r["reason"].as_str()),
+            (Some("skipped"), Some(NO_SHELL_CLI))
+        );
+        assert_eq!(
+            std::fs::read_to_string(bin(&t, CliNames::compiled().name)).unwrap(),
+            STALE_CLI
+        );
+    } else {
+        assert_eq!(v["cliVersion"], crate::core::VERSION, "{v}");
+        assert!(
+            v["cliSha256"].as_str().is_some_and(|h| h.len() == 64),
+            "{v}"
+        );
     }
 }

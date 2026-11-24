@@ -1861,7 +1861,7 @@ fn cli_build_carries_the_product_version_and_its_hash() {
     // build.rs refuses a mismatch; this says so once more at test time.
     assert_eq!(cli_version_of(cli_text().as_bytes()).as_deref(), Some(VERSION));
     let sha: String = sha2::Sha256::digest(cli_text().as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(CLI_SHA256, sha);
+    assert_eq!(CLI_SHA256, Some(sha.as_str()));
     let v = cli_json(&box_root().call(&["helper", "version"]));
     assert_eq!(v["cliSha256"], sha);
     assert_eq!(v["cliVersion"], VERSION);

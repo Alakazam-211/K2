@@ -7,6 +7,12 @@
 //! CLI's sha256 (`helper version` → `cliSha256`, which the daemon compares
 //! with its own embedded copy before it asks for a refresh). The CLI goes
 //! in deflate-compressed (`$OUT_DIR/k2-cli.deflate`, see core.rs).
+//!
+//! A brand with `[cli] no_bash` true (`k2_brand::CLI_NO_BASH`) carries no
+//! shell CLI: the build sets `cfg(k2_no_bash)`, never reads `cli/k2`,
+//! writes no `k2-cli.deflate` and exports no `K2_CLI_SHA256`, so
+//! `cli-refresh` answers skipped. Our brand still reads it and still
+//! refuses an off-version one.
 use std::fs;
 
 use sha2::Digest;
@@ -31,6 +37,13 @@ fn main() {
     };
     assert!(ok, "k2-daemon version must be plain x.y.z, got {version}");
     println!("cargo:rustc-env=K2_PRODUCT_VERSION={version}");
+
+    println!("cargo:rerun-if-env-changed=K2_BRAND_DIR");
+    println!("cargo::rustc-check-cfg=cfg(k2_no_bash)");
+    if k2_brand::CLI_NO_BASH {
+        println!("cargo::rustc-cfg=k2_no_bash");
+        return;
+    }
 
     // The repo's script file, not the command's name: a brand build of the bash CLI is a later step (C7).
     let cli_path = "../../cli/k2";

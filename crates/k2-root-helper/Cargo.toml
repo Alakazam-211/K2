@@ -46,6 +46,8 @@ sha2 = "0.10"
 # ...and deflates it (the helper must fit fielded helpers' 8 MiB
 # self-update cap; the raw CLI alone is ~6 MB).
 flate2 = "1.1.9"
+# ...unless the brand's `cli.no_bash` says the build carries none.
+k2-brand = { path = "../k2-brand" }
 
 [dev-dependencies]
 k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }

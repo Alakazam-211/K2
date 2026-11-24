@@ -112,7 +112,8 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         "keyIds": keys,
         "testKeys": ctx.test_keys,
         "namespaces": {"helper": true, "mail": true, "pg": true, "backup": false, "keep": true, "daemon": true, "apps": true, "sew": true, "front": true, "cli": true, "pgmajor": true, "creds": true, "pgdual": true, "sewreconf": true, "sewrbloss": true, "front80": true, "sewtunnel": true, "sewmirror": true, "sewboxbackup": true, "sewtunnelclear": true, "pgnamed": true, "sewrecording": true, "desktop": true, "mailmodes": true, "pgarchive": true, "pgrestore": true, "agentcg": true, "agentscope": true},
-        // `helper cli-refresh` (protocol 9): the K2 CLI this helper carries.
+        // `helper cli-refresh` (protocol 9): the K2 CLI this helper carries
+        // (null in a build with no shell CLI).
         "cliVersion": embedded_cli_version(),
         // ...and its sha256: the daemon refreshes only when this equals
         // the hash of the CLI the daemon itself embeds.
@@ -334,50 +335,67 @@ pub fn legacy_retire(ctx: &Ctx, which: Legacy) -> HResult<serde_json::Value> {
 /// anything from the caller. build.rs refuses a CLI whose `K2_CLI_VERSION`
 /// is not this build's version. Compressed since 0.46.18: the raw script
 /// (~6 MB) put 0.46.17's helper over the 8 MiB self-update cap of the
-/// helpers already on boxes.
-const CLI_DEFLATED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/k2-cli.deflate"));
+/// helpers already on boxes. `None` in a build with no shell CLI (the
+/// brand's `cli.no_bash`, `cfg(k2_no_bash)`): the bytes never reach that
+/// helper.
+#[cfg(not(k2_no_bash))]
+const CLI_DEFLATED: Option<&[u8]> = Some(include_bytes!(concat!(env!("OUT_DIR"), "/k2-cli.deflate")));
+/// The K2 CLI: none in a build with no shell CLI.
+#[cfg(k2_no_bash)]
+const CLI_DEFLATED: Option<&[u8]> = None;
 /// sha256 of the CLI (build.rs, of the uncompressed script):
 /// `helper version` → `cliSha256`.
-pub const CLI_SHA256: &str = env!("K2_CLI_SHA256");
+#[cfg(not(k2_no_bash))]
+pub const CLI_SHA256: Option<&str> = Some(env!("K2_CLI_SHA256"));
+/// No CLI, no hash.
+#[cfg(k2_no_bash)]
+pub const CLI_SHA256: Option<&str> = None;
+
+/// `helper cli-refresh`'s answer in a build with no shell CLI.
+pub const NO_SHELL_CLI: &str = "this helper carries no shell CLI";
 
 /// The embedded CLI, inflated once and checked against [`CLI_SHA256`].
-/// `None` only if the embedded bytes don't inflate to the CLI build.rs
-/// hashed (never in a build from this tree).
+/// `None` in a build with no shell CLI, or if the embedded bytes don't
+/// inflate to the CLI build.rs hashed (never in a build from this tree).
 pub fn cli_content() -> Option<&'static str> {
+    let (deflated, want) = (CLI_DEFLATED?, CLI_SHA256?);
     static CLI: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     CLI.get_or_init(|| {
         use sha2::Digest;
         use std::io::Read;
         let mut s = String::new();
-        flate2::read::DeflateDecoder::new(CLI_DEFLATED).read_to_string(&mut s).ok()?;
+        flate2::read::DeflateDecoder::new(deflated).read_to_string(&mut s).ok()?;
         let hex: String = sha2::Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
-        (hex == CLI_SHA256).then_some(s)
+        (hex == want).then_some(s)
     })
     .as_deref()
 }
 
 /// The embedded CLI's version, inflating only its first
 /// [`CLI_HEAD_BYTES`] (`helper version` runs often; the whole CLI is MBs).
+/// `None` in a build with no shell CLI.
 pub fn embedded_cli_version() -> Option<String> {
     use std::io::Read;
+    let deflated = CLI_DEFLATED?;
     let mut head = Vec::with_capacity(CLI_HEAD_BYTES);
-    flate2::read::DeflateDecoder::new(CLI_DEFLATED)
+    flate2::read::DeflateDecoder::new(deflated)
         .take(CLI_HEAD_BYTES as u64)
         .read_to_end(&mut head)
         .ok()?;
     cli_version_of(&head)
 }
 
-/// Tests: the embedded CLI, which must inflate.
+/// Tests: the embedded CLI, which must inflate. These tests are for a
+/// build that carries one (ours); a build with no shell CLI has its own.
 #[cfg(test)]
 pub(crate) fn cli_text() -> &'static str {
-    cli_content().expect("the embedded CLI inflates to the script build.rs hashed")
+    cli_content().expect("this helper build carries the shell CLI, and it inflates to the script build.rs hashed")
 }
 
 /// Tests: the compressed bytes, for the size check.
 #[cfg(test)]
 pub(crate) fn cli_deflated_len() -> usize {
-    CLI_DEFLATED.len()
+    CLI_DEFLATED.expect("this helper build carries the shell CLI").len()
 }
 
 pub use k2_root_proto::cli::cli_version_of;
@@ -449,7 +467,26 @@ pub fn cli_refresh_with(
     who: &crate::caller::Caller,
     names: &CliNames,
 ) -> HResult<serde_json::Value> {
-    let cli = cli_content().ok_or_else(|| Fail::state("this helper's embedded CLI doesn't inflate to its cliSha256"))?;
+    // A build with no shell CLI has nothing to inflate: skipped, below.
+    let cli = match CLI_DEFLATED {
+        None => None,
+        Some(_) => Some(cli_content().ok_or_else(|| Fail::state("this helper's embedded CLI doesn't inflate to its cliSha256"))?),
+    };
+    cli_refresh_carrying(ctx, who, names, cli)
+}
+
+/// [`cli_refresh_with`] for the CLI the helper carries, `cli`. With none
+/// (a build with no shell CLI) the answer is `skipped` ([`NO_SHELL_CLI`])
+/// before anything is opened, and nothing is written. Tests pass either.
+pub(crate) fn cli_refresh_carrying(
+    ctx: &Ctx,
+    who: &crate::caller::Caller,
+    names: &CliNames,
+    cli: Option<&str>,
+) -> HResult<serde_json::Value> {
+    let Some(cli) = cli else {
+        return Ok(serde_json::json!({"result": "skipped", "reason": NO_SHELL_CLI}));
+    };
     let to = cli_version_of(cli.as_bytes())
         .and_then(|v| Semver::parse(&v))
         .ok_or_else(|| Fail::state("this helper carries no versioned K2 CLI"))?;

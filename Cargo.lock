@@ -6192,6 +6192,7 @@ name = "k2-root-helper"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "k2-brand",
  "k2-root-proto",
  "libc",
  "serde",

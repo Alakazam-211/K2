@@ -462,7 +462,7 @@ pub fn spawn_auto_heal() {
                 // not): keep a root-owned /usr/local/bin/k2 at it too.
                 let cli = super::cli_refresh::run_once(
                     &super::cli_refresh::LiveCliOps,
-                    &super::cli_refresh::daemon_cli(),
+                    super::cli_refresh::daemon_cli().as_ref(),
                     "daemon",
                 );
                 k2_core::log_debug!("[root-helper] cli refresh: {:?}", cli);

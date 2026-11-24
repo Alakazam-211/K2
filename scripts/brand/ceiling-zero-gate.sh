@@ -25,6 +25,11 @@
 set -euo pipefail
 
 CEILING="crates/k5-cli/tests/data/native_bar_ceiling.tsv"
+# The named, temporary allowance (K2's ruling, 0.46.18): exact rows kept out
+# of the ceiling, which stays at zero for every other form. The gate prints
+# them and their due line; it refuses an allowance without that line.
+ALLOWANCE="crates/k5-cli/tests/data/native_port_allowance.tsv"
+ALLOWANCE_DUE="# due: native port due before the n2 build (0.46.19)"
 usage() { echo "usage: ceiling-zero-gate.sh --tag <tag> [<repo>] | --tree [<repo>]" >&2; exit 2; }
 refuse() { echo "ceiling-zero: REFUSED ($where): $*" >&2; exit 1; }
 
@@ -41,10 +46,12 @@ if [ "$mode" = --tag ]; then
     where="tag $tag"
     git -C "$repo" rev-parse -q --verify "refs/tags/$tag" >/dev/null || refuse "no tag named $tag in $repo"
     text="$(git -C "$repo" show "refs/tags/$tag:$CEILING" 2>/dev/null)" || refuse "the tag has no $CEILING"
+    allow="$(git -C "$repo" show "refs/tags/$tag:$ALLOWANCE" 2>/dev/null || true)"
 else
     where="the working tree"
     [ -f "$repo/$CEILING" ] || refuse "no $CEILING"
     text="$(cat "$repo/$CEILING")"
+    allow="$(cat "$repo/$ALLOWANCE" 2>/dev/null || true)"
 fi
 
 summary="$(printf '%s\n' "$text" | grep -E '^# [0-9]+ of [0-9]+ probes fall through: ' || true)"
@@ -64,5 +71,11 @@ if [ "$fell" != 0 ] || [ "$counts" != "V 0, H 0, F 0, E 0, P 0" ] || [ "$nrows" 
     echo "ceiling-zero: $fell of $probes probes fall through ($counts), $nrows row(s):" >&2
     printf '%s\n' "$rows" | head -n 20 | sed 's/^/  /' >&2
     refuse "every command line must be native before a brand other than ours is built"
+fi
+nallow="$(printf '%s\n' "$allow" | grep -c '^native_bar	' || true)"
+if [ "$nallow" != 0 ]; then
+    printf '%s\n' "$allow" | grep -qxF "$ALLOWANCE_DUE" || refuse "$ALLOWANCE has $nallow row(s) and no due line ($ALLOWANCE_DUE)"
+    echo "ceiling-zero: $where: plus $nallow form(s) on the named temporary allowance $ALLOWANCE (${ALLOWANCE_DUE#\# due: }):" >&2
+    printf '%s\n' "$allow" | grep '^native_bar	' | cut -f3,4 | head -n 80 | sed 's/^/  /' >&2
 fi
 echo "ceiling-zero: $where: 0 of $probes probes fall through ($counts); build it"

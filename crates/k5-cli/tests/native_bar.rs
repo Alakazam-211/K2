@@ -69,6 +69,10 @@ const BIN: &str = env!("CARGO_BIN_EXE_k5-cli");
 const FORMS: &str = "crates/k5-cli/tests/data/router_forms.tsv";
 const SHAPES: &str = "crates/k5-cli/tests/data/native_bar_shapes.tsv";
 const CEILING: &str = "crates/k5-cli/tests/data/native_bar_ceiling.tsv";
+/// The named, temporary allowance (K2's ruling, 0.46.18): exact rows that
+/// may fall through for now, kept out of the ceiling, which stays at zero.
+/// Its `native_bar` rows are `kind, class, family, form`.
+const ALLOWANCE: &str = "crates/k5-cli/tests/data/native_port_allowance.tsv";
 /// The hand-off's line when there is no `python3` ([`k5_cli::fallthrough::FrontError::NoPython`]).
 const NO_PYTHON: &str = "is not built into k5 yet and needs Python 3";
 /// How long a probe may run: past it, it is in its own code.
@@ -523,6 +527,20 @@ fn listing(rows: &[&String]) -> String {
 fn the_native_bar_ceiling_holds() {
     let probes = probes();
     let fell = run(&probes);
+    // The allowance's rows are taken out before the ceiling is compared or
+    // written; each one must still fall through and name a probe.
+    let allowed: BTreeSet<String> = read(ALLOWANCE)
+        .lines()
+        .filter_map(|l| l.strip_prefix("native_bar\t"))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        read(ALLOWANCE).contains("\n# due: native port due before the n2 build (0.46.19)\n"),
+        "{ALLOWANCE} carries its due line"
+    );
+    let row = |p: &Probe| format!("{}\t{}\t{}", p.class, p.family, p.form);
+    let fell_allowed: BTreeSet<String> = fell.iter().map(row).filter(|r| allowed.contains(r)).collect();
+    let fell: Vec<Probe> = fell.into_iter().filter(|p| !allowed.contains(&row(p))).collect();
     let found = ceiling_text(&fell, probes.len());
     if let Ok(to) = std::env::var("NATIVE_BAR_WRITE") {
         fs::write(&to, &found).unwrap_or_else(|e| panic!("write {to}: {e}"));
@@ -546,6 +564,25 @@ fn the_native_bar_ceiling_holds() {
         .collect();
     let stray: Vec<&String> = ceiling.iter().filter(|r| !names.contains(*r)).collect();
     let mut problems = String::new();
+    let allowed_native: Vec<&String> = allowed
+        .iter()
+        .filter(|r| names.contains(*r) && !fell_allowed.contains(*r))
+        .collect();
+    let allowed_stray: Vec<&String> = allowed.iter().filter(|r| !names.contains(*r)).collect();
+    if !allowed_native.is_empty() {
+        problems += &format!(
+            "these are native now: take them out of {ALLOWANCE} ({}):\n  {}\n",
+            allowed_native.len(),
+            listing(&allowed_native)
+        );
+    }
+    if !allowed_stray.is_empty() {
+        problems += &format!(
+            "these allowance rows name no probe ({}):\n  {}\n",
+            allowed_stray.len(),
+            listing(&allowed_stray)
+        );
+    }
     if !rose.is_empty() {
         problems += &format!(
             "these fall through and the ceiling doesn't list them ({}):\n  {}\n",
@@ -568,6 +605,7 @@ fn the_native_bar_ceiling_holds() {
         );
     }
     println!("{}", found.lines().nth(3).unwrap_or_default());
+    println!("plus {} on the named allowance {ALLOWANCE}", fell_allowed.len());
     assert!(problems.is_empty(), "the native bar:\n{problems}");
 }
 

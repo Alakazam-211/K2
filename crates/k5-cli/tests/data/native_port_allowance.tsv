@@ -1,0 +1,111 @@
+# A NAMED, TEMPORARY allowance (K2's ruling, 2026-11-24): the Supabase-compatible
+# App layer's new verbs (app compat, identity, storage, cron, user import and
+# user meta; db cluster and db import) are not native in k5 yet. Only the
+# exact rows below may fall through to bash (native_bar) or have no parity
+# case (parity); every other form stays at zero, and no general ceiling rises.
+# The native bar and parity-coverage fail when a row here is native or covered
+# again (take it out) or names no form; the ceiling-zero gate prints it.
+# due: native port due before the n2 build (0.46.19)
+# owner: the Gardener
+kind	class	family	form
+native_bar	V	db	db cluster basebackup
+native_bar	V	db	db cluster basebackup --json
+native_bar	V	db	db cluster backups
+native_bar	V	db	db cluster backups --json
+native_bar	V	db	db cluster restore
+native_bar	V	db	db cluster restore --json
+native_bar	V	db	db cluster restore-drill
+native_bar	V	db	db cluster restore-drill --json
+native_bar	V	db	db cluster switch
+native_bar	V	db	db cluster switch --json
+native_bar	V	db	db cluster drop-drill
+native_bar	V	db	db cluster drop-drill --json
+native_bar	V	db	db import
+native_bar	V	app	app cron
+native_bar	V	app	app cron add
+native_bar	V	app	app cron add --json
+native_bar	V	app	app cron list
+native_bar	V	app	app cron list --json
+native_bar	V	app	app cron ls
+native_bar	V	app	app cron rm
+native_bar	V	app	app cron rm --json
+native_bar	V	app	app cron remove
+native_bar	V	app	app cron run-now
+native_bar	V	app	app cron run-now --json
+native_bar	V	app	app cron logs
+native_bar	V	app	app cron logs --json
+native_bar	V	app	app compat
+native_bar	V	app	app compat --json
+native_bar	V	app	app identity
+native_bar	V	app	app identity --json
+native_bar	V	app	app compat on
+native_bar	V	app	app compat off
+native_bar	V	app	app compat status
+native_bar	V	app	app compat set
+native_bar	V	app	app compat sync-users
+native_bar	V	app	app identity issuer
+native_bar	V	app	app identity issuers
+native_bar	V	app	app identity unlink
+native_bar	V	app	app storage
+native_bar	V	app	app storage status
+native_bar	V	app	app storage status --json
+native_bar	V	app	app storage enable
+native_bar	V	app	app storage enable --json
+native_bar	V	app	app storage buckets
+native_bar	V	app	app storage buckets --json
+native_bar	V	app	app storage bucket
+native_bar	V	app	app storage bucket --json
+native_bar	V	app	app storage bucket create
+native_bar	V	app	app storage bucket update
+native_bar	V	app	app storage bucket rm
+native_bar	V	app	app storage ls
+native_bar	V	app	app storage ls --json
+native_bar	V	app	app storage list
+native_bar	V	app	app storage import
+native_bar	V	app	app storage import --json
+native_bar	V	app	app storage import-status
+native_bar	V	app	app storage import-status --json
+native_bar	V	app	app storage verify
+native_bar	V	app	app storage verify --json
+native_bar	V	app	app storage key
+native_bar	V	app	app storage key rotate
+native_bar	V	app	app storage key rotate --json
+native_bar	V	app	app user import
+native_bar	V	app	app user import --json
+native_bar	V	app	app user meta
+native_bar	V	app	app user meta --json
+parity	-	db	db cluster basebackup --json
+parity	-	db	db cluster backups --json
+parity	-	db	db cluster restore --json
+parity	-	db	db cluster restore-drill --json
+parity	-	db	db cluster drop-drill --json
+parity	-	db	db cluster switch --json
+parity	-	app	app cron add --json
+parity	-	app	app cron list --json
+parity	-	app	app cron run-now --json
+parity	-	app	app cron logs --json
+parity	-	app	app cron rm --json
+parity	-	app	app compat
+parity	-	app	app compat --json
+parity	-	app	app identity
+parity	-	app	app identity --json
+parity	-	app	app user meta
+parity	-	app	app user meta --json
+parity	-	app	app storage status
+parity	-	app	app storage status --json
+parity	-	app	app storage enable
+parity	-	app	app storage enable --json
+parity	-	app	app storage buckets
+parity	-	app	app storage buckets --json
+parity	-	app	app storage bucket
+parity	-	app	app storage bucket --json
+parity	-	app	app storage ls
+parity	-	app	app storage ls --json
+parity	-	app	app storage import
+parity	-	app	app storage import --json
+parity	-	app	app storage import-status
+parity	-	app	app storage import-status --json
+parity	-	app	app storage verify
+parity	-	app	app storage verify --json
+parity	-	app	app storage key rotate
+parity	-	app	app storage key rotate --json

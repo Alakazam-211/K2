@@ -67,6 +67,22 @@ import sys
 CENSUS = "crates/k5-cli/tests/data/spec_census.tsv"
 CEILING = "crates/k5-cli/tests/data/parity_uncovered.tsv"
 K5_ONLY = "crates/k5-cli/tests/data/k5_only_forms.tsv"
+# The named, temporary allowance (K2's ruling, 0.46.18): its `parity` rows
+# (kind, -, family, form) may have no case for now; they stay out of the
+# ceiling, which stays at zero. A row that is covered again, or names no
+# census form, fails --check.
+ALLOWANCE = "crates/k5-cli/tests/data/native_port_allowance.tsv"
+ALLOWANCE_DUE = "# due: native port due before the n2 build (0.46.19)"
+
+
+def allowance(root):
+    with open(os.path.join(root, ALLOWANCE), encoding="utf-8") as f:
+        text = f.read()
+    out = []
+    for line in text.splitlines():
+        if line.startswith("parity\t"):
+            out.append(line.split("\t")[3])
+    return out, (ALLOWANCE_DUE in text.splitlines())
 NATIVE_BAR = "crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 RUST_TAG = re.compile(r"^\s*// covers: (.+?)\s*$")
 SHELL_TAG = re.compile(r"^\s*# covers: (.+?)\s*$")
@@ -311,11 +327,24 @@ def main(argv):
     native, native_bad = native_tags(root)
     bad += native_bad
     uncovered = [f for f in all_forms if f not in covered]
+    allowed, due_ok = allowance(root)
+    if not due_ok:
+        bad.append("%s has no due line (%s)" % (ALLOWANCE, ALLOWANCE_DUE))
+    for f in allowed:
+        if f not in census:
+            bad.append("%s names a form that isn't in the census: %s" % (ALLOWANCE, f))
+        elif f not in uncovered:
+            bad.append("%s: %s has a parity case now: take it out of the allowance" % (ALLOWANCE, f))
+    allowed_now = [f for f in uncovered if f in allowed]
+    uncovered = [f for f in uncovered if f not in allowed]
+    if allowed_now:
+        print("parity-coverage: %d forms on the named allowance %s (native port due before the n2 build (0.46.19))"
+              % (len(allowed_now), ALLOWANCE))
     by = {}
     for f in uncovered:
         by.setdefault(family_of(f, words), []).append(f)
-    print("parity-coverage: %d of %d forms have no parity case (%d covered); %d K5-only out of the count: %s"
-          % (len(uncovered), len(all_forms), len(all_forms) - len(uncovered), len(only),
+    print("parity-coverage: %d of %d forms have no parity case (%d covered, %d on the allowance); %d K5-only out of the count: %s"
+          % (len(uncovered), len(all_forms), len(all_forms) - len(uncovered) - len(allowed_now), len(allowed_now), len(only),
              ", ".join(only) or "none"))
     for fam in sorted(by, key=lambda k: (-len(by[k]), k)):
         print("  %-16s %4d  %s" % (fam, len(by[fam]), ", ".join(by[fam])))

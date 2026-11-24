@@ -40,6 +40,34 @@ for b in k2 k5 xy; do
 done
 case "$out" in *"brand lint: xy: command xy, product 'Globex Desk': ok"*) ok ;; *) die "brand/xy: $out" ;; esac
 
+# The text rule reads a string escape in our text (JSON goldens, the catalog,
+# printf strings) as a separator: "\n2. step" is the step "2.", not the word
+# n2, and "\t2" is not t2; a real word is still found, after an escape too.
+python3 - "$HERE/scripts/brand/lint.py" <<'PY' || die "the text rule and string escapes"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("lint", sys.argv[1])
+lint = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(lint)
+cases = [
+    ("n2", r'"text": "SETUP\n2. CONNECT USERS\n3. done"', False),
+    ("n2", r"printf 'one\n2. two\n'", False),
+    ("n2", r'"a\\n2. b"', False),
+    ("n2", "run n2 now", True),
+    ("n2", r'"say\nn2 now"', True),
+    ("n2", r'"\"n2\" is a word"', True),
+    ("t2", r'"col\t2\tcol"', False),
+    ("t2", "then t2 runs", True),
+    ("t2", r'"a\tt2 b"', True),
+    ("u0", r'"\u0041"', False),
+]
+bad = [(w, line, want) for w, line, want in cases if lint.stands_in(lint.word_rx(w, True), line) != want]
+for w, line, want in bad:
+    print(f"{w} in {line!r}: want {want}", file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
+ok
+lint --name n2; [ "$rc" = 0 ] || die "n2 (only escaped newlines before numbered steps in our text): $out"; ok
+
 # ── a scratch brand ───────────────────────────────────────────────────
 bare() { # bare <folder> <id> <command> <product> [<alias>...]: its names only
     local d="$T/$1" id="$2" cli="$3" product="$4"; shift 4

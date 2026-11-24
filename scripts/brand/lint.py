@@ -197,13 +197,29 @@ def signoffs(folder):
 
 _text_cache = {}
 
+# An escape in a string of our text (JSON goldens and the catalog, printf and
+# echo -e strings in cli/k2): \n, \t, \r, \", \\, \/, \b, \f, \a, \e, \v,
+# \', \uXXXX, \xHH, after any run of backslashes. It is read as a
+# separator, so "\n2. CONNECT USERS" is the step "2.", not the word n2.
+TEXT_ESCAPE = re.compile(r"\\+(?:u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|[ntrbfaev\"'/\\])")
+
+
+def word_rx(word, case):
+    """`word` standing as a word (no letter, digit or _ on either side)."""
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(word) + r"(?![A-Za-z0-9_])", 0 if case else re.I)
+
+
+def stands_in(rx, line):
+    """Whether `rx` (word_rx) finds its word in `line` once escapes are separators."""
+    return bool(rx.search(TEXT_ESCAPE.sub(" ", line)))
+
 
 def text_hits(word, case):
     """Lines of our own text where `word` stands as a word: (count, first)."""
     key = (word, case)
     if key in _text_cache:
         return _text_cache[key]
-    rx = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(word) + r"(?![A-Za-z0-9_])", 0 if case else re.I)
+    rx = word_rx(word, case)
     count, first = 0, None
     for place in TEXT_PLACES:
         top = os.path.join(HERE, place)
@@ -214,7 +230,7 @@ def text_hits(word, case):
         for path in files:
             with open(path, encoding="utf-8", errors="replace") as f:
                 for n, line in enumerate(f, 1):
-                    if rx.search(line):
+                    if stands_in(rx, line):
                         count += 1
                         if first is None:
                             first = f"{os.path.relpath(path, HERE)}:{n}"

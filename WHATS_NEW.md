@@ -3,70 +3,32 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.18
+## 0.46.18 — Supabase-compatible Apps, files in Home chats, and call recording
 
 ### Desktop app
 - **A slow or unreachable other server no longer makes the app look offline; while this server is busy, the app stays usable and shows a small reconnecting note.**
 - **The Postal tab is now called Friends: agents on other servers your agent can talk to.** The tab and its server switch say Friends, Add a friend and Friend requests, and a line at the top says it is the Postal service. Addresses still end in `.postal.bot`, and the `k2 postal` commands are unchanged.
-### Published sites
-- **Published services started with --cmd now get HOST=127.0.0.1 and their PORT, and K2 warns when one listens beyond the server itself. Mark a service `k2 publish expose <name> public` if that's on purpose.** A service that listens on every address can be reached on its own port, around the server's front door (:443) and any App sign-in. K2 now checks where each `--cmd` service listens after it starts (and every 5 minutes) and warns in `k2 publish ps`, the service's log and `k2 vault doctor`, with the exact fix; it never stops the service. `k2 publish expose` is the owner's: `public` means no warning and no `HOST=127.0.0.1` from the service's next start (`ps` shows `[expose public]`, and the access audit log records it); `server` undoes it. An agent can't change it.
 
-### Permission cards
-- **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
-### Agents
-- Cloning refuses archive entries that would land outside the new workspace.
+### Home
+- **Attach files and images in Home DMs and channels.** The message box has the agent chat's own **+** (Attach a file or image), and you can also drop files on the chat or paste an image into the box. Each file uploads at once, its chip showing how far it is, and Send waits until all are up (up to 10 files per message, up to the size the server allows, 1 GB by default). Pictures show in the message, open in the image viewer, and every file has Download. Files go through your server's K2 as you, and only people who can read the message can open them. Files aren't scanned for viruses, so they always download as files and never open in K2. Your server's K2 needs this release.
 
-### Wiki
-- If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
-### Compute
-- Your own server's compute jobs can no longer create user namespaces unless the node's owner allows it for that job with --userns. Jobs can no longer use io_uring, bpf, userfaultfd, perf_event_open, the kernel keyring (keyctl, add_key, request_key), kexec, kernel module calls, open_by_handle_at or personality changes.
-### Command line
-- k5 reads the owner-fallback setting the same way bash does.
-## 0.46.18 — New compute nodes join node lists by themselves
-
-### Compute
-- **New compute nodes join every workspace's node list automatically, unless the owner fixed that list.** A machine newly added to this server goes on every list that exists, so a job no longer waits for a person to add each new node to each list. To keep a list exactly as it is (one that pins a deliberate window, say), the owner or an Admin runs `k2 compute allow-nodes --fixed on --workspace <ws>` from a terminal outside K2; `--fixed off` lets new nodes join it again. Every list made before this update follows new nodes. `k2 compute allow-nodes` and `k2 compute nodes` say which a list is.
-- **A managing agent can ask to change another workspace's node list with a one-tap card.** An agent that hired a workspace, or one that may manage this server's compute nodes, runs `k2 compute allow-nodes --add <node> --workspace <ws>` (or `--remove <node>`, or `--clear`). K2 refuses it and prints the card to ask for: `k2 permission request compute.allow-nodes-for target=<ws> add=<node>`. The owner or an Admin sees the workspace and each node, and Allow makes exactly that change; Deny changes nothing. Only nodes granted to that workspace can be added, and an agent that doesn't manage the workspace can't ask.
-## 0.46.18 — Your typing goes first in shared live documents
+### Threads
+- **Agents can reply to a specific Thread message or card; click the reply line or a #number to jump to it.** An agent posts `k2 thread <addr> --reply-to '#13664' "…"` to point you at a card or message: the reply shows its `↩ #N` line and the start of what it answers, and clicking that line scrolls to it (loading older messages if needed) and highlights it briefly. A `#N` in a message that names a message or card on that Thread is a link too; any other `#N` stays plain text. A number that isn't on the Thread is refused, and nothing is posted.
+- K2's informational notices in a Thread no longer count as unread; ones that need you still do.
+- **K2 no longer reports a message as not taken, or types it twice, when the agent was busy and read it mid-turn.**
 
 ### Live documents
 - **When people and agents edit one file together, your typing no longer waits behind the agents.** A person's edit now goes ahead of agents' edits, so a keystroke waits for at most the one agent edit already under way, however many agents are writing. Agents get as much done as before.
 - **K2 uses less memory after it saves live documents.** Each open text document keeps one copy of its text instead of several, and on Linux servers the memory a save used is handed back to the system (at most every 30 seconds).
-### Threads
-- **Agents can reply to a specific Thread message or card; click the reply line or a #number to jump to it.** An agent posts `k2 thread <addr> --reply-to '#13664' "…"` to point you at a card or message: the reply shows its `↩ #N` line and the start of what it answers, and clicking that line scrolls to it (loading older messages if needed) and highlights it briefly. A `#N` in a message that names a message or card on that Thread is a link too; any other `#N` stays plain text. A number that isn't on the Thread is refused, and nothing is posted.
-### Threads
-- K2's informational notices in a Thread no longer count as unread; ones that need you still do.
+
 ### Voice
 - **Sew 0.11.4: calls use less battery on weak connections.**
-### Compute
-- **Compute jobs no longer fail at start with a misleading 'No such file or directory' when a machine reuses a work slot right after another job.** The next job's checkout no longer races the last job's cleanup of the same project. A job whose working folder isn't there now fails before it starts, with `cwd_missing` and the folder and commit named (`k2 compute run` starts a job in the folder you ran it from, so that folder must be in the commit). A program that isn't on the job's `PATH` is named with that `PATH`.
-### Mail
-- **A linked inbox no longer stays busy after reads time out:** K2 now gives up on a stalled mail connection and frees its place.
-### Command line
-- **`k2 terminal spawn --command` runs a full command line (with arguments, pipes and quotes); before, only a single program name worked.**
-- **`k2 terminal spawn` in a workspace's folder no longer ends that workspace's chat.** With `--cwd` (or the project path) pointing at a workspace, the new terminal took the workspace's own session: its pinned chat was stopped and the command ran in its place. Every spawn now starts a terminal of its own beside the chat, also when you spawn with the same `--agent` again.
-### Threads
-- **K2 no longer reports a message as not taken, or types it twice, when the agent was busy and read it mid-turn.**
-### Command line
-- **Messages to agents on other servers retry briefly when the other server is busy, and say clearly if they still couldn't be delivered.** `k2 msg <agent>::<host>` (live text and `--inbox-wake` / `--inbox-silent` files) asks the other server up to three times, a few seconds apart, when it doesn't answer or answers that it is busy; a refusal (such as 401 or 403) is never asked again. A send that still fails exits non-zero with one line naming the server, the step (roster or send), the attempts and the last error, and says nothing was delivered and to send again; for a file package it names every file. A message that reached this server's outbox but not the other server still says QUEUED (not delivered yet), for file packages too, and K2 delivers it from the outbox later. A retry never delivers a message twice.
+
 ### Recording calls
 - **Recording stays off until the server's owner turns it on.** Nothing is recorded on a new or updated server. "Recording on this server" and "Record calls in direct messages" are two separate switches, both off. The owner or an admin turns each one on in person, with Touch ID, their login or the vault password. An agent can't turn either on: it asks on a card, and the person who allows it there confirms the same way.
 - **Everyone in the call is told.** When someone presses Record, everyone else in the call sees a notice that says who started it, how long the audio is kept and whether any agent can read the transcript. The call shows a red Recording badge the whole time. Nobody is recorded until they press OK on their own notice. In a voice room, someone who doesn't answer within a minute leaves the call. In a direct message call they stay in the call and aren't recorded.
 - **Record and Stop in voice rooms and direct message calls.** Either person in a direct message call can start or stop a recording. In a voice room, the owner or an admin chooses who may start one. The badge's tooltip says who hasn't answered the notice yet.
 - **The recording and its transcript show in the chat afterwards.** A recording card appears in the direct message or the room's chat, with Show transcript. Only the people in that conversation can read it.
-### Git
-- **Changes, commits, merges and discards now use the git installed on your computer.** If git isn't installed, K2 says so and shows how to install it. Reading changes and diffs doesn't need it.
-- **On Windows, K2 follows your git's line-ending settings when it restores or merges files.**
-- **In a workspace you haven't trusted, K2 won't stage, commit, merge or discard with git if the repository's own git settings run programs (such as filters or merge drivers). Trust the workspace first.**
-### Command line
-- When something can't be asked for with a card, K2 now tells you how to send feedback about it.
-### Home
-- **Attach files and images in Home DMs and channels.** The message box has the agent chat's own **+** (Attach a file or image), and you can also drop files on the chat or paste an image into the box. Each file uploads at once, its chip showing how far it is, and Send waits until all are up (up to 10 files per message, up to the size the server allows, 1 GB by default). Pictures show in the message, open in the image viewer, and every file has Download. Files go through your server's K2 as you, and only people who can read the message can open them. Files aren't scanned for viruses, so they always download as files and never open in K2. Your server's K2 needs this release.
-### Email hosting
-- **Agents that manage email hosting can create as many addresses as they need; the owner can still set a cap.** A workspace whose agent has "Let this agent manage hosted mail" on no longer stops at the default of 5 addresses. The owner sets a cap for it on purpose with `k2 hostmail config --workspace <ws> --address-cap <n>`, and `--address-cap none` clears it. An agent without the switch keeps the default of 5, as before. `k2 hostmail config` shows each workspace's cap, for example `Addresses: unlimited (this agent manages email hosting)`. Send limits, mailbox quotas and the other server-wide limits are unchanged. An agent that manages email hosting can no longer set or clear the cap on its own workspace: that cap is the owner's.
-- **An agent can ask for a different address cap on a permission card.** When `k2 hostmail create` stops at the cap, or `k2 hostmail config --address-cap` is refused, the refusal ends with `k2 permission request mail.address-cap cap=<n|none> target=<workspace> --why "…"` (permission cards on). The card names the workspace, its cap today and what it becomes; the owner or an admin allows it in one tap, the cap is set, and the change is in the Access Audit.
-## Unreleased (after 0.46.17)
-## 0.46.18 — Supabase-compatible Apps: row security, imports, doors, storage and point-in-time restore
 
 ### Apps
 - **Supabase-style row security on an App's database (`k2 app compat`, beta).** `k2 app compat on <app> --db <name>` gives one App's database what a Supabase project has for identity: the roles `anon`, `authenticated` and `service_role`, `auth.uid()`, `auth.jwt()`, `auth.role()`, `auth.email()` and `request.jwt.claims`, and an `auth.users` table K2 keeps equal to the App's users (ids kept, so `REFERENCES auth.users(id) ON DELETE CASCADE` works). Policies are standard: `CREATE POLICY … TO authenticated USING (auth.uid() = user_id)`. The brokered lane (`POST /cli/db/query`) runs as `authenticated` with the person's claims. Your server's own connection proves who the person is with `SELECT k2.set_claims(token)` (the token: `GET /cli/skin/identity-token` with their pass, on the gateway link); a login that just sets the claims setting is nobody. `k2 app compat set` holds the anon lane, origins, schemas and limits, with warnings for the risky ones; `k2 app compat status` and `sync-users` check it. Study: `k2 study supabase-compat`.
@@ -91,14 +53,51 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Base backups, every day.** K2 takes a base backup of every named cluster that archives WAL once a day, headless, beside its WAL spool (the newest 7 stay). `k2 db cluster basebackup <name>` takes one now; `k2 db cluster backups <name>` shows them, the WAL, the window a restore can reach, and the last drill.
 - **Switch a database to its restore, and back.** `k2 db cluster switch <db> --to <restored-cluster>` shows the moment the data goes back to and what is lost, and changes nothing until you confirm (`--yes`). Then it closes the old copy, sets K2's logins and each App's again on the restored cluster, moves the database there and re-hosts its Apps. The old cluster is kept, closed: `k2 db cluster switch <db> --to <old-cluster>` rolls back.
 - **Restore drills.** `k2 db cluster restore-drill <name>` restores into a throwaway cluster, proves the rows match the moment (marker rows around it and every table's row count), removes it and records the result. `k2 db cluster backups` warns when the last good drill is more than 30 days old.
+
+### Published sites
+- **Published services started with --cmd now get HOST=127.0.0.1 and their PORT, and K2 warns when one listens beyond the server itself. Mark a service `k2 publish expose <name> public` if that's on purpose.** A service that listens on every address can be reached on its own port, around the server's front door (:443) and any App sign-in. K2 now checks where each `--cmd` service listens after it starts (and every 5 minutes) and warns in `k2 publish ps`, the service's log and `k2 vault doctor`, with the exact fix; it never stops the service. `k2 publish expose` is the owner's: `public` means no warning and no `HOST=127.0.0.1` from the service's next start (`ps` shows `[expose public]`, and the access audit log records it); `server` undoes it. An agent can't change it.
+
+### Email hosting
+- **Agents that manage email hosting can create as many addresses as they need; the owner can still set a cap.** A workspace whose agent has "Let this agent manage hosted mail" on no longer stops at the default of 5 addresses. The owner sets a cap for it on purpose with `k2 hostmail config --workspace <ws> --address-cap <n>`, and `--address-cap none` clears it. An agent without the switch keeps the default of 5, as before. `k2 hostmail config` shows each workspace's cap, for example `Addresses: unlimited (this agent manages email hosting)`. Send limits, mailbox quotas and the other server-wide limits are unchanged. An agent that manages email hosting can no longer set or clear the cap on its own workspace: that cap is the owner's.
+- **An agent can ask for a different address cap on a permission card.** When `k2 hostmail create` stops at the cap, or `k2 hostmail config --address-cap` is refused, the refusal ends with `k2 permission request mail.address-cap cap=<n|none> target=<workspace> --why "…"` (permission cards on). The card names the workspace, its cap today and what it becomes; the owner or an admin allows it in one tap, the cap is set, and the change is in the Access Audit.
+
+### Mail
+- **A linked inbox no longer stays busy after reads time out:** K2 now gives up on a stalled mail connection and frees its place.
+
 ### Compute
+- Your own server's compute jobs can no longer create user namespaces unless the node's owner allows it for that job with --userns. Jobs can no longer use io_uring, bpf, userfaultfd, perf_event_open, the kernel keyring (keyctl, add_key, request_key), kexec, kernel module calls, open_by_handle_at or personality changes.
+- **New compute nodes join every workspace's node list automatically, unless the owner fixed that list.** A machine newly added to this server goes on every list that exists, so a job no longer waits for a person to add each new node to each list. To keep a list exactly as it is (one that pins a deliberate window, say), the owner or an Admin runs `k2 compute allow-nodes --fixed on --workspace <ws>` from a terminal outside K2; `--fixed off` lets new nodes join it again. Every list made before this update follows new nodes. `k2 compute allow-nodes` and `k2 compute nodes` say which a list is.
+- **A managing agent can ask to change another workspace's node list with a one-tap card.** An agent that hired a workspace, or one that may manage this server's compute nodes, runs `k2 compute allow-nodes --add <node> --workspace <ws>` (or `--remove <node>`, or `--clear`). K2 refuses it and prints the card to ask for: `k2 permission request compute.allow-nodes-for target=<ws> add=<node>`. The owner or an Admin sees the workspace and each node, and Allow makes exactly that change; Deny changes nothing. Only nodes granted to that workspace can be added, and an agent that doesn't manage the workspace can't ask.
+- **Compute jobs no longer fail at start with a misleading 'No such file or directory' when a machine reuses a work slot right after another job.** The next job's checkout no longer races the last job's cleanup of the same project. A job whose working folder isn't there now fails before it starts, with `cwd_missing` and the folder and commit named (`k2 compute run` starts a job in the folder you ran it from, so that folder must be in the commit). A program that isn't on the job's `PATH` is named with that `PATH`.
 - **Compute queues by expected run time too: quick jobs no longer wait behind long ones, and long jobs still start within a bounded time.** Within a tier, a job expected to end sooner starts first, and a job's place rises the longer it waits. A job that has waited an hour goes first and holds the next free slot, on its node and across the nodes K2 places on. Jobs that should end before it could start may still use that slot, so a node is never held idle long. A newer job starts ahead of an older one only when it should end before the older one could start. CI and Priority stay ahead, pinned jobs stay on their node, and with no run times known the order is the same as before.
 - **`k2 compute run` and `k2 compute test` take `--expect <time>`** (for example `--expect 12m`), or `--expect unknown` on a first run. The expected time comes from the job's earlier runs (the same `--tag`, or the same command), else from `--expect`. When three or more earlier runs disagree with `--expect`, the runs win and `k2 compute get` says so. If a run takes more than three times its stated time, `--expect` is ignored for that kind of job for a week. A finished job prints what to pass next time: `took 11m40s; next time: --expect 12m`. It appears in `k2 compute get`, `k2 compute wait` and the completion notice. `k2 compute get` and `k2 compute queue` show each job's expected time and why it is where it is.
 - **One submitter's waiting jobs no longer hold each other up across nodes.** When K2 places a job and it fits on a node with a free slot, it starts there, even when the same submitter's older job is still waiting for room elsewhere. A node with free slots also takes a waiting job when its own queue holds only work that can't start yet, such as a Batch job waiting for an idle node or a job too big for its free memory. Jobs pinned to a node keep their order. A job waiting on the server shows its node as `planned`, not as a node it is bound to.
 - A guest's copy no longer follows links inside the copied folder, and uploads never create anything outside the room.
+
 ### Agents
+- Cloning refuses archive entries that would land outside the new workspace.
 - A workspace hired with an API key is now created the same way as an agent's hire: K2 refuses links in its path and never takes over an existing folder outside the key's root.
 - Hiring with an API key now refuses a hire root that another user on the server could change (a folder not owned by the server's user, or writable by a group or everyone, /tmp included). Move the root into a folder only the server's user can write.
+- **A new agent from a template gets the permissions it suggests, as far as you can give them.** On the Review of Create an agent, each permission the type suggests is a checkbox: ticked ones are turned on when you create it, and you can untick any. One you can't turn on yourself is asked of someone who can, on a card in the new agent's Thread. With permission cards off, it stays off, and the Review says who can turn it on and how. In a terminal, `k2 agent hire --template <id>` prints the same for each one, and `--decline <permission>` leaves one off.
+- **An agent that hires passes on only what it has.** An agent with "Let this agent hire agents" on hires only inside the hire root, and gives a new agent only switches it has on itself, never database access or compute; a person is asked for the rest on a card. It can't hire into an existing workspace, its own included. Every permission a hire turns on, asks for or can't give is in the access audit.
+
+### Permission cards
+- **An agent can ask to move a published site's name to its workspace with a permission card; the owner approves it in one tap.** After a server move a name can still belong to an old workspace (`label_owned_by_other_workspace`), and only the owner or an admin may `--transfer` it. That refusal, and an agent's own `--transfer`, now end with `Ask with: k2 permission request publish.transfer label=<name>`. The card names the workspace that holds the name now; Allow moves it to the asking workspace, recorded in the access audit log with who allowed it, and the agent runs its command again. If the name moves again before the tap, the card goes stale and nothing changes.
+
+### Wiki
+- If your workspace's wiki is a link to a folder elsewhere (an Obsidian vault, say), approve that location once in Settings so API keys and templates can add notes to it.
+
+### Git
+- **Changes, commits, merges and discards now use the git installed on your computer.** If git isn't installed, K2 says so and shows how to install it. Reading changes and diffs doesn't need it.
+- **On Windows, K2 follows your git's line-ending settings when it restores or merges files.**
+- **In a workspace you haven't trusted, K2 won't stage, commit, merge or discard with git if the repository's own git settings run programs (such as filters or merge drivers). Trust the workspace first.**
+
+### Command line
+- k5 reads the owner-fallback setting the same way bash does.
+- **`k2 terminal spawn --command` runs a full command line (with arguments, pipes and quotes); before, only a single program name worked.**
+- **`k2 terminal spawn` in a workspace's folder no longer ends that workspace's chat.** With `--cwd` (or the project path) pointing at a workspace, the new terminal took the workspace's own session: its pinned chat was stopped and the command ran in its place. Every spawn now starts a terminal of its own beside the chat, also when you spawn with the same `--agent` again.
+- **Messages to agents on other servers retry briefly when the other server is busy, and say clearly if they still couldn't be delivered.** `k2 msg <agent>::<host>` (live text and `--inbox-wake` / `--inbox-silent` files) asks the other server up to three times, a few seconds apart, when it doesn't answer or answers that it is busy; a refusal (such as 401 or 403) is never asked again. A send that still fails exits non-zero with one line naming the server, the step (roster or send), the attempts and the last error, and says nothing was delivered and to send again; for a file package it names every file. A message that reached this server's outbox but not the other server still says QUEUED (not delivered yet), for file packages too, and K2 delivers it from the outbox later. A retry never delivers a message twice.
+- When something can't be asked for with a card, K2 now tells you how to send feedback about it.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
@@ -497,10 +496,6 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Files and editors
 - **A new PDF viewer.** Comments, markups and stamps show on the page with their author and date, layers can be turned on and off, you can select and find text (⌘F), and the page fits to the window or its width.
 - **The markdown and code editors gain find and replace, a formatting toolbar, a / menu, an outline and go to line.**
-
-### Making agents
-- **A new agent from a template gets the permissions it suggests, as far as you can give them.** On the Review of Create an agent, each permission the type suggests is a checkbox: ticked ones are turned on when you create it, and you can untick any. One you can't turn on yourself is asked of someone who can, on a card in the new agent's Thread. With permission cards off, it stays off, and the Review says who can turn it on and how. In a terminal, `k2 agent hire --template <id>` prints the same for each one, and `--decline <permission>` leaves one off.
-- **An agent that hires passes on only what it has.** An agent with "Let this agent hire agents" on hires only inside the hire root, and gives a new agent only switches it has on itself, never database access or compute; a person is asked for the rest on a card. It can't hire into an existing workspace, its own included. Every permission a hire turns on, asks for or can't give is in the access audit.
 
 ### Agent messages
 - **A message sent twice lands once.** `k2 msg` (live and `--inbox-wake`/`--inbox-silent`, local or `agent::host`), `k2 thread` and `k2 thread ask` give each send a key; when K2 is slow to answer, the command asks again with the same key and K2 delivers it once, answering with the first delivery. If K2 still doesn't answer, the error says the message may have been delivered and prints the key: run the same command with `--idempotency-key <key>` to try again without a duplicate.

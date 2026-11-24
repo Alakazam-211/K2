@@ -1396,12 +1396,13 @@ mod tests {
         // says plainly that no sandbox is in force.
         let agent = format!("agent-a-plain-{}", uuid::Uuid::new_v4().simple());
         let resp = handle_terminal_spawn(&params_for(&agent, "false"), &ws_str);
-        let live = crate::v2_session_map::unregister(&agent);
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        let id = SessionId::parse(v["terminalId"].as_str().expect("terminalId")).expect("a session id");
+        let live = crate::v2_session_map::agent_name_for_session_id(&id).and_then(|key| crate::v2_session_map::unregister(&key));
         if let Some(ref s) = live {
             s.kill();
         }
-        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
-        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
         assert_eq!(v["sandbox"], serde_json::json!("none"), "body={}", resp.body);
         assert!(live.is_some(), "the plain spawn started a session");
     }
@@ -1412,32 +1413,42 @@ mod tests {
     #[cfg(unix)]
     struct Spawned {
         resp: CliResponse,
-        agent: String,
     }
 
     #[cfg(unix)]
     impl Spawned {
+        /// The spawned session, by the `terminalId` the answer names.
+        fn id(&self) -> Option<SessionId> {
+            let v: serde_json::Value = serde_json::from_str(&self.resp.body).ok()?;
+            SessionId::parse(v["terminalId"].as_str()?)
+        }
         fn session(&self) -> Option<std::sync::Arc<k2_core::terminal::daemon_pty::DaemonPtySession>> {
-            crate::v2_session_map::lookup_by_agent_name(&self.agent)
+            crate::v2_session_map::lookup_by_session_id(&self.id()?)
         }
     }
 
     #[cfg(unix)]
     impl Drop for Spawned {
         fn drop(&mut self) {
-            crate::v2_session_map::unregister(&self.agent);
+            if let Some(key) = self.id().and_then(|id| crate::v2_session_map::agent_name_for_session_id(&id)) {
+                crate::v2_session_map::unregister(&key);
+            }
         }
     }
 
     #[cfg(unix)]
     fn spawn_command(ws: &str, command: &str) -> Spawned {
-        let agent = format!("agent-cmdline-{}", uuid::Uuid::new_v4().simple());
+        spawn_as(&format!("agent-cmdline-{}", uuid::Uuid::new_v4().simple()), ws, command)
+    }
+
+    #[cfg(unix)]
+    fn spawn_as(agent: &str, ws: &str, command: &str) -> Spawned {
         let params = HashMap::from([
-            ("agent".to_string(), agent.clone()),
+            ("agent".to_string(), agent.to_string()),
             ("command".to_string(), command.to_string()),
             ("cwd".to_string(), ws.to_string()),
         ]);
-        Spawned { resp: handle_terminal_spawn(&params, ws), agent }
+        Spawned { resp: handle_terminal_spawn(&params, ws) }
     }
 
     #[cfg(unix)]
@@ -1536,6 +1547,65 @@ mod tests {
         assert_ne!(sp.resp.status, "200 OK", "body={}", sp.resp.body);
         assert!(sp.resp.body.contains("refusing") && sp.resp.body.contains("claude"), "body={}", sp.resp.body);
         assert!(sp.session().is_none(), "a refused agent CLI starts no session");
+    }
+
+    /// 0.46.18: `k2 terminal spawn --cwd <a registered workspace>` took the
+    /// workspace's own session slot (its project id): the spawn evicted
+    /// and killed the workspace's pinned chat and ran the command in its
+    /// place. A spawned terminal is always a new session of its own, and
+    /// the pinned chat keeps running, untouched, however often it is
+    /// spawned beside it (the same `--agent` twice included).
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_spawn_in_a_workspace_never_takes_its_pinned_chat() {
+        let _ = k2_core::db::init_for_tests();
+        let home = crate::test_support::TempHome::new();
+        k2_core::app_settings::update(serde_json::json!({ "terminal": { "ptyd": "off" } })).expect("terminal.ptyd off");
+        let ws = home.path().join(format!("ws-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&ws).expect("workspace folder");
+        let ws_str = dunce::canonicalize(&ws).expect("canonical folder").to_string_lossy().into_owned();
+        let pid = format!("proj-{}", uuid::Uuid::new_v4().simple());
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?1, ?2, ?1)",
+                rusqlite::params![pid, ws_str],
+            )
+            .expect("register the workspace");
+        }
+        // The workspace's pinned chat: a live session in its own slot.
+        let pinned = k2_core::test_env::spawn_plain_pty(k2_core::terminal::daemon_pty::DaemonPtyConfig {
+            program: Some("/bin/cat".into()),
+            cwd: Some(std::path::PathBuf::from(&ws_str)),
+            ..Default::default()
+        })
+        .expect("pinned chat");
+        crate::v2_session_map::register(pid.clone(), pinned.clone());
+
+        let agent = format!("agent-slot-{}", uuid::Uuid::new_v4().simple());
+        let mut ids = Vec::new();
+        let mut keep = Vec::new();
+        for (what, command) in [("a command line", "sleep 30"), ("one word", "/bin/cat"), ("the same --agent again", "sleep 30")] {
+            let sp = spawn_as(&agent, &ws_str, command);
+            assert_eq!(sp.resp.status, "200 OK", "{what}: body={}", sp.resp.body);
+            let id = sp.id().expect("terminalId");
+            assert_ne!(id, pinned.session_id, "{what}: the spawn is not the pinned chat");
+            assert!(!ids.contains(&id), "{what}: a new session every time, not a reused one");
+            let key = crate::v2_session_map::agent_name_for_session_id(&id).expect("registered");
+            assert_ne!(key, pid, "{what}: never the workspace's own slot");
+            ids.push(id);
+            keep.push(sp);
+            let slot = crate::v2_session_map::lookup_by_agent_name(&pid).expect("the pinned chat keeps its slot");
+            assert_eq!(slot.session_id, pinned.session_id, "{what}: the slot still holds the pinned chat");
+            assert!(pinned.is_child_alive(), "{what}: the pinned chat is still running");
+        }
+        // Every spawned terminal is still running too.
+        for sp in &keep {
+            assert!(sp.session().expect("live").is_child_alive());
+        }
+        drop(keep);
+        crate::v2_session_map::unregister(&pid);
     }
 
     #[cfg(unix)]

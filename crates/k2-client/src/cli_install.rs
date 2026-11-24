@@ -1693,7 +1693,7 @@ mod tests {
             std::env::temp_dir().join(format!("k2-check-binary-notes-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
-        let missing = dir.join("k5-cli");
+        let missing = dir.join("absent");
         let unmarked = dir.join("unmarked");
         fs::write(&unmarked, b"\x7fELF no mark here").expect("write");
         let other = dir.join("other");

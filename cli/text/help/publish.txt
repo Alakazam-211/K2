@@ -20,6 +20,7 @@ USAGE
   k2 publish sessions <name> [--revoke-all] [--json]
   k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
   k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
+  k2 publish expose <name> public|server [--json]
   k2 publish client-ip [<label> on|off] [--json]
   k2 publish subdomain <create|list|point|target|rm|claim|unclaim> ...
 
@@ -43,6 +44,9 @@ run
   (label_owned_by_other_workspace). --transfer: owner/admin only, moves it
   here on purpose; recorded in the access audit log.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
+  A --cmd service gets HOST=127.0.0.1 and PORT=<--port>: listen there, so the
+  site is reached only through the server's front door (:443). ps, its log
+  and k2 vault doctor warn when one listens beyond this server.
 
   --assign <login>[,<login>…]  if the run is held for the owner, its permission
                    card goes to those people only (owner or admin logins on
@@ -131,5 +135,12 @@ frame  (owner only) who may put a --skin App in a frame on another site.
   --none                      refuse every frame, K2's windows too
   --reset                     back to the default
   ps shows the policy. A --cmd App sets its own header: k2 study publish-framing
+
+expose  (owner only) where a --cmd service may listen.
+  server   the default: K2 gives it HOST=127.0.0.1 and its PORT, and warns
+           (ps, its log, k2 vault doctor) when it listens beyond this server
+  public   it listens beyond this server on purpose: no warning, and no
+           HOST=127.0.0.1 from its next start. ps shows [expose public].
+  Restart the service to apply. Recorded in the access audit log.
 
 If Connect/tunnel is down, default run FAILS (nothing starts). --no-tunnel still works.

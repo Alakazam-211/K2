@@ -1020,6 +1020,9 @@ pub(super) const ROWS: &[Route] = &[
     // 0.46.3: which nested services get K2's client-IP rewrite.
     post("/cli/publish/client-ip", Member),
     get("/cli/publish/client-ip/list", Member),
+    // 0.46.18: Owner on purpose, like frame: a --cmd service listening beyond
+    // this server skips its front door (`k2 publish expose`).
+    post("/cli/publish/expose", Owner),
     // FA3: Owner on purpose (the other publish mutations are Member): this
     // widens which other sites may frame an App.
     post("/cli/publish/frame", Owner),

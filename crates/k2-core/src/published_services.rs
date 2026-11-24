@@ -313,10 +313,26 @@ pub struct ServiceJson {
     /// App's own logins decide.
     #[serde(default)]
     pub visibility: Option<VisibilityJson>,
-    /// A private or PIN site whose program listens beyond loopback, so the
-    /// port itself skips K2's check (PV-4). Omitted otherwise.
+    /// A `--cmd` service whose program listens beyond loopback, so its port
+    /// skips the server's front door and K2's check (PV-4; every `--cmd`
+    /// service since 0.46.18, with the exact fix). Omitted otherwise, and for
+    /// a service the owner marked public (`expose_public`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind_warning: Option<String>,
+    /// `k2 publish expose <name> public` (0.46.18): the owner said this
+    /// service listens beyond this server on purpose; who and when. Omitted
+    /// for every other service (it gets HOST=127.0.0.1 and its PORT).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expose_public: Option<ExposePublicJson>,
+}
+
+/// Who marked a service public, and when (`ServiceJson::expose_public`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposePublicJson {
+    pub set_by: String,
+    /// Unix seconds.
+    pub set_at: i64,
 }
 
 /// A site's visibility on the wire (`ServiceJson::visibility`).
@@ -417,6 +433,7 @@ impl ServiceJson {
             dev: None,
             visibility: None,
             bind_warning: None,
+            expose_public: None,
         }
     }
 }

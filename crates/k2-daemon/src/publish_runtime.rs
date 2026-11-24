@@ -588,6 +588,8 @@ fn spawn_child(
         if let Some((service_id, port)) = service {
             let applied = crate::vault::publish_env::apply_service(&mut c, service_id, name, project_id, cwd, port);
             enrich = !applied.fixed_path;
+            // 0.46.18: listen on this server only, unless the owner said public.
+            crate::publish_expose::apply(&mut c, service_id, port);
         }
         apply_dev_env(&mut c, name, service.map_or(0, |(_, port)| port), dev.is_some());
         if scoped {
@@ -606,6 +608,8 @@ fn spawn_child(
         if let Some((service_id, port)) = service {
             let applied = crate::vault::publish_env::apply_service(&mut c, service_id, name, project_id, cwd, port);
             enrich = !applied.fixed_path;
+            // 0.46.18: listen on this server only, unless the owner said public.
+            crate::publish_expose::apply(&mut c, service_id, port);
         }
         apply_dev_env(&mut c, name, service.map_or(0, |(_, port)| port), dev.is_some());
         spawn_prepared(c, project_id, name, enrich)
@@ -879,12 +883,17 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         }
     }
     json.visibility = visibility_json(row);
-    if json.visibility.as_ref().is_some_and(|v| v.mode != sv::MODE_PUBLIC) {
+    // 0.46.18: every `--cmd` service, whatever its visibility: a public site
+    // reached on its raw port still skips the server's front door. Not one
+    // the owner marked public (`k2 publish expose <name> public`).
+    let public = crate::publish_expose::public(&row.id);
+    if public.is_none() {
         let exposed = exposed_binds(&row.id);
         if !exposed.is_empty() {
-            json.bind_warning = Some(crate::publish_dev::bind_warning(&row.name, &exposed));
+            json.bind_warning = Some(crate::publish_expose::warning(&row.name, row.port, &exposed));
         }
     }
+    json.expose_public = public.map(|p| ps::ExposePublicJson { set_by: p.set_by, set_at: p.set_at });
     if row.dev_mem_mb.is_some() {
         json.dev = Some(ps::DevJson {
             idle_secs: dev_idle_limit(&row.name).map(|d| d.as_secs() as i64),
@@ -1838,23 +1847,61 @@ fn workspace_path(project_id: &str) -> String {
     conn.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0)).unwrap_or_else(|_| project_id.to_string())
 }
 
-/// PV-4: one Thread notice when a private or PIN site's program listens beyond
-/// loopback. A new set of addresses says so again.
+/// A `--cmd` service that listens beyond loopback (0.46.18: any, not only a
+/// gated site), once per set of addresses in this daemon's life: a line in
+/// the daemon's log and in the service's own log (`k2 publish logs`). A private
+/// or PIN site also gets one Thread notice (PV-4). Never for a service the
+/// owner marked public, and never a stop: a deliberately open one keeps
+/// working.
 fn notify_bind_exposed(row: &ps::PublishedService, exposed: &[String]) {
-    if exposed.is_empty() {
-        return;
-    }
-    let gated = visibility_json(row).is_some_and(|v| v.mode != sv::MODE_PUBLIC);
-    if !gated {
+    if exposed.is_empty() || crate::publish_expose::public(&row.id).is_some() {
         return;
     }
     if !bind_noticed().lock().unwrap_or_else(|e| e.into_inner()).insert((row.id.clone(), exposed.to_vec())) {
+        return;
+    }
+    let warning = crate::publish_expose::warning(&row.name, row.port, exposed);
+    log_debug!("[publish] {}: {warning}", row.name);
+    note_in_service_log(&row.project_id, &row.name, &format!("[k2] warning: {warning}"));
+    let gated = visibility_json(row).is_some_and(|v| v.mode != sv::MODE_PUBLIC);
+    if !gated {
         return;
     }
     let text = crate::publish_dev::bind_warning(&row.name, exposed);
     if let Err(e) = crate::overlay_routes::post_workspace_note(&workspace_path(&row.project_id), &text, "k2-publish", k2_core::overlay::SystemNotice::action("publish.bind_exposed")) {
         log_debug!("[publish] {}: bind notice: {e}", row.name);
     }
+}
+
+/// One line of K2's own in a service's log, beside what its program writes.
+fn note_in_service_log(project_id: &str, name: &str, line: &str) {
+    match open_log(project_id, name) {
+        Ok(mut f) => {
+            if let Err(e) = writeln!(f, "{line}") {
+                log_debug!("[publish] {name}: log note: {e}");
+            }
+        }
+        Err(e) => log_debug!("[publish] {name}: log note: {e}"),
+    }
+}
+
+/// `k2 vault doctor`'s finding (0.46.18): each `--cmd` service the last bind
+/// check saw listening beyond this server, `(name, warning)`. `workspace`:
+/// only that workspace's (an agent's doctor).
+pub(crate) fn bind_doctor_findings(workspace: Option<&str>) -> Vec<(String, String)> {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::list_all(&conn).unwrap_or_default()
+    };
+    rows.iter()
+        .filter(|r| workspace.is_none_or(|w| w == r.project_id))
+        .filter(|r| crate::publish_expose::public(&r.id).is_none())
+        .filter_map(|r| {
+            let exposed = exposed_binds(&r.id);
+            (!exposed.is_empty()).then(|| (r.name.clone(), crate::publish_expose::warning(&r.name, r.port, &exposed)))
+        })
+        .collect()
 }
 
 /// PV-11: one card about the sites public from before 0.46.7, once the upgrade's
@@ -2380,6 +2427,37 @@ pub enum FrameChange {
     Allow(Vec<String>),
     None,
     Reset,
+}
+
+/// `k2 publish expose <name> public|server` (0.46.18), the owner's: a
+/// `--cmd` service that listens beyond this server on purpose (no warning, no
+/// loopback variables at its next start), or back to this server only. `by`
+/// names who, for the record and the access audit log. The running process
+/// is not touched: its environment changes at its next start.
+pub fn set_expose(project_id: &str, name: &str, public: bool, by: &str) -> Result<ServiceJson, PublishError> {
+    let name = ps::normalize_existing_name(name).map_err(PublishError::bad)?;
+    let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
+    if row.kind == KIND_SKIN || row.cmd == ps::CMD_APP_SENTINEL {
+        return Err(PublishError::bad(
+            "expose is for --cmd services. An App and a --skin site listen where K2 starts them, on this server only",
+        ));
+    }
+    crate::publish_expose::set(&row.id, public, by).map_err(PublishError::fail)?;
+    let value = if public { crate::publish_expose::PUBLIC } else { crate::publish_expose::SERVER };
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "publish-expose",
+        by,
+        format!("ok service={name} id={} expose={value}", row.id),
+        "-",
+        "-",
+        "cli",
+    ));
+    if !public {
+        // Back to this server only: warn again at once, as for new addresses.
+        bind_noticed().lock().unwrap_or_else(|e| e.into_inner()).retain(|(id, _)| id != &row.id);
+    }
+    emit_changed(project_id);
+    Ok(to_json(&row))
 }
 
 /// Owner: change a `--skin` App's framing policy, then restart its helper

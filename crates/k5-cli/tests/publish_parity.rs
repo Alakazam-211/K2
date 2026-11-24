@@ -28,7 +28,7 @@ use common::stub::Reply;
 
 const VERB: &str = "publish";
 
-const LIST: &str = r#"{"services":[{"name":"web","status":"running","port":3000,"url":"https://web.acme.k2.dev","visibility":{"mode":"private"},"framePolicy":"self","frameAncestors":"https://a.example https://b.example","bindWarning":"listens on 0.0.0.0"},{"name":"api","status":"starting","port":3047,"startingLeftMs":252000,"target":"localhost:3047","cmd":"(app)","envMode":"legacy","envRemovedIn":"0.47.0","framePolicy":"x","frameAncestors":"none"},{"name":"old","desired":"stopped","legacyLabel":true,"labelMovedTo":"crm","reason":"exit 1: boom","visibility":{"mode":"public","enforced":false},"reservedLabel":true,"frameWarning":"frames off"},{"name":"dev1","status":"running","port":"","visibility":{"mode":"public","dev":true,"reason":"asked"},"dev":{"lane":"box","caps":"2 CPUs","idleSecs":1800,"warning":"hot"},"envDeprecation":true,"framePolicy":"p","frameAncestors":""},"skip",{"name":"bare"}]}"#;
+const LIST: &str = r#"{"services":[{"name":"web","status":"running","port":3000,"url":"https://web.acme.k2.dev","visibility":{"mode":"private"},"framePolicy":"self","frameAncestors":"https://a.example https://b.example","bindWarning":"listens on 0.0.0.0"},{"name":"api","status":"starting","port":3047,"startingLeftMs":252000,"target":"localhost:3047","cmd":"(app)","envMode":"legacy","envRemovedIn":"0.47.0","framePolicy":"x","frameAncestors":"none"},{"name":"old","desired":"stopped","legacyLabel":true,"labelMovedTo":"crm","reason":"exit 1: boom","visibility":{"mode":"public","enforced":false},"reservedLabel":true,"frameWarning":"frames off"},{"name":"dev1","status":"running","port":"","visibility":{"mode":"public","dev":true,"reason":"asked"},"dev":{"lane":"box","caps":"2 CPUs","idleSecs":1800,"warning":"hot"},"envDeprecation":true,"framePolicy":"p","frameAncestors":""},"skip",{"name":"bare"},{"name":"open","status":"running","port":8080,"target":"localhost:8080","exposePublic":{"setBy":"owner","setAt":1700000000}}]}"#;
 
 fn with(env: Vec<(&'static str, String)>, c: Case) -> Case {
     Case { env, ..c }
@@ -650,6 +650,73 @@ fn frame_open_sessions_visibility_answer_as_the_shell_does() {
                 0,
             ),
             on("frame: no mode", &["frame", "web"], vec![], 2, 0),
+            // covers: publish expose
+            on(
+                "expose public",
+                &["expose", "web", "public"],
+                vec![ok(
+                    r#"{"ok":true,"service":{"name":"web","port":3000,"exposePublic":{"setBy":"owner","setAt":1700000000}},"expose":"public"}"#,
+                )],
+                0,
+                1,
+            ),
+            on(
+                "expose server",
+                &["expose", "web", "server"],
+                vec![ok(r#"{"ok":true,"service":{"name":"web","port":3000},"expose":"server"}"#)],
+                0,
+                1,
+            ),
+            on(
+                "expose: no port in the answer",
+                &["expose", "web", "server"],
+                vec![ok(r#"{"ok":true,"name":"web","expose":"server"}"#)],
+                0,
+                1,
+            ),
+            // covers: publish expose --json
+            on(
+                "expose --json",
+                &["expose", "--json", "web", "public"],
+                vec![ok(r#"{"ok":true,"service":{"name":"web"},"expose":"public"}"#)],
+                0,
+                1,
+            ),
+            on(
+                "expose: owner only",
+                &["expose", "web", "public"],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"ok":false,"error":{"code":"owner_only","hint":"the owner's"}}"#.into(),
+                )],
+                3,
+                1,
+            ),
+            on(
+                "expose: role_required",
+                &["expose", "web", "server", "--json"],
+                vec![Reply::Answer(
+                    403,
+                    r#"{"ok":false,"error":{"code":"role_required","hint":"owner"}}"#.into(),
+                )],
+                3,
+                1,
+            ),
+            on(
+                "expose: the daemon's usage",
+                &["expose", "web", "public"],
+                vec![Reply::Answer(
+                    400,
+                    r#"{"ok":false,"error":{"code":"usage","hint":"public or server"}}"#.into(),
+                )],
+                2,
+                1,
+            ),
+            on("expose: no value", &["expose", "web"], vec![], 2, 0),
+            on("expose: a wrong value", &["expose", "web", "everyone", "--json"], vec![], 2, 0),
+            on("expose: no name", &["expose"], vec![], 2, 0),
+            on("expose: a third word", &["expose", "web", "public", "x"], vec![], 2, 0),
+            on("expose: an unknown flag", &["expose", "web", "--public"], vec![], 2, 0),
             on(
                 "frame: --allow with no value",
                 &["frame", "web", "--allow"],

@@ -235,6 +235,8 @@ pub mod providers;
 pub mod label_owner;
 // 0.46.7: `k2 publish run --dev`: flags, caps, bind check, idle clock.
 pub mod publish_dev;
+// 0.46.18: where a --cmd service may listen (HOST/PORT, `k2 publish expose`).
+pub mod publish_expose;
 // 0.46.7: K2's own cards for who may open a site.
 pub(crate) mod publish_cards;
 pub mod publish_routes;

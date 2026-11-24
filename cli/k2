@@ -48469,6 +48469,7 @@ USAGE
   k2 publish sessions <name> [--revoke-all] [--json]
   k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
   k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
+  k2 publish expose <name> public|server [--json]
   k2 publish client-ip [<label> on|off] [--json]
   k2 publish subdomain <create|list|point|target|rm|claim|unclaim> ...
 
@@ -48492,6 +48493,9 @@ run
   (label_owned_by_other_workspace). --transfer: owner/admin only, moves it
   here on purpose; recorded in the access audit log.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
+  A --cmd service gets HOST=127.0.0.1 and PORT=<--port>: listen there, so the
+  site is reached only through the server's front door (:443). ps, its log
+  and k2 vault doctor warn when one listens beyond this server.
 
   --assign <login>[,<login>…]  if the run is held for the owner, its permission
                    card goes to those people only (owner or admin logins on
@@ -48581,6 +48585,13 @@ frame  (owner only) who may put a --skin App in a frame on another site.
   --reset                     back to the default
   ps shows the policy. A --cmd App sets its own header: k2 study publish-framing
 
+expose  (owner only) where a --cmd service may listen.
+  server   the default: K2 gives it HOST=127.0.0.1 and its PORT, and warns
+           (ps, its log, k2 vault doctor) when it listens beyond this server
+  public   it listens beyond this server on purpose: no warning, and no
+           HOST=127.0.0.1 from its next start. ps shows [expose public].
+  Restart the service to apply. Recorded in the access audit log.
+
 If Connect/tunnel is down, default run FAILS (nothing starts). --no-tunnel still works.
 EOF
 }
@@ -48610,7 +48621,7 @@ mode = os.environ.get("P_MODE") or "service"
 verb = os.environ.get("P_VERB") or ""
 
 def fail(code, hint, exit_code=1):
-    if verb == "frame":
+    if verb in ("frame", "expose"):
         # Exit 2 = bad input; exit 3 = stop, this needs the owner.
         if code in ("usage", "bad_frame_origin", "frame_too_many", "bad_frame_policy"):
             exit_code = 2
@@ -48889,6 +48900,9 @@ if mode == "list":
             unwalled.append(str(s.get("name") or "?"))
             hint = s.get("legacyHint") or "k2 study app-move"
             u += "  [legacy (--cmd)%s]" % ((": label moved to App " + s["labelMovedTo"]) if s.get("labelMovedTo") else "")
+        # 0.46.18: the owner said it listens beyond this server on purpose.
+        if s.get("exposePublic"):
+            u += "  [expose public]"
         rows.append((
             str(s.get("name") or "?"),
             status_text(s),
@@ -48960,6 +48974,14 @@ if verb == "frame" and isinstance(svc, dict):
         print("  App restarted with the new policy.")
     else:
         print("  App is not running; the policy applies at the next start.")
+    sys.exit(0)
+if verb == "expose" and isinstance(svc, dict):
+    if d.get("expose") == "public":
+        print("Expose %s · public: it may listen beyond this server, on purpose. K2 doesn't warn about it." % name)
+        print("  From its next start K2 no longer sets HOST=127.0.0.1 for it.")
+    else:
+        print("Expose %s · this server only: K2 sets HOST=127.0.0.1 and PORT=%s from its next start, and warns if it listens beyond." % (name, port))
+    print("  Restart it to apply: k2 publish stop %s && k2 publish start %s" % (name, name))
     sys.exit(0)
 past = {"run": "Started", "start": "Started", "stop": "Stopped", "rm": "Removed"}.get(verb, "ok")
 line = "%s %s" % (past, name)
@@ -49057,6 +49079,9 @@ cmd_publish() {
             ;;
         frame)
             cmd_publish_frame "$@"
+            ;;
+        expose)
+            cmd_publish_expose "$@"
             ;;
         client-ip)
             cmd_publish_client_ip "$@"
@@ -49397,6 +49422,46 @@ print(json.dumps(b))
 ')
     RESP=$(cli_send cli_post_json "/cli/publish/frame" "$body") || RESP=""
     local AS_JSON="$as_json" P_MODE="service" P_VERB="frame"
+    _publish_handle_resp
+}
+
+# `k2 publish expose <name> public|server [--json]` (0.46.18) — owner only.
+# public: a --cmd service listens beyond this server on purpose (no bind
+# warning; no HOST=127.0.0.1 from its next start). server: back to the
+# default. Agents get exit 3; a wrong value is exit 2.
+cmd_publish_expose() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" as_json=false value=""
+    local usage="usage: k2 publish expose <name> public|server [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" "unknown flag '$1' — $usage"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                elif [ -z "$value" ]; then
+                    value="$1"; shift
+                else
+                    as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — $usage"
+                    exit 2
+                fi ;;
+        esac
+    done
+    case "$value" in
+        public|server) ;;
+        *) as_json="$as_json" _publish_err "usage" "$usage"; exit 2 ;;
+    esac
+    local body RESP
+    body=$(P_NAME="$name" P_PROJECT="$PROJECT" P_VALUE="$value" python3 -c '
+import json, os
+print(json.dumps({"name": os.environ["P_NAME"], "project": os.environ["P_PROJECT"], "expose": os.environ["P_VALUE"]}))
+')
+    RESP=$(cli_send cli_post_json "/cli/publish/expose" "$body") || RESP=""
+    local AS_JSON="$as_json" P_MODE="service" P_VERB="expose"
     _publish_handle_resp
 }
 
@@ -58928,7 +58993,7 @@ cmd_schema() {
     },
     {
       "name": "publish",
-      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|visibility|open|sessions|subdomain> ...",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|expose|visibility|open|sessions|subdomain> ...",
       "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
@@ -58996,6 +59061,15 @@ cmd_schema() {
         {"name": "--none", "arg": null, "description": "Refuse every frame, K2's own windows too (X-Frame-Options: DENY)."},
         {"name": "--reset", "arg": null, "description": "Back to the default."},
         {"name": "--json", "arg": null, "description": "JSON {ok, service, restarted} on stdout."}
+      ]
+    },
+    {
+      "name": "publish expose",
+      "usage": "k2 publish expose <name> public|server [--json]",
+      "description": "Owner only. Where a --cmd service may listen. server (the default): K2 gives it HOST=127.0.0.1 and PORT=<its port> at start, and warns in ps, its log and k2 vault doctor when it listens beyond this server (around the front door and any sign-in). public: it does on purpose; no warning, no HOST=127.0.0.1 from its next start; ps shows [expose public]. Restart it to apply. Audited. A wrong value exits 2; an agent passport exits 3 (owner_only).",
+      "args": [{"name": "name", "required": true}, {"name": "value", "required": true, "description": "public or server."}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON {ok, service, expose} on stdout."}
       ]
     },
     {

@@ -223,7 +223,7 @@ impl Out {
 fn fail(o: &mut Out, verb: &str, as_json: bool, code: &Value, hint: &str) -> Exit {
     let is = |set: &[&str]| matches!(code, Value::Str(t) if t.as_str().is_some_and(|c| set.contains(&c)));
     let mut exit = Exit::Error;
-    if verb == "frame" {
+    if verb == "frame" || verb == "expose" {
         if is(&[
             "usage",
             "bad_frame_origin",
@@ -690,6 +690,10 @@ fn list(o: &mut Out, d: &Pairs, long: bool) -> R<Exit> {
             };
             u.push_str(&format!("  [legacy (--cmd){moved}]"));
         }
+        // 0.46.18: the owner said it listens beyond this server on purpose.
+        if truthy(get(sv, "exposePublic")) {
+            u.push_str("  [expose public]");
+        }
         rows.push([
             name.clone(),
             status_text(sv),
@@ -831,7 +835,7 @@ fn list(o: &mut Out, d: &Pairs, long: bool) -> R<Exit> {
     Ok(Exit::Ok)
 }
 
-/// One service's answer (`run`, `start`, `stop`, `rm`, `frame`).
+/// One service's answer (`run`, `start`, `stop`, `rm`, `frame`, `expose`).
 fn service(o: &mut Out, d: &Pairs, verb: &str) -> R<Exit> {
     let sv = as_obj(get(d, "service")).unwrap_or(d);
     let name = or_s(get(sv, "name"), "?");
@@ -849,6 +853,19 @@ fn service(o: &mut Out, d: &Pairs, verb: &str) -> R<Exit> {
         } else {
             o.line("  App is not running; the policy applies at the next start.");
         }
+        return Ok(Exit::Ok);
+    }
+    if verb == "expose" {
+        if is_str(get(d, "expose"), "public") {
+            o.line(&format!("Expose {name} \u{b7} public: it may listen beyond this server, on purpose. {PRODUCT} doesn't warn about it."));
+            o.line(&format!("  From its next start {PRODUCT} no longer sets HOST=127.0.0.1 for it."));
+        } else {
+            o.line(&format!(
+                "Expose {name} \u{b7} this server only: {PRODUCT} sets HOST=127.0.0.1 and PORT={} from its next start, and warns if it listens beyond.",
+                str_opt(port)
+            ));
+        }
+        o.line(&format!("  Restart it to apply: {CLI} publish stop {name} && {CLI} publish start {name}"));
         return Ok(Exit::Ok);
     }
     let past = match verb {

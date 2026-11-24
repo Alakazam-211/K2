@@ -49,7 +49,7 @@
     },
     {
       "name": "publish",
-      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|visibility|open|sessions|subdomain> ...",
+      "usage": "k2 publish <run|start|stop|rm|ps|logs|status|frame|expose|visibility|open|sessions|subdomain> ...",
       "description": "Host a daemon-owned process for this workspace (run/start/stop/rm/ps/logs) and manage nested Connect subdomains (status, subdomain create/list/point/rm/claim/unclaim). Default run creates a nested URL; --no-tunnel is local only. status is Connect plan, not process inventory (use ps).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output where supported (ps/run/start/stop/status)."}]
@@ -117,6 +117,15 @@
         {"name": "--none", "arg": null, "description": "Refuse every frame, K2's own windows too (X-Frame-Options: DENY)."},
         {"name": "--reset", "arg": null, "description": "Back to the default."},
         {"name": "--json", "arg": null, "description": "JSON {ok, service, restarted} on stdout."}
+      ]
+    },
+    {
+      "name": "publish expose",
+      "usage": "k2 publish expose <name> public|server [--json]",
+      "description": "Owner only. Where a --cmd service may listen. server (the default): K2 gives it HOST=127.0.0.1 and PORT=<its port> at start, and warns in ps, its log and k2 vault doctor when it listens beyond this server (around the front door and any sign-in). public: it does on purpose; no warning, no HOST=127.0.0.1 from its next start; ps shows [expose public]. Restart it to apply. Audited. A wrong value exits 2; an agent passport exits 3 (owner_only).",
+      "args": [{"name": "name", "required": true}, {"name": "value", "required": true, "description": "public or server."}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON {ok, service, expose} on stdout."}
       ]
     },
     {

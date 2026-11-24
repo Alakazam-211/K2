@@ -1,7 +1,7 @@
 //! `k5 publish`, as the shell CLI's `cmd_publish` answers it
 //! (`cli/src/connect.sh`): the services this workspace hosts. The
 //! binary answers every verb: `run`, `start`, `stop`, `rm`, `ps` (`list`,
-//! `ls`), `logs`, `frame`, `visibility`, `open`, `sessions`, `subdomain
+//! `ls`), `logs`, `frame`, `expose`, `visibility`, `open`, `sessions`, `subdomain
 //! claim` and `unclaim`, `publish` alone or `help`, and an unknown verb
 //! (the readers are [`read`]'s); `client-ip`, `status <name>`, and
 //! `secret` (`secrets`) and `env`, which hand over to the vault's `grant`,
@@ -95,6 +95,7 @@ pub const RM: &str = "/cli/publish/rm";
 pub const LIST: &str = "/cli/publish/list";
 pub const LOGS: &str = "/cli/publish/logs";
 pub const FRAME: &str = "/cli/publish/frame";
+pub const EXPOSE: &str = "/cli/publish/expose";
 pub const VISIBILITY: &str = "/cli/publish/visibility";
 pub const OPEN: &str = "/cli/publish/open";
 pub const SESSIONS: &str = "/cli/publish/sessions";
@@ -688,6 +689,7 @@ pub fn parse(words: &[&str], project: &str, home: Option<&str>) -> Act {
         "ps" | "list" | "ls" => parse_ps(rest),
         "logs" => parse_logs(rest),
         "frame" => parse_frame(rest, project),
+        "expose" => parse_expose(rest, project),
         "visibility" => parse_visibility(rest),
         "open" => parse_open(rest, project),
         "sessions" => parse_sessions(rest, project),
@@ -1232,6 +1234,46 @@ fn parse_frame(rest: &[&str], project: &str) -> Act {
         json,
         mode: Mode::Service,
         verb: "frame",
+        long: false,
+    }
+}
+
+/// `cmd_publish_expose`: `expose <name> public|server [--json]` (0.46.18).
+fn parse_expose(rest: &[&str], project: &str) -> Act {
+    let line = format!("usage: {CLI} publish expose <name> public|server [--json]");
+    let mut name = String::new();
+    let mut value = String::new();
+    let mut json = false;
+    for &w in rest {
+        match w {
+            "--json" => json = true,
+            f if f.starts_with('-') => {
+                return usage("usage", format!("unknown flag '{f}' \u{2014} {line}"), json)
+            }
+            a if name.is_empty() => name = a.to_string(),
+            a if value.is_empty() => value = a.to_string(),
+            a => {
+                return usage(
+                    "usage",
+                    format!("unexpected argument '{a}' \u{2014} {line}"),
+                    json,
+                )
+            }
+        }
+    }
+    if !matches!(value.as_str(), "public" | "server") {
+        return usage("usage", line, json);
+    }
+    Act::Service {
+        endpoint: EXPOSE,
+        call: Req::Post(body(vec![
+            ("name", read::s(&name)),
+            ("project", read::s(project)),
+            ("expose", read::s(&value)),
+        ])),
+        json,
+        mode: Mode::Service,
+        verb: "expose",
         long: false,
     }
 }

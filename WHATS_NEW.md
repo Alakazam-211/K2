@@ -8,6 +8,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Desktop app
 - **A slow or unreachable other server no longer makes the app look offline; while this server is busy, the app stays usable and shows a small reconnecting note.**
 - **The Postal tab is now called Friends: agents on other servers your agent can talk to.** The tab and its server switch say Friends, Add a friend and Friend requests, and a line at the top says it is the Postal service. Addresses still end in `.postal.bot`, and the `k2 postal` commands are unchanged.
+### Published sites
+- **Published services started with --cmd now get HOST=127.0.0.1 and their PORT, and K2 warns when one listens beyond the server itself. Mark a service `k2 publish expose <name> public` if that's on purpose.** A service that listens on every address can be reached on its own port, around the server's front door (:443) and any App sign-in. K2 now checks where each `--cmd` service listens after it starts (and every 5 minutes) and warns in `k2 publish ps`, the service's log and `k2 vault doctor`, with the exact fix; it never stops the service. `k2 publish expose` is the owner's: `public` means no warning and no `HOST=127.0.0.1` from the service's next start (`ps` shows `[expose public]`, and the access audit log records it); `server` undoes it. An agent can't change it.
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

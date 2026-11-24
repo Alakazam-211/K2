@@ -1077,6 +1077,16 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
             "message": format!("published service {name}: {notice}"),
         }));
     }
+    // 0.46.18: a --cmd service listening beyond this server (the last bind
+    // check's answer), unless the owner marked it public.
+    for (name, warning) in crate::publish_runtime::bind_doctor_findings(c.workspace_id()) {
+        findings.push(json!({
+            "level": "warning",
+            "code": "publish_listens_beyond_server",
+            "service": name,
+            "message": format!("published service {warning}"),
+        }));
+    }
     findings.extend(crate::vault_systemd_routes::doctor_findings(vault, c));
     let roots = doctor_workspace_roots(c);
     let scan = scan_env_files(&roots);

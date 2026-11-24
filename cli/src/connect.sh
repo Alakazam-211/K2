@@ -332,7 +332,7 @@ mode = os.environ.get("P_MODE") or "service"
 verb = os.environ.get("P_VERB") or ""
 
 def fail(code, hint, exit_code=1):
-    if verb == "frame":
+    if verb in ("frame", "expose"):
         # Exit 2 = bad input; exit 3 = stop, this needs the owner.
         if code in ("usage", "bad_frame_origin", "frame_too_many", "bad_frame_policy"):
             exit_code = 2
@@ -611,6 +611,9 @@ if mode == "list":
             unwalled.append(str(s.get("name") or "?"))
             hint = s.get("legacyHint") or "k2 study app-move"
             u += "  [legacy (--cmd)%s]" % ((": label moved to App " + s["labelMovedTo"]) if s.get("labelMovedTo") else "")
+        # 0.46.18: the owner said it listens beyond this server on purpose.
+        if s.get("exposePublic"):
+            u += "  [expose public]"
         rows.append((
             str(s.get("name") or "?"),
             status_text(s),
@@ -682,6 +685,14 @@ if verb == "frame" and isinstance(svc, dict):
         print("  App restarted with the new policy.")
     else:
         print("  App is not running; the policy applies at the next start.")
+    sys.exit(0)
+if verb == "expose" and isinstance(svc, dict):
+    if d.get("expose") == "public":
+        print("Expose %s · public: it may listen beyond this server, on purpose. K2 doesn't warn about it." % name)
+        print("  From its next start K2 no longer sets HOST=127.0.0.1 for it.")
+    else:
+        print("Expose %s · this server only: K2 sets HOST=127.0.0.1 and PORT=%s from its next start, and warns if it listens beyond." % (name, port))
+    print("  Restart it to apply: k2 publish stop %s && k2 publish start %s" % (name, name))
     sys.exit(0)
 past = {"run": "Started", "start": "Started", "stop": "Stopped", "rm": "Removed"}.get(verb, "ok")
 line = "%s %s" % (past, name)
@@ -779,6 +790,9 @@ cmd_publish() {
             ;;
         frame)
             cmd_publish_frame "$@"
+            ;;
+        expose)
+            cmd_publish_expose "$@"
             ;;
         client-ip)
             cmd_publish_client_ip "$@"
@@ -1119,6 +1133,46 @@ print(json.dumps(b))
 ')
     RESP=$(cli_send cli_post_json "/cli/publish/frame" "$body") || RESP=""
     local AS_JSON="$as_json" P_MODE="service" P_VERB="frame"
+    _publish_handle_resp
+}
+
+# `k2 publish expose <name> public|server [--json]` (0.46.18) — owner only.
+# public: a --cmd service listens beyond this server on purpose (no bind
+# warning; no HOST=127.0.0.1 from its next start). server: back to the
+# default. Agents get exit 3; a wrong value is exit 2.
+cmd_publish_expose() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local name="" as_json=false value=""
+    local usage="usage: k2 publish expose <name> public|server [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*)
+                as_json="$as_json" _publish_err "usage" "unknown flag '$1' — $usage"
+                exit 2 ;;
+            *)
+                if [ -z "$name" ]; then
+                    name="$1"; shift
+                elif [ -z "$value" ]; then
+                    value="$1"; shift
+                else
+                    as_json="$as_json" _publish_err "usage" "unexpected argument '$1' — $usage"
+                    exit 2
+                fi ;;
+        esac
+    done
+    case "$value" in
+        public|server) ;;
+        *) as_json="$as_json" _publish_err "usage" "$usage"; exit 2 ;;
+    esac
+    local body RESP
+    body=$(P_NAME="$name" P_PROJECT="$PROJECT" P_VALUE="$value" python3 -c '
+import json, os
+print(json.dumps({"name": os.environ["P_NAME"], "project": os.environ["P_PROJECT"], "expose": os.environ["P_VALUE"]}))
+')
+    RESP=$(cli_send cli_post_json "/cli/publish/expose" "$body") || RESP=""
+    local AS_JSON="$as_json" P_MODE="service" P_VERB="expose"
     _publish_handle_resp
 }
 

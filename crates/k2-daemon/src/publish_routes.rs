@@ -138,7 +138,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/publish/subdomain/unclaim"
         | "/cli/publish/open"
         | "/cli/publish/sessions/revoke"
-        | "/cli/publish/frame" => CliResponse::method_not_allowed(),
+        | "/cli/publish/frame"
+        | "/cli/publish/expose" => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
     })
 }
@@ -508,6 +509,7 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
         "/cli/publish/subdomain/claim" => handle_subdomain_claim(params),
         "/cli/publish/subdomain/unclaim" => handle_subdomain_unclaim(params),
         "/cli/publish/frame" => handle_frame(params),
+        "/cli/publish/expose" => handle_expose(params),
         "/cli/publish/client-ip" => handle_client_ip_set(params),
         "/cli/publish/visibility" => crate::publish_site_routes::handle_set(params, &caller()),
         "/cli/publish/open" => crate::publish_site_routes::handle_open(params, &caller()),
@@ -1439,6 +1441,53 @@ fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+/// POST /cli/publish/expose — owner only (0.46.18): `expose: public` says a
+/// `--cmd` service listens beyond this server on purpose (no bind warning, no
+/// HOST=127.0.0.1 at its next start); `expose: server` undoes it. The route
+/// policy (Owner) refuses Admin and Member logins with `role_required`; an
+/// agent passport reaches here stamped and gets `owner_only`, before any
+/// lookup: opening a port around the front door is never an agent's call.
+fn handle_expose(params: &HashMap<String, String>) -> CliResponse {
+    if crate::caller_workspace::request_principal().is_some()
+        || params.contains_key(crate::caller_workspace::PRINCIPAL_BOUND_KEY)
+    {
+        return frame_error(
+            "403 Forbidden",
+            "owner_only",
+            "k2 publish expose is the owner's: a service that listens beyond this server skips its front door (:443) and any sign-in. \
+             Ask your human to run it from a terminal outside K2. To listen on this server only, use HOST and PORT (K2 sets them).",
+        );
+    }
+    let project = match need_project(params) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let name = str_param(params, "name");
+    if name.trim().is_empty() {
+        return CliResponse::bad_request("Missing name");
+    }
+    let public = match str_param(params, "expose").trim() {
+        crate::publish_expose::PUBLIC => true,
+        crate::publish_expose::SERVER => false,
+        _ => return frame_error("400 Bad Request", "usage", "expose is public or server (k2 publish expose <name> public|server)"),
+    };
+    let project_id = match resolve_project_id(&project) {
+        Ok(id) => id,
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    match publish_runtime::set_expose(&project_id, &name, public, "owner") {
+        Ok(svc) => CliResponse::ok_json(
+            serde_json::json!({
+                "ok": true,
+                "service": svc,
+                "expose": if public { crate::publish_expose::PUBLIC } else { crate::publish_expose::SERVER },
+            })
+            .to_string(),
+        ),
+        Err(e) => err_to_resp(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1609,6 +1658,7 @@ mod tests {
             "/cli/publish/subdomain/claim",
             "/cli/publish/subdomain/unclaim",
             "/cli/publish/frame",
+            "/cli/publish/expose",
         ] {
             let resp = dispatch(path, &p).expect("GET twin must exist");
             assert_eq!(resp.status, "405 Method Not Allowed", "path={path}");
@@ -1629,6 +1679,35 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["error"]["code"], "owner_only", "{}", r.body);
         assert!(v["error"]["hint"].as_str().expect("hint").contains("owner"), "{}", r.body);
+    }
+
+    /// 0.46.18: an agent passport never marks a service public, even its
+    /// own; checked before any lookup. A value other than public|server is
+    /// a usage error.
+    #[test]
+    fn expose_refuses_agent_passports_and_bad_values() {
+        let mut p = HashMap::new();
+        p.insert(crate::caller_workspace::PRINCIPAL_BOUND_KEY.to_string(), "1".to_string());
+        p.insert("name".to_string(), "shop".to_string());
+        p.insert("project".to_string(), "/tmp/k2-expose-no-such-ws".to_string());
+        p.insert("expose".to_string(), "public".to_string());
+        let r = dispatch_post("/cli/publish/expose", &p);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only", "{}", r.body);
+        assert!(v["error"]["hint"].as_str().expect("hint").contains("front door"), "{}", r.body);
+
+        p.remove(crate::caller_workspace::PRINCIPAL_BOUND_KEY);
+        p.insert("expose".to_string(), "everyone".to_string());
+        let r = dispatch_post("/cli/publish/expose", &p);
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "usage", "{}", r.body);
+        assert_eq!(
+            crate::routes::route_policy::lookup("/cli/publish/expose").and_then(|x| x.post).map(|f| f.as_wire()),
+            Some("owner"),
+            "the owner's, like frame"
+        );
     }
 
     #[test]

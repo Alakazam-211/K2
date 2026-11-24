@@ -1088,11 +1088,12 @@ fn a_public_site_turning_into_a_dev_server_goes_private() {
     assert_eq!((v.mode, v.dev), (sv::Mode::Private, false), "back to normal, still private");
 }
 
-/// PV-4: `ps` warns for a gated site that listens on every address, once the
-/// check has looked, and a public site doesn't.
+/// PV-4: `ps` warns for a site that listens on every address, once the check
+/// has looked. 0.46.18: a public site too (its raw port skips the front door);
+/// only the owner's `expose public` quiets it.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn ps_warns_when_a_gated_sites_program_listens_beyond_loopback() {
+fn ps_warns_when_a_sites_program_listens_beyond_loopback() {
     let _home = crate::test_support::TempHome::new();
     let wide = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("bind");
     let port = wide.local_addr().expect("addr").port();
@@ -1116,10 +1117,151 @@ fn ps_warns_when_a_gated_sites_program_listens_beyond_loopback() {
         let conn = db.lock();
         sv::set_public(&conn, &name, "open", "test").expect("public");
     }
-    assert!(to_json(&row).bind_warning.is_none(), "public: the address is open anyway");
+    let w = to_json(&row).bind_warning.expect("a public site's raw port still skips the front door");
+    assert!(w.contains("beyond this server") && w.contains("publish expose"), "{w}");
+    crate::publish_expose::set(&row.id, true, "owner").expect("expose public");
+    assert!(to_json(&row).bind_warning.is_none(), "the owner said it is public on purpose");
     drop(wide);
     let conn = db.lock();
     let _ = ps::delete(&conn, &project_id, &name);
+}
+
+// ── Where a --cmd service listens (0.46.18) ─────────────────────────────
+
+/// A server that listens on `host`, then accepts forever.
+#[cfg(unix)]
+fn listener_on_cmd(host: &str, port: u16) -> String {
+    format!(
+        "{py} -c \"import socket,itertools; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('{host}',{port})); s.listen(8); [s.accept()[0].close() for _ in itertools.count()]\"",
+        py = k2_core::test_env::PYTHON
+    )
+}
+
+#[cfg(unix)]
+fn env_lines(dir: &Path) -> Vec<String> {
+    fs::read_to_string(dir.join("seen-env.txt")).expect("the service wrote its environment").lines().map(str::to_string).collect()
+}
+
+/// A `--cmd` service gets HOST=127.0.0.1 and its PORT (and the other
+/// spellings), on the inherited environment (the services from before
+/// 0.45.4) and on a clean one; one the owner marked public gets no HOST.
+#[cfg(unix)]
+#[test]
+fn a_cmd_service_gets_host_and_port_unless_the_owner_marked_it_public() {
+    assert!(python_ok(), "python3 is required for published-service runtime tests");
+    let _home = crate::test_support::TempHome::new();
+    let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+    let dir = _home.path().join("ws-hostport");
+    fs::create_dir_all(&dir).unwrap();
+    let project_id = make_project(&dir.to_string_lossy());
+    let name = unique("hostport");
+    let port = free_port();
+    let cmd = format!("env > seen-env.txt; exec {}", listener_on_cmd("127.0.0.1", port));
+    let json = run(grace_spec(&project_id, &name, cmd, &dir, port, true, ProbeTimeout::Keep)).expect("run");
+    assert_eq!(json.status, STATUS_RUNNING, "{json:?}");
+    let id = json.id.clone();
+    assert!(crate::vault::publish_env::get(&id).mode == "legacy", "a fresh home has no vault yet: the service inherits, like the old ones");
+    let env = env_lines(&dir);
+    for want in ["HOST=127.0.0.1".to_string(), format!("PORT={port}"), "BINDING=127.0.0.1".to_string(), "UVICORN_HOST=127.0.0.1".to_string()] {
+        assert!(env.contains(&want), "{want} missing: {env:?}");
+    }
+    assert!(!env.iter().any(|l| l.starts_with("HOSTNAME=127.0.0.1")), "never HOSTNAME: {env:?}");
+    assert!(json.expose_public.is_none());
+
+    // The owner marks it public; on a clean environment (nothing inherited)
+    // its next start has no HOST at all, and keeps its PORT.
+    stop(&project_id, &name).expect("stop");
+    crate::vault::publish_env::set(&id, Some("clean"), None).expect("clean");
+    let shown = set_expose(&project_id, &name, true, "owner").expect("expose public");
+    assert_eq!(shown.expose_public.as_ref().map(|p| p.set_by.as_str()), Some("owner"), "{shown:?}");
+    let json = start(&project_id, &name).expect("start");
+    assert_eq!(json.status, STATUS_RUNNING, "{json:?}");
+    let env = env_lines(&dir);
+    assert!(!env.iter().any(|l| l.starts_with("HOST=") || l.starts_with("BINDING=")), "public: no loopback HOST: {env:?}");
+    assert!(env.contains(&format!("PORT={port}")), "{env:?}");
+
+    // Back to this server only: HOST again at the next start.
+    stop(&project_id, &name).expect("stop");
+    assert!(set_expose(&project_id, &name, false, "owner").expect("server").expose_public.is_none());
+    start(&project_id, &name).expect("start");
+    assert!(env_lines(&dir).contains(&"HOST=127.0.0.1".to_string()));
+    cleanup(&project_id, &name);
+}
+
+/// The bind check after a start: a `--cmd` service listening on every
+/// address is flagged in `ps` (with the exact fix), its log and the vault
+/// doctor, and keeps running; one on 127.0.0.1 is not; the owner's `expose
+/// public` quiets it and is shown.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_cmd_service_on_every_address_is_flagged_and_one_on_loopback_is_not() {
+    assert!(python_ok(), "python3 is required for published-service runtime tests");
+    let _home = crate::test_support::TempHome::new();
+    let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+    let dir = _home.path().join("ws-wide");
+    fs::create_dir_all(&dir).unwrap();
+    let project_id = make_project(&dir.to_string_lossy());
+
+    let wide = unique("wide");
+    let wport = free_port();
+    run(grace_spec(&project_id, &wide, format!("exec {}", listener_on_cmd("0.0.0.0", wport)), &dir, wport, true, ProbeTimeout::Keep)).expect("run wide");
+    let narrow = unique("narrow");
+    let nport = free_port();
+    run(grace_spec(&project_id, &narrow, format!("exec {}", listener_on_cmd("127.0.0.1", nport)), &dir, nport, true, ProbeTimeout::Keep)).expect("run narrow");
+
+    let wrow = load_row(&project_id, &wide).expect("row");
+    let nrow = load_row(&project_id, &narrow).expect("row");
+    assert!(wrow.pid.is_some() && nrow.pid.is_some(), "both running");
+    let exposed = check_bind(&wrow);
+    // Linux shows 0.0.0.0:<port>; lsof on macOS shows *:<port>.
+    assert!(exposed.len() == 1 && exposed[0].ends_with(&format!(":{wport}")), "the wide one's own listener: {exposed:?}");
+    assert!(check_bind(&nrow).is_empty(), "127.0.0.1 is this server only");
+
+    let json = to_json(&wrow);
+    assert_eq!(json.status, STATUS_RUNNING, "warned, never stopped");
+    let w = json.bind_warning.expect("flagged");
+    assert!(w.contains(&format!("{wide} listens on {}, beyond this server", exposed[0])), "{w}");
+    assert!(w.contains(&format!("HOST=127.0.0.1 and PORT={wport}")), "{w}");
+    assert!(w.contains(&format!("publish stop {wide} && ")) && w.contains(&format!("publish start {wide}")), "{w}");
+    assert!(w.contains(&format!("publish expose {wide} public")), "{w}");
+    assert!(json.visibility.is_none(), "a local service: flagged whatever its visibility");
+    assert!(to_json(&nrow).bind_warning.is_none());
+
+    // The service's log, once for this set of addresses.
+    bind_check_one(&wrow);
+    bind_check_one(&wrow);
+    let log = fs::read_to_string(log_path(&project_id, &wide)).expect("log");
+    assert_eq!(log.matches("[k2] warning: ").count(), 1, "{log}");
+    assert!(log.contains(&format!("{wide} listens on {}", exposed[0])), "{log}");
+    bind_check_one(&nrow);
+    let nlog = fs::read_to_string(log_path(&project_id, &narrow)).unwrap_or_default();
+    assert!(!nlog.contains("[k2] warning"), "{nlog}");
+
+    // The vault doctor, for this workspace.
+    let found = bind_doctor_findings(Some(&project_id));
+    assert_eq!(found.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec![wide.as_str()], "{found:?}");
+    assert!(bind_doctor_findings(Some("another-workspace")).iter().all(|(n, _)| n != &wide));
+
+    // Public on purpose: no warning, shown with who said so.
+    let shown = set_expose(&project_id, &wide, true, "owner").expect("expose public");
+    assert!(shown.bind_warning.is_none(), "{shown:?}");
+    let rec = shown.expose_public.expect("shown");
+    assert_eq!(rec.set_by, "owner");
+    assert!(rec.set_at > 0);
+    let wire = serde_json::to_value(to_json(&wrow)).expect("json");
+    assert_eq!(wire["exposePublic"]["setBy"], "owner", "{wire}");
+    assert!(wire.get("bindWarning").is_none(), "{wire}");
+    assert!(bind_doctor_findings(Some(&project_id)).is_empty());
+    let audit = k2_core::auth_audit::tail(50).expect("audit");
+    assert!(
+        audit.iter().any(|e| e["event"] == "publish-expose" && e["outcome"].as_str().is_some_and(|o| o.contains(&format!("service={wide}")) && o.contains("expose=public"))),
+        "audited: {audit:?}"
+    );
+    // Only a service this workspace has.
+    assert!(set_expose(&project_id, "no-such-service", true, "owner").is_err());
+
+    cleanup(&project_id, &wide);
+    cleanup(&project_id, &narrow);
 }
 
 /// Poll `to_json` until `want` or `within` runs out; returns the last JSON.

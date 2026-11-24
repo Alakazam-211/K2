@@ -274,7 +274,7 @@ def still_bash(root):
         return set()
     with open(path, encoding="utf-8") as f:
         rows = [l.rstrip("\n").split("\t") for l in f if l.strip() and not l.startswith("#")]
-    return {r[2] for r in rows[1:] if r[0] != "P"}
+    return {r[2] for r in rows[1:] if r[0] not in ("P", "R")}
 
 
 def family_of(form, words):

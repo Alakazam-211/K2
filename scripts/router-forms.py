@@ -64,8 +64,9 @@ CEILING = "crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 # The classes the ship bar counts: V a verb (or its --json
 # twin), H a help form, F a documented flag shape, E an error or
 # environment edge on a k5 code path. P (an edge that exists only
-# because python3 is missing: the native-without-python3 difference) is
-# listed but not counted.
+# because python3 is missing: the native-without-python3 difference) and
+# R (a run-time hand-off: a form under an environment or input variant)
+# are listed but not counted.
 COUNTED = ("V", "H", "F", "E")
 DEPTH = 4
 # Helpers that read the words only to look for a help flag or a hint:
@@ -533,8 +534,9 @@ def summary(root):
             left += 1
     fams = sorted(by, key=lambda k: (-by[k], k))
     print(
-        "native bar: %d forms fall through (%s; P %d not counted): %s"
+        "native bar: %d forms fall through (%s; P %d, R %d not counted): %s"
         % (left, " ".join("%s %d" % (c, classes.get(c, 0)) for c in COUNTED), classes.get("P", 0),
+           classes.get("R", 0),
            ", ".join("%s %d" % (f, by[f]) for f in fams) or "none")
     )
     return 0

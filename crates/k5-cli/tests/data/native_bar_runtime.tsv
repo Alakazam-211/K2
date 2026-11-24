@@ -1,0 +1,653 @@
+# Run-time rows for the native bar (crates/k5-cli/tests/native_bar.rs), class R: one form under
+# one variant of native_bar_variants.tsv (- for none: an odd input shape in the fixed
+# environment), or a sweep (argv * every router form that is no alias, *first the first of each
+# family). The sites are section 10 of the partner no-bash inventory; off-Unix sites and H2 go to
+# the Windows port, Route::Spec only the test binary reaches. argv: words split on single spaces,
+# with the variants file's escapes and placeholders. A probe is named <form> [<variant>].
+site	form	argv	variant	reason
+env:proxy	*	*	proxy-*	every form with a proxy by scheme (transport/proxy.rs Route::Shell, remote.rs sends_here)
+env:locale	*	*	locale-*	every form under a locale or PYTHON* setting (cards.rs:97-117, pages.rs:547-567)
+env:home-unset	*	*	home-unset	every form with HOME unset (airgap::state None, offline prelude)
+env:cdpath	*	*	cdpath*	every form with CDPATH set
+env:pwd	*	*	pwd-*	every form with a PWD bash would tidy (offline.rs:279-299)
+env:tty	*	*	tty	every form with stdin a terminal
+env:tmpdir	*	*first	tmpdir-*	each family's first form with TMPDIR unusable (zen temp_shell, sessions, compute wait)
+env:startup	*	*first	startup-*	each family's first form with a bash startup variable (port.rs:76, offline.rs:142-149)
+H1	*	*first	hook-*	each family's first form with HOOK_SOCK and a CODEX_ variable (H1; the Codex tab gate too)
+env:cell-no-passport	*	*first	cell-no-passport	each family's first form with a live session socket and no passport
+H3	*	*first	arg-non-utf8	each family's first form with a last word that is not UTF-8 (H3)
+env:layout	*	*	layout-app-*	every form run from a macOS app layout
+front:help-gate	*	*	no-owner-fallback	every form with the owner fallback off: help-word lines whose page is gated, and page fallbacks (main.rs:86-91, pages.rs)
+# --- site rows, one per site and caller
+# H4, H5 and environment (proxies, startup, compute, timeouts, locale, host, passport)
+env:startup	whoami (bad K2_PORT, startup)	whoami	port-bad-setting*	port.rs:91 via main.rs:149 a bad port setting with bash start-up settings: Check::Shell
+env:startup	whoami (bad saved port, startup)	whoami	port-bad-saved-startup	port.rs:117 via main.rs:149 a bad saved port with bash start-up settings: Check::Shell
+env:startup	whoami (saved port with a NUL)	whoami	port-saved-nul	port.rs:117 via main.rs:149 a NUL in the saved port: bash warns first, Check::Shell
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-https	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-socks4	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-socks5	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-socks5h	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-ipv6	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-all-lower	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	proxy-no-proxy-blanks	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<host> (proxy)	talk w1@https://h.example hello	odd-proxy-*	families/talk.rs:317 remote::routed None, Route::Shell (transport/proxy.rs:174-200)
+env:proxy	talk <ws>@<Host> (capital, proxy)	talk w1@https://H.example hello	proxy-http	families/talk.rs:317 a target with a capital letter through a proxy, proxy.rs:193
+env:proxy	talk <ws>@<host.> (trailing dot, proxy)	talk w1@https://h.example. hello	proxy-http	families/talk.rs:317 a target with a trailing dot through a proxy, proxy.rs:193
+env:proxy	wiki publish (control plane, proxy)	wiki publish	connect-home-proxy-*	families/wiki.rs:394 routed(connect base) None with tunnel.json and air-gap off
+env:proxy	wiki publish (control plane, base ends /)	wiki publish	connect-home-base-slash	families/wiki.rs:391 a control-plane base ending in /
+env:proxy	publish status (control plane, proxy)	publish status	connect-home-proxy-*	families/publish/cp.rs:286 via publish.rs:256 cp::prep routed None with tunnel.json
+env:proxy	publish status (control plane, base ends /)	publish status	connect-home-base-slash	families/publish/cp.rs:283 via publish.rs:256 a control-plane base ending in /
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-https	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-https	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-socks4	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-socks4	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-socks5	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-socks5	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-socks5h	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-socks5h	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-ipv6	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-ipv6	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-all-lower	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-all-lower	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-no-proxy-blanks	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-no-proxy-blanks	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-http	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-http	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-http-upper	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-http-upper	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-user	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-user	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-bare	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-bare	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-all	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-all	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-no-proxy-dot	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-no-proxy-dot	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	proxy-no-proxy-star	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	proxy-no-proxy-star	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:proxy-sends-here	read <ws>@<host> (proxy set)	read w1@https://h.example	odd-proxy-*	families/read.rs:250 remote::sends_here false: a proxy variable set with an https remote (transport/remote.rs:256-267)
+env:proxy-sends-here	remote-session status --host (proxy set)	remote-session status --host https://h.example	odd-proxy-*	families/remote_session.rs:340 remote::sends_here false: a proxy variable set with an https --host
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-https	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-https	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-socks4	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-socks4	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-socks5	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-socks5	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-socks5h	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-socks5h	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-ipv6	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-ipv6	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-all-lower	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-all-lower	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-no-proxy-blanks	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-no-proxy-blanks	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-http	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-http	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-http-upper	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-http-upper	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-user	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-user	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-bare	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-bare	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	proxy-all	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	proxy-all	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	remote logout --host (proxy)	remote logout --host https://h.example	odd-proxy-*	families/remote/logout.rs:520 proxied(): a proxy would carry it or a setting the binary does not read (logout.rs:45-56)
+env:remote-logout-proxy	daemon restart --host (proxy)	daemon restart --host https://h.example	odd-proxy-*	families/daemon/life.rs:201 proxied() on --host, via daemon.rs ask()?
+env:remote-logout-proxy	connect login (odd proxy)	connect login	odd-proxy-*	families/connect/login.rs:986 proxied() on the account server (the sweeps cover the named proxy-* variants)
+env:remote-logout-proxy	connect logout (saved account, proxy)	connect logout	connect-home-via-http	families/connect/logout.rs:220 proxied() with a saved access token in connect-account.json
+env:remote-logout-proxy	connect logout (saved account, proxy)	connect logout	connect-home-proxy-*	families/connect/logout.rs:220 proxied() with a saved access token in connect-account.json
+H4	review approve (port curl won't take)	review approve a1 main	k2home-port-bad	families/review.rs:160 after the gate, any parsed verb
+H4	commit (port curl won't take)	commit	k2home-port-bad	families/commit.rs:235 after the gate and the usage lines
+H4	onboarding scan (port curl won't take)	onboarding scan	k2home-port-bad	families/onboarding.rs:186 after the gate, cwd is the folder
+H4	skills list (port curl won't take)	skills list	k2home-port-bad	families/skills.rs:181 after the gate
+H4	remote-session status (port curl won't take)	remote-session status	k2home-port-bad	families/remote_session.rs:367 after the gate, no --host
+H4	tunnel status (port curl won't take)	tunnel status	k2home-port-bad	families/tunnel.rs:379 after the gate
+H4	fed status (port curl won't take)	fed status	k2home-port-bad	families/fed.rs:264 after the gate
+H4	users list (port curl won't take)	users list	k2home-port-bad	families/users.rs:618 after the gate, no password read
+H4	git-tools status (port curl won't take)	git-tools status	k2home-port-bad	families/git_tools.rs:124 after the gate
+H4	permission list (port curl won't take)	permission list	k2home-port-bad	families/permission.rs:644 after the gate
+H4	update --cli (port curl won't take)	update --cli	k2home-port-bad	families/update.rs:711 the --cli form once the gate passes
+H4	wiki status (port curl won't take)	wiki status	k2home-port-bad	families/wiki.rs:372 after the gate (not chat on)
+H4	activity (port curl won't take)	activity	k2home-port-bad	families/activity.rs:170 gate passes, port checked
+H4	feedback list (port curl won't take)	feedback list	k2home-port-bad	families/feedback.rs:261 gate passes, port checked
+H4	feedback resolve (port curl won't take)	feedback resolve a1	k2home-port-bad	families/feedback/write.rs:697 a write form, not template
+H4	terminal read (port curl won't take)	terminal read a1	k2home-port-bad	families/terminal.rs:250 after the gate
+H4	connect status (port curl won't take)	connect status	k2home-port-bad	families/connect.rs:228 Facts::read via connect.rs:187, status with no extra word
+H4	connect login --token (port curl won't take)	connect login --token t1	k2home-port-bad	families/connect/login.rs:997 a token given, so no getpass hand-off first
+H4	db status (port curl won't take)	db status	k2home-port-bad	families/db.rs:808 settings_for from db.rs:778
+H4	store list (port curl won't take)	store list	k2home-port-bad	families/db.rs:808 settings_for from store.rs:194
+H4	llm tokens list (port curl won't take)	llm tokens list	k2home-port-bad	families/llm.rs:239 a Line form, gate passes (port read at 237)
+H4	postal status (port curl won't take)	postal status	k2home-port-bad	families/postal.rs:353 a verb that asks the daemon
+H4	ci status (port curl won't take)	ci status	k2home-port-bad	families/ci.rs:434 a sending form, gate passes
+H4	preset list (port curl won't take)	preset list	k2home-port-bad	families/preset.rs:332 gate passes, port checked
+H4	job list (port curl won't take)	job list	k2home-port-bad	families/job.rs:366 not help, gate passes
+H4	organization list (port curl won't take)	organization list	k2home-port-bad	families/organization.rs:541 a verb, gate passes
+H4	organization bare (port curl won't take)	organization	k2home-port-bad	families/organization.rs:573 bare() with no verb
+H4	connections list (port curl won't take)	connections list	k2home-port-bad	families/connections.rs:188 gate passes, port checked
+H4	root-helper status (port curl won't take)	root-helper status	k2home-port-bad	families/root_helper.rs:175 gate passes, port checked
+H4	firewall status (port curl won't take)	firewall status	k2home-port-bad	families/firewall.rs:564 not help, gate passes
+H4	sidecar list (port curl won't take)	sidecar list	k2home-port-bad	families/sidecar.rs:476 not help, gate passes
+H4	sessions set-label (port curl won't take)	sessions set-label a1 x	k2home-port-bad	families/sessions.rs:419 the Label form of sessions/more
+H4	sessions list (port curl won't take)	sessions list	k2home-port-bad	families/sessions.rs:446 a roster ask, gate passes
+H4	explain kit id (port curl won't take)	explain MPC-1	k2home-port-bad	families/explain.rs:136 kit() with no port curl takes (set at 135)
+H4	board (port curl won't take)	board	k2home-port-bad	families/board.rs:263 gate passes, port checked
+H4	read <ws> (port curl won't take)	read w1	k2home-port-bad	families/read.rs:264 a local read, gate passes
+H4	workspace list (port curl won't take)	workspace list	k2home-port-bad	families/workspace.rs:167 a workspace.rs form, gate passes
+H4	workspace trust status (port curl won't take)	workspace trust status	k2home-port-bad	families/workspace/verbs.rs:194 a verbs.rs form, gate passes
+H4	msg <ws> <text> (port curl won't take)	msg w1 hi	k2home-port-bad	families/msg.rs:123 client_for from msg/send.rs:554
+H4	msg who (port curl won't take)	msg who	k2home-port-bad	families/msg.rs:123 client_for from msg/who.rs:62
+H4	msg verify (port curl won't take)	msg verify a1	k2home-port-bad	families/msg.rs:123 client_for from msg/verify.rs:147
+H4	talk <ws> <text> (port curl won't take)	talk w1 hello	k2home-port-bad	families/msg.rs:123 client_for from talk.rs:323
+H4	thread export (port curl won't take)	thread export	k2home-port-bad	families/msg.rs:123 client_for from thread.rs:142 (transfer verbs)
+H4	thread <ws> <text> (port curl won't take)	thread w1 hi	k2home-port-bad	families/msg.rs:123 client_for from thread.rs:164 (a post)
+H4	project list (port curl won't take)	project list	k2home-port-bad	families/project.rs:628 after the gate
+H4	agent list (port curl won't take)	agent list	k2home-port-bad	families/agent.rs:295 run_words after the gate
+H4	front status (port curl won't take)	front status	k2home-port-bad	families/front.rs:372 not help, gate passes
+H4	heartbeat schedule list (port curl won't take)	heartbeat schedule list	k2home-port-bad	families/heartbeat.rs:992 gate passes, port checked
+H4	remind list (port curl won't take)	remind list	k2home-port-bad	families/remind.rs:492 gate passes, port checked
+H4	heartbeat remind list (port curl won't take)	heartbeat remind list	k2home-port-bad	families/remind.rs:492 reached from heartbeat.rs:970
+H4	doc cores (port curl won't take)	doc cores	k2home-port-bad	families/doc.rs:134 a verb, not help, gate passes
+H4	hostchat media status (port curl won't take)	hostchat media status	k2home-port-bad	families/hostchat.rs:397 not skipped, gate passes
+H4	hostchat deliveries (port curl won't take)	hostchat deliveries list	k2home-port-bad	families/chat.rs:1014 chat::start from hostchat.rs:360
+H4	chat spaces (port curl won't take)	chat spaces	k2home-port-bad	families/chat.rs:1014 chat::start from chat.rs:974
+H4	skin-token list (port curl won't take)	skin-token list	k2home-port-bad	families/skin_token.rs:360 gate passes, port checked
+H4	skin users (port curl won't take)	skin users	k2home-port-bad	families/skin.rs:1782 a user list ask, gate passes
+H4	app list (port curl won't take)	app list	k2home-port-bad	families/app.rs:905 run_ask, gate passes
+H4	app bare (port curl won't take)	app	k2home-port-bad	families/app.rs:945 bare() after the gate
+H4	focus-group list (port curl won't take)	focus-group list	k2home-port-bad	families/focus_group.rs:278 gate passes, port checked
+H4	voice status (port curl won't take)	voice status	k2home-port-bad	families/voice.rs:508 not skipped, gate passes
+H4	zen data (port curl won't take)	zen data	k2home-port-bad	families/zen.rs:151 after the gate
+H4	inbox list (port curl won't take)	inbox list	k2home-port-bad	families/inbox.rs:316 gate passes, port checked
+H4	whats-new (port curl won't take)	whats-new	k2home-port-bad	families/whats_new.rs:96 after the gate
+H4	api status (port curl won't take)	api status	k2home-port-bad	families/api.rs:144 gate passes, port checked
+H4	settings (port curl won't take)	settings	k2home-port-bad	families/settings.rs:162 gate passes, port checked
+H4	browser redeliver (port curl won't take)	browser redeliver a1	k2home-port-bad	families/browser.rs:400 gate passes, port checked
+H4	vault incoming (port curl won't take)	vault incoming	k2home-port-bad	families/vault.rs:309 a verb, not the page
+H4	calendar list (port curl won't take)	calendar list	k2home-port-bad	families/calendar.rs:507 gate passes, port checked
+H4	api-key list (port curl won't take)	api-key list	k2home-port-bad	families/api_key.rs:575 gate passes, port checked
+H4	sources list (port curl won't take)	sources list	k2home-port-bad	families/sources.rs:586 a native verb, gate passes
+H4	capabilities (port curl won't take)	capabilities	k2home-port-bad	families/capabilities.rs:127 gate passes, port checked
+H4	mail list (port curl won't take)	mail list	k2home-port-bad	families/mail/core.rs:1889 core::run from mail.rs:156
+H4	hostmail status (port curl won't take)	hostmail status	k2home-port-bad	families/mail/core.rs:1889 core::run from hostmail.rs:101
+H4	mail watch (port curl won't take)	mail watch	k2home-port-bad	families/mail/watch.rs:175 gate passes, port checked
+H4	compute nodes (port curl won't take)	compute nodes	k2home-port-bad	families/compute/reads.rs:583 a reads verb
+H4	compute cancel (port curl won't take)	compute cancel j1	k2home-port-bad	families/compute/writes.rs:166 a writes verb
+H4	compute cache (port curl won't take)	compute cache	k2home-port-bad	families/compute/admin.rs:162 an admin verb
+H4	compute roster (port curl won't take)	compute roster	k2home-port-bad	families/compute/more.rs:96 a more verb
+H4	compute run (port curl won't take)	compute run -- true	k2home-port-bad	families/compute/submit.rs:117 a submit verb
+H4	domain list (port curl won't take)	domain list	k2home-port-bad	families/domain/dom.rs:123 dom::run from domain.rs:34
+H4	dns list (port curl won't take)	dns list	k2home-port-bad	families/domain/dom.rs:123 dom::run from dns.rs:39
+H4	cert list (port curl won't take)	cert list	k2home-port-bad	families/domain/dom.rs:123 dom::run from cert.rs:27
+H4	daemon survive status (port curl won't take)	daemon survive status	k2home-port-bad	families/daemon.rs:107 a Life form with a port curl won't take (read at 105)
+H4	glossary (port curl won't take)	glossary	k2home-port-bad	families/glossary.rs:90 gate passes, port checked
+H4	approve status (port curl won't take)	approve status	k2home-port-bad	families/approve/cp.rs:73 open() for a form that is not local
+H4	hooks status (port curl won't take)	hooks status	k2home-port-bad	families/hooks.rs:302 after the gate
+H4	sim status (port curl won't take)	sim status	k2home-port-bad	families/sim.rs:1653 not help, gate passes
+H4	migrate status (port curl won't take)	migrate status	k2home-port-bad	families/migrate.rs:380 a Call form (port read at 378)
+H4	changes status (port curl won't take)	changes status	k2home-port-bad	families/changes.rs:878 not help, gate passes
+H4	push devices (port curl won't take)	push devices	k2home-port-bad	families/push.rs:211 gate passes, port checked
+H4	clone proposals (port curl won't take)	clone proposals	k2home-port-bad	families/clone.rs:317 gate passes, port checked
+H4	usage tokens (port curl won't take)	usage tokens	k2home-port-bad	families/usage.rs:343 not help, gate passes
+H4	desktop status (port curl won't take)	desktop status	k2home-port-bad	families/desktop.rs:554 gate passes, port checked
+H4	publish list (port curl won't take)	publish list	k2home-port-bad	families/publish.rs:241 gate passes, port checked
+H5	organization <verb> -- -h	organization list -- -h	-	organization.rs:521 help scan reads the words after --
+H5	focus-group <verb> -- -h	focus-group list -- -h	-	focus_group.rs:257 help scan reads the words after --
+H5	wiki <verb> -- -h	wiki status -- -h	-	wiki.rs:339 help scan reads the words after --
+H5	vault run -- <cmd> -h	vault run --secret A -- ls -h	-	vault.rs:282 help scan reads the command after --
+H5	project msg <p> -- -h	project msg p1 -- -h	-	project.rs:606 help scan reads the words after --
+H5	terminal write <id> -- -h	terminal write w1 -- -h	-	terminal.rs:233 help scan reads the words after --
+H5	zen garden <verb> -- -h	zen garden list -- -h	-	zen.rs:105 help scan reads the words after --
+H5	sessions archives -- -h	sessions archives -- -h	-	sessions.rs:461 disk_line help scan reads the words after --
+env:startup	update --list (startup)	update --list	startup*	update.rs:581 shell_program refuses with a startup setting (422-427)
+env:startup	update --app (no mktemp)	update --app	mktemp-missing	update.rs:582 no mktemp on PATH
+env:startup	update --list (no mktemp)	update --list	mktemp-missing	update.rs:582 no mktemp on PATH
+env:startup	update --app (no curl)	update --app	path-unset	update.rs:581 no curl to find with PATH unset
+env:startup	update --list (no curl)	update --list	path-unset	update.rs:581 no curl to find with PATH unset
+env:startup	db run -- <cmd>	db run -- ls	startup-bash-env	db/run.rs:110 a startup setting: bash's exec target unknown
+env:startup	db run -- <cmd>	db run -- ls	startup-env	db/run.rs:110 a startup setting: bash's exec target unknown
+env:startup	db run -- <cmd>	db run -- ls	startup-shellopts	db/run.rs:110 a startup setting: bash's exec target unknown
+env:startup	db run -- <cmd>	db run -- ls	startup-bashopts	db/run.rs:110 a startup setting: bash's exec target unknown
+env:startup	db run -- <cmd>	db run -- ls	startup-posixly-correct	db/run.rs:110 a startup setting: bash's exec target unknown
+env:startup	compute logs <job> (startup)	compute logs j1	startup*	compute/reads.rs:569 logs mktemp lookup refuses with a startup setting
+env:startup	compute logs <job> (no mktemp)	compute logs j1	mktemp-missing	compute/reads.rs:569 logs mktemp not on PATH
+env:startup	ci logs <run> (startup)	ci logs r1	startup*	ci.rs:522 logs mktemp lookup refuses with a startup setting
+env:startup	ci logs <run> (no mktemp)	ci logs r1	mktemp-missing	ci.rs:522 logs mktemp not on PATH
+env:startup	feedback ask --html - (startup)	feedback ask T --html -	startup*	feedback/write.rs:664 --html - mktemp lookup refuses with a startup setting
+env:startup	feedback ask --html - (no mktemp)	feedback ask T --html -	mktemp-missing	feedback/write.rs:664 --html - mktemp not on PATH
+env:startup	zen garden new (startup, no temp)	zen garden new	mktemp-startup*	zen.rs:193 temp_shell via garden new (zen.rs:79)
+env:startup	zen validate --dir (startup, no temp)	zen validate --dir {proj}	mktemp-startup*	zen.rs:193 temp_shell via validate --dir (zen.rs:74-77)
+env:startup	zen widget apply (startup, no temp)	zen widget apply	mktemp-startup*	zen.rs:193 temp_shell via widget apply (zen.rs:82-86)
+env:compute-internal	compute cancel <job> (internal)	compute cancel j1	compute-shell*	compute/writes.rs:152 shell_settings (writes.rs:265)
+env:compute-internal	compute move <job> (internal)	compute move j1	compute-shell*	compute/admin.rs:148 shell_settings
+env:compute-internal	compute retry <job> (internal)	compute retry j1	compute-shell*	compute/more.rs:82 shell_settings
+env:compute-internal	compute run -- <cmd> (internal)	compute run -- true	compute-shell*	compute/submit.rs:103 shell_settings
+env:compute-internal	ci status (internal)	ci status	compute-shell*	ci.rs:413 shell_settings
+env:compute-internal	clone preview <ws> (internal)	clone preview w1	compute-shell*	clone.rs:303 shell_settings
+env:compute-internal	clone preview <ws> (internal)	clone preview w1	compute-args-json	clone.rs:303 _K2_ARGS_JSON set
+env:compute-internal	skin user show <user> (internal)	skin user show a1	compute-shell-cj	skin.rs:1759 a K2_CJ_ variable set
+env:compute-internal	hostchat users list (internal)	hostchat users list	compute-shell-refusal-area	hostchat.rs:340 sew::env_shell (voice/sew.rs:288)
+env:compute-internal	hostchat users list (internal)	hostchat users list	compute-refusal-area-empty	hostchat.rs:340 sew::env_shell takes an empty value too
+env:compute-internal	voice status (internal)	voice status	compute-shell-refusal-area	voice.rs:482 sew::env_shell (voice/sew.rs:288)
+env:compute-internal	voice status (internal)	voice status	compute-refusal-area-empty	voice.rs:482 sew::env_shell takes an empty value too
+env:compute-internal	chat spaces (internal)	chat spaces	compute-shell-refusal-area	chat.rs:990 sew::env_shell (voice/sew.rs:288)
+env:compute-internal	chat spaces (internal)	chat spaces	compute-refusal-area-empty	chat.rs:990 sew::env_shell takes an empty value too
+env:compute-internal	store --widget <ws> (internal)	store --widget w1	compute-shell-noanswer-soft	store.rs:191 _K2_NOANSWER_SOFT on a Garden data line
+env:compute-internal	zen path (internal)	zen path	compute-shell-noanswer-soft	zen.rs:109 _K2_NOANSWER_SOFT set
+env:compute-internal	compute run -- <cmd> (cp state)	compute run -- true	compute-cp*	compute/submit.rs:84-95 a _CP_ wait variable set
+env:compute-internal	compute wait <job> --follow (internal)	compute wait j1 --follow	compute-cp-last-q	compute/writes/wait.rs:196 follow_handed via writes.rs:135
+env:compute-internal	db requests (internal)	db requests	compute-shell-refusal-area	db/cp.rs:401 cp::shells via db.rs:774
+env:compute-internal	db requests (internal)	db requests	compute-shell-noanswer-soft	db/cp.rs:401 cp::shells via db.rs:774
+env:compute-internal	db versions-access <on|off> (max time)	db versions-access on	timeout-cp-max-time-bad*	db/cp.rs:402 any K2_CP_MAX_TIME on versions-access
+env:compute-internal	db versions-access <on|off> (max time)	db versions-access on	timeout-cp-max-time-plain	db/cp.rs:402 any K2_CP_MAX_TIME on versions-access
+env:compute-internal	db request-read (max time)	db request-read --db d1 --why w	timeout-cp-max-time-bad*	db/cp.rs:403 a K2_CP_MAX_TIME curl reads its own way
+env:timeouts	compute cancel <job> (max time)	compute cancel j1	timeout-cp-max-time-bad*	compute/writes.rs:151 post_max_time
+env:timeouts	compute move <job> (max time)	compute move j1	timeout-cp-max-time-bad*	compute/admin.rs:147 post_max_time
+env:timeouts	compute retry <job> (max time)	compute retry j1	timeout-cp-max-time-bad*	compute/more.rs:81 post_max_time
+env:timeouts	compute run -- <cmd> (max time)	compute run -- true	timeout-cp-max-time-bad*	compute/submit.rs:102 post_max_time
+env:timeouts	ci status (max time)	ci status	timeout-cp-max-time-bad*	ci.rs:412 post_max_time
+env:timeouts	chat spaces (max time)	chat spaces	timeout-cp-max-time*	chat.rs:991 K2_CP_MAX_TIME set at all, empty too
+env:timeouts	hostchat users list (max time)	hostchat users list	timeout-cp-max-time*	hostchat.rs:341 K2_CP_MAX_TIME set at all, empty too
+env:timeouts	msg <ws> <text> (post max time)	msg w1 hi	timeout-post-max-time-bad	msg.rs:124 client_for via msg/send.rs:554
+env:timeouts	msg who <id> (post max time)	msg who m1	timeout-post-max-time-bad	msg.rs:124 client_for via msg/who.rs:62
+env:timeouts	msg verify <code> (post max time)	msg verify m_1	timeout-post-max-time-bad	msg.rs:124 client_for via msg/verify.rs:147
+env:timeouts	thread imports (post max time)	thread imports	timeout-post-max-time-bad	msg.rs:124 client_for via thread.rs:142
+env:timeouts	thread <addr> <text> (post max time)	thread w1 hi	timeout-post-max-time-bad	msg.rs:124 client_for via thread.rs:164
+env:timeouts	talk <ws> <text> (post max time)	talk w1 hi	timeout-post-max-time-bad	msg.rs:124 client_for via talk.rs:323
+env:timeouts	talk <ws> <text> (tuning)	talk w1 hi	timeout-talk*	talk.rs:309 Tuning::from_env
+env:timeouts	mail reader inboxes (timeout)	mail reader inboxes	timeout-mail-http*	mail/reader.rs:294 timeout() a value Python reads its own way
+env:timeouts	ci run --wait (wait secs)	ci run --wait	timeout-ci-wait-secs-bad	ci.rs:506 wait_secs via shell_free (ci.rs:408)
+env:locale	agent instances hire <stdin>	agent instances hire -	locale*	families/agent.rs:263 recipe decode check (locale-lang-c-utf8 stays native)
+env:locale	tunnel switch <sub> --token-stdin	tunnel switch s1 --token-stdin	locale*	families/tunnel.rs:389 token read from stdin
+env:locale	fed pair-join --token-stdin	fed pair-join --token-stdin	locale*	families/fed.rs:268 pair token read from stdin
+env:locale	users set-password --password-stdin	users set-password a1 --password-stdin	locale*	families/users.rs:602 password read from stdin
+env:locale	users add --password-stdin	users add a1 --password-stdin	locale*	families/users.rs:602 password read from stdin, add caller
+env:locale	study --json (catalog)	study --json	locale-pythonioencoding-python3	pages.rs:600 catalog json, PYTHON set (native_json 547-567)
+env:locale	study <topic> --json	study errors --json	locale-pythonioencoding-python3	pages.rs:658 page json, PYTHON set (native_json 547-567)
+env:locale	study <topic> --json	study errors --json	locale-lc-all-latin1-python3	pages.rs:658 non-ASCII page under a latin1 locale
+env:locale	study (cards ask)	study	passport-locale-python3	cards.rs:177 reader decode, via pages.rs:620 catalog asks cards
+env:locale	study send-feedback (feedback ask)	study send-feedback	passport-locale-python3	cards.rs:177 reader decode, via pages.rs:595 send-feedback page asks
+env:locale	app --help (cards ask)	app --help	passport-locale-python3	cards.rs:177 reader decode, via pages.rs:790 captured help with cards
+env:locale	help (daily ask)	help	passport-locale-python3	cards.rs:177 reader decode, via pages.rs:934 daily tier asks
+env:locale	permission (cards ask)	permission	passport-locale-python3	cards.rs:177 reader decode, via families/permission.rs:652 cards probe
+env:locale	app (cards ask)	app	passport-locale-python3	cards.rs:177 reader decode, via families/app.rs:933 bare app page asks
+env:locale	skin (cards ask)	skin	passport-locale-python3	cards.rs:177 reader decode, via families/skin.rs:1801 skin usage asks
+env:host	permission (owner probe)	permission	host-*	families/permission.rs:586 owner probe host not IPv4
+env:host	setup (host)	setup	host-ipv6	families/setup.rs:419 host not a plain name
+env:host	setup (host)	setup	host-https	families/setup.rs:419 host not a plain name
+env:host	status (codex host)	status	hook-codex-host	codex_gate.rs:298 a host on a gated Codex call, by socket
+env:host	status (codex host)	status	codex-pane-host	codex_gate.rs:298 a host on a gated Codex call, by pane and passport
+env:host	study (cards ask)	study	passport-host-name	cards.rs:171 host not IPv4, via pages.rs:620 catalog asks cards
+env:host	study send-feedback (feedback ask)	study send-feedback	passport-host-name	cards.rs:171 host not IPv4, via pages.rs:595 send-feedback page asks
+env:host	app --help (cards ask)	app --help	passport-host-name	cards.rs:171 host not IPv4, via pages.rs:790 captured help with cards
+env:host	help (daily ask)	help	passport-host-name	cards.rs:171 host not IPv4, via pages.rs:934 daily tier asks
+env:host	permission (cards ask)	permission	passport-host-name	cards.rs:171 host not IPv4, via families/permission.rs:652 cards probe
+env:host	app (cards ask)	app	passport-host-name	cards.rs:171 host not IPv4, via families/app.rs:933 bare app page asks
+env:host	skin (cards ask)	skin	passport-host-name	cards.rs:171 host not IPv4, via families/skin.rs:1801 skin usage asks
+env:passport	hooks emit <event>	hooks emit Stop	passport-pane	families/hooks.rs:258 emit with passport and pane
+env:passport	remote-session status --token	remote-session status --token k2rs_t1	passport	families/remote_session.rs:361 grant token with a passport
+env:passport	remote-session status --host (passport)	remote-session status --host https://h.example	passport	families/remote_session.rs:361 a --host with a passport
+env:passport	skin grant add (passport)	skin grant add --subject-kind principal --subject a1 --kind app --target a1	passport	families/skin.rs:1786 owner-only grant add with a passport
+env:passport	skin grant rm (passport)	skin grant rm --id g1	passport	families/skin.rs:1786 owner-only grant rm with a passport
+env:passport	app grant rm (passport)	app grant rm --id g1	passport	families/skin.rs:1786 owner-only grant rm, app caller
+env:passport	permission (owner probe)	permission	owner-token-space	families/permission.rs:582 owner token not plain
+env:passport	study (cards ask)	study	passport-non-ascii	cards.rs:158 passport not plain, via pages.rs:620 catalog asks cards
+env:passport	study send-feedback (feedback ask)	study send-feedback	passport-non-ascii	cards.rs:158 passport not plain, via pages.rs:595 send-feedback page asks
+env:passport	app --help (cards ask)	app --help	passport-non-ascii	cards.rs:158 passport not plain, via pages.rs:790 captured help with cards
+env:passport	help (daily ask)	help	passport-non-ascii	cards.rs:158 passport not plain, via pages.rs:934 daily tier asks
+env:passport	permission (cards ask)	permission	passport-non-ascii	cards.rs:158 passport not plain, via families/permission.rs:652 cards probe
+env:passport	app (cards ask)	app	passport-non-ascii	cards.rs:158 passport not plain, via families/app.rs:933 bare app page asks
+env:passport	skin (cards ask)	skin	passport-non-ascii	cards.rs:158 passport not plain, via families/skin.rs:1801 skin usage asks
+# environment (cell socket, TTY, values, HOME, CDPATH, PWD, EDITOR, PATH, TMPDIR) and file system
+env:cell-no-passport	workspace remove <ws> --apps (cell, no passport)	workspace remove w1 --apps uninstall	cell-no-passport	workspace/verbs.rs:196-198: remove --apps sends on the socket; a session with no passport is the shell's
+env:tty	users add <user> (no tty)	users add a1	-	users.rs:601: the password prompt (no --password-stdin) with stdin not a terminal
+env:tty	users set-password <user> (no tty)	users set-password a1	-	users.rs:601: set-password's prompt with stdin not a terminal
+env:tty	workspace remove <ws> --apps (tty)	workspace remove w1 --apps uninstall	tty	workspace/verbs.rs:203-209: --apps at a terminal, owner token, NO_APPROVE unset
+env:tty	workspace trust --yes <folder> (tty both)	workspace trust --yes {proj}	tty-both	workspace/verbs/trust.rs:200 (decide, via verbs.rs:164 and 176): a decision with no --fingerprint, stdin and stdout terminals, asks [y/N]
+env:tty	compute node take-owner <node> (no ctty)	compute node take-owner n1	-	compute/admin/node.rs:257: /dev/tty passes access(R_OK) but can't be opened (no controlling terminal)
+env:non-utf8-value	done (AGENT_NAME not UTF-8)	done	agent-name-non-utf8	done.rs:176: the sender name is not UTF-8
+env:non-utf8-value	reserve <thing> (AGENT_NAME not UTF-8)	reserve r1	agent-name-non-utf8	reserve.rs:180 via run (reserve.rs:168): the agent name is not UTF-8
+env:non-utf8-value	release <thing> (AGENT_NAME not UTF-8)	release r1	agent-name-non-utf8	reserve.rs:180 via run_verb(Release): the agent name is not UTF-8
+env:non-utf8-value	msg <ws> --signal (AGENT_NAME not UTF-8)	msg w1 --signal ping	agent-name-non-utf8	msg/signal.rs:128 via msg/send.rs:377 and 547: no --from and the agent name is not UTF-8
+env:non-utf8-value	project list (AGENT_NAME not UTF-8)	project list	agent-name-non-utf8	project.rs:613-616: AGENT_NAME not UTF-8
+env:non-utf8-value	project list (HOME not UTF-8)	project list	home-non-utf8	project.rs:613-616: HOME not UTF-8
+env:non-utf8-value	focus-group list (HOME not UTF-8)	focus-group list	home-non-utf8	focus_group.rs:264: HOME not UTF-8
+env:non-utf8-value	focus-group list (PROJECT_PATH not UTF-8)	focus-group list	project-path-non-utf8	focus_group.rs:265-268: PROJECT_PATH not UTF-8
+env:non-utf8-value	agent list (HOME not UTF-8)	agent list	home-non-utf8	agent.rs:270: HOME not UTF-8
+env:non-utf8-value	agent list (PROJECT_PATH not UTF-8)	agent list	project-path-non-utf8	agent.rs:271-275: PROJECT_PATH not UTF-8
+env:non-utf8-value	feedback ask <title> (AGENT_NAME not UTF-8)	feedback ask t1	agent-name-non-utf8	feedback/write.rs:659-663 (python_names 633): AGENT_NAME not UTF-8
+env:non-utf8-value	feedback ask <title> (HOME not UTF-8)	feedback ask t1	home-non-utf8	feedback/write.rs:659-663: HOME not UTF-8
+env:non-utf8-value	feedback ask <title> (PWD not UTF-8)	feedback ask t1	pwd-non-utf8	feedback/write.rs:659-663: PWD not UTF-8 (read as a value, even when it names no folder)
+env:non-utf8-value	feedback ask <title> (CLAUDE_SESSION_ID not UTF-8)	feedback ask t1	claude-session-non-utf8	feedback/write.rs:659-663: CLAUDE_SESSION_ID not UTF-8
+env:non-utf8-value	connect login (K2_CONNECT_DB_URL not UTF-8)	connect login	connect-db-url-non-utf8	connect/login.rs:979-982 via connect.rs:133: the account server URL is not UTF-8
+env:non-utf8-value	connect logout (K2_CONNECT_DB_URL not UTF-8)	connect logout	connect-db-url-non-utf8	connect/logout.rs:210-213 via connect.rs:156: the account server URL is not UTF-8
+env:non-utf8-value	heartbeat wakeup <name> --edit (EDITOR not UTF-8)	heartbeat wakeup h1 --edit	editor-non-utf8	heartbeat.rs:858-859 via 888: EDITOR not UTF-8
+env:editor	heartbeat wakeup <name> --edit (EDITOR missing)	heartbeat wakeup h1 --edit	editor-missing	heartbeat.rs:888 (editor_runs 841): EDITOR names nothing on PATH
+env:editor	heartbeat wakeup <name> --edit (EDITOR not executable)	heartbeat wakeup h1 --edit	editor-notexec	heartbeat.rs:888 (editor_runs 847-848): EDITOR is a path to a file with no x bit
+env:path-unset	heartbeat wakeup <name> --edit (no PATH)	heartbeat wakeup h1 --edit	path-unset	heartbeat.rs:888 (editor_runs 850): vi with no PATH
+env:home-unset	publish run <name> --cwd ~/<dir> (HOME unset)	publish run p1 --cmd true --port 8080 --cwd ~/x	home-unset	publish.rs:927-929 via 245-248: --cwd starts ~/ and HOME is unset (Act::Shell)
+env:home-unset	publish run <name> --cwd ~/<dir> (HOME not UTF-8)	publish run p1 --cmd true --port 8080 --cwd ~/x	home-non-utf8	publish.rs:927-929 via 245: std::env::var(HOME) fails on a non-UTF-8 value (Act::Shell)
+env:home-unset	explain MPC-<id> (K2 home error)	explain MPC-1	home-override-relative	explain.rs:136 (kit, via 74-75): daemon::current() fails on the K2 home while the shell's prelude (HOME) is fine
+env:path-unset	update (no PATH)	update	path-unset	update.rs:581 via 699: no curl or mktemp to find with no PATH (Github::find)
+env:path-unset	feedback ask <title> --html - (no PATH)	feedback ask t1 --html -	path-unset	feedback/write.rs:664-668: --html - needs mktemp and there is no PATH
+env:tmpdir	feedback ask <title> --html - (no mktemp)	feedback ask t1 --html -	tmpdir-ok-no-mktemp	feedback/write.rs:664-668: --html - and no mktemp on PATH
+env:tmpdir	update --list (no mktemp)	update --list	tmpdir-ok-no-mktemp	update.rs:582 via 699: no mktemp on PATH
+env:tmpdir	zen validate --dir <d> (no tmp, no mktemp)	zen validate --dir {proj}	tmpdir-missing-no-mktemp	zen.rs:76-80 (temp_shell 191): validate --dir where TMPDIR can't be used and no mktemp
+env:tmpdir	zen widget put --dir <d> (no tmp, no mktemp)	zen widget put --dir {proj}	tmpdir-missing-no-mktemp	zen.rs:83-87 (temp_shell 191): a widget line with --dir where TMPDIR can't be used and no mktemp
+env:tmpdir	sidecar new <name> --brief - (no tmp)	sidecar new s1 --harness claude --brief -	tmpdir-missing	sidecar.rs:461 (temp_folder_usable 428; parse_new needs a name and --harness): --brief - and TMPDIR not a folder
+env:tmpdir	sessions open <id> --brief - (no tmp)	sessions open s1 --brief -	tmpdir-missing	sessions/write.rs:392 via sessions.rs:427: --brief - and TMPDIR not a folder
+env:tmpdir	sessions new <name> --brief - (no tmp)	sessions new s1 --brief -	tmpdir-missing	sessions/write.rs:392 via sessions.rs:427: --brief - and TMPDIR not a folder
+env:tmpdir	compute wait <job> (no tmp)	compute wait j1	tmpdir-missing	compute/writes.rs:132 (wait::temp_usable 248): mktemp -d can't make its folder (Linux: macOS tries /tmp too)
+env:tmpdir	compute wait <job> --follow (no tmp)	compute wait j1 --follow	tmpdir-missing	compute/writes.rs:135 (wait.rs:194-198 follow_handed): the follow's file can't be made
+env:tmpdir	compute wait <job> --follow (no mktemp)	compute wait j1 --follow	tmpdir-ok-no-mktemp	compute/writes.rs:135 (wait.rs:194-198, follow.rs:78-81): no mktemp on PATH
+env:tmpdir	compute attach <job> (no mktemp)	compute attach j1	tmpdir-ok-no-mktemp	compute/admin/setup/attach.rs:36 via admin.rs:136: follow::usable false with no mktemp
+fs:zen-shot	zen widget preview --shot (dev layout)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png	-	zen/shot.rs:147 via zen/widget.rs:44-54, zen.rs:87/105: no k2-widget-shot.mjs beside the built binary
+fs:zen-shot	zen widget preview --shot (app, no bash)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png	layout-app-nobash	zen/shot.rs:147: no _up_/cli/k2, so script_dir_for is Contents/MacOS and the runner in _up_/cli is not found
+fs:zen-shot	zen widget preview --shot (app default)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png	layout-app-default	zen/shot.rs:147: control, the runner is found in _up_/cli (expected native)
+fs:zen-shot	zen widget preview --shot (beside runner)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png	layout-beside-runner	zen/shot.rs:147-152: control, runner found and no --data (expected native)
+fs:zen-shot	zen widget preview --shot (no PATH)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png	path-unset-beside-runner	zen/shot.rs:147: runner found but no PATH at all
+fs:zen-shot	zen widget preview --shot --data (blob not UTF-8)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png --data {fx}/shot/data.json	layout-beside-runner	zen/shot.rs:161-166: a blobs/ name that is not UTF-8
+fs:zen-shot	zen widget preview --shot --data (cwd gone)	zen widget preview --dir {fx}/shot --shot {tmp}/w.png --data {fx}/shot/data.json	shot-beside-runner-cwd-gone	zen/shot.rs:153-155: --data is a file but current_dir fails
+env:editor	heartbeat signal wakeup <name> --edit (EDITOR missing)	heartbeat signal wakeup h1 --edit	editor-missing	heartbeat.rs:888 via 257 (the signal caller): EDITOR names nothing on PATH
+env:cdpath	changes list --workspace <rel dir>	changes list --workspace .k2	cdpath	changes.rs:867-874: an existing relative --workspace with CDPATH set
+env:cdpath	sim status --workspace <rel dir>	sim status --workspace .k2	cdpath	sim.rs:1667-1673 handed_back: an existing relative --workspace with CDPATH set
+env:cdpath	sim install <rel dir>/.	sim install .k2/.	cdpath	sim.rs:600-602: the app path's dirname .k2 is one cd searches CDPATH for
+env:cdpath	wiki status --workspace <rel dir>	wiki status --workspace .k2	cdpath	wiki.rs:443-449 handed_back: an existing relative --workspace with CDPATH set
+env:cdpath	db status --workspace <rel dir>	db status --workspace .k2	cdpath	db.rs:607-619 sel_is_shells via settings_for db.rs:794: CDPATH set and an undotted folder
+env:cdpath	store list --workspace <rel dir>	store list --workspace .k2	cdpath	store.rs:194 -> db.rs:794/607-619: the second caller of sel_is_shells
+env:cdpath	heartbeat list --workspace <rel dir>	heartbeat list --workspace .k2	cdpath	heartbeat.rs:974-975 -> heartbeat.rs:374 -> register.rs:228: relative existing folder with CDPATH set
+env:cdpath	remind list --workspace <rel dir>	remind list --workspace .k2	cdpath	remind.rs:472-473 -> remind.rs:278 -> register.rs:228: relative existing folder with CDPATH set
+env:cdpath	root-helper update --from <rel dir>	root-helper update --from .k2	cdpath	root_helper.rs:121-123: a relative --from with CDPATH set (before resolve at 162)
+env:cdpath	workspace open <rel dir>	workspace open .k2	cdpath	workspace.rs:181-182 -> register.rs:228: open of a relative existing folder with CDPATH set
+env:cdpath	workspace remove <rel dir>	workspace remove .k2	cdpath	workspace/verbs/other.rs:180 -> register.rs:228: relative existing folder with CDPATH set
+env:cdpath	workspace preview <rel dir>	workspace preview .k2	cdpath	workspace/verbs/other.rs:133 -> register.rs:228: relative existing folder with CDPATH set
+env:cdpath	app init --template static (cdpath)	app init --template static	cdpath	app/init.rs:52-54 abs via parse_init 142: CDPATH set, folder . by default
+env:cdpath	app doctor --store (cdpath)	app doctor --store	cdpath	app/init.rs:52-54 abs via parse_doctor 184: CDPATH set, folder . by default
+env:cdpath	sessions live <rel dir>	sessions live .k2	cdpath	sessions/live.rs:78-80 folder -> write.rs:389 needs_shell -> sessions.rs:427: an existing folder with CDPATH set
+env:cdpath	vault backup <rel dir>	vault backup .k2	cdpath	vault/person.rs:291 folder via vault/verbs.rs:61-71 native: a relative folder with CDPATH set
+fs:folders	changes list --workspace <-dir>	changes list --workspace -ws	fsa-cwd-fx	changes.rs:869-871: an existing --workspace that starts with - (cd reads it as an option)
+fs:folders	sim status --workspace <-dir>	sim status --workspace -ws	fsa-cwd-fx	sim.rs:1669-1673: an existing --workspace that starts with -
+fs:folders	sim install <-path>	sim install -ws	fsa-cwd-fx	sim.rs:591-602: an existing app path that starts with -
+fs:folders	wiki status --workspace <-dir>	wiki status --workspace -ws	fsa-cwd-fx	wiki.rs:446-448: an existing --workspace that starts with -
+fs:folders	vault backup <-dir>	vault backup -ws	-	vault/person.rs:288 folder via vault/verbs.rs:61-71: a folder word that starts with -
+fs:folders	db status --workspace <no-enter dir>	db status --workspace {fx}/noenter	-	db.rs:618 enterable false (mode 000; not reached when the box runs as root)
+fs:folders	heartbeat list --workspace <nl path>	heartbeat list --workspace {fx}/nl\nws	-	heartbeat.rs:975 -> register.rs:217: a --workspace with a newline
+fs:folders	remind list --workspace <nl path>	remind list --workspace {fx}/nl\nws	-	remind.rs:473 -> register.rs:217: a --workspace with a newline
+fs:folders	root-helper update --from <nl rel dir>	root-helper update --from nl\nws	fsa-cwd-fx	root_helper.rs:125-128 -> 162 -> register.rs:217: an existing relative --from with a newline
+fs:folders	workspace open <nl path>	workspace open {fx}/nl\nws	-	workspace.rs:182 -> register.rs:217: a target with a newline
+fs:folders	workspace open <//path>	workspace open /{proj}	-	workspace.rs:182 -> register.rs:239 -> cd 169: an existing folder named with a leading //
+fs:folders	workspace open <no-enter dir>	workspace open {fx}/noenter	-	workspace.rs:182 -> register.rs:239 -> cd 172: a folder chdir can't enter (not reached as root)
+fs:folders	workspace open <link>/../<dir>	workspace open {fx}/lnk/../.k2	-	workspace.rs:182 -> register.rs:239 -> canonpath 140-147: the logical .. lands where .k2 is not (needs fixture {fx}/lnk)
+fs:folders	workspace create <path with //>	workspace create {proj}//x	-	workspace.rs:182 -> register.rs:221 -> abs_path 200-202: a doubled /
+fs:folders	workspace remove <nl path>	workspace remove {fx}/nl\nws	-	workspace/verbs/other.rs:180 -> register.rs:217: a target with a newline
+fs:folders	workspace remove <//path>	workspace remove /{proj}	-	workspace/verbs/other.rs:180 -> register.rs:239 -> cd 169: a leading //
+fs:folders	workspace preview <//path>	workspace preview /{proj}	-	workspace/verbs/other.rs:133 -> register.rs:239 -> cd 169: a leading //
+fs:folders	workspace trust status <//path>	workspace trust status /{proj}	-	workspace/verbs/trust.rs:111-114 -> abs_path register.rs:200-202: a doubled /
+fs:folders	workspace trust request <nl path>	workspace trust request {fx}/nl\nws	-	workspace/verbs/trust.rs:144-147 -> abs_path register.rs:200-202: a newline
+fs:folders	workspace trust reset <//path>	workspace trust reset /{proj}	-	workspace/verbs/trust.rs:196-197 decide -> abs_path: a doubled /
+fs:folders	agent identity <//path>	agent identity /{proj}	-	agent/identity.rs:92-93 via agent.rs:229: a target with / goes to abs_path, a doubled / is None
+fs:folders	onboarding scan <missing dir>	onboarding scan {fx}/no-such	-	onboarding.rs:172 cd_pwd (138-141): a folder that isn't there
+fs:folders	app init --template static <unreadable dir>	app init --template static {fx}/noread	-	app/init.rs:57-58 read_dir fails via parse_init 142 (mode 0100; not reached as root)
+fs:folders	app init --template static (cwd not UTF-8)	app init --template static	fsa-cwd-caf	app/init.rs:59 to_str None: the folder . canonicalizes to a non-UTF-8 path
+fs:folders	app doctor --store <unreadable dir>	app doctor --store {fx}/noread	-	app/init.rs:57-58 read_dir fails via parse_doctor 184 (not reached as root)
+fs:folders	app doctor --store (cwd not UTF-8)	app doctor --store	fsa-cwd-caf	app/init.rs:59 to_str None via parse_doctor 184
+fs:folders	vault backup <nl path>	vault backup {fx}/nl\nws	-	vault/person.rs:288 folder via vault/verbs.rs:61-71: a folder with a newline
+fs:folders	vault restore --from <//path>	vault restore --from /{proj}	-	vault/person.rs:302-304 folder via vault/verbs.rs:61-71: a leading //
+fs:folders	vault import <path with //>	vault import {proj}//x	-	vault/verbs.rs:72-80 -> abs_path register.rs:200-202: a doubled /
+fs:folders	vault fetch -o <path with //>	vault fetch https://h.example -o {proj}//x	-	vault/tools.rs:350-361 fetch_native -> abs_path: a doubled / in -o
+fs:folders	compute fetch --out <under a file>	compute fetch j1 --out {fx}/notexec.txt/x	-	compute/writes.rs:143 -> fetch.rs:623-634 creatable: the nearest existing part is a file
+fs:folders	ci evidence --out <under a file>	ci evidence r1 --out {fx}/notexec.txt/x	-	ci.rs:510-514 shell_free -> creatable: the nearest existing part is a file
+fs:cwd	heartbeat list (cwd gone)	heartbeat list	fsa-cwd-gone	heartbeat.rs:972 logical_cwd Err, before daemon::current
+fs:cwd	heartbeat list (cwd not UTF-8)	heartbeat list	fsa-cwd-caf	heartbeat.rs:973 to_str None
+fs:cwd	remind list (cwd gone)	remind list	fsa-cwd-gone	remind.rs:470 logical_cwd Err, before daemon::current
+fs:cwd	remind list (cwd not UTF-8)	remind list	fsa-cwd-caf	remind.rs:471 to_str None
+fs:cwd	root-helper status (cwd gone)	root-helper status	fsa-cwd-gone	root_helper.rs:159 logical_cwd Err, before daemon::current
+fs:cwd	root-helper status (cwd not UTF-8)	root-helper status	fsa-cwd-caf	root_helper.rs:160 to_str None
+fs:cwd	onboarding scan (cwd gone)	onboarding scan	fsa-cwd-gone	onboarding.rs:163 logical_cwd Err, before daemon::current
+fs:cwd	onboarding scan (cwd not UTF-8)	onboarding scan	fsa-cwd-caf	onboarding.rs:166-172: 163 passes; cd_pwd's lossy join (128-141) names no folder
+fs:cwd	workspace trust status (cwd gone)	workspace trust status	fsa-cwd-gone	workspace/verbs.rs:175 logical_cwd Err, before daemon::current
+fs:cwd	workspace trust status (cwd not UTF-8)	workspace trust status	fsa-cwd-caf	workspace/verbs.rs:177 to_str None
+fs:cwd	workspace open <ws> (cwd not UTF-8)	workspace open w1	fsa-cwd-caf	workspace.rs:180 to_str None (179's Err is caught natively by daemon::current at 156)
+fs:cwd	agent identity (cwd gone)	agent identity	fsa-cwd-gone	agent.rs:228 logical_cwd Err, before daemon::current
+fs:cwd	agent identity (cwd not UTF-8)	agent identity	fsa-cwd-caf	agent.rs:229 to_str None
+fs:cwd	feedback ask --file (cwd gone)	feedback ask t --file x	fsa-cwd-gone	feedback/write.rs:678 logical_cwd Err (files given), before daemon::current
+fs:cwd	feedback ask --file (cwd not UTF-8)	feedback ask t --file x	fsa-cwd-caf	feedback/write.rs:679 to_str None
+fs:cwd	feedback comment --file (cwd gone)	feedback comment f1 --file x	fsa-cwd-gone	feedback/write.rs:674/678: the Comment caller
+fs:cwd	feedback resolve --file (cwd gone)	feedback resolve f1 --answered ok --file x	fsa-cwd-gone	feedback/write.rs:675/678: the Resolve caller
+fs:cwd	sessions live <dir> (cwd gone)	sessions live {fx}/ws	fsa-cwd-gone	sessions/live.rs:81-83 logical_cwd Err -> Some(None) -> write.rs:389 -> sessions.rs:427 (not in section 10)
+fs:cwd	vault fetch (cwd gone)	vault fetch https://h.example	fsa-cwd-gone	vault/tools.rs:343 fetch_native: pwd() None (tools.rs:303-307) (not in section 10)
+fs:cwd	vault import <file> (cwd not UTF-8)	vault import x	fsa-cwd-caf	vault/verbs.rs:74-79: pwd() None, (Some, None) is false (not in section 10)
+fs:approve-bin	approve verify (bin a folder)	approve verify	fsb-approve-bin-dir	approve.rs:307-309: K2_APPROVE_BIN executable (access X_OK) but not a file; reached via cp::open local Stop(Ok) approve.rs:229-230 -> local_run -> local
+fs:db-run	db run -- <not on PATH>	db run -- k5-probe-no-such-program	-	db/run.rs:118 find_on_path None -> program None -> db:775 shell -> settings_for None db:795; parse db.rs:300 run::parse takes the --
+fs:db-run	db run -- <not executable>	db run -- {fx}/notexec.txt	-	db/run.rs:116-117 a path with / that is_executable refuses (mode has no x bit) -> db:775 -> None
+fs:db-run	db run -- <not ELF nor #!>	db run -- {fx}/elf-not	-	db/run.rs:120-121 runs_itself false (executable, head is neither ELF, Mach-O nor #!) -> db:775 -> None
+fs:fed-pubkey	fed pubkey (no shasum)	fed pubkey	fsb-fed-no-shasum	fed:270-276 key file (home/tunnel-key.pem, fed/pubkey.rs:17-24) and openssl on PATH, shasum missing; gate open via K2_PORT and the home token fed:261-264
+fs:fed-pubkey	fed pubkey (no awk)	fed pubkey	fsb-fed-no-awk	fed:270-276 key file and openssl and shasum on PATH, awk missing
+fs:file-contents	organization bulletin set --file <nul>	organization bulletin set --file {fx}/nul.txt	-	organization:493-494 file_text NUL -> None at organization:527, before python and settings
+fs:file-contents	organization bulletin set --file <latin1>	organization bulletin set --file {fx}/latin1.txt	-	organization:496 file_text from_utf8 fails -> None at organization:527
+fs:file-contents	organization bulletin set --file <unreadable>	organization bulletin set --file {fx}/unreadable.txt	-	organization:492 fs::read fails -> None (native when the box runs as root: readable there)
+fs:file-contents	hostmail ooo set --text @<nul>	hostmail ooo set a@example.com --text @{fx}/nul.txt	-	hostmail/notices.rs:144-145 read_text NUL -> Plan::Shell via ooo_set notices.rs:224 -> mail/core.rs:1873 None
+fs:file-contents	hostmail ooo set --text @<unreadable>	hostmail ooo set a@example.com --text @{fx}/unreadable.txt	-	hostmail/notices.rs:143 fs::read fails -> Plan::Shell (native as root)
+fs:file-contents	hostmail footer set --text @<latin1>	hostmail footer set --text @{fx}/latin1.txt	-	hostmail/notices.rs:147 read_text not UTF-8 -> Plan::Shell via footer notices.rs:309 -> mail/core.rs:1873 None
+fs:file-contents	mail send --body-file <nul>	mail send a@example.com --subject s --body-file {fx}/nul.txt	-	mail/writes.rs:181-182 body_file NUL -> body_name_timeout writes.rs:213 Plan::Shell (send writes.rs:344) -> mail/core.rs:1873 None
+fs:file-contents	mail send --body-file <unreadable>	mail send a@example.com --subject s --body-file {fx}/unreadable.txt	-	mail/writes.rs:180 fs::read fails -> writes.rs:213 Plan::Shell (native as root)
+fs:file-contents	mail reply --body-file <latin1>	mail reply m1 --body-file {fx}/latin1.txt	-	mail/writes.rs:184 body_file not UTF-8 -> body_name_timeout writes.rs:213 (reply writes.rs:511) -> None
+fs:file-contents	mail draft --body-file <nul>	mail draft --to a@example.com --subject s --body-file {fx}/nul.txt	-	mail/writes.rs:646-647 draft's own body_file call, NUL -> Plan::Shell -> None
+fs:file-contents	app login settings --invite-body-file <nul>	app login settings a1 --invite-body-file {fx}/nul.txt	-	app/sign_in.rs:207-208 body_file NUL -> login sign_in.rs:235 None -> parse_login -> app.rs:760 -> app.rs:874 None
+fs:file-contents	app invite-settings --reset-body-file <latin1>	app invite-settings a1 --reset-body-file {fx}/latin1.txt	-	app/sign_in.rs:210 body_file not UTF-8 -> login sign_in.rs:235 None via parse_invite_settings app.rs:792
+fs:file-contents	workspace api-guest-policy set --file <nul>	workspace api-guest-policy set w1 --file {fx}/nul.txt	-	workspace/verbs/switch.rs:246-247 NUL -> Top::Shell -> verbs.rs:166 None -> verbs.rs:181
+fs:file-contents	workspace api-guest-policy set --file <latin1>	workspace api-guest-policy set w1 --file {fx}/latin1.txt	-	workspace/verbs/switch.rs:249-250 not UTF-8 -> Top::Shell -> verbs.rs:181 None
+fs:file-contents	workspace api-guest-policy set --file <unreadable>	workspace api-guest-policy set w1 --file {fx}/unreadable.txt	-	workspace/verbs/switch.rs:243-244 fs::read fails -> Top::Shell (native as root)
+fs:file-contents	workspace swap-canonical --notes-file <unreadable>	workspace swap-canonical w1 --agent claude --notes-file {fx}/unreadable.txt	-	workspace/verbs/named.rs:250-251 notes file read fails -> Top::Shell (NUL and latin1 are read lossy: native; native as root)
+fs:file-contents	heartbeat add --instructions-file <nul>	heartbeat add --name n1 --daily --instructions-file {fx}/nul.txt	-	heartbeat:633-634 read_instructions NUL -> add heartbeat:729 None -> parse None at heartbeat:979
+fs:file-contents	heartbeat edit --instructions-file <latin1>	heartbeat edit n1 --instructions-file {fx}/latin1.txt	-	heartbeat:636 read_instructions not UTF-8 -> edit heartbeat:766 None -> heartbeat:979
+fs:file-contents	heartbeat wake (port file not UTF-8)	heartbeat wake	fsb-home-hb-port-latin1	heartbeat/wake.rs:89 read_stripped(heartbeat.port) not UTF-8 -> Setup::read None -> heartbeat:999; gate shut (no port, no token) skips the curl_port check heartbeat:991
+fs:file-contents	heartbeat wake (token file not UTF-8)	heartbeat wake	fsb-home-hb-token-latin1	heartbeat/wake.rs:92 read_stripped(heartbeat.token) not UTF-8 -> None -> heartbeat:999
+fs:file-contents	heartbeat wake (port over 65535)	heartbeat wake	fsb-home-hb-port-big	heartbeat/wake.rs:94-98 port 99999 -> None -> heartbeat:999; no token so the gate is shut and heartbeat:991-995 does not stop it first
+fs:file-contents	heartbeat wake (token with a control byte)	heartbeat wake	fsb-hb-token-ctl	heartbeat/wake.rs:100-104 the session token (HOOK_TOKEN, no HOOK_SOCK) holds \x01 -> None -> heartbeat:999
+fs:file-contents	connect status (account not UTF-8)	connect status	fsb-home-connect-account-latin1	connect.rs:216 load(connect-account.json) from_utf8 fails (connect.rs:270) -> Facts::read None -> connect.rs:187
+fs:file-contents	connect status (tunnel.json too deep)	connect status	fsb-home-connect-tunnel-deep	connect.rs:222 load(tunnel.json) json TooDeep (connect.rs:273, MAX_DEPTH 500) -> None -> connect.rs:187
+fs:file-contents	connect status (daemon.port not a port)	connect status	fsb-home-connect-daemon-port	connect.rs:226-228 daemon_port falls back to daemon.port (connect.rs:250-257), curl_port refuses 80x -> None -> connect.rs:187
+fs:file-contents	connect logout (connectDbUrl ipv6)	connect logout	fsb-home-connect-logout-ipv6	connect/logout.rs:214-218 the settings.json connectDbUrl http://[::1]:9 normalizes, a saved access_token, target() refuses the bracket host -> None
+fs:file-contents	remote logout (connect-tokens.json bad)	remote logout --host https://h.example	fsb-home-remote-tokens-nul	remote/logout.rs:523-528 files_readable: connect-tokens.json json.load would stop (NUL) logout.rs:203-205 -> None
+fs:file-contents	remote logout (connect-hosts.json bad)	remote logout --host https://h.example	fsb-home-remote-hosts-type	remote/logout.rs:523-528 files_readable: connect-hosts.json hostname not a string logout.rs:213-219 -> None
+fs:file-contents	remote logout (old home tokens bad)	remote logout --host https://h.example	fsb-oldhome-remote-tokens	remote/logout.rs:161-170 the old .k2so home under HOME is read too; its connect-tokens.json is a list -> files_readable false -> None
+fs:file-contents	sessions archives (name not UTF-8)	sessions archives	fsb-cwd-sess-latin1	sessions/disk.rs:126-128 rows(): a session name not UTF-8 -> None -> archives disk.rs:257 -> sessions:404 disk_line
+fs:file-contents	sessions archives (folder unlistable)	sessions archives	fsb-cwd-sess-noread	sessions/disk.rs:126 read_dir(sessions) fails (mode 0100) -> None (native as root)
+fs:file-contents	sessions archives (session unlistable)	sessions archives	fsb-cwd-sess-subnoread	sessions/disk.rs:144 read_dir(session folder) fails (mode 0100) -> None (native as root)
+fs:file-contents	sessions compact <id>/	sessions compact j1/	-	sessions/disk.rs:305-306 an id ending in / -> None, after the gates sessions:466-475 (argv only, no fixture)
+fs:tilde-user	msg --inbox-silent --path ~user	msg w1 --inbox-silent --path ~nobody/k5-bar	-	msg/tray.rs:211-219 --path is the delivered file (tray.rs:224-226), ~name -> Parsed::Shell -> send.rs:547 None
+fs:tilde-user	msg --inbox-wake ~user/<file>.md	msg w1 --inbox-wake ~nobody/notes.md	-	msg/tray.rs:211-219 a path-looking word (.md, tray.rs:242-247) is picked, ~name -> Parsed::Shell
+fs:tilde-user	thread --file <newline>	thread w1 hello --file a\nb.txt	-	thread/post.rs:239 resolvable: a line break -> post.rs:173-174 None -> thread:162
+fs:tilde-user	thread --file <non-ASCII digit>	thread w1 hello --file a\xd9\xa3.txt	-	thread/post.rs:239 resolvable: U+0663 is numeric, not ASCII -> None -> thread:162
+fs:tilde-user	thread --file ~ (HOME not UTF-8)	thread w1 hello --file ~/x.txt	home-non-utf8	thread/post.rs:242, 350-355 expanduser: HOME not UTF-8 -> None -> post.rs:174 None
+# input, daemon answers, front and router
+in:value-last	heartbeat add --name (value last)	heartbeat add --name	-	heartbeat.rs:671 flags() --name with no value: v? is None
+in:value-last	heartbeat add --instructions (value last)	heartbeat add --name a --instructions	-	heartbeat.rs:672-674 flags() --instructions with no value
+in:value-last	heartbeat add --instructions-file (value last)	heartbeat add --name a --instructions-file	-	heartbeat.rs:676-678 flags() --instructions-file with no value
+in:value-last	heartbeat schedule add --name (value last)	heartbeat schedule add --daily --name	-	heartbeat.rs:671 flags() via parse schedule add (heartbeat.rs:225)
+in:value-last	heartbeat edit <name> --name (value last)	heartbeat edit a --name	-	heartbeat.rs:671 flags(name_first) via edit (heartbeat.rs:754)
+in:value-last	heartbeat edit <name> --instructions (value last)	heartbeat edit a --instructions	-	heartbeat.rs:672-674 flags() via edit
+in:value-last	heartbeat schedule edit <name> --instructions-file (value last)	heartbeat schedule edit a --instructions-file	-	heartbeat.rs:676-678 flags() via parse schedule edit (heartbeat.rs:228)
+in:value-last	heartbeat add --daily --time (value last)	heartbeat add --name a --daily --time	-	heartbeat/spec.rs:90,118-119 hb_parse_spec --time with no value: took false, Spec::Shell, via add
+in:value-last	heartbeat edit <name> --daily --time (value last)	heartbeat edit a --daily --time	-	heartbeat/spec.rs:90,118-119 Spec::Shell, via edit
+in:value-last	heartbeat session <name> --set (value last)	heartbeat session a --set	-	heartbeat.rs:550 session() --set with no value (not in section 10)
+in:value-last	heartbeat session <name> --provider (value last)	heartbeat session a --provider	-	heartbeat.rs:550 session() --provider with no value (not in section 10)
+in:value-last	heartbeat log -n (value last)	heartbeat log -n	-	heartbeat.rs:933 log() -n with no value (not in section 10)
+in:value-last	skills create <name> --template (value last)	skills create s1 --template	-	skills.rs:127 create --template with no value
+in:value-last	skills create <name> --from (value last)	skills create s1 --from	-	skills.rs:127 create --from with no value
+in:value-last	skills create <name> --role (value last)	skills create s1 --role	-	skills.rs:131 create --role with no value
+in:value-last	sessions list --limit (value last)	sessions list --limit	-	sessions.rs:223 roster() value None, via list
+in:value-last	sessions past --days (value last)	sessions past --days	-	sessions.rs:223 roster() value None, via past
+in:value-last	sessions --search (value last)	sessions --search	-	sessions.rs:223 roster() value None, a flag first (sessions.rs:179)
+in:value-last	sessions main --workspace (value last)	sessions main --workspace	-	sessions.rs:267 main_words() value None
+in:value-last	sessions show <id> --tail (value last)	sessions show x1 --tail	-	sessions.rs:303 show_words() value None
+in:value-last	mail watch inboxes --add (value last)	mail watch inboxes --add	-	mail/watch.rs:448 inboxes() --add value None
+in:value-last	mail watch inboxes --remove (value last)	mail watch inboxes --remove	-	mail/watch.rs:449 inboxes() --remove value None
+in:value-last	mail watch inboxes --wake (value last)	mail watch inboxes --add a@example.com --wake	-	mail/watch.rs:450 inboxes() --wake value None
+in:value-last	mail watch window <span> --days (value last)	mail watch window 09:00-17:00 --days	-	mail/watch.rs:541 window() --days value None
+in:value-last	mail watch window <span> --tz (value last)	mail watch window 09:00-17:00 --tz	-	mail/watch.rs:545 window() --tz value None
+in:value-last	mail watch pause --for (value last)	mail watch pause --for	-	mail/watch.rs:581 pause() --for value None
+in:value-last	mail watch log --limit (value last)	mail watch log --limit	-	mail/watch.rs:625 log() --limit value None
+in:value-last	voice recordings --room (value last)	voice recordings --room	-	voice.rs:145-147 a value flag with no value: ${2:?}, Plan::Shell
+in:big-number	heartbeat add --monthly --days <past 18 digits>	heartbeat add --name a --monthly --days 99999999999999999999	-	heartbeat/spec.rs:162-164 a day of month over 18 digits: Spec::Shell
+in:big-number	heartbeat add --hourly --every <past 30 digits>	heartbeat add --name a --hourly --every 1000000000000000000000000000000	-	heartbeat/spec.rs:255-258 --every over 30 digits (bash's wrapped value stays positive): Spec::Shell
+in:non-utf8-arg	<not UTF-8> (first word)	\xff	-	front.rs:127-129 a first word no row names, not UTF-8: Route::Fallthrough
+in:non-utf8-arg	msg <not UTF-8> <text> (second word, native row)	msg \xff hi	-	front.rs:242-244 a native row's word not UTF-8: Route::Fallthrough
+in:non-utf8-arg	msg <ws> <not UTF-8> <text> (middle word)	msg w1 \xff hi	-	front.rs:242-244 a middle word not UTF-8
+in:non-utf8-arg	app <not UTF-8> list (second word, bash row)	app \xff list	-	front.rs:127-129 a bash row's verb word not UTF-8 matches no verb row
+in:non-utf8-arg	compute run -- <cmd> <not UTF-8>	compute run -- printf \xff x	-	front.rs:242-244 a child command's word after -- not UTF-8
+in:non-utf8-arg	vault run -- <cmd> <not UTF-8>	vault run -- printf \xff x	-	front.rs:242-244 a child command's word after -- not UTF-8
+front:stray	<not UTF-8> -- <word>	\xff -- x	-	dashdash.rs:186-189 a bare -- after a first word not UTF-8: Stray::Shell -> front.rs:114
+front:fallthrough	msg <ws> <text> --help	msg w1 hi --help	-	front.rs:269-271 a help word that is no help form exactly
+front:fallthrough	heartbeat list --json --help	heartbeat list --json --help	-	front.rs:269-271 a help word after a flag: no help form
+front:fallthrough	compute run --help -- <cmd>	compute run --help -- true	-	front.rs:269-271 a help word before a taken --: no help form
+front:fallthrough	-h remote	-h remote	-	front.rs:269-271 the help row's native verb with -h first: no help form (help.rs:47-49 is never reached)
+front:fallthrough	help remote --help	help remote --help	-	front.rs:269-271 help remote with --help: no help form
+front:fallthrough	setup <verb> help	setup kessel help	-	front.rs:273-275 setup's help word after a verb: no help form
+front:fallthrough	study <unknown topic>	study nope-topic	-	front.rs:257-258 pages::study None for an unknown topic, no captured form
+front:fallthrough	study --<flag>	study --nope	-	front.rs:257-258 pages.rs:156 an unknown -- flag
+front:fallthrough	study _<topic>	study _x	-	front.rs:257-258 pages.rs:182 a topic that starts with _
+front:fallthrough	app <unknown verb>	app nope	-	front.rs:142 a bash row's verb no verb row names (app.rs OWNER Bash)
+front:fallthrough	chat <unknown verb>	chat nope	-	front.rs:142 chat's verb no verb row names
+front:fallthrough	mail <unknown verb>	mail nope	-	front.rs:142 a mail verb outside VERBS (mail.rs:162-163 is never reached for it)
+front:fallthrough	hostmail <unknown verb>	hostmail nope	-	front.rs:142 a hostmail verb outside VERBS (hostmail.rs:103-104 is never reached for it)
+front:port-check	status (K2_PORT bad, bash startup set)	status	port-env-bad-startup	port.rs:90-91 a port setting that isn't one with bash startup settings: Check::Shell -> main.rs:157
+front:port-check	status (heartbeat.port with a NUL)	status	port-file-nul	port.rs:107,116-117 a saved port that isn't one and holds a NUL: Check::Shell
+front:port-check	status (heartbeat.port bad, bash startup set)	status	port-file-bad-startup	port.rs:116-117 a bad saved port with bash startup settings
+front:port-check	status (heartbeat.port bad, no cat)	status	port-file-bad-no-cat	port.rs:115-117 a bad saved port, the prelude not quiet: cat not on PATH (offline.rs:153)
+front:port-check	status (heartbeat.port bad, token with a NUL)	status	port-file-bad-token-nul	port.rs:115-117 a bad saved port, the prelude not quiet: a NUL in heartbeat.token (offline.rs:175, 217)
+front:port-check	status (heartbeat.port bad, token can't be read)	status	port-file-bad-token-dir	port.rs:115-117 a bad saved port, the prelude not quiet: heartbeat.token passes access() but can't be read (offline.rs:174-175, 216)
+front:port-check	status (heartbeat.port bad, PWD tidy-able)	status	port-file-bad-pwd-dot	port.rs:115-117 a bad saved port, shell_pwd Err (offline.rs:287-293): no cwd
+front:codex-gate	status (Codex call, K2_HOST set)	status	hook-codex-host	codex_gate.rs:298 a host setting: earlier_steps_pass false -> 258-259 Verdict::Shell
+front:codex-gate	status (Codex call, no token)	status	hook-codex-no-owner	codex_gate.rs:301-302 no token for the prelude: Verdict::Shell
+front:codex-gate	status (Codex call, PWD tidy-able)	status	hook-codex-pwd-dot	codex_gate.rs:301 shell_pwd Err: Verdict::Shell
+front:codex-gate	remote --help (Codex call)	remote --help	hook-codex	codex_gate.rs:273-276 HelpOf(remote): help remote routes to the help family, page_for None (322) -> Verdict::Shell
+front:codex-gate	schema --help (Codex call)	schema --help	hook-codex	codex_gate.rs:266-271 Allowed: a Variant::Family help form, page_for None (314) -> Verdict::Shell
+daemon:codex-walk	status (Codex tab marker, no ps on PATH)	status	codex-marker-no-ps	codex_gate.rs:466-480 ps not found and python3 Missing: ancestry None -> 162 Decision::Unknown -> 265 Verdict::Shell
+front:page	msg --help (no token)	msg --help	no-owner-fallback	pages.rs:775-777 help_page needs port and token -> main.rs:190-193 after_help_gate -> shell (a -h line)
+front:page	help (no token)	help	no-owner-fallback	pages.rs:945-947 daily_page needs port and token -> main.rs:96 shell
+front:page	help <word> (no token)	help nope	no-owner-fallback	pages.rs:1100-1102 composed_page needs port and token
+front:page	<unknown command> (no token)	nope	no-owner-fallback	pages.rs:1154 unknown_page needs port and token (first word is no router word)
+front:page	<unknown id-tool word> (session socket)	fs x	cell-no-passport	pages.rs:1157-1160 HOOK_SOCK with an id tool the router has no arm for (first word is no router word)
+front:page	msg --help (session socket, Codex setting)	msg --help	hook-codex-sandbox	pages.rs:729-730 session_checks with a CODEX_ setting: None -> shell
+front:page	msg --help (dead socket, passport, host a name)	msg --help	passport-dead-sock-host	pages.rs:738 session_checks: host not IPv4 -> None
+front:page	msg --help (dead socket, passport not plain)	msg --help	passport-dead-sock-not-plain	pages.rs:740-742 session_checks: passport not plain ASCII -> None
+front:page	app --help (passport, host a name)	app --help	passport-host-name-session	pages.rs:786-790 a CardsOn captured form, cards::ask None (cards.rs:171)
+front:page	app --help (passport not plain)	app --help	passport-not-plain	pages.rs:786-790 a CardsOn captured form, cards::ask None (cards.rs:158)
+front:page	done --help (no token)	done --help	no-owner-fallback	pages.rs:836-842 family_page: done.rs:186 help_line_gated -> None -> shell
+front:page	mail status --help (no token)	mail status --help	no-owner-fallback	pages.rs:836-842 family_page: mail/core.rs:1885 help_line_gated -> None
+front:page	hostchat media --help (no token)	hostchat media --help	no-owner-fallback	pages.rs:836-842 family_page: hostchat.rs:392 help_line_gated -> None
+front:page	approve verify --help (no token)	approve verify --help	no-owner-fallback	pages.rs:836-842 family_page: approve/cp.rs:60 help_line_gated -> Opened::Shell
+front:page	permission --help (host a name)	permission --help	host-localhost	pages.rs:836-842 family_page: permission.rs:586 OwnerProbe needs an IPv4 host -> None
+front:page	help (passport, host a name)	help	passport-host-name-session	pages.rs:934 daily_tier: cards::ask None
+front:page	help <word> (passport, host a name)	help nope	passport-host-name-session	pages.rs:1104 composed daily: daily_tier None
+front:page	chat (dead socket, passport, host a name)	chat	passport-dead-sock-host	pages.rs:1107-1110 composed chat: session_checks None
+front:page	study (passport, host a name)	study	passport-host-name-session	pages.rs:620 the catalog with a passport: cards::ask None
+front:page	study permissions (passport, host a name)	study permissions	passport-host-name-session	pages.rs:620 the cards-only topic with a passport: cards::ask None
+front:page	study send-feedback (passport, host a name)	study send-feedback	passport-host-name-session	pages.rs:595 send-feedback with a passport: feedback_optin::ask None
+front:page	study --json (python3, PYTHONIOENCODING)	study --json	locale-pythonioencoding-python3	pages.rs:600 the catalog JSON: native_json false
+front:page	study <topic> --json (python3, PYTHONIOENCODING)	study cli --json	locale-pythonioencoding-python3	pages.rs:658 a topic's JSON: native_json false
+front:page	explain MPC-<id> (no port or token on disk)	explain MPC-1	home-empty	explain.rs:134-137 kit: no port and no token -> None
+front:page	explain MPC-<id> (session socket, Codex setting)	explain MPC-1	hook-codex-sandbox	explain.rs:128-131 kit in a Codex session -> None
+front:help-gate	setup help (no token)	setup help	no-owner-fallback	main.rs:86-91 after_help_gate: the page needs a token, setup::run reads help as Stop::Help -> None (setup.rs:394-395)
+in:big-number	mail messages --limit <huge>	mail messages --limit 99999999999999999999	-	mail/reads.rs:243 --limit past bash's 64-bit [ (fits_bash) Plan::Shell
+in:big-number	mail attachments --get <huge>	mail attachments a1 --get 99999999999999999999 --out f.bin	-	mail/reads.rs:366 --get past bash's 64-bit [ Plan::Shell
+in:big-number	mail wait --timeout <huge>	mail wait --timeout 99999999999999999999	-	mail/reads.rs:441 check_timeout (388) None, Plan::Shell
+in:big-number	mail outbox --limit <huge>	mail outbox --limit 99999999999999999999	-	mail/reads.rs:545 --limit past bash's 64-bit [ Plan::Shell
+in:big-number	mail send --wait --timeout <huge>	mail send a@example.com --subject s --body b --wait --timeout 99999999999999999999	-	mail/writes.rs:242 name_and_timeout, check_timeout None (send)
+in:big-number	mail reply --wait --timeout <huge>	mail reply a1 --body b --wait --timeout 99999999999999999999	-	mail/writes.rs:242 name_and_timeout, check_timeout None (reply)
+in:big-number	mail forward-message --wait --timeout <huge>	mail forward-message a1 --to a@example.com --wait --timeout 99999999999999999999	-	mail/writes.rs:242 name_and_timeout, check_timeout None (forward-message)
+in:big-number	hostmail ooo set --days <huge>	hostmail ooo set a@example.com --text hi --days 99999999999999999999	-	hostmail/notices.rs:262 --days past bash's 64-bit [ Plan::Shell
+in:big-number	hostmail config --relay-port <huge>	hostmail config --relay-port 99999999999999999999	-	hostmail/admin.rs:384 relay_port_bash_cannot_read (375) Plan::Shell
+in:big-number	calendar wait --timeout <huge>	calendar wait --timeout 99999999999999999999	-	calendar.rs:427 --timeout past bash's 64-bit [ Form::Shell
+in:big-number	desktop setup --timeout <13+ digits>	desktop setup --timeout 99999999999999999999	-	desktop.rs:539 timeout_secs Long (over 12 digits), run None (setup)
+in:big-number	desktop env --timeout <13+ digits>	desktop env --timeout 99999999999999999999	-	desktop.rs:539 timeout_secs Long (over 12 digits), run None (env)
+in:big-number	voice set rooms <19+ digits>	voice set rooms 99999999999999999999	-	voice.rs:343 room count over 18 digits Plan::Shell
+in:big-number	sim logs --since <huge>	sim logs --since 99999999999999999999	-	sim.rs:920 ms() Shell at 305 (ms past 2^63)
+in:big-number	sim logs --lines <huge>	sim logs --lines 99999999999999999999	-	sim.rs:926 --lines digits past i64 Parsed::Shell
+in:big-number	sim wait --timeout <huge>	sim wait --timeout 99999999999999999999	-	sim.rs:975 ms() Shell at 305 (ms past 2^63)
+in:non-ascii-digit	sim wait --timeout <arabic digits>	sim wait --timeout ١٢	-	sim.rs:975 ms() Shell at 272 (not ASCII)
+in:big-number	sources history --from <huge>s	sources history s1 health --from 99999999999999999999s	-	sources.rs:348 history_time, seconds() over 15 digits Stop::Shell at 222
+in:big-number	sources mute --for <huge>	sources mute s1 --for 99999999999999999999	-	sources.rs:388 secs, seconds() over 15 digits Stop::Shell at 222
+in:big-number	sources mute --for <15 digits>d	sources mute s1 --for 999999999999999d	-	sources.rs:388 secs, checked_mul overflow Stop::Shell at 229
+in:big-number	sources simulate --for <huge>	sources simulate s1 ok --for 99999999999999999999	-	sources.rs:436 b2_secs, seconds() over 15 digits Stop::Shell at 222
+in:big-number	sources trigger --on stale_for:<huge>	sources trigger add --on stale_for:99999999999999999999m	-	sources/writes.rs:263 on_json b2_secs Stop::Shell at sources.rs:222
+in:big-number	sources trigger --cooldown <huge>	sources trigger add --cooldown 99999999999999999999	-	sources/writes.rs:309 b2_secs Stop::Shell at sources.rs:222
+in:big-number	sources add --every <31 digits>	sources add --every 9999999999999999999999999999999	-	sources/spec.rs:356 dur, int_value over 30 digits Fail::Shell at 83 (add)
+in:big-number	sources propose --every <31 digits>	sources propose --every 9999999999999999999999999999999	-	sources/spec.rs:356 dur, int_value over 30 digits Fail::Shell at 83 (propose)
+in:big-number	sources edit --every <31 digits>	sources edit s1 --every 9999999999999999999999999999999	-	sources/spec.rs:356 dur, int_value over 30 digits Fail::Shell at 83 (edit, Mode::Set)
+in:big-number	sources try --every <31 digits>	sources try --url https://h.example --every 9999999999999999999999999999999	-	sources/spec.rs:356 dur, int_value over 30 digits Fail::Shell at 83 (try, Mode::Draft)
+in:non-ascii-digit	sources add --every <arabic digits>	sources add --every ١٢	-	sources/spec.rs:131 number_and_unit foreign_digits Fail::Shell
+in:big-number	dns record add --ttl <4301 digits>	dns record add d.example A www 192.0.2.1 --ttl 99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999	-	dns.rs:183 --ttl over MAX_INT_DIGITS (4300) Act::Shell
+in:big-number	dns record add --priority <4301 digits>	dns record add d.example MX @ mx.d.example --priority 99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999	-	dns.rs:183 --priority over MAX_INT_DIGITS (4300) Act::Shell
+in:big-number	compute node alerts --after <huge>	compute node alerts n1 --after 99999999999999999999	-	compute/admin/node.rs:365 secs None (events::secs past i64), admin then more then submit None
+in:big-number	compute node admin propose --timeout <huge>	compute node admin propose --timeout 99999999999999999999	-	compute/admin/node/more.rs:475 _compute_secs None past i64
+in:big-number	compute node servers limits max_job_secs=<huge>s	compute node servers n1 limits s1 max_job_secs=99999999999999999999s	-	compute/more/node.rs:391 secs None past i64
+in:big-number	compute node servers limits --for <huge>d	compute node servers n1 limits s1 --for 99999999999999999999d	-	compute/more/node.rs:410 for_secs, days past i64 None at 311
+in:big-number	compute node servers add --for <huge>d	compute node servers n1 add --for 99999999999999999999d	-	compute/more/node.rs:637 add_handed, for_secs None
+in:big-number	compute node servers add --max-time <huge>	compute node servers n1 add --max-time 99999999999999999999	-	compute/more/node.rs:640 add_handed, secs None
+in:big-number	compute events --max-wait <huge>	compute events --max-wait 99999999999999999999	-	compute/reads.rs:342 events::secs None past i64
+in:big-number	compute run --timeout <huge>	compute run --timeout 99999999999999999999	-	compute/submit/run.rs:449 _compute_secs None past i64
+in:big-number	compute run --wait --max-wait <huge>	compute run --wait --max-wait 99999999999999999999 -- true	-	compute/submit/run.rs:627 wait::secs over 15 digits None
+in:big-number	compute test --timeout <huge>	compute test --timeout 99999999999999999999	-	compute/submit/test.rs:198 run::parse, --timeout None at run.rs:449
+in:big-number	compute test --shards <19+ digits>	compute test --shards 99999999999999999999	-	compute/submit/test.rs:160 --shards over 18 digits None
+in:big-number	compute wait --timeout <huge>	compute wait j1 --timeout 99999999999999999999	-	compute/writes/wait.rs:169 secs over 15 digits None (207)
+in:big-number	publish run --port <huge>	publish run p1 --cmd true --port 99999999999999999999	-	publish.rs:891 is_port past i64 Act::Shell
+in:big-number	workspace host-session-cell-cap set <19+ digits>	workspace host-session-cell-cap set w1 99999999999999999999	-	workspace/verbs/switch.rs:314 cap over 18 digits Top::Shell
+in:big-number	workspace api-host-session-cap set <19+ digits>	workspace api-host-session-cap set w1 99999999999999999999	-	workspace/verbs/switch.rs:314 cap over 18 digits Top::Shell (alias)
+in:non-ascii-digit	api-key create --hire --max-per-day <arabic digits>	api-key create --hire --max-per-day ١٢	-	api_key.rs:379 hire limit not ASCII, parse None
+in:non-ascii-digit	thread export --since-days <arabic digits>	thread export w1 --since-days ١٢	-	thread/transfer.rs:114 since a non-ASCII numeric char, parse None
+in:non-ascii-digit	thread delete <ws> <arabic digits>	thread delete w1 ١٢	-	thread/cards.rs:471 parse_delete non-ASCII numeric seq None
+in:non-ascii-digit	mail reader attachment <id> <arabic digits>	mail reader attachment a1 ١٢ --out f.bin	-	mail/reader.rs:292 attachment number not ASCII Plan::Shell
+in:non-ascii-digit	skin front-door --ui-port <arabic digits>	skin front-door connect --ui-port ١٢	-	skin.rs:1654 py_int (1574) not ASCII Ask::Shell (skin)
+in:non-ascii-digit	app front-door --ui-port <arabic digits>	app front-door connect --ui-port ١٢	-	skin.rs:1654 py_int (1574) not ASCII Ask::Shell (app via run_app)
+in:non-ascii-digit	compute node packages policy max_install_mb=<arabic digits>	compute node packages policy n1 max_install_mb=١٢	-	compute/more/packages.rs:312 max_install_mb not ASCII None
+in:non-ascii-digit	users audit --tail <digits line + arabic line>	users audit --tail 1\n١٢	-	users.rs:595 tail not all ASCII digits (a digits line passes 534) None
+in:non-ascii-digit	vault rollback --to <arabic digits>	vault rollback A --to ١٢	-	vault/verbs.rs:57 py_int None, native false, vault.rs:292 None
+in:non-ascii-digit	app grant --kind --max <arabic digits>	app grant a1 --kind guests-chat --max ١٢	-	app/guests.rs:256 --max not plain digits, parse_grant None
+in:non-ascii-digit	app resources settings --warn-free <arabic digits>	app resources settings --warn-free ١٢G	-	app/box_use.rs:250 size_bytes not ASCII (167) None
+in:shape	read --lines <with #>	read w1 --lines 5#	-	read.rs:243 sendable_lines fails on a # in --lines
+in:shape	talk --lines <with tab>	talk w1 hi --lines 5\t	-	talk.rs:313 sendable_lines fails on a tab in --lines
+in:shape	talk <ws>@<x>@ (bare holds @)	talk w1@x@ hi	-	talk.rs:313 the bare target still holds an @ after the split
+in:shape	talk <ws>@<host>/<path>	talk w1@h.example/p hi	-	talk.rs:317 remote::routed: remote::base rejects a path after the host
+in:shape	read <ws>@<host>/<path>	read w1@h.example/p	-	read.rs:249 remote::base rejects a path after the host
+in:shape	read <ws>@http://<host>	read w1@http://h.example	-	read.rs:250 sends_here false: plain http to a name, not loopback
+in:shape	remote-session read --lines <with #>	remote-session read s1 --lines 5#	-	remote_session.rs:346-352 read --lines not a plain URL word
+in:shape	remote-session status --host <user part>	remote-session status --host https://u@h.example	-	remote_session.rs:339 remote::base rejects a user part
+in:shape	remote-session status --host http://<host>	remote-session status --host http://h.example	-	remote_session.rs:340 sends_here false: plain http to a name, not loopback
+in:shape	msg <ws> --signal <k> -- <text>	msg w1 --signal k -- x	-	msg/send.rs:372-375 a signal line with a bare --
+in:shape	msg <ws> --inbox-silent -- <text>	msg w1 --inbox-silent -- hi	-	msg/send.rs:390-392 a tray line with a bare --
+in:shape	app history <app> -- <word>	app history a1 -- x	-	app.rs:726 -> 830 shell_words: a bare -- on a verb other than exec or shell
+in:shape	app history <app> help	app history a1 help	-	app.rs:726 -> 830 shell_words: the word help before any --
+in:shape	app exec <app> help	app exec a1 help	-	app.rs:721-724 -> 830 shell_words: exec's help word right after the App
+in:shape	app user chat <login> --assign <login>	app user chat u1 --assign u2	-	app.rs:858-860 user chat with --assign is the shell's
+in:shape	app grant <app> --kind --max <not digits>	app grant a1 --kind guest --max 1x	-	app.rs:875 parse None: app/guests.rs:254-256 --max not plain digits
+in:shape	app data get <app> / (no file name)	app data get a1 /	-	app.rs:875 parse None: app/data.rs:318-320 a path with no file name
+in:shape	skin user add <login> --test	skin user add u1 --test	-	skin.rs:353 user add with --test is Ask::Shell (skin caller)
+in:shape	app user add <login> --test	app user add u1 --test	-	skin.rs:353 via app.rs:872 skin::run_app: user add with --test
+in:shape	skin grant hooks help (word)	skin grant hooks help	-	skin.rs:1340 hooks::parse None on the word help
+in:shape	skin front-door --ui-port <non-ASCII>	skin front-door connect --ui-port \xc3\xa9	-	skin.rs:1654 py_int None on a non-ASCII --ui-port (skin caller)
+in:shape	app front-door --ui-port <non-ASCII>	app front-door connect --ui-port \xc3\xa9	-	skin.rs:1654 via app.rs:872 skin::run_app: a non-ASCII --ui-port
+in:shape	daemon restart --host <bare name>	daemon restart --host h.example	-	daemon/life.rs:201 remote_base 213-218: no http:// or https://
+in:shape	daemon restart --host <path>	daemon restart --host https://h.example/p	-	daemon/life.rs:201 remote::base rejects a path after the host
+in:shape	daemon restart --host <user part>	daemon restart --host https://u@h.example	-	daemon/life.rs:201 remote::base rejects a user part
+in:shape	doc cat --host <path>	doc cat p1 --host h.example/p	-	doc.rs:88-96 -> 120 handed_back: remote::base rejects a path
+in:shape	vault placement <other subverb>	vault placement show p1	-	vault/tools.rs:24-27 a placement subverb outside add/done/rm/remove/list
+in:shape	vault fetch <url> --timeout (last word)	vault fetch https://h.example --timeout	-	vault/tools.rs:340 fetch's last word an unchecked value flag
+in:shape	sources <unknown verb>	sources nosuch	-	sources.rs:557 a verb outside NATIVE
+in:shape	compute wait <job> --timeout <no duration>	compute wait j1 --timeout 9x	-	compute.rs:70-76 no submodule takes it: writes/wait.rs:169 secs None
+in:shape	compute wait <job> --follow --failures	compute wait j1 --follow --failures	-	compute/writes/wait.rs:176 --follow with --failures
+in:shape	heartbeat add --days <glob>	heartbeat add --name h1 --weekly --days mon*	-	heartbeat/spec.rs:158 a --days word bash would glob (add, heartbeat.rs:734)
+in:shape	heartbeat edit --months <glob>	heartbeat edit h1 --yearly --months ja?	-	heartbeat/spec.rs:185 a --months word bash would glob (edit, heartbeat.rs:774)
+in:shape	mail watch on --workspace <glob>	mail watch on --workspace w*	-	mail/watch.rs:420 unquoted: workspace glob (on/off, watch.rs:296)
+in:shape	mail watch digest --every --workspace <glob>	mail watch digest --every 60m --workspace w*	-	mail/watch.rs:420 unquoted: workspace glob (digest --every, watch.rs:323)
+in:shape	mail watch outside-window --workspace <glob>	mail watch outside-window hold --workspace w[1]	-	mail/watch.rs:420 unquoted: workspace glob (outside-window, watch.rs:345)
+in:shape	mail watch snippets --workspace <glob>	mail watch snippets on --workspace w?	-	mail/watch.rs:420 unquoted: workspace glob (snippets/vip-line, watch.rs:367)
+in:shape	mail watch inboxes --add --workspace <glob>	mail watch inboxes --add a@example.com --workspace w*	-	mail/watch.rs:420 unquoted: workspace glob (inboxes, watch.rs:479)
+in:shape	mail watch vip add --workspace <glob>	mail watch vip add a@example.com --workspace w*	-	mail/watch.rs:420 unquoted: workspace glob (vip add, watch.rs:508)
+in:shape	mail watch window --workspace <glob>	mail watch window 09:00-17:00 --workspace w*	-	mail/watch.rs:420 unquoted: workspace glob (window, watch.rs:569)
+in:shape	mail watch log --limit <with #>	mail watch log --limit 5#	-	mail/watch.rs:642 a --limit curl would not put in a URL as is
+in:shape	mail watch digest --every <non-ASCII>	mail watch digest --every 6\xc3\xa9	-	mail/watch.rs:317 a non-ASCII digest --every
+in:shape	mail send --from-name <non-ASCII space>	mail send a@example.com --subject s --body b --from-name \xc2\xa0	-	mail/writes.rs:227 blank_name None: only non-ASCII white space (send, writes.rs:344)
+in:shape	mail reply --from-name <non-ASCII space>	mail reply m1 --body b --from-name \xc2\xa0	-	mail/writes.rs:227 blank_name None: only non-ASCII white space (reply, writes.rs:511)
+in:shape	mail forward-message --from-name <non-ASCII space>	mail forward-message m1 --to a@example.com --from-name \xc2\xa0	-	mail/writes.rs:227 blank_name None: only non-ASCII white space (forward-message, writes.rs:434)

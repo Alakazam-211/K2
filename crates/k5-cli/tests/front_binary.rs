@@ -180,7 +180,9 @@ fn version_prints_what_the_shell_prints() {
 /// A known family's line the front hands to the shell: the first form of
 /// the native bar's ceiling (`tests/data/native_bar_ceiling.tsv`, the
 /// probes k5 still hands to bash) that the front routes to the shell, so a
-/// lane that makes one native moves the pick on by itself. With an empty
+/// lane that makes one native moves the pick on by itself. A run-time row
+/// (class R) is a form under a variant, not a line of its own: never
+/// picked. With an empty
 /// ceiling (every probe native), a help word on a line that is no help
 /// form, `mail create x --help`, which the front still hands over. It
 /// fails loudly when the front answers that too.
@@ -191,7 +193,7 @@ fn shell_family_line() -> Vec<OsString> {
     );
     let text = std::fs::read_to_string(file).expect("read the native bar's ceiling");
     text.lines()
-        .filter(|l| !l.starts_with('#') && !l.starts_with("class\t"))
+        .filter(|l| !l.starts_with('#') && !l.starts_with("class\t") && !l.starts_with("R\t"))
         .filter_map(|l| l.split('\t').nth(2))
         .map(|form| form.split(' ').map(OsString::from).collect::<Vec<_>>())
         .chain(std::iter::once(args(&["mail", "create", "x", "--help"])))

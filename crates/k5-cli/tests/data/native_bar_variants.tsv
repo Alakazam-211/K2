@@ -1,0 +1,177 @@
+# Run-time variants for the native bar's class R rows (crates/k5-cli/tests/native_bar.rs,
+# rows in native_bar_runtime.tsv): one environment change each, applied to one probe only, on
+# a machine of their own, so none reaches the fixed-environment rows.
+# set: - or NAME=value items split on single spaces; unset: - or names; special: - or
+# comma-separated (tty, tty-stdout, python3, no-mktemp, beside-runner, app-nobash, app-default,
+# cwd=<path>, cwd-gone, append=<word>). Escapes: \s space, \t tab, \n newline, \\ backslash, \xNN
+# a byte. Placeholders: {dir} {home} {k2home} {proj} {tmp} {fx} {sock} {port}, and {fresh:<name>}
+# (a copy of {fx}/<name> made for the one probe: a native run may write to it). partner: yes when a
+# partner box can have that environment (K2's ruling, m_whANAYZnNb).
+variant	group	partner	set	unset	special	reason
+proxy-http	proxy	yes	https_proxy=http://127.0.0.1:9	-	-	an http proxy for https (nothing listens on port 9)
+proxy-http-upper	proxy	yes	HTTPS_PROXY=http://127.0.0.1:9	-	-	the same, upper case
+proxy-https	proxy	yes	https_proxy=https://127.0.0.1:9	-	-	an https proxy
+proxy-socks4	proxy	yes	https_proxy=socks4://127.0.0.1:9	-	-	a socks4 proxy
+proxy-socks5	proxy	yes	https_proxy=socks5://127.0.0.1:9	-	-	a socks5 proxy
+proxy-socks5h	proxy	yes	https_proxy=socks5h://127.0.0.1:9	-	-	a socks5h proxy (names resolved by the proxy)
+proxy-ipv6	proxy	yes	https_proxy=http://[::1]:9	-	-	a proxy at an IPv6 address
+proxy-user	proxy	yes	https_proxy=http://user:pw@127.0.0.1:9	-	-	a proxy with a user part
+proxy-bare	proxy	yes	https_proxy=127.0.0.1:9	-	-	a proxy with no scheme
+proxy-all	proxy	yes	ALL_PROXY=http://127.0.0.1:9	-	-	ALL_PROXY
+proxy-all-lower	proxy	yes	all_proxy=socks5://127.0.0.1:9	-	-	all_proxy, socks5
+proxy-http-proxy	proxy	yes	http_proxy=http://127.0.0.1:9	-	-	a proxy for plain http
+proxy-no-proxy-blanks	proxy	yes	https_proxy=http://127.0.0.1:9 no_proxy=localhost,\sh.example	-	-	no_proxy with a blank
+proxy-no-proxy-dot	proxy	yes	https_proxy=http://127.0.0.1:9 no_proxy=.example	-	-	no_proxy with a leading dot
+proxy-no-proxy-star	proxy	yes	https_proxy=http://127.0.0.1:9 NO_PROXY=*	-	-	NO_PROXY=*
+locale-lc-all-latin1	locale	yes	LC_ALL=en_US.ISO-8859-1	-	-	LC_ALL neither UTF-8 nor C
+locale-lc-ctype-latin1	locale	yes	LC_CTYPE=en_US.ISO-8859-1	-	-	LC_CTYPE neither UTF-8 nor C
+locale-lang-latin1	locale	yes	LANG=en_US.ISO-8859-1	-	-	LANG neither UTF-8 nor C
+locale-lang-c-utf8	locale	yes	LANG=C.UTF-8	-	-	a UTF-8 LANG (a control)
+locale-pythonioencoding	locale	yes	PYTHONIOENCODING=latin-1	-	-	PYTHONIOENCODING
+locale-pythonutf8-0	locale	yes	PYTHONUTF8=0	-	-	PYTHONUTF8
+locale-pythoncoercelocale-0	locale	yes	PYTHONCOERCECLOCALE=0	-	-	PYTHONCOERCECLOCALE
+locale-lc-all-latin1-python3	locale	yes	LC_ALL=en_US.ISO-8859-1	-	python3	LC_ALL latin1 where the shell has python3
+locale-pythonioencoding-python3	locale	yes	PYTHONIOENCODING=latin-1	-	python3	PYTHONIOENCODING where the shell has python3
+home-unset	home	yes	K5_HOME_OVERRIDE={k2home}	HOME	-	HOME unset; the binary still finds its K2 home by the override
+cdpath	cdpath	yes	CDPATH={dir}/cdpath	-	-	CDPATH set (it holds ws/ and w1/)
+cdpath-dot	cdpath	yes	CDPATH=.:{dir}/cdpath	-	-	CDPATH with . first
+pwd-dot	pwd	yes	PWD={proj}/.	-	-	a PWD bash would tidy: /.
+pwd-dotdot	pwd	yes	PWD={proj}/../proj	-	-	a PWD bash would tidy: ..
+pwd-double-slash	pwd	yes	PWD=/{proj}	-	-	a PWD bash would tidy: a leading //
+pwd-trailing	pwd	yes	PWD={proj}/	-	-	a PWD bash would tidy: a trailing /
+pwd-plain	pwd	yes	PWD={proj}	-	-	PWD the cwd as it is (a control)
+tty	tty	yes	-	-	tty	stdin a pseudo-terminal
+tmpdir-missing	tmpdir	no	TMPDIR={dir}/no-such-tmp	-	-	TMPDIR names no folder
+tmpdir-missing-no-mktemp	tmpdir	no	TMPDIR={dir}/no-such-tmp	-	no-mktemp	TMPDIR names no folder and no mktemp on PATH
+tmpdir-unset	tmpdir	no	-	TMPDIR	-	TMPDIR unset
+path-unset	path	no	-	PATH	-	PATH unset (rows only: the binary would look programs up on the default path)
+path-unset-beside-runner	path	no	-	PATH	beside-runner	PATH unset, the shot runner beside the binary
+layout-beside-runner	layout	no	-	-	beside-runner	the binary with cli/k2-widget-shot.mjs beside it (an install)
+layout-app-nobash	layout	yes	-	-	app-nobash	a macOS app with no shell CLI: the runner in _up_/cli, no _up_/cli/k2
+layout-app-default	layout	yes	-	-	app-default	a macOS app with the shell CLI: _up_/cli/k2 and the runner
+startup-bash-env	startup	no	BASH_ENV={dir}/bashenv	-	-	BASH_ENV set
+startup-env	startup	no	ENV={dir}/bashenv	-	-	ENV set
+startup-shellopts	startup	no	SHELLOPTS=braceexpand:hashall:interactive-comments	-	-	SHELLOPTS exported
+startup-bashopts	startup	no	BASHOPTS=checkwinsize:cmdhist	-	-	BASHOPTS exported
+startup-posixly-correct	startup	no	POSIXLY_CORRECT=1	-	-	POSIXLY_CORRECT set
+startup-bash-func	startup	no	BASH_FUNC_k5probe%%=()\s{\s\s:\n}	-	-	an exported bash function
+hook-codex	hook	no	K2_HOOK_SOCK={sock} CODEX_THREAD_ID=t1	-	-	a session socket and a Codex tool call
+hook-codex-sandbox	hook	no	K2_HOOK_SOCK={sock} CODEX_SANDBOX=seatbelt	-	-	a session socket and a CODEX_ variable, no thread id (no tab gate)
+cell-no-passport	cell	no	K2_HOOK_SOCK={sock}	-	-	a live session socket and no passport
+arg-non-utf8	input	no	-	-	append=\xff	a last word that is not UTF-8
+# --- the row authors' variants
+# H4, H5 and environment (proxies, startup, compute, timeouts, locale, host, passport)
+port-bad-setting-startup	port	no	K2_PORT=70000 BASH_ENV={dir}/bashenv	-	-	a K2_PORT that is no port, with BASH_ENV set (port.rs:76-77, 91)
+port-bad-setting-func	port	no	K2_PORT=70000 BASH_FUNC_k5probe%%=()\s{\s:;\s}	-	-	a K2_PORT that is no port, with a BASH_FUNC_ export (port.rs:77, 91)
+port-bad-saved-startup	port	no	HOME={fresh:home-port-bad} K5_HOME_OVERRIDE={k2home} BASH_ENV={dir}/bashenv	-	-	the shell's saved port is no port (fixture home), BASH_ENV set; the binary keeps its K2 home (port.rs:117)
+port-saved-nul	port	no	HOME={fresh:home-port-nul} K5_HOME_OVERRIDE={k2home}	-	-	the shell's saved port holds a NUL and is no port once it is dropped (port.rs:113, 117)
+odd-proxy-user-bare	proxy	yes	https_proxy=user@127.0.0.1:9	-	-	a scheme-less proxy with a user part (transport/proxy.rs parse_proxy)
+odd-proxy-guessed	proxy	yes	https_proxy=ftp.example:9	-	-	a scheme-less proxy curl guesses ftp:// for
+odd-proxy-query	proxy	yes	https_proxy=http://127.0.0.1:9?q=1	-	-	a query in the proxy authority
+odd-proxy-two-at	proxy	yes	https_proxy=http://a@b@127.0.0.1:9	-	-	a second @ in the proxy URL
+odd-proxy-bad-escape	proxy	yes	https_proxy=http://a%zz@127.0.0.1:9	-	-	a broken percent escape in the user part
+odd-proxy-control	proxy	yes	https_proxy=http://127.0.0.1:9\t	-	-	a control byte (a tab) in the proxy URL
+odd-proxy-port-big	proxy	yes	https_proxy=http://127.0.0.1:99999	-	-	a proxy port that is no u16
+odd-proxy-non-utf8	proxy	yes	https_proxy=http://127.0.0.1:9/\xff	-	-	a proxy variable that is not UTF-8
+odd-proxy-no-proxy-non-utf8	proxy	yes	https_proxy=http://127.0.0.1:9 no_proxy=\xff	-	-	a no_proxy that is not UTF-8
+connect-home-via-http	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=http://127.0.0.1:9	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; an http proxy that would carry the request
+connect-home-proxy-https	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=https://127.0.0.1:9	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; an https:// proxy
+connect-home-proxy-socks5	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=socks5://127.0.0.1:9	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; a socks5 proxy
+connect-home-proxy-ipv6	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=http://[::1]:9	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; an IPv6 proxy
+connect-home-proxy-no-proxy-blanks	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=http://127.0.0.1:9 no_proxy=localhost,\sh.example	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; no_proxy with a blank
+connect-home-proxy-non-utf8	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=http://127.0.0.1:9/\xff	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; a proxy variable that is not UTF-8
+connect-home-proxy-query	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} https_proxy=http://127.0.0.1:9?q=1	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; a query in the proxy authority
+connect-home-proxy-capital	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} K2_CONNECT_BASE=https://Connect.example https_proxy=http://127.0.0.1:9	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; a control-plane base with a capital letter, through an http proxy
+connect-home-base-slash	proxy	yes	K5_HOME_OVERRIDE={fresh:k2home-connect} K2_PORT={port} K2_CONNECT_BASE=https://h.example/	-	-	binary K2 home with tunnel.json and connect-account.json (fixture), port from K2_PORT; a control-plane base ending in /, no proxy
+k2home-port-bad	home	no	K5_HOME_OVERRIDE={fresh:k2home-port-bad}	-	-	the binary's K2 home (override) has heartbeat.port 70000, a port curl will not take; the shell's K2 home keeps the stub port
+mktemp-missing	mktemp	no	-	-	no-mktemp	no mktemp on PATH, TMPDIR writable
+mktemp-startup-bash-env	startup	no	BASH_ENV={dir}/bashenv TMPDIR={dir}/no-such-tmp	-	-	BASH_ENV set and TMPDIR names no folder: no mktemp the binary runs as bash would
+mktemp-startup-bash-func	startup	no	BASH_FUNC_k5probe%%=()\s{\s\s:\n} TMPDIR={dir}/no-such-tmp	-	-	an exported bash function and TMPDIR names no folder
+compute-shell-cj	compute	no	K2_CJ_probe=1	-	-	a K2_CJ_ variable exported
+compute-shell-refusal-area	compute	no	_K2_REFUSAL_AREA=app	-	-	_K2_REFUSAL_AREA set, not empty
+compute-shell-noanswer-soft	compute	no	_K2_NOANSWER_SOFT=1	-	-	_K2_NOANSWER_SOFT set, not empty
+compute-refusal-area-empty	compute	no	_K2_REFUSAL_AREA=	-	-	_K2_REFUSAL_AREA set and empty (sew::env_shell reads the name only)
+compute-args-json	compute	no	_K2_ARGS_JSON=1	-	-	_K2_ARGS_JSON exported
+compute-cp-deadline	compute	no	_CP_DEADLINE=1	-	-	_CP_DEADLINE set
+compute-cp-deadline-rc	compute	no	_CP_DEADLINE_RC=1	-	-	_CP_DEADLINE_RC set
+compute-cp-failures	compute	no	_CP_FAILURES=1	-	-	_CP_FAILURES set
+compute-cp-last-q	compute	no	_CP_LAST_Q=1	-	-	_CP_LAST_Q set
+compute-cp-owner-warned	compute	no	_CP_OWNER_WARNED=1	-	-	_CP_OWNER_WARNED set
+timeout-cp-max-time-bad-word	timeout	no	K2_CP_MAX_TIME=2m	-	-	K2_CP_MAX_TIME not plain seconds
+timeout-cp-max-time-bad-zero	timeout	no	K2_CP_MAX_TIME=0	-	-	K2_CP_MAX_TIME 0 (no limit to curl)
+timeout-cp-max-time-bad-huge	timeout	no	K2_CP_MAX_TIME=1000000000	-	-	K2_CP_MAX_TIME at or past 1e9 seconds
+timeout-cp-max-time-plain	timeout	no	K2_CP_MAX_TIME=30	-	-	K2_CP_MAX_TIME plain seconds (chat, hostchat and db versions-access hand off on any value)
+timeout-cp-max-time-empty	timeout	no	K2_CP_MAX_TIME=	-	-	K2_CP_MAX_TIME set and empty (chat and hostchat read the name only)
+timeout-post-max-time-bad	timeout	no	_K2_POST_MAX_TIME=1m	-	-	_K2_POST_MAX_TIME not plain seconds
+timeout-talk-nav-settle-bad	timeout	yes	K2_TALK_NAV_SETTLE=1m	-	-	K2_TALK_NAV_SETTLE not plain seconds
+timeout-talk-answer-settle-bad	timeout	yes	K2_TALK_ANSWER_SETTLE=1m	-	-	K2_TALK_ANSWER_SETTLE not plain seconds
+timeout-talk-scout-max-octal	timeout	yes	K2_TALK_SCOUT_MAX=010	-	-	K2_TALK_SCOUT_MAX with a leading 0 (octal to bash)
+timeout-talk-scout-max-huge	timeout	yes	K2_TALK_SCOUT_MAX=99999999999999999999	-	-	K2_TALK_SCOUT_MAX past 64 bits
+timeout-mail-http-zero	timeout	yes	K2_MAIL_HTTP_TIMEOUT=0	-	-	K2_MAIL_HTTP_TIMEOUT 0 (a non-blocking socket)
+timeout-mail-http-inf	timeout	yes	K2_MAIL_HTTP_TIMEOUT=inf	-	-	K2_MAIL_HTTP_TIMEOUT infinite
+timeout-mail-http-huge	timeout	yes	K2_MAIL_HTTP_TIMEOUT=10000000000	-	-	K2_MAIL_HTTP_TIMEOUT past what a socket takes
+timeout-mail-http-non-utf8	timeout	yes	K2_MAIL_HTTP_TIMEOUT=\xff	-	-	K2_MAIL_HTTP_TIMEOUT not UTF-8
+timeout-ci-wait-secs-bad	timeout	yes	K2_CI_WAIT_SECS=1m	-	-	K2_CI_WAIT_SECS not plain seconds
+host-name	host	yes	K2_HOST=localhost	-	-	a daemon host that is a name, not IPv4
+host-ipv6	host	yes	K2_HOST=::1	-	-	a daemon host that is an IPv6 address
+host-https	host	yes	K2_HOST=https://h.example	-	-	a daemon host given as an https URL
+hook-codex-host	host	no	K2_HOOK_SOCK={sock} CODEX_THREAD_ID=t1 K2_HOST=localhost	-	-	a Codex tool call in a session, with a daemon host set
+codex-pane-host	host	no	K2_PANE_ID=pane1 K2_HOOK_TOKEN=p1 CODEX_THREAD_ID=t1 K2_HOST=localhost	-	-	a Codex tool call by pane and passport, with a daemon host set
+passport	passport	no	K2_HOOK_TOKEN=p1	-	-	a session passport, no socket
+passport-pane	passport	no	K2_HOOK_TOKEN=p1 K2_PANE_ID=pane1	-	-	a session passport and a pane id
+passport-non-ascii	passport	no	K2_HOOK_TOKEN=p\xc3\xa91	-	-	a passport that is UTF-8 but not plain ASCII
+passport-host-name	passport	no	K2_HOOK_TOKEN=p1 K2_HOST=localhost	-	-	a passport, no socket, a daemon host that is not IPv4
+passport-locale-python3	passport	no	K2_HOOK_TOKEN=p1 LC_ALL=en_US.ISO-8859-1	-	python3	a passport and a latin1 locale where the shell has python3
+owner-token-space	token	no	K5_HOME_OVERRIDE={fresh:k2home-token-space}	-	-	the binary's K2 home holds an owner token with a space
+# environment (cell socket, TTY, values, HOME, CDPATH, PWD, EDITOR, PATH, TMPDIR) and file system
+agent-name-non-utf8	non-utf8	no	K2_AGENT_NAME=a\xff	-	-	the sender's agent name is not UTF-8 (done, reserve, msg --signal, project, feedback)
+home-non-utf8	non-utf8	yes	HOME={dir}/home\xff	-	-	HOME not UTF-8; needs the fixture {dir}/home\xff, a link to {home}, so the K2 home is still found
+project-path-non-utf8	non-utf8	no	K2_PROJECT_PATH={proj}\xff	-	-	PROJECT_PATH not UTF-8 (agent, focus-group)
+pwd-non-utf8	non-utf8	yes	PWD={proj}/\xff	-	-	PWD not UTF-8 (it names no folder, so logical_cwd falls back to the real one)
+claude-session-non-utf8	non-utf8	no	CLAUDE_SESSION_ID=s\xff	-	-	a session id feedback's Python reads, not UTF-8
+connect-db-url-non-utf8	non-utf8	no	K2_CONNECT_DB_URL=https://h.example/\xff	-	-	the account server override is not UTF-8 (connect login, logout)
+editor-missing	editor	yes	EDITOR=k5-no-such-editor	-	-	EDITOR names a program not on PATH
+editor-notexec	editor	yes	EDITOR={fx}/notexec.txt	-	-	EDITOR is a path to a file with no x bit
+editor-non-utf8	non-utf8	yes	EDITOR=vi\xff	-	-	EDITOR not UTF-8
+home-override-relative	home	no	K5_HOME_OVERRIDE=rel/home	-	-	the binary's K2 home is an error (a relative override) while HOME, the shell's, is fine
+tmpdir-ok-no-mktemp	tmpdir	no	-	-	no-mktemp	TMPDIR usable but no mktemp on PATH (feedback --html -, update --list, compute wait --follow, compute attach)
+tty-both	tty	yes	-	-	tty,tty-stdout	stdin AND stdout a pseudo-terminal (workspace trust's [y/N] needs both); needs a new special tty-stdout
+shot-beside-runner-cwd-gone	zen-shot	no	-	-	beside-runner,cwd-gone	the shot runner beside the binary and the cwd removed just before exec
+fsa-cwd-fx	cwd	yes	-	-	cwd={fx}	run in the fixtures folder, so ws, -ws and nl\nws exist relative to the cwd
+fsa-cwd-gone	cwd	yes	-	-	cwd-gone	the working folder removed under the process (current_dir fails)
+fsa-cwd-caf	cwd	yes	-	-	cwd={fx}/caf\xe9	a working folder whose path is not UTF-8 (to_str is None)
+fsb-approve-bin-dir	fs	no	K2_APPROVE_BIN={fx}/ws	-	-	K2_APPROVE_BIN names a folder: executable (searchable) but not a file
+fsb-fed-no-shasum	fs	yes	PATH={fx}/bin-fed K2_PORT={port} K5_HOME_OVERRIDE={fresh:fedhome}	-	-	a federation key and openssl, no shasum on PATH (a minimal Linux without perl); the K2 home is a prepared folder with the key and the owner token, the port from K2_PORT
+fsb-fed-no-awk	fs	yes	PATH={fx}/bin-fed-shasum K2_PORT={port} K5_HOME_OVERRIDE={fresh:fedhome}	-	-	a federation key, openssl and shasum, no awk on PATH
+fsb-hb-token-ctl	fs	no	K2_HOOK_TOKEN=tok\x01x	-	-	a session token with a control byte (no HOOK_SOCK)
+fsb-home-hb-port-latin1	fs	no	K5_HOME_OVERRIDE={fresh:home-hb-port-latin1}	-	-	the binary's K2 home holds a heartbeat.port that is not UTF-8 (the shell's home is unchanged)
+fsb-home-hb-token-latin1	fs	no	K5_HOME_OVERRIDE={fresh:home-hb-token-latin1}	-	-	the binary's K2 home holds a heartbeat.token that is not UTF-8, no port
+fsb-home-hb-port-big	fs	no	K5_HOME_OVERRIDE={fresh:home-hb-port-big}	-	-	the binary's K2 home holds heartbeat.port 99999 and no token
+fsb-home-connect-account-latin1	fs	no	K5_HOME_OVERRIDE={fresh:home-connect-account-latin1}	-	-	a K2 home whose connect-account.json is not UTF-8
+fsb-home-connect-tunnel-deep	fs	no	K5_HOME_OVERRIDE={fresh:home-connect-tunnel-deep}	-	-	a K2 home whose tunnel.json nests deeper than 500
+fsb-home-connect-daemon-port	fs	no	K5_HOME_OVERRIDE={fresh:home-connect-daemon-port}	-	-	a K2 home with a token, no heartbeat.port, and a daemon.port curl won't take
+fsb-home-connect-logout-ipv6	fs	no	K5_HOME_OVERRIDE={fresh:home-connect-logout-ipv6}	-	-	a K2 home whose settings.json connectDbUrl is http://[::1]:9, with a saved access token
+fsb-home-remote-tokens-nul	fs	no	K5_HOME_OVERRIDE={fresh:home-remote-tokens-nul}	-	-	a K2 home whose connect-tokens.json is not JSON (a NUL)
+fsb-home-remote-hosts-type	fs	no	K5_HOME_OVERRIDE={fresh:home-remote-hosts-type}	-	-	a K2 home whose connect-hosts.json has a hostname that is not a string
+fsb-oldhome-remote-tokens	fs	no	HOME={fresh:oldhome} K5_HOME_OVERRIDE={k2home}	-	-	HOME holds an old .k2so home whose connect-tokens.json is a list; the binary keeps its K2 home by the override
+fsb-cwd-sess-latin1	fs	no	-	-	cwd={fx}/sess-latin1	a project whose .k2/sessions holds a name that is not UTF-8
+fsb-cwd-sess-noread	fs	no	-	-	cwd={fx}/sess-noread	a project whose .k2/sessions can be entered, not listed (mode 0100)
+fsb-cwd-sess-subnoread	fs	no	-	-	cwd={fx}/sess-subnoread	a project whose session folder s1 can be entered, not listed (mode 0100)
+# input, daemon answers, front and router
+no-owner-fallback	owner	yes	K2_NO_OWNER_FALLBACK=1	-	-	no owner fallback (a virtual desktop terminal): no token for the prelude, no passport
+home-empty	home	yes	HOME={fresh:home-empty}	-	-	a K2 home with no heartbeat.port and no token (the daemon never ran); fixture home-empty
+host-localhost	host	no	K2_HOST=localhost	-	-	a daemon host that is a name, not an IPv4 address
+passport-host-name-session	passport	no	K2_HOOK_TOKEN=s1.p1 K2_HOST=localhost	-	-	a passport, no session socket, and a host that is a name: the cards probe can't be sure
+passport-not-plain	passport	no	K2_HOOK_TOKEN=s1.p\s1	-	-	a passport with a blank in it (not plain ASCII), no session socket
+passport-dead-sock-host	passport	no	K2_HOOK_SOCK={dir}/no-such-sock K2_HOOK_TOKEN=s1.p1 K2_HOST=localhost	-	-	a session socket path that is no socket, a passport, and a host that is a name
+passport-dead-sock-not-plain	passport	no	K2_HOOK_SOCK={dir}/no-such-sock K2_HOOK_TOKEN=s1.p\s1	-	-	a session socket path that is no socket and a passport that is not plain ASCII
+hook-codex-no-owner	hook	no	K2_HOOK_SOCK={sock} CODEX_THREAD_ID=t1 K2_NO_OWNER_FALLBACK=1	-	-	a Codex call in a session with no token for the prelude
+hook-codex-pwd-dot	hook	no	K2_HOOK_SOCK={sock} CODEX_THREAD_ID=t1 PWD={proj}/.	-	-	a Codex call in a session with a PWD bash would tidy
+codex-marker-no-ps	hook	no	K2_HOOK_SOCK={sock} CODEX_THREAD_ID=t1 K2_CODEX_TAB_ISOLATED=s1 K2_HOOK_TOKEN=s1.p1 PATH={fx}/bin-cat	-	-	a Codex call whose tab marker matches its passport, with no ps on PATH (only cat): the process walk can't be done as the shell does
+port-env-bad-startup	port	no	K2_PORT=abc POSIXLY_CORRECT=1	-	-	a port setting that isn't a port, with a bash startup setting
+port-file-nul	port	no	HOME={fresh:home-c-port-nul}	-	-	a saved heartbeat.port that isn't a port and holds a NUL; fixture home-port-nul
+port-file-bad-startup	port	no	HOME={fresh:home-c-port-bad} POSIXLY_CORRECT=1	-	-	a saved heartbeat.port that isn't a port, with a bash startup setting; fixture home-port-bad
+port-file-bad-no-cat	port	no	HOME={fresh:home-c-port-bad} PATH={dir}/no-such-bin	-	-	a saved heartbeat.port that isn't a port, and no cat on PATH
+port-file-bad-token-nul	port	no	HOME={fresh:home-c-port-bad-token-nul}	-	-	a saved heartbeat.port that isn't a port, and a NUL in heartbeat.token; fixture home-c-port-bad-token-nul
+port-file-bad-token-dir	port	no	HOME={fresh:home-c-port-bad-token-dir}	-	-	a saved heartbeat.port that isn't a port, and a heartbeat.token that can't be read (a folder); fixture home-c-port-bad-token-dir
+port-file-bad-pwd-dot	port	no	HOME={fresh:home-c-port-bad} PWD={proj}/.	-	-	a saved heartbeat.port that isn't a port, and a PWD bash would tidy

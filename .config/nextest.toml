@@ -30,6 +30,13 @@ fail-fast = true
 # never holds a node until the job's 2 h timeout.
 slow-timeout = { period = "60s", terminate-after = 10 }
 
+# The native bar (crates/k5-cli/tests/native_bar.rs) runs every form in its
+# fixed environment and again under each run-time variant: tens of
+# thousands of short runs, so it may take up to 30 periods.
+[[profile.default.overrides]]
+filter = 'binary(native_bar)'
+slow-timeout = { period = "60s", terminate-after = 30 }
+
 [profile.ci]
 retries = 0
 fail-fast = false
@@ -38,6 +45,10 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # ends with all of them together.
 failure-output = "immediate-final"
 success-output = "never"
+
+[[profile.ci.overrides]]
+filter = 'binary(native_bar)'
+slow-timeout = { period = "60s", terminate-after = 30 }
 
 [profile.ci.junit]
 path = "junit.xml"

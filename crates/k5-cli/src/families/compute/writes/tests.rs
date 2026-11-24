@@ -597,6 +597,21 @@ mod wait_verb {
     use super::{at, python_after, source};
     use crate::exit::Exit;
 
+    /// Many checks at once in one process (as parallel tests make them)
+    /// each find the temp folder usable: no two probes share a name.
+    #[test]
+    fn temp_usable_holds_under_parallel_checks() {
+        let threads: Vec<_> = (0..16)
+            .map(|_| std::thread::spawn(|| (0..50).all(|_| wait::temp_usable())))
+            .collect();
+        for t in threads {
+            assert!(
+                t.join().expect("a probe thread panicked"),
+                "a parallel temp check read the temp folder as unusable"
+            );
+        }
+    }
+
     #[test]
     fn the_shell_s_lines() {
         let jobs = source("compute-jobs.sh");

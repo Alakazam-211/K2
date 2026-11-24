@@ -264,18 +264,17 @@ pub fn temp_usable() -> bool {
 }
 
 /// Whether a folder can be made in `dir` (made and taken away again).
+/// Each probe has its own name (the process id and a count), as each
+/// `mktemp` does: two checks at once in one process (parallel callers, or
+/// tests on their threads) must never meet on one folder, where the second
+/// `create_dir` failed and the folder read as unusable.
 fn can_make_in(dir: &std::path::Path) -> bool {
+    static PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if !dir.is_dir() {
         return false;
     }
-    // One name per probe: two at once in one process (threads) never
-    // share a folder, so neither takes the other's away.
-    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let probe = dir.join(format!(
-        "k5-compute-wait-probe.{}.{}",
-        std::process::id(),
-        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
+    let n = PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let probe = dir.join(format!("k5-compute-wait-probe.{}.{n}", std::process::id()));
     match std::fs::create_dir(&probe) {
         Ok(()) => std::fs::remove_dir(&probe).is_ok(),
         Err(_) => false,

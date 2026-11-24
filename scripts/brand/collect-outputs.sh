@@ -18,7 +18,9 @@
 # page (cat, dirname and sed: crates/k5-cli/src/offline.rs `need`), and
 # nothing else, so no python3 and no bash. Without those tools every page
 # would go to the shell. A form the binary hands to the shell CLI then
-# stops with its no-Python line (exit 69) and runs nothing: its output is
+# stops with its no-Python line (exit 69) and runs nothing, or, in a build
+# with no shell CLI (the brand file's cli.no_bash), with its refusal
+# (exit 70) before that: either way its output is
 # not the binary's, so it is left out of the corpus and listed in
 # <out>/../fell-through.txt (a partner build comes only from a tag where
 # none falls through: scripts/brand/ceiling-zero-gate.sh).
@@ -59,7 +61,7 @@ for tool in $PRELUDE_TOOLS; do
     esac
 done
 # Only the link and those tools: no python3 and no bash, so a form the
-# binary hands to the shell shows as exit 69.
+# binary hands to the shell shows as exit 69 (70 in a no-bash build).
 for f in "$S/bin"/*; do
     case " $name $PRELUDE_TOOLS " in
         *" $(basename "$f") "*) ;;
@@ -119,7 +121,7 @@ while IFS= read -r form; do
     (cd "$S/proj" && env -i PATH="$S/bin" HOME="$S/home" TMPDIR="$S/tmp" LANG=C.UTF-8 \
         "$TIMEOUT" 20 "$S/bin/$name" ${words[@]+"${words[@]}"} \
         < /dev/null > "$OUT/$file.out" 2> "$OUT/$file.err") || rc=$?
-    if [ "$rc" = 69 ]; then
+    if [ "$rc" = 69 ] || [ "$rc" = 70 ]; then
         printf '%s\n' "$form" >> "$fell"
         rm -f "$OUT/$file.out" "$OUT/$file.err"
     elif [ "$rc" = 124 ] || [ "$rc" = 137 ]; then

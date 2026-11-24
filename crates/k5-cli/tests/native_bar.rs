@@ -20,7 +20,10 @@
 //! disk, stdin closed, and a `PATH` with no `python3` on it. Every
 //! hand-off checks for `python3` before bash starts
 //! ([`k5_cli::fallthrough::run`]), so a form that falls through exits 69
-//! with its one line and runs nothing; anything else is native. A probe
+//! with its one line and runs nothing; in a build with no shell CLI
+//! (the brand file's `cli.no_bash`, `K2_BRAND_DIR=brand/xy`) the hand-off
+//! is refused before that, with its own line and exit 70, and that counts
+//! as falling through too. Anything else is native. A probe
 //! still running after [`DEADLINE`] is native too (it is waiting in its
 //! own code: a hand-off ends at once). Programs that would act on the
 //! machine (`open`, `launchctl`, `systemctl`, `sudo` and the like) are
@@ -75,6 +78,9 @@ const CEILING: &str = "crates/k5-cli/tests/data/native_bar_ceiling.tsv";
 const ALLOWANCE: &str = "crates/k5-cli/tests/data/native_port_allowance.tsv";
 /// The hand-off's line when there is no `python3` ([`k5_cli::fallthrough::FrontError::NoPython`]).
 const NO_PYTHON: &str = "is not built into k5 yet and needs Python 3";
+/// The hand-off's line in a build with no shell CLI
+/// ([`k5_cli::fallthrough::FrontError::NoShellCli`]).
+const NO_SHELL_CLI: &str = "this build has no shell CLI to run it";
 /// How long a probe may run: past it, it is in its own code.
 const DEADLINE: Duration = Duration::from_secs(10);
 const WORKERS: usize = 8;
@@ -357,21 +363,41 @@ fn spawn(b: &Machine, p: &Probe, env: &[(String, String)]) -> (Option<ExitStatus
     (status, stderr)
 }
 
-/// Whether `p` falls through: the hand-off's exit and line.
+/// Whether `p` falls through: the hand-off's exit and line, the
+/// missing-Python one (69) in a build with the shell CLI, the no-shell
+/// one (70) in a build with none. Neither build prints the other's.
 fn falls_through(b: &Machine, p: &Probe) -> bool {
     let (status, stderr) = spawn(b, p, &[]);
     let Some(status) = status else {
         // Still in its own code at the deadline: native.
         return false;
     };
-    let said = stderr.contains(NO_PYTHON);
+    let no_python = stderr.contains(NO_PYTHON);
+    let no_shell = stderr.contains(NO_SHELL_CLI);
     assert!(
-        !said || status.code() == Some(69),
+        !no_python || status.code() == Some(69),
         "{:?}: the missing-Python line with exit {:?}:\n{stderr}",
         p.argv,
         status.code()
     );
-    said
+    assert!(
+        !no_shell || status.code() == Some(70),
+        "{:?}: the no-shell-CLI line with exit {:?}:\n{stderr}",
+        p.argv,
+        status.code()
+    );
+    let (ours, theirs) = if k2_client::brand::CLI_NO_BASH {
+        (no_shell, no_python)
+    } else {
+        (no_python, no_shell)
+    };
+    assert!(
+        !theirs,
+        "{:?}: the other build's hand-off line (this build: no_bash = {}):\n{stderr}",
+        p.argv,
+        k2_client::brand::CLI_NO_BASH
+    );
+    ours
 }
 
 /// The probes that fall through, in probe order: the [`PROXIED`] ones

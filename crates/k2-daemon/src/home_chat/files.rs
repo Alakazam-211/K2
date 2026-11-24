@@ -430,7 +430,7 @@ pub fn scrub(v: &mut Value) {
         Value::Object(o) => {
             for (k, x) in o.iter_mut() {
                 if k == "attachments" {
-                    if let Value::Array(list) = x {
+                    if let Value::Array(list) = &mut *x {
                         for a in list.iter_mut() {
                             scrub_one(a);
                         }

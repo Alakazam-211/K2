@@ -91,7 +91,7 @@ fn an_upload_resumes_after_a_cut_and_rides_the_send() {
     // The first 2 MiB by Content-Range (a native client).
     let two = vec![7u8; 2 * MIB as usize];
     let range = format!("bytes 0-{}/{size}", 2 * MIB - 1);
-    let r = as_person(&alex(), files::DATA, &q(&[("id", "5001"), (files::RANGE_PARAM, &range)]), &two).expect("range 1");
+    let r = as_person(&alex(), files::DATA, &q(&[("id", "5001"), (files::RANGE_PARAM, range.as_str())]), &two).expect("range 1");
     assert_eq!(r["upload"]["committed"].as_u64(), Some(2 * MIB));
     let posted = api.bytes_in.lock().unwrap().clone();
     assert_eq!(posted[0], ("/api/v1/uploads/5001/data?exp=9999999999&sig=first".to_string(), range, 2 * MIB as usize));
@@ -103,10 +103,10 @@ fn an_upload_resumes_after_a_cut_and_rides_the_send() {
     no_sew_url(&st);
     assert_eq!((st["upload"]["committed"].as_u64(), st["upload"]["conv"].as_str()), (Some(3 * MIB), Some("900")));
     // Sending from the old offset again: Sew's refusal, its code kept.
-    let stale = as_person(&alex(), files::DATA, &q(&[("id", "5001"), ("offset", &(2 * MIB).to_string())]), &vec![1u8; MIB as usize]).unwrap_err();
+    let stale = as_person(&alex(), files::DATA, &q(&[("id", "5001"), ("offset", (2 * MIB).to_string().as_str())]), &vec![1u8; MIB as usize]).unwrap_err();
     assert_eq!((stale.status, stale.code.as_str()), (409, "invalid_range"));
     // From committed (a browser: offset): the last 10 bytes finish it.
-    let r = as_person(&alex(), files::DATA, &q(&[("id", "5001"), ("offset", &(3 * MIB).to_string())]), &[9u8; 10]).expect("last range");
+    let r = as_person(&alex(), files::DATA, &q(&[("id", "5001"), ("offset", (3 * MIB).to_string().as_str())]), &[9u8; 10]).expect("last range");
     assert_eq!((r["upload"]["committed"].as_u64(), r["upload"]["complete"].as_bool()), (Some(size), Some(true)));
     assert_eq!(api.bytes_in.lock().unwrap().last().unwrap().1, format!("bytes {}-{}/{size}", 3 * MIB, size - 1));
 

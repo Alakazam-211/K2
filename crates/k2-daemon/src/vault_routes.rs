@@ -2303,19 +2303,28 @@ fn methods(vault: &LocalVault, c: &VaultCaller) -> Vec<&'static str> {
 }
 
 /// The owner's destructive steps a server with no confirm of its own may
-/// take from the owner's terminal (0.46.18): `k2 app uninstall --purge`
-/// and `k2 hostchat purge`. Field report: a headless Linux server with no
-/// owner login and no vault password refused both (`no_confirm_method`),
-/// so its owner could never purge.
+/// take from a terminal outside K2's process tree (0.46.18):
+/// `k2 app uninstall --purge` and `k2 hostchat purge`. Field report: a
+/// headless Linux server with no owner login and no vault password refused
+/// both (`no_confirm_method`), so its owner could never purge.
 pub(crate) const TERMINAL_ACTIONS: &[&str] = &[crate::apps::access::PURGE_CONFIRM, crate::sew::routes::CONFIRM_PURGE];
 
 /// The terminal check for [`TERMINAL_ACTIONS`]: the same one a server's
 /// first owner login uses (`presence::TERMINAL`). Only the owner token, on
-/// the vault socket from a terminal outside K2 (`Channel::Tty`: never an
-/// agent's or a K2 terminal's process, never TCP or a Connect login), and
-/// only where this server has no other check for it (no vault password,
-/// no Touch ID or Windows Hello, no owner login). Remote callers get
-/// exactly what they got before.
+/// the vault socket from a terminal outside K2's process tree
+/// (`Channel::Tty`; never TCP or a Connect login), and only where this
+/// server has no other check for it (no vault password, no Touch ID or
+/// Windows Hello, no owner login). Remote callers get exactly what they
+/// got before.
+///
+/// What `Channel::Tty` proves is the vault socket's heuristic
+/// (`vault/human.rs`): the peer has no K2 ancestor, isn't in the daemon's
+/// cgroup, carries no K2 session variables, and says it is a terminal. It
+/// is not proof of a person: an agent that deliberately leaves the
+/// daemon's tree (e.g. `systemd-run --user` on a box with a user manager)
+/// gets past it, as it does for the other steps on this channel (review
+/// B1, review-app-runtime-fixes-0.46.18). The real bar comes with the
+/// isolation work (no leaving the tree, a positive login-session check).
 fn terminal_ok(vault: &LocalVault, c: &VaultCaller, action: &str) -> bool {
     TERMINAL_ACTIONS.contains(&action)
         && !c.is_passport()
@@ -2816,7 +2825,7 @@ pub(crate) fn confirm_check(
             "confirm_failed",
             403,
             format!(
-                "the terminal confirm is only for the owner's purge on a server with no other confirm, from a terminal outside {}: run the {} command yourself from your own SSH login. Agents: don't run it; tell your owner.",
+                "the terminal confirm is only for the owner's purge on a server with no other confirm, from a terminal outside {}'s process tree: run the {} command yourself from your own SSH login. Agents: don't run it; tell your owner.",
                 k2_core::brand::PRODUCT_NAME,
                 k2_core::brand::CLI_NAME
             ),

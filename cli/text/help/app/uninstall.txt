@@ -14,6 +14,9 @@ stop, not a failure. A reinstall is a new App and gets none of it back.
                   for who may uninstall as without it.
   --purge         Uninstall and also delete the App's data folder. The
                   owner confirms in person every time (an agent can't).
+                  On a server with no other confirm (no vault password,
+                  Touch ID or owner login), the confirm is a terminal
+                  outside K2's process tree (your own SSH login).
                   --purge alone drops the access above too, without the
                   safety stop.
   --json          Print the daemon's answer as JSON.

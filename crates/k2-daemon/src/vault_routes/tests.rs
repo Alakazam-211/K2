@@ -2262,12 +2262,13 @@ fn ending_owner_chat_sessions_takes_a_confirm_bound_to_its_sid_or_all() {
 /// 0.46.18 field report: on a Linux server with no owner login and no
 /// vault password, `k2 app uninstall --purge` and `k2 hostchat purge`
 /// failed with `no_confirm_method`, so the owner could never purge. The
-/// owner token from a terminal outside K2 (the vault socket's person
-/// check, the one a server's first owner login uses) now confirms them
-/// there; TCP, logins, agents and K2 terminals get what they got before,
-/// and a server with any other check uses that one.
+/// owner token from a terminal outside K2's process tree (the vault
+/// socket's heuristic, the one a server's first owner login uses; not
+/// proof of a person, review B1) now confirms them there; TCP, logins,
+/// agents and K2 terminals get what they got before, and a server with any
+/// other check uses that one.
 #[test]
-fn a_headless_servers_owner_purges_from_its_own_terminal_and_remote_callers_stay_strict() {
+fn a_headless_servers_owner_purges_from_a_terminal_outside_k2s_tree_and_remote_callers_stay_strict() {
     let _home = crate::test_support::TempHome::new();
     let t = vault();
     let finish = |c: &VaultCaller, action: &str| {
@@ -2301,7 +2302,10 @@ fn a_headless_servers_owner_purges_from_its_own_terminal_and_remote_callers_stay
         assert!(matches!(&proof, k2_vault::HumanProof::Confirmed { method } if method == "terminal"), "{proof:?}");
         assert!(t.v.confirm.take(&tok, action, Some("shop"), "owner").is_err(), "single use");
 
-        // The owner token over TCP: as before, no confirm here.
+        // The owner token over TCP: as before, no confirm here. Channel::Plain
+        // is also what the vault socket gives a peer outside the daemon's
+        // tree that doesn't say it is a terminal (no X-K2-Tty header,
+        // `human.rs`), so that peer gets nothing either.
         let (s, v) = call(&t, CONFIRM_START, &owner(), start.clone());
         assert_eq!((s, code(&v)), (409, "no_confirm_method"), "{action}: {v}");
         let (s, v) = finish(&owner(), action);

@@ -427,9 +427,14 @@ if sys.argv[5]: o["phoneRequest"] = sys.argv[5]
 print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
             ;;
         *" terminal "*)
-            # A server's first owner login: this terminal, outside K2, is
-            # the check (the daemon verifies it on the vault socket).
-            echo "Confirming from this terminal (this server has no owner login yet)…" >&2
+            # A server's first owner login, or (0.46.18) a purge on a server
+            # with no other confirm: this terminal, outside K2's process
+            # tree, is the check (the daemon verifies it on the vault socket).
+            if [ "$first_setup" = 1 ]; then
+                echo "Confirming from this terminal (this server has no owner login yet)…" >&2
+            else
+                echo "Confirming from this terminal, outside K2's process tree (this server has no other confirm)…" >&2
+            fi
             body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "terminal"}))' "$action" "$secret_id")"
             ;;
         *" owner-login-password "*)

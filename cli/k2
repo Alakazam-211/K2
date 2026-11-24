@@ -14410,6 +14410,9 @@ stop, not a failure. A reinstall is a new App and gets none of it back.
                   for who may uninstall as without it.
   --purge         Uninstall and also delete the App's data folder. The
                   owner confirms in person every time (an agent can't).
+                  On a server with no other confirm (no vault password,
+                  Touch ID or owner login), the confirm is a terminal
+                  outside K2's process tree (your own SSH login).
                   --purge alone drops the access above too, without the
                   safety stop.
   --json          Print the daemon's answer as JSON.
@@ -43918,9 +43921,14 @@ if sys.argv[5]: o["phoneRequest"] = sys.argv[5]
 print(json.dumps(o))' "$action" "$secret_id" "$label" "$lm" "$_VPC_REQ")"
             ;;
         *" terminal "*)
-            # A server's first owner login: this terminal, outside K2, is
-            # the check (the daemon verifies it on the vault socket).
-            echo "Confirming from this terminal (this server has no owner login yet)…" >&2
+            # A server's first owner login, or (0.46.18) a purge on a server
+            # with no other confirm: this terminal, outside K2's process
+            # tree, is the check (the daemon verifies it on the vault socket).
+            if [ "$first_setup" = 1 ]; then
+                echo "Confirming from this terminal (this server has no owner login yet)…" >&2
+            else
+                echo "Confirming from this terminal, outside K2's process tree (this server has no other confirm)…" >&2
+            fi
             body="$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "secretId": sys.argv[2] or None, "method": "terminal"}))' "$action" "$secret_id")"
             ;;
         *" owner-login-password "*)
@@ -94957,7 +94965,8 @@ Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's pub
           30 days. There is one set of keys for the box, never one per App: an App's chat key
           (k2 app grant <app> --kind chat-key) is a permission, not a key, and revoking it ends
           that App's sessions instead.
-Person only (outside K2, with Touch ID / your login / the vault password):
+Person only (outside K2, with Touch ID / your login / the vault password; purge, on a
+server with none of those, from a terminal outside K2's process tree):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
   k2 hostchat recovery-key                  (the owner only; shows Sew's launch key, the vault's

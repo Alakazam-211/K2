@@ -4,7 +4,9 @@
 
 mod common;
 
-use common::{closed_port, shown, Mode, Pki, Stub};
+#[cfg(feature = "rustls")]
+use common::Pki;
+use common::{closed_port, shown, Mode, Stub};
 use curl_proxy_env::{connect, Error, Options, ProxyStream, ProxyUrl};
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -62,6 +64,7 @@ fn a_refused_connect_is_curl_56_and_closed_is_56() {
     assert_eq!(e.curl_exit_code(), 56);
 }
 
+#[cfg(feature = "rustls")]
 #[test]
 fn an_https_proxy_is_tls_with_its_certificate_checked() {
     let pki = Pki::new();

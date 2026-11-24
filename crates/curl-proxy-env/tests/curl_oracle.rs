@@ -15,7 +15,7 @@
 //! taken out of curl's greeting before the bytes are compared, and the
 //! row says so.
 
-#![cfg(unix)]
+#![cfg(all(unix, feature = "rustls"))]
 
 mod common;
 

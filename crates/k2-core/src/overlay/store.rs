@@ -2113,8 +2113,11 @@ pub struct UnreadScan {
     pub lines: Vec<DocMeta>,
 }
 
-/// The facts of `id` from `doc_meta`, or (no row, or a row this build
-/// can't read) from the doc itself. `Ok(None)` when there is no such doc.
+/// The facts of `id` from `doc_meta`, or (no row, a row this build
+/// can't read, or a row an older build wrote for one of K2's own lines,
+/// which doesn't say whether it is an info notice:
+/// [`DocMeta::notice_unknown`]) from the doc itself. `Ok(None)` when
+/// there is no such doc.
 fn meta_or_doc(
     meta: Option<&redb::ReadOnlyTable<&str, &str>>,
     txn: &redb::ReadTransaction,
@@ -2123,7 +2126,7 @@ fn meta_or_doc(
     if let Some(t) = meta {
         read_counts::note(|c| c.meta_gets += 1);
         if let Some(g) = t.get(id).map_err(|e| format!("overlay get doc_meta: {e}"))? {
-            if let Some(m) = DocMeta::decode(g.value()) {
+            if let Some(m) = DocMeta::decode(g.value()).filter(|m| !m.notice_unknown()) {
                 return Ok(Some(m));
             }
         }
@@ -2341,6 +2344,17 @@ pub mod doc_meta_test {
             for id in ids {
                 meta.remove(*id).map_err(|e| format!("overlay remove doc_meta: {e}"))?;
             }
+        }
+        txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+    }
+
+    /// Write `id`'s row as given (a row in an older build's shape).
+    pub fn put_raw(id: &str, row: &str) -> Result<(), String> {
+        let db = db()?;
+        let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+        {
+            let mut meta = txn.open_table(DOC_META).map_err(|e| format!("overlay open doc_meta: {e}"))?;
+            meta.insert(id, row).map_err(|e| format!("overlay insert doc_meta: {e}"))?;
         }
         txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
     }

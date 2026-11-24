@@ -13,7 +13,8 @@ use crate::overlay::{MessageRef, PostAuthor, SecretProposal};
 /// upgrade test would be parsed by another test's summary.
 static COUNTED: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
-/// The read path before P6, kept verbatim as the oracle.
+/// The read path before P6, kept verbatim as the oracle (plus the one
+/// rule added since: K2's info notices never count, 0.46.18).
 mod old {
     use super::*;
 
@@ -36,6 +37,7 @@ mod old {
             && doc.imported.is_none()
             && doc.external.is_none()
             && doc.via.as_deref() != Some("import")
+            && !overlay::doc_meta::is_info_notice(doc)
             && !(overlay::is_waiting_now(doc, now) && card_waits_for(person, doc))
     }
 
@@ -203,6 +205,12 @@ fn person_post(conn: &Connection, conv: &str, project: &str, author: PostAuthor,
     (item.id, item.seq)
 }
 
+/// K2's own line (thread-system-notice-v1) with `notice`. Returns its id.
+fn k2_notice(conn: &Connection, conv: &str, project: &str, notice: overlay::SystemNotice) -> String {
+    let body = format!("K2: {}", notice.code);
+    overlay::post_system_notice(conn, conv, project, "ri-agent", &body, "k2", notice, None).expect("notice").0.id
+}
+
 fn ask(conn: &Connection, conv: &str, project: &str, expires_at: Option<i64>) -> String {
     overlay::post_choice(conn, conv, project, "ri-agent", "ri-agent", "Ship?", vec!["Go".into(), "Wait".into()], false, expires_at)
         .expect("ask")
@@ -302,6 +310,9 @@ fn counts_match_the_old_parser_on_a_mixed_fixture() {
     person_post(&conn, &c, &project, PostAuthor::user("rimaya"), "maya");
     person_post(&conn, &c, &project, PostAuthor::guest("riguest"), "guest");
     overlay::post_thread(&conn, &c, &project, "ri-agent", "ri-agent", "history", "import").expect("import via");
+    k2_notice(&conn, &c, &project, overlay::SystemNotice::info("job.added"));
+    k2_notice(&conn, &c, &project, overlay::SystemNotice::action("clone.proposed"));
+    k2_notice(&conn, &c, &project, overlay::SystemNotice::delivery("delivery.not_taken.retry_failed"));
     let (gone, gone_seq) = person_post(&conn, &c, &project, PostAuthor::user("alice"), "sensitive");
     overlay::delete_thread_message(&c, &MessageRef::Seq(gone_seq), PostAuthor::user("alice"), |_| Ok(())).expect("delete");
     assert_row_matches_doc(&gone);
@@ -592,4 +603,67 @@ fn the_upgrade_backfill_fills_every_row_and_counts_never_change() {
     assert_eq!(read_counts::take().doc_parses, 0, "every row is there now");
     assert_eq!(after, before);
     assert_same_as_old(&conn, &[&owner()], &convs, &[now, now + 7 * 24 * 3600 + 60]);
+}
+
+/// 0.46.18: K2's info notices never count as unread; its action and
+/// delivery notices, a later kind and a K2 line without `systemNotice` do.
+/// The row says which, so a count still parses no document; a row an
+/// older build wrote for a K2 line is read from its doc (an info notice
+/// stays quiet, one without `systemNotice` counts: the safe default).
+#[test]
+fn info_notices_never_count_and_old_rows_read_their_doc() {
+    let _counted = COUNTED.lock();
+    let (g, project) = db();
+    let h = g.handle();
+    let conn = h.lock();
+    ensure_person(&conn, OWNER).expect("owner");
+    let c = conv();
+    let unread = || item(&conn, &owner(), KIND_THREAD, &c, now_secs()).expect("item").unread;
+    let listed = || summary(&conn, &owner(), now_secs()).expect("summary").items.iter().find(|i| i.id == c).map_or(0, |i| i.unread);
+
+    let info = k2_notice(&conn, &c, &project, overlay::SystemNotice::info("job.added"));
+    assert_row_matches_doc(&info);
+    assert_eq!(doc_meta_test::row(&info).expect("row").expect("present").info_notice, Some(true));
+    assert_eq!((unread(), listed()), (0, 0), "an info notice is never unread");
+    let action = k2_notice(&conn, &c, &project, overlay::SystemNotice::action("clone.proposed"));
+    assert_eq!((unread(), listed()), (1, 1), "an action notice counts");
+    let delivery = k2_notice(&conn, &c, &project, overlay::SystemNotice::delivery("delivery.not_taken.never_read_in"));
+    assert_eq!((unread(), listed()), (2, 2), "a delivery notice counts");
+    let later = k2_notice(&conn, &c, &project, overlay::SystemNotice::new("later", "x.y"));
+    assert_eq!((unread(), listed()), (3, 3), "a kind this build doesn't know counts");
+    k2_notice(&conn, &c, &project, overlay::SystemNotice::info("reminder.fired"));
+    assert_eq!((unread(), listed()), (3, 3));
+    for id in [&action, &delivery, &later] {
+        assert_row_matches_doc(id);
+        assert_eq!(doc_meta_test::row(id).expect("row").expect("present").info_notice, Some(false), "{id}");
+    }
+    read_counts::take();
+    assert_eq!(unread(), 3);
+    assert_eq!(read_counts::take().doc_parses, 0, "the row says which notice it is");
+
+    // Rows an older build wrote (no notice flag): the doc answers.
+    let bare = format!("ri-bare-{}", uuid::Uuid::new_v4());
+    let mut old_line = OverlayDoc::text(bare.clone(), "k2".into(), "ri-agent".into(), "K2: old line".into(), "k2");
+    old_line.author = Some(PostAuthor::system());
+    let head = catalog_head(&conn, &c);
+    doc_meta_test::write_lines(&c, head + 1, std::slice::from_ref(&old_line), false).expect("old line");
+    conn.execute("UPDATE overlay_conversations SET last_thread_seq = ?2 WHERE conversation_id = ?1", params![c, head + 1])
+        .expect("head");
+    let v1 = "1\tu\t\t\tsystem\tk2";
+    for id in [info.as_str(), action.as_str(), bare.as_str()] {
+        doc_meta_test::put_raw(id, v1).expect("v1 row");
+    }
+    read_counts::take();
+    assert_eq!(
+        (unread(), listed()),
+        (4, 4),
+        "an old row of a K2 line without systemNotice counts; the old info row stays quiet; the old action row counts"
+    );
+    assert!(read_counts::take().doc_parses > 0, "old K2 rows are read from the doc");
+    assert_same_as_old(&conn, &[&owner()], std::slice::from_ref(&c), &[now_secs()]);
+}
+
+fn catalog_head(conn: &Connection, conv: &str) -> i64 {
+    conn.query_row("SELECT last_thread_seq FROM overlay_conversations WHERE conversation_id = ?1", params![conv], |r| r.get(0))
+        .expect("head")
 }

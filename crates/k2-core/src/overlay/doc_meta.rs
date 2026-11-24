@@ -3,7 +3,8 @@
 //! The unread summary needs only a few facts about each line past a
 //! person's cursor: who wrote it, whether it is history (imported or
 //! collected), whether it is an action card, whether it is a card still
-//! waiting and until when, and a permission card's approver floor. The
+//! waiting and until when, a permission card's approver floor, and on
+//! K2's own lines whether it is an info notice (0.46.18). The
 //! store writes these in a small `doc_meta` row (`doc id → encoded
 //! DocMeta`) in the SAME redb transaction as every body write, so a count
 //! reads a few short strings instead of parsing whole documents.
@@ -35,6 +36,13 @@ pub struct DocMeta {
     /// A permission card's approver floor (`owner` or `admin`), `None`
     /// for any other doc.
     pub permission_floor: Option<String>,
+    /// K2's own line (thread-system-notice-v1, 0.46.18): `Some(true)` for
+    /// an info notice ([`super::doc::NOTICE_INFO`]: never unread, nothing
+    /// for a person to do), `Some(false)` for any other K2 line (action,
+    /// delivery, a later kind, or no `systemNotice` at all: they count).
+    /// `None` on every doc that is not K2's, and on a K2 line whose row an
+    /// older build wrote ([`DocMeta::notice_unknown`]: read from the doc).
+    pub info_notice: Option<bool>,
 }
 
 /// Encoding version. A row in another version reads as missing (the doc
@@ -58,7 +66,16 @@ impl DocMeta {
             waiting_card: super::store::is_waiting_card(doc),
             expires_at,
             permission_floor: permission_floor(doc).map(str::to_string),
+            info_notice: (doc.by_system() || doc.system_notice.is_some()).then(|| is_info_notice(doc)),
         }
+    }
+
+    /// A row an older build wrote for one of K2's own lines: it doesn't say
+    /// whether the line is an info notice, so the reader takes the facts
+    /// from the doc itself (only K2's lines; every other row stands).
+    pub fn notice_unknown(&self) -> bool {
+        self.info_notice.is_none()
+            && self.author.as_ref().is_some_and(|(kind, _)| kind == super::doc::AUTHOR_SYSTEM)
     }
 
     /// [`OverlayDoc::is_due`] for the doc this was taken from.
@@ -72,7 +89,10 @@ impl DocMeta {
     }
 
     /// `1\t{flags}\t{expires}\t{floor}\t{kind}\t{login}`; the login is
-    /// last so it may hold any character.
+    /// last so it may hold any character. Flags `i` / `n` (0.46.18) are an
+    /// info notice / another K2 line; a build before them reads a row
+    /// with either as unreadable and parses that doc, so a downgrade
+    /// never miscounts.
     pub fn encode(&self) -> String {
         let mut flags = String::new();
         if self.history {
@@ -86,6 +106,11 @@ impl DocMeta {
         }
         if self.author.is_some() {
             flags.push('u');
+        }
+        match self.info_notice {
+            Some(true) => flags.push('i'),
+            Some(false) => flags.push('n'),
+            None => {}
         }
         let expires = self.expires_at.map(|t| t.to_string()).unwrap_or_default();
         let floor = self.permission_floor.as_deref().unwrap_or("");
@@ -104,9 +129,15 @@ impl DocMeta {
             return None;
         }
         let flags = it.next()?;
-        if flags.chars().any(|c| !matches!(c, 'h' | 'a' | 'w' | 'u')) {
+        if flags.chars().any(|c| !matches!(c, 'h' | 'a' | 'w' | 'u' | 'i' | 'n')) {
             return None;
         }
+        let info_notice = match (flags.contains('i'), flags.contains('n')) {
+            (true, true) => return None,
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            (false, false) => None,
+        };
         let expires = it.next()?;
         let expires_at = if expires.is_empty() { None } else { Some(expires.parse().ok()?) };
         let floor = it.next()?;
@@ -119,8 +150,16 @@ impl DocMeta {
             waiting_card: flags.contains('w'),
             expires_at,
             permission_floor: (!floor.is_empty()).then(|| floor.to_string()),
+            info_notice,
         })
     }
+}
+
+/// K2's info notice (thread-system-notice-v1 kind [`super::doc::NOTICE_INFO`],
+/// exactly): never unread (0.46.18). Action and delivery notices, a later
+/// kind and a K2 line without `systemNotice` all count.
+pub fn is_info_notice(doc: &OverlayDoc) -> bool {
+    doc.system_notice.as_ref().is_some_and(|n| n.kind == super::doc::NOTICE_INFO)
 }
 
 /// A permission card's floor (`choice.action.view.approvers.floor`), or
@@ -158,7 +197,10 @@ mod tests {
                 waiting_card: true,
                 expires_at: Some(-5),
                 permission_floor: Some("admin".into()),
+                info_notice: Some(true),
             },
+            DocMeta { author: Some(("system".into(), "k2".into())), info_notice: Some(false), ..Default::default() },
+            DocMeta { author: Some(("system".into(), "k2".into())), info_notice: None, ..Default::default() },
             DocMeta { author: Some((String::new(), String::new())), expires_at: Some(1_900_000_000), ..Default::default() },
         ];
         for m in cases {
@@ -172,6 +214,36 @@ mod tests {
         assert_eq!(DocMeta::decode("1\tz\t\t\t\t"), None);
         assert_eq!(DocMeta::decode("1\t\tsoon\t\t\t"), None);
         assert_eq!(DocMeta::decode("1\t\t"), None);
+        assert_eq!(DocMeta::decode("1\tin\t\t\t\t"), None, "info and not-info at once");
         assert_eq!(DocMeta::decode(""), None);
+    }
+
+    /// 0.46.18: K2's lines say whether they are info notices; nobody
+    /// else's row changes (an older build still reads it).
+    #[test]
+    fn k2_lines_record_their_notice_kind_and_other_rows_stay_as_they_were() {
+        use super::super::doc::{PostAuthor, SystemNotice};
+        let sys = |n: Option<SystemNotice>| {
+            let mut d = OverlayDoc::system_text("d".into(), "a".into(), "K2: x".into(), "k2", SystemNotice::info("x"));
+            d.system_notice = n;
+            DocMeta::of(&d)
+        };
+        assert_eq!(sys(Some(SystemNotice::info("job.added"))).info_notice, Some(true));
+        assert_eq!(sys(Some(SystemNotice::action("clone.proposed"))).info_notice, Some(false));
+        assert_eq!(sys(Some(SystemNotice::delivery("delivery.not_taken.retry_failed"))).info_notice, Some(false));
+        assert_eq!(sys(Some(SystemNotice::new("later", "x"))).info_notice, Some(false), "a later kind counts");
+        assert_eq!(sys(None).info_notice, Some(false), "a K2 line without systemNotice counts");
+        assert!(!sys(None).notice_unknown());
+
+        let mut person = OverlayDoc::text("p".into(), "owner".into(), "a".into(), "hi".into(), "compose");
+        person.author = Some(PostAuthor::owner());
+        let m = DocMeta::of(&person);
+        assert_eq!(m.info_notice, None);
+        assert!(!m.encode().split('\t').nth(1).expect("flags").contains(['i', 'n']), "{}", m.encode());
+
+        // A row an older build wrote for a K2 line: the reader asks the doc.
+        let old = DocMeta::decode("1\tu\t\t\tsystem\tk2").expect("v1 row");
+        assert!(old.notice_unknown());
+        assert!(!DocMeta::decode("1\tu\t\t\tagent\tx").expect("v1 row").notice_unknown());
     }
 }

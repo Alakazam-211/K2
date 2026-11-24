@@ -321,3 +321,50 @@ fn the_field_survives_history_delta_socket_and_hub() {
     assert_eq!(hub["systemNotice"], full, "hub: {hub}");
     assert_eq!(hub["author"]["kind"], "system", "{hub}");
 }
+
+/// 0.46.18: K2's info notices never count as unread; its action and
+/// delivery notices do (a person has something to do). The Thread list
+/// row (`GET /cli/thread/latest`, the desktop and phone lists) and the
+/// badge route (`GET /cli/thread/unread`, whose totals every badge push
+/// carries) count the same.
+#[test]
+fn info_notices_never_count_as_unread_and_the_list_and_badge_agree() {
+    let _home_lock = crate::test_support::lock_home();
+    let (handle, _) = room("sysu");
+    let conv = resolve_addr(&handle).unwrap_or_else(|e| panic!("resolve: {}", e.body)).conversation_id;
+    let badge = || -> (i64, serde_json::Value) {
+        let r = crate::read_routes::handle(false, crate::read_routes::UNREAD_PATH, &HashMap::new(), b"", "owner");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json_body(&r);
+        let row = v["byConversation"]
+            .as_array()
+            .expect("byConversation")
+            .iter()
+            .find(|i| i["id"] == serde_json::json!(conv))
+            .cloned();
+        (row.as_ref().map_or(0, |i| i["unread"].as_i64().expect("unread")), v)
+    };
+    let listed = || -> i64 {
+        let r = crate::read_routes::with_read_login(Some("owner".into()), || {
+            dispatch("/cli/thread/latest", &params_of(&[("addrs", handle.as_str())])).expect("latest")
+        });
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json_body(&r);
+        v["items"][0]["unread"].as_i64().unwrap_or_else(|| panic!("the row carries the owner's unread: {v}"))
+    };
+    let both = |want: i64, what: &str| {
+        let (b, v) = badge();
+        assert_eq!((listed(), b), (want, want), "{what}: list row vs badge route: {v}");
+    };
+    // Seen first, so this Thread (new, no cursor yet) counts from its start.
+    badge();
+
+    post_workspace_note(&handle, "K2: job **collect** added.", "k2-job", overlay::SystemNotice::info("job.added")).expect("info");
+    both(0, "an info notice");
+    post_workspace_notice(&handle, "K2: review the clone proposal.", overlay::SystemNotice::action("clone.proposed")).expect("action");
+    both(1, "an action notice");
+    delivery_notice(&handle, "deploy the site", NotTaken::RetryFailed);
+    both(2, "a delivery notice");
+    post_workspace_note(&handle, "K2: reminder fired.", "k2-reminder", overlay::SystemNotice::info("reminder.fired")).expect("info 2");
+    both(2, "another info notice");
+}

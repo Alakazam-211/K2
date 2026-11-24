@@ -3274,9 +3274,10 @@ mod tests {
 
     /// The text the brand-free tests read, with where each came from: every
     /// refusal row (what happened, the fix, its explain line, its text),
-    /// the registry's index and study page, every wall's constant text, the
-    /// Ask line of every action the walls map names, and every card's
-    /// constant text.
+    /// the registry's index, study page and areas, every wall's constant
+    /// text, the Ask line of every action the walls map names, every
+    /// card's constant text, the glossary as the daemon answers it, a
+    /// compute job's move and retry words, and the risky switches.
     fn brand_texts() -> Vec<(String, String)> {
         use k2_core::refusals;
 
@@ -3331,6 +3332,51 @@ mod tests {
         }
         for n in crate::permission::actions::not_cardable() {
             texts.push((format!("not a card {}: where", n.id), n.r#where.to_string()));
+        }
+
+        // Rebrand B7 step 1 moved the rest of the server's text onto the
+        // brand; these are the parts a test reaches whole. The glossary, as
+        // the daemon answers it, every term.
+        let list: Value = serde_json::from_str(&crate::inbox_routes::handle_glossary_list().body).expect("the glossary list is JSON");
+        let terms = list.as_array().expect("the glossary list is an array");
+        assert!(terms.len() > 20, "the glossary's terms: {}", terms.len());
+        for t in terms {
+            let term = t["term"].as_str().expect("a glossary term");
+            let q = HashMap::from([("term".to_string(), term.to_string())]);
+            let v: Value = serde_json::from_str(&crate::inbox_routes::handle_glossary_get(&q).body).expect("a glossary entry is JSON");
+            let mut all = Vec::new();
+            strings_of(&v, &mut all);
+            assert!(all.len() >= 3, "glossary {term}: {v}");
+            for s in all {
+                texts.push((format!("glossary {term}"), s.to_string()));
+            }
+        }
+        // What a compute job's attempts say when it moves or is placed again.
+        {
+            use k2_core::compute::attempts::{move_words, next, next_words};
+            for code in [
+                next::RETRY_AUTO,
+                next::RETRY_ASKED,
+                next::RESENT,
+                next::WITHDRAWN,
+                next::NODE_LOST,
+                next::NOT_ON_NODE,
+                next::PULLED_BACK,
+                next::WITHDRAW_UNANSWERED,
+            ] {
+                texts.push((format!("compute next {code}"), next_words(code, "n1", Some("n2"))));
+                if let Some(w) = move_words(code, "n1", Some("n2")) {
+                    texts.push((format!("compute move {code}"), w));
+                }
+            }
+        }
+        // The refusal registry's areas, and the switches a shared agent
+        // can't be given.
+        for (area, words) in k2_core::refusals::AREAS {
+            texts.push((format!("refusal area {area}"), (*words).to_string()));
+        }
+        for (switch, words) in crate::shared_routes::RISKY_SWITCHES {
+            texts.push((format!("risky switch {switch}"), (*words).to_string()));
         }
 
         texts

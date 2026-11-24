@@ -11,14 +11,14 @@
 # x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (via the
 # gnu cross toolchain) and uploads k2-daemon-linux-<arch> + its .sha256
 # UNSIGNED (prd-security-sweep-0464-v1 SS1, 0.46.6). The update key is not
-# a GitHub secret any more: z3mbpZ signs the daemons with
+# a GitHub secret any more: mac-b signs the daemons with
 # scripts/sign-daemon.sh (release.sh Step 10.5), uploads the .sig files and
 # then merges them into daemon-latest.json, so the manifest never lists a
 # .sig that isn't up yet. Daemons fetch only what the manifest lists.
 #
 # Asset names MUST match what daemon-latest.json references:
-#   k2-daemon-linux-x86_64{,.sha256}    (.sig added on z3mbpZ)
-#   k2-daemon-linux-aarch64{,.sha256}   (.sig added on z3mbpZ)
+#   k2-daemon-linux-x86_64{,.sha256}    (.sig added on mac-b)
+#   k2-daemon-linux-aarch64{,.sha256}   (.sig added on mac-b)
 #
 # The legacy k2-mail-helper (0.44.1–0.45.3) is no longer built or shipped
 # (0.45.4, Rosson 2026-10-10): install-root-helper.sh retires it. The
@@ -28,7 +28,7 @@
 #   k2-root-helper-linux-x86_64{,.sha256}
 #   k2-root-helper-linux-aarch64{,.sha256}
 #   install-root-helper.sh
-# The .sig is added afterwards on z3mbpZ by scripts/sign-root-helper.sh with
+# The .sig is added afterwards on mac-b by scripts/sign-root-helper.sh with
 # the separate root-helper key (never a GitHub secret, never the updater
 # key). Daemons fetch only signed assets, so an unsigned window is a
 # harmless 404 for auto-heal.
@@ -37,7 +37,7 @@
 #   k2-node-linux-x86_64{,.sha256}
 #   k2-node-linux-aarch64{,.sha256}
 # k2-node has a root mode, so its .sig is the ROOT-HELPER key's, added on
-# z3mbpZ by scripts/sign-k2-node.sh (trusted comment
+# mac-b by scripts/sign-k2-node.sh (trusted comment
 # `file:k2-node-linux-<arch> version:<v> protocol:<p>`). This workflow no
 # longer signs k2-node with the updater key. Until the .sig is up, daemons
 # and controllers refuse the asset (fail closed).
@@ -47,7 +47,7 @@
 #   k2-app-engine-linux-x86_64{,.sha256}
 #   k2-app-engine-linux-aarch64{,.sha256}
 # The root helper installs it (`apps install-engine`) to run as k2app, so
-# its .sig is the ROOT-HELPER key's, added on z3mbpZ by
+# its .sig is the ROOT-HELPER key's, added on mac-b by
 # scripts/sign-app-engine.sh (trusted comment
 # `file:k2-app-engine-linux-<arch> version:<v> protocol:<p>`). Until the .sig
 # is up, daemons and the helper refuse the asset (fail closed).
@@ -118,7 +118,7 @@ jobs:
     if: github.event_name != 'push' || vars.LINUX_BUILDS != 'compute-all'
     runs-on: [self-hosted, linux, k2-linux]
     # id-token + attestations: the build-provenance attestation that
-    # sign-daemon.sh requires before z3mbpZ signs a daemon (security review
+    # sign-daemon.sh requires before mac-b signs a daemon (security review
     # of SS1). contents: the release upload.
     permissions:
       contents: write
@@ -250,7 +250,7 @@ jobs:
           # The marker sign-daemon.sh requires exactly once (version + arch).
           test "$(grep -a -o 'K2_DAEMON_BUILD v=[0-9.]* os=linux arch=[a-z0-9_]*;' "${{ matrix.asset }}" | wc -l)" = 1
           # The root helper (prd-k2-root-helper-v1): its own crate, no
-          # features (never test-keys). Signed LATER on z3mbpZ with the
+          # features (never test-keys). Signed LATER on mac-b with the
           # separate root-helper key (scripts/sign-root-helper.sh); CI
           # never sees that key and uploads no .sig for it.
           cargo build --release --target ${{ matrix.target }} -p k2-root-helper
@@ -262,7 +262,7 @@ jobs:
           test "$(grep -a -o 'K2_ROOT_HELPER_BUILD v=[0-9.]* proto=[0-9]* arch=[a-z0-9_]*;' "${{ matrix.root_asset }}" | wc -l)" = 1
           # Compute nodes: k2-node ships beside the daemon so `k2 compute
           # local enable` never needs a hand-copied binary, and controllers
-          # send it to nodes as a signed self-update. Signed LATER on z3mbpZ
+          # send it to nodes as a signed self-update. Signed LATER on mac-b
           # with the root-helper key (scripts/sign-k2-node.sh), never here.
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-node" \
              "${{ matrix.node_asset }}"
@@ -271,7 +271,7 @@ jobs:
           fi
           test "$(grep -a -o 'K2_NODE_BUILD v=[0-9.]* proto=[0-9]* os=linux arch=[a-z0-9_]*;' "${{ matrix.node_asset }}" | wc -l)" = 1
           # The App engine (S11): its own crate, no features (never
-          # test-keys). Signed LATER on z3mbpZ with the root-helper key
+          # test-keys). Signed LATER on mac-b with the root-helper key
           # (scripts/sign-app-engine.sh), never here.
           cargo build --release --target ${{ matrix.target }} -p k2-app-engine
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-app-engine" \
@@ -291,7 +291,7 @@ jobs:
           assert_daemon_oauth_not_placeholder "${{ matrix.asset }}"
 
       # Published for every asset: sign-daemon.sh, sign-root-helper.sh,
-      # sign-k2-node.sh and sign-app-engine.sh check the downloads on z3mbpZ.
+      # sign-k2-node.sh and sign-app-engine.sh check the downloads on mac-b.
       - name: Compute sha256
         run: |
           set -euo pipefail
@@ -378,6 +378,6 @@ jobs:
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG" >&2; exit 1; }
           gh release upload "$TAG" scripts/install-mail-helper.sh scripts/install-root-helper.sh --clobber
 
-  # No manifest merge here any more (SS1): z3mbpZ signs the Linux daemons
+  # No manifest merge here any more (SS1): mac-b signs the Linux daemons
   # and merges them into daemon-latest.json itself (scripts/sign-daemon.sh,
   # using scripts/merge-daemon-manifest.py), after their .sig is up.

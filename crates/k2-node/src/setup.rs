@@ -130,13 +130,13 @@ mod tests {
     use super::*;
 
     /// IR-4: Simulator apps run outside Seatbelt, so `setup --sim` refuses
-    /// while a person's home is open to others (k2n1-m4's
-    /// `/Users/scoutwilliams` was installed with `--no-private-home`).
+    /// while a person's home is open to others (rig1-mac's
+    /// `/Users/patlee` was installed with `--no-private-home`).
     #[test]
     fn setup_sim_refuses_while_a_home_is_readable_by_others() {
-        let open = vec![(PathBuf::from("/Users/scoutwilliams"), 0o755)];
+        let open = vec![(PathBuf::from("/Users/patlee"), 0o755)];
         let e = sim_preflight(true, &open, false).unwrap_err();
-        assert!(e.contains("/Users/scoutwilliams (755)") && e.contains("sudo chmod 700 /Users/scoutwilliams") && e.contains("--private-home"), "{e}");
+        assert!(e.contains("/Users/patlee (755)") && e.contains("sudo chmod 700 /Users/patlee") && e.contains("--private-home"), "{e}");
         assert!(sim_preflight(true, &open, true).is_ok(), "--private-home makes them private");
         assert!(sim_preflight(true, &[], false).is_ok());
         assert!(sim_preflight(false, &[], false).unwrap_err().contains("Mac node"));

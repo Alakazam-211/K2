@@ -1,4 +1,4 @@
-// The low-latency VUI (z3mbpZ 11-10): the SPS VideoToolbox writes has no VUI,
+// The low-latency VUI (mac-b 11-10): the SPS VideoToolbox writes has no VUI,
 // so WebKit's decoder held frames; the rewrite adds the bitstream
 // restriction (no reorder, buffering = the reference frames) and leaves the
 // rest of the SPS bit for bit.
@@ -8,7 +8,7 @@ import { spsRestriction, spsWithLowLatencyVui, withLowLatencyVui } from './h264-
 import { codecFromAnnexB, splitNals } from './stream-video'
 
 const hex = (s: string): Uint8Array => Uint8Array.from(s.match(/../g)!.map((b) => parseInt(b, 16)))
-// The helper's SPS and PPS as captured on z3mbpZ (Constrained High, level
+// The helper's SPS and PPS as captured on mac-b (Constrained High, level
 // 3.2, 1 reference frame, no VUI).
 const SPS = hex('27640c20ac568084091ea540')
 const PPS = hex('28ee3cb0')

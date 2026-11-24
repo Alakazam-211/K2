@@ -36,7 +36,7 @@ export interface MobileBootScreenProps {
   /** Retry the start (the same boot as Start); omitted when there is none. */
   onRetry?: () => void
   retryDisabled?: boolean
-  /** The daemon's current step on the session row ("Starting on k2n1-m4"
+  /** The daemon's current step on the session row ("Starting on rig1-mac"
    *  for an iPhone on a Mac node), shown as the starting step. */
   bootStep?: string | null
 }

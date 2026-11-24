@@ -42,8 +42,8 @@ from urllib.parse import urlparse, parse_qs
 LOG = sys.argv[1]
 
 def job(avoid):
-    j = {"id": "abcd1234" * 4, "short": "abcd1234", "node": "k2n12-vin", "state": "done", "exitCode": 0, "argv": ["true"],
-         "placement": {"mode": "auto", "policy": "v2", "node": "k2n12-vin", "code": "starts_now_idle", "why": "starts now · idle", "fits": "3 nodes fit"}}
+    j = {"id": "abcd1234" * 4, "short": "abcd1234", "node": "rig12-vps", "state": "done", "exitCode": 0, "argv": ["true"],
+         "placement": {"mode": "auto", "policy": "v2", "node": "rig12-vps", "code": "starts_now_idle", "why": "starts now · idle", "fits": "3 nodes fit"}}
     if avoid is not None:
         j["avoid"] = avoid
     return j
@@ -62,7 +62,7 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/cli/compute/jobs/get":
             which = parse_qs(u.query).get("job", [""])[0]
-            return self.reply(200, job(["k2n11-vin", "z13flow"] if which.startswith("avoid") else []))
+            return self.reply(200, job(["rig11-vps", "laptop-a"] if which.startswith("avoid") else []))
         return self.reply(404, {"error": {"code": "not_found", "hint": self.path}})
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -94,22 +94,22 @@ cd "$SANDBOX"
 last_avoid() { tail -1 "$LOG" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["path"], json.dumps(v["body"].get("avoid")))'; }
 
 echo "== run: every --avoid reaches the daemon =="
-NA="--avoid k2n9-vin --avoid k2n10-vin --avoid k2n8-vin"
+NA="--avoid rig9-vps --avoid rig10-vps --avoid rig8-vps"
 # shellcheck disable=SC2086  # NA is a list of flags, as a submit script keeps it
 "$K2" compute run --repo k2-mpc-engine --os linux --arch x86_64 --sha 3a121820 --needs rust@1.99.1+clippy+rustfmt --cpus 2 --mem 4G --timeout 2h \
-    --avoid k2n11-vin --avoid z13flow --avoid k2n1-m4 --avoid k2n2-m1 --avoid k2n3-m1 $NA --tag rc3:check-3a12 --detach -- sh -c 'true' >/dev/null 2>&1 || true
+    --avoid rig11-vps --avoid laptop-a --avoid rig1-mac --avoid rig2-mac --avoid rig3-mac $NA --tag rc3:check-3a12 --detach -- sh -c 'true' >/dev/null 2>&1 || true
 expect_eq "the long submit line sends all eight" "$(last_avoid)" \
-    '/cli/compute/run ["k2n11-vin", "z13flow", "k2n1-m4", "k2n2-m1", "k2n3-m1", "k2n9-vin", "k2n10-vin", "k2n8-vin"]'
-"$K2" compute run --sha 3a121820 --arch x86_64 --os linux --cpus 2 --mem 8G --timeout 1h --needs rust@stable --avoid k2n11-vin --tag rc3:x -- true >/dev/null 2>&1 || true
-expect_eq "no --repo, attached: the same" "$(last_avoid)" '/cli/compute/run ["k2n11-vin"]'
-"$K2" compute run --any --no-source --avoid k2n11-vin -- true >/dev/null 2>&1 || true
-expect_eq "--any: the same" "$(last_avoid)" '/cli/compute/run ["k2n11-vin"]'
+    '/cli/compute/run ["rig11-vps", "laptop-a", "rig1-mac", "rig2-mac", "rig3-mac", "rig9-vps", "rig10-vps", "rig8-vps"]'
+"$K2" compute run --sha 3a121820 --arch x86_64 --os linux --cpus 2 --mem 8G --timeout 1h --needs rust@stable --avoid rig11-vps --tag rc3:x -- true >/dev/null 2>&1 || true
+expect_eq "no --repo, attached: the same" "$(last_avoid)" '/cli/compute/run ["rig11-vps"]'
+"$K2" compute run --any --no-source --avoid rig11-vps -- true >/dev/null 2>&1 || true
+expect_eq "--any: the same" "$(last_avoid)" '/cli/compute/run ["rig11-vps"]'
 "$K2" compute run --no-source -- true >/dev/null 2>&1 || true
 expect_eq "no --avoid: no avoid key" "$(last_avoid)" '/cli/compute/run null'
 
 echo "== test: passes --avoid through =="
-"$K2" compute test --no-source --avoid k2n11-vin --avoid k2n1 -- -p x >/dev/null 2>&1 || true
-expect_eq "compute test --avoid" "$(last_avoid)" '/cli/compute/run ["k2n11-vin", "k2n1"]'
+"$K2" compute test --no-source --avoid rig11-vps --avoid rig1 -- -p x >/dev/null 2>&1 || true
+expect_eq "compute test --avoid" "$(last_avoid)" '/cli/compute/run ["rig11-vps", "rig1"]'
 
 echo "== --cache-required reaches the daemon =="
 last_cache() { tail -1 "$LOG" | python3 -c 'import json,sys; b=json.load(sys.stdin)["body"]; print(b.get("cache"), json.dumps(b.get("cacheRequired")))'; }
@@ -122,9 +122,9 @@ expect_eq "compute test passes --cache-required" "$(last_cache)" 'corpus true'
 
 echo "== get: names what an auto job avoids =="
 out="$("$K2" compute get avoid1234 2>&1)"
-expect_has "the placement line names the avoided nodes" "$out" "placed on k2n12-vin (auto, v2): starts now · idle · 3 nodes fit · avoids k2n11-vin, z13flow"
+expect_has "the placement line names the avoided nodes" "$out" "placed on rig12-vps (auto, v2): starts now · idle · 3 nodes fit · avoids rig11-vps, laptop-a"
 out="$("$K2" compute get plain1234 2>&1)"
-expect_has "a job that avoids nothing: the placement line" "$out" "placed on k2n12-vin (auto, v2): starts now · idle · 3 nodes fit"
+expect_has "a job that avoids nothing: the placement line" "$out" "placed on rig12-vps (auto, v2): starts now · idle · 3 nodes fit"
 expect_not "... with no avoids" "$out" "avoids"
 
 echo

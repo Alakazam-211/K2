@@ -47,7 +47,7 @@
 // `k2_daemon::daemon_main`.
 // The marker the release signer needs exactly once in a Linux daemon asset
 // (scripts/sign-daemon.sh → scripts/lib/check-daemon-asset.py): it ties the
-// bytes to the release version before z3mbpZ signs them.
+// bytes to the release version before mac-b signs them.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[used]
 static BUILD_MARKER: &str = concat!("K2_DAEMON_BUILD v=", env!("CARGO_PKG_VERSION"), " os=linux arch=x86_64;");

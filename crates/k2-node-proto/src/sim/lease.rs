@@ -342,7 +342,7 @@ mod tests {
         l.open(0, &open(1, WS), &adm(), 0);
         assert_eq!(l.reserved_bytes(), RESERVE_MEM_BYTES);
         assert_eq!(l.reserved_millicpu(), RESERVE_MILLICPU as u64);
-        assert_eq!(l.default_job_mem(cap), 5 << 30, "k2n1-m4: jobs get 5 GB while an iPhone runs (D3)");
+        assert_eq!(l.default_job_mem(cap), 5 << 30, "rig1-mac: jobs get 5 GB while an iPhone runs (D3)");
         assert!(l.police_memory(RESERVE_MEM_BYTES + MEM_SLACK_BYTES).is_empty());
         let e = l.police_memory(RESERVE_MEM_BYTES + MEM_SLACK_BYTES + 1);
         assert_eq!(states(&e), vec![(sid(1), SessionState::Closed, Some(codes::MEM_CAP.into()), true)]);

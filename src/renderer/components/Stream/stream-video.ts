@@ -313,7 +313,7 @@ interface Queued {
 /** A frame is acked when the decoder takes it, unless this many chunks
  *  already wait for the codec; then on output. A decoder may hold decoded
  *  frames before output (no VUI reorder limit); acking only on output then
- *  starves the daemon's window of 3 (z3mbpZ 11-10: 2–4 fps of 55). */
+ *  starves the daemon's window of 3 (mac-b 11-10: 2–4 fps of 55). */
 export const DECODE_BACKLOG = 2
 
 export class VideoSink {

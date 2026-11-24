@@ -1000,11 +1000,11 @@ fn browser_header_detection() {
 #[test]
 fn owner_linked_identity_names_k2_owner_with_the_connect_sid() {
     let tok = "k2cu_owner_linked_session_token_for_tests";
-    let i = identity::owner_linked_identity("z3thon", tok);
+    let i = identity::owner_linked_identity("zoe", tok);
     assert_eq!(i.sub, identity::OWNER_SUB);
     assert_eq!(i.sid, k2_core::connect_users::session_sid(tok));
     assert!(i.sid.starts_with("cu_"), "{}", i.sid);
-    assert_eq!(i.actor, "user:z3thon");
+    assert_eq!(i.actor, "user:zoe");
     assert_eq!(i.provenance, Provenance::ConnectLogin);
     assert_eq!(i.sew_role, SewRole::InstallOwner);
     assert!(i.caps.is_empty());
@@ -1151,17 +1151,17 @@ fn s0_box_logins_never_mint_through_an_app_and_a_same_name_app_user_is_itself() 
     use k2_core::connect_users::{self as cu, Role as CRole};
     let _home = TempHome::new();
     let r = ring("s0-box-logins");
-    cu::add_user("z3thon", "pw-owner-long-1").expect("owner login");
-    cu::set_role("z3thon", CRole::Owner).expect("owner role");
-    k2_core::app_settings::update(json!({ "ownerAccounts": ["z3thon"] })).expect("link the owner");
+    cu::add_user("zoe", "pw-owner-long-1").expect("owner login");
+    cu::set_role("zoe", CRole::Owner).expect("owner role");
+    k2_core::app_settings::update(json!({ "ownerAccounts": ["zoe"] })).expect("link the owner");
     cu::add_user("ada", "pw-admin-long-1").expect("admin login");
     cu::set_role("ada", CRole::Admin).expect("admin role");
-    let owner_login = cu::create_session("z3thon");
+    let owner_login = cu::create_session("zoe");
     let admin_login = cu::create_session("ada");
     // App users with the same names (their own principals and passwords).
-    let z = app_guest("z3thon", &[MEET_SVC]);
+    let z = app_guest("zoe", &[MEET_SVC]);
     let a = app_guest("ada", &[MEET_SVC]);
-    let z_s = k2_core::skin::create_app_session_token("z3thon", MEET_SVC).expect("App user z3thon signs in");
+    let z_s = k2_core::skin::create_app_session_token("zoe", MEET_SVC).expect("App user zoe signs in");
     let a_s = k2_core::skin::create_app_session_token("ada", MEET_SVC).expect("App user ada signs in");
     let meet = mint::OnLink { app_id: "meet", service_id: MEET_SVC, link_id: "gw:38602" };
     let jwks = r.ring.public_jwks(T0).expect("jwks");
@@ -1180,7 +1180,7 @@ fn s0_box_logins_never_mint_through_an_app_and_a_same_name_app_user_is_itself() 
             assert!(!x.response.body.contains("\"pass\""), "{who}: {}", x.response.body);
         }
         // The App users: their own principals, plain members, App-scoped.
-        for (s, id, name) in [(&z_s, &z, "z3thon"), (&a_s, &a, "ada")] {
+        for (s, id, name) in [(&z_s, &z, "zoe"), (&a_s, &a, "ada")] {
             let x = on_link(&s.raw);
             assert_eq!(x.response.status, "200 OK", "{name}: {}", x.response.body);
             let b = body(&x);

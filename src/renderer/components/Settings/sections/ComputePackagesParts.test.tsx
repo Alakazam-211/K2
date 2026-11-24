@@ -33,7 +33,7 @@ function row(over: Partial<PkgRequestRow> = {}): PkgRequestRow {
     id: 'pr_1',
     batchId: 'pb_1',
     origin: 'own',
-    node: 'k2n7',
+    node: 'rig7',
     nodeRequest: null,
     server: 'own',
     workspaceId: 'ws-tests',
@@ -56,7 +56,7 @@ function row(over: Partial<PkgRequestRow> = {}): PkgRequestRow {
 function node(over: Partial<ComputeNode> = {}): ComputeNode {
   return {
     id: 'n-7',
-    name: 'k2n7',
+    name: 'rig7',
     fingerprint: 'fp-7',
     os: 'linux',
     arch: 'x86_64',
@@ -93,15 +93,15 @@ describe('groupPkgBatches', () => {
   it('one batch per batchId, names once each, every node with its host line, dependencies and size summed', () => {
     const batches = api.groupPkgBatches([
       row(),
-      row({ id: 'pr_2', node: 'k2n8', host: 'Debian 13 · apt', names: ['libgtk-3-dev', 'libwebkit2gtk-4.1-dev'], dry: { installs: ['a', 'b'], size_mb: 60 } }),
+      row({ id: 'pr_2', node: 'rig8', host: 'Debian 13 · apt', names: ['libgtk-3-dev', 'libwebkit2gtk-4.1-dev'], dry: { installs: ['a', 'b'], size_mb: 60 } }),
       row({ id: 'pr_3', batchId: 'pb_2', names: ['cmake'], dry: null }),
     ])
     expect(batches.map((b) => b.batchId)).toEqual(['pb_1', 'pb_2'])
     const [first, second] = batches
     expect(first.names).toEqual(['libgtk-3-dev', 'libwebkit2gtk-4.1-dev'])
     expect(first.nodes).toEqual([
-      { node: 'k2n7', host: 'Ubuntu 24.04.1 LTS · apt' },
-      { node: 'k2n8', host: 'Debian 13 · apt' },
+      { node: 'rig7', host: 'Ubuntu 24.04.1 LTS · apt' },
+      { node: 'rig8', host: 'Debian 13 · apt' },
     ])
     expect(first.deps).toBe(5)
     expect(first.sizeMb).toBe(180)
@@ -133,9 +133,9 @@ describe('findLocalNode', () => {
     const nodes = [node(), node({ id: 'n-8', name: 'mini-1', fingerprint: 'fp-mini' })]
     expect(api.findLocalNode(status({ node_fp: 'fp-mini', name: 'other' }), nodes, 'rosson.k2.dev')?.name).toBe('mini-1')
     expect(
-      api.findLocalNode(status({ name: 'k2n7', controller: 'https://rosson.k2.dev' }), nodes, 'rosson.k2.dev')?.name,
-    ).toBe('k2n7')
-    expect(api.findLocalNode(status({ name: 'k2n7', controller: 'https://acme.k2.dev' }), nodes, 'rosson.k2.dev')).toBeNull()
+      api.findLocalNode(status({ name: 'rig7', controller: 'https://rosson.k2.dev' }), nodes, 'rosson.k2.dev')?.name,
+    ).toBe('rig7')
+    expect(api.findLocalNode(status({ name: 'rig7', controller: 'https://acme.k2.dev' }), nodes, 'rosson.k2.dev')).toBeNull()
     expect(api.findLocalNode(null, nodes, 'rosson.k2.dev')).toBeNull()
   })
 })
@@ -148,14 +148,14 @@ describe('PackageRequestsPanel', () => {
   }
 
   it('one card per batch with what, where, for whom, why and the dry-run size', async () => {
-    serve([row(), row({ id: 'pr_2', node: 'k2n8', host: 'Debian 13 · apt' }), row({ id: 'pr_3', batchId: 'pb_2', names: ['cmake'] })])
+    serve([row(), row({ id: 'pr_2', node: 'rig8', host: 'Debian 13 · apt' }), row({ id: 'pr_3', batchId: 'pb_2', names: ['cmake'] })])
     render(<PackageRequestsPanel />)
     const card = await screen.findByTestId('compute-pkg-batch-pb_1')
     expect(screen.getByTestId('compute-pkg-batch-pb_2')).toBeTruthy()
     expect(screen.getByTestId('compute-pkg-requests').textContent).toContain('Package requests (2)')
     expect(card.textContent).toContain('libgtk-3-dev')
     const nodes = within(card).getAllByTestId('compute-pkg-batch-node').map((n) => n.textContent)
-    expect(nodes).toEqual(['on k2n7 (Ubuntu 24.04.1 LTS · apt)', 'on k2n8 (Debian 13 · apt)'])
+    expect(nodes).toEqual(['on rig7 (Ubuntu 24.04.1 LTS · apt)', 'on rig8 (Debian 13 · apt)'])
     expect(card.textContent).toContain('for agent tests')
     expect(card.textContent).toContain('Why: the Tauri build needs GTK')
     expect(within(card).getByTestId('compute-pkg-batch-deps').textContent).toBe('6 packages with dependencies, 240 MB')
@@ -181,7 +181,7 @@ describe('PackageRequestsPanel', () => {
 
   it('Allow once sends approve without add, for the batch', async () => {
     serve([row()])
-    m.decidePkgRequest.mockResolvedValue({ request: 'pb_1', rows: [{ request: 'pr_1', node: 'k2n7', state: 'approved', note: 'on its way to the node' }] })
+    m.decidePkgRequest.mockResolvedValue({ request: 'pb_1', rows: [{ request: 'pr_1', node: 'rig7', state: 'approved', note: 'on its way to the node' }] })
     render(<PackageRequestsPanel />)
     fireEvent.click(await screen.findByTestId('compute-pkg-allow-pb_1'))
     await waitFor(() => expect(m.decidePkgRequest).toHaveBeenCalledWith('pb_1', true, { add: false, note: undefined }))
@@ -198,7 +198,7 @@ describe('PackageRequestsPanel', () => {
 
   it('Deny asks for an optional note, then sends approve: false with it', async () => {
     serve([row()])
-    m.decidePkgRequest.mockResolvedValue({ request: 'pb_1', rows: [{ request: 'pr_1', node: 'k2n7', state: 'denied' }] })
+    m.decidePkgRequest.mockResolvedValue({ request: 'pb_1', rows: [{ request: 'pr_1', node: 'rig7', state: 'denied' }] })
     render(<PackageRequestsPanel />)
     fireEvent.click(await screen.findByTestId('compute-pkg-deny-pb_1'))
     expect(m.decidePkgRequest).not.toHaveBeenCalled()
@@ -263,7 +263,7 @@ describe('NodePackagesSummary', () => {
         })}
       />,
     )
-    const el = screen.getByTestId('compute-node-packages-k2n7')
+    const el = screen.getByTestId('compute-node-packages-rig7')
     expect(screen.getByTestId('compute-node-host').textContent).toBe('Ubuntu 24.04.1 LTS · apt · x86_64')
     expect(screen.getByTestId('compute-node-reboot').textContent).toBe('reboot pending')
     expect(el.textContent).toContain('Packages: apt')
@@ -280,7 +280,7 @@ describe('NodePackagesSummary', () => {
 describe('LocalPackagesSummary', () => {
   it("this machine's policy and its open requests", async () => {
     m.fetchNodePackages.mockResolvedValue({
-      node: 'k2n7',
+      node: 'rig7',
       host: null,
       hostLine: null,
       packages: {
@@ -303,9 +303,9 @@ describe('LocalPackagesSummary', () => {
     const el = await screen.findByTestId('compute-local-pkg-pr_1')
     expect(el.textContent).toContain('libgtk-3-dev for agent tests')
     const part = screen.getByTestId('compute-local-packages')
-    expect(part.textContent).toContain('Package policy for k2n7: profiles (tauri-linux), ≤ 2048 MB per request')
+    expect(part.textContent).toContain('Package policy for rig7: profiles (tauri-linux), ≤ 2048 MB per request')
     expect(part.textContent).toContain('1 open package request')
     expect(screen.queryByTestId('compute-local-pkg-pr_old')).toBeNull()
-    expect(m.fetchNodePackages).toHaveBeenCalledWith('k2n7')
+    expect(m.fetchNodePackages).toHaveBeenCalledWith('rig7')
   })
 })

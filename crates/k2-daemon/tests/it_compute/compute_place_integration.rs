@@ -958,73 +958,73 @@ async fn prefixes_now_exclusive_and_tools() {
     let d = test_harness::start(OWNER).await;
     let me = seed_ws(&env, "easy");
     let other = seed_ws(&env, "easyother");
-    for n in ["k2n12-vin", "k2n1-m4", "k2n10-vin", "k2n99-x"] {
+    for n in ["rig12-vps", "rig1-mac", "rig10-vps", "rig99-x"] {
         active_node(n);
     }
-    for n in ["k2n12-vin", "k2n1-m4", "k2n10-vin"] {
+    for n in ["rig12-vps", "rig1-mac", "rig10-vps"] {
         grant(n, &me, None, 2);
     }
-    grant("k2n99-x", &other, None, 2);
+    grant("rig99-x", &other, None, 2);
     // All three of mine have 1 GB free: a 2 GB job starts nowhere now.
-    let _a = compute_ws::test_attach("k2n12-vin", tooled(1, 1, RUST_READY));
-    let _b = compute_ws::test_attach("k2n1-m4", tooled(1, 1, &[]));
-    let _c = compute_ws::test_attach("k2n10-vin", tooled(1, 1, &[]));
-    let _x = compute_ws::test_attach("k2n99-x", tooled(1, 30, &[]));
+    let _a = compute_ws::test_attach("rig12-vps", tooled(1, 1, RUST_READY));
+    let _b = compute_ws::test_attach("rig1-mac", tooled(1, 1, &[]));
+    let _c = compute_ws::test_attach("rig10-vps", tooled(1, 1, &[]));
+    let _x = compute_ws::test_attach("rig99-x", tooled(1, 30, &[]));
     let agent = passport(&me);
 
     // CE-11: a unique prefix finds the node; an ambiguous one lists them;
     // an agent's prefix never reaches an ungranted node; owner verbs need
     // the full name.
-    let r = run(d.port, &agent, &me, json!({"node": "k2n12", "plan": true})).await;
+    let r = run(d.port, &agent, &me, json!({"node": "rig12", "plan": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(j(&r)["node"], "k2n12-vin");
-    let r = run(d.port, &agent, &me, json!({"node": "k2n1", "plan": true})).await;
+    assert_eq!(j(&r)["node"], "rig12-vps");
+    let r = run(d.port, &agent, &me, json!({"node": "rig1", "plan": true})).await;
     assert_eq!((r.status, code(&r)), (400, "node_ambiguous".to_string()), "{}", r.body);
     let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
-    assert!(hint.contains("k2n1-m4") && hint.contains("k2n10-vin") && !hint.contains("k2n99"), "{hint}");
-    let r = run(d.port, &agent, &me, json!({"node": "k2n9", "plan": true})).await;
+    assert!(hint.contains("rig1-mac") && hint.contains("rig10-vps") && !hint.contains("rig99"), "{hint}");
+    let r = run(d.port, &agent, &me, json!({"node": "rig9", "plan": true})).await;
     assert_eq!((r.status, code(&r)), (404, "node_not_found".to_string()), "an ungranted node never matches: {}", r.body);
-    let r = post(d.port, "/cli/compute/nodes/remove", OWNER, json!({"node": "k2n12"})).await;
+    let r = post(d.port, "/cli/compute/nodes/remove", OWNER, json!({"node": "rig12"})).await;
     assert_eq!((r.status, code(&r)), (404, "node_not_found".to_string()), "{}", r.body);
 
     // CE-1/CE-2: --plan's needs on the picked node, the tools line, the
     // ranking (top 3, never an ungranted node).
-    let r = run(d.port, &agent, &me, json!({"node": "k2n12-vin", "needs": ["rust@stable", "cmake@3"], "plan": true})).await;
+    let r = run(d.port, &agent, &me, json!({"node": "rig12-vps", "needs": ["rust@stable", "cmake@3"], "plan": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let p = j(&r);
     assert_eq!(p["needs"], json!([{"need": "rust@stable", "state": "ready", "have": "stable-x86_64-unknown-linux-gnu"}, {"need": "cmake@3", "state": "install", "have": null}]));
     assert_eq!(p["toolsLine"], "installs cmake@3 first (~minutes)");
     let rk = p["ranking"].as_array().unwrap();
     assert_eq!(rk.len(), 3, "{p}");
-    assert!(rk.iter().all(|x| x["node"] != "k2n99-x"), "{p}");
+    assert!(rk.iter().all(|x| x["node"] != "rig99-x"), "{p}");
 
     // CE-17: nothing starts now → not_now (exit 3), nothing stored.
     let before = job_count();
     let r = run(d.port, &agent, &me, json!({"now": true})).await;
     assert_eq!((r.status, code(&r)), (409, "not_now".to_string()), "{}", r.body);
     assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("the shortest wait is "), "{}", r.body);
-    let r = run(d.port, &agent, &me, json!({"now": true, "node": "k2n12"})).await;
+    let r = run(d.port, &agent, &me, json!({"now": true, "node": "rig12"})).await;
     assert_eq!((r.status, code(&r)), (409, "not_now".to_string()), "a named node must start it now: {}", r.body);
     assert_eq!(job_count(), before, "--now stored nothing");
     let r = run(d.port, &agent, &me, json!({"now": true, "tier": "batch"})).await;
     assert_eq!(r.status, 400, "{}", r.body);
-    compute_ws::test_frame("k2n1-m4", Frame::Offer(tooled(2, 30, &[])));
+    compute_ws::test_frame("rig1-mac", Frame::Offer(tooled(2, 30, &[])));
     let r = run(d.port, &agent, &me, json!({"now": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert_eq!(node_of(&r), "k2n1-m4");
+    assert_eq!(node_of(&r), "rig1-mac");
 
     // CE-13: --exclusive needs --why (exit 2) and the grant's CI right
     // (exit 3 + the compute.ci card); the owner may.
-    let r = run(d.port, &agent, &me, json!({"exclusive": true, "node": "k2n1-m4"})).await;
+    let r = run(d.port, &agent, &me, json!({"exclusive": true, "node": "rig1-mac"})).await;
     assert_eq!((r.status, code(&r)), (400, "exclusive_needs_why".to_string()), "{}", r.body);
-    let r = run(d.port, &agent, &me, json!({"exclusive": true, "why": "a benchmark", "node": "k2n1-m4"})).await;
+    let r = run(d.port, &agent, &me, json!({"exclusive": true, "why": "a benchmark", "node": "rig1-mac"})).await;
     assert_eq!((r.status, code(&r)), (403, "exclusive_needs_grant".to_string()), "{}", r.body);
     let r = run(d.port, &agent, &me, json!({"exclusive": true, "why": "a benchmark"})).await;
     assert_eq!((r.status, code(&r)), (403, "exclusive_needs_grant".to_string()), "auto too: {}", r.body);
-    let r = run(d.port, OWNER, &me, json!({"exclusive": true, "why": "a benchmark", "node": "k2n10-vin"})).await;
+    let r = run(d.port, OWNER, &me, json!({"exclusive": true, "why": "a benchmark", "node": "rig10-vps"})).await;
     assert_eq!(r.status, 200, "the owner may: {}", r.body);
     assert_eq!(row(j(&r)["job"]["id"].as_str().unwrap()).ctl.why.as_deref(), Some("a benchmark"));
-    for n in ["k2n12-vin", "k2n1-m4", "k2n10-vin", "k2n99-x"] {
+    for n in ["rig12-vps", "rig1-mac", "rig10-vps", "rig99-x"] {
         compute_ws::test_detach(n);
     }
 }

@@ -243,7 +243,7 @@ function missionControlServerLabel(): string {
 let lastWindowTitle = ''
 
 function applyK2Zoom(): void {
-  // Hosted web: `z3thon | K2`. Desktop Mission Control: `K2 | <server>`.
+  // Hosted web: `zoe | K2`. Desktop Mission Control: `K2 | <server>`.
   // Zoom suffix shared: `… — 125%`.
   const z = window.__k2Zoom ?? 1
   applyAppZoomToDocument(z)

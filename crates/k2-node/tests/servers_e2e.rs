@@ -667,7 +667,7 @@ async fn a_wiped_slot_is_reused_fresh() {
     assert!(n.node.tenant(1).unwrap().ledger.lock().unwrap().get("w1", 1).unwrap().is_none());
 }
 
-/// z3mbpZ e2e fix 1: a server that still has this node's old row (after a
+/// mac-b e2e fix 1: a server that still has this node's old row (after a
 /// revoke) refuses the enrol `already_enrolled`. `k2-node servers` says so
 /// with the fix (remove the old entry on that server), and the node keeps
 /// retrying with backoff: once the row is gone it enrols on its own.
@@ -703,7 +703,7 @@ async fn an_enrol_refused_already_enrolled_says_why_and_retries() {
     assert!(!fresh.last_error.as_deref().unwrap_or("").contains("already_enrolled"), "the old refusal is gone: {fresh:?}");
 }
 
-/// z3mbpZ e2e fix 4: an owner enrolled over loopback (its line labelled
+/// mac-b e2e fix 4: an owner enrolled over loopback (its line labelled
 /// `127.0.0.1-60710`) is shown to other servers by its own name, as its
 /// `Welcome` gives it.
 #[tokio::test(flavor = "multi_thread")]

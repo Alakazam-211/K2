@@ -379,12 +379,12 @@ mod tests {
             crate::compute_place::skip_words(skip::JOB_NETWORK, 2, &dummies)
                 .contains("--network none with --netns-dummy")
         );
-        assert!(needs_update_hint(&JobNet::none(), Some("k2n7")).contains("'k2n7' can't run"));
+        assert!(needs_update_hint(&JobNet::none(), Some("rig7")).contains("'rig7' can't run"));
         // A named node never seen online: refused (it can't say).
-        let e = named_refusal(&none, None, None, true, "k2n7", "ws").expect("refused");
+        let e = named_refusal(&none, None, None, true, "rig7", "ws").expect("refused");
         assert_eq!((e.code, e.status), (jn::JOB_NETWORK_NEEDS_UPDATE, 409));
         assert!(
-            named_refusal(&want(None), None, None, true, "k2n7", "ws").is_none(),
+            named_refusal(&want(None), None, None, true, "rig7", "ws").is_none(),
             "no ask, no GPU: nothing to refuse"
         );
     }

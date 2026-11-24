@@ -829,7 +829,7 @@ fn servers_listed() -> Value {
         solo: false,
         servers: vec![
             entry(0, "rosson.k2.dev", pshare::ShareLimits::owner(2, 8, 16, 100, pshare::Network::On)),
-            entry(1, "z3thon.k2.dev", pshare::ShareLimits::new_server(pshare::Trust::Own, true)),
+            entry(1, "zoe.k2.dev", pshare::ShareLimits::new_server(pshare::Trust::Own, true)),
         ],
     })
     .unwrap()
@@ -847,9 +847,9 @@ fn servers_add_limits_pause_and_revoke() {
         cadmin::set_setting(&h.lock(), cadmin::ALERTS_TO, Some(&f.ws), "owner", 1).unwrap();
     }
     // A Mac takes only your own servers in 0.46.3.
-    let e = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://z3thon.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef", "trust": "team"})).unwrap_err();
+    let e = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://zoe.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef", "trust": "team"})).unwrap_err();
     assert_eq!(e, (409, pshare::codes::TEAM_NEEDS_TENANT_WALL.to_string()));
-    let r = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://z3thon.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef", "trust": "own"})).unwrap();
+    let r = call(SERVERS_ADD, &agent(&f), json!({"node": f.node_name, "url": "https://zoe.k2.dev", "code": "ABCDE-FGHJK.0123456789abcdef", "trust": "own"})).unwrap();
     assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str()), (Some(true), Some("privileged")), "{r}");
     assert!(r.get("warning").is_none(), "the team warning is for other people's servers");
     let binding = k2_core::compute::proto::pairing::code_binding("ABCDEFGHJK");
@@ -875,18 +875,18 @@ fn servers_add_limits_pause_and_revoke() {
 
     // Narrowing: the list is mirrored first, then sent at once.
     let responder = answer_servers(f.node.clone(), servers_listed(), "servers.limits");
-    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"max_queued": 5}})).unwrap();
+    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "zoe.k2.dev", "set": {"max_queued": 5}})).unwrap();
     assert_eq!(responder.join().unwrap(), vec!["servers.list", "servers.limits"]);
     assert_eq!(r["class"], "operate", "{r}");
     let msgs = test_seams::take_messages(&f.ws);
-    assert!(msgs.iter().any(|m| m.contains("is now shared with z3thon.k2.dev")), "{msgs:?}");
+    assert!(msgs.iter().any(|m| m.contains("is now shared with zoe.k2.dev")), "{msgs:?}");
     // Widening: held, nothing sent.
-    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"max_running": 3}})).unwrap();
+    let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "zoe.k2.dev", "set": {"max_running": 3}})).unwrap();
     assert_eq!(r["held"], true, "{r}");
     // 0.46.9: Settings and the card name the exact change, from and to.
     assert_eq!(
         r["request"]["summary"],
-        format!("Raise z3thon.k2.dev's share on {}: jobs at once 1 → 3", f.node_name),
+        format!("Raise zoe.k2.dev's share on {}: jobs at once 1 → 3", f.node_name),
         "{r}"
     );
     assert!(test_seams::take_sent(&f.node).is_empty());
@@ -897,18 +897,18 @@ fn servers_add_limits_pause_and_revoke() {
     let r = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "slot:0", "set": {"weight": 2}})).unwrap();
     assert_eq!(r["held"], true, "{r}");
     assert!(test_seams::take_sent(&f.node).is_empty());
-    let e = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "set": {"weight": 0}})).unwrap_err();
+    let e = call(SERVERS_LIMITS, &agent(&f), json!({"node": f.node_name, "server": "zoe.k2.dev", "set": {"weight": 0}})).unwrap_err();
     assert_eq!(e.1, cadmin::codes::BAD_ARGS, "weight is 1–100");
     // Pause: at once.
     let responder = answer_servers(f.node.clone(), servers_listed(), "servers.pause");
-    let r = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev", "action": "pause"})).unwrap();
+    let r = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "zoe.k2.dev", "action": "pause"})).unwrap();
     assert_eq!(responder.join().unwrap(), vec!["servers.pause"]);
     assert_eq!(r["action"], "servers.pause");
     // Revoke: never an agent; the owner, at once.
-    let e = call(SERVERS_REVOKE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev"})).unwrap_err();
+    let e = call(SERVERS_REVOKE, &agent(&f), json!({"node": f.node_name, "server": "zoe.k2.dev"})).unwrap_err();
     assert_eq!(e, (403, "owner_only".to_string()));
     let responder = answer_servers(f.node.clone(), servers_listed(), "servers.revoke");
-    call(SERVERS_REVOKE, &Who::Owner, json!({"node": f.node_name, "server": "z3thon.k2.dev", "now": true})).unwrap();
+    call(SERVERS_REVOKE, &Who::Owner, json!({"node": f.node_name, "server": "zoe.k2.dev", "now": true})).unwrap();
     assert_eq!(responder.join().unwrap(), vec!["servers.revoke"]);
     let e = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "slot:0"})).unwrap_err();
     assert_eq!(e.1, cadmin::codes::BAD_ARGS, "slot 0 is this server");
@@ -922,7 +922,7 @@ fn servers_add_limits_pause_and_revoke() {
     }
     // A node without `servers`: node_too_old.
     test_seams::register(&f.node, true, &[wire::FEATURE_ADMIN, frames::FEATURE_JOB_WALL]);
-    let e = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "z3thon.k2.dev"})).unwrap_err();
+    let e = call(SERVERS_PAUSE, &agent(&f), json!({"node": f.node_name, "server": "zoe.k2.dev"})).unwrap_err();
     assert_eq!(e, (409, pshare::codes::NODE_TOO_OLD.to_string()));
 }
 
@@ -954,14 +954,14 @@ fn an_owner_change_is_the_owners_held_and_names_the_key() {
     let target_fp = format!("0123456789abcdef{}", "a".repeat(48));
     let feats = [wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, frames::FEATURE_JOB_WALL, pshare::FEATURE_SERVERS, pshare::FEATURE_SERVERS_OWNER];
     test_seams::register(&f.node, true, &feats);
-    let body = json!({"node": f.node_name, "server": "z3thon.k2.dev", "caches": "move", "old": "keep"});
+    let body = json!({"node": f.node_name, "server": "zoe.k2.dev", "caches": "move", "old": "keep"});
 
     // Never an agent (even with the operate switch on).
     let e = call(SERVERS_OWNER, &agent(&f), body.clone()).unwrap_err();
     assert_eq!(e, (403, codes::OWNER_ONLY.to_string()));
     // Review F4: nor through the generic proposal, by an agent or the owner,
     // as a command or a plan step; nothing is filed.
-    let args = json!({"server": "z3thon.k2.dev", "fp": target_fp});
+    let args = json!({"server": "zoe.k2.dev", "fp": target_fp});
     for (who, req) in [
         (agent(&f), json!({"node": f.node_name, "verb": "servers.owner", "args": args})),
         (Who::Owner, json!({"node": f.node_name, "verb": "servers.owner", "args": args})),
@@ -1003,10 +1003,10 @@ fn an_owner_change_is_the_owners_held_and_names_the_key() {
     responder.join().unwrap();
 
     // Held for the owner; one at a time.
-    let r = call(SERVERS_OWNER, &Who::Owner, json!({"node": f.node_name, "server": "z3thon.k2.dev", "old": "revoke", "caches": "wipe", "now": true, "reason": "drill"})).unwrap();
+    let r = call(SERVERS_OWNER, &Who::Owner, json!({"node": f.node_name, "server": "zoe.k2.dev", "old": "revoke", "caches": "wipe", "now": true, "reason": "drill"})).unwrap();
     assert_eq!((r["held"].as_bool(), r["request"]["class"].as_str()), (Some(true), Some("privileged")), "{r}");
     let summary = r["request"]["summary"].as_str().unwrap();
-    assert!(summary.contains("make z3thon.k2.dev (key ") && summary.contains(&target_fp) && summary.contains("leaves"), "the card shows the full key: {summary}");
+    assert!(summary.contains("make zoe.k2.dev (key ") && summary.contains(&target_fp) && summary.contains("leaves"), "the card shows the full key: {summary}");
     assert!(test_seams::take_sent(&f.node).is_empty(), "nothing goes out while held");
     let e = call(SERVERS_OWNER, &Who::Owner, body.clone()).unwrap_err();
     assert_eq!(e, (409, "owner_change_pending".to_string()));
@@ -1018,7 +1018,7 @@ fn an_owner_change_is_the_owners_held_and_names_the_key() {
     let o = node_open(&f, &cmds[0]).expect("the node accepts the owner-signed change");
     assert_eq!((o.cmd.verb.as_str(), o.cmd.class), ("servers.owner", wire::Class::Privileged));
     let a: pshare::OwnerArgs = serde_json::from_value(o.cmd.args.clone()).unwrap();
-    assert_eq!((a.server.as_str(), a.fp.as_deref(), a.old, a.caches, a.now), ("z3thon.k2.dev", Some(target_fp.as_str()), pshare::OldOwner::Revoke, pshare::Caches::Wipe, true));
+    assert_eq!((a.server.as_str(), a.fp.as_deref(), a.old, a.caches, a.now), ("zoe.k2.dev", Some(target_fp.as_str()), pshare::OldOwner::Revoke, pshare::Caches::Wipe, true));
     let kinds: Vec<String> = {
         let h = k2_core::db::shared();
         let conn = h.lock();

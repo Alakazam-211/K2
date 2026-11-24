@@ -5,7 +5,7 @@
 // (another Space, behind other windows, app in the background) has its
 // timers throttled by WebKit / App Nap, so its beats can be far apart; the
 // shell gives it a longer threshold and probes it with an eval before any
-// reload (0.46.9: ~38,000 false reloads in z3mbp's field log). A beat also
+// reload (0.46.9: ~38,000 false reloads in mac-a's field log). A beat also
 // goes out on every visibility change, so a window that comes back into
 // view is fresh at once.
 //

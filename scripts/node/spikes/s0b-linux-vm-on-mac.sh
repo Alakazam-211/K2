@@ -5,7 +5,7 @@
 # (Virtualization.framework, Rosetta on), build and test K2's Rust crates
 # inside it, and report how long it takes and what fails. This is the
 # "a Linux VM on a Mac is its own node" path (labels os=linux,
-# arch=aarch64, vm=true). x86_64-only failures still need z13flow.
+# arch=aarch64, vm=true). x86_64-only failures still need laptop-a.
 #
 # Run ON the mini as the human (no sudo):
 #   scp scripts/node/spikes/s0b-linux-vm-on-mac.sh <user>@<mini>:

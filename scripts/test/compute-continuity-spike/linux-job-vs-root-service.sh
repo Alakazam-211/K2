@@ -17,7 +17,7 @@
 # on failure).
 #
 # Needs: root on a DISPOSABLE or test Linux box with systemd >= 245 (the
-# job wall's floor; z13flow or a throwaway VM). Not a customer box, not a
+# job wall's floor; laptop-a or a throwaway VM). Not a customer box, not a
 # box with someone's work on it. ~3 minutes.
 #
 #   K2_SPIKE_OK=1 sudo -E bash linux-job-vs-root-service.sh [--report PATH]

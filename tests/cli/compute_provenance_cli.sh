@@ -77,9 +77,9 @@ LINE = json.dumps(ENV, separators=(",", ":")) + "\n"
 TRUST = {"owners": [{"id": "owner.example.test", "rosterKeyFp": "e" * 64, "rosterSeq": 3}],
          "rosters": [{"body": "{\"seq\":3}", "sig": "r"}],
          "statements": [{"body": "{\"node\":1}", "sig": "s"}],
-         "nodeKeys": {"a" * 64: {"node": "k2n7", "pem": "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"}}}
+         "nodeKeys": {"a" * 64: {"node": "rig7", "pem": "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n"}}}
 def checks(ok_all, failed=None):
-    c = [{"check": "node key", "ok": True, "detail": "signed by k2n7 (key aaaaaaaa…aaaa), the key this server pinned when the node enrolled"},
+    c = [{"check": "node key", "ok": True, "detail": "signed by rig7 (key aaaaaaaa…aaaa), the key this server pinned when the node enrolled"},
          {"check": "receipt", "ok": True, "detail": "the job's receipt (v1) verifies with the same key"},
          {"check": "statement", "ok": ok_all, "detail": "the signature verifies" if ok_all else failed}]
     return c
@@ -104,7 +104,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/compute/jobs/provenance":
             if q.get("job") == "nostmt":
                 return self.reply({"error": {"code": "no_statement", "hint": "job nostmt has no build statement: the job kept no files"}}, 409)
-            return self.reply({"job": "job1" + "0" * 28, "short": "job10000", "node": "k2n7", "keyid": "a" * 64,
+            return self.reply({"job": "job1" + "0" * 28, "short": "job10000", "node": "rig7", "keyid": "a" * 64,
                                "builderId": "https://k2.dev/compute/builder/v1/owner/" + "e" * 64,
                                "subjects": [{"name": "dist/acme", "sha256": "4" * 64}], "file": "job10000.intoto.jsonl",
                                "line": LINE, "envelope": ENV, "trust": TRUST})
@@ -119,7 +119,7 @@ class H(BaseHTTPRequestHandler):
         v = json.loads(body or "{}")
         if path == "/cli/compute/verify":
             bad = v.get("job") == "tampered"
-            out = {"job": "job1" + "0" * 28, "short": "job10000", "node": "k2n7", "verified": not bad,
+            out = {"job": "job1" + "0" * 28, "short": "job10000", "node": "rig7", "verified": not bad,
                    "failed": "provenance: the signature does not verify with that node key" if bad else None,
                    "checks": checks(not bad, "provenance: the signature does not verify with that node key"),
                    "notChecked": "whether the node is honest, and whether this server's records are: a release signer checks again with keys it pinned itself"}
@@ -131,7 +131,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/ci/evidence":
             return self.reply({"workspace": "proj", "run": "ab12cd34" + "0" * 24, "short": "ab12cd34", "version": "1.2.0", "project": "acme",
                                "file": "evidence-acme-1.2.0.json", "bundle": {"v": 3, "provenance": {"L1": ENV}},
-                               "jobs": {"L1": {"job": "job1" + "0" * 28, "short": "job10000", "build": "linux-x86_64", "role": "build", "node": "k2n7", "artifacts": []}},
+                               "jobs": {"L1": {"job": "job1" + "0" * 28, "short": "job10000", "build": "linux-x86_64", "role": "build", "node": "rig7", "artifacts": []}},
                                "dual": {}, "notes": [], "trust": TRUST})
         self.reply({"error": {"code": "not_found", "hint": "POST " + path}}, 404)
 srv = HTTPServer(("127.0.0.1", 0), H)
@@ -222,7 +222,7 @@ eq "provenance: the token rides the Bearer header" "$(last_auth /cli/compute/job
 eq "provenance: no token in the query" "$(qparam /cli/compute/jobs/provenance token)" "<absent>"
 out="$("$K2" compute provenance job1 --out "$WORK/job1.intoto.jsonl")"
 eq "--out writes the line" "$(cat "$WORK/job1.intoto.jsonl")" "$want_line"
-has "--out names the node" "$out" "signed by node k2n7, naming 1 file(s)"
+has "--out names the node" "$out" "signed by node rig7, naming 1 file(s)"
 has "--out lists each file" "$out" "dist/acme  sha256 4444"
 has "--out says how to check" "$out" "k2 compute verify $WORK/job1.intoto.jsonl"
 json_out="$("$K2" compute provenance job1 --json)"
@@ -235,11 +235,11 @@ echo "== k2 compute verify =="
 rc "verify a job" 0 compute verify job1
 eq "sends the job" "$(last /cli/compute/verify)" '{"job": "job1"}'
 out="$(cat "$WORK/out")"
-has "says verified" "$out" "verified: job job10000's build statement (node k2n7)"
-has "each check" "$out" "  checked  node key   signed by k2n7"
+has "says verified" "$out" "verified: job job10000's build statement (node rig7)"
+has "each check" "$out" "  checked  node key   signed by rig7"
 has "what isn't checked" "$out" "not checked: whether the node is honest"
 rc "a tampered one" 1 compute verify tampered
-has "NOT verified, and why" "$(cat "$WORK/out")" "NOT verified: job job10000's build statement (node k2n7): provenance: the signature does not verify"
+has "NOT verified, and why" "$(cat "$WORK/out")" "NOT verified: job job10000's build statement (node rig7): provenance: the signature does not verify"
 has "the failed line" "$(cat "$WORK/out")" "  FAILED   statement"
 printf 'acme binary\n' >"$WORK/acme"
 sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/acme")"

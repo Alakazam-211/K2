@@ -1236,7 +1236,7 @@ fn username_suffix_is_deterministic_and_fits_64() {
 
 #[test]
 fn owner_username_is_the_login_normalised() {
-    assert_eq!(chat::owner_username(Some("z3thon")), "z3thon");
+    assert_eq!(chat::owner_username(Some("zoe")), "zoe");
     // Dots → `-`, other characters stripped, lowercased.
     assert_eq!(chat::owner_username(Some("rosson.long")), "rosson-long");
     assert_eq!(chat::owner_username(Some("Ro$s.On_2 ")), "ros-on_2");
@@ -1245,7 +1245,7 @@ fn owner_username_is_the_login_normalised() {
     // Nothing usable left → `owner`.
     assert_eq!(chat::owner_username(Some("é")), "owner");
     assert_eq!(chat::owner_username(Some("a")), "owner");
-    for l in ["z3thon", "rosson.long", "Ro$s.On_2", "ALL", "here"] {
+    for l in ["zoe", "rosson.long", "Ro$s.On_2", "ALL", "here"] {
         let u = chat::login_username(l).unwrap();
         chat::check_username(&u).unwrap_or_else(|e| panic!("{l} → {u}: {e}"));
     }
@@ -1310,7 +1310,7 @@ fn username_updates(planned: &[reconcile::PlannedOp]) -> Vec<String> {
 fn reconcile_renames_an_existing_owner_member_to_the_login() {
     // 0.46.0-era install: Sew holds the display-name slug.
     let (planned, s) = reconcile::plan(
-        &[owner_desired("z3thon")],
+        &[owner_desired("zoe")],
         &[owner_member("rosson-long")],
         &HashSet::new(),
         &HashMap::new(),
@@ -1318,19 +1318,19 @@ fn reconcile_renames_an_existing_owner_member_to_the_login() {
     assert_eq!(planned.len(), 1, "{planned:?}");
     assert_eq!(planned[0].op, Op::Update);
     assert_eq!(planned[0].subject, ExternalId::K2Owner);
-    assert_eq!(username_updates(&planned), ["z3thon"]);
+    assert_eq!(username_updates(&planned), ["zoe"]);
     assert_eq!(planned[0].payload["profile"].get("display_name"), None);
     assert_eq!(s.updated, 1);
 }
 
 #[test]
 fn owner_fallback_username_is_sticky_until_the_login_changes() {
-    let fallback = chat::suffixed_username("z3thon", "k2:owner");
+    let fallback = chat::suffixed_username("zoe", "k2:owner");
     let mut sew = owner_member(&fallback);
     // Two reconciles after a fallback: no rename.
     for _ in 0..2 {
         let (planned, _) = reconcile::plan(
-            &[owner_desired("z3thon")],
+            &[owner_desired("zoe")],
             std::slice::from_ref(&sew),
             &HashSet::new(),
             &HashMap::new(),
@@ -1338,13 +1338,13 @@ fn owner_fallback_username_is_sticky_until_the_login_changes() {
         assert!(planned.is_empty(), "{planned:?}");
     }
     // A re-provision of the member keeps the fallback, too.
-    let mut req = owner_desired("z3thon").request;
+    let mut req = owner_desired("zoe").request;
     assert!(chat::fill_provision_from_member(&mut req, &sew));
     assert_eq!(req.profile.username, fallback);
     // A bare-login member is left as it is.
-    let mut req = owner_desired("z3thon").request;
-    assert!(!chat::fill_provision_from_member(&mut req, &owner_member("z3thon")));
-    assert_eq!(req.profile.username, "z3thon");
+    let mut req = owner_desired("zoe").request;
+    assert!(!chat::fill_provision_from_member(&mut req, &owner_member("zoe")));
+    assert_eq!(req.profile.username, "zoe");
 
     // The login changes: exactly one rename, then nothing.
     let (planned, _) = reconcile::plan(
@@ -1616,20 +1616,20 @@ fn kick_reconcile_fires_on_main_db_and_app_user_changes() {
 #[test]
 fn owner_profile_name_is_the_linked_accounts_first_last() {
     let _e = setup();
-    crate::connect_users::add_user_with_names("z3thon", "password1", Some("Rosson"), Some("Long"))
+    crate::connect_users::add_user_with_names("zoe", "password1", Some("Rosson"), Some("Long"))
         .expect("add login");
-    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
     // The retired "Your name" setting is ignored even when set.
     crate::app_settings::update(serde_json::json!({ "ownerDisplayName": "Old Name" })).expect("legacy");
     let ctx = HookCtx::load("owner-token", &[]);
     assert_eq!(ctx.owner_name.as_deref(), Some("Rosson Long"));
-    assert_eq!(ctx.owner_login.as_deref(), Some("z3thon"));
+    assert_eq!(ctx.owner_login.as_deref(), Some("zoe"));
     let req = chat::owner_provision_request(&ctx);
     assert_eq!(req.external_id, ExternalId::K2Owner);
     assert_eq!(req.kind, MemberKind::Person);
     assert!(!req.guest);
     assert_eq!(req.profile.display_name, "Rosson Long");
-    assert_eq!(req.profile.username, "z3thon");
+    assert_eq!(req.profile.username, "zoe");
     assert_eq!(req.profile.email, None);
 }
 
@@ -1669,11 +1669,11 @@ fn owner_profile_name_falls_back_to_username_then_owner() {
     let req = chat::owner_provision_request(&HookCtx::default());
     assert_eq!((req.profile.display_name.as_str(), req.profile.username.as_str()), ("Owner", "owner"));
 
-    crate::connect_users::add_user("z3thon", "password1").expect("add login");
-    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+    crate::connect_users::add_user("zoe", "password1").expect("add login");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
     let req = chat::owner_provision_request(&HookCtx::load("owner-token", &[]));
-    assert_eq!(req.profile.display_name, "z3thon");
-    assert_eq!(req.profile.username, "z3thon");
+    assert_eq!(req.profile.display_name, "zoe");
+    assert_eq!(req.profile.username, "zoe");
 }
 
 #[test]
@@ -2012,21 +2012,21 @@ fn s0_handle(desired: &[Desired], ext: &ExternalId) -> String {
 fn s0_app_users_named_like_box_users_get_the_suffixed_handle_from_the_start() {
     let _e = setup();
     enable_chat();
-    let (z, b, c) = (person("z3thon"), person("bob"), person("cara"));
+    let (z, b, c) = (person("zoe"), person("bob"), person("cara"));
     for p in [&z, &b, &c] {
         grant("principal", &p.id, Some("member")).expect("chat grant");
     }
-    let ctx = s0_ctx(Some("z3thon"), &["bob"]);
+    let ctx = s0_ctx(Some("zoe"), &["bob"]);
     let desired = s0_desired(&ctx);
     let (pz, pb, pc) = (
         ExternalId::K2Principal(z.id.clone()),
         ExternalId::K2Principal(b.id.clone()),
         ExternalId::K2Principal(c.id.clone()),
     );
-    assert_eq!(s0_handle(&desired, &pz), chat::suffixed_username("z3thon", &pz.to_string()));
+    assert_eq!(s0_handle(&desired, &pz), chat::suffixed_username("zoe", &pz.to_string()));
     assert_eq!(s0_handle(&desired, &pb), chat::suffixed_username("bob", &pb.to_string()));
     assert_eq!(s0_handle(&desired, &pc), "cara", "no box user is named cara");
-    assert_eq!(s0_handle(&desired, &ExternalId::K2Owner), "z3thon", "the owner keeps the plain handle");
+    assert_eq!(s0_handle(&desired, &ExternalId::K2Owner), "zoe", "the owner keeps the plain handle");
     // The App user named like the owner is never the owner's member.
     let owners: Vec<_> = desired.iter().filter(|d| d.request.external_id == ExternalId::K2Owner).collect();
     assert_eq!(owners.len(), 1, "exactly one k2:owner, the owner's own");
@@ -2036,7 +2036,7 @@ fn s0_app_users_named_like_box_users_get_the_suffixed_handle_from_the_start() {
     assert!(chat::username_matches(&s0_handle(&desired, &pb), &s0_handle(&desired, &pb), &pb));
     // Nothing linked: the owner's handle is `owner`, and that is reserved.
     assert!(chat::is_box_handle(&s0_ctx(None, &[]), "owner"));
-    assert!(!chat::is_box_handle(&s0_ctx(None, &[]), "z3thon"));
+    assert!(!chat::is_box_handle(&s0_ctx(None, &[]), "zoe"));
 }
 
 /// A box login made after an App user already holds the plain handle: the

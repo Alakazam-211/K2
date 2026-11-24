@@ -11,8 +11,8 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
 
-const ROOT = '/Users/z3thon/DevProjects/Alakazam Labs/K2'
-const HOME = '/Users/z3thon'
+const ROOT = '/Users/zoe/DevProjects/Alakazam Labs/K2'
+const HOME = '/Users/zoe'
 
 /** The 0.46.0 server's folders (name → is a folder). */
 const TREE: Record<string, Record<string, boolean>> = {
@@ -52,7 +52,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 const activateTab = vi.fn()
 vi.mock('@/stores/panels', () => ({ usePanelsStore: { getState: () => ({ activateTab }) } }))
 const projectsState = vi.hoisted(() => ({
-  projects: [{ id: 'p-k2', path: '/Users/z3thon/DevProjects/Alakazam Labs/K2', workspaces: [{ id: 'w' }] }],
+  projects: [{ id: 'p-k2', path: '/Users/zoe/DevProjects/Alakazam Labs/K2', workspaces: [{ id: 'w' }] }],
   activeProjectId: 'p-k2',
   setActiveProject: () => {},
 }))

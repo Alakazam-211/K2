@@ -448,9 +448,9 @@ async fn owner_linked_connect_login_mints_k2_owner_with_its_cu_sid() {
     k2_core::tool_hook::allow_target_off_linux_for_tests(true);
     k2_core::tool_hook::set_target("chat", true, Some("/tmp/k2-mint-sew.sock"), Some("/tmp/k2-mint-sew.token"), "owner-token")
         .expect("enable chat target");
-    let tok = login("z3thon", Role::Member);
-    let uuid = connect_users::user_uuid("z3thon").expect("uuid").expect("exists");
-    k2_core::app_settings::update(json!({ "ownerAccounts": ["z3thon"] })).expect("link owner account");
+    let tok = login("zoe", Role::Member);
+    let uuid = connect_users::user_uuid("zoe").expect("uuid").expect("exists");
+    k2_core::app_settings::update(json!({ "ownerAccounts": ["zoe"] })).expect("link owner account");
 
     let r = pass(d.port, Some(&tok), "{}");
     let c = verified(d.port, &r);
@@ -469,7 +469,7 @@ async fn owner_linked_connect_login_mints_k2_owner_with_its_cu_sid() {
         "no connect grant"
     );
     // A second session of the same login gets its own cu_ sid.
-    let tok2 = connect_users::create_session("z3thon");
+    let tok2 = connect_users::create_session("zoe");
     let c2 = verified(d.port, &pass(d.port, Some(&tok2), "{}"));
     assert_eq!((c2.sub.as_str(), c2.sid.clone()), ("k2:owner", connect_users::session_sid(&tok2)));
     assert_ne!(c2.sid, c.sid);

@@ -329,8 +329,8 @@ mod tests {
         assert_eq!(cpus_words(4000, 8000), "4+8");
         assert_eq!(cpus_words(500, 1500), "0.5+1.5");
         let old = vec!["stall".to_string()];
-        assert!(burst_note("k2n7", &old, 4000, 8000).unwrap().contains("held to 4"));
-        assert_eq!(burst_note("k2n7", &[k2_core::compute::proto::gens::FEATURE_CPU_BURST.to_string()], 4000, 8000), None);
+        assert!(burst_note("rig7", &old, 4000, 8000).unwrap().contains("held to 4"));
+        assert_eq!(burst_note("rig7", &[k2_core::compute::proto::gens::FEATURE_CPU_BURST.to_string()], 4000, 8000), None);
         let _off = k2_core::test_env::EnvVar::set(k2_core::compute::CI_ENV, "off");
         assert_eq!(cpus_burst_from(&json!({"cpus": 4, "cpusBurst": 8}), Some(4000)).unwrap_err().code, k2_core::compute::CI_PREVIEW_OFF);
         assert_eq!(cpus_burst_from(&json!({"cpus": 4}), Some(4000)).unwrap(), None, "a plain --cpus is untouched");

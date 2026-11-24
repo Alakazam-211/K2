@@ -461,7 +461,7 @@ mod tests {
                                 {
                                     "id": "it-1",
                                     "type": "terminal",
-                                    "cwd": "/Users/z3thon/proj",
+                                    "cwd": "/Users/zoe/proj",
                                     "command": "claude",
                                     "args": ["--resume", "abc"],
                                     "sessionId": "abc-123",
@@ -469,7 +469,7 @@ mod tests {
                                     "heartbeatName": "hb-foo",
                                     "surfacedAgentName": "agent-bar",
                                     "attachAgentName": "tab-attach-baz",
-                                    "projectPath": "/Users/z3thon/proj"
+                                    "projectPath": "/Users/zoe/proj"
                                 }
                             ],
                             "activeItemIndex": 0
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(item["heartbeatName"].as_str().unwrap(), "hb-foo");
         assert_eq!(item["surfacedAgentName"].as_str().unwrap(), "agent-bar");
         assert_eq!(item["attachAgentName"].as_str().unwrap(), "tab-attach-baz");
-        assert_eq!(item["projectPath"].as_str().unwrap(), "/Users/z3thon/proj");
+        assert_eq!(item["projectPath"].as_str().unwrap(), "/Users/zoe/proj");
     }
 
     #[test]

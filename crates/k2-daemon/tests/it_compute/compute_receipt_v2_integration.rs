@@ -270,21 +270,21 @@ async fn receipt_v2_mixed_versions_and_the_receipt_route() {
     let ws = seed_ws(&env, "rv2");
     let new_key = SigningKey::generate().unwrap();
     let old_key = SigningKey::generate().unwrap();
-    active_node("new-1", "k2n7", &new_key, &ws);
-    active_node("old-1", "k2n4", &old_key, &ws);
+    active_node("new-1", "rig7", &new_key, &ws);
+    active_node("old-1", "rig4", &old_key, &ws);
     let v9 = [ci::FEATURE_NODE_STATEMENT, ci::FEATURE_RECEIPT_V2];
     let mut new = compute_ws::test_attach("new-1", offer(9, &["artifacts", "stall", v9[0], v9[1]]));
     let mut old = compute_ws::test_attach("old-1", offer(8, &["artifacts", "stall"]));
 
     // Body rules: only 2.
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "receiptV": 3})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "receiptV": 3})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "bad_request"), "{}", r.body);
     // A protocol-8 node named for receipt v2: refused, nothing sent to it.
-    let r = submit(d.port, &ws, json!({"node": "k2n4", "receiptV": 2})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig4", "receiptV": 2})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "node_upgrade_required"), "{}", r.body);
     assert!(old.frames().is_empty());
     // A plain job to the old node: 0.46.9's plan bytes (no `receipt_v`).
-    let r = submit(d.port, &ws, json!({"node": "k2n4"})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig4"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let plain = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let a = assigned(&old.frames(), &plain).expect("assigned to the old node");

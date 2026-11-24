@@ -1134,34 +1134,34 @@ mod tests {
     #[test]
     fn linked_login_shares_the_owner_person_but_not_owner_power() {
         let f = fixture();
-        add("z3thon", Role::Admin);
+        add("zoe", Role::Admin);
         add("gina", Role::Admin);
         add("wes", Role::Owner);
         add("rosson", Role::Owner);
-        let z = Actor::login("z3thon");
-        // Before linking: z3thon is its own person.
-        assert_eq!(ok(get(PREFS_PATH, &z))["principal"], "z3thon");
+        let z = Actor::login("zoe");
+        // Before linking: zoe is its own person.
+        assert_eq!(ok(get(PREFS_PATH, &z))["principal"], "zoe");
         // Only the owner token may link: not an Owner-role login, not the
         // Admin itself.
         for who in [Actor::login("rosson"), z.clone()] {
-            let r = post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &who);
+            let r = post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &who);
             assert_eq!(r.status, "403 Forbidden", "{who:?}: {}", r.body);
             assert!(r.body.contains("owner_token_required"), "{}", r.body);
         }
         let r = post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["ghost"] }), &Actor::owner_token());
         assert_eq!(r.status, "400 Bad Request", "unknown login refused: {}", r.body);
         let mut rx = crate::session_events::subscribe();
-        let v = ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["Z3thon"] }), &Actor::owner_token()));
-        assert_eq!(v["accounts"], serde_json::json!(["z3thon"]));
+        let v = ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["Zoe"] }), &Actor::owner_token()));
+        assert_eq!(v["accounts"], serde_json::json!(["zoe"]));
         assert_eq!(drain_notify_events(&mut rx), 1);
-        assert_eq!(k2_core::app_settings::load().owner_accounts, vec!["z3thon".to_string()]);
+        assert_eq!(k2_core::app_settings::load().owner_accounts, vec!["zoe".to_string()]);
         // An Admin can see the links.
-        assert_eq!(ok(get(OWNER_ACCOUNTS_PATH, &Actor::login("gina")))["accounts"], serde_json::json!(["z3thon"]));
+        assert_eq!(ok(get(OWNER_ACCOUNTS_PATH, &Actor::login("gina")))["accounts"], serde_json::json!(["zoe"]));
 
         // The phone login and the desktop owner token: ONE row.
         let v = ok(post(PREFS_PATH, serde_json::json!({ "workspace": { "projectId": f.alpha, "threadPush": false } }), &z));
         assert_eq!(v["principal"], "owner");
-        assert_eq!(v["aliases"], serde_json::json!(["z3thon"]));
+        assert_eq!(v["aliases"], serde_json::json!(["zoe"]));
         let desk = ok(get(PREFS_PATH, &Actor::owner_token()));
         assert_eq!(ws(&desk, &f.alpha)["threadPush"], false, "the desktop sees the phone's switch");
         assert_eq!(ws(&desk, &f.alpha)["updatedBy"], "owner");
@@ -1175,14 +1175,14 @@ mod tests {
         assert!(r.body.contains("owner_only"), "{}", r.body);
         let r = post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": [] }), &z);
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
-        assert_eq!(k2_core::connect_users::role_for_user("z3thon"), Some(Role::Admin), "role unchanged");
+        assert_eq!(k2_core::connect_users::role_for_user("zoe"), Some(Role::Admin), "role unchanged");
         // settings/update can't write the key at all.
         let r = crate::settings_routes::handle_settings_update(
             br#"{"ownerAccounts":["gina"]}"#,
             crate::settings_routes::SettingsActor::Owner,
         );
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
-        assert_eq!(k2_core::app_settings::load().owner_accounts, vec!["z3thon".to_string()]);
+        assert_eq!(k2_core::app_settings::load().owner_accounts, vec!["zoe".to_string()]);
     }
 
     #[test]
@@ -1284,26 +1284,26 @@ mod tests {
     #[test]
     fn people_color_linked_accounts_show_the_owner_colour() {
         let _f = fixture();
-        add("z3thon", Role::Admin);
+        add("zoe", Role::Admin);
         add("gina", Role::Admin);
         add("rosson", Role::Owner);
         add("wes", Role::Owner);
-        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &Actor::owner_token()));
         // The owner token sets the owner's colour …
         let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#4f46e5" }), &Actor::owner_token()));
         assert_eq!(v["person"], "owner");
         assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#4f46e5"));
         assert_eq!(color_of(&v, "owner"), "#4f46e5");
-        assert_eq!(color_of(&v, "z3thon"), "#4f46e5", "the linked login shows the owner's colour");
+        assert_eq!(color_of(&v, "zoe"), "#4f46e5", "the linked login shows the owner's colour");
         assert_eq!(color_of(&v, "gina"), k2_core::person_color::hash_color("gina"));
         // … and the linked login's own pick sets the OWNER's colour too.
-        let z = Actor::login("z3thon");
+        let z = Actor::login("zoe");
         let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#c026d3" }), &z));
         assert_eq!(v["person"], "owner");
         assert_eq!(v["chosen"], "#c026d3");
         assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#c026d3"));
         assert_eq!(color_of(&v, "owner"), "#c026d3");
-        let z_row = k2_core::connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        let z_row = k2_core::connect_users::list_users().expect("users").into_iter().find(|u| u.username == "zoe").expect("zoe");
         assert_eq!(z_row.color, None, "the linked login's own row is untouched");
         // 0.46.0: the old ownerDisplayName is no longer a colour key (the
         // owner's identity key is the linked username, already above).
@@ -1447,7 +1447,7 @@ mod tests {
     #[test]
     fn people_name_owner_is_the_linked_account() {
         let _f = fixture();
-        add("z3thon", Role::Admin);
+        add("zoe", Role::Admin);
         add("gina", Role::Admin);
         add("rosson", Role::Owner);
         add("wes", Role::Owner);
@@ -1464,8 +1464,8 @@ mod tests {
         let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "person": "owner" }), &Actor::login("rosson"));
         assert_eq!(r.status, "409 Conflict", "{}", r.body);
 
-        // Linking z3thon (no names yet) carries the old display name over once.
-        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        // Linking zoe (no names yet) carries the old display name over once.
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &Actor::owner_token()));
         let settings = k2_core::app_settings::load();
         assert!(settings.owner_display_name_carried);
         assert_eq!(settings.owner_display_name.as_deref(), Some("Rosson L"), "kept on disk");
@@ -1478,26 +1478,26 @@ mod tests {
         let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "lastName": "Long" }), &Actor::owner_token()));
         assert_eq!(v["person"], "owner");
         assert_eq!(v["displayName"], "Rosson Long");
-        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "zoe").expect("zoe");
         assert_eq!((z.first_name.as_deref(), z.last_name.as_deref()), (Some("Rosson"), Some("Long")), "on the linked row");
         assert_eq!(display_of(&v, "owner"), "Rosson Long");
-        assert_eq!(display_of(&v, "z3thon"), "Rosson Long");
+        assert_eq!(display_of(&v, "zoe"), "Rosson Long");
         assert!(v["names"].get("Rosson L").is_none(), "no display-name key: {v}");
         assert_eq!(display_of(&v, "gina"), "gina");
         // … and the linked login editing itself edits its own row (the owner's names).
-        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "lastName": "L." }), &Actor::login("z3thon")));
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "lastName": "L." }), &Actor::login("zoe")));
         assert_eq!(v["person"], "owner");
         assert_eq!(v["displayName"], "Rosson L.");
         assert_eq!(ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()))["displayName"], "Rosson L.");
         // Cleared: the owner shows the linked username.
         let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": null, "lastName": null }), &Actor::owner_token()));
         assert_eq!(v["firstName"], serde_json::Value::Null);
-        assert_eq!(v["displayName"], "z3thon");
+        assert_eq!(v["displayName"], "zoe");
         // The carry-over never runs again.
-        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
-        assert_eq!(ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()))["displayName"], "z3thon");
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &Actor::owner_token()));
+        assert_eq!(ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()))["displayName"], "zoe");
         // An Admin can't rename the owner person's login.
-        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "X", "person": "z3thon" }), &Actor::login("gina"));
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "X", "person": "zoe" }), &Actor::login("gina"));
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
     }
 
@@ -1510,8 +1510,8 @@ mod tests {
         add("hal", Role::Admin);
         add("rosson", Role::Owner);
         add("wes", Role::Owner);
-        add("z3thon", Role::Admin);
-        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        add("zoe", Role::Admin);
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &Actor::owner_token()));
         // A Member sets only their own.
         let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Bob", "person": "bob" }), &Actor::login("anna"));
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
@@ -1527,12 +1527,12 @@ mod tests {
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
         let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "X", "person": "owner" }), &Actor::login("gina"));
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
-        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "zoe").expect("zoe");
         assert_eq!(z.first_name, None, "nothing written on a 403");
         // The owner token (and an Owner-role login) may change anyone's.
         ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Wes", "person": "wes" }), &Actor::owner_token()));
         ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "person": "owner" }), &Actor::login("rosson")));
-        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "zoe").expect("zoe");
         assert_eq!(z.first_name.as_deref(), Some("Rosson"), "the owner person's names live on the linked row");
         let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Ghost", "person": "ghost" }), &Actor::owner_token());
         assert_eq!(r.status, "400 Bad Request", "{}", r.body);
@@ -1549,18 +1549,18 @@ mod tests {
     // ── Only linked accounts are the owner person (0.46.0) ────────────
 
     /// julie is the server's only Owner-role login but is NOT linked: she
-    /// keeps her own name and colour after z3thon is linked, and z3thon
+    /// keeps her own name and colour after zoe is linked, and zoe
     /// (linked) shows the owner's colour and names everywhere.
     #[test]
     fn an_unlinked_sole_owner_role_login_stays_itself() {
         let _f = fixture();
         add("julie", Role::Owner);
-        add("z3thon", Role::Admin);
+        add("zoe", Role::Admin);
         let owner = Actor::owner_token();
         let julie = Actor::login("julie");
         ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Julie", "lastName": "Ray" }), &julie));
         ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#aa3355" }), &julie));
-        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &owner));
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &owner));
         ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "lastName": "Long" }), &owner));
         ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#12ab9f" }), &owner));
 
@@ -1572,16 +1572,16 @@ mod tests {
         assert_eq!(c["colors"]["julie"], "#aa3355");
         assert_eq!(v["names"]["julie"]["displayName"], "Julie Ray");
 
-        // z3thon (linked): the owner's settings.
-        assert_eq!(c["colors"]["z3thon"], "#12ab9f");
+        // zoe (linked): the owner's settings.
+        assert_eq!(c["colors"]["zoe"], "#12ab9f");
         assert_eq!(c["colors"]["owner"], "#12ab9f");
-        assert_eq!(v["names"]["z3thon"]["displayName"], "Rosson Long");
+        assert_eq!(v["names"]["zoe"]["displayName"], "Rosson Long");
         assert_eq!(v["names"]["owner"]["displayName"], "Rosson Long");
-        let z = ok(get(PEOPLE_COLOR_PATH, &Actor::login("z3thon")));
+        let z = ok(get(PEOPLE_COLOR_PATH, &Actor::login("zoe")));
         assert_eq!((z["person"].clone(), z["color"].clone()), ("owner".into(), "#12ab9f".into()));
 
         // The owner's aliases name only the linked login.
-        assert_eq!(ok(get(OWNER_ACCOUNTS_PATH, &owner))["aliases"], serde_json::json!(["z3thon"]));
+        assert_eq!(ok(get(OWNER_ACCOUNTS_PATH, &owner))["aliases"], serde_json::json!(["zoe"]));
     }
 
     // ── "Your account" setup prompt (0.46.0) ──────────────────────────
@@ -1589,14 +1589,14 @@ mod tests {
     #[test]
     fn account_prompt_pick_then_not_now_then_link() {
         let _f = fixture();
-        add("z3thon", Role::Admin);
+        add("zoe", Role::Admin);
         add("julie", Role::Owner);
         add("anna", Role::Member);
         let owner = Actor::owner_token();
         let v = ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner));
         assert_eq!((v["show"].clone(), v["mode"].clone(), v["reason"].clone()), (true.into(), "pick".into(), "pick_account".into()));
         let names: Vec<&str> = v["candidates"].as_array().expect("candidates").iter().map(|c| c["username"].as_str().expect("u")).collect();
-        assert_eq!(names, vec!["julie", "z3thon"], "Owner/Admin only, sorted");
+        assert_eq!(names, vec!["julie", "zoe"], "Owner/Admin only, sorted");
         assert_eq!(v["preselect"], serde_json::Value::Null, "two candidates, no name match");
         assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
 
@@ -1610,9 +1610,9 @@ mod tests {
         assert_eq!(ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner))["show"], false);
 
         // A link (the existing route) stops it for good.
-        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &owner));
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["zoe"] }), &owner));
         let v = ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner));
-        assert_eq!((v["show"].clone(), v["reason"].clone(), v["linked"].clone()), (false.into(), "linked".into(), "z3thon".into()));
+        assert_eq!((v["show"].clone(), v["reason"].clone(), v["linked"].clone()), (false.into(), "linked".into(), "zoe".into()));
     }
 
     #[test]
@@ -1629,8 +1629,8 @@ mod tests {
     #[test]
     fn account_prompt_is_the_owner_tokens_only_and_dismiss_is_post_only() {
         let _f = fixture();
-        add("z3thon", Role::Owner);
-        let login = Actor::login("z3thon");
+        add("zoe", Role::Owner);
+        let login = Actor::login("zoe");
         for (is_post, path) in [(false, OWNER_ACCOUNT_PROMPT_PATH), (true, OWNER_ACCOUNT_PROMPT_DISMISS_PATH)] {
             let r = handle(is_post, path, b"{}", &login);
             assert_eq!(r.status, "403 Forbidden", "{path}: {}", r.body);

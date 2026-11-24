@@ -1619,7 +1619,7 @@ mod tests {
         n.owner().hub.attach(tx);
         assert_eq!(n.on_assign(&n.owner(), a), Some((id.into(), 1)));
         // The server hears the end from memory while the row can't be
-        // written (k2n4: a full disk kept two jobs `running` for hours).
+        // written (rig4: a full disk kept two jobs `running` for hours).
         let t0 = std::time::Instant::now();
         loop {
             let f = tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.expect("a frame").expect("the hub");
@@ -1649,7 +1649,7 @@ mod tests {
 
     /// A row a lost runner left `running` (a 0.46.2 full-disk finish, or a
     /// task that died): no process, but it held a slot and showed
-    /// `running` for hours (k2n4, 2026-10-21). A cancel records its end
+    /// `running` for hours (rig4, 2026-10-21). A cancel records its end
     /// as cancelled, with a receipt, and frees its place.
     #[tokio::test]
     async fn a_cancel_ends_a_job_whose_runner_is_gone() {

@@ -56,7 +56,7 @@ import {
 const REMOTE: ConnectHost = {
   id: 'h-z3',
   label: 'Z3 build',
-  hostname: 'z3thon.k2.dev',
+  hostname: 'zoe.k2.dev',
   username: 'rosson',
   port: 443,
   secure: true,
@@ -64,7 +64,7 @@ const REMOTE: ConnectHost = {
   remember: false,
   lastConnectedAt: null,
 }
-const REMOTE_KEY = 'z3thon.k2.dev'
+const REMOTE_KEY = 'zoe.k2.dev'
 
 function account(id: string, label: string, active: boolean): Record<string, unknown> {
   return {

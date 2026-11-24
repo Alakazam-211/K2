@@ -77,7 +77,7 @@ beforeEach(() => {
     'users/set-role': () => ({ success: true }),
   }
   h.routes = {
-    'owner/account-prompt': pickView([cand('z3thon', { firstName: 'Rosson', lastName: 'Long', displayName: 'Rosson Long' }), cand('julie')]),
+    'owner/account-prompt': pickView([cand('zoe', { firstName: 'Rosson', lastName: 'Long', displayName: 'Rosson Long' }), cand('julie')]),
     'people/color': { ok: true, palette: [], person: 'owner', color: '#8c62c4', chosen: null, colors: {} },
   }
 })
@@ -117,8 +117,8 @@ describe('owner account prompt: when it shows', () => {
     expect(el.textContent).toContain(PROMPT_WHY)
     expect(PROMPT_WHY).toBe('Agents see your messages as from this user.')
     // Display name + username + colour dot per admin.
-    expect(screen.getByTestId('owner-account-option-z3thon').textContent).toContain('Rosson Long')
-    expect(screen.getByTestId('owner-account-option-z3thon').textContent).toContain('z3thon')
+    expect(screen.getByTestId('owner-account-option-zoe').textContent).toContain('Rosson Long')
+    expect(screen.getByTestId('owner-account-option-zoe').textContent).toContain('zoe')
     expect(screen.getByTestId('owner-account-dot-julie').style.background).toBe('rgb(58, 135, 168)')
   })
 
@@ -138,7 +138,7 @@ describe('owner account prompt: when it shows', () => {
 
   it('hides when the daemon says no (linked, dismissed, not the owner token, older daemon)', async () => {
     for (const answer of [
-      { ok: true, show: false, mode: 'pick', candidates: [cand('z3thon')] },
+      { ok: true, show: false, mode: 'pick', candidates: [cand('zoe')] },
       new Error('route not found'),
       new Error('403 forbidden'),
     ]) {
@@ -160,14 +160,14 @@ describe('owner account prompt: when it shows', () => {
 
 describe('owner account prompt: pre-select', () => {
   it('takes the daemon pre-selection (one admin, or the old "Your name" match)', async () => {
-    h.routes['owner/account-prompt'] = pickView([cand('z3thon'), cand('julie')], 'z3thon')
+    h.routes['owner/account-prompt'] = pickView([cand('zoe'), cand('julie')], 'zoe')
     await shown()
-    expect([radio('z3thon').checked, radio('julie').checked]).toEqual([true, false])
+    expect([radio('zoe').checked, radio('julie').checked]).toEqual([true, false])
   })
 
   it('selects nothing when the daemon has no obvious match; Use this account waits for a pick', async () => {
     await shown()
-    expect([radio('z3thon').checked, radio('julie').checked]).toEqual([false, false])
+    expect([radio('zoe').checked, radio('julie').checked]).toEqual([false, false])
     expect((screen.getByRole('button', { name: 'Use this account' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -176,17 +176,17 @@ describe('owner account prompt: pre-select', () => {
     const group = screen.getByRole('radiogroup', { name: 'Your account' })
     const radios = Array.from(group.querySelectorAll('input[type="radio"]')) as HTMLInputElement[]
     expect(radios.map((r) => [r.name, r.value, r.classList.contains(RADIO_CLASS)])).toEqual([
-      ['owner-account', 'z3thon', true],
+      ['owner-account', 'zoe', true],
       ['owner-account', 'julie', true],
     ])
     // The label still names it (a real radio inside its label).
-    expect(screen.getByRole('radio', { name: /Rosson Long/ })).toBe(radio('z3thon'))
+    expect(screen.getByRole('radio', { name: /Rosson Long/ })).toBe(radio('zoe'))
     // Focusable, and Space/arrow selection is the browser's own radio:
     // a change event picks it like a click does.
     radio('julie').focus()
     expect(document.activeElement).toBe(radio('julie'))
     act(() => void fireEvent.click(radio('julie')))
-    expect([radio('z3thon').checked, radio('julie').checked]).toEqual([false, true])
+    expect([radio('zoe').checked, radio('julie').checked]).toEqual([false, true])
   })
 
   it('ignores a pre-selection that is not in the list', () => {
@@ -373,12 +373,12 @@ describe('owner account prompt: reopened from the setup checklist', () => {
   })
 
   it('a reopened prompt starts on the daemon\'s pre-select', async () => {
-    h.routes['owner/account-prompt'] = { ...DISMISSED, candidates: [cand('julie'), cand('z3thon')], preselect: 'z3thon' }
+    h.routes['owner/account-prompt'] = { ...DISMISSED, candidates: [cand('julie'), cand('zoe')], preselect: 'zoe' }
     render(<OwnerAccountPrompt />)
     await settled()
     act(() => useOwnerAccountPromptReopenStore.getState().reopen())
     await screen.findByTestId('owner-account-prompt')
-    await waitFor(() => expect(radio('z3thon').checked).toBe(true))
+    await waitFor(() => expect(radio('zoe').checked).toBe(true))
   })
 
   it('does not reopen once an account is linked', async () => {

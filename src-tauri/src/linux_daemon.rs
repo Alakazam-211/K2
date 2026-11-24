@@ -6,7 +6,7 @@
 //! pacman runs as root and cannot restart a user unit, so after
 //! `pacman -U` the old daemon keeps running and the new app waits forever
 //! on the exact-version gate (ConnectionGate `localPairedPolicy`). Field
-//! report: z13flow, 0.46.0, 2026-10-18.
+//! report: laptop-a, 0.46.0, 2026-10-18.
 //!
 //! What this does, once per call:
 //!   1. Only for the local daemon: loopback base URL, a process owned by
@@ -578,7 +578,7 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // z13flow: a dev-hop drop-in runs an old dev build; pacman replaced
+        // laptop-a: a dev-hop drop-in runs an old dev build; pacman replaced
         // /usr/bin/k2-daemon but not that file. Name the drop-in at once.
         let u = parse_show(SHOW_DEV_HOP);
         match plan_restart("0.46.0", &seen("0.45.7"), &u, Some(false), false) {

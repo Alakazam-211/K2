@@ -1484,15 +1484,15 @@ fn userns_places_only_on_owned_granted_nodes_that_offer_it() {
     // A node never seen online can't say: refused.
     assert_eq!(userns_skip(&w, true, c.grant.as_ref(), None), Some(skip::USERNS_NEEDS_UPDATE));
     // A named node: the named refusals (exit 3), each naming the node.
-    let e = named_refusal(skip::USERNS_OWNER_ONLY, "k2n7", "builder", false);
+    let e = named_refusal(skip::USERNS_OWNER_ONLY, "rig7", "builder", false);
     assert_eq!((e.code, e.status), (codes::USERNS_OWNER_ONLY, 403));
-    assert!(e.hint.contains("--userns is only for the node owner's own server: this server is a tenant of k2n7, so its jobs can't make user namespaces there"), "{}", e.hint);
-    let e = named_refusal(skip::USERNS_NOT_GRANTED, "k2n7", "builder", false);
+    assert!(e.hint.contains("--userns is only for the node owner's own server: this server is a tenant of rig7, so its jobs can't make user namespaces there"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NOT_GRANTED, "rig7", "builder", false);
     assert_eq!((e.code, e.status), (codes::USERNS_NOT_GRANTED, 403));
-    assert!(e.hint.contains("k2 compute grant k2n7 --workspace builder --userns"), "{}", e.hint);
-    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "k2n7", "builder", false);
+    assert!(e.hint.contains("k2 compute grant rig7 --workspace builder --userns"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "rig7", "builder", false);
     assert_eq!((e.code, e.status), (codes::USERNS_NEEDS_UPDATE, 409));
-    assert!(e.hint.contains("'k2n7' can't") && e.hint.contains("0.46.18"), "{}", e.hint);
+    assert!(e.hint.contains("'rig7' can't") && e.hint.contains("0.46.18"), "{}", e.hint);
     // Auto-placement with none left: the grant first (the fix an owner can
     // make), then the update, then a tenant node named.
     let mut r = CandReport { visible: 3, ..Default::default() };
@@ -1565,10 +1565,10 @@ fn no_addr_filter_needs_userns_network_none_its_feature_and_grant() {
     let mut p = userns_plan(true);
     p.no_addr_filter = true;
     assert!(Want::of_job(&JobRow::default(), &p).no_addr_filter, "a move keeps it");
-    let e = named_refusal(skip::USERNS_NOT_GRANTED, "k2n7", "builder", true);
-    assert!(e.hint.contains("k2 compute grant k2n7 --workspace builder --userns --no-addr-filter"), "{}", e.hint);
-    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "k2n7", "builder", true);
-    assert!(e.hint.starts_with("--no-addr-filter: 'k2n7' can't"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NOT_GRANTED, "rig7", "builder", true);
+    assert!(e.hint.contains("k2 compute grant rig7 --workspace builder --userns --no-addr-filter"), "{}", e.hint);
+    let e = named_refusal(skip::USERNS_NEEDS_UPDATE, "rig7", "builder", true);
+    assert!(e.hint.starts_with("--no-addr-filter: 'rig7' can't"), "{}", e.hint);
     assert!(skip_words(skip::USERNS_NEEDS_UPDATE, 1, &w).contains("--no-addr-filter"));
 }
 

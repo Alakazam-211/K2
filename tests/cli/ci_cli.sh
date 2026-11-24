@@ -82,7 +82,7 @@ def run(state, checks=None):
             "state": state, "detail": None, "by": "owner", "tier": "ci", "createdAt": int(time.time()) - 30,
             "endedAt": None, "statuses": {"slug": "acme/app", "context": "k2-ci", "tokenSecret": "K2_CI_STATUSES_TOKEN"},
             "checks": checks if checks is not None else [
-                {"name": "unit", "job": "jobaaaaa1111", "state": "success" if state != "running" else "running", "description": "job jobaaaaa on k2n7, 2m", "status": "success", "statusError": None},
+                {"name": "unit", "job": "jobaaaaa1111", "state": "success" if state != "running" else "running", "description": "job jobaaaaa on rig7, 2m", "status": "success", "statusError": None},
                 {"name": "lint", "job": None, "state": "error", "description": "not submitted: ci_not_allowed: x", "status": None, "statusError": "no secret K2_CI_STATUSES_TOKEN"}]}
 polls = {"n": 0}
 class H(BaseHTTPRequestHandler):
@@ -162,16 +162,16 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/compute/stats":
             g = 1 << 30
             if q.get("job") == "old00000":
-                return self.reply({"id": "old00000", "short": "old00000", "state": "done", "node": "k2n4", "generation": 1, "wallSecs": 30, "cpus": {"guaranteed": None, "burst": None},
-                                   "memLimitBytes": g, "stats": None, "why": "no series for it: its node's k2-node is older than protocol 10 (k2 compute node update k2n4), or it ended more than 30 days ago",
-                                   "text": ["stats · job old00000 · done · k2n4 · ran 30s · attempt 1", "  no series: no series for it: its node's k2-node is older than protocol 10 (k2 compute node update k2n4), or it ended more than 30 days ago"]})
+                return self.reply({"id": "old00000", "short": "old00000", "state": "done", "node": "rig4", "generation": 1, "wallSecs": 30, "cpus": {"guaranteed": None, "burst": None},
+                                   "memLimitBytes": g, "stats": None, "why": "no series for it: its node's k2-node is older than protocol 10 (k2 compute node update rig4), or it ended more than 30 days ago",
+                                   "text": ["stats · job old00000 · done · rig4 · ran 30s · attempt 1", "  no series: no series for it: its node's k2-node is older than protocol 10 (k2 compute node update rig4), or it ended more than 30 days ago"]})
             pts = [{"t": i * 5, "cpuMilli": 3900, "memBytes": i * g // 8, "ioReadBytes": i * g // 72, "ioWriteBytes": i * 2 * g // 72, "load1Milli": 6000} for i in range(1, 73)]
-            return self.reply({"id": "ab12cd34ffff", "short": "ab12cd34", "state": "done", "node": "k2n7", "generation": 1, "wallSecs": 360, "cpus": {"guaranteed": 4.0, "burst": None}, "memLimitBytes": 16 * g,
+            return self.reply({"id": "ab12cd34ffff", "short": "ab12cd34", "state": "done", "node": "rig7", "generation": 1, "wallSecs": 360, "cpus": {"guaranteed": 4.0, "burst": None}, "memLimitBytes": 16 * g,
                                "stats": {"everySecs": 5, "points": pts, "peaks": {"cpus": 3.9, "memBytes": 9 * g, "load1": 6.0}, "io": {"readBytes": g, "writeBytes": 2 * g},
                                          "throttle": {"periods": 1200, "usec": 110000000, "heldPct": 33, "ceilingCpus": 4.0, "hint": "held to its --cpus 4 33% of the time: try --cpus 4+8"},
                                          "oomEvents": 0, "notes": ["no per-job network numbers (a cgroup doesn't give them cheaply)"]},
                                # The daemon writes the lines (job_stats::render, tested there).
-                               "text": ["stats · job ab12cd34 · done · k2n7 · ran 6m00s · attempt 1", "  every 5s, 72 points",
+                               "text": ["stats · job ab12cd34 · done · rig7 · ran 6m00s · attempt 1", "  every 5s, 72 points",
                                         "  cpu     peak 3.9    of --cpus 4  ████", "  memory  peak 9.0G   of 16G  ▁▂▂", "  io      read 1.0G · written 2.0G  ████",
                                         "  load    peak 6      ████", "  held at its CPU limit about 33% of the run (1200 throttled periods)",
                                         "  held to its --cpus 4 33% of the time: try --cpus 4+8", "  oom kills: 0", "  (no per-job network numbers (a cgroup doesn't give them cheaply))"]})
@@ -208,7 +208,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/compute/run":
             if v.get("memAuto") and not v.get("memAutoFallbackBytes"):
                 return self.reply({"error": {"code": "mem_auto_no_history", "hint": "--mem auto: no finished run yet; --mem auto:8G"}}, 400)
-            return self.reply({"plan": True, "node": "k2n7", "online": True, "startsNow": True,
+            return self.reply({"plan": True, "node": "rig7", "online": True, "startsNow": True,
                                "warnings": ["--mem auto: 8G — auto (no history yet: the fallback 8G)"],
                                "effective": {"source": None, "mem": {"value": "8G", "bytes": 8 << 30, "from": "auto (no history yet: the fallback 8G)", "asked": "flag"}}})
         if path == "/cli/ci/release":
@@ -488,7 +488,7 @@ eq "stats usage errors sent nothing" "$(wc -l <"$REQ_LOG")" "$before"
 rc "stats" 0 compute stats ab12cd34
 has "stats: the job" "$(last /cli/compute/stats)" "job=ab12cd34"
 out="$(cat "$WORK/out")"
-has "stats: header" "$out" "stats · job ab12cd34 · done · k2n7 · ran 6m00s · attempt 1"
+has "stats: header" "$out" "stats · job ab12cd34 · done · rig7 · ran 6m00s · attempt 1"
 has "stats: spacing" "$out" "every 5s, 72 points"
 has "stats: cpu line" "$out" "cpu     peak 3.9    of --cpus 4"
 has "stats: memory line" "$out" "memory  peak 9.0G   of 16G"

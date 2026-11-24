@@ -66,7 +66,7 @@ function json(body: unknown, status = 200): Response {
 beforeEach(() => {
   cli.whoami = { owner: true, role: 'owner' }
   cli.users = [
-    { username: 'z3thon', disabled: false, role: 'admin', firstName: 'Rosson', lastName: 'Long', displayName: 'Rosson Long' },
+    { username: 'zoe', disabled: false, role: 'admin', firstName: 'Rosson', lastName: 'Long', displayName: 'Rosson Long' },
     { username: 'gina', disabled: false, role: 'member', firstName: null, lastName: null, displayName: 'gina' },
   ]
   cli.fetches = []
@@ -98,7 +98,7 @@ afterEach(() => {
 
 /** The open Add a person dialog, after the list has loaded. */
 async function openAdd(): Promise<HTMLElement> {
-  await screen.findByTestId('user-real-name-z3thon')
+  await screen.findByTestId('user-real-name-zoe')
   act(() => void fireEvent.click(screen.getByRole('button', { name: 'Add person' })))
   return screen.getByTestId('add-person-dialog')
 }
@@ -120,8 +120,8 @@ function menuItem(user: string, name: RegExp): void {
 describe('Admin Access: first and last names', () => {
   it('a row shows the real name beside the username; no name shows the username alone', async () => {
     render(<K2ConnectSection panel="people" />)
-    expect((await screen.findByTestId('user-real-name-z3thon')).textContent).toBe('Rosson Long')
-    expect(screen.getByText('z3thon')).toBeTruthy()
+    expect((await screen.findByTestId('user-real-name-zoe')).textContent).toBe('Rosson Long')
+    expect(screen.getByText('zoe')).toBeTruthy()
     expect(document.querySelector('[data-testid="user-real-name-gina"]')).toBeNull()
   })
 
@@ -146,7 +146,7 @@ describe('Admin Access: first and last names', () => {
 
   it('Name and picture sets someone else\'s names through people/name with person; empty clears', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('user-real-name-z3thon')
+    await screen.findByTestId('user-real-name-zoe')
     menuItem('gina', /Name and picture/)
     screen.getByTestId('name-form-gina')
     act(() => void fireEvent.change(screen.getByLabelText('gina first name'), { target: { value: 'Gina' } }))
@@ -160,13 +160,13 @@ describe('Admin Access: first and last names', () => {
   it('a refused name keeps the dialog open and says why', async () => {
     cli.nameError = 'only an Owner can change the owner\'s names'
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('user-real-name-z3thon')
-    menuItem('z3thon', /Name and picture/)
-    expect((screen.getByLabelText('z3thon first name') as HTMLInputElement).value).toBe('Rosson')
+    await screen.findByTestId('user-real-name-zoe')
+    menuItem('zoe', /Name and picture/)
+    expect((screen.getByLabelText('zoe first name') as HTMLInputElement).value).toBe('Rosson')
     act(() => void fireEvent.click(screen.getByRole('button', { name: 'Save name' })))
     const err = await screen.findByTestId('dialog-error')
-    expect(err.textContent).toContain('Couldn’t save z3thon’s name.')
+    expect(err.textContent).toContain('Couldn’t save zoe’s name.')
     expect(err.textContent).toContain('The server said: only an Owner can change the owner\'s names.')
-    expect(screen.getByTestId('name-form-z3thon')).toBeTruthy()
+    expect(screen.getByTestId('name-form-zoe')).toBeTruthy()
   })
 })

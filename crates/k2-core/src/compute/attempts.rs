@@ -444,16 +444,16 @@ mod tests {
 
     #[test]
     fn ends_and_next_steps_are_plain_words() {
-        assert!(end_words("interrupted", Some("node_update"), true, "k2n7").contains("k2n7 stopped it while updating"));
-        assert!(end_words("interrupted", Some("node_lost"), true, "k2n7").contains("offline"));
-        assert_eq!(end_words("assigned", Some("withdraw_resend"), false, "k2n7"), "it never started on k2n7");
-        assert!(end_words("failed", Some("weird_code"), true, "k2n7").contains("(weird_code)"));
+        assert!(end_words("interrupted", Some("node_update"), true, "rig7").contains("rig7 stopped it while updating"));
+        assert!(end_words("interrupted", Some("node_lost"), true, "rig7").contains("offline"));
+        assert_eq!(end_words("assigned", Some("withdraw_resend"), false, "rig7"), "it never started on rig7");
+        assert!(end_words("failed", Some("weird_code"), true, "rig7").contains("(weird_code)"));
         let d = end_words("failed", Some(crate::compute::proto::share::codes::DISK_BUDGET), true, "node-1");
         assert!(d.contains("whole disk budget") && !d.contains("infrastructure"), "the job's own result: {d}");
-        let n = next_words(next::RETRY_AUTO, "k2n7", Some("k2n12"));
-        assert!(n.starts_with("retried automatically on k2n12") && n.contains("--retries 0"), "{n}");
-        assert!(next_words(next::RESENT, "k2n7", None).contains("new caps"));
-        assert!(next_words(next::WITHDRAWN, "k2n7", Some("k2n9")).contains("to move it to k2n9"));
+        let n = next_words(next::RETRY_AUTO, "rig7", Some("rig12"));
+        assert!(n.starts_with("retried automatically on rig12") && n.contains("--retries 0"), "{n}");
+        assert!(next_words(next::RESENT, "rig7", None).contains("new caps"));
+        assert!(next_words(next::WITHDRAWN, "rig7", Some("rig9")).contains("to move it to rig9"));
     }
 
     #[test]
@@ -505,13 +505,13 @@ mod tests {
             push(&mut j.ctl, r1);
             j.node_id = "n2".into();
             assert!(logs::append(&j.id, 1, 1, crate::compute::proto::frames::LogStream::Out, b"verdict\n").unwrap());
-            let names = HashMap::from([("n1".to_string(), "k2n7".to_string()), ("n2".to_string(), "k2n12".to_string())]);
+            let names = HashMap::from([("n1".to_string(), "rig7".to_string()), ("n2".to_string(), "rig12".to_string())]);
             let list = list_json(&j, &names);
             assert_eq!(list.len(), 2);
-            assert_eq!(list[0]["node"], "k2n7");
+            assert_eq!(list[0]["node"], "rig7");
             assert_eq!(list[0]["log"]["available"], true);
             assert_eq!(list[0]["log"]["command"], "k2 compute logs jobid-00 --attempt 1");
-            assert!(list[0]["next"].as_str().unwrap().starts_with("retried automatically on k2n12"));
+            assert!(list[0]["next"].as_str().unwrap().starts_with("retried automatically on rig12"));
             // No --artifact on this plan: nothing was asked.
             assert_eq!(list[0]["artifacts"]["status"], "not_asked");
             assert_eq!((list[1]["current"].as_bool(), list[1]["log"]["available"].as_bool()), (Some(true), Some(false)));

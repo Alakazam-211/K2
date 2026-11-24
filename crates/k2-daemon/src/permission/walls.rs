@@ -1812,8 +1812,8 @@ mod tests {
             (403, "POST", "/cli/compute/grants/set", vec![], Some(json!({"node":"n1","allowCi":true})), json!({"error":{"code":"owner_only"}}), "compute.use"),
             (403, "POST", "/cli/compute/grants/revoke", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.use"),
             // 0.46.18: an agent's `k2 compute node pinned-only <node> on|off`.
-            (403, "POST", "/cli/compute/nodes/pinned-only", vec![], Some(json!({"node":"k2n4","on":true})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.node.pinned-only"),
-            (403, "POST", "/cli/compute/nodes/pinned-only", vec![], Some(json!({"node":"k2n4","on":false})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.node.pinned-only"),
+            (403, "POST", "/cli/compute/nodes/pinned-only", vec![], Some(json!({"node":"rig4","on":true})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.node.pinned-only"),
+            (403, "POST", "/cli/compute/nodes/pinned-only", vec![], Some(json!({"node":"rig4","on":false})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.node.pinned-only"),
             (403, "POST", "/cli/sidecar/new", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             // 0.46.12: hiring is its own switch.
@@ -1871,11 +1871,11 @@ mod tests {
             (403, "POST", "/cli/publish/subdomain/claim", vec![("label","pogshop"),("transfer","1")], None, json!({"code":"transfer_owner_only","error":"transfer_owner_only: only the server owner or an admin can transfer 'pogshop'.","hint":"Pick another name, or ask the server owner to transfer this one.","label":"pogshop"}), "publish.transfer"),
             (403, "POST", "/cli/zen/widget/sign", vec![], Some(json!({"widget":"board"})), json!({"ok":false,"error":"sign_needs_person","widget":"board","version":"ab".repeat(32),"card":null}), "zen.sign"),
             // Job tiers (prd-compute-job-tiers-v1 T13).
-            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"rig4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
             // 0.46.7 (CE-13): --exclusive without the grant's CI right.
-            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","exclusive":true,"why":"bench"})), json!({"error":{"code":"exclusive_needs_grant","hint":"x"}}), "compute.ci"),
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"rig4","exclusive":true,"why":"bench"})), json!({"error":{"code":"exclusive_needs_grant","hint":"x"}}), "compute.ci"),
             // 0.46.11: --gpu where the grant lacks --gpu (auto: the node is in the refusal).
-            (403, "POST", "/cli/compute/run", vec![], Some(json!({"gpu":{"vendor":"any","count":1}})), json!({"error":{"code":"gpu_needs_grant","hint":"x","node":"k2n11"}}), "compute.gpu"),
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"gpu":{"vendor":"any","count":1}})), json!({"error":{"code":"gpu_needs_grant","hint":"x","node":"rig11"}}), "compute.gpu"),
             // Mobile dev (0.46.6): `k2 sim boot` with "Allow mobile devices" off.
             (403, "POST", "/cli/sim/boot", vec![], Some(json!({})), json!({"error":{"code":"sim_switch_off","hint":"x"},"code":"sim_switch_off"}), "sim.use"),
             // 0.46.12 (L8): `k2 desktop env` with "Allow a virtual desktop" off.
@@ -1887,7 +1887,7 @@ mod tests {
             (403, "POST", "/cli/agent/refresh", vec![], Some(json!({"notes":"n"})), json!({"error":{"code":"chat_refresh_needs_person","notes":"ab"},"refreshed":false}), "chat.refresh"),
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"codex"})), json!({"error":{"code":"chat_refresh_needs_person"},"swapped":false}), "chat.refresh"),
             // 0.46.6: `k2 vault delivery NAME env` on a secret the agent can't widen.
-            (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"K2N12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"K2N12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
+            (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"RIG12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"RIG12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
             // `k2 app grant add … --kind app` by the App's own agent.
             (403, "POST", "/cli/skin/grants", vec![], Some(json!({"subjectKind":"principal","subjectId":"dana","kind":"app","targetId":"jobs","roleId":"viewer"})), json!({"error":{"code":"owner_only","hint":"x"}}), "app.login-grant"),
             // `k2 publish secret add svc NAME` on a secret a person gave.
@@ -1929,9 +1929,9 @@ mod tests {
             (403, "POST", "/cli/skin/users/password", vec![], Some(json!({"username":"adam","password":"hunter2-not-real"})), json!({"ok":false,"error":{"code":"owner_only","hint":"'adam' has a box login"}}), "apps.user-password-reset"),
             (403, "GET", "/cli/docs/read", vec![("workspace", "alpha"), ("path", "/abs/alpha/notes/plan.md")], None, json!({"ok":false,"error":{"code":"doc_not_shared","hint":"x","workspace":"alpha","path":"notes/plan.md"}}), "docs.share"),
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
-            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"rig2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"rig2-mac","nodes":"rig2-mac"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
-            (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"workspace":"k2-engine","add":"k2n13"})), json!({"error":{"code":"allow_nodes_for_needs_person","hint":"x","workspace":"k2-engine","add":"k2n13"}}), "compute.allow-nodes-for"),
+            (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"workspace":"k2-engine","add":"rig13"})), json!({"error":{"code":"allow_nodes_for_needs_person","hint":"x","workspace":"k2-engine","add":"rig13"}}), "compute.allow-nodes-for"),
             (403, "POST", "/cli/ci/cache/trust/set", vec![], Some(json!({"add":["rel"]})), json!({"error":{"code":"cache_trust_needs_person","hint":"x","workspace":"k2","branches":"rel"}}), "ci.cache-trust"),
             // 0.46.9 (GH#78): an agent's git-access grant.
             (403, "POST", "/cli/compute/git-access/grant", vec![], Some(json!({"github":"acme/app"})), json!({"error":{"code":"git_access_needs_person","hint":"x","workspace":"k2","repos":"acme/app"}}), "compute.git-access"),
@@ -1939,9 +1939,9 @@ mod tests {
             (403, "POST", "/cli/compute/git-access/grant", vec![], Some(json!({"github":"acme/app"})), json!({"error":{"code":"git_access_needs_setup","hint":"x","workspace":"k2","repos":"acme/app"}}), "compute.git-access-setup"),
             (403, "POST", "/cli/compute/git-access/setup", vec![], Some(json!({"token":"x"})), json!({"error":{"code":"owner_only","hint":"x"}}), "compute.git-access-setup"),
             // 0.46.9: a filed package request, and the package policy to an agent that can't operate nodes.
-            (200, "POST", "/cli/compute/nodes/packages/request", vec![], Some(json!({"nodes":["k2n7"],"names":["libgtk-3-dev"]})), json!({"pkgHeld":true,"request":{"id":"cpr_0123456789abcdef"}}), "compute.packages"),
-            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n7"})), json!({"error":{"code":"package_not_approved","hint":"x","request":"cpr_0123456789abcdef","node":"k2n7"}}), "compute.packages"),
-            (403, "POST", "/cli/compute/nodes/packages/policy", vec![], Some(json!({"node":"k2n7","server":"own","level":"official"})), json!({"error":{"code":"operate_off","hint":"x"}}), "compute.packages-policy"),
+            (200, "POST", "/cli/compute/nodes/packages/request", vec![], Some(json!({"nodes":["rig7"],"names":["libgtk-3-dev"]})), json!({"pkgHeld":true,"request":{"id":"cpr_0123456789abcdef"}}), "compute.packages"),
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"rig7"})), json!({"error":{"code":"package_not_approved","hint":"x","request":"cpr_0123456789abcdef","node":"rig7"}}), "compute.packages"),
+            (403, "POST", "/cli/compute/nodes/packages/policy", vec![], Some(json!({"node":"rig7","server":"own","level":"official"})), json!({"error":{"code":"operate_off","hint":"x"}}), "compute.packages-policy"),
             // 0.46.8: `k2 chat space create --app` with no chat account (fix A),
             // and `k2 mail sending <ws> off` by an agent without mail-manage.
             (403, "POST", "/cli/sew/chat/manage/space/create", vec![], Some(json!({"slug":"jobs","app":"jobs"})), json!({"ok":false,"error":{"code":"chat_account_needed","hint":"x","details":{"workspace":"alpha"}}}), "chat.account"),
@@ -2268,8 +2268,8 @@ mod tests {
             json!({ "error": e })
         };
         for (extra, want) in [
-            (json!({"add":"k2n13,k2n14"}), "k2 permission request compute.allow-nodes-for add=k2n13,k2n14 target=k2-engine --why \"<what you need it for>\""),
-            (json!({"remove":"k2n2"}), "k2 permission request compute.allow-nodes-for remove=k2n2 target=k2-engine --why \"<what you need it for>\""),
+            (json!({"add":"rig13,rig14"}), "k2 permission request compute.allow-nodes-for add=rig13,rig14 target=k2-engine --why \"<what you need it for>\""),
+            (json!({"remove":"rig2"}), "k2 permission request compute.allow-nodes-for remove=rig2 target=k2-engine --why \"<what you need it for>\""),
             (json!({"clear":"true"}), "k2 permission request compute.allow-nodes-for clear=true target=k2-engine --why \"<what you need it for>\""),
         ] {
             let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"workspace":"k2-engine"})), refusal(extra.clone())).unwrap();
@@ -2286,21 +2286,21 @@ mod tests {
     /// agent's clear teaches `compute.allow-nodes-clear`.
     #[test]
     fn the_node_list_walls_name_the_node_or_the_clear() {
-        let off = json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1","allowed":["k2n9"]}});
+        let off = json!({"error":{"code":"node_not_allowed","hint":"x","node":"rig2-mac","nodes":"rig2-mac","allowed":["rig9"]}});
         for (path, body) in [
-            ("/cli/compute/run", json!({"node":"k2n2"})),
+            ("/cli/compute/run", json!({"node":"rig2"})),
             ("/cli/compute/jobs/retry", json!({"job":"abcd1234"})),
-            ("/cli/compute/prewarm", json!({"nodes":["k2n2"]})),
+            ("/cli/compute/prewarm", json!({"nodes":["rig2"]})),
         ] {
             let p = teach_of(403, "POST", path, &[], Some(body), off.clone()).unwrap();
             assert_eq!(action_of(&p), "compute.allow-nodes", "{path}: {p}");
             assert_eq!(p["approvers"], "owner or admin");
-            assert_eq!(p["command"], "k2 permission request compute.allow-nodes nodes=k2n2-m1 --why \"<what you need it for>\"", "{path}");
+            assert_eq!(p["command"], "k2 permission request compute.allow-nodes nodes=rig2-mac --why \"<what you need it for>\"", "{path}");
         }
-        let add = json!({"error":{"code":"allow_nodes_needs_person","hint":"x","workspace":"k2","nodes":"k2n2-m1,k2n3-m1"}});
-        let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"add":["k2n2-m1","k2n3-m1"]})), add).unwrap();
+        let add = json!({"error":{"code":"allow_nodes_needs_person","hint":"x","workspace":"k2","nodes":"rig2-mac,rig3-mac"}});
+        let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"add":["rig2-mac","rig3-mac"]})), add).unwrap();
         assert_eq!(action_of(&p), "compute.allow-nodes", "{p}");
-        assert_eq!(p["command"], "k2 permission request compute.allow-nodes nodes=k2n2-m1,k2n3-m1 --why \"<what you need it for>\"");
+        assert_eq!(p["command"], "k2 permission request compute.allow-nodes nodes=rig2-mac,rig3-mac --why \"<what you need it for>\"");
         let clear = json!({"error":{"code":"allow_nodes_needs_person","hint":"x","workspace":"k2","clear":true}});
         let p = teach_of(403, "POST", "/cli/compute/allow-nodes/set", &[], Some(json!({"clear":true})), clear).unwrap();
         assert_eq!(action_of(&p), "compute.allow-nodes-clear", "{p}");
@@ -2314,19 +2314,19 @@ mod tests {
     fn pinned_only_teaches_its_own_card_with_the_node_and_the_mode() {
         let refused = json!({"error":{"code":"owner_only","hint":"x"}});
         for (on, word) in [(true, "true"), (false, "false")] {
-            let p = teach_of(403, "POST", "/cli/compute/nodes/pinned-only", &[], Some(json!({"node":"k2n4","on":on})), refused.clone()).unwrap();
+            let p = teach_of(403, "POST", "/cli/compute/nodes/pinned-only", &[], Some(json!({"node":"rig4","on":on})), refused.clone()).unwrap();
             assert_eq!(action_of(&p), "compute.node.pinned-only", "{p}");
             assert_eq!(p["approvers"], "owner or admin", "{p}");
-            assert_eq!(p["params"], json!({"node":"k2n4","on":word}), "{p}");
-            assert_eq!(p["command"], format!("k2 permission request compute.node.pinned-only node=k2n4 on={word} --why \"<what you need it for>\""), "{p}");
+            assert_eq!(p["params"], json!({"node":"rig4","on":word}), "{p}");
+            assert_eq!(p["command"], format!("k2 permission request compute.node.pinned-only node=rig4 on={word} --why \"<what you need it for>\""), "{p}");
         }
         // No `on` in the body: still this card, the mode left to fill in.
-        let p = teach_of(403, "POST", "/cli/compute/nodes/pinned-only", &[], Some(json!({"node":"k2n4"})), refused.clone()).unwrap();
-        assert_eq!(p["command"], "k2 permission request compute.node.pinned-only node=k2n4 on=<on> --why \"<what you need it for>\"", "{p}");
+        let p = teach_of(403, "POST", "/cli/compute/nodes/pinned-only", &[], Some(json!({"node":"rig4"})), refused.clone()).unwrap();
+        assert_eq!(p["command"], "k2 permission request compute.node.pinned-only node=rig4 on=<on> --why \"<what you need it for>\"", "{p}");
         // A GET, or another route's owner_only, is not this card.
-        let p = teach_of(403, "POST", "/cli/compute/nodes/pause", &[], Some(json!({"node":"k2n4","on":true})), refused.clone()).unwrap();
+        let p = teach_of(403, "POST", "/cli/compute/nodes/pause", &[], Some(json!({"node":"rig4","on":true})), refused.clone()).unwrap();
         assert_eq!(action_of(&p), "compute.manage", "{p}");
-        let p = teach_of(403, "POST", "/cli/compute/nodes/retire", &[], Some(json!({"node":"k2n4"})), refused.clone()).unwrap();
+        let p = teach_of(403, "POST", "/cli/compute/nodes/retire", &[], Some(json!({"node":"rig4"})), refused.clone()).unwrap();
         assert_eq!(action_of(&p), "compute.manage", "{p}");
         let p = teach_of(403, "GET", "/cli/compute/nodes/pinned-only", &[], None, refused).unwrap();
         assert_ne!(p["action"], "compute.node.pinned-only", "{p}");
@@ -2568,14 +2568,14 @@ mod tests {
             "POST",
             "/cli/compute/admin/propose",
             &[],
-            Some(json!({"node":"z3mbpz"})),
-            json!({"error":{"code":"remote_admin_off","hint":"z3mbpz only takes admin steps from someone at that Mac."}}),
+            Some(json!({"node":"mac-b"})),
+            json!({"error":{"code":"remote_admin_off","hint":"mac-b only takes admin steps from someone at that Mac."}}),
         )
         .unwrap();
         assert_eq!(
             p,
             json!({"requestable": false, "where": "at the machine",
-                   "hint": "At z3mbpz, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)"})
+                   "hint": "At mac-b, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)"})
         );
         let p = teach_of(403, "POST", "/cli/x", &[], None, json!({"error":{"code":"remote_admin_off"}})).unwrap();
         assert!(p["hint"].as_str().unwrap().starts_with("At that machine, run:"), "{p}");
@@ -2837,7 +2837,7 @@ mod tests {
             "/cli/compute/nodes/servers/add",
             "/cli/compute/nodes/wall",
         ] {
-            let p = teach_of(200, "POST", path, &[], Some(json!({"node": "k2n1-m4"})), held.clone()).unwrap_or_else(|| panic!("{path}: not taught"));
+            let p = teach_of(200, "POST", path, &[], Some(json!({"node": "rig1-mac"})), held.clone()).unwrap_or_else(|| panic!("{path}: not taught"));
             assert_eq!(action_of(&p), "compute.admin-approve", "{path}: {p}");
             assert_eq!(p["approvers"], "owner", "{path}: {p}");
             assert_eq!(p["command"], want, "{path}: {p}");
@@ -2858,17 +2858,17 @@ mod tests {
     fn a_package_request_teaches_its_own_card() {
         let id = "cpr_0123456789abcdef";
         let want = format!("k2 permission request compute.packages request={id} --why \"<what you need it for>\"");
-        let held = json!({"pkgHeld": true, "request": {"id": id, "summary": "Install 1 package on k2n7 for agent tests: libgtk-3-dev"}});
+        let held = json!({"pkgHeld": true, "request": {"id": id, "summary": "Install 1 package on rig7 for agent tests: libgtk-3-dev"}});
         for path in ["/cli/compute/nodes/packages/request", "/cli/compute/prewarm"] {
-            let p = teach_of(200, "POST", path, &[], Some(json!({"nodes":["k2n7"]})), held.clone()).unwrap_or_else(|| panic!("{path}: no permission"));
+            let p = teach_of(200, "POST", path, &[], Some(json!({"nodes":["rig7"]})), held.clone()).unwrap_or_else(|| panic!("{path}: no permission"));
             assert_eq!(action_of(&p), "compute.packages", "{path}: {p}");
             assert_eq!(p["params"], json!({"request": id}), "{path}: {p}");
             assert_eq!(p["command"], want, "{path}");
             assert_eq!(p["approvers"], Floor::Admin.label(), "{path}: {p}");
         }
-        let refused = json!({"error": {"code": "package_not_approved", "hint": "x", "request": id, "node": "k2n7", "packages": ["libgtk-3-dev"]}});
+        let refused = json!({"error": {"code": "package_not_approved", "hint": "x", "request": id, "node": "rig7", "packages": ["libgtk-3-dev"]}});
         for path in ["/cli/compute/run", "/cli/compute/test", "/cli/compute/prewarm"] {
-            let p = teach_of(403, "POST", path, &[], Some(json!({"node":"k2n7"})), refused.clone()).unwrap_or_else(|| panic!("{path}: no permission"));
+            let p = teach_of(403, "POST", path, &[], Some(json!({"node":"rig7"})), refused.clone()).unwrap_or_else(|| panic!("{path}: no permission"));
             assert_eq!(action_of(&p), "compute.packages", "{path}: {p}");
             assert_eq!(p["command"], want, "{path}");
         }
@@ -2895,15 +2895,15 @@ mod tests {
     #[test]
     fn the_package_policy_wall_names_the_node_server_and_level() {
         let off = json!({"error": {"code": "operate_off", "hint": "x"}});
-        let p = teach_of(403, "POST", "/cli/compute/nodes/packages/policy", &[], Some(json!({"node":"k2n7","server":"acme.k2.dev","level":"profiles"})), off.clone())
+        let p = teach_of(403, "POST", "/cli/compute/nodes/packages/policy", &[], Some(json!({"node":"rig7","server":"acme.k2.dev","level":"profiles"})), off.clone())
             .expect("a permission");
         assert_eq!(action_of(&p), "compute.packages-policy", "{p}");
         assert_eq!(p["approvers"], Floor::Owner.label(), "{p}");
         assert_eq!(
             p["command"],
-            "k2 permission request compute.packages-policy level=profiles node=k2n7 server=acme.k2.dev --why \"<what you need it for>\""
+            "k2 permission request compute.packages-policy level=profiles node=rig7 server=acme.k2.dev --why \"<what you need it for>\""
         );
-        let p = teach_of(403, "POST", "/cli/compute/admin/propose", &[], Some(json!({"node":"k2n7"})), off).expect("a permission");
+        let p = teach_of(403, "POST", "/cli/compute/admin/propose", &[], Some(json!({"node":"rig7"})), off).expect("a permission");
         assert_eq!(action_of(&p), "compute.operate", "{p}");
     }
 

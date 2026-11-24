@@ -684,7 +684,7 @@ fn signer_pairing_is_a_persons_and_the_sas_stays_here() {
     let ws = operating_ws("sig");
     let signer = SigningKey::generate().unwrap();
     let t0 = compute::now();
-    let (code, hello, mut pending) = sp::signer_begin(&signer, "z3mbpZ", t0).unwrap();
+    let (code, hello, mut pending) = sp::signer_begin(&signer, "mac-b", t0).unwrap();
     let prefix = code.split('.').nth(1).unwrap().to_string();
     let body = |tok: Option<String>| json!({"code": code, "hello": hello, "confirmToken": tok});
     assert_eq!(call(SIGNER_ADD, &agent(&ws), body(Some(token(trust::CONFIRM_SIGNER, &format!("add:{prefix}"), "owner")))).unwrap_err().1, tcodes::PERSON_ONLY);

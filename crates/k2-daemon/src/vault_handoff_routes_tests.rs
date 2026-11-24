@@ -589,7 +589,7 @@ fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
         let _rt = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, run.path().join("run"));
         let v = crate::vault::ensure_test_vault();
         let ops = workspace("ops");
-        let name = format!("K2N12_ENROLL_{}", &uuid::Uuid::new_v4().simple().to_string()[..6].to_uppercase());
+        let name = format!("RIG12_ENROLL_{}", &uuid::Uuid::new_v4().simple().to_string()[..6].to_uppercase());
         let enroll = format!("ABCDE-FGHJK.{}", &uuid::Uuid::new_v4().simple().to_string()[..16]);
         let item = k2_vault::handoff::HandoffItem {
             name: name.clone(),
@@ -607,16 +607,16 @@ fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
         let inc = Incoming {
             delivery_id: id.clone(),
             workspace_id: ops.id.clone(),
-            peer_addr: "k2-dev-web::z3thon.k2.dev".into(),
+            peer_addr: "k2-dev-web::zoe.k2.dev".into(),
             peer_fp: Some("fp-peer".into()),
-            sender_actor: "agent:x@z3thon.k2.dev".into(),
+            sender_actor: "agent:x@zoe.k2.dev".into(),
             source_vault_id: Some("vault-peer".into()),
             item,
             note: "run k2-node servers add with it".into(),
             reply_to: None,
             auto_land: false,
             remote_off: false,
-            sender_label: "k2-dev-web on z3thon.k2.dev".into(),
+            sender_label: "k2-dev-web on zoe.k2.dev".into(),
         };
         v.handoff_receive(inc, SecretBytes::from_slice(enroll.as_bytes())).expect("pending");
 

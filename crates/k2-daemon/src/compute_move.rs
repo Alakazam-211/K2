@@ -818,8 +818,8 @@ mod tests {
 
     #[test]
     fn avoid_with_a_named_node_is_a_usage_refusal() {
-        let r = avoid_with_pinned("k2n12-vin");
+        let r = avoid_with_pinned("rig12-vps");
         assert_eq!((r.code, r.status), (AVOID_WITH_PINNED, 400));
-        assert!(r.hint.contains("k2n12-vin") && r.hint.contains("Leave the node off"), "{}", r.hint);
+        assert!(r.hint.contains("rig12-vps") && r.hint.contains("Leave the node off"), "{}", r.hint);
     }
 }

@@ -128,7 +128,7 @@ pub fn claude_project_hash(project_path: &str) -> String {
 }
 
 /// Convert a project path to Cursor's chat-directory hash.
-/// `Users-z3thon-DevProjects-K2SO` — strip leading `/`, then slashes
+/// `Users-zoe-DevProjects-K2SO` — strip leading `/`, then slashes
 /// to dashes.
 pub fn cursor_project_hash(project_path: &str) -> String {
     project_path.trim_start_matches('/').replace('/', "-")

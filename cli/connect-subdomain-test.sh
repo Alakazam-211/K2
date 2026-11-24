@@ -322,7 +322,7 @@ runc() { HOME="$TEST_HOME" K2_PORT= K2SO_PORT= K2_HOOK_TOKEN= K2SO_HOOK_TOKEN= K
 runc_d() { HOME="$TEST_HOME" K2_PORT="$PORT" K2_HOOK_TOKEN=fake K2SO_PORT= K2SO_HOOK_TOKEN= K2_HOOK_SOCK= K2SO_HOOK_SOCK= "$K2_BIN" publish "$@" 2>&1; }
 
 # Pro plan on the connected (tunnel.json: rosson) subdomain.
-set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"pro","primary":true},{"label":"z3thon","host":"z3thon.k2.dev","tier":"free"}]}'
+set_resp 200 '{"subdomains":[{"label":"rosson","host":"rosson.k2.dev","tier":"pro","primary":true},{"label":"zoe","host":"zoe.k2.dev","tier":"free"}]}'
 out="$(runc status)"; rc=$?
 [ "$(req_line)" = "GET /subdomains" ] && ok "status -> GET /subdomains" || bad "status method/path: $(req_line)"
 echo "$out" | grep -q "Connected: rosson.k2.dev" && ok "status names the connected host" || bad "status host: $out"

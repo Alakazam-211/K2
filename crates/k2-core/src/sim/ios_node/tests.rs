@@ -55,7 +55,7 @@ fn tmpdir(tag: &str) -> PathBuf {
 fn profiles_name_the_node_and_need_no_session() {
     let (_dir, lane) = setup();
     let p = lane.profiles().unwrap();
-    assert_eq!(p[0].name, "iPhone 17 (on k2n1-m4)");
+    assert_eq!(p[0].name, "iPhone 17 (on rig1-mac)");
     assert_eq!(p[0].id, format!("{NODE_NAME}:{}", fake_node::TYPE_17));
     assert!(p[0].default && p.iter().filter(|x| x.default).count() == 1);
     assert_eq!((p[0].width_pt, p[0].height_pt, p[0].scale), (402, 874, 3.0));
@@ -68,7 +68,7 @@ fn profiles_name_the_node_and_need_no_session() {
 fn a_fake_node_session_end_to_end() {
     let (dir, lane) = setup();
     let b = lane.boot(&req(None)).unwrap();
-    assert_eq!(b.profile.name, "iPhone 17 (on k2n1-m4)");
+    assert_eq!(b.profile.name, "iPhone 17 (on rig1-mac)");
     assert_eq!(b.profile.id, format!("{NODE_NAME}:{}", fake_node::TYPE_17));
     assert_eq!(b.lane_state["node"], NODE_NAME);
     assert_eq!(lane.session_state(&key()), Some("open"));
@@ -171,7 +171,7 @@ fn the_reaper_keeps_a_reconnecting_device_inside_the_grace() {
     assert!(lane.alive(&d), "IR-6: alive from state inside the grace, never from the node");
     let e = lane.tree(&d).unwrap_err();
     assert_eq!(e.code(), "sim_not_running");
-    assert!(e.message().contains("reconnecting to k2n1-m4"), "{}", e.message());
+    assert!(e.message().contains("reconnecting to rig1-mac"), "{}", e.message());
     // A redial inside the grace keeps the device.
     dir.node.dial(&session, &key()).unwrap();
     assert!(lane.alive(&d));
@@ -227,7 +227,7 @@ fn an_offer_without_our_session_means_the_node_restarted() {
     facts.sessions.clear();
     lane.on_offer(NODE_ID, Some(&facts));
     assert!(!lane.alive(&d));
-    assert!(lane.tree(&d).unwrap_err().message().contains("k2n1-m4 restarted"));
+    assert!(lane.tree(&d).unwrap_err().message().contains("rig1-mac restarted"));
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn open_url_refuses_file_urls_and_this_servers_own_addresses() {
     let d = dref(&lane.boot(&req(None)).unwrap());
     for (url, code) in [
         ("file:///etc/passwd", "sim_invalid"),
-        ("FILE:/Users/scoutwilliams", "sim_invalid"),
+        ("FILE:/Users/patlee", "sim_invalid"),
         ("http://localhost:3000", "sim_url_unreachable"),
         ("http://127.0.0.1:8081", "sim_url_unreachable"),
         ("http://192.168.1.20/", "sim_url_unreachable"),
@@ -284,7 +284,7 @@ fn open_url_refuses_file_urls_and_this_servers_own_addresses() {
         assert_eq!(e.code(), code, "{url}: {}", e.message());
     }
     let e = lane.act(&d, &Action::OpenUrl { url: "http://localhost:3000".into() }).unwrap_err();
-    assert!(e.message().contains("k2n1-m4") && e.message().contains("k2 app inspect"), "{}", e.message());
+    assert!(e.message().contains("rig1-mac") && e.message().contains("k2 app inspect"), "{}", e.message());
     for ok in ["https://web.app.k2.dev", "http://example.com", "myapp://open"] {
         lane.act(&d, &Action::OpenUrl { url: ok.into() }).unwrap();
     }
@@ -329,7 +329,7 @@ fn node_selection_failures_teach_with_the_right_codes() {
     dir.node.attach_lane(&lane);
     let e = lane.boot(&wsreq).unwrap_err();
     assert_eq!((e.code(), e.http_status()), ("sim_node_not_granted", 403));
-    assert!(e.message().contains("k2 compute grant k2n1-m4"), "{}", e.message());
+    assert!(e.message().contains("k2 compute grant rig1-mac"), "{}", e.message());
     assert_eq!(crate::sim::manager::SimError::from(e).exit, 3);
     dir.grant(WS_ID);
     // Held (a foreign lock, as the offer says).
@@ -347,7 +347,7 @@ fn node_selection_failures_teach_with_the_right_codes() {
     *dir.node.ready.lock().unwrap() = false;
     let e = lane.boot(&wsreq).unwrap_err();
     assert_eq!(e.code(), "sim_needs_setup");
-    assert!(e.message().starts_with("On k2n1-m4: install an iOS Simulator runtime"), "{}", e.message());
+    assert!(e.message().starts_with("On rig1-mac: install an iOS Simulator runtime"), "{}", e.message());
     let p = lane.probe();
     assert!(p.usable && !p.ready && !p.needs.is_empty(), "{p:?}");
     *dir.node.ready.lock().unwrap() = true;
@@ -364,10 +364,10 @@ fn node_selection_failures_teach_with_the_right_codes() {
     assert!(e.message().contains("holding for Sew CI"), "{}", e.message());
     dir.node.admission.lock().unwrap().foreign_lock = None;
     // A named device the node doesn't have.
-    let e = lane.boot(&req(Some("k2n1-m4:Nokia 3310"))).unwrap_err();
+    let e = lane.boot(&req(Some("rig1-mac:Nokia 3310"))).unwrap_err();
     assert_eq!(e.code(), "sim_invalid");
     // A named node that runs no iPhones.
-    assert_eq!(lane.boot(&req(Some("k2n2-m1:iPhone 17"))).unwrap_err().code(), "sim_lane_unavailable");
+    assert_eq!(lane.boot(&req(Some("rig2-mac:iPhone 17"))).unwrap_err().code(), "sim_lane_unavailable");
 }
 
 /// The grant rule matches `k2 compute run`: the owner and admins may boot
@@ -380,7 +380,7 @@ fn the_owner_and_admins_need_no_grant() {
     assert_eq!(lane.boot(&req(None)).unwrap_err().code(), "sim_node_not_granted");
     assert!(dir.node.sessions().is_empty());
     let b = lane.boot(&BootRequest { grant_exempt: true, ..req(None) }).expect("an owner or admin boots without a grant");
-    assert_eq!(b.profile.name, "iPhone 17 (on k2n1-m4)");
+    assert_eq!(b.profile.name, "iPhone 17 (on rig1-mac)");
     assert_eq!(dir.node.sessions().len(), 1);
 }
 
@@ -397,7 +397,7 @@ fn the_node_list_and_pinned_only_hold_for_a_lease() {
         assert_eq!((e.code(), e.http_status()), ("node_not_allowed", 403), "{}", e.message());
         assert!(matches!(e, LaneError::Node { reason: NodeReason::NotAllowed, .. }));
         assert_eq!(NodeReason::NotAllowed.exit(), 3, "a person changes the list");
-        assert!(e.message().contains("k2 compute allow-nodes --add k2n1-m4"), "{}", e.message());
+        assert!(e.message().contains("k2 compute allow-nodes --add rig1-mac"), "{}", e.message());
     }
     assert!(dir.node.sessions().is_empty(), "nothing leased off the list");
     dir.allow_again(WS_ID);
@@ -407,7 +407,7 @@ fn the_node_list_and_pinned_only_hold_for_a_lease() {
     assert_eq!(e.code(), "sim_lane_unavailable", "automatic placement never picks a pinned-only Mac: {}", e.message());
     assert!(dir.node.sessions().is_empty());
     let b = lane.boot(&req(Some(&format!("{NODE_NAME}:{TYPE_17_PRO}")))).expect("a device that names the Mac boots there");
-    assert_eq!(b.profile.name, "iPhone 17 Pro (on k2n1-m4)");
+    assert_eq!(b.profile.name, "iPhone 17 Pro (on rig1-mac)");
     assert_eq!(dir.node.sessions().len(), 1);
 }
 
@@ -416,7 +416,7 @@ fn one_iphone_per_node_and_a_pick_names_its_device() {
     let (dir, lane) = setup();
     dir.grant("proj-other");
     let b = lane.boot(&req(Some(&format!("{NODE_NAME}:{TYPE_17_PRO}")))).unwrap();
-    assert_eq!(b.profile.name, "iPhone 17 Pro (on k2n1-m4)");
+    assert_eq!(b.profile.name, "iPhone 17 Pro (on rig1-mac)");
     let mut other = req(None);
     other.workspace_id = "proj-other".into();
     other.workspace_key = crate::sim::workspace_key("proj-other");
@@ -430,7 +430,7 @@ fn one_iphone_per_node_and_a_pick_names_its_device() {
 struct NoNodes;
 impl NodeDirectory for NoNodes {
     fn nodes(&self) -> Vec<NodeInfo> {
-        vec![NodeInfo { id: "n2".into(), name: "k2n9-vin".into(), online: true, protocol: 7, features: vec![], mac: false, sim: None, hold: None, pinned_only: false }]
+        vec![NodeInfo { id: "n2".into(), name: "rig9-vps".into(), online: true, protocol: 7, features: vec![], mac: false, sim: None, hold: None, pinned_only: false }]
     }
     fn granted(&self, _: &str, _: &str) -> bool {
         true

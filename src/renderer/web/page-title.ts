@@ -3,7 +3,7 @@
  *
  * Desktop (Mission Control / Exposé): `K2 | <server nickname>`, or
  * `K2 | local` for the local daemon.
- * Hosted web: `<subdomain> | K2` e.g. `z3thon | K2`.
+ * Hosted web: `<subdomain> | K2` e.g. `zoe | K2`.
  */
 
 import { isWebClient } from '@/lib/is-web'
@@ -35,7 +35,7 @@ export function missionControlServerName(label: string | null | undefined): stri
   return name || 'local'
 }
 
-/** Base title: `K2 | local` on desktop, `z3thon | K2` on web. */
+/** Base title: `K2 | local` on desktop, `zoe | K2` on web. */
 export function k2BasePageTitle(
   hostname?: string | null,
   serverLabel?: string | null,
@@ -52,7 +52,7 @@ export function k2BasePageTitle(
 
 /**
  * Full tab title including optional zoom suffix (desktop zoom UI).
- * Zoom ≠ 1 → `K2 | local — 125%` / `z3thon | K2 — 125%`.
+ * Zoom ≠ 1 → `K2 | local — 125%` / `zoe | K2 — 125%`.
  */
 export function k2PageTitle(
   zoom = 1,

@@ -303,7 +303,7 @@ fn facts(owner: Owner) -> NodeFacts {
         protocol: 10,
         key_epoch: 0,
         statement_digest: None,
-        node_name: Some("k2n7".into()),
+        node_name: Some("rig7".into()),
     }
 }
 
@@ -341,9 +341,9 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     let key = SigningKey::generate().unwrap();
     let mid_key = SigningKey::generate().unwrap();
     let old_key = SigningKey::generate().unwrap();
-    active_node("new-1", "k2n7", &key, &ws);
-    active_node("mid-1", "k2n9", &mid_key, &ws);
-    active_node("old-1", "k2n4", &old_key, &ws);
+    active_node("new-1", "rig7", &key, &ws);
+    active_node("mid-1", "rig9", &mid_key, &ws);
+    active_node("old-1", "rig4", &old_key, &ws);
     let mut new = compute_ws::test_attach("new-1", offer(10, &["artifacts", "stall", prov::FEATURE_PROVENANCE_V1]));
     let mut mid = compute_ws::test_attach("mid-1", offer(10, &["artifacts", "stall"]));
     let mut old = compute_ws::test_attach("old-1", offer(9, &["artifacts", "stall"]));
@@ -351,16 +351,16 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     // ── asking ──────────────────────────────────────────────────────────
     // A protocol-10 node without the feature, and a protocol-9 node: no
     // `provenance` key in the plan at all (their digests as before).
-    let on_mid = submit(d.port, &ws, json!({"node": "k2n9"})).await;
-    let p = assigned(&mid.frames(), &on_mid).expect("assigned to k2n9");
+    let on_mid = submit(d.port, &ws, json!({"node": "rig9"})).await;
+    let p = assigned(&mid.frames(), &on_mid).expect("assigned to rig9");
     assert_eq!(p.provenance, None);
     assert!(!serde_json::to_string(&p).unwrap().contains("provenance"), "no key: {p:?}");
-    let on_old = submit(d.port, &ws, json!({"node": "k2n4"})).await;
-    let p = assigned(&old.frames(), &on_old).expect("assigned to k2n4");
+    let on_old = submit(d.port, &ws, json!({"node": "rig4"})).await;
+    let p = assigned(&old.frames(), &on_old).expect("assigned to rig4");
     assert!(!serde_json::to_string(&p).unwrap().contains("provenance"), "no key: {p:?}");
     // The node offering it: asked, and the digest covers it.
-    let job = submit(d.port, &ws, json!({"node": "k2n7"})).await;
-    let plan = assigned(&new.frames(), &job).expect("assigned to k2n7");
+    let job = submit(d.port, &ws, json!({"node": "rig7"})).await;
+    let plan = assigned(&new.frames(), &job).expect("assigned to rig7");
     assert_eq!(plan.provenance, Some(prov::PROVENANCE_V1));
     let rw = row(&job);
     assert_eq!(rw.plan_digest, plan.digest().unwrap());
@@ -407,7 +407,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     let v = j(&r);
     assert_eq!(v["line"].as_str().unwrap(), good.line().unwrap(), "the .intoto.jsonl line, byte for byte");
     assert_eq!(serde_json::from_value::<Dsse>(v["envelope"].clone()).unwrap(), good);
-    assert_eq!((v["node"].as_str(), v["keyid"].as_str()), (Some("k2n7"), Some(key.fingerprint().as_str())));
+    assert_eq!((v["node"].as_str(), v["keyid"].as_str()), (Some("rig7"), Some(key.fingerprint().as_str())));
     assert_eq!(v["subjects"], json!([{"name": "dist/acme", "sha256": FILE_SHA}]));
     assert_eq!(v["trust"]["nodeKeys"][key.fingerprint()]["pem"].as_str().unwrap(), key.spki_pem(), "the node's key for a stock DSSE tool");
     assert_eq!(v["trust"]["owners"], json!([]), "no roster from that owner held yet");
@@ -440,7 +440,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     let mut stray = good.clone();
     stray.signatures[0].keyid = stranger.fingerprint();
     let v = verify(d.port, json!({"envelope": stray})).await;
-    assert!(v["failed"].as_str().unwrap().contains("the key this server pinned for k2n7"), "{v}");
+    assert!(v["failed"].as_str().unwrap().contains("the key this server pinned for rig7"), "{v}");
     let r = post(d.port, "/cli/compute/verify", json!({"envelope": {"payload": "x"}})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "bad_request"), "{}", r.body);
     let r = post(d.port, "/cli/compute/verify", json!({})).await;
@@ -449,7 +449,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     assert_eq!(r.status, 405, "POST only: {}", r.body);
 
     // The owner: with the owner's roster held here, its key pinned.
-    store_roster("k2n7", &key);
+    store_roster("rig7", &key);
     let owner_fp = owner_key().public().fingerprint();
     let v = verify(d.port, json!({"job": job, "ownerKey": owner_fp})).await;
     assert_eq!(v["verified"], json!(true), "{v}");
@@ -464,7 +464,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
 
     // A node that held no roster signs the owner-server form: verified on
     // its own, refused under a pinned owner key.
-    let job2 = submit(d.port, &ws, json!({"node": "k2n7"})).await;
+    let job2 = submit(d.port, &ws, json!({"node": "rig7"})).await;
     let plan2 = assigned(&new.frames(), &job2).expect("assigned");
     let rw2 = row(&job2);
     let sr2 = receipt_for(&key, &rw2, &plan2);
@@ -477,7 +477,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     assert!(v["failed"].as_str().unwrap().contains("owner-server form"), "{v}");
 
     // ── no statement, and why ───────────────────────────────────────────
-    // The plan didn't ask (k2n9 doesn't offer it).
+    // The plan didn't ask (rig9 doesn't offer it).
     let mrw = row(&on_mid);
     let mplan = mrw.plan().unwrap();
     let msr = receipt_for(&mid_key, &mrw, &mplan);
@@ -490,7 +490,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     send("mid-1", &mrw, &msr, Some(mid_key.sign_statement(&mst).unwrap()));
     assert!(stored(&on_mid)["provenance_refused"].as_str().unwrap().contains("didn't ask"), "{}", stored(&on_mid));
     // Asked, a file kept, and none came.
-    let job3 = submit(d.port, &ws, json!({"node": "k2n7"})).await;
+    let job3 = submit(d.port, &ws, json!({"node": "rig7"})).await;
     let plan3 = assigned(&new.frames(), &job3).expect("assigned");
     let rw3 = row(&job3);
     send("new-1", &rw3, &receipt_for(&key, &rw3, &plan3), None);
@@ -500,7 +500,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
 
     // ── BA-39: a plain env name that is a vault secret's ────────────────
     put_secret(&ws, "BUILD_API_KEY");
-    let job4 = submit(d.port, &ws, json!({"node": "k2n7", "env": {"BUILD_API_KEY": "plain-value"}})).await;
+    let job4 = submit(d.port, &ws, json!({"node": "rig7", "env": {"BUILD_API_KEY": "plain-value"}})).await;
     let plan4 = assigned(&new.frames(), &job4).expect("assigned");
     assert_eq!(plan4.env.get("BUILD_API_KEY").map(String::as_str), Some("plain-value"));
     let rw4 = row(&job4);
@@ -508,7 +508,7 @@ async fn a_statement_is_asked_checked_kept_served_and_verified() {
     send("new-1", &rw4, &sr4, Some(key.sign_statement(&statement(&sr4, &plan4, Owner::Server("9".repeat(64)))).unwrap()));
     assert!(stored(&job4)["provenance_refused"].as_str().unwrap().contains("plain env BUILD_API_KEY is also a secret's name"), "{}", stored(&job4));
     // A secret named after a statement was kept: not written out.
-    let job5 = submit(d.port, &ws, json!({"node": "k2n7", "env": {"LATER_TOKEN": "x"}})).await;
+    let job5 = submit(d.port, &ws, json!({"node": "rig7", "env": {"LATER_TOKEN": "x"}})).await;
     let plan5 = assigned(&new.frames(), &job5).expect("assigned");
     let rw5 = row(&job5);
     let sr5 = receipt_for(&key, &rw5, &plan5);

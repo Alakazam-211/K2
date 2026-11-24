@@ -11,7 +11,7 @@
     {
       "file": "admin-wait-confirm__approved__cards2.json",
       "form": "cards2",
-      "sha256": "01c355e2367049bf1f81b9f1f1feeef36adcce026f8f5faa5dd0a9e3545c7231",
+      "sha256": "758ce63ee86c7ec07ae11e40786cd54eb08a661dcfdecd355e0907d8bc260ba5",
       "state": "approved",
       "transport": "doc",
       "view": "admin-wait-confirm"
@@ -27,7 +27,7 @@
     {
       "file": "admin-wait-confirm__pending__cards2.json",
       "form": "cards2",
-      "sha256": "a2b091e0c2258e434c8414d01eef1bdcde1d189838dafe715b6603a5418a4584",
+      "sha256": "1fdea5a37ae91807ffc97283b72eb6c32ace7ee4bb46fc70bad94f5bcc24fe41",
       "state": "pending",
       "transport": "doc",
       "view": "admin-wait-confirm"
@@ -195,7 +195,7 @@
     {
       "file": "approver-admin__approved__cards2.json",
       "form": "cards2",
-      "sha256": "874bce00d2ae169b59f8ab6b5eb1f23db28d7efd1372e00a9128447e4f3c01ca",
+      "sha256": "29a8a0a93e5f3ea2a69768ea68239076fcfde19f07acd9b34d334f7e81f407ff",
       "state": "approved",
       "transport": "doc",
       "view": "approver-admin"
@@ -211,7 +211,7 @@
     {
       "file": "approver-admin__pending__cards2.json",
       "form": "cards2",
-      "sha256": "b234dcaff37acf30906b3f62bea93d29fb96d2c597350660928439e752c6edc5",
+      "sha256": "d64c742d0557292995ec02564fb398c45ae518c7066e652bcfb3f7b209c34be9",
       "state": "pending",
       "transport": "doc",
       "view": "approver-admin"
@@ -219,7 +219,7 @@
     {
       "file": "approver-admin__pending__fallback.json",
       "form": "fallback",
-      "sha256": "0edb2c53d0e678737e70d193d0e7cb970156bc4d3d6bce583796a9acaf4a3458",
+      "sha256": "dd9d740e21910560293460c0ddeeca19c3c0288f458ca22b218decc6db5f8791",
       "state": "pending",
       "transport": "doc",
       "view": "approver-admin"
@@ -227,7 +227,7 @@
     {
       "file": "approver-click__already_done-closed__cards2.json",
       "form": "cards2",
-      "sha256": "ffed446bf6c17efea52fb1936480f561c9febca9342e5207c72e7ef313577937",
+      "sha256": "3eb5968ea60fad4847ae5482b6be233bdfc7105d3df964ccd1cbf6a108d169e0",
       "state": "already_done-closed",
       "transport": "doc",
       "view": "approver-click"
@@ -243,7 +243,7 @@
     {
       "file": "approver-click__already_done__cards2.json",
       "form": "cards2",
-      "sha256": "b0f20ab6439a06ef86b15d2426691f0eb0fd4628b2b21cd645f19ad6b4e38c9f",
+      "sha256": "ba4cc506c5b68bdcaa7944c29c97a735fdb4e044519407f259361092e7dc0036",
       "state": "already_done",
       "transport": "doc",
       "view": "approver-click"
@@ -259,7 +259,7 @@
     {
       "file": "approver-click__applying__cards2.json",
       "form": "cards2",
-      "sha256": "14f70436816c06a23e80a51d1683247d1aa42b1e27e6d494b4f0358102a33823",
+      "sha256": "15afbcf61109fe6b0201abe9ac449a474f65d36f2ce6f7f8fa3d29a5dac0d611",
       "state": "applying",
       "transport": "doc",
       "view": "approver-click"
@@ -275,7 +275,7 @@
     {
       "file": "approver-click__approved__cards2.json",
       "form": "cards2",
-      "sha256": "9c82c7792151c9b54a1d2113ec582f87cef44dc99e97e77a603e319653911ded",
+      "sha256": "324a2cd7db2c68a7c428f7d191812a67302b9c0fc7116784511b87fee533700f",
       "state": "approved",
       "transport": "doc",
       "view": "approver-click"
@@ -291,7 +291,7 @@
     {
       "file": "approver-click__approved__item.json",
       "form": "item",
-      "sha256": "e30d8bb92507b88452993e3611687d6f31fd8d39e747286a347af4498958a10a",
+      "sha256": "ef80a515c33066cfab0a8ed23516845a4a63081cb2841b4d47ba88a76906b36c",
       "state": "approved",
       "transport": "get",
       "view": "approver-click"
@@ -299,7 +299,7 @@
     {
       "file": "approver-click__approved__ws.json",
       "form": "ws",
-      "sha256": "a92aa1ade190de0dd0d16aa7e90864ff93f4d2a5ab59d5c7ab128fa4dda4ea94",
+      "sha256": "8d145c5c48791cbc32037cdbc20b9dcfc17ee91ddcbfbaa3af445091d64b3898",
       "state": "approved",
       "transport": "ws",
       "view": "approver-click"
@@ -307,7 +307,7 @@
     {
       "file": "approver-click__cancelled__cards2.json",
       "form": "cards2",
-      "sha256": "0507ff510c97149739bc8900593a8a2de8f099ee67f0d835545210fc1ba30e71",
+      "sha256": "6dafc40d86e8018caed95d2bbc1e9602cf419018bea5140506f92746b7ffa9e0",
       "state": "cancelled",
       "transport": "doc",
       "view": "approver-click"
@@ -323,7 +323,7 @@
     {
       "file": "approver-click__closed__cards2.json",
       "form": "cards2",
-      "sha256": "ca3975f0874eb113307f0aef96b4f3f1870786392c86a35fa0e0269fc75501a2",
+      "sha256": "a5696c60a49933083d0a4743e40061421f6387a0bb663ab245889699b1ea35d6",
       "state": "closed",
       "transport": "doc",
       "view": "approver-click"
@@ -339,7 +339,7 @@
     {
       "file": "approver-click__denied__cards2.json",
       "form": "cards2",
-      "sha256": "9661505c76dd3dd996d89f53b04075a7d46ff7ded840725b1f3952def2ea565f",
+      "sha256": "b24f6aaaa848c29d3b4c713fa834e0fd094295c77a1c3459b9c8262723ddfc1a",
       "state": "denied",
       "transport": "doc",
       "view": "approver-click"
@@ -355,7 +355,7 @@
     {
       "file": "approver-click__expired__cards2.json",
       "form": "cards2",
-      "sha256": "b9ee8c74c31d4f1c912ae48bbac7b6ff7192b08ac1db29177bb2db6814d7c3dc",
+      "sha256": "888ba57c921b82d4ce383e521ccfc106bbe1956451b1f3cdecbe69c699e8eb6e",
       "state": "expired",
       "transport": "doc",
       "view": "approver-click"
@@ -371,7 +371,7 @@
     {
       "file": "approver-click__failed__cards2.json",
       "form": "cards2",
-      "sha256": "3ba71c37d86718ad4fc36eeeb6a39d437ed646cd9fd41bcd9236e64327d031d4",
+      "sha256": "ca98a6e572d1c2d14a48929feabb5e83be5cfaec4575b7f1ffc01c774176d1f6",
       "state": "failed",
       "transport": "doc",
       "view": "approver-click"
@@ -387,7 +387,7 @@
     {
       "file": "approver-click__pending__cards2.json",
       "form": "cards2",
-      "sha256": "ac58d6a0616f9e257e1072163615073acb6979260ad252c67ef09e9074613a97",
+      "sha256": "baf1a86b823c4b01cb4790f8ab303dd09020118c67170100c76e1114e8f5d10b",
       "state": "pending",
       "transport": "doc",
       "view": "approver-click"
@@ -395,7 +395,7 @@
     {
       "file": "approver-click__pending__fallback.json",
       "form": "fallback",
-      "sha256": "0edb2c53d0e678737e70d193d0e7cb970156bc4d3d6bce583796a9acaf4a3458",
+      "sha256": "dd9d740e21910560293460c0ddeeca19c3c0288f458ca22b218decc6db5f8791",
       "state": "pending",
       "transport": "doc",
       "view": "approver-click"
@@ -403,7 +403,7 @@
     {
       "file": "approver-click__pending__item.json",
       "form": "item",
-      "sha256": "023f05dc92ed6ebc6a30642fe803f31ab8f6ba3d31ef9522530e3ab6f98f4866",
+      "sha256": "fa589969a4c19c495195f5e08f0821e4c8a62b8482377898864f8be3d612f60d",
       "state": "pending",
       "transport": "get",
       "view": "approver-click"
@@ -411,7 +411,7 @@
     {
       "file": "approver-click__pending__ws.json",
       "form": "ws",
-      "sha256": "7c8ccfbb9d91a539691fb5f50aca99e1a7d2bc00d730ef16c701793bf92978e9",
+      "sha256": "215eaca8c5c539a5c9329e7a705f7700e6aec672680ff70f7c29622aa2f21899",
       "state": "pending",
       "transport": "ws",
       "view": "approver-click"
@@ -419,7 +419,7 @@
     {
       "file": "approver-click__stale__cards2.json",
       "form": "cards2",
-      "sha256": "d69992174d6d595ad92ffd4bc2a7c84b8864a2e627262d0d031732b12368a054",
+      "sha256": "ab99167243ee8a2ff32f0babc8604ebc478ab30a10524b31894f619f6f5488da",
       "state": "stale",
       "transport": "doc",
       "view": "approver-click"
@@ -435,7 +435,7 @@
     {
       "file": "approver-confirm__approved__cards2.json",
       "form": "cards2",
-      "sha256": "3e8aef4b23fcfafa31d6fc975d0a8f90e3c1b56404ae4536cd756432719ee64f",
+      "sha256": "6c79291790e3a6d56046427ab4e1be7221af86dcf9c23288f114166db9ae6099",
       "state": "approved",
       "transport": "doc",
       "view": "approver-confirm"
@@ -451,7 +451,7 @@
     {
       "file": "approver-confirm__pending__cards2.json",
       "form": "cards2",
-      "sha256": "67d1b8a9ead171103fee12e427763981f178f25e6d8d80bdefa8596386c230ec",
+      "sha256": "f33b75e517d2728424f1ad2376bb1dbb46136578af1774d05ff5f00bc3d1d81c",
       "state": "pending",
       "transport": "doc",
       "view": "approver-confirm"
@@ -467,7 +467,7 @@
     {
       "file": "asker__already_done-closed__cards2.json",
       "form": "cards2",
-      "sha256": "2ea8d9d1dbb383b918008702d2d266292416c6c67261b5ffaf374731cf736c1f",
+      "sha256": "28e4abe837d92bd9f8d68043e3c8d4039ad0b88310e13da6cebdf24afb98d965",
       "state": "already_done-closed",
       "transport": "doc",
       "view": "asker"
@@ -483,7 +483,7 @@
     {
       "file": "asker__already_done__cards2.json",
       "form": "cards2",
-      "sha256": "886958528987019f2b0b9b25bf17f71237ad0f8be3508770cfaa637d1f64368d",
+      "sha256": "e6dd5a08447d34ce30e0558a2e67c9e27b559566f48671a3e7cb7eb5e79b175a",
       "state": "already_done",
       "transport": "doc",
       "view": "asker"
@@ -499,7 +499,7 @@
     {
       "file": "asker__applying__cards2.json",
       "form": "cards2",
-      "sha256": "0da704ab78d66cba822a446af2a91d8f721957d68f2c7617ba0bf3645ec063c5",
+      "sha256": "15643e64116fbe7b277167d439d85503c53541f5f157666704d42ef8b92b48b7",
       "state": "applying",
       "transport": "doc",
       "view": "asker"
@@ -515,7 +515,7 @@
     {
       "file": "asker__approved__cards2.json",
       "form": "cards2",
-      "sha256": "2d4fabdc8401ca088b196c8789d785f6d2c5629f557c10b358668c8f61acba83",
+      "sha256": "9504ccef65f0c04d4bb46d1242852393f4a7991e375716a54a8de310c94c09cf",
       "state": "approved",
       "transport": "doc",
       "view": "asker"
@@ -531,7 +531,7 @@
     {
       "file": "asker__cancelled__cards2.json",
       "form": "cards2",
-      "sha256": "23fcf123318d8e6a50e85f00b1b3693d43888dabf40695dfb511d118a2b30e7a",
+      "sha256": "4e4a7f45403a2a7b288b4f7a754399cfa727bc89ea44ffe3959f4903b7b524b5",
       "state": "cancelled",
       "transport": "doc",
       "view": "asker"
@@ -547,7 +547,7 @@
     {
       "file": "asker__closed__cards2.json",
       "form": "cards2",
-      "sha256": "278587e45c8f385476f0c4084ed41ef0fc8a8bcc13d8ea7845509eb15c0a70d6",
+      "sha256": "f11247e0feb90f9e8a2e50e88f06aa86a42acc9dd98ff911a9c5033501be9124",
       "state": "closed",
       "transport": "doc",
       "view": "asker"
@@ -563,7 +563,7 @@
     {
       "file": "asker__denied__cards2.json",
       "form": "cards2",
-      "sha256": "236e5926ac850753110ee4bf3bb4755dc2229cb1a15b24ba4883021bb5d0df2d",
+      "sha256": "45435ee6557bc5aaf67226e615713dc846a8e68b1c34d5fce361d3cce3f7bc26",
       "state": "denied",
       "transport": "doc",
       "view": "asker"
@@ -579,7 +579,7 @@
     {
       "file": "asker__expired__cards2.json",
       "form": "cards2",
-      "sha256": "04127c27db7930c4b6a6d717e8b185977cd1f298f9221ce02cec79e42093d216",
+      "sha256": "4364fe27b8b1781fdfdfedbf8cf2e802db43df0fdb0ef513ccbd4483d7359be8",
       "state": "expired",
       "transport": "doc",
       "view": "asker"
@@ -595,7 +595,7 @@
     {
       "file": "asker__failed__cards2.json",
       "form": "cards2",
-      "sha256": "2f9b0a4b001f84011788ba71f05c2850dc1c3859b076defcece8e00d3eb5e978",
+      "sha256": "4f8b4b551fe425e9ffc89b91620e64d5a4e3c344103cfff9334ae6b307537b6d",
       "state": "failed",
       "transport": "doc",
       "view": "asker"
@@ -611,7 +611,7 @@
     {
       "file": "asker__pending__cards2.json",
       "form": "cards2",
-      "sha256": "54e27be7eadaedf4615beab9111766c2177ade7a5e040e2fb3e28bd19ddbea2c",
+      "sha256": "f1d10ff684abfc23443cf135d8ffd39b6e25b886fae0aaf13100e1302379c4b9",
       "state": "pending",
       "transport": "doc",
       "view": "asker"
@@ -627,7 +627,7 @@
     {
       "file": "asker__stale__cards2.json",
       "form": "cards2",
-      "sha256": "51e180bd915bc28ca5956ee500d160fd94cceeac028d4f5400391e9acbc11c48",
+      "sha256": "73dfefeca90c330ab1f59598641ab08a7ef9418b664f21e88c5d765362f794fc",
       "state": "stale",
       "transport": "doc",
       "view": "asker"
@@ -643,7 +643,7 @@
     {
       "file": "batch-admin__done__cards2.json",
       "form": "cards2",
-      "sha256": "ddec322d13f52b85eae07f8207623677406cccc7f30388f7f23206e821e41dd1",
+      "sha256": "05ddcfdb23ba4222f2ab1254465b08c68b893a65d0fe5ce8afd809fdb4ce8158",
       "state": "done",
       "transport": "doc",
       "view": "batch-admin"
@@ -659,7 +659,7 @@
     {
       "file": "batch-admin__partial__cards2.json",
       "form": "cards2",
-      "sha256": "60a3f8c4aa3e4d7730cd0187a9f3e799dac9b8f850252af60003e7ab6633ccfa",
+      "sha256": "c4c1a32c124204a5af863143a20dcfc3ee4379317ceef5bbb52522f875a6994b",
       "state": "partial",
       "transport": "doc",
       "view": "batch-admin"
@@ -675,7 +675,7 @@
     {
       "file": "batch-admin__pending__cards2.json",
       "form": "cards2",
-      "sha256": "7afc44e19c23f46931ddc33b0dd475fba81ac461cb96741ac5303aa19dd1fb9c",
+      "sha256": "79498de293f1a7d676e6aa70780c44260330dc725068edf22e784f13dd7a46b9",
       "state": "pending",
       "transport": "doc",
       "view": "batch-admin"
@@ -691,7 +691,7 @@
     {
       "file": "batch-approver__done__cards2.json",
       "form": "cards2",
-      "sha256": "237fac76539696c462460af14c7e614e343a0f2144326df8850c297b3e2705dd",
+      "sha256": "6271e6081fc872cb7dc615d0f4fb6228536ad85d769694620e8a3b84819b5503",
       "state": "done",
       "transport": "doc",
       "view": "batch-approver"
@@ -707,7 +707,7 @@
     {
       "file": "batch-approver__partial__cards2.json",
       "form": "cards2",
-      "sha256": "b163d9646b3f30cf40af5e6aa7a61e3ebedaf800c6a5e45a89033456cb824234",
+      "sha256": "019d8f44c76dcfe7e124c9b3560aef38d7f6eccaa75eb8952fda863a85463940",
       "state": "partial",
       "transport": "doc",
       "view": "batch-approver"
@@ -723,7 +723,7 @@
     {
       "file": "batch-approver__pending__cards2.json",
       "form": "cards2",
-      "sha256": "0671c6ffeae9633d316dce29d5ec24a93bdf1ae004b91525f8bb65733321de4d",
+      "sha256": "4cac9c044549ee39a64e2d375961f3aeed85896119e5e4b82ee4e6fcc898694e",
       "state": "pending",
       "transport": "doc",
       "view": "batch-approver"
@@ -875,7 +875,7 @@
     {
       "file": "member__approved__cards2.json",
       "form": "cards2",
-      "sha256": "d722f408efa9aaf53cc8182871f77d2be14f67e935e57515ca68b3421fcadd8e",
+      "sha256": "7178bff8ac4d12571687bbe1d40cc47fdb5fbba6442a5c4c6147ee5ee1fbc889",
       "state": "approved",
       "transport": "doc",
       "view": "member"
@@ -891,7 +891,7 @@
     {
       "file": "member__pending__cards2.json",
       "form": "cards2",
-      "sha256": "4ccecf1b1a582f669aaa7238f94377374ee779157caa69b02d120d11e7c8cd51",
+      "sha256": "ef6a7aa1d2222bc039a7e2e0224eebd02d1473e496c6cf13d39b0f14cbf39bda",
       "state": "pending",
       "transport": "doc",
       "view": "member"
@@ -907,7 +907,7 @@
     {
       "file": "owner-token__pending__cards2.json",
       "form": "cards2",
-      "sha256": "9b5994d4b95b736428c094db242f91794c6cb020504b031e2888c4e7e62c6000",
+      "sha256": "0f3d27cfdf1b2f6a3d7fa0405517f382bf878c3757db4a58c02757a17317e119",
       "state": "pending",
       "transport": "doc",
       "view": "owner-token"
@@ -915,7 +915,7 @@
     {
       "file": "owner-token__pending__fallback.json",
       "form": "fallback",
-      "sha256": "0edb2c53d0e678737e70d193d0e7cb970156bc4d3d6bce583796a9acaf4a3458",
+      "sha256": "dd9d740e21910560293460c0ddeeca19c3c0288f458ca22b218decc6db5f8791",
       "state": "pending",
       "transport": "doc",
       "view": "owner-token"

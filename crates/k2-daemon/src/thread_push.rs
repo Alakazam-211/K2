@@ -1111,7 +1111,7 @@ mod tests {
 
     #[test]
     fn five_posts_in_45s_make_exactly_two_sends_with_one_collapse_id() {
-        let env = Fake::with(&[("owner", &["owner", "z3thon"])]);
+        let env = Fake::with(&[("owner", &["owner", "zoe"])]);
         let mut c = Coalescer::new();
         let t0 = Instant::now();
         for i in 0..5u64 {
@@ -1129,7 +1129,7 @@ mod tests {
         let b = PushEvent::ThreadPost(sent[1].clone());
         assert_eq!(b.body(), "4 new messages", "posts without text: the count alone");
         assert_eq!(a.collapse_id(), b.collapse_id(), "the trailing push replaces the banner");
-        assert_eq!(sent[1].device_usernames, vec!["owner".to_string(), "z3thon".to_string()]);
+        assert_eq!(sent[1].device_usernames, vec!["owner".to_string(), "zoe".to_string()]);
         // Nothing more after the next (quiet) window closes.
         c.tick(&env, t0 + WINDOW + BACKOFF + secs(1));
         assert_eq!(env.sent().len(), 2);
@@ -1191,14 +1191,14 @@ mod tests {
     /// principal and only their own devices; windows are per person.
     #[test]
     fn two_people_get_two_dispatches_each_with_its_own_principal() {
-        let env = Fake::with(&[("owner", &["owner", "z3thon"]), ("gina", &["gina"])]);
+        let env = Fake::with(&[("owner", &["owner", "zoe"]), ("gina", &["gina"])]);
         let mut c = Coalescer::new();
         let t0 = Instant::now();
         c.post(&env, post("c3", 7, ThreadMsgKind::Secret), t0);
         let sent = env.sent();
         assert_eq!(sent.len(), 2);
         let by: HashMap<_, _> = sent.iter().map(|t| (t.principal.clone(), t.clone())).collect();
-        assert_eq!(by["owner"].device_usernames, vec!["owner".to_string(), "z3thon".to_string()]);
+        assert_eq!(by["owner"].device_usernames, vec!["owner".to_string(), "zoe".to_string()]);
         assert_eq!(by["gina"].device_usernames, vec!["gina".to_string()]);
         let stamp = k2_core::push::PushStamp { subdomain: "rosson".into(), instance_id: "i".into() };
         for t in &sent {
@@ -1206,7 +1206,7 @@ mod tests {
             let payload = k2_core::push::K2Cloud::payload(&PushEvent::ThreadPost(t.clone()), &stamp, &key);
             assert_eq!(payload["data"]["badgeKey"], key.as_str());
             assert!(payload["data"].get("principal").is_none(), "never a name");
-            let other = if t.principal == "owner" { "gina" } else { "z3thon" };
+            let other = if t.principal == "owner" { "gina" } else { "zoe" };
             assert!(!payload.to_string().contains(other), "{other} leaked into {}'s payload", t.principal);
         }
         // gina looking quiets only gina.
@@ -1311,7 +1311,7 @@ mod tests {
     /// The owner's switch off → every push is generic and one call.
     #[test]
     fn master_switch_off_means_generic_for_everyone() {
-        let env = Fake::with(&[("owner", &["owner", "z3thon"]), ("gina", &["gina"])]);
+        let env = Fake::with(&[("owner", &["owner", "zoe"]), ("gina", &["gina"])]);
         env.previews_off.set(true);
         let mut c = Coalescer::new();
         c.post(&env, said("pv3", 1, ThreadMsgKind::Text, "Private numbers: 42."), Instant::now());
@@ -1329,8 +1329,8 @@ mod tests {
     /// generic, one call. Only one token left → one generic call.
     #[test]
     fn per_device_previews_take_one_call_per_payload_variant() {
-        let env = Fake::with(&[("owner", &["owner", "z3thon"]), ("gina", &["gina"])]);
-        env.previews_off_logins.borrow_mut().insert("z3thon".into());
+        let env = Fake::with(&[("owner", &["owner", "zoe"]), ("gina", &["gina"])]);
+        env.previews_off_logins.borrow_mut().insert("zoe".into());
         env.previews_off_logins.borrow_mut().insert("gina".into());
         let mut c = Coalescer::new();
         let t0 = Instant::now();
@@ -1344,8 +1344,8 @@ mod tests {
 
         // Budget for one call only: the split person still gets ONE push,
         // generic, and nothing more is spent.
-        let env = Fake::with(&[("owner", &["owner", "z3thon"])]);
-        env.previews_off_logins.borrow_mut().insert("z3thon".into());
+        let env = Fake::with(&[("owner", &["owner", "zoe"])]);
+        env.previews_off_logins.borrow_mut().insert("zoe".into());
         env.budget.set(Some(1));
         let mut c = Coalescer::new();
         c.post(&env, said("pv5", 1, ThreadMsgKind::Text, "Ready for review."), t0);
@@ -1417,9 +1417,9 @@ mod tests {
 
         // Split legacy + sealed = 3 calls; with too little budget nothing is
         // sent (no partial fallback that would blank the sealed phone).
-        let env = Fake::with(&[("owner", &["owner", "z3thon", "ipad"])]);
+        let env = Fake::with(&[("owner", &["owner", "zoe", "ipad"])]);
         env.sealed_logins.borrow_mut().insert("ipad".into());
-        env.previews_off_logins.borrow_mut().insert("z3thon".into());
+        env.previews_off_logins.borrow_mut().insert("zoe".into());
         env.budget.set(Some(2));
         let mut c = Coalescer::new();
         c.post(&env, said("e2e4", 1, ThreadMsgKind::Text, "Deploy done."), t0);

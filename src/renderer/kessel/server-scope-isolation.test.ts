@@ -1,7 +1,7 @@
 // Home M1 — two servers that share a workspace path and project id never
 // share a request target. The two checkouts are byte-identical
-// (`/Users/z3thon/DevProjects/K2`, project `p-k2`) on purpose: z3mbp and
-// z3mbpZ really do have the same path.
+// (`/Users/zoe/DevProjects/K2`, project `p-k2`) on purpose: mac-a and
+// mac-b really do have the same path.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -32,7 +32,7 @@ import {
 } from '@/stores/connect-host'
 import { reviveRemoteSession, __resetRemoteSessionForTests } from '@/lib/remote-session'
 
-const SAME_PATH = '/Users/z3thon/DevProjects/K2'
+const SAME_PATH = '/Users/zoe/DevProjects/K2'
 const SAME_PROJECT = 'p-k2'
 
 function host(over: Partial<ConnectHost>): ConnectHost {
@@ -49,7 +49,7 @@ function host(over: Partial<ConnectHost>): ConnectHost {
   }
 }
 const A = host({})
-const B = host({ id: 'b', label: 'B', hostname: 'z3thon.k2.dev', token: 'tok-b' })
+const B = host({ id: 'b', label: 'B', hostname: 'zoe.k2.dev', token: 'tok-b' })
 
 function okRes(body: unknown = {}): Response {
   return {
@@ -97,7 +97,7 @@ describe('two scopes, same workspace path + project id', () => {
     const got = urls()
     expect(got).toHaveLength(6)
     const forA = got.filter((u) => u.startsWith('https://rosson.k2.dev/cli/'))
-    const forB = got.filter((u) => u.startsWith('https://z3thon.k2.dev/cli/'))
+    const forB = got.filter((u) => u.startsWith('https://zoe.k2.dev/cli/'))
     expect(forA).toHaveLength(3)
     expect(forB).toHaveLength(3)
     for (const u of forA) {
@@ -115,7 +115,7 @@ describe('two scopes, same workspace path + project id', () => {
     const ca = await getDaemonWs(scopeForHost(A))
     const cb = await getDaemonWs(scopeForHost(B))
     expect(ca).toEqual({ port: 443, token: 'tok-a', host: 'rosson.k2.dev', secure: true })
-    expect(cb).toEqual({ port: 443, token: 'tok-b', host: 'z3thon.k2.dev', secure: true })
+    expect(cb).toEqual({ port: 443, token: 'tok-b', host: 'zoe.k2.dev', secure: true })
   })
 
   it('the primary scope and a pinned scope differ while the window is on another server', async () => {
@@ -124,7 +124,7 @@ describe('two scopes, same workspace path + project id', () => {
     await daemonCliGet(scopeForHost(B), 'fs/read-dir', { path: SAME_PATH })
     const [p, pinned] = urls()
     expect(p.startsWith('https://rosson.k2.dev/cli/fs/read-dir?')).toBe(true)
-    expect(pinned.startsWith('https://z3thon.k2.dev/cli/fs/read-dir?')).toBe(true)
+    expect(pinned.startsWith('https://zoe.k2.dev/cli/fs/read-dir?')).toBe(true)
   })
 
   it("A switching servers mid-flight does not drop a pinned request to B", async () => {
@@ -151,7 +151,7 @@ describe('two scopes, same workspace path + project id', () => {
     await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toBeInstanceOf(RecoveringError)
     await expect(daemonCliGet(scopeForHost(A), 'projects/list')).rejects.toBeInstanceOf(RecoveringError)
     await expect(daemonCliGet(scopeForHost(B), 'projects/list')).resolves.toEqual({ ok: true })
-    expect(urls()).toEqual([expect.stringMatching(/^https:\/\/z3thon\.k2\.dev\/cli\/projects\/list\?/)])
+    expect(urls()).toEqual([expect.stringMatching(/^https:\/\/zoe\.k2\.dev\/cli\/projects\/list\?/)])
   })
 
   it('the remote request cap is per server: four in flight on A leave B free', async () => {
@@ -169,14 +169,14 @@ describe('two scopes, same workspace path + project id', () => {
     expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(4)
     const onB = daemonCliGet(b, 'projects/list')
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5))
-    expect(remoteCliInflightForTests('z3thon.k2.dev')).toBe(1)
-    expect(String(fetchMock.mock.calls[4][0]).startsWith('https://z3thon.k2.dev/')).toBe(true)
+    expect(remoteCliInflightForTests('zoe.k2.dev')).toBe(1)
+    expect(String(fetchMock.mock.calls[4][0]).startsWith('https://zoe.k2.dev/')).toBe(true)
     while (releases.length > 0) releases.shift()!(okRes({}))
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6))
     releases.shift()!(okRes({}))
     await Promise.all([...onA, onB])
     expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(0)
-    expect(remoteCliInflightForTests('z3thon.k2.dev')).toBe(0)
+    expect(remoteCliInflightForTests('zoe.k2.dev')).toBe(0)
   })
 })
 
@@ -190,7 +190,7 @@ describe('G1 / MS59 / MS77 — background auth failures never delete a saved log
   it("a pinned scope's 401 makes no revive, no rotation, and deletes nothing", async () => {
     useConnectHostStore.getState().selectHost(A)
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.startsWith('https://z3thon.k2.dev/')) {
+      if (url.startsWith('https://zoe.k2.dev/')) {
         return {
           ok: false,
           status: 401,
@@ -205,7 +205,7 @@ describe('G1 / MS59 / MS77 — background auth failures never delete a saved log
       'Invalid or missing auth token',
     )
     // Exactly the one request: no whoami probe, no login POST, no replay.
-    expect(urls()).toEqual([expect.stringMatching(/^https:\/\/z3thon\.k2\.dev\/cli\/projects\/list\?/)])
+    expect(urls()).toEqual([expect.stringMatching(/^https:\/\/zoe\.k2\.dev\/cli\/projects\/list\?/)])
     expect(deleteInvokes()).toEqual([])
     const s = useConnectHostStore.getState()
     expect(s.hosts.find((h) => h.id === 'b')!.token).toBe('tok-b')

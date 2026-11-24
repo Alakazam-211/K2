@@ -113,10 +113,10 @@ k2_clear_failed_cmake_dirs() {
 # target/release/bundle afterwards, where every caller looks for K2.app.
 # The sidecars keep target/ (Step 8.5's standalone daemon and dev builds
 # reuse it). The critical path is the sidecars (k2-core, then k2-daemon,
-# then its fat-LTO link: 17–21 min on z3mbpZ); `tauri build` (4–7.5 min)
+# then its fat-LTO link: 17–21 min on mac-b); `tauri build` (4–7.5 min)
 # finishes inside it.
 #
-# Job split (16 GB / 10 cores on z3mbpZ): the sidecars get most cores, the
+# Job split (16 GB / 10 cores on mac-b): the sidecars get most cores, the
 # tauri build a third (K2_MAC_SIDECAR_JOBS / K2_MAC_TAURI_JOBS override).
 # Memory: in a release (dependencies already built, the workspace crates
 # rebuilt for the new version) the two big single-rustc steps, k2-daemon's

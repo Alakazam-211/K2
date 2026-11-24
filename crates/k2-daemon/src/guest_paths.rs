@@ -202,12 +202,12 @@ mod tests {
 
     #[test]
     fn a_doc_loses_the_rooms_folder_and_path_senders() {
-        let s = GuestScrub::new(Some("/home/alakazamlabs/AI Projects/agent-acme-vanilla/"), "agent-acme-vanilla");
+        let s = GuestScrub::new(Some("/home/acmelabs/AI Projects/agent-acme-vanilla/"), "agent-acme-vanilla");
         let mut d = json!({
-            "from": "/home/alakazamlabs/AI Projects/agent-acme-vanilla",
+            "from": "/home/acmelabs/AI Projects/agent-acme-vanilla",
             "to": "/srv/elsewhere",
-            "body": "K2: saved /home/alakazamlabs/AI Projects/agent-acme-vanilla/out/a.txt",
-            "choice": {"prompt": "in /home/alakazamlabs/AI Projects/agent-acme-vanilla?"},
+            "body": "K2: saved /home/acmelabs/AI Projects/agent-acme-vanilla/out/a.txt",
+            "choice": {"prompt": "in /home/acmelabs/AI Projects/agent-acme-vanilla?"},
             "author": {"kind": "guest", "login": "dana"},
         });
         s.doc(&mut d);

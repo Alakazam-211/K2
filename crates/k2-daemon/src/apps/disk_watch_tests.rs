@@ -147,17 +147,17 @@ fn a_new_device_number_after_a_reboot_keeps_the_same_ticket() {
     let sink = Rec::default();
     let mut st = load_state(&path);
     let now = 1_800_000_000;
-    let out = tick_with(&mut st, &[mac_disk("1:16", 89)], &guard(Mode::On), Some(snap(now - 60)), "z3mbp", now, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[mac_disk("1:16", 89)], &guard(Mode::On), Some(snap(now - 60)), "mac-a", now, &sink, &no_fresh);
     assert_eq!(out.iter().filter(|n| matches!(n, Notice::Owner { .. })).count(), 1);
     assert_eq!(st.levels.keys().collect::<Vec<_>>(), vec!["uuid:8e3a51c4-1b2d-4c1f-9e77-0d6b5a1f2c3d@/System/Volumes/Data"]);
     sink.take();
     // Reboot: state from the file, the device renumbered.
     save_state(&path, &st).unwrap();
     let mut st = load_state(&path);
-    let out = tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 600, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "mac-a", now + 600, &sink, &no_fresh);
     assert!(out.is_empty(), "same volume, no new ticket or agent notice: {out:#?}");
     // It still moves up a line on the new number, once.
-    let out = tick_with(&mut st, &[mac_disk("1:17", 96)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 660, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[mac_disk("1:17", 96)], &guard(Mode::On), Some(snap(now)), "mac-a", now + 660, &sink, &no_fresh);
     assert_eq!(out.iter().filter(|n| matches!(n, Notice::Owner { priority: 1, .. })).count(), 1, "{out:#?}");
     assert_eq!(st.levels.len(), 1, "{:?}", st.levels);
 }
@@ -199,7 +199,7 @@ fn the_live_sink_lists_and_closes_its_own_disk_tickets() {
 #[test]
 fn ticket_titles_give_the_mount_and_level() {
     assert_eq!(ticket_mount_level("Disk / 89% full on acme.k2.dev (118 GB free)", 2), Some(("/".into(), Level::Warn)));
-    assert_eq!(ticket_mount_level("Disk /System/Volumes/Data 43.9% full on z3mbp (52 GB free)", 2), Some(("/System/Volumes/Data".into(), Level::Warn)));
+    assert_eq!(ticket_mount_level("Disk /System/Volumes/Data 43.9% full on mac-a (52 GB free)", 2), Some(("/System/Volumes/Data".into(), Level::Warn)));
     assert_eq!(ticket_mount_level("Disk /mnt/my disk 96% full on box (9 GB free)", 1), Some(("/mnt/my disk".into(), Level::Refuse)));
     assert_eq!(ticket_mount_level("CRITICAL: disk / 99% full on box (1 GB free)", 1), Some(("/".into(), Level::Critical)));
     assert_eq!(ticket_mount_level("Disk device 1:16 90% full on box (5 GB free)", 2), Some(("device 1:16".into(), Level::Warn)));
@@ -221,14 +221,14 @@ fn old_device_keys_and_duplicate_tickets_are_merged_once() {
     st.sent.insert("id-acme|growth:app:jobs".into(), 1_799_999_000);
     let sink = TicketRec {
         open: vec![
-            OpenTicket { id: "aaaaaaaa-old".into(), title: "Disk /System/Volumes/Data 43.9% full on z3mbp (52 GB free)".into(), priority: 2, created_at: 100 },
-            OpenTicket { id: "bbbbbbbb-new".into(), title: "Disk /System/Volumes/Data 44.1% full on z3mbp (51 GB free)".into(), priority: 2, created_at: 200 },
-            OpenTicket { id: "cccccccc-other".into(), title: "Disk /Volumes/Ext 90% full on z3mbp (9 GB free)".into(), priority: 2, created_at: 150 },
+            OpenTicket { id: "aaaaaaaa-old".into(), title: "Disk /System/Volumes/Data 43.9% full on mac-a (52 GB free)".into(), priority: 2, created_at: 100 },
+            OpenTicket { id: "bbbbbbbb-new".into(), title: "Disk /System/Volumes/Data 44.1% full on mac-a (51 GB free)".into(), priority: 2, created_at: 200 },
+            OpenTicket { id: "cccccccc-other".into(), title: "Disk /Volumes/Ext 90% full on mac-a (9 GB free)".into(), priority: 2, created_at: 150 },
         ],
         ..TicketRec::default()
     };
     let now = 1_800_000_000;
-    let out = tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now - 60)), "z3mbp", now, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now - 60)), "mac-a", now, &sink, &no_fresh);
     assert!(out.is_empty(), "the open ticket already covers this disk: {out:#?}");
     let merged = sink.merged.lock().unwrap().clone();
     assert_eq!(merged, vec![Merge { close: "aaaaaaaa-old".into(), into: "bbbbbbbb-new".into(), mount: "/System/Volumes/Data".into() }]);
@@ -241,7 +241,7 @@ fn old_device_keys_and_duplicate_tickets_are_merged_once() {
     assert!(st.sent.contains_key("id-acme|growth:app:jobs"));
     assert!(!st.sent.keys().any(|k| k.contains("disk:1:17")));
     // Only once: a second tick merges nothing again.
-    tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "z3mbp", now + 60, &sink, &no_fresh);
+    tick_with(&mut st, &[mac_disk("1:17", 89)], &guard(Mode::On), Some(snap(now)), "mac-a", now + 60, &sink, &no_fresh);
     assert_eq!(sink.merged.lock().unwrap().len(), 1);
     // A daemon from before the field: the flag is off in its file.
     let old: WatchState = serde_json::from_str(r#"{"levels":{"1:16":"warn"},"sent":{}}"#).unwrap();
@@ -332,7 +332,7 @@ fn warn_mode_notices_say_nothing_is_refused() {
     let _home = crate::test_support::TempHome::new();
     let sink = Rec::default();
     let mut st = WatchState::default();
-    let out = tick_with(&mut st, &[disk(96)], &guard(Mode::Warn), Some(snap(1_000)), "z3mbp", 1_000, &sink, &no_fresh);
+    let out = tick_with(&mut st, &[disk(96)], &guard(Mode::Warn), Some(snap(1_000)), "mac-a", 1_000, &sink, &no_fresh);
     match &out[0] {
         Notice::Owner { body, .. } => assert!(body.contains("warn mode: nothing is refused"), "{body}"),
         n => panic!("{n:?}"),

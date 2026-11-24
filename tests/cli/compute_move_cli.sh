@@ -35,10 +35,10 @@ usage() {
 
 echo "== k2 compute move usage =="
 usage "no --auto or --to" "say where: --auto or --to <node>" compute move ab12cd34
-usage "both --auto and --to" "--auto or --to, not both" compute move ab12cd34 --auto --to k2n11
+usage "both --auto and --to" "--auto or --to, not both" compute move ab12cd34 --auto --to rig11
 usage "no job and no --all-mine" "name a job, or --all-mine" compute move --auto
 usage "a job and --all-mine" "job ids or --all-mine, not both" compute move ab12cd34 --all-mine --auto
-usage "--node without --all-mine" "--tag and --node pick jobs with --all-mine" compute move ab12cd34 --node k2n12 --auto
+usage "--node without --all-mine" "--tag and --node pick jobs with --all-mine" compute move ab12cd34 --node rig12 --auto
 usage "an unknown flag" "unknown flag '--bogus'" compute move ab12cd34 --auto --bogus
 usage "--to with no node" "--to needs a node" compute move ab12cd34 --to ""
 usage "--avoid with no node" "--avoid needs a node" compute move ab12cd34 --auto --avoid ""

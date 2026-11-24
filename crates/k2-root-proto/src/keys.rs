@@ -6,8 +6,8 @@
 //! - `scripts/install-root-helper.sh` (`K2_ROOT_HELPER_PUBKEYS`);
 //! - `scripts/sign-root-helper.sh` reads the secret key, never a copy.
 //!
-//! **Key ceremony** (Rosson, on z3mbpZ; steps in `scripts/sign-root-helper.sh`):
-//! a primary key whose encrypted secret lives only on z3mbpZ (password in
+//! **Key ceremony** (Rosson, on mac-b; steps in `scripts/sign-root-helper.sh`):
+//! a primary key whose encrypted secret lives only on mac-b (password in
 //! the login keychain) and a backup key kept offline. Both public keys are
 //! in [`RELEASE_KEYS`] (ceremony done 2026-10-10). An empty list would
 //! refuse every signed self-update and every downloaded install (fail

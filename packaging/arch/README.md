@@ -72,7 +72,7 @@ A later `k2-bin` package may consume the already-baked GitHub `k2-daemon-linux-x
 
 ## GitHub release
 
-The k2-arch runner builds this on a release tag (`packaging/arch/build-release-pkg.sh`) and uploads `dist/k2-$VERSION-x86_64.pkg.tar.zst`. The Mac does not compile the GUI. This workflow doesn't publish to the AUR or to `pkgs.omarchy.org`.
+The arch-box runner builds this on a release tag (`packaging/arch/build-release-pkg.sh`) and uploads `dist/k2-$VERSION-x86_64.pkg.tar.zst`. The Mac does not compile the GUI. This workflow doesn't publish to the AUR or to `pkgs.omarchy.org`.
 
 A published package never changes bytes (`scripts/arch-upload-pkg.sh`): a rebuild of the same tag that comes out different fails instead of replacing the file. The Omarchy recipe in `packaging/omarchy/k2-bin` pins that file's sha256.
 

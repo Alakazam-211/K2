@@ -6,7 +6,7 @@
 #
 #   scripts/ci/shadow-linux-builds.sh <tag> [--wait-min N]
 #
-# Run on the Mac whose K2 submits the jobs (z3mbpZ once it is a server on
+# Run on the Mac whose K2 submits the jobs (mac-b once it is a server on
 # the release nodes), from the repo checkout that has the tag. The same
 # steps run inside release.sh with K2_LINUX_BUILDS=shadow, before the tag.
 #

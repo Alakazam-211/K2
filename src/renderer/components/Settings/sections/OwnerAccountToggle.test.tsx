@@ -75,7 +75,7 @@ beforeEach(() => {
   cli.fetches = []
   cli.whoami = { owner: true, role: 'owner' }
   cli.users = [
-    { username: 'z3thon', disabled: false, role: 'admin' },
+    { username: 'zoe', disabled: false, role: 'admin' },
     { username: 'gina', disabled: false, role: 'member' },
   ]
   cli.pushAvailable = true
@@ -113,8 +113,8 @@ describe('OwnerAccountTag', () => {
   it('renders the tag only on the linked row', () => {
     const { container, rerender } = render(<OwnerAccountTag username="gina" linked={false} />)
     expect(container.innerHTML).toBe('')
-    rerender(<OwnerAccountTag username="z3thon" linked />)
-    expect(screen.getByTestId('owner-account-tag-z3thon').textContent).toBe(OWNER_ACCOUNT_TAG)
+    rerender(<OwnerAccountTag username="zoe" linked />)
+    expect(screen.getByTestId('owner-account-tag-zoe').textContent).toBe(OWNER_ACCOUNT_TAG)
     expect(OWNER_ACCOUNT_TAG).toBe("Owner's account")
   })
 })
@@ -124,7 +124,7 @@ function Harness({ enabled }: { enabled: boolean }): React.JSX.Element {
   return (
     <div>
       {s.loaded &&
-        ['z3thon', 'gina'].map((u) => (
+        ['zoe', 'gina'].map((u) => (
           <button key={u} type="button" data-testid={`flip-${u}`} data-linked={String(s.isLinked(u))} onClick={() => void s.setLinked(u, !s.isLinked(u))}>
             {u}
           </button>
@@ -143,37 +143,37 @@ describe('useOwnerAccounts', () => {
   it('loads the list; a flip POSTs the whole list; setAccounts replaces it', async () => {
     cli.ownerAccounts = { ok: true, accounts: ['gina'], aliases: ['gina'] }
     render(<Harness enabled />)
-    const z3 = await screen.findByTestId('flip-z3thon')
+    const z3 = await screen.findByTestId('flip-zoe')
     expect(z3.dataset.linked).toBe('false')
     expect(screen.getByTestId('flip-gina').dataset.linked).toBe('true')
 
     fireEvent.click(z3)
     await waitFor(() => expect(cli.posts).toHaveLength(1))
-    expect(cli.posts[0]).toEqual({ route: 'owner/accounts', body: { accounts: ['gina', 'z3thon'] } })
-    await waitFor(() => expect(screen.getByTestId('flip-z3thon').dataset.linked).toBe('true'))
-    expect(screen.getByTestId('aliases').textContent).toBe('gina,z3thon')
+    expect(cli.posts[0]).toEqual({ route: 'owner/accounts', body: { accounts: ['gina', 'zoe'] } })
+    await waitFor(() => expect(screen.getByTestId('flip-zoe').dataset.linked).toBe('true'))
+    expect(screen.getByTestId('aliases').textContent).toBe('gina,zoe')
 
     fireEvent.click(screen.getByTestId('set-gina'))
     await waitFor(() => expect(cli.posts).toHaveLength(2))
     expect(cli.posts[1]).toEqual({ route: 'owner/accounts', body: { accounts: ['gina'] } })
-    await waitFor(() => expect(screen.getByTestId('flip-z3thon').dataset.linked).toBe('false'))
+    await waitFor(() => expect(screen.getByTestId('flip-zoe').dataset.linked).toBe('false'))
   })
 
   it('disabled: fetches nothing', async () => {
     render(<Harness enabled={false} />)
     await Promise.resolve()
     expect(cli.gets).toEqual([])
-    expect(screen.queryByTestId('flip-z3thon')).toBeNull()
+    expect(screen.queryByTestId('flip-zoe')).toBeNull()
   })
 })
 
 describe('Settings → Admin Access → Users: the "Owner\'s account" tag', () => {
   it('owner token: no "This is me (owner)" checkbox; the linked row shows the tag', async () => {
-    cli.ownerAccounts = { ok: true, accounts: ['z3thon'], aliases: ['z3thon'] }
+    cli.ownerAccounts = { ok: true, accounts: ['zoe'], aliases: ['zoe'] }
     render(<K2ConnectSection panel="people" />)
-    expect((await screen.findByTestId('owner-account-tag-z3thon')).textContent).toBe("Owner's account")
+    expect((await screen.findByTestId('owner-account-tag-zoe')).textContent).toBe("Owner's account")
     expect(screen.queryByTestId('owner-account-tag-gina')).toBeNull()
-    expect(screen.queryByLabelText('z3thon: This is me (owner)')).toBeNull()
+    expect(screen.queryByLabelText('zoe: This is me (owner)')).toBeNull()
     expect(screen.queryByText('This is me (owner)')).toBeNull()
     expect(screen.queryByTestId('owner-link-explainer')).toBeNull()
     expect(cli.posts).toEqual([])
@@ -181,16 +181,16 @@ describe('Settings → Admin Access → Users: the "Owner\'s account" tag', () =
 
   it('no linked login: no tag anywhere', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByText('z3thon')
+    await screen.findByText('zoe')
     await waitFor(() => expect(cli.gets).toContain('owner/accounts'))
     expect(document.querySelector('[data-testid^="owner-account-tag-"]')).toBeNull()
   })
 
   it('Admin login sees the tag too (read-only data), never POSTs', async () => {
     cli.whoami = { owner: false, role: 'admin', username: 'sam' }
-    cli.ownerAccounts = { ok: true, accounts: ['z3thon'], aliases: ['z3thon'] }
+    cli.ownerAccounts = { ok: true, accounts: ['zoe'], aliases: ['zoe'] }
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('owner-account-tag-z3thon')
+    await screen.findByTestId('owner-account-tag-zoe')
     expect(cli.posts).toEqual([])
   })
 
@@ -205,32 +205,32 @@ describe('Settings → Admin Access → Users: the "Owner\'s account" tag', () =
 
   it('a server without Thread push shows no tag', async () => {
     cli.pushAvailable = false
-    cli.ownerAccounts = { ok: true, accounts: ['z3thon'], aliases: ['z3thon'] }
+    cli.ownerAccounts = { ok: true, accounts: ['zoe'], aliases: ['zoe'] }
     render(<K2ConnectSection panel="people" />)
-    await screen.findByText('z3thon')
-    expect(screen.queryByTestId('owner-account-tag-z3thon')).toBeNull()
+    await screen.findByText('zoe')
+    expect(screen.queryByTestId('owner-account-tag-zoe')).toBeNull()
     expect(cli.gets).not.toContain('owner/accounts')
   })
 })
 
 describe('notify-api owner-account helpers', () => {
   it('toggledOwnerAccounts adds/removes, lowercases, sorts, dedupes', () => {
-    expect(toggledOwnerAccounts(['gina'], 'Z3thon', true)).toEqual(['gina', 'z3thon'])
-    expect(toggledOwnerAccounts(['gina', 'z3thon'], 'z3thon', true)).toEqual(['gina', 'z3thon'])
-    expect(toggledOwnerAccounts(['gina', 'z3thon'], 'z3thon', false)).toEqual(['gina'])
+    expect(toggledOwnerAccounts(['gina'], 'Zoe', true)).toEqual(['gina', 'zoe'])
+    expect(toggledOwnerAccounts(['gina', 'zoe'], 'zoe', true)).toEqual(['gina', 'zoe'])
+    expect(toggledOwnerAccounts(['gina', 'zoe'], 'zoe', false)).toEqual(['gina'])
   })
 
   it('parseOwnerAccounts tolerates junk', () => {
-    expect(parseOwnerAccounts({ accounts: ['Z3thon', 3, ''], aliases: 'x' })).toEqual({ accounts: ['z3thon'], aliases: [] })
+    expect(parseOwnerAccounts({ accounts: ['Zoe', 3, ''], aliases: 'x' })).toEqual({ accounts: ['zoe'], aliases: [] })
   })
 
   it('isYouAuthor: owner always; linked logins only when the viewer is the owner person', () => {
-    const asOwner = { principal: 'owner', aliases: ['z3thon'] }
+    const asOwner = { principal: 'owner', aliases: ['zoe'] }
     expect(isYouAuthor('owner', null)).toBe(true)
-    expect(isYouAuthor('z3thon', asOwner)).toBe(true)
-    expect(isYouAuthor('Z3thon', asOwner)).toBe(true)
+    expect(isYouAuthor('zoe', asOwner)).toBe(true)
+    expect(isYouAuthor('Zoe', asOwner)).toBe(true)
     expect(isYouAuthor('gina', asOwner)).toBe(false)
-    expect(isYouAuthor('z3thon', { principal: 'gina', aliases: ['z3thon'] })).toBe(false)
-    expect(isYouAuthor('z3thon', null)).toBe(false)
+    expect(isYouAuthor('zoe', { principal: 'gina', aliases: ['zoe'] })).toBe(false)
+    expect(isYouAuthor('zoe', null)).toBe(false)
   })
 })

@@ -840,7 +840,7 @@ fn manual_manifest(source_project_path: &str) -> CloneManifest {
 fn unpack_rewrites_embedded_cwd_for_arbitrary_spaced_paths() {
     let root = TempDir::new("gh23-unpack");
     // SOURCE machine path — arbitrary user/parent, WITH SPACES.
-    let source = "/Users/z3thon/DevProjects/Acme Industrial/acme-plan01";
+    let source = "/Users/zoe/DevProjects/Acme Industrial/acme-plan01";
     // DEST machine: a real temp parent (also containing a space) + home.
     let dest_parent = root.path().join("AI Projects");
     fs::create_dir_all(&dest_parent).unwrap();

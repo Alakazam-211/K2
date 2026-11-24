@@ -399,21 +399,21 @@ mod tests {
     fn sender_identity_table() {
         let linked = people(
             vec![
-                user("z3thon", Role::Admin, Some("Rosson"), Some("Long")),
+                user("zoe", Role::Admin, Some("Rosson"), Some("Long")),
                 user("anna", Role::Member, Some("Anna"), None),
                 user("wes", Role::Owner, None, None),
             ],
-            &["z3thon"],
+            &["zoe"],
         );
         let unlinked = people(vec![user("anna", Role::Member, None, None)], &[]);
         let cases: &[(&str, Sender<'_>, &People, &str)] = &[
-            ("owner token + linked → the linked username", Sender::OwnerToken, &linked, "z3thon"),
+            ("owner token + linked → the linked username", Sender::OwnerToken, &linked, "zoe"),
             ("owner token, none linked → owner", Sender::OwnerToken, &unlinked, "owner"),
-            ("owner-linked Connect login → its username", Sender::Login("z3thon"), &linked, "z3thon"),
+            ("owner-linked Connect login → its username", Sender::Login("zoe"), &linked, "zoe"),
             ("other Connect user → its username", Sender::Login("anna"), &linked, "anna"),
             ("an Owner-role login that is not linked → its username", Sender::Login("wes"), &linked, "wes"),
             ("case-folded to the stored username", Sender::Login("ANNA"), &linked, "anna"),
-            ("session author 'owner' is the owner token", Sender::from_session_author("owner"), &linked, "z3thon"),
+            ("session author 'owner' is the owner token", Sender::from_session_author("owner"), &linked, "zoe"),
             ("empty session author is the owner token", Sender::from_session_author(" "), &unlinked, "owner"),
         ];
         for (label, sender, p, want) in cases {
@@ -447,18 +447,18 @@ mod tests {
     #[test]
     fn the_owner_shows_the_linked_accounts_names() {
         let p = people(
-            vec![user("z3thon", Role::Admin, Some("Rosson"), Some("Long")), user("anna", Role::Member, None, None)],
-            &["z3thon"],
+            vec![user("zoe", Role::Admin, Some("Rosson"), Some("Long")), user("anna", Role::Member, None, None)],
+            &["zoe"],
         );
         let o = effective("owner", &p);
         assert_eq!(o.first_name.as_deref(), Some("Rosson"));
         assert_eq!(o.last_name.as_deref(), Some("Long"));
         assert_eq!(o.display_name, "Rosson Long");
-        assert_eq!(effective("z3thon", &p).display_name, "Rosson Long");
+        assert_eq!(effective("zoe", &p).display_name, "Rosson Long");
         assert_eq!(effective("anna", &p).display_name, "anna", "others are untouched");
         // A nameless linked account: the owner shows its username.
-        let p = people(vec![user("z3thon", Role::Admin, None, None)], &["z3thon"]);
-        assert_eq!(effective("owner", &p).display_name, "z3thon");
+        let p = people(vec![user("zoe", Role::Admin, None, None)], &["zoe"]);
+        assert_eq!(effective("owner", &p).display_name, "zoe");
         assert_eq!(effective("owner", &p).first_name, None);
     }
 
@@ -489,16 +489,16 @@ mod tests {
     fn name_map_covers_owner_and_every_login() {
         let p = people(
             vec![
-                user("z3thon", Role::Admin, Some("Rosson"), Some("Long")),
+                user("zoe", Role::Admin, Some("Rosson"), Some("Long")),
                 user("anna", Role::Member, Some("Anna"), Some("Smith")),
                 user("bob", Role::Member, None, None),
             ],
-            &["z3thon"],
+            &["zoe"],
         );
         let m = name_map(&p);
         let dn = |k: &str| m.get(k).map(|e| e.display_name.clone()).unwrap_or_else(|| panic!("no entry for {k}: {m:?}"));
         assert_eq!(dn("owner"), "Rosson Long");
-        assert_eq!(dn("z3thon"), "Rosson Long");
+        assert_eq!(dn("zoe"), "Rosson Long");
         assert_eq!(dn("anna"), "Anna Smith");
         assert_eq!(dn("bob"), "bob", "every login has an entry");
         assert_eq!(m.get("bob").expect("bob").first_name, None);
@@ -508,10 +508,10 @@ mod tests {
     #[test]
     fn label_shows_the_name_beside_the_username() {
         let named = NameEntry { first_name: Some("Rosson".into()), last_name: Some("Long".into()), display_name: "Rosson Long".into() };
-        assert_eq!(label("z3thon", Some(&named)), "z3thon — Rosson Long");
-        let nameless = NameEntry { first_name: None, last_name: None, display_name: "z3thon".into() };
-        assert_eq!(label("z3thon", Some(&nameless)), "z3thon", "a fallback displayName is not a name");
-        assert_eq!(label("z3thon", None), "z3thon");
+        assert_eq!(label("zoe", Some(&named)), "zoe — Rosson Long");
+        let nameless = NameEntry { first_name: None, last_name: None, display_name: "zoe".into() };
+        assert_eq!(label("zoe", Some(&nameless)), "zoe", "a fallback displayName is not a name");
+        assert_eq!(label("zoe", None), "zoe");
     }
 
     #[test]
@@ -546,19 +546,19 @@ mod tests {
     fn carry_over_waits_for_a_linked_account_then_runs_once() {
         crate::tunnel::test_support::with_temp_home(|| {
             set_display(Some("Rosson Long"));
-            crate::connect_users::add_user("z3thon", "password1").expect("add");
+            crate::connect_users::add_user("zoe", "password1").expect("add");
             assert_eq!(carry_over_owner_display_name().expect("carry"), CarryOver::NoLinkedAccount);
             assert!(!crate::app_settings::load().owner_display_name_carried, "flag stays false until linked");
-            crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
-            assert_eq!(carry_over_owner_display_name().expect("carry"), CarryOver::Carried { login: "z3thon".into() });
-            assert_eq!(names_of("z3thon"), (Some("Rosson".into()), Some("Long".into())));
+            crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
+            assert_eq!(carry_over_owner_display_name().expect("carry"), CarryOver::Carried { login: "zoe".into() });
+            assert_eq!(names_of("zoe"), (Some("Rosson".into()), Some("Long".into())));
             let s = crate::app_settings::load();
             assert!(s.owner_display_name_carried);
             assert_eq!(s.owner_display_name.as_deref(), Some("Rosson Long"), "kept on disk for downgrades");
             // Never again, even after the names are cleared.
-            crate::connect_users::set_names("z3thon", Some(""), Some("")).expect("clear");
+            crate::connect_users::set_names("zoe", Some(""), Some("")).expect("clear");
             assert_eq!(carry_over_owner_display_name().expect("carry"), CarryOver::AlreadyDone);
-            assert_eq!(names_of("z3thon"), (None, None));
+            assert_eq!(names_of("zoe"), (None, None));
         });
     }
 

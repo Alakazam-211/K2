@@ -2505,7 +2505,7 @@ mod tests {
         assert!(!n.owner_claim(), "an owned node makes no claim");
         // Owned → tenant by an offer is still allowed (one way).
         let mut v = view(Role::Tenant);
-        v.owner_label = Some("z3thon.k2.dev".into());
+        v.owner_label = Some("zoe.k2.dev".into());
         store_share(&c, "n1", Some(&v), 12);
         let n = node_by_id(&c, "n1").unwrap();
         assert!(n.is_tenant() && !n.owned_for_secrets());
@@ -2808,10 +2808,10 @@ mod tests {
     /// typed (that name or one starting with it); nothing else.
     #[test]
     fn avoid_rules_out_by_id_or_by_a_kept_name() {
-        let f = AnyFilter { avoid: vec!["id-11".into()], avoid_names: vec!["k2n2".into()], ..Default::default() };
+        let f = AnyFilter { avoid: vec!["id-11".into()], avoid_names: vec!["rig2".into()], ..Default::default() };
         assert!(f.avoids("id-11", "renamed-later"), "by id, after a rename");
-        assert!(f.avoids("id-20", "k2n2") && f.avoids("id-21", "k2n21-vin"), "the kept name, and a name starting with it");
-        assert!(!f.avoids("id-12", "k2n12-vin"), "neither");
+        assert!(f.avoids("id-20", "rig2") && f.avoids("id-21", "rig21-vps"), "the kept name, and a name starting with it");
+        assert!(!f.avoids("id-12", "rig12-vps"), "neither");
         let old: AnyFilter = serde_json::from_str("{\"avoid\":[\"id-11\"]}").unwrap();
         assert!(old.avoid_names.is_empty() && old.avoids("id-11", "x"), "a row from before keeps reading");
         assert!(!serde_json::to_string(&AnyFilter::default()).unwrap().contains("avoidNames"), "empty: not written");

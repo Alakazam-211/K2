@@ -424,7 +424,7 @@ pub struct Cand {
     /// (the `any_hold` minute, not yet in the node's queue, so not in its
     /// quote), as seconds of work per slot ([`SoloWaits::held_eta`]). Added
     /// to the quote, so a burst stops piling onto the node with the lowest
-    /// quote (11-03: 15 jobs on k2n10 while others had room soon).
+    /// quote (11-03: 15 jobs on rig10 while others had room soon).
     pub held_wait: u64,
     /// B2 (§4.1.6): this server's `trusted` cache heads on the node,
     /// `(project key, head commit)`, from its `lineage_status`.
@@ -540,7 +540,7 @@ impl Cand {
     /// queued job that can't start now (a Batch job on a busy node, one
     /// too big for the free room, one at its grant's cap) no longer keeps
     /// every other job off a node with free slots (the Gardener 11-24: 32
-    /// jobs held while k2n15–17 had free slots). One that starts now, or a
+    /// jobs held while rig15–17 had free slots). One that starts now, or a
     /// hold (CI or Priority, an hour-old job, an exclusive head), still
     /// goes first. Queued jobs it can't see: as before, never.
     fn first_in_line(&self, w: &Want) -> bool {
@@ -2372,7 +2372,7 @@ pub fn leave_target<'a>(
     cands.iter().find(|x| x.node.id == c.node.id)
 }
 
-/// The line a move leaves on the job ("moved from k2n7-vin: k2n12-vin can
+/// The line a move leaves on the job ("moved from rig7-vps: rig12-vps can
 /// start it now · …"): where it came from, and why the new node.
 pub fn moved_why(from: &str, to: &str, tier: Tier, why: &str) -> String {
     match tier {

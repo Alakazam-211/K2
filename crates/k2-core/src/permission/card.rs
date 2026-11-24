@@ -274,7 +274,7 @@ mod tests {
             duration: "until someone turns it off".into(),
             consequences: "Every active machine; default limits.".into(),
             values: vec![KeyValue { key: "workspace".into(), value: "billing".into() }],
-            why: Some(Why { by: "billing".into(), text: "Run the test suite on k2n2-m1".into() }),
+            why: Some(Why { by: "billing".into(), text: "Run the test suite on rig2-mac".into() }),
             notes: vec![Note { by: "dana".into(), role: "member".into(), text: "payroll run".into(), at: 1_761_060_000 }],
             asked_for: Some("dana".into()),
             askers: None,

@@ -400,7 +400,7 @@ async fn git_access_with_a_github_app_end_to_end() {
     let gh = start_github(public);
     k2_daemon::compute_git::test_set_api_base(Some(gh.base.clone()));
     let ws = seed_ws(&env, "gaw");
-    active_node("own-1", "k2n4", &ws);
+    active_node("own-1", "rig4", &ws);
     active_node("ten-1", "tenant-node", &ws);
     let mut node = compute_ws::test_attach("own-1", offer(&[FEATURE_GIT_ACCESS, "artifacts", "stall"], None));
     let _ten = compute_ws::test_attach("ten-1", offer(&[FEATURE_GIT_ACCESS, "artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], Some(tenant_view())));
@@ -453,7 +453,7 @@ async fn git_access_with_a_github_app_end_to_end() {
 
     // A job on the owned node: its plan names the repos granted there
     // (acme/app by `all`; acme/lib only on the tenant node).
-    let r = run(d.port, &agent, json!({"node": "k2n4"})).await;
+    let r = run(d.port, &agent, json!({"node": "rig4"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let plan = node
@@ -545,10 +545,10 @@ async fn a_fine_grained_token_is_checked_and_handed_out_as_it_is() {
     let gh = start_github(public);
     k2_daemon::compute_git::test_set_api_base(Some(gh.base.clone()));
     let ws = seed_ws(&env, "pat");
-    active_node("own-2", "k2n7", &ws);
+    active_node("own-2", "rig7", &ws);
     let mut node = compute_ws::test_attach("own-2", offer(&[FEATURE_GIT_ACCESS, "artifacts", "stall"], None));
     let old_node = {
-        active_node("old-2", "k2n5", &ws);
+        active_node("old-2", "rig5", &ws);
         compute_ws::test_attach("old-2", offer(&["artifacts", "stall"], None))
     };
     let r = post(d.port, "/cli/compute/git-access/setup", OWNER, json!({"token": PAT})).await;
@@ -563,7 +563,7 @@ async fn a_fine_grained_token_is_checked_and_handed_out_as_it_is() {
 
     // A node without the feature gets no git_access in its plan.
     let agent = passport(&ws);
-    let r = run(d.port, &agent, json!({"node": "k2n5"})).await;
+    let r = run(d.port, &agent, json!({"node": "rig5"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job_old = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let mut old_node = old_node;
@@ -573,7 +573,7 @@ async fn a_fine_grained_token_is_checked_and_handed_out_as_it_is() {
     });
     assert!(p_old.expect("assigned").git_access.is_empty(), "an older node never sees git_access");
 
-    let r = run(d.port, &agent, json!({"node": "k2n7"})).await;
+    let r = run(d.port, &agent, json!({"node": "rig7"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let r1 = row(&job);

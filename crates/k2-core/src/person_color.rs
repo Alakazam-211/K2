@@ -167,13 +167,13 @@ mod tests {
     #[test]
     fn linked_accounts_show_the_owner_colour() {
         let p = people(
-            vec![user("z3thon", Role::Admin, Some("#0d9488")), user("anna", Role::Member, None)],
-            &["z3thon"],
+            vec![user("zoe", Role::Admin, Some("#0d9488")), user("anna", Role::Member, None)],
+            &["zoe"],
         );
-        assert_eq!(effective("z3thon", &p, Some("#4f46e5")), "#4f46e5");
-        assert_eq!(chosen("z3thon", &p, Some("#4f46e5")).as_deref(), Some("#4f46e5"));
+        assert_eq!(effective("zoe", &p, Some("#4f46e5")), "#4f46e5");
+        assert_eq!(chosen("zoe", &p, Some("#4f46e5")).as_deref(), Some("#4f46e5"));
         // No owner colour yet: the linked login keeps its own.
-        assert_eq!(effective("z3thon", &p, None), "#0d9488");
+        assert_eq!(effective("zoe", &p, None), "#0d9488");
         // Others are untouched.
         assert_eq!(effective("anna", &p, Some("#4f46e5")), hash_color("anna"));
     }
@@ -189,12 +189,12 @@ mod tests {
     #[test]
     fn color_map_covers_owner_and_logins() {
         let p = people(
-            vec![user("z3thon", Role::Admin, None), user("anna", Role::Member, Some("#64748b"))],
-            &["z3thon"],
+            vec![user("zoe", Role::Admin, None), user("anna", Role::Member, Some("#64748b"))],
+            &["zoe"],
         );
         let m = color_map(&p, Some("#c026d3"));
         assert_eq!(m.get("owner").map(String::as_str), Some("#c026d3"));
-        assert_eq!(m.get("z3thon").map(String::as_str), Some("#c026d3"));
+        assert_eq!(m.get("zoe").map(String::as_str), Some("#c026d3"));
         assert_eq!(m.get("anna").map(String::as_str), Some("#64748b"));
         assert_eq!(m.len(), 3, "no display-name keys: {m:?}");
     }

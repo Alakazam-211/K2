@@ -705,7 +705,7 @@ fn dns_supervisor_fails_back_fast_once_k2dev_points_the_name_at_the_primary() {
 
 #[test]
 fn dns_supervisor_with_no_relay_reachable_stays_on_the_primary_and_backs_off() {
-    // z3mbpZ on a dead network: 0.46.2 alternated every ~6 s. Even
+    // mac-b on a dead network: 0.46.2 alternated every ~6 s. Even
     // with every switch rule met (k2.dev names the standby, zero
     // minimum outage) an unreachable standby is never switched to.
     with_temp_home(|| {

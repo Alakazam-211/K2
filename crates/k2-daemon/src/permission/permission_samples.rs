@@ -112,7 +112,7 @@ const GD_CARD_ID: &str = "4d1e7e7e-2b3c-4d4e-9f50-6b7c8d9e0f12";
 const GARDEN_SALES: &str = "g-5a1e5b0a";
 const GARDEN_OLD: &str = "g-0e1db0a7";
 
-const WHY: &str = "Run the test suite on k2n2-m1; it takes 40 min here";
+const WHY: &str = "Run the test suite on rig2-mac; it takes 40 min here";
 const NOTE: &str = "I need this for the payroll run";
 
 // ── stand-in actions (the real spec wins once registered) ───────────

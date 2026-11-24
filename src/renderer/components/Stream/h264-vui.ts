@@ -4,7 +4,7 @@
 // kessel-video) writes an SPS with no VUI at all. Without the VUI's bitstream
 // restriction a decoder must assume frames may be reordered and may hold up
 // to the level's whole DPB before it outputs anything, and WebKit's decoder
-// does: on z3mbpZ (11-10) the Mobile tab drew 2–4 fps while the daemon sent
+// does: on mac-b (11-10) the Mobile tab drew 2–4 fps while the daemon sent
 // 55. This adds the restriction WebRTC's SPS rewriter adds:
 // max_num_reorder_frames = 0 and max_dec_frame_buffering = max_num_ref_frames,
 // so each frame is output as soon as it is decoded.

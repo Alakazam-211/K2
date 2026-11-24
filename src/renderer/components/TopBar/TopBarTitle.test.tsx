@@ -26,7 +26,7 @@ import { SERVER_ICON_PX } from './ServerSwitcher'
 const LONG = 'a-really-long-customer-server-name.example.k2.dev'
 const B: ConnectHost = {
   id: 'id-b',
-  label: 'z3thon.k2.dev',
+  label: 'zoe.k2.dev',
   hostname: '127.0.0.1',
   port: 59_998,
   secure: false,
@@ -93,7 +93,7 @@ describe('local agent (the window’s server)', () => {
 describe('agent on another server', () => {
   it('server / agent / branch, the server first with its icon and picker label', () => {
     render(<TopBarTitle agent="nora" branch="feat/press" remoteServer={{ hostKey: B_KEY, phase: 'open' }} />)
-    expect(parts()).toEqual(['z3thon.k2.dev', '/', 'nora', '/', 'feat/press'])
+    expect(parts()).toEqual(['zoe.k2.dev', '/', 'nora', '/', 'feat/press'])
     const server = screen.getByTestId('top-bar-title-server')
     const icon = server.firstElementChild
     expect(icon?.getAttribute('data-testid')).toBe('server-status-icon')
@@ -104,13 +104,13 @@ describe('agent on another server', () => {
       [GREEN, '7'],
       [GREEN, '7'],
     ])
-    expect(server.getAttribute('title')).toBe('z3thon.k2.dev — Connection: connected')
-    expect(server.getAttribute('aria-label')).toBe('z3thon.k2.dev — Connection: connected')
+    expect(server.getAttribute('title')).toBe('zoe.k2.dev — Connection: connected')
+    expect(server.getAttribute('aria-label')).toBe('zoe.k2.dev — Connection: connected')
   })
 
   it('without a known branch: server / agent', () => {
     render(<TopBarTitle agent="nora" remoteServer={{ hostKey: B_KEY, phase: 'open' }} />)
-    expect(parts()).toEqual(['z3thon.k2.dev', '/', 'nora'])
+    expect(parts()).toEqual(['zoe.k2.dev', '/', 'nora'])
     expect(screen.queryByTestId('top-bar-title-branch')).toBe(null)
   })
 
@@ -130,10 +130,10 @@ describe('agent on another server', () => {
     expect(led()).toBe(GREEN)
     setPool({ reach: 'offline' })
     expect(led()).toBe(RED)
-    expect(screen.getByTestId('top-bar-title-server').getAttribute('title')).toBe('z3thon.k2.dev — Connection: offline')
+    expect(screen.getByTestId('top-bar-title-server').getAttribute('title')).toBe('zoe.k2.dev — Connection: offline')
     setPool({ auth: 'signin-required' })
     expect(led()).toBe(RED)
-    expect(screen.getByTestId('top-bar-title-server').getAttribute('title')).toBe('z3thon.k2.dev — Sign-in required')
+    expect(screen.getByTestId('top-bar-title-server').getAttribute('title')).toBe('zoe.k2.dev — Sign-in required')
     setPool({})
     expect(led()).toBe(GREEN)
   })

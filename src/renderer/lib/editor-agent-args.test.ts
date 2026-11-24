@@ -26,7 +26,7 @@ describe('buildEditorAgentArgs', () => {
   it('forces grok fullscreen and a positional prompt', () => {
     expect(
       buildEditorAgentArgs({
-        command: '/Users/z3thon/.grok/bin/grok',
+        command: '/Users/zoe/.grok/bin/grok',
         baseArgs: ['--always-approve', '--minimal'],
         systemBrief: 'BRIEF',
         userMessage: 'DO IT',

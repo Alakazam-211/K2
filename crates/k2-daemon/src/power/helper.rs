@@ -647,16 +647,16 @@ mod tests {
 
     #[test]
     fn install_script_writes_one_narrow_sudoers_line() {
-        let s = install_script("z3thon", "/Applications/K2.app/Contents/MacOS/k2-power-helper")
+        let s = install_script("zoe", "/Applications/K2.app/Contents/MacOS/k2-power-helper")
             .expect("valid inputs");
-        assert!(s.contains("z3thon ALL=(root) NOPASSWD: /Library/PrivilegedHelperTools/dev.k2.power-helper"), "{s}");
+        assert!(s.contains("zoe ALL=(root) NOPASSWD: /Library/PrivilegedHelperTools/dev.k2.power-helper"), "{s}");
         assert!(s.contains("/usr/sbin/visudo -cf"), "sudoers must be checked before install: {s}");
         assert!(s.contains("-m 0440"), "{s}");
         assert!(s.contains("-o root -g wheel -m 0755 '/Applications/K2.app/Contents/MacOS/k2-power-helper'"), "{s}");
         assert!(install_script("bad user", "/x").is_err());
         assert!(install_script("root;id", "/x").is_err());
-        assert!(install_script("z3thon", "/tmp/it's").is_err());
-        assert!(install_script("z3thon", "relative/path").is_err());
+        assert!(install_script("zoe", "/tmp/it's").is_err());
+        assert!(install_script("zoe", "relative/path").is_err());
 
         let apple = install_applescript(&s);
         assert!(apple.starts_with("do shell script \""), "{apple}");

@@ -319,7 +319,7 @@ mod tests {
             ("xcrun", simctl(&["io", UDID, "screenshot", "/tmp/x.png"])),
             ("xcrun", simctl(&["launch", UDID, "a;rm"])),
             ("/usr/bin/plutil", vec!["-convert".into(), "json".into(), "-o".into(), "-".into(), "/etc/k2-node/policy.toml".into()]),
-            ("/usr/bin/plutil", vec!["-extract".into(), "CFBundleIdentifier".into(), "raw".into(), "-o".into(), "-".into(), "/Users/scout/Info.plist".into()]),
+            ("/usr/bin/plutil", vec!["-extract".into(), "CFBundleIdentifier".into(), "raw".into(), "-o".into(), "-".into(), "/Users/patlee/Info.plist".into()]),
             ("/usr/bin/plutil", vec!["-extract".into(), "NSPrivate".into(), "raw".into(), "-o".into(), "-".into(), "/var/k2sim/uploads/0/a/A.app/Info.plist".into()]),
             ("/bin/sh", vec!["-c".into(), "id".into()]),
         ];
@@ -379,7 +379,7 @@ mod tests {
         for ok in ["https://web.app.k2.dev", "http://example.com/x", "myapp://open?x=1"] {
             assert!(check_open_url(ok).is_ok(), "{ok}");
         }
-        for bad in ["file:///etc/passwd", "File:/Users/scout", "  file:x", "nocolon", "https://x\n"] {
+        for bad in ["file:///etc/passwd", "File:/Users/patlee", "  file:x", "nocolon", "https://x\n"] {
             assert!(check_open_url(bad).is_err(), "{bad}");
         }
     }

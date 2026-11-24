@@ -1655,8 +1655,8 @@ mod tests {
 
     #[test]
     fn cursor_slug_matches_cursor_agent() {
-        assert_eq!(cursor_slug("/Users/z3thon/DevProjects/Alakazam Labs/K2"), "Users-z3thon-DevProjects-Alakazam-Labs-K2");
-        assert_eq!(cursor_slug("/home/k2/ai/nora/"), "home-k2-ai-nora");
+        assert_eq!(cursor_slug("/Users/acme/DevProjects/Globex Labs/K2"), "Users-acme-DevProjects-Globex-Labs-K2");
+        assert_eq!(cursor_slug("/home/acme/ai/demo/"), "home-acme-ai-demo");
         assert_eq!(cursor_slug("/a//b__c"), "a-b-c");
     }
 

@@ -934,7 +934,7 @@ mod tests {
         j
     }
 
-    /// k2n1-m4 (2 GB caps) took a --mem 4G job from --any and held it at
+    /// rig1-mac (2 GB caps) took a --mem 4G job from --any and held it at
     /// position 1 forever; every later job from the workspace waited behind it.
     #[test]
     fn never_fits_compares_against_the_node_caps_not_free() {
@@ -959,16 +959,16 @@ mod tests {
         let mut busy6 = small(6);
         busy6.free.mem_bytes = 1 << 30;
         let cands = vec![
-            ("k2n1-m4".to_string(), small(2), Load::default()),
-            ("k2n2-m1".to_string(), busy6, Load::default()),
+            ("rig1-mac".to_string(), small(2), Load::default()),
+            ("rig2-mac".to_string(), busy6, Load::default()),
         ];
         let j = mem_job("j", "A", 1, 4);
         assert_eq!(pick_any(&cands, None, None, &j), None, "nothing takes it now");
-        assert_eq!(pick_any_queue(&cands, None, None, &j), Some("k2n2-m1"));
+        assert_eq!(pick_any_queue(&cands, None, None, &j), Some("rig2-mac"));
         assert_eq!(pick_any_queue(&cands[..1], None, None, &j), None, "no node could ever run it");
         // A job that fits now still goes where it runs now.
-        let fits = vec![("k2n1-m4".to_string(), small(2), Load::default()), ("k2n3-m1".to_string(), small(6), Load::default())];
-        assert_eq!(pick_any(&fits, None, None, &j), Some("k2n3-m1"));
+        let fits = vec![("rig1-mac".to_string(), small(2), Load::default()), ("rig3-mac".to_string(), small(6), Load::default())];
+        assert_eq!(pick_any(&fits, None, None, &j), Some("rig3-mac"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# release-lock.sh — sourced by release.sh (macOS release Mac, z3mbpZ).
+# release-lock.sh — sourced by release.sh (macOS release Mac, mac-b).
 #
-# z3mbpZ is also a K2 compute node. Its node policy has
+# mac-b is also a K2 compute node. Its node policy has
 #   foreign_locks = ["/var/tmp/k2-release.lock"]
 # so while that file exists the node takes no new jobs. release.sh writes
 # it first thing, waits for a node job that is already running to finish

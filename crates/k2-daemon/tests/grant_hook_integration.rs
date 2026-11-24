@@ -582,11 +582,11 @@ fn updates_for(env: &Env, ext: &str) -> Vec<fake_sew::Call> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_username_is_the_linked_login_not_the_display_name() {
     let env = setup().await;
-    link_owner("z3thon", Some("Rosson"), Some("Long"));
+    link_owner("zoe", Some("Rosson"), Some("Long"));
     enable(&env);
     drain(&env).await;
     let m = env.sew.member("k2:owner").expect("owner provisioned");
-    assert_eq!(m.username, "z3thon");
+    assert_eq!(m.username, "zoe");
     assert_eq!(m.display_name, "Rosson Long");
 }
 
@@ -600,26 +600,26 @@ async fn owner_no_linked_account_is_owner_then_a_reconcile_renames_it_to_the_log
     let member_id = m.member_id;
 
     // An existing install: linking an account renames the same member.
-    link_owner("z3thon", Some("Rosson"), Some("Long"));
+    link_owner("zoe", Some("Rosson"), Some("Long"));
     worker::reconcile_once().await.unwrap();
     drain(&env).await;
     let m = env.sew.member("k2:owner").unwrap();
     assert_eq!(m.member_id, member_id, "renamed in place, same member");
-    assert_eq!((m.username.as_str(), m.display_name.as_str()), ("z3thon", "Rosson Long"));
+    assert_eq!((m.username.as_str(), m.display_name.as_str()), ("zoe", "Rosson Long"));
     let ups = updates_for(&env, "k2:owner");
     assert_eq!(ups.len(), 1, "exactly one rename: {}", env.sew.log());
-    assert_eq!(ups[0].body["profile"]["username"], "z3thon");
+    assert_eq!(ups[0].body["profile"]["username"], "zoe");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_username_taken_falls_back_to_suffix_and_sticks_until_the_login_changes() {
     let env = setup().await;
-    link_owner("z3thon", None, None);
+    link_owner("zoe", None, None);
     env.sew
-        .seed("local:z3thon", MemberKind::Person, "z3thon", "Someone Else", false);
+        .seed("local:zoe", MemberKind::Person, "zoe", "Someone Else", false);
     enable(&env);
     drain(&env).await;
-    let fallback = hook::chat::suffixed_username("z3thon", "k2:owner");
+    let fallback = hook::chat::suffixed_username("zoe", "k2:owner");
     let m = env.sew.member("k2:owner").expect("owner provisioned with a suffix");
     assert_eq!(m.username, fallback);
     let provisions: Vec<String> = env
@@ -629,10 +629,10 @@ async fn owner_username_taken_falls_back_to_suffix_and_sticks_until_the_login_ch
         .filter(|c| c.path == hook::sew_wire::MGMT_PROVISION && c.body["external_id"] == "k2:owner")
         .map(|c| format!("{} {}", c.status, c.body["profile"]["username"].as_str().unwrap()))
         .collect();
-    assert_eq!(provisions, [format!("409 z3thon"), format!("200 {fallback}")]);
+    assert_eq!(provisions, [format!("409 zoe"), format!("200 {fallback}")]);
 
     // Sticky: two reconciles after the fallback send nothing (no rename
-    // back to the bare login, even though K2 still wants `z3thon`).
+    // back to the bare login, even though K2 still wants `zoe`).
     let before = env.sew.posts().len();
     for _ in 0..2 {
         worker::reconcile_once().await.unwrap();
@@ -656,10 +656,10 @@ async fn owner_username_taken_falls_back_to_suffix_and_sticks_until_the_login_ch
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_username_and_fallback_both_taken_blocks_with_a_clear_error() {
     let env = setup().await;
-    link_owner("z3thon", None, None);
-    let fallback = hook::chat::suffixed_username("z3thon", "k2:owner");
+    link_owner("zoe", None, None);
+    let fallback = hook::chat::suffixed_username("zoe", "k2:owner");
     env.sew
-        .seed("local:z3thon", MemberKind::Person, "z3thon", "A", false);
+        .seed("local:zoe", MemberKind::Person, "zoe", "A", false);
     env.sew
         .seed("local:other", MemberKind::Person, &fallback, "B", false);
     enable(&env);
@@ -926,11 +926,11 @@ async fn owner_linked_connect_login_never_gets_its_own_member() {
     let env = setup().await;
     enable(&env);
     drain(&env).await;
-    let z = connect_login("z3thon", Some("Rosson"), Some("Long"));
-    link_owner_to("z3thon");
+    let z = connect_login("zoe", Some("Rosson"), Some("Long"));
+    link_owner_to("zoe");
 
     // A connect grant for it is refused, by login or by id.
-    for subject in ["z3thon", z.as_str()] {
+    for subject in ["zoe", z.as_str()] {
         let e = skin::create_grant(&SkinGrantWrite {
             subject_kind: "connect".into(),
             subject_id: subject.into(),
@@ -944,19 +944,19 @@ async fn owner_linked_connect_login_never_gets_its_own_member() {
         assert_eq!(e, hook::OWNER_CONNECT_IS_OWNER, "{subject}");
     }
     // The mint gate never writes a grant or a row for it either.
-    let e = hook::connect_chat_gate(&z, "z3thon").expect_err("owner-linked");
+    let e = hook::connect_chat_gate(&z, "zoe").expect_err("owner-linked");
     assert_eq!(e, hook::OWNER_CONNECT_IS_OWNER);
     assert!(connect_grant(&z).is_none());
 
     // A stray k2:connect member for it (e.g. from before the link) is
     // deprovisioned by reconcile; k2:owner stays.
-    env.sew.seed(&cext(&z), MemberKind::Person, "z3thon-old", "Rosson Long", false);
+    env.sew.seed(&cext(&z), MemberKind::Person, "zoe-old", "Rosson Long", false);
     worker::reconcile_once().await.unwrap();
     drain(&env).await;
     assert!(env.sew.member(&cext(&z)).unwrap().deactivated, "{}", env.sew.log());
     let owner = env.sew.member("k2:owner").expect("owner member");
     assert!(!owner.deactivated);
-    assert_eq!((owner.username.as_str(), owner.display_name.as_str()), ("z3thon", "Rosson Long"));
+    assert_eq!((owner.username.as_str(), owner.display_name.as_str()), ("zoe", "Rosson Long"));
     assert!(
         rows().iter().all(|r| r.subject_key != cext(&z) || r.op == "deprovision"),
         "never a provision for the owner-linked login: {:?}",
@@ -1757,13 +1757,13 @@ async fn routes_drive_the_hook_end_to_end() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s0_app_users_named_like_box_users_never_take_their_handles() {
     let env = setup().await;
-    link_owner("z3thon", None, None);
+    link_owner("zoe", None, None);
     let bob = connect_login("bob", None, None);
     enable(&env);
     drain(&env).await;
-    assert_eq!(env.sew.member("k2:owner").expect("owner").username, "z3thon");
+    assert_eq!(env.sew.member("k2:owner").expect("owner").username, "zoe");
     // The App users get chat first, the Connect login's grant after.
-    let z = skin::add_principal("z3thon").expect("App user z3thon");
+    let z = skin::add_principal("zoe").expect("App user zoe");
     let b = skin::add_principal("bob").expect("App user bob");
     let c = skin::add_principal("cara").expect("App user cara");
     for p in [&z, &b, &c] {
@@ -1774,9 +1774,9 @@ async fn s0_app_users_named_like_box_users_never_take_their_handles() {
     drain(&env).await;
 
     let handle = |ext: &str| env.sew.member(ext).unwrap_or_else(|| panic!("{ext} provisioned: {}", env.sew.log())).username;
-    assert_eq!(handle("k2:owner"), "z3thon", "the owner keeps the plain handle");
+    assert_eq!(handle("k2:owner"), "zoe", "the owner keeps the plain handle");
     assert_eq!(handle(&cext(&bob)), "bob", "the Connect login keeps the plain handle");
-    assert_eq!(handle(&pext(&z.id)), hook::chat::suffixed_username("z3thon", &pext(&z.id)));
+    assert_eq!(handle(&pext(&z.id)), hook::chat::suffixed_username("zoe", &pext(&z.id)));
     assert_eq!(handle(&pext(&b.id)), hook::chat::suffixed_username("bob", &pext(&b.id)));
     assert_eq!(handle(&pext(&c.id)), "cara");
     assert_eq!(env.sew.owner().as_deref(), Some("k2:owner"), "the install owner is the box owner's member");
@@ -1818,11 +1818,11 @@ async fn s0_owner_rename_onto_a_taken_handle_falls_back_and_never_blocks() {
     enable(&env);
     drain(&env).await;
     assert_eq!(env.sew.member("k2:owner").expect("owner").username, "owner");
-    env.sew.seed("local:z3thon", MemberKind::Person, "z3thon", "Someone Else", false);
-    link_owner("z3thon", None, None);
+    env.sew.seed("local:zoe", MemberKind::Person, "zoe", "Someone Else", false);
+    link_owner("zoe", None, None);
     worker::reconcile_once().await.unwrap();
     drain(&env).await;
-    let fallback = hook::chat::suffixed_username("z3thon", "k2:owner");
+    let fallback = hook::chat::suffixed_username("zoe", "k2:owner");
     assert_eq!(env.sew.member("k2:owner").unwrap().username, fallback);
     let tries: Vec<String> = env
         .sew
@@ -1831,7 +1831,7 @@ async fn s0_owner_rename_onto_a_taken_handle_falls_back_and_never_blocks() {
         .filter(|c| c.path == hook::sew_wire::MGMT_UPDATE && c.body["external_id"] == "k2:owner")
         .map(|c| format!("{} {}", c.status, c.body["profile"]["username"].as_str().unwrap_or("-")))
         .collect();
-    assert_eq!(tries, ["409 z3thon".to_string(), format!("200 {fallback}")]);
+    assert_eq!(tries, ["409 zoe".to_string(), format!("200 {fallback}")]);
     assert!(rows().iter().all(|r| r.state != "blocked"), "{:?}", rows());
     assert!(
         env.sew.posts().iter().filter(|c| c.path == hook::sew_wire::MGMT_OWNER_SET).all(|c| c.body.get("profile").is_none()),

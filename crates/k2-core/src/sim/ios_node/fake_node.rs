@@ -25,8 +25,8 @@ use serde_json::{json, Value as J};
 use super::link::StreamConn;
 use super::{IosNodeLane, NodeDirectory, NodeInfo};
 
-pub const NODE_ID: &str = "node-k2n1";
-pub const NODE_NAME: &str = "k2n1-m4";
+pub const NODE_ID: &str = "node-rig1";
+pub const NODE_NAME: &str = "rig1-mac";
 pub const TYPE_17: &str = "com.apple.CoreSimulator.SimDeviceType.iPhone-17";
 pub const TYPE_17_PRO: &str = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
 pub const RUNTIME: &str = "com.apple.CoreSimulator.SimRuntime.iOS-26-5";

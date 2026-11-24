@@ -481,10 +481,10 @@ mod tests {
         assert!(matches!(&old, PermissionRefusal::Requestable { tail, .. } if tail.is_empty()), "{old:?}");
         let n = PermissionRefusal::not_requestable(WHERE_AT_MACHINE);
         assert_eq!(serde_json::to_value(&n).unwrap(), json!({"requestable": false, "where": "at the machine"}));
-        let m = PermissionRefusal::at_the_machine("At z3mbpz, run: sudo k2-node admin level policy");
+        let m = PermissionRefusal::at_the_machine("At mac-b, run: sudo k2-node admin level policy");
         assert_eq!(
             serde_json::to_value(&m).unwrap(),
-            json!({"requestable": false, "where": "at the machine", "hint": "At z3mbpz, run: sudo k2-node admin level policy"})
+            json!({"requestable": false, "where": "at the machine", "hint": "At mac-b, run: sudo k2-node admin level policy"})
         );
     }
 }

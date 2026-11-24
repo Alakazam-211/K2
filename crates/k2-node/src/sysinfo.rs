@@ -186,7 +186,7 @@ pub fn reboot_required() -> bool {
     }
     let k = kernel_release();
     // Only when the folder is readable here: a user that can't list it
-    // can't tell (z13flow's job users can't), and a guess would cry wolf.
+    // can't tell (laptop-a's job users can't), and a guess would cry wolf.
     let Ok(rd) = std::fs::read_dir("/usr/lib/modules") else { return false };
     let names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     !k.is_empty() && !names.is_empty() && !names.iter().any(|n| *n == k) && !std::path::Path::new("/lib/modules").join(&k).is_dir()

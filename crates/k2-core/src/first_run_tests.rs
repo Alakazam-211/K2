@@ -30,7 +30,7 @@ fn user(name: &str, role: Role, created: chrono::DateTime<Utc>) -> ConnectUserVi
     }
 }
 
-/// anna and gina (Members), julie (an unlinked Admin), z3thon (an Admin
+/// anna and gina (Members), julie (an unlinked Admin), zoe (an Admin
 /// the owner linked).
 fn people() -> People {
     let t = Utc::now() - Duration::days(10);
@@ -39,9 +39,9 @@ fn people() -> People {
             user("anna", Role::Member, t),
             user("gina", Role::Member, t),
             user("julie", Role::Admin, t),
-            user("z3thon", Role::Admin, t),
+            user("zoe", Role::Admin, t),
         ],
-        linked: vec!["z3thon".to_string()],
+        linked: vec!["zoe".to_string()],
     }
 }
 
@@ -255,7 +255,7 @@ fn two_logins_hide_and_skip_apart_while_the_owner_token_and_a_linked_login_share
     assert_eq!(p.person_key("anna"), "anna");
     assert_eq!(p.person_key("gina"), "gina");
     assert_eq!(p.person_key(OWNER), OWNER);
-    assert_eq!(p.person_key("z3thon"), OWNER, "a linked login is the owner");
+    assert_eq!(p.person_key("zoe"), OWNER, "a linked login is the owner");
 
     let s = apply_on(&conn, &p, "anna", member, &f, true, &Action::Hide, 100).expect("hide");
     assert!(s.hidden);
@@ -269,7 +269,7 @@ fn two_logins_hide_and_skip_apart_while_the_owner_token_and_a_linked_login_share
     // The owner token hides; the linked login (another viewer, same person) sees it.
     let s = apply_on(&conn, &p, &p.person_key(OWNER), Viewer::OwnerToken, &f, true, &Action::Hide, 104).expect("hide");
     assert!(s.hidden);
-    let z = status_on(&conn, &p, &p.person_key("z3thon"), Viewer::Login(Role::Admin), &f, true, 105).expect("z3thon");
+    let z = status_on(&conn, &p, &p.person_key("zoe"), Viewer::Login(Role::Admin), &f, true, 105).expect("zoe");
     assert!(z.hidden, "one person, one list");
     let j = status_on(&conn, &p, &p.person_key("julie"), Viewer::Login(Role::Admin), &f, true, 106).expect("julie");
     assert!(!j.hidden, "an unlinked Admin is their own person");
@@ -492,7 +492,7 @@ fn an_existing_server_marks_its_people_finished_and_later_logins_start_fresh() {
 #[test]
 fn phones_are_each_logins_own_and_the_owners_are_every_linked_logins() {
     let _home = crate::test_env::TempHome::new();
-    for (name, role) in [("anna", Role::Member), ("gina", Role::Member), ("z3thon", Role::Admin)] {
+    for (name, role) in [("anna", Role::Member), ("gina", Role::Member), ("zoe", Role::Admin)] {
         crate::connect_users::add_user(name, "password123").expect("add");
         if role != Role::Member {
             crate::connect_users::set_role(name, role).expect("role");
@@ -505,15 +505,15 @@ fn phones_are_each_logins_own_and_the_owners_are_every_linked_logins() {
     let unlinked = People::load().expect("people");
     assert_eq!(phones_for(&unlinked, OWNER).expect("owner"), 0, "the owner token with no linked login: todo");
     pair("anna", "dev-anna-1");
-    pair("z3thon", "dev-z3-1");
+    pair("zoe", "dev-z3-1");
     let unlinked = People::load().expect("people");
     assert_eq!(phones_for(&unlinked, "anna").expect("anna"), 1);
     assert_eq!(phones_for(&unlinked, "gina").expect("gina"), 0, "anna's phone is anna's");
-    assert_eq!(phones_for(&unlinked, OWNER).expect("owner"), 0, "z3thon is not linked yet");
-    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+    assert_eq!(phones_for(&unlinked, OWNER).expect("owner"), 0, "zoe is not linked yet");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
     let p = People::load().expect("people");
     assert_eq!(phones_for(&p, &p.person_key(OWNER)).expect("owner"), 1, "the linked login's phone");
-    assert_eq!(phones_for(&p, &p.person_key("z3thon")).expect("z3thon"), 1, "the same person");
+    assert_eq!(phones_for(&p, &p.person_key("zoe")).expect("zoe"), 1, "the same person");
 
     // load_facts reads the same: the owner is linked, one phone, no tunnel.
     let conn = db();
@@ -569,7 +569,7 @@ fn dismissing_the_offer_is_per_person_and_show_keeps_it() {
     assert_eq!(o.kessel.expect("on").offer, Some(OFFER_MEET_KESSEL), "the owner still gets it");
     // The owner token and a linked login are one person.
     apply_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, &Action::DismissOffer, 7).expect("dismiss");
-    assert_eq!(status_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, 8).expect("z3thon").kessel.expect("on").offer, None);
+    assert_eq!(status_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, 8).expect("zoe").kessel.expect("on").offer, None);
     let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::Show, 9).expect("show");
     assert_eq!(s.kessel.expect("on").offer, None, "show brings the list back, not the offer");
     assert_eq!(load_record(&conn, "julie").expect("load").expect("row").offer_dismissed_at, Some(5));

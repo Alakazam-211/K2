@@ -226,7 +226,7 @@ pub fn expire(conn: &Connection, now: i64) -> Vec<PkgRow> {
     rows.into_iter().filter(|r| r.expires_at <= now && set_state(conn, &r.id, pkgpolicy::state::EXPIRED, None, Some("nobody answered within 24 h"), None, now)).collect()
 }
 
-/// The card's and Settings' one line: "Install 3 packages on k2n11
+/// The card's and Settings' one line: "Install 3 packages on rig11
 /// (Ubuntu 24.04) for acme.k2.dev's agent tests: a, b, c (42 with
 /// dependencies, 180 MB)".
 pub fn summary(rows: &[PkgRow], node_names: &dyn Fn(&str) -> String) -> String {

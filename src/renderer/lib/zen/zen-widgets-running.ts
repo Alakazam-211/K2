@@ -29,7 +29,7 @@
 //   - a window that was hidden when it went quiet (`hidden` on the marker,
 //     kept by `noteZenWidgetsVisibility` on every visibilitychange) runs its
 //     widgets: a hidden webview's timers are throttled, so its watchdog
-//     reload is not a freeze anyone saw (on z3mbp the watchdog log holds
+//     reload is not a freeze anyone saw (on mac-a the watchdog log holds
 //     thousands of such reloads);
 //   - otherwise K2 relaunches them once on its own (`autoAt` on the next
 //     marker), and pauses only when that relaunch is followed by another

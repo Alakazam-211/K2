@@ -192,19 +192,19 @@ nolim="$(k2_sent compute node admin list --state all)"
 expect_eq "no --limit: no limit key (the daemon's 50)" "$(field "$nolim" 'v["query"].get("limit")')" 'null'
 
 echo "== node servers list --refresh =="
-ref="$(k2_sent compute node servers k2n12 list --refresh)"
-expect_eq "servers list --refresh" "$(field "$ref" 'v["path"], v["query"].get("node"), v["query"].get("refresh")')" '["/cli/compute/nodes/servers", "k2n12", "1"]'
-plain="$(k2_sent compute node servers k2n12)"
-expect_eq "no --refresh: no refresh key" "$(field "$plain" 'v["query"].get("node"), v["query"].get("refresh")')" '["k2n12", null]'
+ref="$(k2_sent compute node servers rig12 list --refresh)"
+expect_eq "servers list --refresh" "$(field "$ref" 'v["path"], v["query"].get("node"), v["query"].get("refresh")')" '["/cli/compute/nodes/servers", "rig12", "1"]'
+plain="$(k2_sent compute node servers rig12)"
+expect_eq "no --refresh: no refresh key" "$(field "$plain" 'v["query"].get("node"), v["query"].get("refresh")')" '["rig12", null]'
 
 echo "== node servers add / limits --reason: the note reaches the request =="
-add="$(k2_sent compute node servers k2n12 add --url https://globex.example --code ABC123.FP --reason "CI for the build lane")"
-expect_eq "servers add --reason" "$(field "$add" 'v["path"], v["body"].get("node"), v["body"].get("reason")')" '["/cli/compute/nodes/servers/add", "k2n12", "CI for the build lane"]'
-add0="$(k2_sent compute node servers k2n12 add --url https://globex.example --code ABC123.FP)"
+add="$(k2_sent compute node servers rig12 add --url https://globex.example --code ABC123.FP --reason "CI for the build lane")"
+expect_eq "servers add --reason" "$(field "$add" 'v["path"], v["body"].get("node"), v["body"].get("reason")')" '["/cli/compute/nodes/servers/add", "rig12", "CI for the build lane"]'
+add0="$(k2_sent compute node servers rig12 add --url https://globex.example --code ABC123.FP)"
 expect_eq "servers add without --reason: no note" "$(field "$add0" 'v["body"].get("reason")')" 'null'
-lim="$(k2_sent compute node servers k2n12 limits slot:2 max_running=3 --reason "nightly soak needs a third slot")"
+lim="$(k2_sent compute node servers rig12 limits slot:2 max_running=3 --reason "nightly soak needs a third slot")"
 expect_eq "servers limits --reason" "$(field "$lim" 'v["path"], v["body"].get("server"), v["body"].get("reason")')" '["/cli/compute/nodes/servers/limits", "slot:2", "nightly soak needs a third slot"]'
-lim0="$(k2_sent compute node servers k2n12 limits slot:2 max_running=3)"
+lim0="$(k2_sent compute node servers rig12 limits slot:2 max_running=3)"
 expect_eq "servers limits without --reason: no note" "$(field "$lim0" 'v["body"].get("reason")')" 'null'
 
 echo "== local status --json =="

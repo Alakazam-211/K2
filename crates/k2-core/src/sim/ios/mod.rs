@@ -8,7 +8,7 @@
 //! - [`tree`]: accessibility JSON → the core's `RawNode`s.
 //! - [`lane`]: `IosLane`.
 //!
-//! L-I spike (2026-10-27, z3mbpZ macOS 27.0.1 + Xcode 26.5, M5 + Xcode
+//! L-I spike (2026-10-27, mac-b macOS 27.0.1 + Xcode 26.5, M5 + Xcode
 //! 26.6, iOS 26.5): AXe 1.8.0 can't see a non-default device set (M-A14), so
 //! K2 carries its own helper instead of AXe. Typing with no Simulator window
 //! works through the HID keyboard; setting the value through accessibility

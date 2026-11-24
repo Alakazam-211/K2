@@ -190,7 +190,7 @@ export const THIS_COMPUTER_LABEL = LOCAL_SCOPE_LABEL
  *  the top bar never shifts when the server changes; a longer name ends in
  *  an ellipsis (the full name is in the tooltip). 140px (Rosson: two 10px
  *  trims from the first 160) leaves ~90px for the name at 11px after
- *  the icon, chevron and border — `rosson.k2.dev`, `z3thon.k2.dev` and
+ *  the icon, chevron and border — `rosson.k2.dev`, `zoe.k2.dev` and
  *  `This computer` fit whole. Exported for tests. */
 export const SERVER_SWITCHER_WIDTH_PX = 140
 export const SERVER_SWITCHER_WIDTH_CLASS = 'w-[140px] shrink-0'

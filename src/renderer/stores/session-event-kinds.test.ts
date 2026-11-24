@@ -98,7 +98,7 @@ function host(over: Partial<ConnectHost>): ConnectHost {
   }
 }
 const A = host({})
-const B = host({ id: 'b', label: 'B', hostname: 'z3thon.k2.dev', token: 'tok-b' })
+const B = host({ id: 'b', label: 'B', hostname: 'zoe.k2.dev', token: 'tok-b' })
 const WS_PATH = '/srv/anna'
 
 const routes = SESSION_EVENT_ROUTES as Record<string, SessionEventRoute>
@@ -227,7 +227,7 @@ describe('agent_status_changed reaches a room through its own server (Z22)', () 
     cleanups.push(onAgentStatusChanged(b, (e) => onB.push(e)))
     const carrier = await newSocket(
       () => subscribeToWorkspaceSessionEvents(b, WS_PATH, { carryAppBus: true }),
-      'wss://z3thon.k2.dev/cli/sessions/events?path=%2Fsrv%2Fanna',
+      'wss://zoe.k2.dev/cli/sessions/events?path=%2Fsrv%2Fanna',
     )
     const frame = { kind: 'agent_status_changed', paneId: 'sid-1', tabId: 'sid-1', status: 'permission', workspacePath: WS_PATH }
     push(carrier, frame)

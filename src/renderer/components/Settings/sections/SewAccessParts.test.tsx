@@ -227,11 +227,11 @@ describe('Admin Access: read-only Sew state', () => {
       { id: 'g-c2', subjectKind: 'connect', subjectId: 'uuid-gone', kind: 'chat', targetId: 'sew', scope: 'member', enabled: false },
       { id: 'g-app', subjectKind: 'connect', subjectId: 'uuid-z3', kind: 'app', targetId: 'host', scope: null, enabled: true },
     ]
-    render(<SewAdminAccessState users={[{ id: 'uuid-gina', username: 'gina' }, { id: 'uuid-z3', username: 'z3thon' }]} />)
+    render(<SewAdminAccessState users={[{ id: 'uuid-gina', username: 'gina' }, { id: 'uuid-z3', username: 'zoe' }]} />)
     const box = await screen.findByTestId('sew-admin-access')
     expect(screen.getByTestId('sew-admin-row-gina').textContent).toContain('Chat guest')
     expect(screen.getByTestId('sew-admin-row-uuid-gone').textContent).toContain('Chat member (off)')
-    expect(screen.queryByTestId('sew-admin-row-z3thon')).toBeNull()
+    expect(screen.queryByTestId('sew-admin-row-zoe')).toBeNull()
     expect(screen.queryByTestId('sew-admin-row-ada')).toBeNull()
     expect(box.querySelectorAll('button, input, select').length).toBe(0)
     expect(box.textContent).toContain('never because of its role')

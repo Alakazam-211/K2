@@ -44,7 +44,7 @@ fn approver_pending() -> Value {
         "direction":"loosen","grant":"standing","scope":"billing","duration":"until someone turns it off",
         "consequences":"Every active machine; default limits; jobs see only the code billing sends.",
         "values":[{"key":"workspace","value":"billing"}],
-        "why":{"by":"billing","text":"Run the test suite on k2n2-m1; it takes 40 min here"},
+        "why":{"by":"billing","text":"Run the test suite on rig2-mac; it takes 40 min here"},
         "notes":[{"by":"dana","role":"member","text":"I need this for the payroll run","at":1761060300}],
         "askedFor":"dana","askers":null,
         "approvers":{"floor":"admin","label":"owner or admin","names":["rosson","maya"]},
@@ -67,7 +67,7 @@ fn approver_approved() -> Value {
         "direction":"loosen","grant":"standing","scope":"billing","duration":"until someone turns it off",
         "consequences":"Every active machine; default limits; jobs see only the code billing sends.",
         "values":[{"key":"workspace","value":"billing"}],
-        "why":{"by":"billing","text":"Run the test suite on k2n2-m1; it takes 40 min here"},
+        "why":{"by":"billing","text":"Run the test suite on rig2-mac; it takes 40 min here"},
         "notes":[{"by":"dana","role":"member","text":"I need this for the payroll run","at":1761060300}],
         "askedFor":"dana","askers":null,
         "approvers":{"floor":"admin","label":"owner or admin","names":["rosson","maya"]},
@@ -182,7 +182,7 @@ fn passports_and_old_clients_get_the_fallback() {
     assert_eq!(
         a["choice"]["prompt"],
         "billing asks: Let billing run jobs on this server's compute nodes (Allow compute nodes).\n\
-         billing says: \"Run the test suite on k2n2-m1; it takes 40 min here\"\n\
+         billing says: \"Run the test suite on rig2-mac; it takes 40 min here\"\n\
          dana (member): \"I need this for the payroll run\""
     );
     // A confirm action is text on an old build.
@@ -228,7 +228,7 @@ fn answered(off: bool, deny: Option<Option<&str>>) -> Value {
 }
 
 /// Phone test 2026-10-24: the Thread text after an answer named the
-/// SETTING, so an `-off` card read "Allowed by z3thon: Allow this agent to
+/// SETTING, so an `-off` card read "Allowed by zoe: Allow this agent to
 /// create databases for k2." when databases were turned OFF. The done line
 /// now names the action (`whatChanges`), for both directions and both
 /// answers, for every fallback viewer (old build, agent passport).

@@ -1618,7 +1618,7 @@ mod tests {
         assert!(whats(&r2).contains(&(".claude/settings.local.json".into(), "enableAllProjectMcpServers".into())), "{:?}", r2.findings);
     }
 
-    /// This repo's own shape on z3mbp: an untracked `.mcp.json` with a
+    /// This repo's own shape on mac-a: an untracked `.mcp.json` with a
     /// remote HTTP server, the untracked `settings.local.json` Claude wrote
     /// when it was approved, and Claude Code's own worktrees under
     /// `.claude/worktrees/` (full checkouts with scripts and settings of

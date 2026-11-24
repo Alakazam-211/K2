@@ -61,7 +61,7 @@ FREE_ROOM = {"running": 0, "parallelMax": 4, "thisServer": 0, "otherServers": 0,
 SHARE = {"shared": True, "role": "tenant", "ownerLabel": "owner.example.test", "servers": 3, "state": "active",
          "line": "running 0/3 · queued 0/10 · today 0.0 of 8 CPU-h · max 2h/job · 4 CPUs · 8 GB"}
 
-ELSEWHERE = "no other node has 8 free CPUs now: k2n11 2.4/14.4 (other servers' jobs), k2n12 2.4/14.4 (other servers' jobs), k2n10 0/12 (other servers' jobs) unreserved"
+ELSEWHERE = "no other node has 8 free CPUs now: rig11 2.4/14.4 (other servers' jobs), rig12 2.4/14.4 (other servers' jobs), rig10 0/12 (other servers' jobs) unreserved"
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -78,7 +78,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/cli/compute/nodes":
             detail = "detail=1" in (u.query or "")
             rows = []
-            for name, free_cpu, cpus, running, room, share in (("k2n10", 0, 12000, 3, FULL_ROOM, SHARE), ("k2n9", 12000, 12000, 0, FREE_ROOM, None)):
+            for name, free_cpu, cpus, running, room, share in (("rig10", 0, 12000, 3, FULL_ROOM, SHARE), ("rig9", 12000, 12000, 0, FREE_ROOM, None)):
                 n, st = node(name, free_cpu, cpus, running, room, share)
                 if detail:
                     n["status"] = st
@@ -86,9 +86,9 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"nodes": rows})
         if u.path == "/cli/compute/jobs/get":
             return self.reply(200, {
-                "id": "abcdef0123456789", "short": "abcdef01", "node": "k2n7", "state": "queued", "argv": ["true"],
-                "placement": {"mode": "auto", "policy": "v2", "node": "k2n7", "code": "queued_least_busy",
-                              "why": "no node has 8 free CPUs now: k2n7 4/12, k2n10 0/12 (other servers' jobs) unreserved; least busy (2 running, 0 queued) · it moves if another frees up first",
+                "id": "abcdef0123456789", "short": "abcdef01", "node": "rig7", "state": "queued", "argv": ["true"],
+                "placement": {"mode": "auto", "policy": "v2", "node": "rig7", "code": "queued_least_busy",
+                              "why": "no node has 8 free CPUs now: rig7 4/12, rig10 0/12 (other servers' jobs) unreserved; least busy (2 running, 0 queued) · it moves if another frees up first",
                               "fits": "4 nodes fit"},
                 "move": {"auto": True, "note": "K2 moves it when another node can start it now; " + ELSEWHERE, "elsewhere": ELSEWHERE},
                 "wait": {"where": "server", "reason": "local_resource_limit", "words": "waiting for room: asks 8 CPUs; 4 of 12 CPUs unreserved",
@@ -115,8 +115,8 @@ printf '%s' "owner-test-token" > "$HOME/.k2/heartbeat.token"
 
 echo "== nodes =="
 out="$("$K2" compute nodes </dev/null)"
-full="$(grep '^k2n10 ' <<<"$out")"
-free="$(grep '^k2n9 ' <<<"$out")"
+full="$(grep '^rig10 ' <<<"$out")"
+free="$(grep '^rig9 ' <<<"$out")"
 expect_has "a node full of other servers' jobs is marked first in its room" "$full" "busy (other servers) · all servers: cpu 0/12 unreserved"
 expect_has "the run count is the node's, every server's" "$full" "runs 3/4 (this server 0, yours 0, other servers 3)"
 expect_has "queued says whose" "$full" "queued 0 (this server, yours 0)"
@@ -128,7 +128,7 @@ expect_not "the share's owner is not on the node line" "$full" "owner.example.te
 
 echo "== status =="
 out="$("$K2" compute status </dev/null)"
-full="$(grep '^k2n10 ' <<<"$out")"
+full="$(grep '^rig10 ' <<<"$out")"
 expect_has "status marks it too" "$full" "busy (other servers)"
 expect_has "status counts every server's jobs" "$full" "runs 3/4 (this server 0, yours 0, other servers 3)"
 expect_has "status labels the room" "$full" "all servers: cpu 0/12 unreserved"
@@ -136,8 +136,8 @@ expect_has "status's share line says whose" "$out" "your share (jobs of this ser
 
 echo "== get =="
 out="$("$K2" compute get abcdef01 </dev/null)"
-expect_has "the placement names the best candidates" "$out" "placed on k2n7 (auto, v2): no node has 8 free CPUs now: k2n7 4/12, k2n10 0/12 (other servers' jobs) unreserved"
-expect_has "the move note says why no other node fits" "$out" "move: K2 moves it when another node can start it now; no other node has 8 free CPUs now: k2n11 2.4/14.4"
+expect_has "the placement names the best candidates" "$out" "placed on rig7 (auto, v2): no node has 8 free CPUs now: rig7 4/12, rig10 0/12 (other servers' jobs) unreserved"
+expect_has "the move note says why no other node fits" "$out" "move: K2 moves it when another node can start it now; no other node has 8 free CPUs now: rig11 2.4/14.4"
 expect_has "the wait words stay" "$out" "waiting for room: asks 8 CPUs; 4 of 12 CPUs unreserved"
 
 echo "== docs =="

@@ -710,7 +710,7 @@ mod tests {
         let v = json!({"github": "Acme/App, acme/lib.git,,acme/app", "nodes": "all"});
         assert_eq!(repos_in(&v).expect("repos"), vec!["github.com/acme/app", "github.com/acme/lib"]);
         assert_eq!(nodes_in(&v), vec!["*"]);
-        assert_eq!(nodes_in(&json!({"nodes": ["k2n9", " k2n10 "]})), vec!["k2n9", "k2n10"]);
+        assert_eq!(nodes_in(&json!({"nodes": ["rig9", " rig10 "]})), vec!["rig9", "rig10"]);
         assert_eq!(nodes_in(&json!({})), vec!["*"], "no nodes = every owned node");
         assert_eq!(repos_in(&json!({"github": "gitlab.com/acme/app"})).expect_err("gitlab").code, BAD_REPO);
         assert_eq!(repos_in(&json!({"github": 3})).expect_err("number").code, BAD_REPO);

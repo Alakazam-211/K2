@@ -15,7 +15,7 @@
 //
 // The 3 hot / 5 min values are approved (plan decision 2). 6 warm and the
 // 30 min warm-to-cold value are placeholders until the M4 measurement on a
-// signed z3mbpZ build (MS47/MS48, Q7). All four live in
+// signed mac-b build (MS47/MS48, Q7). All four live in
 // `DEFAULT_ROOM_TIER_CONFIG` and can be changed with `reconfigure`.
 //
 // This module is pure logic plus a small store. It opens nothing itself: it

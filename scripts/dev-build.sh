@@ -11,7 +11,7 @@
 #   ./scripts/dev-build.sh --install # also replace /Applications/K2.app + kickstart launchd
 #   bun run build:dev
 #
-# Same GUI-session codesign rule as build-app.sh / release.sh (z3mbpZ iTerm,
+# Same GUI-session codesign rule as build-app.sh / release.sh (mac-b iTerm,
 # not plain SSH) or codesign hits errSecInternalComponent.
 set -euo pipefail
 

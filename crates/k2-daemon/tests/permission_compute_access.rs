@@ -263,7 +263,7 @@ async fn an_agent_asks_for_its_own_compute_access_and_only_that_turns_on() {
     }
 
     // A request can't name a workspace or any other value.
-    for params in [json!({ "workspace": b.id }), json!({ "workspace": a.id }), json!({ "node": "k2n1-m4" })] {
+    for params in [json!({ "workspace": b.id }), json!({ "workspace": a.id }), json!({ "node": "rig1-mac" })] {
         let r = post(port, "/cli/permission/request", &pa, json!({ "action": "compute.use", "params": params, "why": "Run the suite" })).await;
         assert_eq!(r.status, 400, "{params}: {}", r.body);
     }

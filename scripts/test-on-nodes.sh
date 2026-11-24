@@ -56,7 +56,7 @@ rust_need="$(k2_rust_need HEAD)"
 common=(
     compute test --any --shards "$shards"
     --profile ci
-    # No sys: packages: --any also picks k2-arch, where the Debian names
+    # No sys: packages: --any also picks arch-box, where the Debian names
     # (zlib1g-dev, pkg-config) are package_not_approved. The Linux nodes
     # have the C build deps installed; K2_TEST_NEEDS overrides the list.
     --needs "${K2_TEST_NEEDS:-$rust_need,cargo-nextest,cmake@3,ninja,protoc}"

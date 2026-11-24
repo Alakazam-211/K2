@@ -1,7 +1,7 @@
 // Drive the Zen library smoke (serve.ts) in Playwright WebKit and the
 // installed Chrome, print one line per library, and exit 1 if any library
 // fails in WebKit (prd-zen-user-widgets-v2 UWB17). A first check only; the
-// decisive runs are the signed app on z3mbpZ and z13flow.
+// decisive runs are the signed app on mac-b and laptop-a.
 //
 //   bun scripts/zen-lib-smoke/serve.ts --port 5198 &
 //   node scripts/zen-lib-smoke/run.mjs [http://127.0.0.1:5198] [out.json] [libs=a,b]

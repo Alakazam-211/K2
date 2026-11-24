@@ -1202,8 +1202,8 @@ mod tests {
             },
             SessionEvent::TunnelIdentityChanged {
                 previous_subdomain: Some("afs".into()),
-                subdomain: Some("k2n1-m4".into()),
-                public_url: Some("https://k2n1-m4.k2.dev".into()),
+                subdomain: Some("rig1-mac".into()),
+                public_url: Some("https://rig1-mac.k2.dev".into()),
                 running: true,
                 ok: true,
             },

@@ -16,7 +16,7 @@ const ITEM_7F = {
   duration: 'until someone turns it off',
   consequences: 'Every active machine; default limits; jobs see only the code billing sends.',
   values: [{ key: 'workspace', value: 'billing' }],
-  why: { by: 'billing', text: 'Run the test suite on k2n2-m1; it takes 40 min here' },
+  why: { by: 'billing', text: 'Run the test suite on rig2-mac; it takes 40 min here' },
   notes: [{ by: 'dana', role: 'member', text: 'I need this for the payroll run', at: 1761060300 }],
   askedFor: 'dana',
   askers: null,

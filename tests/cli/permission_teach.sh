@@ -108,8 +108,8 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/compute/nodes/policy/set":
             # A widening is held for the owner (`held: true`, a car_ id);
             # with cards on it teaches the card that brings it to chat (0.46.9).
-            held = {"held": True, "request": {"id": "car_9f8e7d", "state": "pending", "node": "k2n1-m4",
-                                               "summary": "change job limits on k2n1-m4: max_cpus=10"},
+            held = {"held": True, "request": {"id": "car_9f8e7d", "state": "pending", "node": "rig1-mac",
+                                               "summary": "change job limits on rig1-mac: max_cpus=10"},
                     "hint": "held for the owner"}
             if on:
                 held["permission"] = ask("compute.admin-approve", " request=car_9f8e7d")
@@ -154,9 +154,9 @@ class H(BaseHTTPRequestHandler):
         err = {"error": {"code": "owner_only", "hint": "only the server's owner may do this"}}
         if on:
             if path == "/cli/connections" and "action=remove" in self.path:
-                err = {"error": {"code": "remote_admin_off", "hint": "z3mbpz only takes admin steps from someone at that Mac."},
+                err = {"error": {"code": "remote_admin_off", "hint": "mac-b only takes admin steps from someone at that Mac."},
                        "permission": {"requestable": False, "where": "at the machine",
-                                      "hint": "At z3mbpz, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)"}}
+                                      "hint": "At mac-b, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)"}}
             elif path == "/cli/connections":
                 err = {"error": {"code": "agents_create_connections_disabled", "hint": "connections are off"}, "ok": False,
                        "permission": ask("connections.add", " to=billing")}
@@ -164,9 +164,9 @@ class H(BaseHTTPRequestHandler):
                 err = {"error": {"code": "agent_permission_off", "hint": "projects off"}, "ok": False,
                        "permission": ask("projects.manage")}
             elif path == "/cli/compute/admin/propose":
-                err = {"error": {"code": "remote_admin_off", "hint": "z3mbpz only takes admin steps from someone at that Mac."},
+                err = {"error": {"code": "remote_admin_off", "hint": "mac-b only takes admin steps from someone at that Mac."},
                        "permission": {"requestable": False, "where": "at the machine",
-                                      "hint": "At z3mbpz, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)"}}
+                                      "hint": "At mac-b, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)"}}
             else:
                 err["permission"] = {"requestable": False, "where": "a person does this, in Settings or from a terminal outside K2"}
         self.reply(403, err)
@@ -287,7 +287,7 @@ run agent app install heldapp
 # A machine-only refusal: the plain-text hint, then "It can't be requested."
 run agent connections remove billing
 tail2="$(printf '%s\n' "$ERR" | sed -e '/^$/d' | tail -2)"
-[ "$tail2" = "At z3mbpz, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)
+[ "$tail2" = "At mac-b, run: sudo k2-node admin level policy   (switch back after: sudo k2-node admin level off)
 It can't be requested." ] && ok || bad "machine hint: stderr ends with '$tail2'"
 
 # cli_print_or_fail: a teaching refusal exits 3 …
@@ -316,7 +316,7 @@ run agent compute manage on
 
 # 0.46.9: a held node request (exit 2) says where the owner approves it,
 # and ends with the Ask-with line that brings it to their chat.
-run agent compute node policy k2n1-m4 set max_cpus=10 --reason "bigger builds"
+run agent compute node policy rig1-mac set max_cpus=10 --reason "bigger builds"
 [ "$RC" = 2 ] && ok || bad "node policy held: exit $RC, want 2 ($ERR)"
 <<<"$ERR" grep -q '^held for the owner: car_9f8e7d$' && ok || bad "node policy held: '$ERR'"
 <<<"$ERR" grep -q "^  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card.$" && ok || bad "node policy held: no chat line: '$ERR'"
@@ -357,11 +357,11 @@ run agent mail access grant ops@brand.test "$SANDBOX/ws" --level send
 grep -q '^POST /cli/mail/access/grant ' "$LOG" && ok || bad "mail access grant: never reached the stub: $(cat "$LOG")"
 
 # `k2 permission request` reaches the daemon and prints the ask.
-run agent permission request compute.use --why "Run the test suite on k2n2-m1"
+run agent permission request compute.use --why "Run the test suite on rig2-mac"
 [ "$RC" = 0 ] && ok || bad "permission request: exit $RC ($ERR)"
 <<<"$OUT" grep -q '^Asked: pr_7f3a2c (pending; expires in .*). Shown to: rosson (owner), maya (admin).$' && ok \
     || bad "permission request: '$OUT'"
-grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "why": "Run the test suite on k2n2-m1"}$' "$LOG" && ok \
+grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "why": "Run the test suite on rig2-mac"}$' "$LOG" && ok \
     || bad "permission request: wrong request: $(cat "$LOG")"
 run agent permission request compute.use
 [ "$RC" = 2 ] && ok || bad "permission request without --why: exit $RC, want 2"
@@ -418,7 +418,7 @@ run agent study permissions
 [ "$RC" = 2 ] && ok || bad "study permissions (off): exit $RC, want 2"
 run agent connections add billing
 <<<"$ERR" grep -q 'Ask with:\|It can.t be requested' && bad "connections add (off): a closing line" || ok
-run agent compute node policy k2n1-m4 set max_cpus=10
+run agent compute node policy rig1-mac set max_cpus=10
 [ "$RC" = 2 ] && ok || bad "node policy held (off): exit $RC, want 2"
 <<<"$ERR" grep -q "Ask with:\|It can.t be requested\|owner's chat" && bad "node policy held (off): a card line: $ERR" || ok
 run agent compute access on

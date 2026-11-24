@@ -17,7 +17,7 @@
         "label": "Deny"
       }
     ],
-    "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Let this agent use compute nodes).\nbilling says: \"Run the test suite on k2n2-m1; it takes 40 min here\"\ndana (member): \"I need this for the payroll run\"",
+    "prompt": "billing asks: Let billing run jobs on this server's compute nodes (Let this agent use compute nodes).\nbilling says: \"Run the test suite on rig2-mac; it takes 40 min here\"\ndana (member): \"I need this for the payroll run\"",
     "status": "pending"
   },
   "created_at": 1761060000,

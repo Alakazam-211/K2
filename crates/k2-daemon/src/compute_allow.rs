@@ -705,8 +705,8 @@ mod tests {
 
     #[test]
     fn names_in_takes_a_list_or_a_comma_string() {
-        let v = serde_json::json!({"nodes": "k2n9, k2-arch,,", "add": ["a", " "], "remove": 3});
-        assert_eq!(names_in(&v, "nodes").expect("nodes"), vec!["k2n9", "k2-arch"]);
+        let v = serde_json::json!({"nodes": "rig9, arch-box,,", "add": ["a", " "], "remove": 3});
+        assert_eq!(names_in(&v, "nodes").expect("nodes"), vec!["rig9", "arch-box"]);
         assert_eq!(names_in(&v, "add").expect("add"), vec!["a"]);
         assert_eq!(names_in(&v, "missing").expect("none"), Vec::<String>::new());
         assert_eq!(names_in(&v, "remove").expect_err("a number").code, compute::codes::BAD_REQUEST);
@@ -715,17 +715,17 @@ mod tests {
     #[test]
     fn not_allowed_carries_the_card_values_and_names_the_list() {
         let ws = Ws { id: "w".into(), path: "/w".into(), handle: "k2".into() };
-        let r = not_allowed(&ws, "k2n2-m1", &["k2-arch".to_string(), "k2n9".to_string()], "node");
+        let r = not_allowed(&ws, "rig2-mac", &["arch-box".to_string(), "rig9".to_string()], "node");
         assert_eq!((r.code, r.status), (NODE_NOT_ALLOWED, 403));
-        assert!(r.hint.contains("Its list: k2-arch, k2n9.") && r.hint.contains("'k2n2-m1'"), "{}", r.hint);
+        assert!(r.hint.contains("Its list: arch-box, rig9.") && r.hint.contains("'rig2-mac'"), "{}", r.hint);
         let body: serde_json::Value = serde_json::from_str(&crate::compute_routes::refusal_response(&r).body).expect("json");
         assert_eq!(body["error"]["code"], NODE_NOT_ALLOWED);
-        assert_eq!(body["error"]["nodes"], "k2n2-m1");
-        assert_eq!(body["error"]["allowed"], serde_json::json!(["k2-arch", "k2n9"]));
+        assert_eq!(body["error"]["nodes"], "rig2-mac");
+        assert_eq!(body["error"]["allowed"], serde_json::json!(["arch-box", "rig9"]));
         // The hint names this server's command; its template has the slots
         // a CLI of another brand fills with its own (white-label C5).
         let t = body["error"]["hintTemplate"].as_str().expect("hintTemplate");
-        assert!(t.contains("{cli} compute allow-nodes --add k2n2-m1") && t.contains("{cli} permission request compute.allow-nodes"), "{t}");
+        assert!(t.contains("{cli} compute allow-nodes --add rig2-mac") && t.contains("{cli} permission request compute.allow-nodes"), "{t}");
         assert!(t.contains("outside {product}") && !t.contains(&format!("{CLI_NAME} compute")) && !t.contains(&format!("{CLI_NAME} permission")), "{t}");
         assert_eq!(body["error"]["hint"].as_str(), Some(k2_core::brand::fill_names(t).as_str()));
         assert_eq!(r.hint, k2_core::brand::fill_names(t));

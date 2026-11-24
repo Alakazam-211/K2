@@ -39,7 +39,7 @@ pub struct StreamConn {
     next_channel: AtomicU8,
     closed: AtomicBool,
     why: Mutex<Option<String>>,
-    /// The node this connection reaches, for messages ("k2n1-m4").
+    /// The node this connection reaches, for messages ("rig1-mac").
     node_name: String,
 }
 

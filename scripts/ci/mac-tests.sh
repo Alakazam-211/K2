@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The macOS test run, as one K2 Compute job on a Mac node:
 #
-#   k2 compute run k2n1-m4 --sha <sha> --os macos --cpus 7 --mem 8G \
+#   k2 compute run rig1-mac --sha <sha> --os macos --cpus 7 --mem 8G \
 #       --stall-timeout off --needs rust@<pin>,cmake@3,cargo-nextest \
 #       -- bash scripts/ci/mac-tests.sh
 #

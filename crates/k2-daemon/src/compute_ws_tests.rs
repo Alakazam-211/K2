@@ -112,7 +112,7 @@ fn a_job_its_requester_cancelled_sends_no_completion_message() {
     assert_eq!(test_sink_take(mine), Vec::<String>::new(), "no message for a job its requester cancelled");
 }
 
-/// k2n4, 2026-10-21: a running job whose cancel was asked for, that
+/// rig4, 2026-10-21: a running job whose cancel was asked for, that
 /// then comes back `interrupted/node_restart` (a full disk lost its
 /// end; the node was restarted), ends `cancelled` and is never sent
 /// again, even with retries and `retry_interrupted` on. Without a

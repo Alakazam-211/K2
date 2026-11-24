@@ -3608,10 +3608,10 @@ mod connections_list_users_tests {
             let (_id, path) = make_project("with-names");
             connect_users::add_user("julie", "password1").expect("add");
             connect_users::add_user("member1", "password1").expect("add");
-            connect_users::add_user("z3thon", "password1").expect("add");
+            connect_users::add_user("zoe", "password1").expect("add");
             connect_users::set_names("julie", Some("Julie"), Some("Park")).expect("names");
-            connect_users::set_names("z3thon", Some("Rosson"), Some("Long")).expect("names");
-            k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+            connect_users::set_names("zoe", Some("Rosson"), Some("Long")).expect("names");
+            k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
             let resp = dispatch(
                 "/cli/connections",
                 &params(&[("project", &path), ("action", "list"), ("users", "1")]),
@@ -3636,7 +3636,7 @@ mod connections_list_users_tests {
             assert_eq!(m["displayName"], "member1");
             // The owner is its linked account's row (identity = username).
             assert!(users.iter().all(|u| u["username"] != "owner"), "no separate owner row: {users:?}");
-            let z = row("z3thon");
+            let z = row("zoe");
             assert_eq!(z["displayName"], "Rosson Long");
         });
     }

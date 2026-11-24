@@ -2595,7 +2595,7 @@ fn servers_limits(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<Value> {
     pshare::check_verb_args(pshare::VERB_LIMITS, &args).map_err(|e| no(acodes::BAD_ARGS, 400, e))?;
     let row = server_row(&node, &server)?;
     // 0.46.9: from → to, so Settings and the permission card name the
-    // exact change ("Raise rosson.k2.dev's share on k2n1-m4: CPUs 7 → 10").
+    // exact change ("Raise rosson.k2.dev's share on rig1-mac: CPUs 7 → 10").
     let mut before = serde_json::to_value(&row.limits).unwrap_or_else(|_| json!({}));
     if let (Some(p), Some(m)) = (server_priority(&row), before.as_object_mut()) {
         m.insert("priority".into(), json!(p));

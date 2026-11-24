@@ -349,8 +349,8 @@ async fn secret_env_release_end_to_end() {
     let d = test_harness::start(OWNER).await;
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let ws = seed_ws(&env, "rel");
-    active_node("sec-1", "k2n4", &ws);
-    active_node("old-1", "k2n9", &ws);
+    active_node("sec-1", "rig4", &ws);
+    active_node("old-1", "rig9", &ws);
     let secret_id = put_secret(&ws);
     let mut node = compute_ws::test_attach("sec-1", offer(&["artifacts", "stall", psecret::FEATURE_SECRET_ENV], None));
     let mut old = compute_ws::test_attach("old-1", offer(&["artifacts", "stall"], None));
@@ -359,38 +359,38 @@ async fn secret_env_release_end_to_end() {
 
     // Body checks (exit 2).
     // Env names are checked before coverage (no grant yet).
-    let r = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": ENV}], "env": {ENV: "x"}})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig4", "workspace": ws.id, "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": ENV}], "env": {ENV: "x"}})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "env_secret_collision"), "{}", r.body);
-    let r = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": "K2_X"}]})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig4", "workspace": ws.id, "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": "K2_X"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "env_refused"), "{}", r.body);
-    let r = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": "LD_PRELOAD"}]})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig4", "workspace": ws.id, "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": "LD_PRELOAD"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "env_refused"), "{}", r.body);
     let many: Vec<Value> = (0..17).map(|i| json!({"name": format!("S{i}")})).collect();
-    let r = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": many})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig4", "workspace": ws.id, "secrets": many})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, scodes::TOO_LARGE), "{}", r.body);
-    let r = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": [{"name": "NOPE_SECRET"}]})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig4", "workspace": ws.id, "secrets": [{"name": "NOPE_SECRET"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (404, "secret_not_found"), "{}", r.body);
 
     // Not granted: exit 3 with the owner's exact command.
-    let r = run(d.port, &agent, json!({"node": "k2n4", "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": ENV}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig4", "secrets": [{"name": "GMAIL_CLIENT_SECRET", "env": ENV}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (403, scodes::NOT_GRANTED), "{}", r.body);
     let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
-    assert!(hint.contains("k2 vault grant GMAIL_CLIENT_SECRET --scope ws:rel --to compute:rel/k2n4 --as env"), "{hint}");
+    assert!(hint.contains("k2 vault grant GMAIL_CLIENT_SECRET --scope ws:rel --to compute:rel/rig4 --as env"), "{hint}");
 
     // An agent can't grant to compute: (people only, SE15), through the route.
-    let r = post(d.port, "/cli/vault/grant", &agent, json!({"id": secret_id, "to": "compute:rel/k2n4", "as": "env"})).await;
+    let r = post(d.port, "/cli/vault/grant", &agent, json!({"id": secret_id, "to": "compute:rel/rig4", "as": "env"})).await;
     assert_eq!((r.status, code(&r).as_str()), (403, "vault_owner_confirm_required"), "{}", r.body);
 
     // The owner grants it to that node.
     let grant_id = owner_grant(&secret_id, Consumer::compute(&ws.id, "sec-1"), Some(ENV));
 
     // A node without the feature: refused (exit 3), never assigned.
-    let r = run(d.port, &agent, json!({"node": "k2n9", "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig9", "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "node_upgrade_required"), "{}", r.body);
     assert!(old.frames().is_empty());
 
     // --plan: names and coverage, no value.
-    let r = run(d.port, &agent, json!({"node": "k2n4", "plan": true, "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig4", "plan": true, "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let p = j(&r);
     assert_eq!(p["secrets"], json!([{"name": "GMAIL_CLIENT_SECRET", "secret": "GMAIL_CLIENT_SECRET", "env": ENV, "covered": true}]), "{p}");
@@ -406,8 +406,8 @@ async fn secret_env_release_end_to_end() {
         p.hosts = vec!["api.example.com".into()];
         vault.put(p, SecretBytes::from_slice(b"k2test-secret-OTHER-1234567890"), &Actor::Owner).expect("put other");
     }
-    let probe = run(d.port, &agent, json!({"node": "k2n4", "secrets": [{"name": "k2v://ws/otherws/OTHER_KEY"}]})).await;
-    let none = run(d.port, &agent, json!({"node": "k2n4", "secrets": [{"name": "k2v://ws/otherws/NO_SUCH_KEY"}]})).await;
+    let probe = run(d.port, &agent, json!({"node": "rig4", "secrets": [{"name": "k2v://ws/otherws/OTHER_KEY"}]})).await;
+    let none = run(d.port, &agent, json!({"node": "rig4", "secrets": [{"name": "k2v://ws/otherws/NO_SUCH_KEY"}]})).await;
     assert_eq!((probe.status, code(&probe).as_str()), (404, "secret_not_found"), "{}", probe.body);
     assert_eq!((none.status, code(&none).as_str()), (404, "secret_not_found"), "{}", none.body);
     assert_eq!(
@@ -415,10 +415,10 @@ async fn secret_env_release_end_to_end() {
         j(&none)["error"]["hint"].as_str().unwrap().replace("NO_SUCH_KEY", "X"),
         "an existing secret of another workspace reads like a missing one"
     );
-    let as_owner = run(d.port, OWNER, json!({"node": "k2n4", "workspace": ws.id, "secrets": [{"name": "k2v://ws/otherws/OTHER_KEY"}]})).await;
+    let as_owner = run(d.port, OWNER, json!({"node": "rig4", "workspace": ws.id, "secrets": [{"name": "k2v://ws/otherws/OTHER_KEY"}]})).await;
     assert_eq!((as_owner.status, code(&as_owner).as_str()), (403, scodes::NOT_GRANTED), "a person may name it: {}", as_owner.body);
 
-    let r = run(d.port, &agent, json!({"node": "k2n4", "retries": 3, "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig4", "retries": 3, "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(j(&r)["job"]["secrets"], json!([ENV]));

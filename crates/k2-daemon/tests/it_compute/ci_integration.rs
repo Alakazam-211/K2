@@ -359,7 +359,7 @@ async fn watch_runs_each_push_on_compute_and_posts_statuses() {
     k2_daemon::ci_engine::test_set_statuses_api(Some(gh.base.clone()));
     let (ws, _bare) = seed_repo_ws(&env, "ciapp", Some(CI_TOML));
     let sha1 = git(&ws.path, &["rev-parse", "HEAD"]);
-    active_node("ci-1", "k2n7", &ws, true);
+    active_node("ci-1", "rig7", &ws, true);
     let mut node = compute_ws::test_attach("ci-1", offer());
     put_token(&ws, vec![gh.base.clone()]);
     let agent = passport(&ws);
@@ -491,7 +491,7 @@ async fn ci_refusals_init_and_freeze() {
     // No .k2/ci.toml committed; the grant lacks --ci.
     let (ws, _bare) = seed_repo_ws(&env, "cibare", None);
     let (other, _) = seed_repo_ws(&env, "ciother", None);
-    active_node("cr-1", "k2n8", &ws, false);
+    active_node("cr-1", "rig8", &ws, false);
     let _node = compute_ws::test_attach("cr-1", offer());
     let agent = passport(&ws);
 
@@ -611,7 +611,7 @@ async fn one_ci_message_per_run_monitors_stats_and_log_search() {
     let (ws, _bare) = seed_repo_ws(&env, "o1app", Some(toml));
     let (other, _) = seed_repo_ws(&env, "o1other", None);
     let sha = git(&ws.path, &["rev-parse", "HEAD"]);
-    active_node("o1-1", "k2n9", &ws, true);
+    active_node("o1-1", "rig9", &ws, true);
     let _node = compute_ws::test_attach("o1-1", offer());
     let agent = passport(&ws);
     k2_daemon::ci_engine::test_sink_open();

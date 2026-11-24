@@ -136,10 +136,10 @@ function fire(person: string, imageHash: string | null): void {
 beforeEach(() => {
   resetPersonPicturesForTests()
   cli.users = [
-    { username: 'z3thon', disabled: false, role: 'admin', firstName: 'Rosson', lastName: 'Long', displayName: 'Rosson Long' },
+    { username: 'zoe', disabled: false, role: 'admin', firstName: 'Rosson', lastName: 'Long', displayName: 'Rosson Long' },
     { username: 'gina', disabled: false, role: 'member', firstName: null, lastName: null, displayName: 'gina' },
   ]
-  cli.pictures = { z3thon: { hash: 'h-z', url: jpeg('z3thon') } }
+  cli.pictures = { zoe: { hash: 'h-z', url: jpeg('zoe') } }
   cli.gets = []
   cli.posts = []
   cli.refuse = null
@@ -165,13 +165,13 @@ afterEach(() => {
 describe('Admin Access: people\'s pictures', () => {
   it('each row shows that person\'s picture on this server, initials without one', async () => {
     render(<K2ConnectSection panel="people" />)
-    await screen.findByTestId('user-chip-z3thon')
-    await waitFor(() => expect(hasPicture('z3thon')).toBe(true))
-    expect(pictureOf('z3thon')).toContain(jpeg('z3thon'))
+    await screen.findByTestId('user-chip-zoe')
+    await waitFor(() => expect(hasPicture('zoe')).toBe(true))
+    expect(pictureOf('zoe')).toContain(jpeg('zoe'))
     expect(hasPicture('gina')).toBe(false)
     expect(chip('gina').textContent).toBe('G')
-    openPicture('z3thon')
-    expect(screen.getByTestId('user-picture-z3thon-choose').textContent).toBe('Change picture')
+    openPicture('zoe')
+    expect(screen.getByTestId('user-picture-zoe-choose').textContent).toBe('Change picture')
     closeDialog()
     openPicture('gina')
     expect(screen.getByTestId('user-picture-gina-choose').textContent).toBe('Add picture')
@@ -191,22 +191,22 @@ describe('Admin Access: people\'s pictures', () => {
 
   it('Remove picture clears it for that person', async () => {
     render(<K2ConnectSection panel="people" />)
-    await waitFor(() => expect(hasPicture('z3thon')).toBe(true))
-    openPicture('z3thon')
-    act(() => void fireEvent.click(screen.getByTestId('user-picture-z3thon-remove')))
-    await waitFor(() => expect(cli.posts).toEqual([{ route: 'people/picture/clear', body: { person: 'z3thon' } }]))
-    await waitFor(() => expect(hasPicture('z3thon')).toBe(false))
-    expect(chip('z3thon').textContent).toBe('RL')
+    await waitFor(() => expect(hasPicture('zoe')).toBe(true))
+    openPicture('zoe')
+    act(() => void fireEvent.click(screen.getByTestId('user-picture-zoe-remove')))
+    await waitFor(() => expect(cli.posts).toEqual([{ route: 'people/picture/clear', body: { person: 'zoe' } }]))
+    await waitFor(() => expect(hasPicture('zoe')).toBe(false))
+    expect(chip('zoe').textContent).toBe('RL')
   })
 
   it('a refusal shows the daemon\'s reason and changes nothing', async () => {
     cli.refuse = "you can change only your own picture (an Admin can change a Member's or an Admin's; only the owner can change an Owner's)"
     render(<K2ConnectSection panel="people" />)
-    await waitFor(() => expect(hasPicture('z3thon')).toBe(true))
-    openPicture('z3thon')
-    act(() => void fireEvent.click(screen.getByTestId('user-picture-z3thon-remove')))
-    expect((await screen.findByTestId('user-picture-z3thon-error')).textContent).toBe(cli.refuse)
-    expect(hasPicture('z3thon')).toBe(true)
+    await waitFor(() => expect(hasPicture('zoe')).toBe(true))
+    openPicture('zoe')
+    act(() => void fireEvent.click(screen.getByTestId('user-picture-zoe-remove')))
+    expect((await screen.findByTestId('user-picture-zoe-error')).textContent).toBe(cli.refuse)
+    expect(hasPicture('zoe')).toBe(true)
   })
 
   it('a file of the wrong type or over 2 MB is refused before anything is sent', async () => {
@@ -222,13 +222,13 @@ describe('Admin Access: people\'s pictures', () => {
 
   it('a change made elsewhere arrives as person_picture_changed and the row repaints', async () => {
     render(<K2ConnectSection panel="people" />)
-    await waitFor(() => expect(hasPicture('z3thon')).toBe(true))
+    await waitFor(() => expect(hasPicture('zoe')).toBe(true))
     expect(cli.pictureHandlers.size).toBeGreaterThan(0)
-    // gina sets hers on her phone; z3thon's is removed by the owner.
+    // gina sets hers on her phone; zoe's is removed by the owner.
     cli.pictures = { gina: { hash: 'h-g2', url: jpeg('gina-phone') } }
     fire('gina', 'h-g2')
     await waitFor(() => expect(hasPicture('gina')).toBe(true))
     expect(pictureOf('gina')).toContain(jpeg('gina-phone'))
-    await waitFor(() => expect(hasPicture('z3thon')).toBe(false))
+    await waitFor(() => expect(hasPicture('zoe')).toBe(false))
   })
 })

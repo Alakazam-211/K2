@@ -7,7 +7,7 @@ commit status. The GitHub workflows stay as the fallback.
 ## One Rust version
 
 `rust-toolchain.toml` pins the compiler for every machine that builds K2:
-the Macs, the z3mbpZ release, the Linux nodes, the Windows box and
+the Macs, the mac-b release, the Linux nodes, the Windows box and
 GitHub. rustup reads the file; Homebrew's cargo does not, so a build Mac
 needs rustup. `release.sh` Step 0.4 installs the pinned toolchain if it's
 missing and stops if `rustc -V` names another version
@@ -29,13 +29,13 @@ The scripts read the pin at the commit they send (`scripts/lib/rust-pin.sh`:
 `k2_rust_pin`, `k2_rust_need`). `tests/packaging/rust-pin.sh` fails when
 the file, the workflows' `toolchain:` lines or a script disagree.
 
-**The Mac nodes** (k2n1-m4, k2n2-m1, k2n3-m1) list rustc 1.99.0 in
+**The Mac nodes** (rig1-mac, rig2-mac, rig3-mac) list rustc 1.99.0 in
 `k2 compute nodes`: that is the node's default toolchain, not what a K2
 job gets. A job that sends `--needs rust@1.99.1`, or sends no rust need at
 all (the checkout's `rust-toolchain.toml` then applies), gets 1.99.1: the
 node's own rustup installs it on first use, and its `cargo/bin` comes
 before Homebrew's on the job's PATH (checked 2026-11-05, jobs 23653d45 on
-k2n1-m4 and fa715dba on k2n2-m1: `rustc 1.99.1`). No exception is needed.
+rig1-mac and fa715dba on rig2-mac: `rustc 1.99.1`). No exception is needed.
 The same holds for the Linux nodes.
 
 To move to a new Rust: change `channel` in `rust-toolchain.toml` and the
@@ -46,7 +46,7 @@ a node.
 
 ```
 push to main / integ/*
-  └─ z3mbpZ: k2 job k2-ci-poll (cron every 2 min, workspace k2-ci)
+  └─ mac-b: k2 job k2-ci-poll (cron every 2 min, workspace k2-ci)
        scripts/ci/k2-ci-poll.sh --once            (never waits for a job)
          1. reap: run-checks.sh --reap <sha> for every run in flight
               all jobs ended → final statuses; past the deadline → error
@@ -88,12 +88,12 @@ push to main / integ/*
   an Admin can give that).
 - **Where jobs run:** no node is named, so K2 picks one of the Linux
   nodes the submitting workspace is granted. For the poller that is
-  `k2-ci`, and its grants are the fence: k2n7-vin, k2n8-vin, k2n9-vin and
-  k2n10-vin. k2n12-vin (the fuzz node) never takes CI: `k2-ci` has no
-  grant there, so even naming it is refused (`not_granted`). k2-arch is
+  `k2-ci`, and its grants are the fence: rig7-vps, rig8-vps, rig9-vps and
+  rig10-vps. rig12-vps (the fuzz node) never takes CI: `k2-ci` has no
+  grant there, so even naming it is refused (`not_granted`). arch-box is
   an Arch node, so the Debian `sys:` packages fail there: don't grant it
   to `k2-ci`. If the submitting workspace is granted it anyway, the
-  scripts add `--avoid k2-arch` (K2 0.46.8+; `K2_COMPUTE_AVOID` changes
+  scripts add `--avoid arch-box` (K2 0.46.8+; `K2_COMPUTE_AVOID` changes
   the list). To pin a part
   to a node, set `K2_CI_NODE_WEB`, `K2_CI_NODE_RUST_CHECK`,
   `K2_CI_NODE_RUST_TEST` or `K2_CI_NODE_AUDIT` to its name.
@@ -148,7 +148,7 @@ vault in the first place, the owner fills a secret card
 (`k2 thread secret <addr> --name K2_CI_STATUSES_TOKEN --for api.github.com`);
 the value never passes through a chat or a file.
 
-### Setting it up on z3mbpZ (owner steps)
+### Setting it up on mac-b (owner steps)
 
 1. **A CI checkout** (not the release checkout):
    `git clone git@github.com:Alakazam-211/K2.git ~/k2-ci/K2`, then add it
@@ -156,7 +156,7 @@ the value never passes through a chat or a file.
    `k2 agent hire ~/k2-ci/K2 --name k2-ci --mode off --no-wiki --no-agents-md`
 2. **Grants**, exactly these four nodes:
    `k2 compute grant <node> --workspace k2-ci --ci --max-time 2h --max-parallel 2 --max-queued 20`
-   for k2n7-vin, k2n8-vin, k2n9-vin and k2n10-vin. z3mbpZ's K2 must be a
+   for rig7-vps, rig8-vps, rig9-vps and rig10-vps. mac-b's K2 must be a
    server on each of them: `k2 compute nodes` there lists the nodes it
    can use.
 3. **Seed, then try it.** `--dry-run` really runs the jobs; it only
@@ -176,7 +176,7 @@ the value never passes through a chat or a file.
 5. **Later:** branch protection on `k2-compute/*` is a separate decision
    (Rosson's). `checks.yml` already runs only by hand.
 
-The full, in-order list for z3mbpZ is in "Ops checklist" at the end.
+The full, in-order list for mac-b is in "Ops checklist" at the end.
 
 A Mac without `k2 job` can run the same poller from the LaunchAgent in
 `scripts/ci/dev.k2.ci-poll.plist` (its header says how to install it).
@@ -185,7 +185,7 @@ A Mac without `k2 job` can run the same poller from the LaunchAgent in
 
 Nodes already keep a warm target dir per project slot, so a job at a
 nearby commit recompiles only what changed. sccache only helps when that
-dir is cold. On k2n4-vin, a cold `cargo build -p k2-daemon` (dev) took
+dir is cold. On rig4-vps, a cold `cargo build -p k2-daemon` (dev) took
 643 s without sccache, 696 s while filling an empty local cache and 549 s
 from a warm one in a different checkout path (jobs get a fresh path each
 time): 80% of Rust units and 27% of C/C++ units hit, and the long poles
@@ -203,12 +203,12 @@ crate too, compiles warning-free on Linux before a release builds
 anything. It runs as a K2 Compute job (`K2_LINUX_GATE=compute`, the
 default): `cargo check --workspace --all-targets` at HEAD (plus
 uncommitted changes, `--dirty`), on a Linux x86 node K2 picks among the
-release workspace's grants (never k2-arch), `--tier ci`, the pinned Rust,
+release workspace's grants (never arch-box), `--tier ci`, the pinned Rust,
 the GTK/WebKit and ALSA headers, `--mem 24G` (peak 17.7G, job 20fbaea6), and it waits for the result.
 No GitHub runner and no ssh box is involved. `K2_LINUX_GATE=ssh` is the
 old way (rsync and ssh to the ship box) while that box exists;
 `K2_SKIP_LINUX_GATE=1` skips it loudly. Step 0.5 (cargo, typecheck,
-vitest, the web build) still runs on z3mbpZ itself, the release Mac.
+vitest, the web build) still runs on mac-b itself, the release Mac.
 
 ## Linux release builds (release.sh)
 
@@ -220,7 +220,7 @@ checks that, or that the variable already has the right value).
 
 | `K2_LINUX_BUILDS` | Repo variable `LINUX_BUILDS` (set by release.sh) | What happens |
 |---|---|---|
-| `compute` (default since 0.46.12) | `compute-all` | The compute-built x86_64 AND aarch64 files are the release. release.sh publishes them and signs both daemons on z3mbpZ at Step 10.5. On the tag, `daemon-binaries.yml` builds nothing (only the installer job runs) and `app-linux.yml` skips. No release step waits on GitHub; Arch still builds on k2-arch and isn't waited for. Needs a signer that accepts compute builds (see "Signing" below). |
+| `compute` (default since 0.46.12) | `compute-all` | The compute-built x86_64 AND aarch64 files are the release. release.sh publishes them and signs both daemons on mac-b at Step 10.5. On the tag, `daemon-binaries.yml` builds nothing (only the installer job runs) and `app-linux.yml` skips. No release step waits on GitHub; Arch still builds on arch-box and isn't waited for. Needs a signer that accepts compute builds (see "Signing" below). |
 | `compute`, aarch64 fell back (or `K2_COMPUTE_ARM=github`) | `compute` | x86_64 from compute; GitHub builds only aarch64, and Step 10.5 waits for it. |
 | `github` | `github` | Pushing the tag starts `daemon-binaries.yml` and `app-linux.yml`. |
 | `shadow` | `github` | As `github`, plus release.sh builds the Linux set on K2 Compute before the tag, checks it, and compares it with what GitHub built (Step 10.7). Publishes nothing from compute; a compute problem only warns. |
@@ -239,15 +239,15 @@ Rust). L is a Linux build, V the verify build:
 
 | Job | Node | What it builds |
 |---|---|---|
-| L1 | k2n7-vin | `scripts/ci/build-linux-bins.sh x86_64`: the daemon, k2-node, the root helper and the App engine (`--mem 20G`) |
-| L3 | k2n8-vin | `scripts/ci/build-linux-app.sh`: deb, rpm and AppImage. The app links the native voice stack (on by default since 0.46.9), so the job asks for `sys:libasound2-dev` and `--mem 24G` (a release link needs at least 20G) |
-| V1 | k2n9-vin | the same as L1, a second time on another node (never L1's: submit refuses it in every mode) |
-| L2 | k2n10-vin | `scripts/ci/build-linux-bins.sh aarch64`: the aarch64 set, cross-compiled on the x86_64 node with zig (`cargo zigbuild`, glibc 2.28 floor). zig (its release tarball) and cargo-zigbuild (its crates.io source, built `--locked`) are fetched by the build and refused unless their sha256 is the one `scripts/ci/cross-pins.sh` pins; `build-info.json` records both hashes. No `rust@` need, so the node installs `rust-toolchain.toml`'s channel and its `aarch64-unknown-linux-gnu` target (a job can't add a target itself) |
+| L1 | rig7-vps | `scripts/ci/build-linux-bins.sh x86_64`: the daemon, k2-node, the root helper and the App engine (`--mem 20G`) |
+| L3 | rig8-vps | `scripts/ci/build-linux-app.sh`: deb, rpm and AppImage. The app links the native voice stack (on by default since 0.46.9), so the job asks for `sys:libasound2-dev` and `--mem 24G` (a release link needs at least 20G) |
+| V1 | rig9-vps | the same as L1, a second time on another node (never L1's: submit refuses it in every mode) |
+| L2 | rig10-vps | `scripts/ci/build-linux-bins.sh aarch64`: the aarch64 set, cross-compiled on the x86_64 node with zig (`cargo zigbuild`, glibc 2.28 floor). zig (its release tarball) and cargo-zigbuild (its crates.io source, built `--locked`) are fetched by the build and refused unless their sha256 is the one `scripts/ci/cross-pins.sh` pins; `build-info.json` records both hashes. No `rust@` need, so the node installs `rust-toolchain.toml`'s channel and its `aarch64-unknown-linux-gnu` target (a job can't add a target itself) |
 | V2 | <release node> | the same as L2 on another node; must equal L2 byte for byte (never L2's node) |
 
 `K2_COMPUTE_X86_NODE`, `K2_COMPUTE_APP_NODE` and `K2_COMPUTE_VERIFY_NODE`
 change the nodes (`K2_COMPUTE_NODE` moves L1 and L3 together; never onto
-V1's node, so `K2_COMPUTE_NODE=k2n9-vin` needs another
+V1's node, so `K2_COMPUTE_NODE=rig9-vps` needs another
 `K2_COMPUTE_VERIFY_NODE`). `K2_COMPUTE_ARM_NODE` and
 `K2_COMPUTE_ARM_VERIFY_NODE` move L2 and V2. Every job asks for 8 CPUs
 (`K2_COMPUTE_CPUS`; the Ryzens' default of 4 roughly doubles a build). L1,
@@ -264,7 +264,7 @@ in github mode, and in shadow every one of them only warns.
 `K2_COMPUTE_BINS_MEM` (x86_64 binaries, 24G), `K2_COMPUTE_ARM_MEM` (aarch64
 binaries, 32G) and `K2_COMPUTE_APP_MEM` (the app, 24G) change the memory. The jobs
 name their nodes on purpose (the dual build needs two different ones), so
-they never land on k2-arch.
+they never land on arch-box.
 
 **The checks** (Step 7.9c): after `k2 compute fetch --over-relay`,
 `scripts/ci/compute_release.py check-job` checks each job:
@@ -291,7 +291,7 @@ boxes, and the daemon is the file the signing user signs from compute
 - the release checkout's workspace on <build Mac> (`$WS`, `<your-workspace>`:
   its own handle, read as in the ops checklist's A.0) needs grants
   with `--ci` on every release node (`K2_COMPUTE_RELEASE_NODES`; `--ci` also allows
-  `--exclusive`; on a node z3mbpZ shares, its share needs `exclusive`);
+  `--exclusive`; on a node mac-b shares, its share needs `exclusive`);
 - each release node has `kernel.yama.ptrace_scope >= 1`;
 - the OAuth vault grants below exist (L1, V1, L2 and V2's nodes);
 - the release Mac's `gh` is a repo admin (release.sh sets `LINUX_BUILDS`);
@@ -450,7 +450,7 @@ tag.
    `rustc`/`GCC` lines.
 3. **0.46.10: compute mode,** once S3b is installed on the signing Mac
    and its sitting is done (`docs/release/updater-key-ceremony.md`, "K2
-   Compute builds (S3b)": install.sh, the pins, the rehearsal), z3mbpZ's
+   Compute builds (S3b)": install.sh, the pins, the rehearsal), mac-b's
    running K2 has the S3b receipt route (the rehearsal checks it), and the
    0.46.9 report is clean: `gh variable set LINUX_BUILDS -b compute`, then
    `K2_LINUX_BUILDS=compute ./scripts/release.sh 0.46.10`. Fallback as
@@ -459,10 +459,10 @@ tag.
 A dry run of the shadow builds for any commit, with no bump, tag, signing
 or publishing: `bash scripts/lib/compute-release.sh --shadow-only <sha>`.
 
-## Ops checklist (z3mbpZ, for 0.46.9 and 0.46.10)
+## Ops checklist (mac-b, for 0.46.9 and 0.46.10)
 
 Run in this order. "Owner" steps need Rosson (a person) in a K2 terminal
-or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
+or GUI shell on mac-b. Nothing here needs a GitHub runner.
 
 **A. Rust and the release checkout**
 0. The release checkout's workspace handle, for every command below that
@@ -495,7 +495,7 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
 **B. OAuth values for the release builds (owner, release checkout)**
 1. `(set -a; . ./.env; set +a; printf %s "$K2_GMAIL_CLIENT_ID" | k2 vault set K2_GMAIL_CLIENT_ID --scope "ws:$WS" --kind generic --delivery env; printf %s "$K2_GMAIL_CLIENT_SECRET" | k2 vault set K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --kind generic --delivery env)`
    and the same for `K2_MICROSOFT_CLIENT_ID` if `.env` has a real one.
-2. For each of k2n7-vin, k2n8-vin, k2n9-vin:
+2. For each of rig7-vps, rig8-vps, rig9-vps:
    `k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/<node>" --as env --env-name BUILD_GMAIL_CLIENT_ID`
    `k2 vault grant K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --to "compute:$WS/<node>" --as env --env-name BUILD_GMAIL_CLIENT_SECRET`
    (and `K2_MICROSOFT_CLIENT_ID` as `BUILD_MICROSOFT_CLIENT_ID`).
@@ -508,9 +508,9 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
    auth; no token in the URL).
 2. `k2 agent hire ~/k2-ci/K2 --name k2-ci --mode off --no-wiki --no-agents-md --dry-run`,
    then the same without `--dry-run`.
-3. `for n in k2n7-vin k2n8-vin k2n9-vin k2n10-vin; do k2 compute grant $n --workspace k2-ci --ci --max-time 2h --max-parallel 2 --max-queued 20 --max-disk 200G; done`
+3. `for n in rig7-vps rig8-vps rig9-vps rig10-vps; do k2 compute grant $n --workspace k2-ci --ci --max-time 2h --max-parallel 2 --max-queued 20 --max-disk 200G; done`
    then `k2 compute grants --workspace k2-ci`: exactly those four. Never
-   k2n12-vin or k2-arch.
+   rig12-vps or arch-box.
 4. In a K2 terminal of `k2-ci`, from `~/k2-ci/K2`:
    `bash scripts/ci/k2-ci-poll.sh --mark-seen`, push a test commit to an
    `integ/ci-smoke` branch, then `bash scripts/ci/k2-ci-poll.sh --once --dry-run`

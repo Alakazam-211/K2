@@ -38,10 +38,10 @@ describe('server-ids', () => {
   })
 
   it('migration: a host-key row goes on the wire by id once the id is known; until then by host key', () => {
-    expect(toWireAddress('pi::z3mbpz.k2.dev')).toBe('pi::z3mbpz.k2.dev')
-    noteServerId('z3mbpz.k2.dev', Z)
-    expect(toWireAddress('pi::z3mbpz.k2.dev')).toBe(`pi::${Z}`)
-    expect(fromWireAddress(`pi::${Z}`)).toBe('pi::z3mbpz.k2.dev')
+    expect(toWireAddress('pi::mac-b.k2.dev')).toBe('pi::mac-b.k2.dev')
+    noteServerId('mac-b.k2.dev', Z)
+    expect(toWireAddress('pi::mac-b.k2.dev')).toBe(`pi::${Z}`)
+    expect(fromWireAddress(`pi::${Z}`)).toBe('pi::mac-b.k2.dev')
     // An unknown id (a server this device hasn't saved) stays as is, and round-trips.
     expect(fromWireAddress('pi::3333333333333333')).toBe('pi::3333333333333333')
     expect(toWireAddress('pi::3333333333333333')).toBe('pi::3333333333333333')
@@ -50,9 +50,9 @@ describe('server-ids', () => {
   })
 
   it('a home server’s servers map fills gaps but never overrides a host’s own answer', () => {
-    noteServerId('z3mbpz.k2.dev', Z)
-    noteServerMap({ 'z3mbpz.k2.dev': '9999999999999999', 'acme.k2.dev': '4444444444444444', bad: 'x' })
-    expect(serverIdForHost('z3mbpz.k2.dev')).toBe(Z)
+    noteServerId('mac-b.k2.dev', Z)
+    noteServerMap({ 'mac-b.k2.dev': '9999999999999999', 'acme.k2.dev': '4444444444444444', bad: 'x' })
+    expect(serverIdForHost('mac-b.k2.dev')).toBe(Z)
     expect(serverIdForHost('acme.k2.dev')).toBe('4444444444444444')
     expect(serverIdForHost('bad')).toBeNull()
     expect(hostKeyForServerId('4444444444444444')).toBe('acme.k2.dev')

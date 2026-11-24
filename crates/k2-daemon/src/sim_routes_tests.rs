@@ -621,7 +621,7 @@ fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
     let r = get(DEVICES, Caller::Owner, &[("workspace", &ws), ("platform", "ios")]);
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert_eq!(body(&r)["lane"], json!("ios-node"));
-    assert_eq!(body(&r)["devices"][0]["name"], json!("iPhone 17 (on k2n1-m4)"));
+    assert_eq!(body(&r)["devices"][0]["name"], json!("iPhone 17 (on rig1-mac)"));
 
     // A Member login (no control): refused before anything is leased.
     let r = post(BOOT, Caller::Login { username: "member-without-control".into() }, json!({ "workspace": ws, "platform": "ios" }));

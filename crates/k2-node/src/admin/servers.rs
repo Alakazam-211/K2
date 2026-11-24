@@ -1140,7 +1140,7 @@ mod tests {
     #[test]
     fn first_add_writes_the_owner_and_a_pending_line() {
         let t = setup(true);
-        let r = add(&t.ctx, &add_args("https://z3thon.k2.dev", "0123456789abcdef", Trust::Own)).unwrap();
+        let r = add(&t.ctx, &add_args("https://zoe.k2.dev", "0123456789abcdef", Trust::Own)).unwrap();
         assert_eq!((r["slot"].as_u64(), r["state"].as_str()), (Some(1), Some("pending")));
         let f = read_file(&t.ctx.config_dir).unwrap().unwrap();
         assert_eq!(f.owner, t.owner.fingerprint());
@@ -1148,11 +1148,11 @@ mod tests {
         let o = f.entry(0).unwrap();
         assert_eq!((o.label.as_str(), o.weight, o.gate, o.max_running), ("rosson.k2.dev", 1, true, 3));
         let b = f.entry(1).unwrap();
-        assert_eq!((b.label.as_str(), b.state, b.trust, b.expires_at), ("z3thon.k2.dev", ShareState::Pending, Trust::Own, None));
+        assert_eq!((b.label.as_str(), b.state, b.trust, b.expires_at), ("zoe.k2.dev", ShareState::Pending, Trust::Own, None));
         assert_eq!(b.pending_until, t.ctx.now + PENDING_SECS);
         assert_eq!(b.uid, None, "not root (a test): root's tenant.prepare hands out the uid (tenant_wall_linux S1)");
         let en = read_enroll(&t.ctx.config_dir).unwrap().unwrap();
-        assert_eq!((en.slot, en.url.as_str(), en.code_binding.as_str()), (1, "https://z3thon.k2.dev", "binding-b64"));
+        assert_eq!((en.slot, en.url.as_str(), en.code_binding.as_str()), (1, "https://zoe.k2.dev", "binding-b64"));
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(enroll_path(&t.ctx.config_dir)).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode & 0o007, 0, "the credential is never world-readable: {mode:o}");
@@ -1163,7 +1163,7 @@ mod tests {
     fn adds_need_the_wall_and_team_needs_the_tenant_wall() {
         let mut t = setup(true);
         t.ctx.walled = false;
-        let e = add(&t.ctx, &add_args("https://z3thon.k2.dev", "0123456789abcdef", Trust::Own)).unwrap_err();
+        let e = add(&t.ctx, &add_args("https://zoe.k2.dev", "0123456789abcdef", Trust::Own)).unwrap_err();
         assert_eq!(e.code, codes::TENANT_NEEDS_JOB_WALL);
         assert!(read_file(&t.ctx.config_dir).unwrap().is_none(), "nothing written");
         t.ctx.walled = true;
@@ -1174,7 +1174,7 @@ mod tests {
         assert_eq!(add(&l.ctx, &add_args("https://baden.k2.dev", "0123456789abcdef", Trust::Team)).unwrap_err().code, codes::TEAM_NEEDS_TENANT_WALL);
     }
 
-    /// z3mbpZ e2e fix 2: after a plain revoke, `revoke <label> --now` (and
+    /// mac-b e2e fix 2: after a plain revoke, `revoke <label> --now` (and
     /// `--wipe`) still finds the line by its label, not only by `slot:N`.
     #[test]
     fn a_revoked_line_is_found_by_its_label() {
@@ -1427,7 +1427,7 @@ mod tests {
             confirmed: true,
         };
         crate::identity::write_pin(&layout.pin(), &pin).unwrap();
-        let add = json!({"url": "https://z3thon.k2.dev", "code_binding": "SECRET-BINDING", "fp_prefix": "0123456789abcdef", "trust": "own"});
+        let add = json!({"url": "https://zoe.k2.dev", "code_binding": "SECRET-BINDING", "fp_prefix": "0123456789abcdef", "trust": "own"});
 
         // No wall (the node's status says none): refused, nothing written.
         let res = r.run(&r.approve(r.cmd("servers.add", add.clone())));
@@ -1449,9 +1449,9 @@ mod tests {
         assert_eq!(read_enroll(&layout.config).unwrap().unwrap().code_binding, "SECRET-BINDING");
 
         // Narrowing runs on the controller's word; widening needs approval.
-        let narrow = json!({"server": "z3thon.k2.dev", "set": {"cpu_hours_day": 4}});
+        let narrow = json!({"server": "zoe.k2.dev", "set": {"cpu_hours_day": 4}});
         assert_eq!(r.run(&r.sign(&r.cmd("servers.limits", narrow))).state, "done");
-        let wide = json!({"server": "z3thon.k2.dev", "set": {"max_running": 3}});
+        let wide = json!({"server": "zoe.k2.dev", "set": {"max_running": 3}});
         assert_eq!(r.run(&r.sign(&r.cmd("servers.limits", wide.clone()))).code.as_deref(), Some(code::APPROVAL_REQUIRED));
         assert_eq!(read_file(&layout.config).unwrap().unwrap().entry(1).unwrap().max_running, 1, "nothing widened");
         assert_eq!(r.run(&r.approve(r.cmd("servers.limits", wide))).state, "done");

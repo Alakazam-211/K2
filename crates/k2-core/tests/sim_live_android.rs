@@ -3,7 +3,7 @@
 //! stream frames, install an APK, read logs, stop, adopt, erase.
 //!
 //! Only with `--features sim-live-android`, on a Linux box with KVM (the
-//! k2n9 sandbox lane), never on the M5:
+//! rig9 sandbox lane), never on the M5:
 //!
 //! ```text
 //! K2_SIM_LIVE_BASE=/srv/k2-sandbox/live cargo test -p k2-core \

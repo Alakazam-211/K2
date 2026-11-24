@@ -135,13 +135,13 @@ fn push_keys_are_yes_or_no_and_an_app_pass_is_refused() {
 
 #[test]
 fn a_nodes_row_reads_os_slots_xcode_and_android() {
-    let n = json!({ "name": "k2n2-m1", "os": "macos", "arch": "arm64", "online": true, "running": 1,
+    let n = json!({ "name": "rig2-mac", "os": "macos", "arch": "arm64", "online": true, "running": 1,
         "offer": { "parallelMax": 2, "tools": ["node@22", "xcode@26.0", "rust@stable"] } });
     let r = node_row(&n);
     assert_eq!(r["ok"], true);
-    assert_eq!(r["node"], json!({ "name": "k2n2-m1", "os": "macos", "arch": "arm64", "online": true, "freeSlots": 1, "xcode": true, "androidSdk": false, "tools": ["node@22", "xcode@26.0", "rust@stable"] }));
+    assert_eq!(r["node"], json!({ "name": "rig2-mac", "os": "macos", "arch": "arm64", "online": true, "freeSlots": 1, "xcode": true, "androidSdk": false, "tools": ["node@22", "xcode@26.0", "rust@stable"] }));
     assert!(r["detail"].as_str().expect("detail").contains("macos-arm64, online, 1 free slot(s), Xcode yes, Android SDK no"), "{r}");
-    let off = node_row(&json!({ "name": "k2n9", "os": "linux", "arch": "x86_64", "online": false }));
+    let off = node_row(&json!({ "name": "rig9", "os": "linux", "arch": "x86_64", "online": false }));
     check_rows(&[off.clone()]);
     assert_eq!(off["missing"]["reason"], NOT_PREPARED, "{off}");
 }

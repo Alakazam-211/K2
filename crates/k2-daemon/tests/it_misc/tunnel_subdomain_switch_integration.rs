@@ -2,7 +2,7 @@
 //! listener and its certificate to the new name WITHOUT a daemon restart.
 //!
 //! Field bug (Reggie's Mac mini, 0.45.0): the owner released `afs` and
-//! connected `k2n1-m4` in Settings. tunnel.json and frpc moved, but the
+//! connected `rig1-mac` in Settings. tunnel.json and frpc moved, but the
 //! E2E TLS listener kept serving the `afs.k2.dev` certificate (and its
 //! renewer kept renewing `afs`), so every direct client failed the TLS
 //! handshake with `CertificateUnknown` until the daemon was restarted.
@@ -277,26 +277,26 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
             .await
             .expect("afs.k2.dev handshake on the afs listener");
 
-        // ── 2. The 0.45.0 field path: tunnel.json moves to k2n1-m4 under
+        // ── 2. The 0.45.0 field path: tunnel.json moves to rig1-mac under
         //       the listener (no identity hook ran), then the tunnel start
         //       ensures its listener. It must be REPLACED, not reused. ───
-        seed("k2n1-m4", "tok-new");
+        seed("rig1-mac", "tok-new");
         let p2 = ensure(d.port).await;
         // Runtime stage H (AR3): the listener is replaced (new cert, new
         // renewer) but its PORT is sticky, so frpc's localPort stays valid.
         assert_eq!(p2, p1, "a new name gets a new listener on the same sticky port");
         assert_eq!(
             k2_daemon::tunnel_tls_listener::live_listener(),
-            Some((p2, "k2n1-m4".to_string()))
+            Some((p2, "rig1-mac".to_string()))
         );
         assert_eq!(
             k2_daemon::tunnel_tls_listener::live_renewer_subdomain().as_deref(),
-            Some("k2n1-m4"),
+            Some("rig1-mac"),
             "the cert renewer must follow the new name"
         );
-        handshake(&broker.ca_pem, p2, "k2n1-m4.k2.dev")
+        handshake(&broker.ca_pem, p2, "rig1-mac.k2.dev")
             .await
-            .expect("k2n1-m4.k2.dev must handshake after the switch (the field bug)");
+            .expect("rig1-mac.k2.dev must handshake after the switch (the field bug)");
         let old = handshake(&broker.ca_pem, p2, "afs.k2.dev")
             .await
             .expect_err("the old name must not validate on the new listener");
@@ -310,7 +310,7 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
             broker.seen(),
             vec![
                 ("afs".to_string(), "tok-afs".to_string()),
-                ("k2n1-m4".to_string(), "tok-new".to_string()),
+                ("rig1-mac".to_string(), "tok-new".to_string()),
             ],
             "the broker was asked for the new name with the new token"
         );
@@ -318,11 +318,11 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
         assert_eq!(r.status, 200, "{}", r.body);
         assert_eq!(
             json(&r.body)["e2eListener"],
-            serde_json::json!({ "subdomain": "k2n1-m4", "port": p2 })
+            serde_json::json!({ "subdomain": "rig1-mac", "port": p2 })
         );
 
         // ── 3. Switch BACK to afs through the route (tunnel off): the
-        //       daemon retires the k2n1-m4 listener at once, and the next
+        //       daemon retires the rig1-mac listener at once, and the next
         //       start brings afs back with a valid cert. ─────────────────
         let r = http(
             d.port,
@@ -333,7 +333,7 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
         assert_eq!(r.status, 200, "switch: {}", r.body);
         let v = json(&r.body);
         assert_eq!(v["ok"], serde_json::json!(true), "{v}");
-        assert_eq!(v["previousSubdomain"], serde_json::json!("k2n1-m4"), "{v}");
+        assert_eq!(v["previousSubdomain"], serde_json::json!("rig1-mac"), "{v}");
         assert_eq!(v["subdomain"], serde_json::json!("afs"), "{v}");
         let steps: Vec<String> = v["steps"]
             .as_array()
@@ -342,15 +342,15 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
             .map(|s| format!("{}:{}", s["step"].as_str().unwrap_or(""), s["detail"].as_str().unwrap_or("")))
             .collect();
         assert!(
-            steps.iter().any(|s| s.starts_with("listener:") && s.contains("k2n1-m4.k2.dev")),
-            "the switch must report stopping the k2n1-m4 listener: {steps:?}"
+            steps.iter().any(|s| s.starts_with("listener:") && s.contains("rig1-mac.k2.dev")),
+            "the switch must report stopping the rig1-mac listener: {steps:?}"
         );
         assert_eq!(k2_daemon::tunnel_tls_listener::live_listener(), None);
         assert_eq!(k2_daemon::tunnel_tls_listener::live_renewer_subdomain(), None);
         wait_port_closed(p2).await;
         assert_eq!(
             identity_events(&mut events),
-            vec![(Some("k2n1-m4".to_string()), Some("afs".to_string()), true)],
+            vec![(Some("rig1-mac".to_string()), Some("afs".to_string()), true)],
             "clients are told the tunnel moved"
         );
         let p3 = ensure(d.port).await;
@@ -364,11 +364,11 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
             d.port,
             "POST",
             &format!("/cli/tunnel/config?token={OWNER_TOKEN}"),
-            Some(r#"{"subdomain":"k2n2-m1","token":"tok-third","deviceId":"dev-app"}"#),
+            Some(r#"{"subdomain":"rig2-mac","token":"tok-third","deviceId":"dev-app"}"#),
         );
         assert_eq!(r.status, 200, "config: {}", r.body);
         let v = json(&r.body);
-        assert_eq!(v["subdomain"], serde_json::json!("k2n2-m1"), "{v}");
+        assert_eq!(v["subdomain"], serde_json::json!("rig2-mac"), "{v}");
         assert_eq!(v["identityChange"]["ok"], serde_json::json!(true), "{v}");
         assert_eq!(v["identityChange"]["previousSubdomain"], serde_json::json!("afs"), "{v}");
         assert_eq!(k2_daemon::tunnel_tls_listener::live_listener(), None);
@@ -387,7 +387,7 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
         assert!(json(&r.body).get("identityChange").is_none(), "{}", r.body);
         assert_eq!(
             k2_daemon::tunnel_tls_listener::live_listener(),
-            Some((p4, "k2n2-m1".to_string()))
+            Some((p4, "rig2-mac".to_string()))
         );
 
         // ── 5. Forget locally: the listener goes, nothing is sent. ───────
@@ -417,16 +417,16 @@ fn switching_subdomains_moves_the_e2e_listener_and_cert_without_a_restart() {
             d.port,
             "POST",
             &format!("/cli/tunnel/switch?token={OWNER_TOKEN}"),
-            Some(r#"{"subdomain":"k2n1-m4","token":"tok-new","deviceId":"dev-app","start":false}"#),
+            Some(r#"{"subdomain":"rig1-mac","token":"tok-new","deviceId":"dev-app","start":false}"#),
         );
         assert_eq!(r.status, 200, "switch after forget: {}", r.body);
         assert_eq!(json(&r.body)["ok"], serde_json::json!(true), "{}", r.body);
         let r = http(d.port, "GET", &format!("/cli/tunnel/status?token={OWNER_TOKEN}"), None);
         assert_eq!(json(&r.body)["released"], serde_json::json!(false), "{}", r.body);
         let p5 = ensure(d.port).await;
-        handshake(&broker.ca_pem, p5, "k2n1-m4.k2.dev")
+        handshake(&broker.ca_pem, p5, "rig1-mac.k2.dev")
             .await
-            .expect("k2n1-m4 after release + reconnect on the same device");
+            .expect("rig1-mac after release + reconnect on the same device");
     });
 }
 

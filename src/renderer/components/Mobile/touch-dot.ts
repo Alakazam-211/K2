@@ -11,7 +11,7 @@
 // separate `scale` property: CSS applies `scale` before `transform`, so a
 // separate scale of 1.5 also scaled the translate, and the span's `scale`
 // transition then slid the dot toward the bottom-right on release and back
-// in from there on the next touch (z3mbpZ, 11-10). Only the opacity
+// in from there on the next touch (mac-b, 11-10). Only the opacity
 // animates; position and size change at once.
 
 /** The fade after release, ms (the span's `duration-200`). */

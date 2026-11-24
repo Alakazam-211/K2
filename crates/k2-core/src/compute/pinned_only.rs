@@ -123,22 +123,22 @@ mod tests {
     #[test]
     fn off_by_default_and_on_then_off_round_trips() {
         let c = conn();
-        assert_eq!(get(&c, "k2n2").expect("read"), None);
-        assert!(!is_on(&c, "k2n2"));
+        assert_eq!(get(&c, "rig2").expect("read"), None);
+        assert!(!is_on(&c, "rig2"));
         assert_eq!(all(&c), Pinned::Only(BTreeSet::new()));
 
-        assert!(set(&c, " k2n2 ", true, "owner", 10).expect("on"), "it changed");
-        assert_eq!(get(&c, "k2n2").expect("read"), Some(Entry { updated_by: "owner".into(), updated_at: 10 }));
-        assert!(is_on(&c, "k2n2") && all(&c).holds("k2n2"));
+        assert!(set(&c, " rig2 ", true, "owner", 10).expect("on"), "it changed");
+        assert_eq!(get(&c, "rig2").expect("read"), Some(Entry { updated_by: "owner".into(), updated_at: 10 }));
+        assert!(is_on(&c, "rig2") && all(&c).holds("rig2"));
         // On again changes nothing, and keeps who first turned it on.
-        assert!(!set(&c, "k2n2", true, "admin", 11).expect("on again"));
-        assert_eq!(get(&c, "k2n2").expect("read").expect("on").updated_by, "owner");
+        assert!(!set(&c, "rig2", true, "admin", 11).expect("on again"));
+        assert_eq!(get(&c, "rig2").expect("read").expect("on").updated_by, "owner");
         // Another node is untouched.
-        assert!(!is_on(&c, "k2n3") && !all(&c).holds("k2n3"));
+        assert!(!is_on(&c, "rig3") && !all(&c).holds("rig3"));
 
-        assert!(set(&c, "k2n2", false, "owner", 12).expect("off"), "it changed");
-        assert_eq!(get(&c, "k2n2").expect("read"), None);
-        assert!(!set(&c, "k2n2", false, "owner", 13).expect("off again"));
+        assert!(set(&c, "rig2", false, "owner", 12).expect("off"), "it changed");
+        assert_eq!(get(&c, "rig2").expect("read"), None);
+        assert!(!set(&c, "rig2", false, "owner", 13).expect("off again"));
         assert!(set(&c, "", true, "owner", 14).expect_err("no node").contains("names a node"));
     }
 
@@ -147,24 +147,24 @@ mod tests {
         let c = conn();
         // A workspace node list, and a key that only looks alike under
         // LIKE (`_` matches any character there).
-        crate::compute::allow::set(&c, "ws1", Some(&["k2n9".to_string()]), "owner", 1).expect("list");
-        c.execute("INSERT INTO compute_admin_settings (key, value, updated_by, updated_at) VALUES ('pinnedXonly:k2n7', '1', 'x', 1)", [])
+        crate::compute::allow::set(&c, "ws1", Some(&["rig9".to_string()]), "owner", 1).expect("list");
+        c.execute("INSERT INTO compute_admin_settings (key, value, updated_by, updated_at) VALUES ('pinnedXonly:rig7', '1', 'x', 1)", [])
             .expect("insert");
         assert_eq!(all(&c), Pinned::Only(BTreeSet::new()));
         set(&c, "node:with:colons", true, "owner", 2).expect("on");
-        set(&c, "k2-arch", true, "owner", 3).expect("on");
-        assert_eq!(all(&c), Pinned::Only(BTreeSet::from(["k2-arch".to_string(), "node:with:colons".to_string()])));
-        assert!(!all(&c).holds("k2n7") && !all(&c).holds("k2n9"));
+        set(&c, "arch-box", true, "owner", 3).expect("on");
+        assert_eq!(all(&c), Pinned::Only(BTreeSet::from(["arch-box".to_string(), "node:with:colons".to_string()])));
+        assert!(!all(&c).holds("rig7") && !all(&c).holds("rig9"));
     }
 
     #[test]
     fn an_unreadable_table_closes_every_node() {
         let c = conn();
-        set(&c, "k2n2", true, "owner", 1).expect("on");
+        set(&c, "rig2", true, "owner", 1).expect("on");
         c.execute_batch("ALTER TABLE compute_admin_settings RENAME TO gone;").expect("rename");
         assert_eq!(all(&c), Pinned::Unreadable);
-        assert!(all(&c).holds("k2n2") && all(&c).holds("any-node"));
+        assert!(all(&c).holds("rig2") && all(&c).holds("any-node"));
         assert!(is_on(&c, "any-node"));
-        assert!(get(&c, "k2n2").is_err());
+        assert!(get(&c, "rig2").is_err());
     }
 }

@@ -156,7 +156,7 @@ pub fn upstream_url(a: &PodmanArtifact) -> String {
 /// The trusted comment a mirror tarball's `.minisig` must carry, exactly:
 /// it names the file, the bundle version and the pinned sha256, so a
 /// signature can't be replayed onto another file or version. Signed on
-/// z3mbpZ with `minisign -S -s <primary.key> -t "<this>" -m <asset>`.
+/// mac-b with `minisign -S -s <primary.key> -t "<this>" -m <asset>`.
 pub fn bundle_trusted_comment(a: &PodmanArtifact) -> String {
     format!("file:{} version:{BUNDLE_VERSION} sha256:{}", a.asset, a.sha256)
 }

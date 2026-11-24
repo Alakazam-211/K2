@@ -21,8 +21,8 @@ user's keychain search list is never touched), everything removed on exit.
 `--selftest` (no real key anywhere: a throwaway self-signed identity and a
 dummy `.app`) on both Mac minis, as `_k2node` inside the wall:
 
-- k2n2-m1, jobs `344e6a34`, `8f1e45dc`, `f66312db` (iterations)
-- k2n3-m1, job `10fdb163` (final script, exit 0)
+- rig2-mac, jobs `344e6a34`, `8f1e45dc`, `f66312db` (iterations)
+- rig3-mac, job `10fdb163` (final script, exit 0)
 
 macOS 26.4.1, Command Line Tools at `/Library/Developer/CommandLineTools`.
 
@@ -50,10 +50,10 @@ The two unknowns TA-24 raised are answered:
 What is left is one run with our own Developer ID, ASC key and updater key
 on a mini acting as "an owner's Mac" (criteria 2–5). That run needs Rosson's
 go, because it uses our real signing identity (the release keys stay on
-z3mbpZ otherwise):
+mac-b otherwise):
 
 ```
-k2 compute run k2n2-m1 --sha <sha> --needs node@22 \
+k2 compute run rig2-mac --sha <sha> --needs node@22 \
   --secret <p12 b64>=K2_SIGN_P12_B64 --secret <p12 pw>=K2_SIGN_P12_PASSWORD \
   --secret <identity>=K2_SIGN_IDENTITY \
   --secret <p8 b64>=K2_NOTARY_KEY_P8_B64 --secret <key id>=K2_NOTARY_KEY_ID --secret <issuer>=K2_NOTARY_ISSUER \

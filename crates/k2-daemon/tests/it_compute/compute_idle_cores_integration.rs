@@ -172,23 +172,23 @@ async fn cpus_n_plus_m_reaches_only_burst_nodes_and_admission_counts_n() {
     let env = setup();
     let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "icapp");
-    active_node("ic-new", "k2n7", &ws);
-    active_node("ic-old", "k2n4", &ws);
+    active_node("ic-new", "rig7", &ws);
+    active_node("ic-old", "rig4", &ws);
     let burst = k2_core::compute::proto::gens::FEATURE_CPU_BURST;
     let mut new = compute_ws::test_attach("ic-new", offer(10, &["artifacts", "stall", burst]));
     let mut old = compute_ws::test_attach("ic-old", offer(9, &["artifacts", "stall"]));
 
     // Body rules (BK-13): M needs N, and is above it.
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpusBurst": 8})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpusBurst": 8})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "bad_request"), "{}", r.body);
     assert!(r.body.contains("needs N"), "{}", r.body);
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpus": 4, "cpusBurst": 4})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpus": 4, "cpusBurst": 4})).await;
     assert_eq!((r.status, code(&r).as_str()), (400, "bad_request"), "{}", r.body);
     assert!(new.frames().is_empty() && old.frames().is_empty(), "nothing sent for a refused body");
 
     // To the cpu-burst node: the burst rides the plan, the guarantee stays
     // the limit placement and admission count (§10 R2).
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpus": 2, "cpusBurst": 8})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpus": 2, "cpusBurst": 8})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(!warnings(&r).iter().any(|w| w.contains("idle cores")), "{}", r.body);
     let id = j(&r)["job"]["id"].as_str().unwrap().to_string();
@@ -203,15 +203,15 @@ async fn cpus_n_plus_m_reaches_only_burst_nodes_and_admission_counts_n() {
     // `get --json` shows it as result.effective.cpus.
     assert_eq!(row.ctl.effective.as_ref().expect("effective")["cpus"]["value"], "2+8", "{:?}", row.ctl.effective);
     // --plan says the same before anything is stored.
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpus": 2, "cpusBurst": 8, "plan": true})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpus": 2, "cpusBurst": 8, "plan": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(j(&r)["effective"]["cpus"]["value"], "2+8", "{}", r.body);
     assert_eq!(row.plan_digest, a.plan.digest().unwrap(), "the burst is in the digest the node checks");
 
     // To the older node: today's plan (no key at all), held to 2, said.
-    let r = submit(d.port, &ws, json!({"node": "k2n4", "cpus": 2, "cpusBurst": 8})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig4", "cpus": 2, "cpusBurst": 8})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert!(warnings(&r).iter().any(|w| w.contains("--cpus 2+8: k2n4 doesn't take idle cores") && w.contains("held to 2")), "{}", r.body);
+    assert!(warnings(&r).iter().any(|w| w.contains("--cpus 2+8: rig4 doesn't take idle cores") && w.contains("held to 2")), "{}", r.body);
     let id = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let a = assigned(&old.frames(), &id).expect("assigned to the older node");
     assert_eq!((a.plan.limits.cpu_millis, a.plan.cpus_burst), (Some(2000), None));
@@ -237,15 +237,15 @@ async fn cpus_n_plus_m_reaches_only_burst_nodes_and_admission_counts_n() {
             }),
         );
     }
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpus": 4})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpus": 4})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let id = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(assigned(&new.frames(), &id).expect("assigned").plan.cpus_burst, None);
 
     // Dark while the CI preview is off; a plain --cpus is untouched.
     std::env::set_var("K2_CI", "off");
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpus": 2, "cpusBurst": 8})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpus": 2, "cpusBurst": 8})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "ci_preview_off"), "{}", r.body);
-    let r = submit(d.port, &ws, json!({"node": "k2n7", "cpus": 2})).await;
+    let r = submit(d.port, &ws, json!({"node": "rig7", "cpus": 2})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 }

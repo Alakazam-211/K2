@@ -202,7 +202,7 @@ fn series() -> JobStats {
 }
 
 async fn submit(port: u16, token: &str, ws: &str, cpus: u64) -> String {
-    let body = json!({"workspace": ws, "node": "k2n7", "argv": ["cargo", "build"], "noSource": true, "memBytes": 16 * GB, "cpus": cpus, "clientJobId": uuid::Uuid::new_v4().simple().to_string()});
+    let body = json!({"workspace": ws, "node": "rig7", "argv": ["cargo", "build"], "noSource": true, "memBytes": 16 * GB, "cpus": cpus, "clientJobId": uuid::Uuid::new_v4().simple().to_string()});
     let r = post(port, "/cli/compute/run", token, body).await;
     assert_eq!(r.status, 200, "{}", r.body);
     j(&r)["job"]["id"].as_str().unwrap().to_string()
@@ -214,7 +214,7 @@ async fn a_jobs_series_is_kept_apart_and_compute_stats_reads_it() {
     let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "jsapp");
     let other = seed_ws(&env, "jsother");
-    active_node("js-1", "k2n7", &ws);
+    active_node("js-1", "rig7", &ws);
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -252,7 +252,7 @@ async fn a_jobs_series_is_kept_apart_and_compute_stats_reads_it() {
     let s = get(d.port, "/cli/compute/stats", &agent, &format!("job={id}")).await;
     assert_eq!(s.status, 200, "{}", s.body);
     let v = j(&s);
-    assert_eq!((v["node"].as_str(), v["wallSecs"].as_i64(), v["cpus"]["guaranteed"].as_f64()), (Some("k2n7"), Some(360), Some(4.0)), "{v}");
+    assert_eq!((v["node"].as_str(), v["wallSecs"].as_i64(), v["cpus"]["guaranteed"].as_f64()), (Some("rig7"), Some(360), Some(4.0)), "{v}");
     let st = &v["stats"];
     assert_eq!(st["points"].as_array().map(Vec::len), Some(72));
     assert_eq!((st["peaks"]["cpus"].as_f64(), st["peaks"]["memBytes"].as_u64()), (Some(3.9), Some(9 * GB)));
@@ -272,7 +272,7 @@ async fn a_jobs_series_is_kept_apart_and_compute_stats_reads_it() {
     compute_ws::test_frame("js-1", state(&plain, g, JobState::Running, now - 10, None));
     compute_ws::test_frame("js-1", state(&plain, g, JobState::Done, now, Some(Outputs::default())));
     let s = get(d.port, "/cli/compute/stats", &agent, &format!("job={plain}")).await;
-    assert!(j(&s)["why"].as_str().unwrap().contains("older than protocol 10 (k2 compute node update k2n7)"), "{}", s.body);
+    assert!(j(&s)["why"].as_str().unwrap().contains("older than protocol 10 (k2 compute node update rig7)"), "{}", s.body);
 
     // Another workspace's agent can't read it; no job named is a usage error.
     let r = get(d.port, "/cli/compute/stats", &passport(&other), &format!("job={id}")).await;

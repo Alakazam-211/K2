@@ -3,7 +3,7 @@
 // a keystroke's update stays near 8 ms. jsdom has no layout and a slow DOM, so
 // the whole-view number overstates a browser's; the decoration-only number is
 // the part Write adds. Both print as MEASURE lines; the asserts are loose so a
-// busy runner doesn't fail them. The real check is the WebKit pass on z3mbpZ.
+// busy runner doesn't fail them. The real check is the WebKit pass on mac-b.
 
 import { describe, expect, it } from 'vitest'
 import { EditorSelection, EditorState } from '@codemirror/state'

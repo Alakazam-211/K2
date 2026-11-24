@@ -171,7 +171,7 @@ describe('k2:canvas@1 shipped files', () => {
 
 describe('k2:canvas@1 the canvas', () => {
   it('shows the Garden’s tiles in its order, with its title, and remembers what the person has seen', async () => {
-    const m = await started({ notes: true, config: { title: 'Compute', tiles: 'notes,compute,nope' }, nodes: [node('k2n12-vin')] })
+    const m = await started({ notes: true, config: { title: 'Compute', tiles: 'notes,compute,nope' }, nodes: [node('rig12-vps')] })
     expect(text(m.doc.getElementById('title'))).toBe('Compute')
     expect(m.C.state().offered).toEqual(['notes', 'compute'])
     expect([...m.doc.querySelectorAll('.cv-tile')].map((t: Any) => t.dataset.tile)).toEqual(['notes', 'compute'])
@@ -181,7 +181,7 @@ describe('k2:canvas@1 the canvas', () => {
   })
 
   it('hides a tile from its ×, stops it, and shows it again from the Tiles menu', async () => {
-    const m = await started({ nodes: [node('k2n12-vin')] })
+    const m = await started({ nodes: [node('rig12-vps')] })
     await until('the first read', () => m.fake.log.nodes === 1)
     tileEl(m, 'compute').querySelector('.cv-x').click()
     expect(tileEl(m, 'compute')).toBeNull()
@@ -247,15 +247,15 @@ describe('k2:canvas@1 the canvas', () => {
 describe('k2:canvas@1 Compute load', () => {
   it('draws each node: running against slots, queued, free CPU and memory, room, held, offline folded', async () => {
     const nodes = [
-      node('k2n10-vin', { running: 3, slots: 3, queued: 2, shared: true, servers: 2, queueFrom: 'node' }),
-      node('k2n11-vin', { running: 0, slots: 2, cpu: { freeMillis: 8000, totalMillis: 8000, idleMillis: 8000 }, who: [], jobs: [] }),
-      node('k2n12-vin', { running: 1, why: 'sew-ci holds a lock' }),
-      node('k2n4-vin', { online: false, state: 'offline', running: 0, lastSeenAt: NOW - 7 * 86400 }),
+      node('rig10-vps', { running: 3, slots: 3, queued: 2, shared: true, servers: 2, queueFrom: 'node' }),
+      node('rig11-vps', { running: 0, slots: 2, cpu: { freeMillis: 8000, totalMillis: 8000, idleMillis: 8000 }, who: [], jobs: [] }),
+      node('rig12-vps', { running: 1, why: 'sew-ci holds a lock' }),
+      node('rig4-vps', { online: false, state: 'offline', running: 0, lastSeenAt: NOW - 7 * 86400 }),
     ]
     const m = await started({ nodes })
     await until('drawn', () => m.doc.querySelectorAll('.cl-node').length === 3)
     const names = [...m.doc.querySelectorAll('.cl-grid:not(.cl-grid-off) .cl-node .cl-name')].map(text)
-    expect(names).toEqual(['k2n10-vin', 'k2n12-vin', 'k2n11-vin'])
+    expect(names).toEqual(['rig10-vps', 'rig12-vps', 'rig11-vps'])
     const cards = m.doc.querySelectorAll('.cl-node')
     expect(cards[0].classList.contains('cl-full')).toBe(true)
     expect(text(cards[0].querySelector('.cl-count'))).toBe('3/3')
@@ -267,7 +267,7 @@ describe('k2:canvas@1 Compute load', () => {
     expect(text(m.doc.querySelector('.cl-meta'))).toBe('4/8 running · 2 queued · 1 with room · 3 online')
     expect(text(cards[0])).toContain('20/32 GB free')
     const fold = m.doc.querySelector('.cl-off-head')
-    expect(text(fold)).toContain('offline (1): k2n4-vin')
+    expect(text(fold)).toContain('offline (1): rig4-vps')
     fold.click()
     expect(text(m.doc.querySelector('.cl-grid-off'))).toContain('seen 7 d ago')
   })

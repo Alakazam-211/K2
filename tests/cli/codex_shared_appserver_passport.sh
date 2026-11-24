@@ -100,7 +100,7 @@ matches() {
     if printf '%s\n' "$2" | _cli_ancestry_has_shared_codex_server "$1"; then echo yes; else echo no; fi
 }
 
-# z3mbpZ, Codex 0.161: pid-update-loop parent, unix listener child.
+# mac-b, Codex 0.161: pid-update-loop parent, unix listener child.
 Z3="$(cat <<'EOF'
     1     0 /sbin/launchd
   200     1 /Users/u/.codex/packages/app-server-daemon/releases/0.161.0-x/bin/codex app-server daemon pid-update-loop

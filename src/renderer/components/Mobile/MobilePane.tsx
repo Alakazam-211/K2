@@ -321,7 +321,7 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
   const s = status.sim
   if (s?.state === 'installing') return `Installing the device tools for ${s.profile?.name ?? 'the device'}… (first use only)`
   // A Mac node's boot names its step ("Finding a Mac node", "Starting on
-  // k2n1-m4", "Booting iPhone 17"); a local boot has none.
+  // rig1-mac", "Booting iPhone 17"); a local boot has none.
   if (s?.state === 'booting') return s.reason ? `${s.reason}…` : `Starting ${s.profile?.name ?? 'the device'}…`
   if (s?.state === 'stopping') return `Stopping ${s.profile?.name ?? 'the device'}…`
   if (s?.state === 'running') return null
@@ -337,7 +337,7 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
       return `The owner of this server must accept ${all} first.`
     }
     const step = lane.needs.find((n) => n.kind === 'owner-step')
-    // A step on another machine already names it ("On k2n1-m4: …").
+    // A step on another machine already names it ("On rig1-mac: …").
     if (step && step.kind === 'owner-step' && step.what.startsWith('On ')) return `${step.what}: ${step.command}`
     if (step && step.kind === 'owner-step') return `The owner of this server must ${step.what} first: ${step.command}`
     if (lane.setup?.running) return `${setupAcceptedLine(lane.setup)}Setting up the device tools: ${lane.detail ?? 'installing…'}`

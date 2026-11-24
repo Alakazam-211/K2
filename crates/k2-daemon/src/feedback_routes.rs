@@ -338,28 +338,28 @@ mod badge_me_tests {
     }
 
     /// The 0.46.0 smoke bug: "This is me (owner)" links the Connect login
-    /// `z3thon`; a ticket assigned to `z3thon` is the owner's.
+    /// `zoe`; a ticket assigned to `zoe` is the owner's.
     #[test]
     fn owner_linked_accounts_are_me_for_the_owner_and_the_linked_login() {
         let people = People {
-            users: vec![user("z3thon", Role::Admin), user("julie", Role::Member)],
-            linked: vec![" Z3thon ".to_string()],
+            users: vec![user("zoe", Role::Admin), user("julie", Role::Member)],
+            linked: vec![" Zoe ".to_string()],
         };
         assert_eq!(
             my_assignee_names(true, None, Some("Rosson"), &people),
-            vec!["owner", "rosson", "z3thon"]
+            vec!["owner", "rosson", "zoe"]
         );
         // The linked login itself is the owner person: same set.
         assert_eq!(
-            my_assignee_names(false, Some("z3thon"), Some("Rosson"), &people),
-            vec!["owner", "rosson", "z3thon"]
+            my_assignee_names(false, Some("zoe"), Some("Rosson"), &people),
+            vec!["owner", "rosson", "zoe"]
         );
         // An unlinked user stays just themself.
         assert_eq!(my_assignee_names(false, Some("julie"), Some("Rosson"), &people), vec!["julie"]);
-        // Unlinked: the owner token is not z3thon (z3thon is an Admin, not the sole Owner).
+        // Unlinked: the owner token is not zoe (zoe is an Admin, not the sole Owner).
         let unlinked = People { users: people.users.clone(), linked: Vec::new() };
         assert_eq!(my_assignee_names(true, None, None, &unlinked), vec!["owner"]);
-        assert_eq!(my_assignee_names(false, Some("z3thon"), None, &unlinked), vec!["z3thon"]);
+        assert_eq!(my_assignee_names(false, Some("zoe"), None, &unlinked), vec!["zoe"]);
     }
 }
 

@@ -294,7 +294,7 @@ mod tests {
     /// orphans are signalled only for a system account.
     #[test]
     fn node_users_are_plain_accounts() {
-        for ok in ["k2node", "_k2node", "k2nodet", "z3thon", "k2.node-1"] {
+        for ok in ["k2node", "_k2node", "k2nodet", "zoe", "k2.node-1"] {
             check_node_user(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
         }
         use crate::admin::tenants::is_system_account;

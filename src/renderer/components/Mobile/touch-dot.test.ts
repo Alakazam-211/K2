@@ -30,7 +30,7 @@ function fakeTimers(): DotTimers & { fire(): void; pending(): number; lastMs: nu
 }
 
 describe('TouchDot', () => {
-  it('z3mbpZ: the lift scale never moves the dot (scale after the translate, no separate scale property)', () => {
+  it('mac-b: the lift scale never moves the dot (scale after the translate, no separate scale property)', () => {
     expect(dotTransform(100, 200, 1)).toBe('translate3d(100px, 200px, 0) translate(-50%, -50%)')
     expect(dotTransform(100, 200, 1.5)).toBe('translate3d(100px, 200px, 0) translate(-50%, -50%) scale(1.5)')
     const el = document.createElement('span')

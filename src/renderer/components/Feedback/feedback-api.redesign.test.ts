@@ -100,19 +100,19 @@ describe('scopes', () => {
     expect(filterByScope(rows, 'mine', []).map((r) => r.id)).toEqual([])
   })
 
-  it("the daemon's ticketMe wins: an owner-linked account (z3thon) is Waiting on me", () => {
+  it("the daemon's ticketMe wins: an owner-linked account (zoe) is Waiting on me", () => {
     const linked = [
       ...rows,
-      { id: 'z', status: 'waiting' as const, assignees: ['z3thon'] },
-      { id: 'y', status: 'needs_discussion' as const, assignees: [' Z3THON '] },
+      { id: 'z', status: 'waiting' as const, assignees: ['zoe'] },
+      { id: 'y', status: 'needs_discussion' as const, assignees: [' ZOE '] },
     ]
     const me = myAssigneeNames(
-      { owner: true, username: null, ticketMe: ['owner', 'rosson', ' Z3thon ', '', 'owner'] },
+      { owner: true, username: null, ticketMe: ['owner', 'rosson', ' Zoe ', '', 'owner'] },
       'Ignored',
     )
-    expect(me).toEqual(['owner', 'rosson', 'z3thon'])
+    expect(me).toEqual(['owner', 'rosson', 'zoe'])
     expect(filterByScope(linked, 'waiting', me).map((r) => r.id)).toEqual(['a', 'e', 'z', 'y'])
-    // Without the link (older daemon / unlinked): z3thon's tickets are not mine.
+    // Without the link (older daemon / unlinked): zoe's tickets are not mine.
     const unlinked = myAssigneeNames({ owner: true, username: null }, 'Rosson')
     expect(filterByScope(linked, 'waiting', unlinked).map((r) => r.id)).toEqual(['a', 'e'])
     // An empty daemon list is respected (no fallback guessing).

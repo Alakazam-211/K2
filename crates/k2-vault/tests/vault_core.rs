@@ -442,15 +442,15 @@ fn explicit_grant_env_name_beats_the_implicit_own_workspace_candidate() {
     // A workspace's own password (default delivery env) with a name that
     // isn't a valid env name, then an explicit env grant to that same
     // workspace naming the variable.
-    let r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "mini-k2n1-admin-pw", Kind::Password);
+    let r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), "mini-rig1-admin-pw", Kind::Password);
     v.put(r, SecretBytes::from_slice(b"k2test-admin-pw-123456"), &Actor::Owner).expect("put");
-    let sel = Selector::user(Scope::workspace("ws1"), "mini-k2n1-admin-pw");
+    let sel = Selector::user(Scope::workspace("ws1"), "mini-rig1-admin-pw");
     v.grant(
         GrantRequest {
             selector: sel.clone(),
             consumer: Consumer::workspace("ws1"),
             delivery: Delivery::Env,
-            env_name: Some("MINI_K2N1_PW".into()),
+            env_name: Some("MINI_RIG1_PW".into()),
             file_name: None,
             hosts_narrowed: None,
             expires_at: None,
@@ -460,10 +460,10 @@ fn explicit_grant_env_name_beats_the_implicit_own_workspace_candidate() {
     )
     .expect("grant");
     let r = v.resolve(&sel, Use::Env, &session("ws1")).expect("resolve");
-    assert_eq!(r.env_name.as_deref(), Some("MINI_K2N1_PW"));
+    assert_eq!(r.env_name.as_deref(), Some("MINI_RIG1_PW"));
     let items = v.spawn_items(&session("ws1")).expect("items");
     assert_eq!(items.len(), 1, "{items:?}");
-    assert_eq!(items[0].env_name.as_deref(), Some("MINI_K2N1_PW"));
+    assert_eq!(items[0].env_name.as_deref(), Some("MINI_RIG1_PW"));
 }
 
 #[test]
@@ -471,13 +471,13 @@ fn unnamed_env_delivery_derives_a_valid_env_name_and_still_denies() {
     let t = TestDir::new("derive");
     let ks = Arc::new(FakeKeyStore::new());
     let v = open(&t, &ks);
-    for name in ["mini-k2n1-admin-pw", "k2-token"] {
+    for name in ["mini-rig1-admin-pw", "k2-token"] {
         let r = PutRequest::new(Namespace::User, Scope::workspace("ws1"), name, Kind::Password);
         v.put(r, SecretBytes::from_slice(b"k2test-admin-pw-123456"), &Actor::Owner).expect("put");
     }
     // Own secret, nothing names the variable: derived, not the raw name.
-    let r = v.resolve(&Selector::user(Scope::workspace("ws1"), "mini-k2n1-admin-pw"), Use::Env, &session("ws1")).expect("resolve");
-    assert_eq!(r.env_name.as_deref(), Some("MINI_K2N1_ADMIN_PW"));
+    let r = v.resolve(&Selector::user(Scope::workspace("ws1"), "mini-rig1-admin-pw"), Use::Env, &session("ws1")).expect("resolve");
+    assert_eq!(r.env_name.as_deref(), Some("MINI_RIG1_ADMIN_PW"));
     // A derived name that's denied (K2_*) is never delivered at spawn.
     let r = v.resolve(&Selector::user(Scope::workspace("ws1"), "k2-token"), Use::Env, &session("ws1")).expect("resolve");
     let denied = r.env_name.expect("env name");
@@ -485,12 +485,12 @@ fn unnamed_env_delivery_derives_a_valid_env_name_and_still_denies() {
     assert_eq!(delivery::validate_env_name(&denied).expect_err("denied").code, "env_name_not_allowed");
     let items = v.spawn_items(&session("ws1")).expect("items");
     let names: Vec<_> = items.iter().map(|i| (i.name.as_str(), i.env_name.as_deref())).collect();
-    assert_eq!(names, vec![("mini-k2n1-admin-pw", Some("MINI_K2N1_ADMIN_PW"))]);
+    assert_eq!(names, vec![("mini-rig1-admin-pw", Some("MINI_RIG1_ADMIN_PW"))]);
     // An env grant without --env-name stores the derived name.
     let g = v
         .grant(
             GrantRequest {
-                selector: Selector::user(Scope::workspace("ws1"), "mini-k2n1-admin-pw"),
+                selector: Selector::user(Scope::workspace("ws1"), "mini-rig1-admin-pw"),
                 consumer: Consumer::workspace("ws2"),
                 delivery: Delivery::Env,
                 env_name: None,
@@ -502,7 +502,7 @@ fn unnamed_env_delivery_derives_a_valid_env_name_and_still_denies() {
             &Actor::Owner,
         )
         .expect("grant");
-    assert_eq!(g.env_name.as_deref(), Some("MINI_K2N1_ADMIN_PW"));
+    assert_eq!(g.env_name.as_deref(), Some("MINI_RIG1_ADMIN_PW"));
 }
 
 #[test]

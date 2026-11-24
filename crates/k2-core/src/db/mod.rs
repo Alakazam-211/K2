@@ -6742,7 +6742,7 @@ mod tests {
         run_migrations_through(&conn, Some("0225_app_users_switch")).unwrap();
         conn.execute(
             "INSERT INTO compute_nodes (id, name, fingerprint, public_key_pem, state, enrolled_via, enrolled_at) \
-             VALUES ('n1', 'k2n4', 'fp', 'pem', 'active', 'code', 1)",
+             VALUES ('n1', 'rig4', 'fp', 'pem', 'active', 'code', 1)",
             [],
         )
         .unwrap();

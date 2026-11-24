@@ -25,7 +25,7 @@
 // frozen window is reloaded on its own: a custom Garden widget stuck in
 // `while (true) {}` freezes only the window it runs in.
 //
-// 0.46.9 — false reloads. z3mbp's field log had ~38,000 reload lines, almost
+// 0.46.9 — false reloads. mac-a's field log had ~38,000 reload lines, almost
 // all "attempt 1/3" (the reloaded page beat at once, so the renderer was
 // alive) and in runs of up to 15,517 for one window. A hidden, minimised or
 // occluded window has its JS timers throttled by WebKit / App Nap, so the

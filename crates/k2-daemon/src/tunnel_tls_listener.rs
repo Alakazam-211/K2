@@ -52,7 +52,7 @@ use k2_core::brand::{CLI_NAME, LOGIN_NAME};
 ///
 /// **Keyed by subdomain** (0.45.2): the listener serves ONE name. Before
 /// 0.45.2 a tunnel start reused any live listener, so after "release `afs`,
-/// connect `k2n1-m4`" the daemon kept serving the `afs.k2.dev` certificate
+/// connect `rig1-mac`" the daemon kept serving the `afs.k2.dev` certificate
 /// until a restart (Reggie's Mac mini: `CertificateUnknown` for every
 /// direct client). [`ensure_spawned_blocking`] now replaces a listener that
 /// serves another name, and [`retire_listener`] is the identity-changed
@@ -1157,7 +1157,7 @@ async fn serve_one(
         // listener) every 10 s (`probe_local_desync`), and `ensure` checks
         // the recorded port the same way. Each used to log "TLS handshake
         // failed: closed before the first byte" (163 MB of
-        // daemon.stderr.log on z3mbpZ). Nothing to serve, nothing to log.
+        // daemon.stderr.log on mac-b). Nothing to serve, nothing to log.
         Err(e) if e == crate::client_ip::CLOSED_BEFORE_FIRST_BYTE => return Ok(()),
         Err(e) => return Err(format!("TLS handshake failed: {e}")),
     };

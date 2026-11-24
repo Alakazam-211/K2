@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn three_nodes_on_three_hosts_get_one_job_each() {
-        let nodes = [node("k2n7", "h7"), node("k2n8", "h8"), node("k2n9", "h9")];
+        let nodes = [node("rig7", "h7"), node("rig8", "h8"), node("rig9", "h9")];
         let p = place(&nodes, &[single(), dual()], now).unwrap();
         assert_eq!(p.len(), 3);
         let (l1, v1, l3) = (at(&p, "L1"), at(&p, "V1"), at(&p, "L3"));
@@ -655,18 +655,18 @@ mod tests {
     #[test]
     fn only_keys_skips_nodes_the_signer_has_not_accepted() {
         let fp = |n: &SeatNode| n.entry.as_ref().unwrap().node_fp.clone();
-        let all = [node("k2n7", "h7"), node("k2n8", "h8"), node("k2n9", "h9")];
+        let all = [node("rig7", "h7"), node("rig8", "h8"), node("rig9", "h9")];
         // One accepted node: a dual build can't be placed, before any job.
         let mut one = all.clone();
         only_keys(&mut one, &[fp(&all[0])]);
         let e = place(&one, &[dual()], now).unwrap_err();
         assert_eq!(e.code, codes::SEAT_DEGRADED);
-        assert!(e.message.contains("k2n8: the release signer hasn't accepted its key yet"), "{}", e.message);
+        assert!(e.message.contains("rig8: the release signer hasn't accepted its key yet"), "{}", e.message);
         // Two accepted, on two hosts: the set goes on exactly those.
         let mut two = all.clone();
         only_keys(&mut two, &[fp(&all[0]), fp(&all[2])]);
         let p = place(&two, &[dual(), single()], now).unwrap();
-        assert!(p.iter().all(|x| x.node == "k2n7" || x.node == "k2n9"), "{p:?}");
+        assert!(p.iter().all(|x| x.node == "rig7" || x.node == "rig9"), "{p:?}");
         // None accepted: nothing can take it.
         let mut none = all.clone();
         only_keys(&mut none, &[]);
@@ -739,7 +739,7 @@ mod tests {
         .unwrap();
         mark_release(&c, "r1", "1.2.3", "acme", &"b".repeat(40), "seat-1").unwrap();
         assert!(mark_release(&c, "nope", "1.2.3", "acme", "t", "s").is_err());
-        let p = Placed { build: "linux-x86_64".into(), label: "L1".into(), role: Role::Build, node_id: "n7".into(), node: "k2n7".into(), why: "starts now".into() };
+        let p = Placed { build: "linux-x86_64".into(), label: "L1".into(), role: Role::Build, node_id: "n7".into(), node: "rig7".into(), why: "starts now".into() };
         insert_job(&c, "r1", &p, "pending", "submitting").unwrap();
         let (k, f) = release_facts(&c, "r1").unwrap();
         assert_eq!((k.as_str(), f.version.as_deref(), f.seat_id.as_deref()), (kind::RELEASE, Some("1.2.3"), Some("seat-1")));

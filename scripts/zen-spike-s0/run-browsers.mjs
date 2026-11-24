@@ -1,6 +1,6 @@
 // Zen v2 S0 spike: drive Playwright WebKit and Chromium over serve.ts and
 // print the results (prd-zen-user-widgets-v2 §15). A first check only; the
-// decisive runs are the signed app on z3mbpZ and z13flow.
+// decisive runs are the signed app on mac-b and laptop-a.
 //
 //   bun scripts/zen-spike-s0/serve.ts --port 5199 &
 //   node scripts/zen-spike-s0/run-browsers.mjs [http://127.0.0.1:5199] [out.json]

@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn labels_are_single_lowercase_k2dev_labels() {
-        for ok in ["rosson", "k2n1-m4", "a", "x9"] {
+        for ok in ["rosson", "rig1-mac", "a", "x9"] {
             assert!(label_ok(ok), "{ok}");
         }
         for bad in ["", "Rosson", "rosson.k2.dev", "staging.rosson", "-a", "a-", "a_b", &"a".repeat(64)] {

@@ -5,7 +5,7 @@
 //! **0.46.6 (Rosson 2026-10-27): both, with a switch.** The switch
 //! ([`storage`]: `llmAccountsStorage` in the app settings, overridden by
 //! `K2_LLM_ACCOUNTS_STORAGE=files|vault`) picks which store is the source
-//! of truth. Default `files` everywhere; `vault` on z3mbp, one Linux box
+//! of truth. Default `files` everywhere; `vault` on mac-a, one Linux box
 //! and the test fleet.
 //! - **files**: today's code, unchanged ([`FileStore`]). The vault is
 //!   never touched.

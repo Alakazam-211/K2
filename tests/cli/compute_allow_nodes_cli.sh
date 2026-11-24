@@ -46,8 +46,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ASK_ONE='k2 permission request compute.allow-nodes nodes=k2n13-vin --why "<what you need it for>"'
-ASK_TWO='k2 permission request compute.allow-nodes nodes=k2n13-vin,k2n14-vin --why "<what you need it for>"'
+ASK_ONE='k2 permission request compute.allow-nodes nodes=rig13-vps --why "<what you need it for>"'
+ASK_TWO='k2 permission request compute.allow-nodes nodes=rig13-vps,rig14-vps --why "<what you need it for>"'
 
 cat > "$SANDBOX/stub.py" <<'PY'
 import json, sys
@@ -76,7 +76,7 @@ class H(BaseHTTPRequestHandler):
         with open(LOG, "a") as f:
             f.write(json.dumps({"path": u.path, "body": None}) + "\n")
         if u.path == "/cli/compute/nodes":
-            return self.reply(200, {"nodes": [], "allowNodes": ["k2n13-vin"], "allowNodesWorkspace": "builder", "allowNodesFixed": True})
+            return self.reply(200, {"nodes": [], "allowNodes": ["rig13-vps"], "allowNodesWorkspace": "builder", "allowNodesFixed": True})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -88,7 +88,7 @@ class H(BaseHTTPRequestHandler):
             return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
         if "fixed" in body:
             return self.reply(200, {"workspace": "builder", "list": True, "change": "fixed", "fixed": body["fixed"],
-                                    "nodes": [{"name": "k2n13-vin", "state": "active", "granted": True}]})
+                                    "nodes": [{"name": "rig13-vps", "state": "active", "granted": True}]})
         if body.get("workspace") == "managed-ws":
             key = "add" if body.get("add") else ("remove" if body.get("remove") else "clear")
             value = body.get(key) if key != "clear" else "true"
@@ -105,9 +105,9 @@ class H(BaseHTTPRequestHandler):
                 e["hintTemplate"] = t
             return self.reply(403, {"error": e, "permission": NOT})
         add = body.get("add") or ""
-        if "k2n9-ungranted" in add:
-            return self.reply(403, {"error": {"code": "allow_nodes_not_granted", "workspace": "builder", "notGranted": "k2n9-ungranted",
-                                              "hint": "k2n9-ungranted is not granted to workspace builder"},
+        if "rig9-ungranted" in add:
+            return self.reply(403, {"error": {"code": "allow_nodes_not_granted", "workspace": "builder", "notGranted": "rig9-ungranted",
+                                              "hint": "rig9-ungranted is not granted to workspace builder"},
                                     "permission": NOT})
         return self.reply(403, {"error": {"code": "allow_nodes_needs_person", "workspace": "builder", "nodes": add,
                                           "hint": "adding %s to workspace builder's compute node list lets its jobs reach more machines" % add},
@@ -140,41 +140,41 @@ run() {
 }
 
 echo "== an agent's add: exit 3, ends with the ask =="
-run --add k2n13-vin
+run --add rig13-vps
 expect_eq "add exits 3" "$rc" "3"
 expect_has "refusal code" "$err" "allow_nodes_needs_person"
 expect_eq "it ends with the ask" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_ONE"
-expect_eq "the body names exactly that node" "$(last_add)" "k2n13-vin"
+expect_eq "the body names exactly that node" "$(last_add)" "rig13-vps"
 
-run --add k2n13-vin,k2n14-vin
+run --add rig13-vps,rig14-vps
 expect_eq "comma form exits 3" "$rc" "3"
 expect_eq "comma form ends with the ask for both" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_TWO"
-expect_eq "comma form body" "$(last_add)" "k2n13-vin,k2n14-vin"
+expect_eq "comma form body" "$(last_add)" "rig13-vps,rig14-vps"
 
-run --add k2n13-vin --add k2n14-vin
-expect_eq "repeated --add body" "$(last_add)" "k2n13-vin,k2n14-vin"
+run --add rig13-vps --add rig14-vps
+expect_eq "repeated --add body" "$(last_add)" "rig13-vps,rig14-vps"
 expect_eq "repeated --add ends with the ask for both" "$(printf '%s\n' "$err" | tail -1)" "Ask with: $ASK_TWO"
 
 echo "== not requestable: an ungranted node, another workspace =="
-run --add k2n9-ungranted
+run --add rig9-ungranted
 expect_eq "ungranted exits 3" "$rc" "3"
 expect_has "ungranted code" "$err" "allow_nodes_not_granted"
 expect_eq "ungranted can't be requested" "$(printf '%s\n' "$err" | tail -1)" "It can't be requested."
 set +e
-err="$("$K2" compute allow-nodes --add k2n13-vin --workspace other-ws 2>&1 </dev/null >/dev/null)"; rc=$?
+err="$("$K2" compute allow-nodes --add rig13-vps --workspace other-ws 2>&1 </dev/null >/dev/null)"; rc=$?
 set -e
 expect_eq "another workspace exits 3" "$rc" "3"
 expect_eq "another workspace can't be requested" "$(printf '%s\n' "$err" | tail -1)" "It can't be requested."
 expect_has "another workspace: the hint with this CLI's names" "$err" "a person runs k2 compute allow-nodes --add <node> --workspace other-ws from a terminal outside K2"
 case "$err" in *"zz compute"*|*"Globex Desk"*) bad "another workspace: the server's names leaked: $err" ;; *) ok "another workspace: no server names" ;; esac
 set +e
-err="$("$K2" compute allow-nodes --add k2n13-vin --workspace old-ws 2>&1 </dev/null >/dev/null)"; rc=$?
+err="$("$K2" compute allow-nodes --add rig13-vps --workspace old-ws 2>&1 </dev/null >/dev/null)"; rc=$?
 set -e
 expect_eq "no template (an older daemon) exits 3" "$rc" "3"
 expect_has "no template: the hint as sent" "$err" "a person runs zz compute allow-nodes --add <node> --workspace old-ws from a terminal outside Globex Desk"
 
 echo "== a managing agent: another workspace's list asks on its card =="
-for change in "--add k2n13-vin:add=k2n13-vin" "--remove k2n14-vin:remove=k2n14-vin" "--clear:clear=true"; do
+for change in "--add rig13-vps:add=rig13-vps" "--remove rig14-vps:remove=rig14-vps" "--clear:clear=true"; do
     flags="${change%%:*}"
     want="${change#*:}"
     set +e
@@ -213,7 +213,7 @@ set +e
 out="$("$K2" compute nodes --workspace builder 2>&1 </dev/null)"; rc=$?
 set -e
 expect_eq "nodes exits 0" "$rc" "0"
-expect_has "nodes: the list" "$out" "node list (builder): jobs go only to k2n13-vin"
+expect_has "nodes: the list" "$out" "node list (builder): jobs go only to rig13-vps"
 expect_has "nodes: fixed" "$out" "  fixed: new nodes do not join it"
 
 echo "== help and study name the card =="

@@ -1490,7 +1490,7 @@ mod tests {
     #[test]
     fn owner_args_are_checked() {
         let fp = "ab".repeat(32);
-        let ok = serde_json::json!({"server": "z3thon.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true});
+        let ok = serde_json::json!({"server": "zoe.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true});
         check_verb_args(VERB_OWNER, &ok).unwrap();
         let a: OwnerArgs = serde_json::from_value(ok).unwrap();
         assert_eq!((a.old, a.caches, a.now), (OldOwner::Revoke, Caches::Wipe, true));
@@ -1500,11 +1500,11 @@ mod tests {
             serde_json::json!({"server": "slot:0"}),
             serde_json::json!({"server": "slot:9"}),
             serde_json::json!({"server": "a b"}),
-            serde_json::json!({"server": "z3thon.k2.dev", "fp": "abc"}),
-            serde_json::json!({"server": "z3thon.k2.dev", "fp": "AB".repeat(32)}),
-            serde_json::json!({"server": "z3thon.k2.dev", "old": "drop"}),
-            serde_json::json!({"server": "z3thon.k2.dev", "caches": "keep"}),
-            serde_json::json!({"server": "z3thon.k2.dev", "surprise": 1}),
+            serde_json::json!({"server": "zoe.k2.dev", "fp": "abc"}),
+            serde_json::json!({"server": "zoe.k2.dev", "fp": "AB".repeat(32)}),
+            serde_json::json!({"server": "zoe.k2.dev", "old": "drop"}),
+            serde_json::json!({"server": "zoe.k2.dev", "caches": "keep"}),
+            serde_json::json!({"server": "zoe.k2.dev", "surprise": 1}),
             serde_json::json!({}),
         ] {
             assert!(check_verb_args(VERB_OWNER, &bad).is_err(), "{bad}");

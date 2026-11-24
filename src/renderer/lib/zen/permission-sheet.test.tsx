@@ -54,7 +54,7 @@ describe('the widget’s copy of the card (closed shape, K2’s words)', () => {
       setting: 'Allow compute nodes',
       direction: 'loosen',
       duration: 'until someone turns it off',
-      why: 'billing says: Run the test suite on k2n2-m1; it takes 40 min here',
+      why: 'billing says: Run the test suite on rig2-mac; it takes 40 min here',
       line: null,
       button: 'Review and answer',
       count: 1,
@@ -299,7 +299,7 @@ describe('the kit draws a permission card with one button that asks K2', () => {
     expect(block.getAttribute('data-k2t-permission')).toBe('pending')
     expect(block.querySelector('.k2t-perm-title')?.textContent).toBe("Let billing run jobs on this server's compute nodes.")
     expect(block.querySelector('.k2t-perm-tag')?.textContent).toBe('Loosens access')
-    expect(block.querySelector('.k2t-perm-why')?.textContent).toBe('billing says: Run the test suite on k2n2-m1; it takes 40 min here')
+    expect(block.querySelector('.k2t-perm-why')?.textContent).toBe('billing says: Run the test suite on rig2-mac; it takes 40 min here')
     // The fallback prompt isn't drawn, and neither are the raw options.
     expect(doc.body.textContent).not.toContain('billing asks:')
     const chips = [...doc.querySelectorAll<HTMLButtonElement>('.k2t-chip')]

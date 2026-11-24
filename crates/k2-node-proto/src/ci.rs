@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn names() {
-        for ok in ["k2n7-vin", "ci-standard", "a", "rosson.k2.dev", "linux-x86_64"] {
+        for ok in ["rig7-vps", "ci-standard", "a", "rosson.k2.dev", "linux-x86_64"] {
             assert!(is_name(ok), "{ok}");
         }
         for bad in ["", "-a", "A", "a b", "a/b", &"a".repeat(64)] {

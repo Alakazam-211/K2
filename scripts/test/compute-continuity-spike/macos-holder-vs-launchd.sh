@@ -17,8 +17,8 @@
 # It never touches the real node: label dev.k2.spike-node, hidden user
 # _k2spike, home /var/k2spike; all removed at the end (also on failure).
 #
-# Needs: root on a Mac mini that is NOT mid-job for anyone (k2n2-m1 /
-# k2n3-m1 when idle; ask Sew if its CI holds one). macOS 14+. ~2 minutes.
+# Needs: root on a Mac mini that is NOT mid-job for anyone (rig2-mac /
+# rig3-mac when idle; ask Sew if its CI holds one). macOS 14+. ~2 minutes.
 #
 #   K2_SPIKE_OK=1 sudo -E bash macos-holder-vs-launchd.sh [--report PATH] [--keep]
 #

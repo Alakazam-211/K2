@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn room_words_name_the_slot_limit_and_the_default_reservation() {
-        // CE-8 acceptance 1 (k2n7-vin, 10-29): parallel 3, three jobs
+        // CE-8 acceptance 1 (rig7-vps, 10-29): parallel 3, three jobs
         // without --cpus hold all 12 CPUs, load ~1 (idle ~8).
         let f = WaitFacts {
             free_cpu_millis: Some(0),

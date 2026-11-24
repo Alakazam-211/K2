@@ -240,11 +240,11 @@ mod tests {
             throttled_usec: Some(110_000_000),
             oom_events: Some(0),
         };
-        let v = json!({"short": "ab12cd34", "state": "done", "node": "k2n7", "generation": 1, "wallSecs": 360,
+        let v = json!({"short": "ab12cd34", "state": "done", "node": "rig7", "generation": 1, "wallSecs": 360,
             "cpus": {"guaranteed": 4.0, "burst": null}, "memLimitBytes": 16u64 << 30, "statsGeneration": 1,
             "stats": view(&s, Some(4000), None, Some(360))});
         let t = render(&v);
-        assert_eq!(t[0], "stats · job ab12cd34 · done · k2n7 · ran 6m00s · attempt 1");
+        assert_eq!(t[0], "stats · job ab12cd34 · done · rig7 · ran 6m00s · attempt 1");
         assert_eq!(t[1], "  every 5s, 72 points");
         assert!(t[2].starts_with("  cpu     peak 3.9    of --cpus 4  ████"), "{}", t[2]);
         assert!(t[3].starts_with("  memory  peak 9.0G   of 16G  ▁"), "{}", t[3]);
@@ -256,8 +256,8 @@ mod tests {
         assert_eq!(t[8], "  oom kills: 0");
         assert_eq!(t[9], "  (no per-job network numbers (a cgroup doesn't give them cheaply))");
         // No series: the reason; a burst job's header.
-        let none = json!({"short": "old00000", "state": "done", "node": "k2n4", "generation": 1, "wallSecs": 30, "stats": null, "why": "no series for it"});
-        assert_eq!(render(&none), vec!["stats · job old00000 · done · k2n4 · ran 30s · attempt 1", "  no series: no series for it"]);
+        let none = json!({"short": "old00000", "state": "done", "node": "rig4", "generation": 1, "wallSecs": 30, "stats": null, "why": "no series for it"});
+        assert_eq!(render(&none), vec!["stats · job old00000 · done · rig4 · ran 30s · attempt 1", "  no series: no series for it"]);
         let burst = json!({"short": "b", "state": "done", "node": "n", "generation": 2, "wallSecs": 4000, "statsGeneration": 1, "cpus": {"guaranteed": 4.0, "burst": 8.0}, "stats": view(&s, Some(4000), Some(8000), None)});
         let t = render(&burst);
         assert_eq!(t[0], "stats · job b · done · n · ran 1h06m · attempt 2");

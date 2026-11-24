@@ -659,7 +659,7 @@ async fn sync_by_bundle_runs_in_a_worktree_at_the_commit_in_a_warm_slot_next_tim
     assert_eq!((src.slot, src.warmth.as_deref()), (None, Some("private")));
 }
 
-/// 0.46.18 (jobs 9f22e22f on k2n16, e1f2a581 on k2n21): a job that takes
+/// 0.46.18 (jobs 9f22e22f on rig16, e1f2a581 on rig21): a job that takes
 /// the warm slot the last job of its project just gave back starts while
 /// that job's folder is still being stripped (its worktree removed and the
 /// shared mirror pruned). Many times over, back to back: each one starts
@@ -910,7 +910,7 @@ async fn rss_over_the_cap_kills_the_job() {
 }
 
 /// git works in the job's own checkout even though the job user doesn't
-/// own it (it's the node's mirror worktree; k2n4, 2026-10-27): the node
+/// own it (it's the node's mirror worktree; rig4, 2026-10-27): the node
 /// lists it as a safe directory in the job's env only. Git's own test knob
 /// makes it treat every folder as someone else's, as on a walled node; the
 /// same command without the node's entries is refused "dubious ownership".
@@ -921,7 +921,7 @@ async fn git_works_in_the_jobs_own_checkout_it_does_not_own() {
     let (repo, _first, second) = temp_repo();
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
-    // The read commands a job runs on its own code (k2n9 on 0.46.4, before
+    // The read commands a job runs on its own code (rig9 on 0.46.4, before
     // the fix: `git diff` said "Not a git repository", its wording for a
     // repo refused as dubious ownership) all work; the knob stands in for
     // the job user not owning the node's checkout.

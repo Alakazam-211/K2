@@ -92,7 +92,7 @@ import {
   type ConnectHost,
 } from '@/stores/connect-host'
 
-const SAME_PATH = '/Users/z3thon/DevProjects/K2'
+const SAME_PATH = '/Users/zoe/DevProjects/K2'
 const SAME_PROJECT = 'p-k2'
 
 function host(over: Partial<ConnectHost>): ConnectHost {
@@ -109,7 +109,7 @@ function host(over: Partial<ConnectHost>): ConnectHost {
   }
 }
 const A = host({})
-const B = host({ id: 'b', label: 'B', hostname: 'z3thon.k2.dev', token: 'tok-b' })
+const B = host({ id: 'b', label: 'B', hostname: 'zoe.k2.dev', token: 'tok-b' })
 
 beforeEach(() => {
   mem.clear()
@@ -150,9 +150,9 @@ describe('app event bus per server', () => {
     const b = openAppBus(scopeForHost(B))
     expect(p).not.toBe(b)
     expect(p.scopeId).toBe('primary')
-    expect(b.scopeId).toBe('host:z3thon.k2.dev')
+    expect(b.scopeId).toBe('host:zoe.k2.dev')
     expect(openAppBus(primaryScope())).toBe(p)
-    expect(openAppBus(scopeForHost('z3thon.k2.dev'))).toBe(b)
+    expect(openAppBus(scopeForHost('zoe.k2.dev'))).toBe(b)
   })
 
   it('same path + project on two servers: an event on A never reaches B and vice versa', async () => {
@@ -176,7 +176,7 @@ describe('app event bus per server', () => {
     expect(openAppBus(a).openSockets).toBe(1)
     expect(openAppBus(b).openSockets).toBe(1)
     const wsA = socketFor('wss://rosson.k2.dev/cli/sessions/events?path=&token=tok-a')
-    const wsB = socketFor('wss://z3thon.k2.dev/cli/sessions/events?path=&token=tok-b')
+    const wsB = socketFor('wss://zoe.k2.dev/cli/sessions/events?path=&token=tok-b')
 
     push(wsA, { kind: 'fs_changed', workspacePath: SAME_PATH, paths: [`${SAME_PATH}/a.txt`] })
     push(wsA, { kind: 'session_added', workspace_path: SAME_PATH, agent_name: SAME_PROJECT, args: [], isV2: true })
@@ -203,7 +203,7 @@ describe('app event bus per server', () => {
     const off = onFsChanged(primaryScope(), (e) => primarySeen.push(e.workspacePath))
     const unsub = subscribeToActiveState(scopeForHost(B))
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1))
-    push(socketFor('wss://z3thon.k2.dev/'), { kind: 'fs_changed', workspacePath: SAME_PATH, paths: [] })
+    push(socketFor('wss://zoe.k2.dev/'), { kind: 'fs_changed', workspacePath: SAME_PATH, paths: [] })
     expect(primarySeen).toEqual([])
     unsub()
     off()
@@ -225,8 +225,8 @@ describe('app event bus per server', () => {
       [
         `wss://rosson.k2.dev${q}&token=tok-a`,
         `wss://rosson.k2.dev${q}&token=tok-a`,
-        `wss://z3thon.k2.dev${q}&token=tok-b`,
-        `wss://z3thon.k2.dev${q}&token=tok-b`,
+        `wss://zoe.k2.dev${q}&token=tok-b`,
+        `wss://zoe.k2.dev${q}&token=tok-b`,
       ].sort(),
     )
     for (const off of offs) off()
@@ -254,16 +254,16 @@ describe('grid dial queue per server', () => {
     const a1 = openQueuedGridWebSocket(a, `wss://rosson.k2.dev${url}`)
     const a2 = openQueuedGridWebSocket(a, `wss://rosson.k2.dev${url}`)
     const a3 = openQueuedGridWebSocket(a, `wss://rosson.k2.dev${url}`)
-    const b1 = openQueuedGridWebSocket(b, `wss://z3thon.k2.dev${url}`)
+    const b1 = openQueuedGridWebSocket(b, `wss://zoe.k2.dev${url}`)
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(3))
     expect(gridDialInflightForTests(a)).toBe(2)
     expect(gridDialInflightForTests(b)).toBe(1)
     expect(gridDialInflightForTests(null)).toBe(3)
     const dialed = FakeWebSocket.instances.map((w) => w.url)
     expect(dialed.filter((u) => u.startsWith('wss://rosson.k2.dev/'))).toHaveLength(2)
-    expect(dialed.filter((u) => u.startsWith('wss://z3thon.k2.dev/'))).toHaveLength(1)
+    expect(dialed.filter((u) => u.startsWith('wss://zoe.k2.dev/'))).toHaveLength(1)
     // Opening B's socket frees B's slot only; A's third dial still waits for A.
-    const wsB = socketFor('wss://z3thon.k2.dev/')
+    const wsB = socketFor('wss://zoe.k2.dev/')
     wsB.readyState = 1
     wsB.onopen!()
     await expect(b1).resolves.toBe(wsB)
@@ -291,7 +291,7 @@ describe('grid dial queue per server', () => {
     useConnectHostStore.getState().addHost(C)
     useConnectHostStore.getState().selectHost(A)
     const scopes = [scopeForHost(A), scopeForHost(B), scopeForHost(C)]
-    const hostsOf = ['wss://rosson.k2.dev/', 'wss://z3thon.k2.dev/', 'wss://c.k2.dev/']
+    const hostsOf = ['wss://rosson.k2.dev/', 'wss://zoe.k2.dev/', 'wss://c.k2.dev/']
     const dials: Array<Promise<unknown>> = []
     for (let i = 0; i < 3; i++) {
       for (let n = 0; n < 3; n++) dials.push(openQueuedGridWebSocket(scopes[i]!, `${hostsOf[i]}grid?n=${n}`))
@@ -334,10 +334,10 @@ describe('grid dial queue per server', () => {
     expect(FakeWebSocket.instances).toHaveLength(1)
     // A second socket for A waits for the first handshake; B is not held up.
     const second = openQueuedWebSocket(a, 'wss://rosson.k2.dev/cli/overlay/events')
-    const onB = await openQueuedWebSocket(scopeForHost(B), 'wss://z3thon.k2.dev/cli/sessions/events?path=')
+    const onB = await openQueuedWebSocket(scopeForHost(B), 'wss://zoe.k2.dev/cli/sessions/events?path=')
     expect(FakeWebSocket.instances.map((w) => w.url)).toEqual([
       'wss://rosson.k2.dev/cli/sessions/events?path=',
-      'wss://z3thon.k2.dev/cli/sessions/events?path=',
+      'wss://zoe.k2.dev/cli/sessions/events?path=',
     ])
     expect(gridDialInflightForTests(a)).toBe(1)
     ;(first as unknown as FakeWebSocket).fire('open')

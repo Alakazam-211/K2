@@ -7,7 +7,7 @@
 # ID, Trash, launchctl) or the human's home. Nothing is silently skipped:
 # every failure is listed with a guessed reason.
 #
-# Run ON the target machine (a Mac mini or z13flow) as root:
+# Run ON the target machine (a Mac mini or laptop-a) as root:
 #   scp scripts/node/spikes/s0a-tests-as-hidden-user.sh <user>@<host>:
 #   ssh -t <user>@<host> sudo bash s0a-tests-as-hidden-user.sh --sha <commit>
 # Options:
@@ -18,7 +18,7 @@
 #   --report PATH    where to write the report (default /var/tmp/k2-s0a-report.txt)
 #
 # Linux: waits while /home/sew-ci/sew-build/.job.lock exists and holds
-# /var/tmp/k2-smoke.lock for the whole run (z13flow is shared with Sew CI).
+# /var/tmp/k2-smoke.lock for the whole run (laptop-a is shared with Sew CI).
 # Needs network (rustup, crates.io, github.com). Takes 30–90 minutes.
 
 set -euo pipefail

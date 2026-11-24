@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Widgets on K2's REAL frame runtime (sdk/generated/k2-frame.js) in the REAL
-// order (the 0.45.1 smoke bug, z3mbpZ): K2 inlines the runtime first, the
+// order (the 0.45.1 smoke bug, mac-b): K2 inlines the runtime first, the
 // widget's own script runs next, and only then, on the frame's `load`
 // (ZenCustomFrame onLoad), does the host post the hello with the port. A
 // widget that called `k2.can()` at startup saw false and drew "the diary is

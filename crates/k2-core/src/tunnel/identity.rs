@@ -2,7 +2,7 @@
 //! subdomain-bound part of the daemon to a new K2 Connect name.
 //!
 //! The bug this exists for (Reggie's Mac mini, 0.45.0): the owner released
-//! `afs` in Settings and connected `k2n1-m4`. `tunnel.json` and frpc moved
+//! `afs` in Settings and connected `rig1-mac`. `tunnel.json` and frpc moved
 //! to the new name, but the E2E TLS listener (and its cert renewer) kept
 //! serving the `afs.k2.dev` certificate, because the listener was bound
 //! once per daemon process and the tunnel start reused any live listener
@@ -722,7 +722,7 @@ mod tests {
 
             let report = switch_subdomain(
                 SwitchRequest {
-                    subdomain: "k2n1-m4".to_string(),
+                    subdomain: "rig1-mac".to_string(),
                     token: Some("tok-new".to_string()),
                     device_id: Some("dev-app".to_string()),
                     ..Default::default()
@@ -734,16 +734,16 @@ mod tests {
             assert!(report.ok, "{report:?}");
             assert!(report.changed && !report.rolled_back);
             assert_eq!(report.previous_subdomain.as_deref(), Some("afs"));
-            assert_eq!(report.subdomain.as_deref(), Some("k2n1-m4"));
-            assert_eq!(running_sub().as_deref(), Some("k2n1-m4"), "frpc restarted on the new name");
+            assert_eq!(report.subdomain.as_deref(), Some("rig1-mac"));
+            assert_eq!(running_sub().as_deref(), Some("rig1-mac"), "frpc restarted on the new name");
             assert!(report.status.running);
             let toml = frpc_toml();
-            assert!(toml.contains("k2so-k2n1-m4") && !toml.contains("k2so-afs"), "{toml}");
+            assert!(toml.contains("k2so-rig1-mac") && !toml.contains("k2so-afs"), "{toml}");
             let cfg = config::load().expect("cfg");
-            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("k2n1-m4", "tok-new"));
+            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("rig1-mac", "tok-new"));
             // Nested routes of afs are gone.
             let map = subdomains::current();
-            assert_eq!(map.primary, "k2n1-m4");
+            assert_eq!(map.primary, "rig1-mac");
             assert!(map.targets.is_empty(), "afs's nested routes must not survive: {map:?}");
             let steps: Vec<&str> = report.steps.iter().map(|s| s.step.as_str()).collect();
             assert_eq!(steps, vec!["config", "listener", "routing", "tunnel"], "{report:?}");
@@ -828,7 +828,7 @@ mod tests {
             connector::start(None, 57839, &true_bin()).expect("start afs");
             let (view, report) = apply_config(
                 super::super::TunnelConfigUpdate {
-                    subdomain: Some("k2n1-m4".to_string()),
+                    subdomain: Some("rig1-mac".to_string()),
                     token: Some("tok-new".to_string()),
                     ..Default::default()
                 },
@@ -836,13 +836,13 @@ mod tests {
                 &true_bin(),
             )
             .expect("apply");
-            assert_eq!(view.subdomain, "k2n1-m4");
+            assert_eq!(view.subdomain, "rig1-mac");
             let report = report.expect("identity changed → report");
             assert!(report.ok, "{report:?}");
-            assert_eq!(running_sub().as_deref(), Some("k2n1-m4"));
+            assert_eq!(running_sub().as_deref(), Some("rig1-mac"));
             let reason = connector::last_stop_reason().expect("the restart stopped the old tunnel");
             assert!(
-                reason.contains("identity change") && reason.contains("afs") && reason.contains("k2n1-m4"),
+                reason.contains("identity change") && reason.contains("afs") && reason.contains("rig1-mac"),
                 "the stop must say why: {reason}"
             );
 
@@ -857,7 +857,7 @@ mod tests {
             )
             .expect("apply");
             assert!(none.is_none());
-            assert_eq!(running_sub().as_deref(), Some("k2n1-m4"));
+            assert_eq!(running_sub().as_deref(), Some("rig1-mac"));
             let _ = connector::stop("test teardown");
             reset_routing();
         });
@@ -871,13 +871,13 @@ mod tests {
             let _env = env();
             seed("afs", "tok-afs");
             connector::start(None, 57839, &true_bin()).expect("start afs");
-            seed("k2n1-m4", "tok-new");
+            seed("rig1-mac", "tok-new");
             let st = connector::start(None, 57839, &true_bin()).expect("start again");
-            assert_eq!(st.subdomain.as_deref(), Some("k2n1-m4"), "{st:?}");
-            assert_eq!(running_sub().as_deref(), Some("k2n1-m4"));
+            assert_eq!(st.subdomain.as_deref(), Some("rig1-mac"), "{st:?}");
+            assert_eq!(running_sub().as_deref(), Some("rig1-mac"));
             // Same identity → idempotent (no restart, same status).
             let again = connector::start(None, 57839, &true_bin()).expect("idempotent");
-            assert_eq!(again.subdomain.as_deref(), Some("k2n1-m4"));
+            assert_eq!(again.subdomain.as_deref(), Some("rig1-mac"));
             let _ = connector::stop("test teardown");
         });
     }
@@ -1149,11 +1149,11 @@ mod tests {
             let _v = config::TestTokenVault::install(vault.clone());
             seed("afs", "tok-afs");
 
-            let report = switch_to("k2n1-m4", "tok-new", false);
+            let report = switch_to("rig1-mac", "tok-new", false);
             assert!(report.ok && !report.rolled_back, "{report:?}");
             assert_eq!(vault.stored().as_deref(), Some("tok-new"));
             let cfg = config::load().expect("cfg");
-            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("k2n1-m4", "tok-new"));
+            assert_eq!((cfg.subdomain.as_str(), cfg.token.as_str()), ("rig1-mac", "tok-new"));
             reset_routing();
         });
     }
@@ -1170,7 +1170,7 @@ mod tests {
             vault.set_fail_reads(true);
             let err = switch_subdomain(
                 SwitchRequest {
-                    subdomain: "k2n1-m4".into(),
+                    subdomain: "rig1-mac".into(),
                     token: Some("tok-new".into()),
                     ..Default::default()
                 },
@@ -1252,7 +1252,7 @@ mod tests {
             .expect_err("token required for another name");
             assert!(no_token.contains("needs its tunnel token"), "{no_token}");
             assert_eq!(std::fs::read(config::config_path()).expect("cfg"), before);
-            assert!(valid_label("k2n1-m4") && valid_label("a") && !valid_label("A") && !valid_label(""));
+            assert!(valid_label("rig1-mac") && valid_label("a") && !valid_label("A") && !valid_label(""));
         });
     }
 }

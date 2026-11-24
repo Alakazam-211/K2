@@ -594,7 +594,7 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
 }
 
 /// The queue line of a job waiting in a shared node's queue (§4.2):
-/// `queued on k2n2-m1, position 2, ETA ~6m (fair share: …)`.
+/// `queued on rig2-mac, position 2, ETA ~6m (fair share: …)`.
 fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
     let node = node.unwrap_or("the node");
     // "2 of 5" (prd-compute-job-tiers-v2 L6, T26): the node's place; a node
@@ -1194,8 +1194,8 @@ fn job_event_json(e: &store::EventRow) -> Option<serde_json::Value> {
         "exit": d.get("exit").cloned().unwrap_or_default(),
         "reason": reason,
     });
-    // A move says where from and why: "moved from k2n7-vin to k2n12-vin:
-    // k2n12-vin can start it now".
+    // A move says where from and why: "moved from rig7-vps to rig12-vps:
+    // rig12-vps can start it now".
     if event == "moved" {
         if let (Some(from), Some(to)) = (s("from").map(node_name_of), node.as_deref()) {
             let why = match reason {

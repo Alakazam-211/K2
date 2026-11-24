@@ -2919,7 +2919,7 @@ impl Node {
         if let Some(d) = dirs {
             self.strip_job_dir(t, &d.root, a.plan.src.as_ref().map(|s| s.project_key.as_str()), super::disk::JOB_END_KEEP).await;
         }
-        // A job never stays `running` because its finish didn't land (k2n4,
+        // A job never stays `running` because its finish didn't land (rig4,
         // 2026-10-21: a full disk). Its server hears the end from memory at
         // once; the row is retried, backing off, until it lands (then the
         // shipper sends it again with its receipt). The job stays counted

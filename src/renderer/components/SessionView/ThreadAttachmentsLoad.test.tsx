@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Thread file objects must survive the trip from the daemon to the screen
-// (0.46.1 RC smoke, Rosson 2026-10-18): Cortana's Thread on z3mbpZ showed
+// (0.46.1 RC smoke, Rosson 2026-10-18): Cortana's Thread on mac-b showed
 // seqs 59–62 without their chips and seq 63 (files only) as an empty
 // bubble, although `GET /cli/thread` carried `attachments`. The page went
 // through `threadItemsFromSnapshot` → `coerceItem`, which rebuilt the doc

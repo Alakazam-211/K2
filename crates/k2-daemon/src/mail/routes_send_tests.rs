@@ -1653,7 +1653,7 @@ fn send_bcc_is_audited_survives_approval_and_rides_envelope_only() {
     assert!(!wire.contains("boss@shop.example"), "bcc in headers: {wire}");
     assert!(!wire.contains("qa@shop.example"), "bcc in headers: {wire}");
     // Structural, not a substring: a random Message-ID such as
-    // `…949fbccd06@…` contains "bcc" about 1 run in 140 (seen on k2n5,
+    // `…949fbccd06@…` contains "bcc" about 1 run in 140 (seen on rig5,
     // 0.46.5 integration), while a real leak is a key or a header.
     assert!(!jmap_has_bcc(email), "Bcc in the Email object: {wire}");
     assert!(jmap_has_bcc(&serde_json::json!({"headers": [{"name": "BCC", "value": "x"}]})), "the check sees a Bcc header");

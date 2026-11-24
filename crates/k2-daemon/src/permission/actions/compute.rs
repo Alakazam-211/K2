@@ -1337,7 +1337,7 @@ fn names_words(names: &[String]) -> String {
 }
 
 /// The card's words for `compute.allow-nodes-for`, from the stored values:
-/// `{target}` ("k2-engine"), `{change}` ("Add k2n13 and k2n14 to
+/// `{target}` ("k2-engine"), `{change}` ("Add rig13 and rig14 to
 /// k2-engine's compute node list"), `{effects}`.
 fn allow_for_computed(ctx: &Ctx) -> Ctx {
     let mut out = ctx.clone();

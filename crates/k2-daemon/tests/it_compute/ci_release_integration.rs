@@ -293,9 +293,9 @@ fn seed(env: &Env) -> (String, PathBuf, Vec<Node>) {
     git(&path, &["commit", "-q", "-m", "one"]);
     let ws = uuid::Uuid::new_v4().to_string();
     let nodes = vec![
-        Node { id: "n-7", name: "k2n7", key: SigningKey::generate().unwrap() },
-        Node { id: "n-8", name: "k2n8", key: SigningKey::generate().unwrap() },
-        Node { id: "n-9", name: "k2n9", key: SigningKey::generate().unwrap() },
+        Node { id: "n-7", name: "rig7", key: SigningKey::generate().unwrap() },
+        Node { id: "n-8", name: "rig8", key: SigningKey::generate().unwrap() },
+        Node { id: "n-9", name: "rig9", key: SigningKey::generate().unwrap() },
     ];
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -471,25 +471,25 @@ async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "seat_degraded"), "{}", r.body);
     assert!(r.body.contains("isn't in the owner's newest node roster"), "{}", r.body);
-    // Roster 1: only k2n7 vouched for. Degraded, each one's reason named.
+    // Roster 1: only rig7 vouched for. Degraded, each one's reason named.
     let r1 = roster(&nodes, &["h1", "h1", "h2"], &[true, false, false], &[], 1, None);
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "seat_degraded"), "{}", r.body);
-    assert!(r.body.contains("k2n8: the owner vouches for nothing") && r.body.contains("1 can"), "{}", r.body);
+    assert!(r.body.contains("rig8: the owner vouches for nothing") && r.body.contains("1 can"), "{}", r.body);
     // Roster 2: all vouched for, all on one host: no independent pair.
     let r2 = roster(&nodes, &["h1", "h1", "h1"], &[true, true, true], &[], 2, Some(&r1));
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "no_independent_nodes"), "{}", r.body);
     assert!(r.body.contains("both on host h1"), "{}", r.body);
-    // Roster 3: k2n9 on another host, vouched for by the owner's
+    // Roster 3: rig9 on another host, vouched for by the owner's
     // attestation. --plan places the set, sends nothing.
-    let _r3 = roster(&nodes, &["h1", "h1", "h2"], &[true, true, true], &["k2n9"], 3, Some(&r2));
+    let _r3 = roster(&nodes, &["h1", "h1", "h2"], &[true, true, true], &["rig9"], 3, Some(&r2));
     let r = post(d.port, "/cli/ci/release", release(true)).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let placed = j(&r)["placed"].as_array().unwrap().clone();
     let at = |label: &str| placed.iter().find(|p| p["label"] == label).unwrap_or_else(|| panic!("no {label}: {placed:?}")).clone();
     let (l1, v1, l3) = (at("L1"), at("V1"), at("L3"));
-    let on_h2 = |p: &Value| p["node"] == "k2n9";
+    let on_h2 = |p: &Value| p["node"] == "rig9";
     assert!(on_h2(&l1) ^ on_h2(&v1), "exactly one of L1/V1 on the other host: {placed:?}");
     assert_eq!((l1["role"].as_str(), v1["role"].as_str(), l3["role"].as_str()), (Some("build"), Some("verify"), Some("build")));
     assert!(l3["node"] != l1["node"] && l3["node"] != v1["node"], "L3 on the third node: {placed:?}");
@@ -547,17 +547,17 @@ async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
         node_ran(n, job, &sha, &tree, &files);
     }
     tokio::task::spawn_blocking(k2_daemon::ci_engine::tick_now).await.unwrap();
-    // The roster vouches for k2n9 by attestation, but no attestation
+    // The roster vouches for rig9 by attestation, but no attestation
     // document is held here yet: the bundle has none, and a note says so.
     let r = post(d.port, "/cli/ci/evidence", json!({"workspace": ws, "run": &run_id[..8]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = j(&r);
     assert_eq!(v["bundle"]["attestations"], json!([]), "{}", r.body);
     let note = v["notes"][0].as_str().unwrap_or_else(|| panic!("a note: {}", r.body));
-    assert!(note.contains("k2n9") && note.contains("owner_attested"), "{note}");
+    assert!(note.contains("rig9") && note.contains("owner_attested"), "{note}");
     // The attestation as it arrives with the seat offer (compute_owner_
     // attestations; the trust tests cover receive_attestations itself).
-    let k9 = nodes.iter().find(|n| n.name == "k2n9").unwrap();
+    let k9 = nodes.iter().find(|n| n.name == "rig9").unwrap();
     let att = attestation(k9);
     {
         let db = k2_core::db::shared();

@@ -1124,7 +1124,7 @@ fn accepting_is_consent_the_receiving_workspace_takes_it_up_to_the_ceiling() {
         "vault_owner_confirm_required"
     );
     assert_eq!(
-        grant_to(v, "ws-ops", "PAIR_CODE", crate::model::Consumer::compute("ws-ops", "k2n7"), Delivery::Env, &agent("ws-ops")).expect_err("compute").code,
+        grant_to(v, "ws-ops", "PAIR_CODE", crate::model::Consumer::compute("ws-ops", "rig7"), Delivery::Env, &agent("ws-ops")).expect_err("compute").code,
         "vault_owner_confirm_required"
     );
     // Another workspace's agent can't touch it at all.

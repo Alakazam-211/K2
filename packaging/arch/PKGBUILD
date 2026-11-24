@@ -5,7 +5,7 @@
 #   cd packaging/arch && makepkg -si
 #
 # Release asset: packaging/arch/build-release-pkg.sh writes
-# dist/k2-<version>-x86_64.pkg.tar.zst. The k2-arch tag job uploads it.
+# dist/k2-<version>-x86_64.pkg.tar.zst. The arch-box tag job uploads it.
 # This PKGBUILD does not call
 # release.sh. O17: do not debtap the GH deb/rpm/AppImage.
 # O12: this is NOT the air-gap SKU — never `--features airgap`.

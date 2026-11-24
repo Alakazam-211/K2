@@ -11,9 +11,9 @@ describe('person names (display only)', () => {
   })
 
   it('personDisplayName: the real name, else the daemon displayName, else the username ("Owner" for owner)', () => {
-    expect(personDisplayName('z3thon', { firstName: 'Rosson', lastName: 'Long' })).toBe('Rosson Long')
-    expect(personDisplayName('z3thon', { displayName: 'z3thon' })).toBe('z3thon')
-    expect(personDisplayName('z3thon')).toBe('z3thon')
+    expect(personDisplayName('zoe', { firstName: 'Rosson', lastName: 'Long' })).toBe('Rosson Long')
+    expect(personDisplayName('zoe', { displayName: 'zoe' })).toBe('zoe')
+    expect(personDisplayName('zoe')).toBe('zoe')
     expect(personDisplayName('owner')).toBe('Owner')
   })
 
@@ -25,7 +25,7 @@ describe('person names (display only)', () => {
   })
 
   it('tooltip: "First Last (username) · role", else "username · role"', () => {
-    expect(personTooltip('z3thon', 'admin', { firstName: 'Rosson', lastName: 'Long' })).toBe('Rosson Long (z3thon) · admin')
+    expect(personTooltip('zoe', 'admin', { firstName: 'Rosson', lastName: 'Long' })).toBe('Rosson Long (zoe) · admin')
     expect(personTooltip('owner', 'owner', null)).toBe('Owner · owner')
     expect(personTooltip('anna', 'member', null, ' (you)')).toBe('anna (you) · member')
   })

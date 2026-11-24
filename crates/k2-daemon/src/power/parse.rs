@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(linux_supplies(&[]), PowerSource { on_ac: None, battery_percent: None });
     }
 
-    /// Seen on z13flow: a stylus battery (`scope` Device, capacity 0)
+    /// Seen on laptop-a: a stylus battery (`scope` Device, capacity 0)
     /// listed before BAT0 made the laptop read as 0 %, which would pause
     /// wake and Keep awake on battery.
     #[test]

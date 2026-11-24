@@ -17,15 +17,15 @@ use k2_scenerender::scene::{encode, InputLimits, Scene};
 use k2_scenerender::sha256::{digest, hex};
 use k2_scenerender::testgen;
 
-/// Made on x86_64 Linux (k2n10-vin, Intel, job 71bc4b0f) and matched, all 30, on aarch64
-/// macOS (k2n1-m4, Apple M4, job c4090b9e). The 27 transparent ones: made on k2n10-vin
+/// Made on x86_64 Linux (rig10-vps, Intel, job 71bc4b0f) and matched, all 30, on aarch64
+/// macOS (rig1-mac, Apple M4, job c4090b9e). The 27 transparent ones: made on rig10-vps
 /// (job 9919a84e), the 30 above unchanged there. The 11 content-framing ones: made on
-/// k2-arch (x86_64, job d8bddba8). The 13 clay ones: made on k2-arch (job 20f420f1). All 81
-/// matched on aarch64 macOS (k2n1-m4, job ffe2988a). The 15 ambient occlusion ones: made on
-/// k2n10-vin (job ac55097d), all 96 matched on aarch64 macOS (k2n1-m4, job e76bf3a5). The 15
-/// object id ones (stills and id images): made on k2n10-vin (job feb4c66f), the 96 above unchanged
+/// arch-box (x86_64, job d8bddba8). The 13 clay ones: made on arch-box (job 20f420f1). All 81
+/// matched on aarch64 macOS (rig1-mac, job ffe2988a). The 15 ambient occlusion ones: made on
+/// rig10-vps (job ac55097d), all 96 matched on aarch64 macOS (rig1-mac, job e76bf3a5). The 15
+/// object id ones (stills and id images): made on rig10-vps (job feb4c66f), the 96 above unchanged
 /// there. The 2 stills with ambient occlusion above 640 px, redrawn when it moved to a half grid
-/// there: made on k2n10-vin (job 2c3e0bec), the other 109 unchanged there.
+/// there: made on rig10-vps (job 2c3e0bec), the other 109 unchanged there.
 const WANT: &[(&str, &str)] = &[
     ("cube-webp-320/k2scene1", "c891d86464fe48e6c3b4e5aae359e3124474982f275171081455b3dd0332837d"),
     ("cube-webp-320/0", "5a8e7a89bef92a33281af63a775f1c297cd8dc99090f88b80d190b43eb91c9bc"),

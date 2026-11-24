@@ -394,7 +394,7 @@ fn an_iphone_on_a_mac_node_is_outside_the_box_limits() {
 
     let v = m.boot_gated(&a, &person(), &req("ios"), &|| Ok(false)).expect("ios-node boots on a full box");
     assert_eq!((v.lane, v.state), (LaneKind::IosNode, SimState::Running));
-    assert_eq!(v.profile.as_ref().map(|p| p.name.as_str()), Some("iPhone 17 (on k2n1-m4)"));
+    assert_eq!(v.profile.as_ref().map(|p| p.name.as_str()), Some("iPhone 17 (on rig1-mac)"));
     {
         let db = crate::db::shared();
         let conn = db.lock();
@@ -412,11 +412,11 @@ fn an_iphone_on_a_mac_node_is_outside_the_box_limits() {
     }
     let rid = m.row(&a).expect("row").expect("a").id;
     m.booting.lock().insert(a.id.clone(), (rid, a.clone()));
-    m.progress(&a.id, "Starting on k2n1-m4");
-    assert_eq!(m.row(&a).expect("row").expect("a").reason.as_deref(), Some("Starting on k2n1-m4"));
+    m.progress(&a.id, "Starting on rig1-mac");
+    assert_eq!(m.row(&a).expect("row").expect("a").reason.as_deref(), Some("Starting on rig1-mac"));
     m.booting.lock().remove(&a.id);
     m.progress(&a.id, "ignored when not booting");
-    assert_eq!(m.row(&a).expect("row").expect("a").reason.as_deref(), Some("Starting on k2n1-m4"));
+    assert_eq!(m.row(&a).expect("row").expect("a").reason.as_deref(), Some("Starting on rig1-mac"));
     {
         let db = crate::db::shared();
         let conn = db.lock();

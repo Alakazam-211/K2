@@ -278,7 +278,7 @@ impl Manager {
     }
 
     /// A booting device's current step ("Finding a Mac node", "Starting on
-    /// k2n1-m4"…) as the row's reason, pushed as `sim_state` (IN-A13).
+    /// rig1-mac"…) as the row's reason, pushed as `sim_state` (IN-A13).
     /// Ignored when the workspace isn't booting.
     pub fn progress(&self, workspace_id: &str, step: &str) {
         let Some((id, ws)) = self.booting.lock().get(workspace_id).cloned() else { return };

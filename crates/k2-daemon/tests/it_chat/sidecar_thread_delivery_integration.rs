@@ -2,7 +2,7 @@
 //! sidecar's PTY, never in another workspace's live session that holds the
 //! same provider conversation id.
 //!
-//! Field case (0.45.0 smoke, z3mbpZ, 2026-10-07): a Cortana tab continued
+//! Field case (0.45.0 smoke, mac-b, 2026-10-07): a Cortana tab continued
 //! the nested ProposalWriter workspace's pinned Chat
 //! (`claude --fork-session --resume <id>`). Registration stamped the source
 //! id on the Cortana tab row, so its handle `cortanax/1` keys on the

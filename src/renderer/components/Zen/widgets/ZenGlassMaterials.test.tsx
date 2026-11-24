@@ -344,7 +344,7 @@ describe('Glass: each surface’s material', () => {
   })
 
   it('Agents header and rows: the Home picker, the settings cog and server chips are glass; the settings dialog and its cards are tiles', async () => {
-    const fb = fakeBridge([row('alpha', { server: 'z3thon.k2.dev' }), row('beta')])
+    const fb = fakeBridge([row('alpha', { server: 'zoe.k2.dev' }), row('beta')])
     const decl = { id: 'agents', kind: 'agents', column: 0, props: { 'home-picker': true, settings: true }, caps: ['agents:read'], source: 'builtin' } as ZenWidgetDecl
     render(
       <Root mobile>

@@ -69,7 +69,7 @@ function host(over: Partial<ConnectHost>): ConnectHost {
   }
 }
 const A = host({})
-const B = host({ id: 'b', label: 'B', hostname: 'z3thon.k2.dev', token: 'tok-b' })
+const B = host({ id: 'b', label: 'B', hostname: 'zoe.k2.dev', token: 'tok-b' })
 const LAN = host({ id: 'lan-id', label: 'LAN', hostname: '192.168.1.20', port: 38471, secure: false })
 
 beforeEach(() => {
@@ -166,7 +166,7 @@ describe('MS52 f — same workspace key on two servers never shares a key', () =
     const b = scopeForHost(B)
     const base = `urls-ports.section-collapsed.${PROJECT}`
     expect(scopedKey(a, base)).toBe(`rosson.k2.dev|${base}`)
-    expect(scopedKey(b, base)).toBe(`z3thon.k2.dev|${base}`)
+    expect(scopedKey(b, base)).toBe(`zoe.k2.dev|${base}`)
   })
 
   it('selected tabs', () => {
@@ -179,7 +179,7 @@ describe('MS52 f — same workspace key on two servers never shares a key', () =
     expect(useSelectedTabsStore.getState().getSelected(b, PROJECT, WORKSPACE)).toBe('tab-on-b')
     expect(JSON.parse(mem.getItem('k2so:selected-tabs')!)).toEqual({
       [`rosson.k2.dev|${PROJECT}:${WORKSPACE}`]: 'tab-on-a',
-      [`z3thon.k2.dev|${PROJECT}:${WORKSPACE}`]: 'tab-on-b',
+      [`zoe.k2.dev|${PROJECT}:${WORKSPACE}`]: 'tab-on-b',
     })
   })
 

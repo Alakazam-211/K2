@@ -2261,8 +2261,8 @@ mod tests {
                 &conn,
                 &Uuid::new_v4().to_string(),
                 &src_id,
-                "Cortana@z3thon.k2.dev",
-                "z3thon.k2.dev",
+                "Cortana@zoe.k2.dev",
+                "zoe.k2.dev",
                 "Cortana",
                 None,
             )
@@ -2271,27 +2271,27 @@ mod tests {
 
         // Lowercase @ lookup matches the capital stored row.
         assert!(
-            is_remote_connection(&src_path, "cortana@z3thon.k2.dev"),
+            is_remote_connection(&src_path, "cortana@zoe.k2.dev"),
             "lowercase @ lookup must match a pre-existing capital row"
         );
         // Canonical :: lookup also matches old @ storage.
         assert!(
-            is_remote_connection(&src_path, "cortana::z3thon.k2.dev"),
+            is_remote_connection(&src_path, "cortana::zoe.k2.dev"),
             "colon form must match a pre-existing @ row"
         );
         // Upper-case lookup also matches (fully case-insensitive).
         assert!(
-            is_remote_connection(&src_path, "CORTANA@Z3THON.K2.DEV"),
+            is_remote_connection(&src_path, "CORTANA@ZOE.K2.DEV"),
             "upper-case lookup must match the stored row case-insensitively"
         );
         // Exact stored casing still matches.
         assert!(
-            is_remote_connection(&src_path, "Cortana@z3thon.k2.dev"),
+            is_remote_connection(&src_path, "Cortana@zoe.k2.dev"),
             "exact-case lookup must still match"
         );
         // A genuinely different agent stays closed (no false positives).
         assert!(
-            !is_remote_connection(&src_path, "ai@z3thon.k2.dev"),
+            !is_remote_connection(&src_path, "ai@zoe.k2.dev"),
             "a different agent must NOT match"
         );
         // A different host stays closed.
@@ -2306,13 +2306,13 @@ mod tests {
         let (src_path, src_id) = make_project("CaseAddSrc");
 
         // Add with mixed case — stored canonical form must be lowercased.
-        let resp = connections(&src_path, "add", Some("Cortana@Z3thon.K2.Dev"), None)
+        let resp = connections(&src_path, "add", Some("Cortana@Zoe.K2.Dev"), None)
             .expect("remote add ok");
         let parsed: serde_json::Value = serde_json::from_str(&resp).expect("valid JSON");
         assert_eq!(parsed["success"], serde_json::json!(true));
         assert_eq!(parsed["remote"], serde_json::json!(true));
         assert_eq!(
-            parsed["target"], serde_json::json!("cortana::z3thon.k2.dev"),
+            parsed["target"], serde_json::json!("cortana::zoe.k2.dev"),
             "stored target must be normalized to lowercase agent::host"
         );
 
@@ -2321,20 +2321,20 @@ mod tests {
             let conn = db.lock();
             let rows = WorkspaceRemoteConnection::list_for_source(&conn, &src_id).unwrap();
             assert_eq!(rows.len(), 1, "exactly one row persisted");
-            assert_eq!(rows[0].remote_addr, "cortana::z3thon.k2.dev");
+            assert_eq!(rows[0].remote_addr, "cortana::zoe.k2.dev");
             assert_eq!(rows[0].agent, "cortana");
-            assert_eq!(rows[0].host, "z3thon.k2.dev");
+            assert_eq!(rows[0].host, "zoe.k2.dev");
         }
 
         // Gate opens for any casing / separator of the same addr.
-        assert!(is_remote_connection(&src_path, "cortana@z3thon.k2.dev"));
-        assert!(is_remote_connection(&src_path, "cortana::z3thon.k2.dev"));
-        assert!(is_remote_connection(&src_path, "Cortana@Z3thon.K2.Dev"));
-        assert!(is_remote_connection(&src_path, "CORTANA::Z3THON.K2.DEV"));
+        assert!(is_remote_connection(&src_path, "cortana@zoe.k2.dev"));
+        assert!(is_remote_connection(&src_path, "cortana::zoe.k2.dev"));
+        assert!(is_remote_connection(&src_path, "Cortana@Zoe.K2.Dev"));
+        assert!(is_remote_connection(&src_path, "CORTANA::ZOE.K2.DEV"));
 
         // Re-adding a differently-cased form is an idempotent no-op (matches
         // the normalized row), so no duplicate is created.
-        let resp2 = connections(&src_path, "add", Some("CORTANA@z3thon.k2.dev"), None)
+        let resp2 = connections(&src_path, "add", Some("CORTANA@zoe.k2.dev"), None)
             .expect("remote re-add ok");
         let parsed2: serde_json::Value = serde_json::from_str(&resp2).expect("valid JSON");
         assert_eq!(parsed2["noop"], serde_json::json!(true), "re-add must no-op");
@@ -2346,7 +2346,7 @@ mod tests {
         }
 
         // Remove with yet another casing / :: must delete the row.
-        let resp3 = connections(&src_path, "remove", Some("CoRtAnA::Z3THON.k2.dev"), None)
+        let resp3 = connections(&src_path, "remove", Some("CoRtAnA::ZOE.k2.dev"), None)
             .expect("remote remove ok");
         let parsed3: serde_json::Value = serde_json::from_str(&resp3).expect("valid JSON");
         assert_eq!(parsed3["success"], serde_json::json!(true));

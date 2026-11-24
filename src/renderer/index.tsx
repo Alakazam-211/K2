@@ -78,7 +78,7 @@ installExternalLinkHandler()
 bootWebHostIfNeeded()
 
 // Zen v2 S0 spike (prd-zen-user-widgets-v2 §15): a build with
-// `VITE_K2_ZEN_SPIKE=s0` (a throwaway signed build on z3mbpZ / z13flow), or
+// `VITE_K2_ZEN_SPIKE=s0` (a throwaway signed build on mac-b / laptop-a), or
 // `?zenspike=s0` on the dev page, renders the sealed-frame capability spike
 // instead of the app. A normal build never sets the variable, so this branch
 // and the spike module drop out.

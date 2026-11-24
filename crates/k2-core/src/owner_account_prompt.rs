@@ -208,9 +208,9 @@ mod tests {
 
     #[test]
     fn linked_never_shows() {
-        let p = people(vec![user("z3thon", Role::Admin, None, None, false)], &["z3thon"]);
+        let p = people(vec![user("zoe", Role::Admin, None, None, false)], &["zoe"]);
         let v = view(&p, &state(None), None, None, "0.46.0");
-        assert_eq!((v.show, v.reason, v.linked.as_deref()), (false, Reason::Linked, Some("z3thon")));
+        assert_eq!((v.show, v.reason, v.linked.as_deref()), (false, Reason::Linked, Some("zoe")));
     }
 
     #[test]
@@ -271,11 +271,11 @@ mod tests {
     #[test]
     fn preselect_the_old_your_name_match_only_when_unique() {
         let users = vec![
-            user("z3thon", Role::Admin, Some("Rosson"), Some("Long"), false),
+            user("zoe", Role::Admin, Some("Rosson"), Some("Long"), false),
             user("julie", Role::Owner, Some("Julie"), None, false),
         ];
         let p = people(users.clone(), &[]);
-        assert_eq!(view(&p, &state(None), Some("  rosson   LONG "), None, "0.46.0").preselect.as_deref(), Some("z3thon"));
+        assert_eq!(view(&p, &state(None), Some("  rosson   LONG "), None, "0.46.0").preselect.as_deref(), Some("zoe"));
         assert_eq!(view(&p, &state(None), Some("Someone Else"), None, "0.46.0").preselect, None);
         assert_eq!(view(&p, &state(None), None, None, "0.46.0").preselect, None);
         assert_eq!(view(&p, &state(None), Some(""), None, "0.46.0").preselect, None);

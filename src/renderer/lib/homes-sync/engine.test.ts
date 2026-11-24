@@ -26,11 +26,11 @@ const OTHER = 'bbbbbbbbbbbbbbbb'
 
 /** The laptop: `local` is the home server itself. */
 const laptop: AddressMap = {
-  toWire: (a) => a.replace(/::local$/, `::${SID}`).replace(/::z3mbpz\.k2\.dev$/, `::${OTHER}`),
-  fromWire: (a) => a.replace(new RegExp(`::${SID}$`), '::local').replace(new RegExp(`::${OTHER}$`), '::z3mbpz.k2.dev'),
+  toWire: (a) => a.replace(/::local$/, `::${SID}`).replace(/::mac-b\.k2\.dev$/, `::${OTHER}`),
+  fromWire: (a) => a.replace(new RegExp(`::${SID}$`), '::local').replace(new RegExp(`::${OTHER}$`), '::mac-b.k2.dev'),
 }
 
-/** The phone: it knows the same box as `rosson.k2.dev`, and not z3mbpZ. */
+/** The phone: it knows the same box as `rosson.k2.dev`, and not mac-b. */
 const phone: AddressMap = {
   toWire: (a) => a.replace(/::rosson\.k2\.dev$/, `::${SID}`),
   fromWire: (a) => a.replace(new RegExp(`::${SID}$`), '::rosson.k2.dev'),
@@ -65,7 +65,7 @@ describe('homes-sync engine', () => {
 
   it('diffLocal queues new, renamed and reordered items and tombstones what left; label repairs never queue', () => {
     let st = merged('lap')
-    const homes = [home('h1', 'Home', ['atlas::local', 'pi::z3mbpz.k2.dev'])]
+    const homes = [home('h1', 'Home', ['atlas::local', 'pi::mac-b.k2.dev'])]
     let r = diffLocal(homes, st, ctx(laptop, 'lap', 100))
     expect(r.changes.map(itemKey).sort()).toEqual([`h|h1`, `r|h1|atlas::${SID}`, `r|h1|pi::${OTHER}`].sort())
     expect(r.changes.every((c) => c.deviceId === 'lap' && c.updatedAt === 100)).toBe(true)
@@ -153,7 +153,7 @@ describe('homes-sync engine', () => {
     ]
     const local = [
       home('lap-home', ' home ', ['atlas::local', 'nova::local']),
-      home('lap-side', 'Side', ['pi::z3mbpz.k2.dev']),
+      home('lap-side', 'Side', ['pi::mac-b.k2.dev']),
     ]
     const { state, changes } = firstSync(local, pull(server, 3, { full: true }), emptySyncState('lap'), ctx(laptop, 'lap', 500))
     expect(state.merged).toBe(true)
@@ -170,7 +170,7 @@ describe('homes-sync engine', () => {
     expect(built?.map((h) => [h.id, h.name, h.rows.map((r) => r.address)])).toEqual([
       ['srv-home', 'Home', ['atlas::local', 'nova::local']],
       ['srv-work', 'Work', []],
-      ['lap-side', 'Side', ['pi::z3mbpz.k2.dev']],
+      ['lap-side', 'Side', ['pi::mac-b.k2.dev']],
     ])
     // The rebuilt copy diffs clean: no churn after the union.
     expect(diffLocal(built as Home[], state, ctx(laptop, 'lap', 501)).changes).toEqual([])
@@ -204,19 +204,19 @@ describe('homes-sync engine', () => {
   })
 
   it('hostKey → serverId migration: a row pushed by host key moves to the id once the id is known', () => {
-    // A device that didn't know z3mbpZ's id pushed `pi::z3mbpz.k2.dev`.
+    // A device that didn't know mac-b's id pushed `pi::mac-b.k2.dev`.
     let st = applyPull(merged('lap'), pull([
       { kind: 'home', id: 'h1', name: 'Home', order: 'V', updatedAt: 1, deviceId: 'old' },
-      { kind: 'row', homeId: 'h1', address: 'pi::z3mbpz.k2.dev', label: 'Pi', workspaceId: 'w-1', order: 'V', updatedAt: 1, deviceId: 'old' },
+      { kind: 'row', homeId: 'h1', address: 'pi::mac-b.k2.dev', label: 'Pi', workspaceId: 'w-1', order: 'V', updatedAt: 1, deviceId: 'old' },
     ], 1), 5)
     const built = buildLocal(st, [], laptop) as Home[]
-    expect(built[0].rows[0].address).toBe('pi::z3mbpz.k2.dev')
+    expect(built[0].rows[0].address).toBe('pi::mac-b.k2.dev')
     // The laptop knows that host's id: the row is re-keyed (add the id row, tombstone the host-key row).
     const r = diffLocal(built, st, ctx(laptop, 'lap', 10))
     const byKey = Object.fromEntries(r.changes.map((c) => [itemKey(c), c]))
     expect(byKey[`r|h1|pi::${OTHER}`]?.deleted).toBeUndefined()
     expect((byKey[`r|h1|pi::${OTHER}`] as { label: string; order: string }).label).toBe('Pi')
-    expect(byKey['r|h1|pi::z3mbpz.k2.dev']?.deleted).toBe(true)
+    expect(byKey['r|h1|pi::mac-b.k2.dev']?.deleted).toBe(true)
     st = r.state
     // While both are live somewhere, the local copy shows one row.
     expect((buildLocal(st, built, laptop) as Home[])[0].rows).toHaveLength(1)

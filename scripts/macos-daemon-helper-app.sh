@@ -369,7 +369,7 @@ k2_daemon_helper_sign() {
 # the k2-daemon LIBRARY (ptyd_status.rs, docs/export_worker.rs) and build.rs
 # reruns on the K2_PTYD_EMBED change, so the whole k2-daemon crate
 # recompiles, and with `lto = true` + `codegen-units = 1` its link is a
-# whole-program, single-threaded LLVM run: the 15–18 min on z3mbpZ.
+# whole-program, single-threaded LLVM run: the 15–18 min on mac-b.
 # release.sh therefore runs it in the background during the notarization
 # waits (k2_standalone_macos_daemon_start after Step 3,
 # k2_standalone_macos_daemon_finish at Step 8.5); a resumed run

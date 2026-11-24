@@ -402,7 +402,7 @@ fn rotated_entries_retire_the_old_key_and_keep_the_facts() {
 #[test]
 fn signers_and_statements() {
     let c = conn();
-    add_signer(&c, &"a".repeat(64), "spki", "z3mbpZ", "owner", "local-auth", 5).unwrap();
+    add_signer(&c, &"a".repeat(64), "spki", "mac-b", "owner", "local-auth", 5).unwrap();
     assert!(add_signer(&c, "short", "spki", "x", "owner", "local-auth", 5).is_err());
     assert_eq!(signers(&c, false).len(), 1);
     assert!(remove_signer(&c, &"a".repeat(64), 6).unwrap());

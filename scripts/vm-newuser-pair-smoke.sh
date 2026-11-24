@@ -107,7 +107,7 @@ ssh_opts=(
   -o PubkeyAuthentication=no
   # OpenSSH 9.5+ hides keystroke timing by default. sshpass then loses
   # the password on some attempts: "SSH ready" and the next login is
-  # Permission denied. z3mbpZ is OpenSSH 10.3.
+  # Permission denied. mac-b is OpenSSH 10.3.
   -o ObscureKeystrokeTiming=no
   -o NumberOfPasswordPrompts=1
   -o ConnectTimeout=10

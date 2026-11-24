@@ -1045,11 +1045,11 @@ mod tests {
             state: state.into(),
             exit,
             reason: reason.map(str::to_string),
-            node: "k2n7".into(),
+            node: "rig7".into(),
             short: "abcd1234".into(),
             secs: 61,
         };
-        assert_eq!(verdict(&j("done", Some(0), None), false), (check_state::SUCCESS, "job abcd1234 on k2n7, 2m".to_string()));
+        assert_eq!(verdict(&j("done", Some(0), None), false), (check_state::SUCCESS, "job abcd1234 on rig7, 2m".to_string()));
         let (s, d) = verdict(&j("done", Some(101), None), false);
         assert_eq!(s, check_state::FAILURE);
         assert!(d.contains("exit 101") && d.contains("k2 compute logs abcd1234 --failures"), "{d}");

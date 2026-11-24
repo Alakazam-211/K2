@@ -13,10 +13,10 @@
 # Where it runs (K2_LINUX_GATE):
 #   compute (default)  a K2 Compute job at this checkout's HEAD (plus its
 #       uncommitted changes, --dirty), on a Linux x86 node K2 picks among
-#       the ones this workspace is granted (never k2-arch: an Arch node has
+#       the ones this workspace is granted (never arch-box: an Arch node has
 #       no Debian sys: packages), --tier ci, the pinned Rust
 #       (rust-toolchain.toml at HEAD). Needs a grant with --ci on the Linux
-#       nodes for the workspace of the checkout you run from (z3mbpZ's
+#       nodes for the workspace of the checkout you run from (mac-b's
 #       release checkout: pod-leader). K2_LINUX_GATE_WORKSPACE sends
 #       --workspace; K2_LINUX_GATE_TIER=standard for a workspace without a
 #       --ci grant; K2_LINUX_GATE_MAX_WAIT (default 90m).

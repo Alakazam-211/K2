@@ -73,7 +73,7 @@ describe('thread view cache', () => {
     expect(hit.items.some((it) => it.id === 'c141')).toBe(false)
     expect(hit.conversationId).toBe('conv-1')
     // Per (server, address): another server's Thread with the same address is another entry.
-    expect(peekThreadView('z3thon.k2.dev', 'k2')).toBeNull()
+    expect(peekThreadView('zoe.k2.dev', 'k2')).toBeNull()
     expect(peekThreadView('rosson.k2.dev', 'other')).toBeNull()
   })
 
@@ -163,12 +163,12 @@ describe('thread view cache', () => {
   it('is cleared for a server on sign-out and when the server is removed', async () => {
     useConnectHostStore.getState().addHost(HOST)
     saveThreadView('rosson.k2.dev', 'k2', '', items(2))
-    saveThreadView('z3thon.k2.dev', 'k2', '', items(2))
+    saveThreadView('zoe.k2.dev', 'k2', '', items(2))
     await flushThreadViewWritesForTests()
     // Sign-out: the saved login's token goes.
     useConnectHostStore.setState((s) => ({ hosts: s.hosts.map((h) => ({ ...h, token: '' })) }))
     await vi.waitFor(async () => expect(await readThreadView('rosson.k2.dev', 'k2')).toBeNull())
-    expect(peekThreadView('z3thon.k2.dev', 'k2')).not.toBeNull()
+    expect(peekThreadView('zoe.k2.dev', 'k2')).not.toBeNull()
     // Removal.
     useConnectHostStore.setState((s) => ({ hosts: s.hosts.map((h) => ({ ...h, token: 'tok-2' })) }))
     saveThreadView('rosson.k2.dev', 'k2', '', items(2))

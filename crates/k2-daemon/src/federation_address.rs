@@ -322,7 +322,7 @@ mod tests {
                 fingerprint: f.clone(),
                 to_fingerprint: federation::local_fingerprint().expect("local fp"),
                 old_address: PeerAddress::new("afs", ""),
-                new_address: PeerAddress::new("k2n1-m4", ""),
+                new_address: PeerAddress::new("rig1-mac", ""),
                 issued_at: Utc::now().to_rfc3339(),
                 seq: 42,
             };
@@ -331,7 +331,7 @@ mod tests {
             let r = handle_address_notice(&body);
             assert_eq!(r.status, "200 OK", "{}", r.body);
             let p = PeerStore::load().expect("load").get(&f).cloned().expect("peer");
-            assert_eq!(p.subdomain, "k2n1-m4");
+            assert_eq!(p.subdomain, "rig1-mac");
             assert_eq!(p.address_seq, 42);
             let audit = k2_core::auth_audit::tail(10).expect("audit");
             assert!(
@@ -354,7 +354,7 @@ mod tests {
             assert_eq!(unknown.status, "403 Forbidden", "{}", unknown.body);
             let after = PeerStore::load().expect("load");
             assert_eq!(after.list().len(), 1);
-            assert_eq!(after.get(&f).expect("peer").subdomain, "k2n1-m4");
+            assert_eq!(after.get(&f).expect("peer").subdomain, "rig1-mac");
 
             // A bad signature (the pinned peer's fingerprint, another key).
             let mut forged = sn.clone();
@@ -430,10 +430,10 @@ mod tests {
             SendResult::Http(code, r.body)
         };
 
-        // Baseline, then the switch afs -> k2n1-m4.
+        // Baseline, then the switch afs -> rig1-mac.
         let first = sweep_once_with(&PeerAddress::new("afs", ""), deliver).expect("pass").expect("ran");
         assert!(matches!(first.issue, Some(notice::IssueOutcome::Baseline(_))), "{first:?}");
-        let second = sweep_once_with(&PeerAddress::new("k2n1-m4", ""), deliver).expect("pass").expect("ran");
+        let second = sweep_once_with(&PeerAddress::new("rig1-mac", ""), deliver).expect("pass").expect("ran");
         assert_eq!(second.sent.len(), 2, "{second:?}");
         assert_eq!(k2_core::paths::home_dir().expect("home"), home_a_path, "HOME is A again");
 
@@ -447,7 +447,7 @@ mod tests {
             let _b = k2_core::test_env::EnvVar::set("HOME", home_b.to_string_lossy().to_string());
             let b_store = PeerStore::load().expect("B store");
             let a_at_b = b_store.get(&fp_of(&a_key)).expect("A pinned at B");
-            assert_eq!(a_at_b.subdomain, "k2n1-m4");
+            assert_eq!(a_at_b.subdomain, "rig1-mac");
             assert_eq!(a_at_b.public_key_pem, a_pem);
             assert_eq!(a_at_b.trust, PeerTrust::Trusted);
         }

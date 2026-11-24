@@ -3,7 +3,7 @@
 // Question: inside the sealed widget frame (srcdoc, sandbox="allow-scripts",
 // null origin) with the proposed widget CSP, under the proposed APP CSP
 // (R3: + 'wasm-unsafe-eval', worker-src 'self' blob:), do these work on
-// WKWebView (signed macOS build) and WebKitGTK (z13flow)?
+// WKWebView (signed macOS build) and WebKitGTK (laptop-a)?
 //   WebGL2 · wasm · a blob: worker (+ wasm and fetch('data:') inside it) ·
 //   fetch('data:') / fetch(blob:) · a 2 MB inline nonced script
 // …while the negatives stay blocked: network, eval, new Function, an

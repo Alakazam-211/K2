@@ -97,7 +97,7 @@ describe('PermissionCard: approver, pending (§17.11.1)', () => {
     expect(text('permission-meta')).toBe('Allow compute nodes · billing · until someone turns it off')
     expect(text('permission-values')).toBe('workspace: billing')
     expect(text('permission-direction')).toBe('Loosens access')
-    expect(text('permission-why')).toBe('billing says: Run the test suite on k2n2-m1; it takes 40 min here')
+    expect(text('permission-why')).toBe('billing says: Run the test suite on rig2-mac; it takes 40 min here')
     expect(text('permission-note')).toBe('dana (member): I need this for the payroll run')
     expect(text('permission-asked-for')).toBe('Asked while working with dana')
     expect(text('permission-expiry')).toBe('expires in 3 days')

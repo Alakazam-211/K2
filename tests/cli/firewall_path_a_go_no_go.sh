@@ -5,7 +5,7 @@
 #
 # Runs against a sandbox daemon (temp HOME, never ~/.k2, never the running
 # daemon). Needs target/{debug,release}/k2-daemon: build it first, on a
-# compute node (never on z3mbp):
+# compute node (never on mac-a):
 #   cargo build -p k2-daemon && bash tests/cli/firewall_path_a_go_no_go.sh
 #
 # What a sandbox can't show is printed as MANUAL with the exact command to

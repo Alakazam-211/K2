@@ -1,5 +1,5 @@
 //! The permission outcome turn wakes a dormant agent without a panic
-//! (0.46.3 r9 smoke, job 961206a2 on k2n6-hil):
+//! (0.46.3 r9 smoke, job 961206a2 on rig6-dc):
 //!
 //! ```text
 //! thread 'permission-turn' panicked at crates/k2-daemon/src/cell_server.rs:244:34:

@@ -377,7 +377,7 @@ describe('useGroupSwipe on the Homes store', () => {
     expect(current()).toBe('Three')
   })
 
-  // Rosson (z3mbpZ): after a swipe, the next one only worked once the
+  // Rosson (mac-b): after a swipe, the next one only worked once the
   // pointer had left Home and come back. No mouseleave or mouseenter here.
   it('swipe right, idle, swipe left: back again, the pointer never leaving the nav', () => {
     renderHook(() => useGroupSwipe(true))

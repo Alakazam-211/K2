@@ -1597,7 +1597,7 @@ mod address_label_tests {
         for a in ["127.0.0.1-60710", "localhost-8080", "10.0.0.5", "---1--80", "192.168.1.20"] {
             assert!(super::address_label(a), "{a}");
         }
-        for n in ["rosson.k2.dev", "z3thon.k2.dev-8443", "mini-1", "k2n2-m1"] {
+        for n in ["rosson.k2.dev", "zoe.k2.dev-8443", "mini-1", "rig2-mac"] {
             assert!(!super::address_label(n), "{n}");
         }
     }

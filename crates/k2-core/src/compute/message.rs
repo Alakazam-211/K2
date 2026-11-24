@@ -141,8 +141,8 @@ mod tests {
         assert_eq!(duration(372), "6m12s");
         assert_eq!(duration(7260), "2h01m");
         assert_eq!(
-            completion_text("7f3a0000aaaa", "z13flow", "done", Some(1), None, None, Some(372), None, &Extra::default()),
-            "[compute] job 7f3a0000 on z13flow: exit 1 after 6m12s. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
+            completion_text("7f3a0000aaaa", "laptop-a", "done", Some(1), None, None, Some(372), None, &Extra::default()),
+            "[compute] job 7f3a0000 on laptop-a: exit 1 after 6m12s. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
         );
         assert!(completion_text("j", "n", "failed", None, None, Some("sync_failed"), None, None, &Extra::default()).contains("failed (sync_failed)"));
         assert!(completion_text("j", "n; rm -rf", "unknown", None, None, None, None, None, &Extra::default()).contains("on nrm-rf:"));
@@ -186,8 +186,8 @@ mod tests {
         // CE-12: the wait and the retry line, never "logs" (it never ran).
         let x = Extra { detail: Some("not started within 30m00s (parallel_full)"), ..Default::default() };
         assert_eq!(
-            completion_text("ab12cd34ffff", "k2n10-vin", "failed", None, None, Some("queue_timeout"), None, None, &x),
-            "[compute] job ab12cd34 on k2n10-vin: failed (queue_timeout): not started within 30m00s (parallel_full). Next: k2 compute retry ab12cd34, or submit again with a longer --queue-timeout (e.g. 4h) · k2 compute get ab12cd34 --json"
+            completion_text("ab12cd34ffff", "rig10-vps", "failed", None, None, Some("queue_timeout"), None, None, &x),
+            "[compute] job ab12cd34 on rig10-vps: failed (queue_timeout): not started within 30m00s (parallel_full). Next: k2 compute retry ab12cd34, or submit again with a longer --queue-timeout (e.g. 4h) · k2 compute get ab12cd34 --json"
         );
         let bare = completion_text("ab12cd34ffff", "n", "failed", None, None, Some("queue_timeout"), None, None, &Extra::default());
         assert!(bare.contains("failed (queue_timeout). Next: k2 compute retry ab12cd34"), "{bare}");
@@ -198,8 +198,8 @@ mod tests {
         // CE-5 / CE-4: the node's duration, the late note, the Rust version.
         let x = Extra { late_secs: Some(10_560), rustc: Some("rustc 1.99.1"), ..Default::default() };
         assert_eq!(
-            completion_text("7f3a0000aaaa", "k2n7-vin", "done", Some(0), None, None, Some(372), None, &x),
-            "[compute] job 7f3a0000 on k2n7-vin: exit 0 after 6m12s (rustc 1.99.1) (this server heard of it 2h56m late). k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
+            completion_text("7f3a0000aaaa", "rig7-vps", "done", Some(0), None, None, Some(372), None, &x),
+            "[compute] job 7f3a0000 on rig7-vps: exit 0 after 6m12s (rustc 1.99.1) (this server heard of it 2h56m late). k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
         );
     }
 
@@ -208,8 +208,8 @@ mod tests {
     fn a_finished_run_says_the_next_expect() {
         let x = Extra { next_expect: Some("12m"), ..Default::default() };
         assert_eq!(
-            completion_text("7f3a0000aaaa", "k2n7-vin", "done", Some(0), None, None, Some(700), None, &x),
-            "[compute] job 7f3a0000 on k2n7-vin: exit 0 after 11m40s; next time: --expect 12m. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
+            completion_text("7f3a0000aaaa", "rig7-vps", "done", Some(0), None, None, Some(700), None, &x),
+            "[compute] job 7f3a0000 on rig7-vps: exit 0 after 11m40s; next time: --expect 12m. k2 compute logs 7f3a0000 --tail 50 · k2 compute get 7f3a0000 --json"
         );
         let failed = completion_text("7f3a0000aaaa", "n", "timeout", None, None, None, Some(700), None, &x);
         assert!(!failed.contains("--expect"), "{failed}");

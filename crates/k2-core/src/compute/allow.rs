@@ -263,18 +263,18 @@ mod tests {
         let c = conn();
         assert_eq!(get(&c, "ws1").expect("read"), None);
         assert_eq!(permit(&c, "ws1"), Permit::Any);
-        assert!(allows(&c, "ws1", "k2n2"));
-        set(&c, "ws1", Some(&v(&["k2n9", " k2-arch ", "k2n9"])), "owner", 10).expect("set");
+        assert!(allows(&c, "ws1", "rig2"));
+        set(&c, "ws1", Some(&v(&["rig9", " arch-box ", "rig9"])), "owner", 10).expect("set");
         let e = get(&c, "ws1").expect("read").expect("a list");
-        assert_eq!(e.nodes, v(&["k2-arch", "k2n9"]));
+        assert_eq!(e.nodes, v(&["arch-box", "rig9"]));
         assert_eq!((e.updated_by.as_str(), e.updated_at), ("owner", 10));
-        assert!(allows(&c, "ws1", "k2n9") && allows(&c, "ws1", "k2-arch"));
-        assert!(!allows(&c, "ws1", "k2n2"));
+        assert!(allows(&c, "ws1", "rig9") && allows(&c, "ws1", "arch-box"));
+        assert!(!allows(&c, "ws1", "rig2"));
         // Another workspace is untouched.
         assert_eq!(permit(&c, "ws2"), Permit::Any);
         set(&c, "ws1", None, "owner", 11).expect("clear");
         assert_eq!(get(&c, "ws1").expect("read"), None);
-        assert!(allows(&c, "ws1", "k2n2"));
+        assert!(allows(&c, "ws1", "rig2"));
     }
 
     #[test]
@@ -290,9 +290,9 @@ mod tests {
         .expect("bad row");
         assert!(get(&c, "ws1").is_err());
         assert_eq!(permit(&c, "ws1"), Permit::Only(Vec::new()), "fail closed");
-        assert!(!allows(&c, "ws1", "k2n9"));
+        assert!(!allows(&c, "ws1", "rig9"));
         c.execute("UPDATE compute_admin_settings SET value = '[]' WHERE key = ?1", params![key("ws1")]).expect("empty row");
-        assert!(!allows(&c, "ws1", "k2n9"), "an empty stored list allows nothing");
+        assert!(!allows(&c, "ws1", "rig9"), "an empty stored list allows nothing");
     }
 
     /// 0.46.18: a new node joins every list that follows new nodes (the

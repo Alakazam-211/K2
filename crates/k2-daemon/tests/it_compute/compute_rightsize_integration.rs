@@ -199,7 +199,7 @@ async fn mem_auto_resolves_from_history_with_the_mem_cap_floor_and_the_node_cap(
     let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "rsapp");
     let other = seed_ws(&env, "rsother");
-    active_node("rs-1", "k2n7", &ws);
+    active_node("rs-1", "rig7", &ws);
     let _node = compute_ws::test_attach("rs-1", offer());
     let agent = passport(&ws);
     let cmd = ["cargo", "nextest", "run"];

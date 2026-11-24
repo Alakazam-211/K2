@@ -229,7 +229,7 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
   })
 
   it('triggerHidden: no trigger and no room taken, and the menu still opens from the store (⌘L)', () => {
-    act(() => useConnectHostStore.setState({ activeHost: 'local', hosts: [host('z3thon', 'z3thon.k2.dev')], pickHost }))
+    act(() => useConnectHostStore.setState({ activeHost: 'local', hosts: [host('zoe', 'zoe.k2.dev')], pickHost }))
     const { container } = render(<ServerSwitcher triggerHidden />)
     expect(screen.queryByTestId('server-switcher-trigger')).toBe(null)
     const root = container.querySelector('[data-server-switcher]')
@@ -238,14 +238,14 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(root.style.marginRight).toBe('-14px')
     act(() => useServerSwitcherStore.getState().setOpen(true))
     expect(screen.getByRole('listbox', { name: 'Servers' })).toBeTruthy()
-    expect(screen.getAllByRole('option').some((o) => o.textContent?.includes('z3thon.k2.dev'))).toBe(true)
-    fireEvent.click(screen.getAllByRole('option').find((o) => o.textContent?.includes('z3thon.k2.dev'))!)
+    expect(screen.getAllByRole('option').some((o) => o.textContent?.includes('zoe.k2.dev'))).toBe(true)
+    fireEvent.click(screen.getAllByRole('option').find((o) => o.textContent?.includes('zoe.k2.dev'))!)
     expect(pickHost).toHaveBeenCalledTimes(1)
     expect(useServerSwitcherStore.getState().open).toBe(false)
   })
 
   it('triggerHidden: while ⌘L has the menu open, the trigger shows the current server in its spot, then hides on close', () => {
-    act(() => useConnectHostStore.setState({ activeHost: host('z3thon', 'z3thon.k2.dev'), hosts: [], pickHost }))
+    act(() => useConnectHostStore.setState({ activeHost: host('zoe', 'zoe.k2.dev'), hosts: [], pickHost }))
     const { container } = render(<ServerSwitcher triggerHidden />)
     const root = container.querySelector('[data-server-switcher]')
     if (!(root instanceof HTMLElement)) throw new Error('root is gone')
@@ -253,7 +253,7 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
 
     act(() => useServerSwitcherStore.getState().setOpen(true))
     const t = screen.getByTestId('server-switcher-trigger')
-    expect(screen.getByTestId('server-switcher-label').textContent).toBe('z3thon.k2.dev')
+    expect(screen.getByTestId('server-switcher-label').textContent).toBe('zoe.k2.dev')
     expect(t.getAttribute('aria-expanded')).toBe('true')
     // Floats in its usual spot (the zero-width slot after the page tabs) so
     // the bar does not reflow, and fades in via [data-home-reveal].
@@ -298,7 +298,7 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
   })
 
   it('the dropdown still opens below the trigger at its own 260px width, not the trigger width', () => {
-    const t = renderOn(host('long', LONG), [host('long', LONG), host('z3thon', 'z3thon.k2.dev')])
+    const t = renderOn(host('long', LONG), [host('long', LONG), host('zoe', 'zoe.k2.dev')])
     fireEvent.click(t)
     expect(useServerSwitcherStore.getState().open).toBe(true)
     const list = screen.getByRole('listbox', { name: 'Servers' })
@@ -308,7 +308,7 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(menu.className).toContain('w-[260px]')
     expect(menu.className).not.toContain('overflow-hidden')
     const options = screen.getAllByRole('option').map((o) => o.textContent ?? '')
-    expect(options.some((o) => o.includes('z3thon.k2.dev'))).toBe(true)
+    expect(options.some((o) => o.includes('zoe.k2.dev'))).toBe(true)
     expect(options.some((o) => o.includes(LONG))).toBe(true)
   })
 })

@@ -48,7 +48,7 @@ pub fn validate_env_name(name: &str) -> Result<()> {
 
 /// The env name a secret is delivered under when nothing names one:
 /// uppercase, `-` and `.` become `_`, and a leading digit gets a `_`
-/// (`mini-k2n1-admin-pw` → `MINI_K2N1_ADMIN_PW`). The result still goes
+/// (`mini-rig1-admin-pw` → `MINI_RIG1_ADMIN_PW`). The result still goes
 /// through [`validate_env_name`], so a denied name (`k2-token` →
 /// `K2_TOKEN`) is still refused.
 pub fn default_env_name(secret_name: &str) -> String {
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn default_env_names() {
         for (secret, env) in [
-            ("mini-k2n1-admin-pw", "MINI_K2N1_ADMIN_PW"),
+            ("mini-rig1-admin-pw", "MINI_RIG1_ADMIN_PW"),
             ("stripe.key", "STRIPE_KEY"),
             ("DATABASE_URL", "DATABASE_URL"),
             ("1password", "_1PASSWORD"),

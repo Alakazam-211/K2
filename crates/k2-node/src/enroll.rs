@@ -18,7 +18,7 @@ use crate::identity::Pin;
 use crate::node::NODE_VERSION;
 use crate::session::{parse_hs, recv_text, send_hs};
 
-/// Node names: `mini-1`, `z13flow`.
+/// Node names: `mini-1`, `laptop-a`.
 pub fn valid_name(n: &str) -> bool {
     !n.is_empty()
         && n.len() <= 32
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn names() {
         assert!(valid_name("mini-1"));
-        assert!(valid_name("z13flow"));
+        assert!(valid_name("laptop-a"));
         assert!(!valid_name("-x"));
         assert!(!valid_name("Mini"));
         assert!(!valid_name(""));

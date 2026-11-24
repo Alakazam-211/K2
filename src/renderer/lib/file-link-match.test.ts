@@ -75,11 +75,11 @@ describe('findFilePaths (prose)', () => {
   })
 
   it('takes a root prefix with spaces whole', () => {
-    const root = '/Users/z3thon/DevProjects/Alakazam Labs/K2'
+    const root = '/Users/zoe/DevProjects/Alakazam Labs/K2'
     expect(found(`wrote ${root}/src/foo.ts:12 today`, [root])).toEqual([`${root}/src/foo.ts:12`])
     // Without the prefix the space splits it (and both halves are junk the
     // daemon refuses, never a wrong link).
-    expect(found(`wrote ${root}/src/foo.ts today`)).toEqual(['/Users/z3thon/DevProjects/Alakazam', 'Labs/K2/src/foo.ts'])
+    expect(found(`wrote ${root}/src/foo.ts today`)).toEqual(['/Users/zoe/DevProjects/Alakazam', 'Labs/K2/src/foo.ts'])
     expect(found('see ~/DevProjects/Alakazam Labs/K2/a.md', ['~/DevProjects/Alakazam Labs/K2'])).toEqual([
       '~/DevProjects/Alakazam Labs/K2/a.md',
     ])
@@ -111,8 +111,8 @@ describe('matchWholeFilePath (inline code)', () => {
   })
 
   it('takes an absolute path with spaces in it', () => {
-    expect(matchWholeFilePath('/Users/z3thon/DevProjects/Alakazam Labs/K2/src/a.ts:9')).toEqual({
-      path: '/Users/z3thon/DevProjects/Alakazam Labs/K2/src/a.ts',
+    expect(matchWholeFilePath('/Users/zoe/DevProjects/Alakazam Labs/K2/src/a.ts:9')).toEqual({
+      path: '/Users/zoe/DevProjects/Alakazam Labs/K2/src/a.ts',
       line: 9,
     })
     expect(matchWholeFilePath('~/DevProjects/Alakazam Labs/K2/')).toEqual({ path: '~/DevProjects/Alakazam Labs/K2/' })

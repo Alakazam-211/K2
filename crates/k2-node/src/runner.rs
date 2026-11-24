@@ -117,7 +117,7 @@ pub fn target_dir_line(env: &[(String, String)], fallback: &Path) -> String {
 
 /// Let git work in the job's own checkout. The checkout belongs to the
 /// node (its mirror's worktree), the job runs as the job user, so git
-/// refuses it as "dubious ownership" (k2n4, 2026-10-27). Trusted for this
+/// refuses it as "dubious ownership" (rig4, 2026-10-27). Trusted for this
 /// job only, through git's own `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` /
 /// `GIT_CONFIG_VALUE_n`, never a global config: appended after any entries
 /// the job already sets (its `--env`, a toolchain), never over one. Both the

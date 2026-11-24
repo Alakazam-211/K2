@@ -633,7 +633,7 @@ pub(crate) const NODE_AMBIGUOUS: &str = "node_ambiguous";
 
 /// A node for a read or run path (CE-11, CE-A11): the exact name or id, as
 /// [`node_or_404`], else a prefix that matches exactly one node the caller
-/// may see (`k2n12` → `k2n12-vin`). Visible = granted to `ws_id`, except
+/// may see (`rig12` → `rig12-vps`). Visible = granted to `ws_id`, except
 /// for the owner and Admins, who see every node. Owner and destructive
 /// verbs (node remove/retire/rename/pause, grant, revoke) keep
 /// [`node_or_404`]: they need the full name.
@@ -2361,7 +2361,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     }
     // 0.46.8 (advisory): no --cpus reserves the node's CPUs ÷ its slots,
     // used or not; the next job waits for unreserved CPUs even while they
-    // sit idle (11-03: k2n10 at 0/12 unreserved, ~12 idle).
+    // sit idle (11-03: rig10 at 0/12 unreserved, ~12 idle).
     // A warning line, not a coded notice: notices are the tier/memory
     // record scripts read exactly.
     if cpu_millis.is_none() {
@@ -3542,7 +3542,7 @@ fn pick_node(
 /// `--now` refused: nothing could start the job at once (CE-17; exit 3).
 pub(crate) const NOT_NOW: &str = "not_now";
 
-/// "k2n10-vin, ~6 min (quoted)" · "k2n2-m1 (wait unknown)" · "k2n3-m1 (offline)".
+/// "rig10-vps, ~6 min (quoted)" · "rig2-mac (wait unknown)" · "rig3-mac (offline)".
 fn wait_line(c: &crate::compute_place::Cand, tier: crate::compute_place::Tier, want: &crate::compute_place::Want) -> String {
     use crate::compute_place::{self as place, Tier};
     match (tier, c.wait_eta(want)) {

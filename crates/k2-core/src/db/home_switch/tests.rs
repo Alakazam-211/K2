@@ -150,7 +150,7 @@ fn legacy_only_renames_and_keeps_wal_rows() {
 }
 
 /// The Stage A stub `k2.db` (sentinels only) beside a live `k2so.db`
-/// (z3mbp, z3mbpZ, Baden): the stub goes to quarantine with its bytes
+/// (mac-a, mac-b, Baden): the stub goes to quarantine with its bytes
 /// intact, then the live file is renamed.
 #[cfg(unix)]
 #[test]

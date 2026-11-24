@@ -694,26 +694,26 @@ mod tests {
     #[test]
     fn linked_accounts_resolve_to_the_owner_person() {
         let p = People {
-            linked: vec!["Z3thon".into()],
+            linked: vec!["Zoe".into()],
             users: vec![
-                user("z3thon", Role::Admin, false),
+                user("zoe", Role::Admin, false),
                 user("gina", Role::Admin, false),
                 user("rosson", Role::Owner, false),
                 user("wes", Role::Owner, false),
             ],
         };
-        assert_eq!(p.person_key("z3thon"), OWNER, "linked Admin login → owner person");
+        assert_eq!(p.person_key("zoe"), OWNER, "linked Admin login → owner person");
         assert_eq!(p.person_key("gina"), "gina", "an unlinked Admin is a separate person");
         assert_eq!(p.person_key("rosson"), "rosson", "two Owner-role users: no automatic mapping");
-        assert_eq!(p.device_person("z3thon").as_deref(), Some(OWNER));
-        assert_eq!(p.owner_aliases(), vec!["z3thon".to_string()]);
-        assert_eq!(p.roster()[0].logins, vec!["owner".to_string(), "z3thon".to_string()]);
-        assert!(p.roster().iter().all(|r| r.principal != "z3thon"), "folded into owner");
+        assert_eq!(p.device_person("zoe").as_deref(), Some(OWNER));
+        assert_eq!(p.owner_aliases(), vec!["zoe".to_string()]);
+        assert_eq!(p.roster()[0].logins, vec!["owner".to_string(), "zoe".to_string()]);
+        assert!(p.roster().iter().all(|r| r.principal != "zoe"), "folded into owner");
         // The login's own role is untouched by the link.
-        assert_eq!(p.user("z3thon").map(|u| u.role), Some(Role::Admin));
+        assert_eq!(p.user("zoe").map(|u| u.role), Some(Role::Admin));
         // A disabled linked login's devices still get nothing.
-        let d = People { linked: vec!["z3thon".into()], users: vec![user("z3thon", Role::Admin, true)] };
-        assert_eq!(d.device_person("z3thon"), None);
+        let d = People { linked: vec!["zoe".into()], users: vec![user("zoe", Role::Admin, true)] };
+        assert_eq!(d.device_person("zoe"), None);
     }
 
     #[test]

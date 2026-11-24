@@ -54,7 +54,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == "/cli/compute/jobs/get":
-            return self.reply(200, {"id": "abcd1234" * 4, "short": "abcd1234", "node": "k2n7", "state": "done", "exitCode": 0, "argv": ["true"],
+            return self.reply(200, {"id": "abcd1234" * 4, "short": "abcd1234", "node": "rig7", "state": "done", "exitCode": 0, "argv": ["true"],
                                     "network": NET, "result": {"network": NET}})
         return self.reply(404, {"error": {"code": "not_found", "hint": self.path}})
     def do_POST(self):

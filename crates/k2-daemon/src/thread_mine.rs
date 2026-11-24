@@ -159,22 +159,22 @@ mod tests {
     }
 
     /// The report: the owner's linked login on another computer posts as
-    /// `user/z3thon`; that login reading it is the owner person, and so is
+    /// `user/zoe`; that login reading it is the owner person, and so is
     /// the owner token. An unlinked login is only itself.
     #[test]
     fn a_linked_login_and_the_owner_token_are_one_person() {
-        let p = people(&["z3thon"]);
-        let by_login = json!({"kind": "user", "login": "z3thon"});
+        let p = people(&["zoe"]);
+        let by_login = json!({"kind": "user", "login": "zoe"});
         let by_token = json!({"kind": "owner", "login": "owner"});
-        for viewer in [login("z3thon"), login("Z3thon"), Viewer::OwnerToken] {
+        for viewer in [login("zoe"), login("Zoe"), Viewer::OwnerToken] {
             let me = viewer_person(&p, &viewer).expect("a person");
             assert_eq!(me, OWNER, "{viewer:?}");
             assert!(is_mine(&p, &me, &by_login), "{viewer:?} wrote it from the linked login");
             assert!(is_mine(&p, &me, &by_token), "{viewer:?} wrote it from the owner token");
         }
         let unlinked = people(&[]);
-        let me = viewer_person(&unlinked, &login("z3thon")).expect("a person");
-        assert_eq!(me, "z3thon");
+        let me = viewer_person(&unlinked, &login("zoe")).expect("a person");
+        assert_eq!(me, "zoe");
         assert!(is_mine(&unlinked, &me, &by_login));
         assert!(!is_mine(&unlinked, &me, &by_token), "an unlinked login is not the owner");
         let owner = viewer_person(&unlinked, &Viewer::OwnerToken).expect("the owner");
@@ -186,10 +186,10 @@ mod tests {
     /// login named `owner` (made before 0.46.6) are never the viewer's.
     #[test]
     fn other_people_guests_imported_lines_and_reserved_logins_are_not_mine() {
-        let p = people(&["z3thon"]);
-        let me = viewer_person(&p, &login("z3thon")).expect("a person");
+        let p = people(&["zoe"]);
+        let me = viewer_person(&p, &login("zoe")).expect("a person");
         assert!(!is_mine(&p, &me, &json!({"kind": "user", "login": "alice"})));
-        assert!(!is_mine(&p, &me, &json!({"kind": "guest", "login": "z3thon"})));
+        assert!(!is_mine(&p, &me, &json!({"kind": "guest", "login": "zoe"})));
         assert!(!is_mine(&p, &me, &json!({"kind": "imported", "login": "owner", "name": "Rosson"})));
         assert!(!is_mine(&p, &me, &json!({"kind": "user", "login": "owner"})), "a reserved-name login is nobody");
         assert!(!is_mine(&p, &me, &json!({"kind": "user", "login": ""})));

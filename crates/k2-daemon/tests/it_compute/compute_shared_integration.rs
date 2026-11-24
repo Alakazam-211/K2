@@ -346,7 +346,7 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     let env = setup();
     let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "tenant");
-    active_node("shr-1", "k2n2-m1", "linux", &ws);
+    active_node("shr-1", "rig2-mac", "linux", &ws);
     // Busy as far as the node's own slots go: on a shared node the job is
     // sent anyway, and the node decides.
     let mut node = compute_ws::test_attach("shr-1", full(offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 2, Some(view(Role::Tenant, 0, 0)))));
@@ -357,30 +357,30 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
         assert_eq!(n.owner_label.as_deref(), Some("rosson.k2.dev"));
     }
     let r = get(d.port, "/cli/compute/nodes", OWNER, "").await;
-    let n = j(&r)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "k2n2-m1").cloned().unwrap();
+    let n = j(&r)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "rig2-mac").cloned().unwrap();
     assert_eq!(n["share"]["role"], "tenant");
     assert_eq!(n["share"]["ownerLabel"], "rosson.k2.dev");
     assert_eq!(n["share"]["servers"], 2);
     assert!(n["share"]["line"].as_str().unwrap().starts_with("running 0/1 · queued 0/10"), "{}", n["share"]);
 
     // Submit-time share checks (exit 3).
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "cpus": 5})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig2-mac", "workspace": ws.id, "cpus": 5})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "exceeds_share_caps"), "{}", r.body);
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "gate": true})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig2-mac", "workspace": ws.id, "gate": true})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "gate_not_allowed"), "{}", r.body);
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "exclusive": true, "why": "needs the whole node"})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig2-mac", "workspace": ws.id, "exclusive": true, "why": "needs the whole node"})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "exclusive_not_allowed"), "{}", r.body);
     assert!(assigns(&node.frames()).is_empty());
 
     // --plan shows the share and the quote.
-    let r = post(d.port, "/cli/compute/run", OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "argv": ["true"], "noSource": true, "plan": true})).await;
+    let r = post(d.port, "/cli/compute/run", OWNER, json!({"node": "rig2-mac", "workspace": ws.id, "argv": ["true"], "noSource": true, "plan": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let p = j(&r);
     assert_eq!((p["shared"].as_bool(), p["owner"].as_str(), p["class"].as_str()), (Some(true), Some("rosson.k2.dev"), Some("interactive")));
     assert_eq!(p["yourShare"]["role"], "tenant");
     assert_eq!(p["quote"]["startsNow"], true, "running 0/1, nothing queued, no quote yet");
 
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "detach": true})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig2-mac", "workspace": ws.id, "detach": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let a = assigns(&node.frames());
@@ -402,12 +402,12 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     let g = j(&r);
     assert_eq!((g["state"].as_str(), g["nodeQueued"].as_bool()), (Some("queued"), Some(true)), "{g}");
     let msg = g["queue"]["message"].as_str().unwrap();
-    assert_eq!(msg, "queued on k2n2-m1, position 2, ETA ~6m — fair share: another server's jobs run first");
+    assert_eq!(msg, "queued on rig2-mac, position 2, ETA ~6m — fair share: another server's jobs run first");
     // `status` / `nodes` count it as queued, never running (0.46.6: a
     // node-queued row stays `assigned`, and `status` showed "run 6/3" on a
     // node running 2).
     let r = get(d.port, "/cli/compute/nodes", OWNER, "detail=1").await;
-    let me = j(&r)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "k2n2-m1").unwrap().clone();
+    let me = j(&r)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "rig2-mac").unwrap().clone();
     assert_eq!((me["running"].as_u64(), me["queued"].as_u64()), (Some(0), Some(1)), "{me}");
     assert_eq!(me["status"]["running"].as_array().map(Vec::len), Some(0), "{me}");
     let q = me["status"]["queued"].as_array().unwrap();
@@ -427,7 +427,7 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     assert_eq!(row(&job).state, "done");
 
     // A no-force cancel the node answers before the start: cancelled.
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig2-mac", "workspace": ws.id})).await;
     let job2 = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(assigns(&node.frames()).len(), 1);
     compute_ws::test_frame("shr-1", state(&job2, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 1, of: None, eta_secs: None, eta_p90_secs: None, blocked_by: None })));
@@ -439,7 +439,7 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
 
     // The node ends a queued job itself when the share is revoked: a
     // result, said plainly, never retried.
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig2-mac", "workspace": ws.id})).await;
     let job3 = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(assigns(&node.frames()).len(), 1);
     compute_ws::test_frame("shr-1", state(&job3, 1, JobState::Queued, Some("node_queued"), None));
@@ -452,7 +452,7 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     let mut skewed = view(Role::Tenant, 0, 0);
     skewed.skew_secs = Some(300);
     compute_ws::test_frame("shr-1", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 0, Some(skewed.clone()))));
-    let skew = |v: &Value| v["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "k2n2-m1").unwrap()["share"]["skewSecs"].clone();
+    let skew = |v: &Value| v["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "rig2-mac").unwrap()["share"]["skewSecs"].clone();
     let r = get(d.port, "/cli/compute/nodes", OWNER, "").await;
     assert_eq!(skew(&j(&r)), json!(300));
     skewed.skew_secs = Some(-60);
@@ -473,12 +473,12 @@ async fn raising_a_grant_resends_node_queued_jobs_with_the_new_cap() {
     let env = setup();
     let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "capper");
-    active_node("cap-1", "k2n9-vin", "linux", &ws);
+    active_node("cap-1", "rig9-vps", "linux", &ws);
     let mut node = compute_ws::test_attach("cap-1", offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 1, Some(view(Role::Tenant, 1, 0))));
-    let r = run(d.port, OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "detach": true})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig9-vps", "workspace": ws.id, "detach": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let old = j(&r)["job"]["id"].as_str().unwrap().to_string();
-    let r = run(d.port, OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "detach": true})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig9-vps", "workspace": ws.id, "detach": true})).await;
     let older2 = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let a = assigns(&node.frames());
     assert_eq!(a.len(), 2);
@@ -491,7 +491,7 @@ async fn raising_a_grant_resends_node_queued_jobs_with_the_new_cap() {
     let q = j(&r)["queue"].clone();
     assert_eq!((q["position"].as_i64(), q["of"].as_i64(), q["waitReason"].as_str(), q["holdsQueue"].as_bool()), (Some(1), Some(3), Some("workspace_running_full"), Some(false)), "{q}");
     let line = q["line"].as_str().unwrap();
-    assert!(line.starts_with("queued on k2n9-vin: 1 of 3 — your workspace runs "), "{line}");
+    assert!(line.starts_with("queued on rig9-vps: 1 of 3 — your workspace runs "), "{line}");
     assert!(line.ends_with("(its grant); jobs behind it may start first"), "{line}");
 
     // Raise the grant 1 → 3: both are asked back, oldest first. (Both were
@@ -501,13 +501,13 @@ async fn raising_a_grant_resends_node_queued_jobs_with_the_new_cap() {
         let conn = db.lock();
         conn.execute("UPDATE compute_jobs SET created_at = created_at - 10 WHERE id = ?1", params![old]).expect("age old");
     }
-    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "maxParallel": 3})).await;
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "rig9-vps", "workspace": ws.id, "maxParallel": 3})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(j(&r)["resent"], 2, "{}", r.body);
     assert_eq!(cancels(&node.frames()), vec![(old.clone(), 1, CANCEL_WITHDRAW.to_string()), (older2.clone(), 1, CANCEL_WITHDRAW.to_string())]);
     assert_eq!(row(&old).reason.as_deref(), Some("withdraw_resend"));
     // The same grant again re-sends nothing.
-    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "maxParallel": 3})).await;
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "rig9-vps", "workspace": ws.id, "maxParallel": 3})).await;
     assert_eq!(j(&r)["resent"], 0, "{}", r.body);
     // The node gives each back: sent again to the SAME node with cap 3.
     compute_ws::test_frame("cap-1", state(&old, 1, JobState::Cancelled, Some("withdrawn"), None));
@@ -1235,7 +1235,7 @@ async fn the_role_follows_the_node_after_an_owner_change() {
         let conn = db.lock();
         let row = k2_core::compute::share::ServerRow {
             slot: 1,
-            label: "z3thon.k2.dev".into(),
+            label: "zoe.k2.dev".into(),
             fp: Some("ab".repeat(32)),
             state: "active".into(),
             trust: "own".into(),
@@ -1326,7 +1326,7 @@ async fn tiers_on_a_shared_node() {
     let env = setup();
     let d = test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "tiered");
-    active_node("shr-t", "k2n3-m1", "linux", &ws);
+    active_node("shr-t", "rig3-mac", "linux", &ws);
     let feats = ["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS, FEATURE_TIERS];
     let mut v = view(Role::Tenant, 0, 0);
     v.limits.max_queued = 30;
@@ -1334,7 +1334,7 @@ async fn tiers_on_a_shared_node() {
     let mut node = compute_ws::test_attach("shr-t", offer(&feats, 0, Some(v.clone())));
 
     // A guest share where Priority doesn't count: Normal, with a note.
-    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig3-mac", "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let out = j(&r);
     assert_eq!((out["job"]["tier"].as_str(), out["job"]["tierAsked"].as_str()), (Some("normal"), Some("priority")), "{out}");
@@ -1345,7 +1345,7 @@ async fn tiers_on_a_shared_node() {
     assert_eq!((p.tier, p.class), (Some(Tier::Normal), Some(JobClass::Interactive)), "the node gets the tier it counts");
 
     // CI on a share without gate: refused, as --gate was.
-    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "ci"})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig3-mac", "workspace": ws.id, "tier": "ci"})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "gate_not_allowed"), "{}", r.body);
 
     // The node's owner lets this server's Priority count, and gives it gate.
@@ -1353,12 +1353,12 @@ async fn tiers_on_a_shared_node() {
     v.limits.gate = true;
     v.limits.top_class = JobClass::Gate;
     compute_ws::test_frame("shr-t", Frame::Offer(offer(&feats, 0, Some(v.clone()))));
-    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig3-mac", "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let out = j(&r);
     assert_eq!((out["job"]["tier"].as_str(), out["job"]["tierAsked"].as_str()), (Some("priority"), None), "{out}");
     assert!(out["notices"].as_array().is_some_and(|n| n.iter().all(|x| x["code"] != "priority_downgraded")), "{out}");
-    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "gate": true})).await;
+    let r = run(d.port, OWNER, json!({"node": "rig3-mac", "workspace": ws.id, "gate": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(j(&r)["job"]["tier"], "ci", "--gate is --tier ci");
     let a = assigns(&node.frames());

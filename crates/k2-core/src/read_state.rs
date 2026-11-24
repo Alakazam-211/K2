@@ -1567,9 +1567,9 @@ mod tests {
             assert_ne!(k, owner, "a different person, a different key");
             assert!(!k.contains(name) && !k.contains("owner"), "{k}");
         }
-        let linked = People { users: Vec::new(), linked: vec!["z3thon".into()] };
+        let linked = People { users: Vec::new(), linked: vec!["zoe".into()] };
         assert_eq!(
-            badge_key_for(&conn, &linked.person_key("z3thon")).expect("linked"),
+            badge_key_for(&conn, &linked.person_key("zoe")).expect("linked"),
             owner,
             "a linked login is the owner person: same key"
         );

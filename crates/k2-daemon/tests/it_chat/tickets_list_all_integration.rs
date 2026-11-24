@@ -305,10 +305,10 @@ async fn waiting_count_counts_needs_discussion_and_me_scopes_to_the_login() {
     });
 }
 
-/// 0.46.0 smoke (Rosson on z3mbpZ): a ticket assigned to `z3thon`, the
+/// 0.46.0 smoke (Rosson on mac-b): a ticket assigned to `zoe`, the
 /// Connect login he linked as "This is me (owner)", must be "Waiting on
 /// me" for the owner token. Unlinked, the owner counts only `owner`
-/// assignments. Linked, the owner token AND the `z3thon` session count it,
+/// assignments. Linked, the owner token AND the `zoe` session count it,
 /// and whoami's `ticketMe` (the board's "me") carries the same names.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
@@ -316,7 +316,7 @@ async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
     with_temp_home(|| {
         // The in-memory DB is process-wide, and an earlier test in this
         // file leaves waiting tickets assigned to the wire `owner`. Linking
-        // makes tlbz3thon count `owner` tickets too, so those leftovers
+        // makes tlbzoe count `owner` tickets too, so those leftovers
         // used to land in its delta whenever that test ran first (the
         // order-dependent flake). Start from an empty ticket table (we hold
         // TEST_LOCK; comments and briefs cascade) so the counts below are
@@ -324,8 +324,8 @@ async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
         k2_core::db::shared().lock().execute("DELETE FROM feedback", []).expect("clear tickets");
         k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson Link" }))
             .expect("set owner display name");
-        connect_users::add_user("tlbz3thon", "password123").expect("add_user");
-        let linked = connect_users::create_session("tlbz3thon");
+        connect_users::add_user("tlbzoe", "password123").expect("add_user");
+        let linked = connect_users::create_session("tlbzoe");
         let d = futures_block(test_harness::start(OWNER_TOKEN));
 
         let read = |tok: &str| -> i64 {
@@ -341,28 +341,28 @@ async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
             json(&r.body)["ticketMe"].clone()
         };
 
-        // Unlinked: the owner is `owner` + display name; z3thon is z3thon.
+        // Unlinked: the owner is `owner` + display name; zoe is zoe.
         assert_eq!(ticket_me(OWNER_TOKEN), serde_json::json!(["owner", "rosson link"]));
-        assert_eq!(ticket_me(linked.as_str()), serde_json::json!(["tlbz3thon"]));
+        assert_eq!(ticket_me(linked.as_str()), serde_json::json!(["tlbzoe"]));
         let owner_before = read(OWNER_TOKEN);
         let linked_before = read(linked.as_str());
-        seed_linked_ticket("assigned to the linked login", "waiting", &["TLBz3thon "]);
+        seed_linked_ticket("assigned to the linked login", "waiting", &["TLBzoe "]);
         seed_linked_ticket("assigned to owner", "needs_discussion", &["owner"]);
         // A legacy ticket assigned by the old owner display name.
         seed_linked_ticket("assigned by the old display name", "waiting", &["Rosson Link"]);
         assert_eq!(read(OWNER_TOKEN) - owner_before, 2, "unlinked owner: the `owner` + legacy display-name tickets");
-        assert_eq!(read(linked.as_str()) - linked_before, 1, "unlinked z3thon: only their own ticket");
+        assert_eq!(read(linked.as_str()) - linked_before, 1, "unlinked zoe: only their own ticket");
 
-        // Link z3thon as the owner (Settings → People → "This is me (owner)").
+        // Link zoe as the owner (Settings → People → "This is me (owner)").
         let r = http(
             d.port,
             "POST",
             &format!("/cli/owner/accounts?token={OWNER_TOKEN}"),
-            Some(r#"{"accounts":["tlbz3thon"]}"#),
+            Some(r#"{"accounts":["tlbzoe"]}"#),
         );
         assert_eq!(r.status, 200, "link owner account; body={}", r.body);
 
-        let both = serde_json::json!(["owner", "rosson link", "tlbz3thon"]);
+        let both = serde_json::json!(["owner", "rosson link", "tlbzoe"]);
         assert_eq!(ticket_me(OWNER_TOKEN), both, "owner token: owner + display + linked");
         assert_eq!(ticket_me(linked.as_str()), both, "linked login: the same person");
         assert_eq!(read(OWNER_TOKEN) - owner_before, 3, "linked owner: all three tickets");

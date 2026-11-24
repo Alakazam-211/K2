@@ -59,7 +59,7 @@ use crate::cli_name;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeInfo {
     pub id: String,
-    /// `k2n1-m4`.
+    /// `rig1-mac`.
     pub name: String,
     pub online: bool,
     /// The node's protocol (its hello).
@@ -73,7 +73,7 @@ pub struct NodeInfo {
     /// owner", "holding for Sew CI"); `None` = free.
     pub hold: Option<String>,
     /// `k2 compute node pinned-only <node> on`: automatic placement never
-    /// picks it; a device that names it (`k2n1-m4:<type>`) still boots there.
+    /// picks it; a device that names it (`rig1-mac:<type>`) still boots there.
     pub pinned_only: bool,
 }
 
@@ -250,7 +250,7 @@ pub fn profile_id(node: &str, type_id: &str) -> String {
     format!("{node}:{type_id}")
 }
 
-/// `iPhone 17 (on k2n1-m4)`.
+/// `iPhone 17 (on rig1-mac)`.
 pub fn profile_name(name: &str, node: &str) -> String {
     format!("{name} (on {node})")
 }

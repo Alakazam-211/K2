@@ -38,7 +38,7 @@ describe('isMacTmpPath', () => {
   })
 
   it('does not refuse /Users or C:\\Users', () => {
-    expect(isMacTmpPath('/Users/z3thon/Desktop/Screenshot.png')).toBe(false)
+    expect(isMacTmpPath('/Users/zoe/Desktop/Screenshot.png')).toBe(false)
     expect(isMacTmpPath('C:\\Users\\rosson\\Pictures\\x.png')).toBe(false)
     expect(isMacTmpPath('/home/rosson/shot.png')).toBe(false)
     expect(isMacTmpPath('/var/folders-backup/x')).toBe(false)
@@ -60,7 +60,7 @@ describe('isRemoteMacTmpPath — remote only', () => {
     useConnectHostStore.getState().addHost(host)
     useConnectHostStore.getState().selectHost(host)
     expect(isRemoteMacTmpPath('/var/folders/zz/abc/T/Screenshot.png')).toBe(true)
-    expect(isRemoteMacTmpPath('/Users/z3thon/Desktop/x.png')).toBe(false)
+    expect(isRemoteMacTmpPath('/Users/zoe/Desktop/x.png')).toBe(false)
     expect(() => throwIfRemoteMacTmp('/private/var/folders/x/Screenshot.png')).toThrow(RemoteMacTmpError)
   })
 })

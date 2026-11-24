@@ -62,7 +62,7 @@ const SUPABASE_ANON_KEY =
 export interface K2Subdomain {
   /**
    * The bare **apex** label, e.g. `rosson` → exposes `rosson.k2.dev`.
-   * Must not contain `.` — nested DNS (`staging.z3thon`) is routing under an
+   * Must not contain `.` — nested DNS (`staging.zoe`) is routing under an
    * apex tunnel, not a separate frpc tunnel root.
    */
   label: string
@@ -80,7 +80,7 @@ export interface K2Subdomain {
 
 /**
  * True when `label` is a tunnelable apex purchase (single DNS label under
- * `k2.dev`). Nested names (`api.z3thon`, `rosson.rekall`) are **not**
+ * `k2.dev`). Nested names (`api.zoe`, `rosson.rekall`) are **not**
  * tunnel roots — they are routes under an apex tunnel.
  */
 export function isApexTunnelLabel(label: string): boolean {

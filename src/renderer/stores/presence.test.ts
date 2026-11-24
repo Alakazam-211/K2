@@ -397,11 +397,11 @@ describe('presence store — person colours', () => {
   it('the snapshot ingests the colors map; rows keep their color', async () => {
     cli.getImpl = async () => ({
       roster: [row('owner', { color: '#4f46e5' })],
-      colors: { owner: '#4f46e5', z3thon: '#4f46e5', anna: '#0d9488', bad: 3 },
+      colors: { owner: '#4f46e5', zoe: '#4f46e5', anna: '#0d9488', bad: 3 },
     })
     await usePresenceStore.getState().refreshRoster()
     expect(usePresenceStore.getState().roster[0].color).toBe('#4f46e5')
-    expect(usePresenceStore.getState().colors).toEqual({ owner: '#4f46e5', z3thon: '#4f46e5', anna: '#0d9488' })
+    expect(usePresenceStore.getState().colors).toEqual({ owner: '#4f46e5', zoe: '#4f46e5', anna: '#0d9488' })
   })
 
   it('presence_changed replaces the map; an older daemon without it leaves the map as it was', () => {

@@ -848,7 +848,7 @@ async fn one_click_tickets_and_declared_toolchains() {
     assert_eq!(code(&r), "need_invalid");
 
     // An unsupported tool is refused before any job exists, never dropped
-    // (k2n3-m1, 2026-10-13: a job ran without what it asked for).
+    // (rig3-mac, 2026-10-13: a job ran without what it asked for).
     let mut unsup = run_body("n5", &["true"], "client-0000000204");
     unsup["workspace"] = json!(ws_.id);
     unsup["needs"] = json!(["cmake@3", "make@4"]);

@@ -4,7 +4,7 @@
 // its version differs from the app's (src-tauri/src/linux_daemon.rs, the
 // launchctl-kickstart twin): pacman/apt/dnf run as root and cannot restart
 // a user unit, so after a package upgrade the old daemon kept answering
-// and the gate sat on a dead "Connecting…" (z13flow, 0.46.0). The Rust
+// and the gate sat on a dead "Connecting…" (laptop-a, 0.46.0). The Rust
 // side publishes its phase through `local_daemon_update_state`; the gate
 // polls it while it waits on the local host and says "Updating K2
 // daemon…", or shows why the restart could not fix it (e.g. a systemd

@@ -3,7 +3,7 @@
 # without Arch. Runs on GitHub-hosted ubuntu-latest (checks.yml) and on
 # the Mac. Needs bash and sha256sum or shasum. No makepkg, no pacman.
 #
-# Why: the Arch package is only built by arch-package.yml on the k2-arch
+# Why: the Arch package is only built by arch-package.yml on the arch-box
 # runner, after the tag is live. 0.43.0's tag build died in 14 seconds on
 # a stale k2.install sha256. That is a text check; it belongs on every push.
 #

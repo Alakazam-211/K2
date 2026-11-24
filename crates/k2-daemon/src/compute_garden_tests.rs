@@ -147,7 +147,7 @@ fn entry(pos: u32, mine: bool, state: JobState, job_id: Option<&str>, server: Op
 /// owner, tier and age.
 #[test]
 fn a_solo_node_shows_this_servers_jobs_and_free_room() {
-    let mut f = facts(row("k2n12-vin"), true, Some(offer(1, 3)));
+    let mut f = facts(row("rig12-vps"), true, Some(offer(1, 3)));
     f.active = vec![job("j-run", "wsid-a", "running", Some(NOW - 120))];
     let mut q = job("j-wait", "wsid-b", "queued", None);
     q.reason = Some("waiting_for_room".into());
@@ -171,7 +171,7 @@ fn a_solo_node_shows_this_servers_jobs_and_free_room() {
     assert_eq!(v["jobs"][1]["elapsedSecs"], 300, "a queued job's wait");
     assert_eq!(v["jobs"][1]["blockedBy"], "waiting_for_room");
     let all = v.to_string();
-    for secret in ["j-run", "j-wait", "cargo", "--secret-flag", "sess-secret", "wsid-", "id-k2n12"] {
+    for secret in ["j-run", "j-wait", "cargo", "--secret-flag", "sess-secret", "wsid-", "id-rig12"] {
         assert!(!all.contains(secret), "no job id, command, session, workspace id or node id: {secret} in {all}");
     }
 }
@@ -181,7 +181,7 @@ fn a_solo_node_shows_this_servers_jobs_and_free_room() {
 /// "another server"), and this server's carry the agent's handle.
 #[test]
 fn a_shared_node_counts_every_servers_jobs_from_its_own_queue() {
-    let mut r = row("k2n10-vin");
+    let mut r = row("rig10-vps");
     r.shared = true;
     r.share = Some(shared_view(2, ServerStatus::Active));
     let mut f = facts(r, true, Some(offer(2, 3)));
@@ -217,7 +217,7 @@ fn a_shared_node_counts_every_servers_jobs_from_its_own_queue() {
 /// node-wide running count, and why.
 #[test]
 fn a_shared_node_that_doesnt_answer_falls_back_to_this_servers_jobs() {
-    let mut r = row("k2n11-vin");
+    let mut r = row("rig11-vps");
     r.shared = true;
     r.share = Some(shared_view(2, ServerStatus::Active));
     let mut f = facts(r, true, Some(offer(2, 2)));
@@ -247,7 +247,7 @@ fn states_say_why_a_node_isnt_taking_jobs() {
 
     let mut o = offer(0, 2);
     o.control = Control::Paused;
-    o.control_by = Some("z3thon".into());
+    o.control_by = Some("zoe".into());
     let v = shape(&facts(row("p"), true, Some(o)));
     assert_eq!(v["state"], "paused");
     assert!(v["why"].as_str().is_some_and(|w| w.contains("on the node")), "{v}");
@@ -279,7 +279,7 @@ fn states_say_why_a_node_isnt_taking_jobs() {
 /// that name it), and every other node says false.
 #[test]
 fn a_pinned_only_node_says_so() {
-    let mut f = facts(row("k2n2"), true, Some(offer(0, 4)));
+    let mut f = facts(row("rig2"), true, Some(offer(0, 4)));
     assert_eq!(shape(&f)["pinnedOnly"], false);
     f.pinned_only = true;
     let v = shape(&f);

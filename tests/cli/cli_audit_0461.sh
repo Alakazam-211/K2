@@ -206,7 +206,7 @@ echo "== 8/12. k2 compute =="
 routes '{"GET /cli/compute/jobs/get": [404, {"error": {"code": "job_not_found", "hint": "no job abc"}}]}'
 run owner compute get abc
 assert_eq "compute get missing → exit 4" "$rc" "4"
-routes '{"GET /cli/compute/jobs": [200, {"jobs": [{"short": "913e14ac", "node": "k2n2-m1", "state": "queued", "exitCode": null, "reason": "local_resource_limit", "argv": ["cargo", "test"]}]}]}'
+routes '{"GET /cli/compute/jobs": [200, {"jobs": [{"short": "913e14ac", "node": "rig2-mac", "state": "queued", "exitCode": null, "reason": "local_resource_limit", "argv": ["cargo", "test"]}]}]}'
 run owner compute jobs
 assert_contains "compute jobs prints the full reason" "$out" "local_resource_limit"
 

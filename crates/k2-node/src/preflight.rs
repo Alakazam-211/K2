@@ -2,8 +2,8 @@
 //!
 //! A spawn that can't `chdir` into its working directory fails with the
 //! same `ENOENT` as one whose program isn't there, and Rust's
-//! `Command::spawn` names only the program: jobs 9f22e22f (k2n16) and
-//! e1f2a581 (k2n21) died at once with `k2-node job-exec: run bash: No such
+//! `Command::spawn` names only the program: jobs 9f22e22f (rig16) and
+//! e1f2a581 (rig21) died at once with `k2-node job-exec: run bash: No such
 //! file or directory (os error 2)`, even as `/bin/bash`, which was there.
 //! So the `job-exec` shim, the node's own spawn and the node's last step
 //! before a start check both first and say which one is missing.

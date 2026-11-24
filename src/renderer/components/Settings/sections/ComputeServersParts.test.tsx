@@ -52,7 +52,7 @@ const FP_B = 'b'.repeat(64)
 function row(over: Partial<NodeServerRow>): NodeServerRow {
   return {
     slot: 1,
-    label: 'z3thon.k2.dev',
+    label: 'zoe.k2.dev',
     fp: FP_B,
     state: 'active',
     trust: 'own',
@@ -208,7 +208,7 @@ describe('limits (S2)', () => {
     fireEvent.click(within(b).getByRole('button', { name: 'Edit limits' }))
     fireEvent.change(within(b).getByLabelText('Queued'), { target: { value: '5' } })
     fireEvent.click(within(b).getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(m.setServerLimits).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', { max_queued: 5 }, undefined))
+    await waitFor(() => expect(m.setServerLimits).toHaveBeenCalledWith('mini-2', 'zoe.k2.dev', { max_queued: 5 }, undefined))
     expect((await screen.findByTestId('compute-servers-notice')).textContent).toContain('narrowed at once')
 
     m.setServerLimits.mockResolvedValueOnce({ held: true, request: { id: 'car_2' } as never })
@@ -217,7 +217,7 @@ describe('limits (S2)', () => {
     fireEvent.change(within(form).getByLabelText('Running at once'), { target: { value: '3' } })
     fireEvent.change(within(form).getByLabelText('End date from now'), { target: { value: 'none' } })
     fireEvent.click(within(form).getByRole('button', { name: 'Save' }))
-    await waitFor(() => expect(m.setServerLimits).toHaveBeenLastCalledWith('mini-2', 'z3thon.k2.dev', { max_running: 3 }, 0))
+    await waitFor(() => expect(m.setServerLimits).toHaveBeenLastCalledWith('mini-2', 'zoe.k2.dev', { max_running: 3 }, 0))
     await waitFor(() => expect(screen.getByTestId('compute-servers-notice').textContent).toContain('Waiting for your approval'))
     expect(m.fetchNodeServers.mock.calls.length).toBeGreaterThanOrEqual(3)
   })
@@ -262,7 +262,7 @@ describe('pause and resume (S4)', () => {
     m.fetchNodeServers.mockResolvedValue(owned({ servers: [row({}), row({ slot: 2, label: 'p.k2.dev', state: 'paused' })] }))
     await openServers()
     fireEvent.click(within(screen.getByTestId('compute-server-row-1')).getByRole('button', { name: 'Pause' }))
-    await waitFor(() => expect(m.pauseServer).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', 'pause'))
+    await waitFor(() => expect(m.pauseServer).toHaveBeenCalledWith('mini-2', 'zoe.k2.dev', 'pause'))
     fireEvent.click(within(screen.getByTestId('compute-server-row-2')).getByRole('button', { name: 'Resume' }))
     await waitFor(() => expect(m.pauseServer).toHaveBeenCalledWith('mini-2', 'p.k2.dev', 'resume'))
   })
@@ -274,10 +274,10 @@ describe('revoke (S5)', () => {
     await openServers()
     const b = screen.getByTestId('compute-server-row-1')
     fireEvent.click(within(b).getByRole('button', { name: 'Revoke' }))
-    const dlg = screen.getByRole('dialog', { name: 'Revoke z3thon.k2.dev?' })
+    const dlg = screen.getByRole('dialog', { name: 'Revoke zoe.k2.dev?' })
     fireEvent.click(within(dlg).getByLabelText('Stop running jobs now'))
     fireEvent.click(within(dlg).getByRole('button', { name: 'Revoke' }))
-    await waitFor(() => expect(m.revokeServer).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', { now: true, wipe: false }))
+    await waitFor(() => expect(m.revokeServer).toHaveBeenCalledWith('mini-2', 'zoe.k2.dev', { now: true, wipe: false }))
   })
 
   it('is the owner’s alone: disabled for anyone else', async () => {
@@ -307,13 +307,13 @@ describe('make owner (S6)', () => {
     m.changeNodeOwner.mockResolvedValue({ held: true, request: { id: 'car_4' } as never })
     await openServers()
     fireEvent.click(within(screen.getByTestId('compute-server-row-1')).getByRole('button', { name: 'Make owner' }))
-    const dlg = screen.getByRole('dialog', { name: 'Make z3thon.k2.dev the owner of mini-2?' })
+    const dlg = screen.getByRole('dialog', { name: 'Make zoe.k2.dev the owner of mini-2?' })
     expect(dlg.textContent).toContain('drains')
     expect(dlg.textContent).toContain('stays as one of your servers')
     expect(within(dlg).getByTestId('compute-owner-key').textContent).toContain(FP_B)
     fireEvent.click(within(dlg).getByLabelText('Wipe the build caches'))
     fireEvent.click(within(dlg).getByRole('button', { name: 'Ask to change the owner' }))
-    await waitFor(() => expect(m.changeNodeOwner).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', { old: 'keep', caches: 'wipe', now: false }))
+    await waitFor(() => expect(m.changeNodeOwner).toHaveBeenCalledWith('mini-2', 'zoe.k2.dev', { old: 'keep', caches: 'wipe', now: false }))
     expect((await screen.findByTestId('compute-servers-notice')).textContent).toContain('Waiting for your approval')
   })
 })
@@ -397,7 +397,7 @@ describe('job tiers: Priority counts here (0.46.5)', () => {
     m.fetchNodeServers.mockResolvedValue(tiered())
     await openServers()
     expect(within(screen.getByTestId('compute-server-row-0')).queryByTestId('compute-server-priority')).toBeNull()
-    const off = within(screen.getByTestId('compute-server-row-1')).getByRole('switch', { name: 'Priority counts here: z3thon.k2.dev' })
+    const off = within(screen.getByTestId('compute-server-row-1')).getByRole('switch', { name: 'Priority counts here: zoe.k2.dev' })
     expect(off.getAttribute('aria-checked')).toBe('false')
     const on = within(screen.getByTestId('compute-server-row-2')).getByRole('switch', { name: 'Priority counts here: baden.k2.dev' })
     expect(on.getAttribute('aria-checked')).toBe('true')
@@ -411,9 +411,9 @@ describe('job tiers: Priority counts here (0.46.5)', () => {
     m.fetchNodeServers.mockResolvedValue(tiered())
     m.setServerPriority.mockResolvedValue({ held: true, request: { id: 'car_7' } as never })
     await openServers()
-    fireEvent.click(within(screen.getByTestId('compute-server-row-1')).getByRole('switch', { name: 'Priority counts here: z3thon.k2.dev' }))
+    fireEvent.click(within(screen.getByTestId('compute-server-row-1')).getByRole('switch', { name: 'Priority counts here: zoe.k2.dev' }))
     await waitFor(() => expect(m.setServerPriority).toHaveBeenCalledTimes(1))
-    expect(m.setServerPriority).toHaveBeenCalledWith('mini-2', 'z3thon.k2.dev', true)
+    expect(m.setServerPriority).toHaveBeenCalledWith('mini-2', 'zoe.k2.dev', true)
     await waitFor(() => expect(screen.getByTestId('compute-servers-notice').textContent).toContain('Waiting for your approval'))
   })
 

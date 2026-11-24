@@ -30,7 +30,7 @@
 # docs/internal/spike-macos-signing-in-a-job.md.
 #
 # Usage (from a K2 workspace, on one of the owner's Mac nodes):
-#   k2 compute run k2n2-m1 --sha HEAD -- bash scripts/spike/macos-sign-in-job.sh --selftest
+#   k2 compute run rig2-mac --sha HEAD -- bash scripts/spike/macos-sign-in-job.sh --selftest
 #   k2 compute run <owner-mac-node> --sha HEAD --secret SIGN_P12_B64=K2_SIGN_P12_B64 … \
 #       -- bash scripts/spike/macos-sign-in-job.sh --app target/release/bundle/macos/My.app
 

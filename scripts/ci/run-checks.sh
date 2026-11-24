@@ -15,7 +15,7 @@
 #       0 (all passed) or 1. Still running: exit 10, nothing posted.
 #
 # Run from a checkout that is a K2 workspace with compute grants on the
-# nodes (z3mbpZ's CI checkout, workspace k2-ci). The commit need not be
+# nodes (mac-b's CI checkout, workspace k2-ci). The commit need not be
 # pushed: K2 Compute sends a git bundle.
 #
 # One job per part, each `--tier ci` (CI goes first in every node's queue;
@@ -25,10 +25,10 @@
 #   k2-compute/rust-test   scripts/ci/checks.sh rust-test
 #   k2-compute/audit       scripts/ci/checks.sh audit
 # Where: K2 picks the node (--any --os linux --arch x86_64) among the
-# nodes this workspace is granted, never k2-arch (--avoid when it is
+# nodes this workspace is granted, never arch-box (--avoid when it is
 # granted: an Arch node has no Debian sys: packages; K2_COMPUTE_AVOID).
-# The grants are the fence: k2-ci is granted the Debian Ryzens k2n7, k2n8,
-# k2n9 and k2n10 only, never k2n12 (the fuzz node) or k2-arch. K2_CI_NODE_WEB,
+# The grants are the fence: k2-ci is granted the Debian Ryzens rig7, rig8,
+# rig9 and rig10 only, never rig12 (the fuzz node) or arch-box. K2_CI_NODE_WEB,
 # K2_CI_NODE_RUST_CHECK, K2_CI_NODE_RUST_TEST, K2_CI_NODE_AUDIT pin a part
 # to a node instead ("any" = the default).
 #
@@ -127,7 +127,7 @@ submit() {
     rust="$(k2_rust_need "$SHA")"
     local -a tier_args=() avoid_args=()
     while IFS= read -r t; do [ -n "$t" ] && tier_args+=("$t"); done < <(K2_BIN="$K2" k2_compute_tier_args "${K2_CI_TIER:-ci}")
-    # A part K2 places itself never lands on k2-arch (Arch: no apt sys:).
+    # A part K2 places itself never lands on arch-box (Arch: no apt sys:).
     while IFS= read -r t; do [ -n "$t" ] && avoid_args+=("$t"); done < <(K2_BIN="$K2" k2_compute_avoid_args)
     # cargo-nextest: rust-test runs nextest (.config/nextest.toml, profile ci).
     # libssl-dev as checks.yml's apt line; libasound2-dev for the native-voice

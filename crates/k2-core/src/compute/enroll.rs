@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn names() {
         assert!(valid_name("mini-1"));
-        assert!(valid_name("z13flow"));
+        assert!(valid_name("laptop-a"));
         assert!(!valid_name("-x"));
         assert!(!valid_name("Mini"));
         assert!(!valid_name(""));

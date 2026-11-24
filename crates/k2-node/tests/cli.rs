@@ -46,7 +46,7 @@ fn every_installer_script_parses_and_is_executable() {
     }
 }
 
-/// The S0 spike scripts (run by hand on the minis / z13flow) parse, are
+/// The S0 spike scripts (run by hand on the minis / laptop-a) parse, are
 /// executable, and refuse to start without their required arguments.
 #[test]
 fn spike_scripts_parse_and_refuse_without_arguments() {
@@ -203,7 +203,7 @@ fn enroll_force_on_a_shared_node_points_at_servers_owner() {
     let mut f = ServersFile::new(&k.fingerprint(), "rosson.k2.dev", ShareLimits::owner(1, 1, 1, 1, Network::On), 3, 1, "local:test");
     let mut b = f.servers[0].clone();
     b.slot = 1;
-    b.label = "z3thon.k2.dev".into();
+    b.label = "zoe.k2.dev".into();
     b.fp_prefix = "0123456789abcdef".into();
     b.set_limits(&ShareLimits::new_server(Trust::Own, false));
     f.servers.push(b);
@@ -212,7 +212,7 @@ fn enroll_force_on_a_shared_node_points_at_servers_owner() {
     let mut args = vec!["enroll", "--controller", "https://127.0.0.1:9", "--enroll", "ABCDE-FGHJK.0123456789abcdef", "--name", "mini-1", "--home", &home, "--config-dir", &cfg, "--force"];
     let (ok, _, err) = run(&args);
     assert!(!ok);
-    assert!(err.contains("z3thon.k2.dev") && err.contains("sudo k2-node servers owner") && err.contains("--drop-servers"), "{err}");
+    assert!(err.contains("zoe.k2.dev") && err.contains("sudo k2-node servers owner") && err.contains("--drop-servers"), "{err}");
     assert_eq!(k2_node::identity::read_pin(&layout.pin()).unwrap().unwrap().controller_fp, k.fingerprint(), "nothing changed");
     args.push("--drop-servers");
     let (ok, _, err) = run(&args);
@@ -268,7 +268,7 @@ fn no_install_path_ever_runs_dev() {
     assert!(!k2_node::node::dev_test_exemption(true, &cfg), "an installed node's config never takes the --dev exemption");
 }
 
-/// z3mbpZ e2e fix 3: re-running the macOS installer with --binary pointing
+/// mac-b e2e fix 3: re-running the macOS installer with --binary pointing
 /// at the installed k2-node (an upgrade in place with nothing to copy) is a
 /// no-op copy, not `install`'s "are the same file" stopping the script
 /// under `set -e`. The script's own `install_binary` is run on its own.

@@ -405,13 +405,13 @@ describe('Thread overlay choice chips + secret field', () => {
     })
 
     // thread-mine-v1 (Rosson 2026-11-04, a desktop on another Mac signed in
-    // to rosson.k2.dev as the owner's linked login `z3thon`): "The bubbles
+    // to rosson.k2.dev as the owner's linked login `zoe`): "The bubbles
     // are blue for a moment, and then they turn grey." The pending bubble
     // is always mine; the server's copy was decided by the client's own
     // viewer lookup, which on that remote missed. The daemon now says
     // `mine` for the reader, and that wins.
     describe('the server says which posts are the reader\'s (thread-mine-v1)', () => {
-      const z3thon = { kind: 'user', login: 'z3thon' }
+      const zoe = { kind: 'user', login: 'zoe' }
       /** What the window sees on that remote when its lookup missed. */
       const missedViewers: Array<[string, ThreadViewer | null]> = [
         ['no answer yet on a remote', null],
@@ -432,12 +432,12 @@ describe('Thread overlay choice chips + secret field', () => {
             ok: true,
             id: 'srv-1',
             seq: 8607,
-            from: 'z3thon',
+            from: 'zoe',
             to: 'k2',
             kind: 'text',
             body: 'The bubbles are blue for a moment, and then they turn grey.',
             via: 'compose',
-            author: z3thon,
+            author: zoe,
             created_at: Math.floor(Date.now() / 1000),
             clientMsgId: 'abc',
             mine: true,
@@ -450,16 +450,16 @@ describe('Thread overlay choice chips + secret field', () => {
       })
 
       it.each(missedViewers)('a read page and a socket frame keep the server\'s mine (%s)', (_why, viewer) => {
-        renderInRoom(overlayRoom, <ThreadItemRow item={post('read-own', 'z3thon', z3thon, { mine: true })} viewer={viewer} />)
+        renderInRoom(overlayRoom, <ThreadItemRow item={post('read-own', 'zoe', zoe, { mine: true })} viewer={viewer} />)
         expect(authorText()).toBe('You')
         cleanup()
         // Someone else's post stays theirs even for a viewer that would
         // have matched it.
         renderInRoom(
           overlayRoom,
-          <ThreadItemRow item={post('read-theirs', 'z3thon', z3thon, { mine: false })} viewer={{ principal: 'z3thon', aliases: [] }} />,
+          <ThreadItemRow item={post('read-theirs', 'zoe', zoe, { mine: false })} viewer={{ principal: 'zoe', aliases: [] }} />,
         )
-        expect(authorText()).toBe('z3thon')
+        expect(authorText()).toBe('zoe')
       })
     })
 

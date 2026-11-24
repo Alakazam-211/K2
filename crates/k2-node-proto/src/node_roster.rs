@@ -64,7 +64,7 @@ pub struct RosterEntry {
     pub node_fp: String,
     /// P-256 SPKI, base64 DER.
     pub node_spki: String,
-    /// The node's stable name (`k2n7-vin`): the same across re-keys. At most
+    /// The node's stable name (`rig7-vps`): the same across re-keys. At most
     /// one `active` entry per name.
     pub name: String,
     pub key_epoch: u32,

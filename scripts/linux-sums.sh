@@ -5,7 +5,7 @@
 # the tag, on different runners and in either order:
 #   app-linux.yml    (k2-linux) K2_<v>_amd64.deb, K2-<v>-1.x86_64.rpm,
 #                               K2_<v>_amd64.AppImage
-#   arch-package.yml (k2-arch)  k2-<v>-x86_64.pkg.tar.zst
+#   arch-package.yml (arch-box)  k2-<v>-x86_64.pkg.tar.zst
 # Both merge their own lines into the one SUMS file with `merge`: download
 # the release's file, replace or append their lines, keep every other
 # line, re-upload with --clobber, read it back. The merge jobs share the

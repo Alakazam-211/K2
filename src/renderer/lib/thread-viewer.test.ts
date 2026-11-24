@@ -126,15 +126,15 @@ describe('isOwnThreadPost', () => {
   })
 
   it('the server\'s mine wins over the viewer, both ways (thread-mine-v1)', () => {
-    const z3thon = { kind: 'user', login: 'z3thon' }
+    const zoe = { kind: 'user', login: 'zoe' }
     // The owner's linked login reading on a remote whose lookup missed.
     for (const viewer of [null, { principal: 'owner', aliases: [] }, alice]) {
-      expect(isOwnThreadPost({ via: 'compose', author: z3thon, mine: true }, viewer)).toBe(true)
+      expect(isOwnThreadPost({ via: 'compose', author: zoe, mine: true }, viewer)).toBe(true)
     }
     expect(isOwnThreadPost({ via: 'compose', author: { kind: 'user', login: 'alice' }, mine: false }, alice)).toBe(false)
     // Anything but a boolean is not an answer: the viewer rule decides.
-    expect(isOwnThreadPost({ via: 'compose', author: z3thon, mine: 'yes' }, alice)).toBe(false)
-    expect(isOwnThreadPost({ via: 'compose', author: z3thon, mine: null }, { principal: 'z3thon', aliases: [] })).toBe(true)
+    expect(isOwnThreadPost({ via: 'compose', author: zoe, mine: 'yes' }, alice)).toBe(false)
+    expect(isOwnThreadPost({ via: 'compose', author: zoe, mine: null }, { principal: 'zoe', aliases: [] })).toBe(true)
   })
 
   it('a doc without an author keeps the old via=compose rule', () => {

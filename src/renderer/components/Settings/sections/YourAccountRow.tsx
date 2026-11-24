@@ -8,7 +8,7 @@
 // Admin or Owner-role login sees it read-only; a Member doesn't see it.
 // Picking a login sets the list to `[that login]`; "None" clears it. When
 // more than one login is already linked the trigger reads
-// "z3thon + 1 more" and the others stay until a different login is
+// "zoe + 1 more" and the others stay until a different login is
 // picked.
 
 import React, { useEffect, useMemo, useState } from 'react'
@@ -42,7 +42,7 @@ export function primaryOwnerAccount(accounts: string[]): string | null {
   return accounts.length > 0 ? [...accounts].sort()[0] : null
 }
 
-/** "None", "z3thon" or "z3thon + 1 more". */
+/** "None", "zoe" or "zoe + 1 more". */
 export function yourAccountLabel(accounts: string[]): string {
   const first = primaryOwnerAccount(accounts)
   if (!first) return 'None'
@@ -87,7 +87,7 @@ export function parseAccountChoices(raw: unknown): AccountChoice[] {
   return out
 }
 
-/** The dropdown's options: None, "z3thon + 1 more" when several are
+/** The dropdown's options: None, "zoe + 1 more" when several are
  *  linked, the Owner/Admin logins, and a linked login that isn't one. */
 export function yourAccountOptions(users: AccountChoice[], accounts: string[]): { value: string; label: string; badge?: string }[] {
   const opts: { value: string; label: string; badge?: string }[] = [{ value: NO_ACCOUNT, label: 'None' }]

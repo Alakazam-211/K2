@@ -318,7 +318,7 @@ fn live_openssh_tools_use_the_agent_socket() {
             println!("live: ssh login and the ssh -A refusal checked ({version})");
         }
         // Apple's sshd run as a non-root service account never creates the
-        // forwarded agent socket (checked on k2n3-m1, OpenSSH_10.2p1). The
+        // forwarded agent socket (checked on rig3-mac, OpenSSH_10.2p1). The
         // ssh -A refusal is required on Linux; on macOS the wire-level test
         // (a real host-signed bind with is_forwarding) covers it.
         None if cfg!(target_os = "macos") => {

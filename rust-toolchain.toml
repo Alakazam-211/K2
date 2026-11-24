@@ -1,5 +1,5 @@
 # The one Rust compiler for K2 (Rosson 2026-10-29): every machine that
-# builds K2 uses this rustc, so the Macs, the z3mbpZ release, the Linux
+# builds K2 uses this rustc, so the Macs, the mac-b release, the Linux
 # compute nodes, the Windows box and GitHub produce the same code, and two
 # Linux builders can produce the same bytes (scripts/ci/repro-build-env.sh).
 #

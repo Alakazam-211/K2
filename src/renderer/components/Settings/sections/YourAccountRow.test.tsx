@@ -63,7 +63,7 @@ import {
 beforeEach(() => {
   cli.whoami = { owner: true, role: 'owner', username: null }
   cli.users = [
-    { username: 'z3thon', role: 'admin', disabled: false },
+    { username: 'zoe', role: 'admin', disabled: false },
     { username: 'julie', role: 'owner', disabled: false },
     { username: 'gina', role: 'member', disabled: false },
     { username: 'old', role: 'admin', disabled: true },
@@ -94,28 +94,28 @@ async function openMenu(): Promise<void> {
 describe('Your account helpers', () => {
   it('offers Owner and Admin logins only, sorted', () => {
     expect(accountChoices([
-      { username: 'z3thon', role: 'admin' },
+      { username: 'zoe', role: 'admin' },
       { username: 'gina', role: 'member' },
       { username: 'julie', role: 'owner' },
-    ]).map((c) => c.username)).toEqual(['julie', 'z3thon'])
+    ]).map((c) => c.username)).toEqual(['julie', 'zoe'])
   })
 
   it('labels and values: none, one, several', () => {
     expect(yourAccountLabel([])).toBe('None')
     expect(yourAccountValue([])).toBe(NO_ACCOUNT)
-    expect(yourAccountLabel(['z3thon'])).toBe('z3thon')
-    expect(yourAccountValue(['z3thon'])).toBe('z3thon')
-    expect(yourAccountLabel(['z3thon', 'phone'])).toBe('phone + 1 more')
-    expect(yourAccountValue(['phone', 'z3thon'])).toBe(MANY_ACCOUNTS)
+    expect(yourAccountLabel(['zoe'])).toBe('zoe')
+    expect(yourAccountValue(['zoe'])).toBe('zoe')
+    expect(yourAccountLabel(['zoe', 'phone'])).toBe('phone + 1 more')
+    expect(yourAccountValue(['phone', 'zoe'])).toBe(MANY_ACCOUNTS)
   })
 
   it('picking: a login replaces the list; the shown one or "+ more" keeps several; None clears', () => {
-    expect(nextOwnerAccounts([], 'z3thon')).toEqual(['z3thon'])
-    expect(nextOwnerAccounts(['z3thon'], 'z3thon')).toBeNull()
-    expect(nextOwnerAccounts(['phone', 'z3thon'], MANY_ACCOUNTS)).toBeNull()
-    expect(nextOwnerAccounts(['phone', 'z3thon'], 'phone')).toBeNull()
-    expect(nextOwnerAccounts(['phone', 'z3thon'], 'julie')).toEqual(['julie'])
-    expect(nextOwnerAccounts(['z3thon'], NO_ACCOUNT)).toEqual([])
+    expect(nextOwnerAccounts([], 'zoe')).toEqual(['zoe'])
+    expect(nextOwnerAccounts(['zoe'], 'zoe')).toBeNull()
+    expect(nextOwnerAccounts(['phone', 'zoe'], MANY_ACCOUNTS)).toBeNull()
+    expect(nextOwnerAccounts(['phone', 'zoe'], 'phone')).toBeNull()
+    expect(nextOwnerAccounts(['phone', 'zoe'], 'julie')).toEqual(['julie'])
+    expect(nextOwnerAccounts(['zoe'], NO_ACCOUNT)).toEqual([])
     expect(nextOwnerAccounts([], NO_ACCOUNT)).toBeNull()
   })
 })
@@ -127,23 +127,23 @@ describe('Settings → General → Your account', () => {
     expect(trigger().textContent).toContain('None')
     expect(trigger().disabled).toBe(false)
     await openMenu()
-    expect(menuLabels()).toEqual(['None', 'julie', 'z3thon'])
-    act(() => void fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByText('z3thon')))
-    await waitFor(() => expect(cli.posts).toEqual([{ route: 'owner/accounts', body: { accounts: ['z3thon'] } }]))
-    await waitFor(() => expect(trigger().textContent).toContain('z3thon'))
+    expect(menuLabels()).toEqual(['None', 'julie', 'zoe'])
+    act(() => void fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByText('zoe')))
+    await waitFor(() => expect(cli.posts).toEqual([{ route: 'owner/accounts', body: { accounts: ['zoe'] } }]))
+    await waitFor(() => expect(trigger().textContent).toContain('zoe'))
   })
 
   it('None clears the link', async () => {
-    cli.ownerAccounts = { ok: true, accounts: ['z3thon'], aliases: ['z3thon'] }
+    cli.ownerAccounts = { ok: true, accounts: ['zoe'], aliases: ['zoe'] }
     render(<YourAccountRow />)
-    await waitFor(() => expect(trigger().textContent).toContain('z3thon'))
+    await waitFor(() => expect(trigger().textContent).toContain('zoe'))
     await openMenu()
     act(() => void fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByText('None')))
     await waitFor(() => expect(cli.posts).toEqual([{ route: 'owner/accounts', body: { accounts: [] } }]))
   })
 
-  it('several linked: shows "z3thon + 1 more", explains it, and keeps them until a different login is picked', async () => {
-    cli.ownerAccounts = { ok: true, accounts: ['gina', 'z3thon'], aliases: ['gina', 'z3thon'] }
+  it('several linked: shows "zoe + 1 more", explains it, and keeps them until a different login is picked', async () => {
+    cli.ownerAccounts = { ok: true, accounts: ['gina', 'zoe'], aliases: ['gina', 'zoe'] }
     render(<YourAccountRow />)
     await waitFor(() => expect(trigger().textContent).toContain('gina + 1 more'))
     expect(screen.getByTestId('your-account-hint').textContent).toContain('they stay until you pick a different one')
@@ -156,10 +156,10 @@ describe('Settings → General → Your account', () => {
   })
 
   it('Admin login: read-only, never posts', async () => {
-    cli.whoami = { owner: false, role: 'admin', username: 'z3thon' }
-    cli.ownerAccounts = { ok: true, accounts: ['z3thon'], aliases: ['z3thon'] }
+    cli.whoami = { owner: false, role: 'admin', username: 'zoe' }
+    cli.ownerAccounts = { ok: true, accounts: ['zoe'], aliases: ['zoe'] }
     render(<YourAccountRow />)
-    await waitFor(() => expect(trigger().textContent).toContain('z3thon'))
+    await waitFor(() => expect(trigger().textContent).toContain('zoe'))
     expect(trigger().disabled).toBe(true)
     expect(screen.getByTestId('your-account-hint').textContent).toContain('Only the owner')
     expect(cli.posts).toEqual([])

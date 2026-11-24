@@ -889,7 +889,7 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
 }
 
 /// `servers.limits` in plain words, with the share it changes from
-/// (0.46.9, Rosson 2026-11-05: "Raise rosson.k2.dev's share on k2n1-m4:
+/// (0.46.9, Rosson 2026-11-05: "Raise rosson.k2.dev's share on rig1-mac:
 /// CPUs 7 → 10, memory 8 → 14 GB"). `server` is the server's label;
 /// `before` its current share (`ShareLimits` as JSON, plus `priority` when
 /// known). A value `before` lacks shows only the new one. What the owner
@@ -977,7 +977,7 @@ pub fn summarize_limits_change(node: &str, server: &str, args: &Value, before: &
 }
 
 /// A held `policy.set` in plain words, from the policy the node last
-/// reported to the new values (0.46.9): "change job limits on k2n1-m4:
+/// reported to the new values (0.46.9): "change job limits on rig1-mac:
 /// max_cpus 6 → 10". A key the node didn't report shows only the new value.
 pub fn summarize_policy_change(node: &str, set: &Map<String, Value>, current: &Map<String, Value>) -> String {
     let shown = |v: &Value| match v {
@@ -1360,8 +1360,8 @@ mod tests {
             "network": "no-lan", "priority": false});
         let raise = json!({"server": "slot:2", "set": {"max_mem_gb": 14, "max_cpus": 10}});
         assert_eq!(
-            summarize_limits_change("k2n1-m4", "rosson.k2.dev", &raise, &before),
-            "Raise rosson.k2.dev's share on k2n1-m4: CPUs 7 → 10, memory 8 GB → 14 GB"
+            summarize_limits_change("rig1-mac", "rosson.k2.dev", &raise, &before),
+            "Raise rosson.k2.dev's share on rig1-mac: CPUs 7 → 10, memory 8 GB → 14 GB"
         );
         let mixed = json!({"server": "x", "set": {"max_cpus": 4, "gate": true, "max_job_secs": 14400}, "for_secs": 0, "priority": true});
         assert_eq!(
@@ -1375,7 +1375,7 @@ mod tests {
         // A held policy widening, from the policy the node last reported.
         let set = json!({"max_cpus": 10, "mem_cap_gb": 12}).as_object().unwrap().clone();
         let current = json!({"max_cpus": 6}).as_object().unwrap().clone();
-        assert_eq!(summarize_policy_change("k2n1-m4", &set, &current), "change job limits on k2n1-m4: max_cpus 6 → 10, mem_cap_gb → 12");
+        assert_eq!(summarize_policy_change("rig1-mac", &set, &current), "change job limits on rig1-mac: max_cpus 6 → 10, mem_cap_gb → 12");
     }
 
     #[test]
@@ -1456,9 +1456,9 @@ mod tests {
         assert_eq!(validate_step("wall.enable", &json!({"restart": true})).unwrap(), Class::Operate);
         assert_eq!(validate_step("wall.enable", &json!({"restart": "yes"})).unwrap_err().0, codes::BAD_ARGS);
         assert_eq!(validate_step("wall.enable", &json!({"user": "root"})).unwrap_err().0, codes::BAD_ARGS, "the job user isn't the caller's to pick");
-        assert!(summarize("k2n2-m1", "wall.enable", &json!({"restart": true})).contains("once its running jobs end"));
-        assert!(summarize("k2n2-m1", "wall.enable", &json!({})).contains("k2job"));
-        assert!(summarize("k2n2-m1", "homes.private", &json!({})).contains("private"));
+        assert!(summarize("rig2-mac", "wall.enable", &json!({"restart": true})).contains("once its running jobs end"));
+        assert!(summarize("rig2-mac", "wall.enable", &json!({})).contains("k2job"));
+        assert!(summarize("rig2-mac", "homes.private", &json!({})).contains("private"));
         assert_eq!(validate_step("control.pause", &json!({})).unwrap(), Class::Operate);
         // V55: `now` skips a shared node's drain (bool only).
         assert!(validate_step("node.rollback", &json!({"now": true, "reason": "bad build"})).is_ok());
@@ -1534,11 +1534,11 @@ mod tests {
         // servers.owner (prd-macos-tenant-compute-v1 §6.4): always the owner's.
         assert_eq!(step_class("servers.owner"), Some(Class::Privileged));
         let fp = "ab".repeat(32);
-        assert_eq!(validate_step("servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp})).unwrap(), Class::Privileged);
+        assert_eq!(validate_step("servers.owner", &json!({"server": "zoe.k2.dev", "fp": fp})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("servers.owner", &json!({"server": "slot:0", "fp": fp})).unwrap_err().0, codes::BAD_ARGS);
-        let s = summarize("k2n2-m1", "servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true}));
-        assert!(s.contains("make z3thon.k2.dev (key ") && s.contains(&fp) && s.contains("the owner of k2n2-m1") && s.contains("leaves") && s.contains("wiped") && s.contains("stops running jobs"), "{s}");
-        let s = summarize("k2n2-m1", "servers.owner", &json!({"server": "z3thon.k2.dev", "fp": fp}));
+        let s = summarize("rig2-mac", "servers.owner", &json!({"server": "zoe.k2.dev", "fp": fp, "old": "revoke", "caches": "wipe", "now": true}));
+        assert!(s.contains("make zoe.k2.dev (key ") && s.contains(&fp) && s.contains("the owner of rig2-mac") && s.contains("leaves") && s.contains("wiped") && s.contains("stops running jobs"), "{s}");
+        let s = summarize("rig2-mac", "servers.owner", &json!({"server": "zoe.k2.dev", "fp": fp}));
         assert!(s.contains("stays on it") && s.contains("move with their server"), "{s}");
         assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev", "code_binding": "ab", "fp_prefix": "0123456789abcdef", "trust": "team"})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("servers.add", &json!({"url": "https://b.k2.dev"})).unwrap_err().0, codes::BAD_ARGS);
@@ -1571,14 +1571,14 @@ mod tests {
         let other = json!({"verb": "gc", "args": {}});
         let r2 = insert_request(&c, &NewRequest { body: &other, ..n }).unwrap();
         assert_eq!(r2.expires_at, 100 + REQUEST_TTL_SECS);
-        assert!(summarize("k2n2-m1", "servers.add", &body["args"]).contains("https://b.k2.dev"));
-        assert!(!summarize("k2n2-m1", "servers.add", &body["args"]).contains("SECRET"));
-        assert!(summarize("k2n2-m1", "servers.revoke", &json!({"server": "b", "now": true})).contains("stop its running jobs"));
+        assert!(summarize("rig2-mac", "servers.add", &body["args"]).contains("https://b.k2.dev"));
+        assert!(!summarize("rig2-mac", "servers.add", &body["args"]).contains("SECRET"));
+        assert!(summarize("rig2-mac", "servers.revoke", &json!({"server": "b", "now": true})).contains("stop its running jobs"));
     }
 
     #[test]
     fn summaries_are_plain_words() {
-        assert_eq!(summarize("k2n2-m1", "unit.restart", &json!({"unit": "k2-node"})), "restart k2-node on k2n2-m1 (as root)");
+        assert_eq!(summarize("rig2-mac", "unit.restart", &json!({"unit": "k2-node"})), "restart k2-node on rig2-mac (as root)");
         assert_eq!(summarize("m", "policy.set", &json!({"mem_cap_gb": 10})), "change job limits on m: mem_cap_gb=10");
         assert_eq!(summarize("m", "gc", &json!({"older_days": 3})), "clean old job folders on m (older than 3 days)");
     }
@@ -1644,10 +1644,10 @@ mod tests {
         assert!(!offline_due("active", false, Some(0), &cols, 10_000), "alerts off");
         assert!(set_alert_after(&c, "n1", Some(60)).is_err());
 
-        let t = offline_text("k2n1-m4", 0, Some("relay"), Some(&f));
+        let t = offline_text("rig1-mac", 0, Some("relay"), Some(&f));
         assert!(t.contains("FileVault screen"), "{t}");
-        assert_eq!(back_online_text("k2n1-m4", 47 * 60, Some("b1"), Some("b2")), "k2n1-m4 back after 47m00s; it rebooted (new boot id).");
-        assert_eq!(back_online_text("k2n1-m4", 60, Some("b1"), Some("b1")), "k2n1-m4 back after 1m00s; no reboot.");
+        assert_eq!(back_online_text("rig1-mac", 47 * 60, Some("b1"), Some("b2")), "rig1-mac back after 47m00s; it rebooted (new boot id).");
+        assert_eq!(back_online_text("rig1-mac", 60, Some("b1"), Some("b1")), "rig1-mac back after 1m00s; no reboot.");
 
         let p = json!({"mem_cap_gb": 8}).as_object().cloned().unwrap();
         set_policy_cache(&c, "n1", &p, 77);

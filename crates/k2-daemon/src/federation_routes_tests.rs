@@ -2083,8 +2083,8 @@ async fn send_sets_from_agent_identity_from_resolved_name_not_basename() {
 #[test]
 fn federated_from_label_uses_double_colon_never_at() {
     assert_eq!(
-        federated_from_label("Cortana", "Z3thon.k2.dev"),
-        "cortana::z3thon.k2.dev"
+        federated_from_label("Cortana", "Zoe.k2.dev"),
+        "cortana::zoe.k2.dev"
     );
     assert_eq!(
         federated_from_label("  argus  ", "  Peer.K2.DEV  "),

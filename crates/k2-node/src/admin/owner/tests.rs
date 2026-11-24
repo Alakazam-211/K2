@@ -54,7 +54,7 @@ fn line(slot: u8, label: &str, prefix: &str, trust: Trust, base: &ServerEntry) -
 }
 
 /// A shared node: the owner (rosson, the rig's controller), the target
-/// (z3thon, slot 1, own, online) and another server (baden, slot 2), each
+/// (zoe, slot 1, own, online) and another server (baden, slot 2), each
 /// with a file in its trees.
 fn setup(level: &str) -> T {
     let r = Rig::new(level);
@@ -65,10 +65,10 @@ fn setup(level: &str) -> T {
     let c = SigningKey::generate().unwrap();
     let mut f = ServersFile::new(&r.ctl.fingerprint(), "rosson.k2.dev", ShareLimits::owner(2, 8, 16, 100, Network::On), 3, 50, "local:test");
     let base = f.servers[0].clone();
-    f.servers.push(line(1, "z3thon.k2.dev", &b.fingerprint()[..16], Trust::Own, &base));
+    f.servers.push(line(1, "zoe.k2.dev", &b.fingerprint()[..16], Trust::Own, &base));
     f.servers.push(line(2, "baden.k2.dev", &c.fingerprint()[..16], Trust::Own, &base));
     servers::write_file(&layout.config, &f).unwrap();
-    for (slot, k, url) in [(1, &b, "https://z3thon.k2.dev"), (2, &c, "https://baden.k2.dev")] {
+    for (slot, k, url) in [(1, &b, "https://zoe.k2.dev"), (2, &c, "https://baden.k2.dev")] {
         let t = layout.tenant(slot);
         t.ensure_state().unwrap();
         crate::identity::write_tenant_pin(&t.pin(), &pin_of(k, url, 200), &Default::default()).unwrap();
@@ -161,10 +161,10 @@ fn the_owner_moves_to_another_own_server() {
     let layout = r.exec.paths.layout();
     let before = file(r);
     let baden_before = before.entry(2).cloned().unwrap();
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": t.b.fingerprint()}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": t.b.fingerprint()}));
     assert_eq!(res.state, "done", "{res:?}");
     assert_eq!(res.result["phase"], "draining", "always a settling drain first: {}", res.result);
-    assert_eq!((res.result["server"].as_str(), res.result["slot"].as_u64()), (Some("z3thon.k2.dev"), Some(1)));
+    assert_eq!((res.result["server"].as_str(), res.result["slot"].as_u64()), (Some("zoe.k2.dev"), Some(1)));
     let line = wait_done(r);
     assert!(line.code.is_none(), "{line:?}");
     assert!(!exists(r.exec.paths.state_dir.join(STEP_FILE)), "the step file goes once it's done");
@@ -173,7 +173,7 @@ fn the_owner_moves_to_another_own_server() {
     let f = file(r);
     assert_eq!(f.owner, t.b.fingerprint());
     let o = f.entry(0).unwrap();
-    assert_eq!((o.label.as_str(), o.fp_prefix.as_str(), o.expires_at), ("z3thon.k2.dev", t.b.fingerprint().as_str(), None));
+    assert_eq!((o.label.as_str(), o.fp_prefix.as_str(), o.expires_at), ("zoe.k2.dev", t.b.fingerprint().as_str(), None));
     assert_eq!(o.limits(), before.entry(1).unwrap().limits(), "the target keeps its limits");
     let old = f.entry(1).unwrap();
     assert_eq!((old.label.as_str(), old.fp_prefix.as_str(), old.trust, old.state), ("rosson.k2.dev", &r.ctl.fingerprint()[..16], Trust::Own, ShareState::Active));
@@ -235,11 +235,11 @@ fn bad_targets_are_refused_before_any_change() {
     let before_file = std::fs::read(servers::servers_path(&layout.config)).unwrap();
     let before_admin = std::fs::read(r.exec.paths.admin()).unwrap();
 
-    let res = r.run(&r.sign(&r.cmd(share::VERB_OWNER, json!({"server": "z3thon.k2.dev", "fp": fp}))));
+    let res = r.run(&r.sign(&r.cmd(share::VERB_OWNER, json!({"server": "zoe.k2.dev", "fp": fp}))));
     assert_eq!(res.code.as_deref(), Some(code::APPROVAL_REQUIRED), "always the owner's approval: {res:?}");
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev"}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev"}));
     assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "a signed command names the key: {res:?}");
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": "c".repeat(64)}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": "c".repeat(64)}));
     assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "the node's pin has another key: {res:?}");
     assert!(res.message.as_deref().unwrap_or("").contains("isn't the one named"), "{res:?}");
     let res = owner_cmd(&t, json!({"server": "slot:0", "fp": fp}));
@@ -249,7 +249,7 @@ fn bad_targets_are_refused_before_any_change() {
 
     // Offline.
     online(r, &[2]);
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": fp}));
     assert_eq!(res.code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY), "{res:?}");
     online(r, &[1, 2]);
 
@@ -257,32 +257,32 @@ fn bad_targets_are_refused_before_any_change() {
     let mut f = file(r);
     f.servers.iter_mut().find(|e| e.slot == 1).unwrap().state = ShareState::Paused;
     servers::write_file(&layout.config, &f).unwrap();
-    assert_eq!(owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
+    assert_eq!(owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
     let mut f = file(r);
     let e = f.servers.iter_mut().find(|e| e.slot == 1).unwrap();
     e.state = ShareState::Active;
     e.trust = Trust::Team;
     servers::write_file(&layout.config, &f).unwrap();
-    assert_eq!(owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_NEEDS_OWN_SERVER));
+    assert_eq!(owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_NEEDS_OWN_SERVER));
     std::fs::write(servers::servers_path(&layout.config), &before_file).unwrap();
 
     // No key record from root (or one for another key): refused (F5).
     let keys = r.exec.paths.state_dir.join(servers::KEYS_FILE);
     let saved = std::fs::read(&keys).unwrap();
     std::fs::remove_file(&keys).unwrap();
-    assert_eq!(owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
+    assert_eq!(owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
     servers::record_key(&r.exec.paths.state_dir, 1, &"9".repeat(64), 100).unwrap();
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": fp}));
     assert_eq!(res.code.as_deref(), Some(code::BAD_ARGS), "the pin isn't the key root recorded: {res:?}");
     assert!(res.message.as_deref().unwrap_or("").contains("recorded"), "{res:?}");
     std::fs::write(&keys, saved).unwrap();
 
     // An unconfirmed pin.
-    let mut p = pin_of(&t.b, "https://z3thon.k2.dev", 200);
+    let mut p = pin_of(&t.b, "https://zoe.k2.dev", 200);
     p.confirmed = false;
     crate::identity::write_tenant_pin(&layout.tenant(1).pin(), &p, &Default::default()).unwrap();
-    assert_eq!(owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
-    crate::identity::write_tenant_pin(&layout.tenant(1).pin(), &pin_of(&t.b, "https://z3thon.k2.dev", 200), &Default::default()).unwrap();
+    assert_eq!(owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": fp})).code.as_deref(), Some(codes::OWNER_TARGET_NOT_READY));
+    crate::identity::write_tenant_pin(&layout.tenant(1).pin(), &pin_of(&t.b, "https://zoe.k2.dev", 200), &Default::default()).unwrap();
 
     assert_eq!(std::fs::read(servers::servers_path(&layout.config)).unwrap(), before_file, "servers.toml unchanged");
     assert_eq!(std::fs::read(r.exec.paths.admin()).unwrap(), before_admin, "admin.toml unchanged");
@@ -291,7 +291,7 @@ fn bad_targets_are_refused_before_any_change() {
 
     // `policy`: refused with the machine hint.
     let p = setup("policy");
-    let res = owner_cmd(&p, json!({"server": "z3thon.k2.dev", "fp": p.b.fingerprint()}));
+    let res = owner_cmd(&p, json!({"server": "zoe.k2.dev", "fp": p.b.fingerprint()}));
     assert_eq!(res.code.as_deref(), Some(code::REMOTE_ADMIN_OFF), "{res:?}");
     assert!(res.message.as_deref().unwrap_or("").contains("sudo k2-node servers owner"), "{res:?}");
 }
@@ -337,7 +337,7 @@ fn a_crash_at_any_step_resumes_on_the_next_start() {
         let t = setup("full");
         let r = &t.r;
         let layout = r.exec.paths.layout();
-        let p = plan(&r.exec, &OwnerArgs { server: "z3thon.k2.dev".into(), fp: None, old: OldOwner::Keep, caches: Caches::Move, now: false }, false, true).unwrap();
+        let p = plan(&r.exec, &OwnerArgs { server: "zoe.k2.dev".into(), fp: None, old: OldOwner::Keep, caches: Caches::Move, now: false }, false, true).unwrap();
         let mut step = Step {
             v: 1,
             id: "crash1".into(),
@@ -398,7 +398,7 @@ fn a_crash_at_any_step_resumes_on_the_next_start() {
         from_fp: "d".repeat(64),
         to_fp: "e".repeat(64),
         to_key: String::new(),
-        to_label: "z3thon.k2.dev".into(),
+        to_label: "zoe.k2.dev".into(),
         old: OldOwner::Keep,
         caches: Caches::Wipe,
         phase: Phase::Files,
@@ -420,10 +420,10 @@ fn a_crash_at_any_step_resumes_on_the_next_start() {
     assert_eq!(read_step(&r.exec).unwrap().unwrap().attempts, MAX_ATTEMPTS, "it stopped trying");
     // A new change waits for it: refused while the step file exists
     // (verification #7), at the machine too.
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": t.b.fingerprint()}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": t.b.fingerprint()}));
     assert_eq!(res.code.as_deref(), Some(IN_PROGRESS), "{res:?}");
     let local = crate::admin::exec::LocalRequest::OwnerChange {
-        args: Some(OwnerArgs { server: "z3thon.k2.dev".into(), fp: Some(t.b.fingerprint()), old: OldOwner::Keep, caches: Caches::Move, now: false }),
+        args: Some(OwnerArgs { server: "zoe.k2.dev".into(), fp: Some(t.b.fingerprint()), old: OldOwner::Keep, caches: Caches::Move, now: false }),
         resume: false,
         abort: false,
         by: "rosson".into(),
@@ -442,7 +442,7 @@ fn the_machine_changes_the_owner_without_signatures() {
     let r = &t.r;
     // The full key is required at the machine too (F5).
     let req = |fp: Option<String>| crate::admin::exec::LocalRequest::OwnerChange {
-        args: Some(OwnerArgs { server: "z3thon.k2.dev".into(), fp, old: OldOwner::Keep, caches: Caches::Move, now: false }),
+        args: Some(OwnerArgs { server: "zoe.k2.dev".into(), fp, old: OldOwner::Keep, caches: Caches::Move, now: false }),
         resume: false,
         abort: false,
         by: "rosson".into(),
@@ -477,7 +477,7 @@ fn swap_lines_keeps_everyone_else() {
         from_fp: t.r.ctl.fingerprint(),
         to_fp: t.b.fingerprint(),
         to_key: String::new(),
-        to_label: "z3thon.k2.dev".into(),
+        to_label: "zoe.k2.dev".into(),
         old: OldOwner::Keep,
         caches: Caches::Move,
         phase: Phase::Files,
@@ -505,7 +505,7 @@ fn control_stays_draining_until_a_stopped_change_finishes() {
     *t.r.plat.on_restart.lock().unwrap() = None;
     let r = &t.r;
     let layout = r.exec.paths.layout();
-    let res = owner_cmd(&t, json!({"server": "z3thon.k2.dev", "fp": t.b.fingerprint()}));
+    let res = owner_cmd(&t, json!({"server": "zoe.k2.dev", "fp": t.b.fingerprint()}));
     assert_eq!(res.state, "done", "{res:?}");
     let l = wait_done(r);
     assert_eq!(l.code.as_deref(), Some(code::FAILED), "{l:?}");
@@ -534,10 +534,10 @@ fn control_stays_draining_until_a_stopped_change_finishes() {
     assert_eq!(crate::config::read_control(&layout.control()).unwrap().control, k2_node_proto::frames::Control::Active, "control is back once it's done");
 }
 
-/// A step for the setup's target (slot 1, z3thon), `caches = move`.
+/// A step for the setup's target (slot 1, zoe), `caches = move`.
 fn step_for(t: &T, id: &str, phase: Phase) -> Step {
     let r = &t.r;
-    let p = plan(&r.exec, &OwnerArgs { server: "z3thon.k2.dev".into(), fp: None, old: OldOwner::Keep, caches: Caches::Move, now: false }, false, true).unwrap();
+    let p = plan(&r.exec, &OwnerArgs { server: "zoe.k2.dev".into(), fp: None, old: OldOwner::Keep, caches: Caches::Move, now: false }, false, true).unwrap();
     Step {
         v: 1,
         id: id.into(),
@@ -646,7 +646,7 @@ fn nothing_acts_beside_an_unfinished_change() {
     assert_eq!(list["servers"].as_array().map(|s| s.len()), Some(3), "servers list still answers: {list}");
     let e = servers::run(&ctx, share::VERB_PAUSE, &json!({"server": "baden.k2.dev"})).unwrap_err();
     assert_eq!(e.code, IN_PROGRESS, "{e:?}");
-    let e = servers::run(&ctx, share::VERB_REVOKE, &json!({"server": "z3thon.k2.dev", "now": false, "wipe": false})).unwrap_err();
+    let e = servers::run(&ctx, share::VERB_REVOKE, &json!({"server": "zoe.k2.dev", "now": false, "wipe": false})).unwrap_err();
     assert_eq!(e.code, IN_PROGRESS, "{e:?}");
     // No job starts through root either, whatever control says (L3).
     let start = crate::admin::jobs::JobOp::Start(crate::admin::jobs::JobStart {
@@ -755,7 +755,7 @@ fn the_files_step_waits_for_the_applied_record() {
     let layout = r.exec.paths.layout();
     let step = step_for(&t, "applied1", Phase::Restart);
     // The pin says swapped, but the swap isn't finished (no record).
-    crate::identity::write_pin(&layout.pin(), &pin_of(&t.b, "https://z3thon.k2.dev", 1)).unwrap();
+    crate::identity::write_pin(&layout.pin(), &pin_of(&t.b, "https://zoe.k2.dev", 1)).unwrap();
     let e = wait_for_swap(&r.exec, &step).unwrap_err();
     assert!(e.message.contains("didn't swap"), "{e:?}");
     // A record for another change isn't this one.

@@ -43,7 +43,7 @@
 //!     longer than the 2-min DNS flip).
 //! Either way the standby must also answer a TCP probe: when neither relay
 //! is reachable (the box's own network is down) it stays on the primary
-//! and the backoff grows, instead of alternating like 0.46.2 did (z3mbpZ,
+//! and the backoff grows, instead of alternating like 0.46.2 did (mac-b,
 //! 2026-10-21: 13 switches in 75 s). A move back onto the primary is never
 //! gated. Otherwise it holds and keeps redialing the primary. On a fallback it
 //! returns after [`FailbackPolicy::DNS_AWARE`] (2 healthy probes ~30 s
@@ -119,7 +119,7 @@ enum Hold {
     /// k2.dev did not say; the outage is shorter than the minimum.
     WaitingForOutage,
     /// A move was allowed, but the standby it would go to does not answer
-    /// either (2026-10-21 z3mbpZ: on a dead network 0.46.2 flip-flopped
+    /// either (2026-10-21 mac-b: on a dead network 0.46.2 flip-flopped
     /// between two unreachable relays every ~6 s). Nothing to switch to.
     TargetUnreachable,
 }
@@ -1498,7 +1498,7 @@ mod tests {
         assert_eq!(FailoverMode::default(), FailoverMode::Dns, "new behaviour is the default");
     }
 
-    // ── Neither relay reachable (z3mbpZ, 2026-10-21 19:20–19:21 UTC) ──
+    // ── Neither relay reachable (mac-b, 2026-10-21 19:20–19:21 UTC) ──
     //
     // On a dead travel network 0.46.2 flip-flopped standby ↔ primary
     // every ~6 s (13 switches in 75 s): each switch reset the backoff, so
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn dns_on_a_standby_when_the_network_dies_moves_home_once_then_stays() {
-        // z3mbpZ's case: it was on the standby when its network went.
+        // mac-b's case: it was on the standby when its network went.
         let mut sel = dns_selector();
         let t0 = Instant::now();
         fail_for(&mut sel, t0, Duration::from_secs(10), Duration::from_secs(1), &active("secondary"))

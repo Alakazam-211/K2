@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live air-gap + LAN probe for a running macOS launchd daemon (z3mbpZ).
+# Live air-gap + LAN probe for a running macOS launchd daemon (mac-b).
 #
 # What it proves, inside the Connect lease window (3 minutes):
 #   1. K2_AIRGAP=1 + K2_LISTEN=lan on THAT launchd daemon (env only — not
@@ -12,8 +12,8 @@
 #      comes back. tunnel.json / keychain / federation files are never
 #      deleted.
 #
-# Usage (on the daemon box, or ssh z3mbpZ bash this):
-#   NEW_DAEMON=/path/to/aa5dd0e9/k2-daemon ./tests/airgap/run-z3mbpz-airgap-lan-3min.sh
+# Usage (on the daemon box, or ssh mac-b bash this):
+#   NEW_DAEMON=/path/to/aa5dd0e9/k2-daemon ./tests/airgap/run-macos-airgap-lan-3min.sh
 #
 # Does NOT: persist AppSettings.airgap, write enabled:false, unpair, or
 # leave K2_AIRGAP on. Hard deadline: restore begins by T+150s.

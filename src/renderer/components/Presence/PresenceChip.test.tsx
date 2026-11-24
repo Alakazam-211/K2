@@ -193,12 +193,12 @@ describe('server-provided person colour', () => {
 
   it('a real name drives the initials and the tooltip', () => {
     const names = { firstName: 'Rosson', lastName: 'Long' }
-    expect(chipInitials('z3thon', 20, names)).toBe('RL')
-    expect(chipInitials('z3thon', 14, names)).toBe('R')
-    expect(chipInitials('z3thon', 20, { firstName: 'Cher' })).toBe('C')
-    expect(chipInitials('z3thon', 20, null)).toBe('Z')
-    const { container } = render(<PresenceChip name="z3thon" role="admin" names={names} />)
-    expect(container.querySelector('[data-presence-chip]')?.getAttribute('title')).toBe('Rosson Long (z3thon) · admin')
+    expect(chipInitials('zoe', 20, names)).toBe('RL')
+    expect(chipInitials('zoe', 14, names)).toBe('R')
+    expect(chipInitials('zoe', 20, { firstName: 'Cher' })).toBe('C')
+    expect(chipInitials('zoe', 20, null)).toBe('Z')
+    const { container } = render(<PresenceChip name="zoe" role="admin" names={names} />)
+    expect(container.querySelector('[data-presence-chip]')?.getAttribute('title')).toBe('Rosson Long (zoe) · admin')
     expect(container.querySelector('[data-presence-chip]')?.textContent).toBe('RL')
   })
 

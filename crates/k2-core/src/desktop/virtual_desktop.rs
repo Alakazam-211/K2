@@ -210,7 +210,7 @@ pub const DISPLAY_SPAN: u32 = 900;
 /// The display K2 asks Xvfb for: the first from `from` that `taken` says
 /// is free (no `/tmp/.X<n>-lock`, no `/tmp/.X11-unix/X<n>`). Never left
 /// to Xvfb: with `-nolisten local` its own scan starts at :0 and can take
-/// a live session's display, unlinking its socket (L0 11-11, z13flow).
+/// a live session's display, unlinking its socket (L0 11-11, laptop-a).
 pub fn pick_display(taken: impl Fn(u32) -> bool, from: u32) -> Option<u32> {
     (from.max(DISPLAY_BASE)..DISPLAY_BASE + DISPLAY_SPAN).find(|n| !taken(*n))
 }

@@ -63,7 +63,7 @@ class H(BaseHTTPRequestHandler):
             # The cell socket never applies "Allow managing compute nodes".
             return self.reply(403, {"error": {"code": "owner_only", "hint": "only the server's owner"}})
         if u.path == "/cli/compute/cache":
-            return self.reply(200, {"nodes": [{"node": "k2n7", "online": True, "supported": True,
+            return self.reply(200, {"nodes": [{"node": "rig7", "online": True, "supported": True,
                                     "caches": [{"workspace": "ops", "wsKey": "0123456789abcdef", "name": "fuzz", "bytes": 2048, "usedAt": 0, "busy": False}]}]})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
     def do_POST(self):
@@ -76,7 +76,7 @@ class H(BaseHTTPRequestHandler):
         if self.via == "cell" and u.path.startswith("/cli/compute/"):
             return self.reply(403, {"error": {"code": "owner_only", "hint": "only the server's owner"}})
         if u.path == "/cli/compute/cache/clear":
-            return self.reply(200, {"nodes": [{"node": "k2n7", "online": True, "supported": True, "caches": [],
+            return self.reply(200, {"nodes": [{"node": "rig7", "online": True, "supported": True, "caches": [],
                                     "cleared": [{"workspace": "ops", "wsKey": "0123456789abcdef", "name": "fuzz", "bytes": 2048, "usedAt": 0}]}]})
         if u.path == "/cli/agent-access/set":
             if body.get("workspace") == "locked":
@@ -172,15 +172,15 @@ echo "== cache list/clear from a K2 session go over loopback TCP (the cell socke
 # Sent on the cell socket, where the daemon never applies "Allow managing
 # compute nodes", an agent with the switch got owner_only for another
 # workspace's caches although the help says it may.
-out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops K2_HOOK_SOCK="$CELL_SOCK" "$K2" compute cache list --node k2n7 </dev/null)"
+out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops K2_HOOK_SOCK="$CELL_SOCK" "$K2" compute cache list --node rig7 </dev/null)"
 expect_has "cache list renders" "$out" "fuzz"
 expect_eq "cache list path" "$(last path)" "/cli/compute/cache"
 expect_eq "cache list over TCP" "$(last via)" "tcp"
 expect_eq "cache list carries the passport" "$(last token)" "passport-ops"
-out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops K2_HOOK_SOCK="$CELL_SOCK" "$K2" compute cache clear --workspace ops --node k2n7 </dev/null)"
+out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops K2_HOOK_SOCK="$CELL_SOCK" "$K2" compute cache clear --workspace ops --node rig7 </dev/null)"
 expect_has "cache clear renders" "$out" "cleared"
 expect_eq "cache clear over TCP" "$(last via)" "tcp"
-expect_eq "cache clear body" "$(last body)" '{"all": false, "node": "k2n7", "workspace": "ops"}'
+expect_eq "cache clear body" "$(last body)" '{"all": false, "node": "rig7", "workspace": "ops"}'
 
 echo "== docs =="
 usage="$("$K2" compute --help 2>&1 || true)"

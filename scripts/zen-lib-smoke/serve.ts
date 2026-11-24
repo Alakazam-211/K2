@@ -11,7 +11,7 @@
 // Download libraries (Babylon.js, Plotly) are fetched here from their pinned
 // URL and sha256-checked, like the daemon does (cached in the OS temp dir).
 // A first check in plain browsers only: the decisive runs are the signed
-// app on z3mbpZ and z13flow (make-widgets.ts writes the same smokes as
+// app on mac-b and laptop-a (make-widgets.ts writes the same smokes as
 // widget folders for that).
 
 import { createHash } from 'node:crypto'

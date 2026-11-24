@@ -1481,7 +1481,7 @@ fn apply_observation(
     };
     // A job someone asked to cancel that comes back interrupted (the node
     // restarted, rebooted or lost it) or unknown ends `cancelled`: that is
-    // what was asked, and it is never sent again (k2n4, 2026-10-21: two
+    // what was asked, and it is never sent again (rig4, 2026-10-21: two
     // cancelled jobs whose ends a full disk lost came back
     // `interrupted/node_restart` and were re-dispatched).
     let cancel_owed = asked == Some("cancel_requested");
@@ -2546,7 +2546,7 @@ pub fn artifact_cache_path(job_id: &str, generation: i64, sha256: &str) -> std::
 /// `over_relay` is the caller saying "yes, through the relay": then the
 /// node's own collection cap ([`results::MAX_FILE_BYTES`]) is the limit,
 /// as on the LAN. Release builds need it: the Linux AppImage is over
-/// 100 MB and the release nodes reach z3mbpZ only through the relay.
+/// 100 MB and the release nodes reach mac-b only through the relay.
 pub fn artifact_pull_cap(route: Option<&str>, over_relay: bool) -> u64 {
     if route == Some("relay") && !over_relay {
         results::RELAY_MAX_FILE_BYTES

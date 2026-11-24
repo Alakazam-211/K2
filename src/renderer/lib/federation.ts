@@ -1107,7 +1107,7 @@ async function tryAddReverseConnection(
     }
     // Always lowercase — federated handles are case-insensitive and stored
     // as `agent::host` (canonical). Capitalized basenames like "Cortana"
-    // used to produce Cortana::z3thon.k2.dev and break older remotes that
+    // used to produce Cortana::zoe.k2.dev and break older remotes that
     // only treated `@` as remote, and mismatched gates that lowercased.
     const sourceAgent = workspaceBasename(sourceWorkspacePath)
     if (!sourceAgent) return 'Reverse connection skipped: could not derive this workspace’s agent name.'

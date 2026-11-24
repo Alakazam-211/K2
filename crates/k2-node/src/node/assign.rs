@@ -595,7 +595,7 @@ impl Node {
     /// whose row is still open but that no task runs: its runner ended
     /// without its end landing (a full disk before 0.46.3, a give-up after
     /// the finish retries). Such a row held a slot and showed `running`
-    /// forever (k2n4, 2026-10-21). If `job_id` is one, record its end now
+    /// forever (rig4, 2026-10-21). If `job_id` is one, record its end now
     /// (a placeholder holds its place so nothing else finishes it) and
     /// return true. A queued or just-dequeued row is never one.
     pub(crate) fn finish_if_orphan(self: &Arc<Self>, t: &Arc<Tenant>, job_id: &str, generation: u32, state: JobState, reason: &str, detail: &str) -> bool {

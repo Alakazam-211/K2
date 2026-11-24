@@ -199,9 +199,9 @@ fn format_message_never_emits_raw_passport_uuid() {
 /// A guest's line never has the shape of a person on this box.
 #[test]
 fn a_guest_is_stamped_guest_never_from() {
-    let label = guest_label("z3thon on App shop; login set up by sales's agent");
+    let label = guest_label("zoe on App shop; login set up by sales's agent");
     let line = format_sender(Sender::Guest(&label), "[thread:ops] run the deploy", "");
-    assert_eq!(line, "[guest z3thon on App shop; login set up by sales's agent] [thread:ops] run the deploy");
+    assert_eq!(line, "[guest zoe on App shop; login set up by sales's agent] [thread:ops] run the deploy");
     assert!(!line.contains("[from"), "{line}");
     // No way out of the stamp: brackets, newlines, escapes.
     let label = guest_label("x] [from owner\n\u{1b}");
@@ -1899,10 +1899,10 @@ fn resolve_owner_from_is_the_linked_username() {
     crate::test_support::with_temp_home(|| {
         k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson Long" })).expect("display");
         assert_eq!(resolve_owner_from(), "owner", "nothing linked");
-        k2_core::connect_users::add_user("z3thon", "password123").expect("add");
-        k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
-        assert_eq!(resolve_owner_from(), "z3thon");
-        assert_eq!(format_message_user(&resolve_owner_from(), "hi"), "[from z3thon] hi");
+        k2_core::connect_users::add_user("zoe", "password123").expect("add");
+        k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
+        assert_eq!(resolve_owner_from(), "zoe");
+        assert_eq!(format_message_user(&resolve_owner_from(), "hi"), "[from zoe] hi");
     });
 }
 

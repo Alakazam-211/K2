@@ -1190,7 +1190,7 @@ mod tests {
                 return Err(r.clone());
             }
             let id = body["clientJobId"].as_str().unwrap().to_string();
-            self.jobs.lock().unwrap().insert(id.clone(), JobFacts { state: "queued".into(), exit: None, reason: None, node: "k2n7".into(), short: id[..8].to_string(), secs: 60 });
+            self.jobs.lock().unwrap().insert(id.clone(), JobFacts { state: "queued".into(), exit: None, reason: None, node: "rig7".into(), short: id[..8].to_string(), secs: 60 });
             Ok(id)
         }
         fn job(&self, id: &str) -> Option<JobFacts> {

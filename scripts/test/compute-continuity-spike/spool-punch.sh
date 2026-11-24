@@ -14,7 +14,7 @@
 # under --dir. Run it on the SAME filesystem as the node home:
 #   Linux node: --dir /var/tmp (when /var/lib is on the same fs; check df)
 #   Mac node:   --dir /var/tmp (APFS, same container as /var/k2node)
-# Boxes: one Linux node with ext4 (k2n4-vin/k2n5-vin), one with xfs if the
+# Boxes: one Linux node with ext4 (rig4-vps/rig5-vps), one with xfs if the
 # fleet has one, and a Mac mini (APFS). It can run as a compute job:
 #   k2 compute run <node> --sha <sha> -- bash scripts/test/compute-continuity-spike/spool-punch.sh --dir /var/tmp
 #

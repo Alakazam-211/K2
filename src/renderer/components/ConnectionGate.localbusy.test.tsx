@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 0.46.18 — the LOCAL window, through the REAL ConnectionGate.
 //
-// Field report (0.46.17, z3mbp under heavy compute load): one CLI request
+// Field report (0.46.17, mac-a under heavy compute load): one CLI request
 // took 12.6 s, the next 0.1 s. The window read "offline", couldn't be used
 // and took ~20 s to come back, while other saved servers were failing too
 // (401s, a server that no longer answers). Rosson's rule: "If servers aren't

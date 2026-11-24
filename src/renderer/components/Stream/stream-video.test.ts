@@ -103,7 +103,7 @@ describe('VideoSink', () => {
     warn.mockRestore()
   })
 
-  it('z3mbpZ: a decoder that holds frames never starves the window: acks on hand-off, once each', () => {
+  it('mac-b: a decoder that holds frames never starves the window: acks on hand-off, once each', () => {
     const codecs = fakeWebCodecs()
     const { sink, log } = sinkWith(codecs)
     sink.push(h264(1, true))

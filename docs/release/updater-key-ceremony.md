@@ -2,14 +2,14 @@
 
 Runbook for the planned rotation of K2's update-signing key
 (prd-security-sweep-0464-v1, SS4/SS5, option C "dual-sign bridge").
-Rosson runs it **once**, on **z3mbpZ**, in a **GUI terminal** (iTerm or
+Rosson runs it **once**, on **mac-b**, in a **GUI terminal** (iTerm or
 Terminal, not SSH). With the signing user it is four short sittings (about
 80 minutes in all, below), and it must be done before
 0.46.6 can be released: `release.sh` refuses to start while the new key is
 missing.
 
 > **Rosson chose the signing user (2026-10-28):** each signing Mac's primary
-> key (U2 on z3mbpZ, U2b on z3mbp) is born inside that Mac's `_k2sign` macOS
+> key (U2 on mac-b, U2b on mac-a) is born inside that Mac's `_k2sign` macOS
 > user and never sits in `~/.k2-updater` or the keychain.
 > Follow **"The signing user"** right below. The keychain steps further down
 > (sections 1–2, "the stopgap") stay only as the rollback path
@@ -38,14 +38,14 @@ that pass its own checks (below). Every signature is in
 marked copy).
 
 **Two signing Macs, one key each (Rosson 2026-10-28).** Releases can run on
-z3mbpZ or on z3mbp (the M5). Each Mac makes its **own** primary key inside its
+mac-b or on mac-a (the M5). Each Mac makes its **own** primary key inside its
 own `_k2sign`; no key is ever copied between them:
 
 | Key | Mac | Made by | Trusted by 0.46.6+ |
 |---|---|---|---|
-| **U2** | z3mbpZ | `k2sign-admin generate-u2` on z3mbpZ (sitting 2) | yes (primary) |
-| **U2b** | z3mbp | `k2sign-admin generate-u2` on z3mbp (sitting 2 with `--key U2b`) | yes (primary) |
-| **U3** | none: the password manager | the ceremony, once, during z3mbpZ's sitting 2 | yes (backup) |
+| **U2** | mac-b | `k2sign-admin generate-u2` on mac-b (sitting 2) | yes (primary) |
+| **U2b** | mac-a | `k2sign-admin generate-u2` on mac-a (sitting 2 with `--key U2b`) | yes (primary) |
+| **U3** | none: the password manager | the ceremony, once, during mac-b's sitting 2 | yes (backup) |
 | **U1** | both Macs (imported into each `_k2sign`) | the old key, retired | installs older than 0.46.6 only (the bridge) |
 
 - Installs trust **any** of U2, U2b and U3 (`UPDATER_KEYS`: two primaries,
@@ -57,9 +57,9 @@ own `_k2sign`; no key is ever copied between them:
   `UPDATER_KEYS` in the next release (installs that update past it stop
   trusting it); the other Mac keeps releasing. U3 is the backup if both are
   lost.
-- Releasing from z3mbp is Rosson's choice when he uses it. A release build is
+- Releasing from mac-a is Rosson's choice when he uses it. A release build is
   heavy on the M5 (cargo, notarization, the DMG): pause the other builders
-  first. z3mbp also needs what any release Mac needs: the Developer ID
+  first. mac-a also needs what any release Mac needs: the Developer ID
   identity in its login keychain, the notarization key, a GUI iTerm.
 - Each Mac's signer state is its own: a version approved on one Mac is not
   approved on the other.
@@ -83,8 +83,8 @@ power; keep remote-GUI tools off on both Macs (cleanup items 8–9).
 **Sittings** (all in `scripts/k2sign/sitting.sh`). Each prints its exact
 commands and changes nothing until you add `--run`; then it stops before
 every step (Enter runs it, `s` skips a step already done on an earlier try).
-Sittings 1–3 and `reenrol` take `--key U2` (on z3mbpZ) or `--key U2b` (on
-z3mbp), refuse to run on the other Mac, and take `--commit <sha>`, the
+Sittings 1–3 and `reenrol` take `--key U2` (on mac-b) or `--key U2b` (on
+mac-a), refuse to run on the other Mac, and take `--commit <sha>`, the
 commit K2 names.
 
 **Before the first sitting on a Mac**
@@ -97,20 +97,20 @@ commit K2 names.
 | Sitting | Where | When | Time | You type | You approve |
 |---|---|---|---|---|---|
 | `check` | each Mac | any time | 1 min | nothing | nothing |
-| `0` (S0 spike) | z3mbpZ (z3mbp optional) | first; wait for K2's go | ~10 min | one `ssh` line from another Mac | Touch ID ×4 |
+| `0` (S0 spike) | mac-b (mac-a optional) | first; wait for K2's go | ~10 min | one `ssh` line from another Mac | Touch ID ×4 |
 | `1 --key U2` / `--key U2b` | that Mac | after K2's go on sitting 0 | ~25 min | Mac admin password ×2–3, that Mac's new GitHub token; send K2 the hashes | ×1 (enrol) |
-| `reenrol` | z3mbpZ only | z3mbpZ's sitting 1 ran before the password change (87b27c2dc) | ~10 min | admin password ×1, the login password once (proof 2), one `ssh` line | Touch ID ×1–2 |
-| `2 --key U2` (agents stopped) | z3mbpZ | after its hashes match | ~30 min | admin password ×1–2, U3's new password ×2, `saved`, U1's password ×1; send K2 `~/k2-update-pubkeys-U2.txt` | nothing |
-| `2 --key U2b` (agents stopped) | z3mbp | after its hashes match | ~15 min | admin password ×1–2, U1's password ×1; send K2 `~/k2-update-pubkeys-U2b.txt` | nothing |
+| `reenrol` | mac-b only | mac-b's sitting 1 ran before the password change (87b27c2dc) | ~10 min | admin password ×1, the login password once (proof 2), one `ssh` line | Touch ID ×1–2 |
+| `2 --key U2` (agents stopped) | mac-b | after its hashes match | ~30 min | admin password ×1–2, U3's new password ×2, `saved`, U1's password ×1; send K2 `~/k2-update-pubkeys-U2.txt` | nothing |
+| `2 --key U2b` (agents stopped) | mac-a | after its hashes match | ~15 min | admin password ×1–2, U1's password ×1; send K2 `~/k2-update-pubkeys-U2b.txt` | nothing |
 | `3 --key U2` / `--key U2b` | each Mac | after K2 lands the public keys | ~15 min | admin password ×1; send K2 the hashes again | ×1 |
 
 U1's password must be in your password manager before sitting 2 (today it
 is the value on the `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` line in the K2
 checkout's `.env`: open the file in an editor, don't `cat` it). After pasting
 any password or a token, copy other text so it isn't left on the clipboard.
-Sitting 2 on z3mbp stops every agent on z3mbp too, including the K2 workspace
+Sitting 2 on mac-a stops every agent on mac-a too, including the K2 workspace
 agents that build this code.
-**One allowed agent (Rosson's request, 2026-10-28).** On z3mbp, K2's
+**One allowed agent (Rosson's request, 2026-10-28).** On mac-a, K2's
 coordinator session drives the terminal, so sitting 2 there can run with
 `--allow-agent <pid>`: that one claude process of Rosson's (and what it
 started) keeps running; every other agent must still be stopped, checked at
@@ -120,7 +120,7 @@ isolation for convenience, at his request: the allowed agent runs as his user
 and can read what he can (the screen, his files, `$TMPDIR`). Passwords go only
 into hidden prompts in an iTerm window (Secure Keyboard Entry on), never a K2
 tab or the compose bar; U2b's own password is random inside `_k2sign` and
-never typed; no U3 is made on z3mbp. Check first with
+never typed; no U3 is made on mac-a. Check first with
 `bash scripts/k2sign/sitting.sh agents --allow-agent <pid>`.
 Sitting 2 (both Macs) first rebuilds K2 Release Approve from its commit and
 checks it lists `timeout` (`--capabilities`); sitting 3 checks again, and
@@ -129,17 +129,17 @@ approver key (it lives in `~/.k2-release-approve`, not in the app).
 
 **Order against landing.** The lane stays held until the public keys exist,
 because it changes what installs trust and `release.sh` refuses to start
-without them. **Plan (Rosson 2026-10-28): 0.46.6 ships U2 + U3 only;** z3mbp's
+without them. **Plan (Rosson 2026-10-28): 0.46.6 ships U2 + U3 only;** mac-a's
 sitting 2 (U2b) happens after 0.46.6, and U2b joins the key list in a later
-release (`pubkeys <U2> <U2b> <U3>`). That release must be made on z3mbpZ
-(installs trust only U2/U3 until then), and z3mbp should not release until
+release (`pubkeys <U2> <U2b> <U3>`). That release must be made on mac-b
+(installs trust only U2/U3 until then), and mac-a should not release until
 the fleet has taken it: an install that hasn't would refuse a release signed
-with U2b alone. Until then z3mbp's signer has no key and refuses to sign.
+with U2b alone. Until then mac-a's signer has no key and refuses to sign.
 (Doing both Macs' sitting 2 before the landing would have needed one rollout;
 the steps below show that order.)
 1. From the **lane's commit** (K2 pushes it as a branch and names the commit):
-   z3mbpZ `0`, `1 --key U2` (done 2026-10-28 at 87b27c2dc), `reenrol --key U2`,
-   `2 --key U2`; z3mbp `1 --key U2b`, `2 --key U2b`. The two Macs' sittings
+   mac-b `0`, `1 --key U2` (done 2026-10-28 at 87b27c2dc), `reenrol --key U2`,
+   `2 --key U2`; mac-a `1 --key U2b`, `2 --key U2b`. The two Macs' sittings
    can interleave; sitting 2 needs agents stopped on that Mac only.
 2. K2 runs `bash scripts/updater-key-ceremony.sh pubkeys <U2> <U2b> <U3>`
    (the backup last) on the lane, runs the gates, and lands lane + pubkeys
@@ -156,8 +156,8 @@ the steps below show that order.)
    team); the Windows setup only when the approval named it (an NSIS installer, whose stub is a 32-bit PE even for x64;
    no independent evidence).
 
-If z3mbp's sitting 2 slips past the landing, U2b needs a second pubkeys
-commit and only releases after the one that ships it can be signed on z3mbp.
+If mac-a's sitting 2 slips past the landing, U2b needs a second pubkeys
+commit and only releases after the one that ships it can be signed on mac-a.
 
 **Re-enrolling the approver** (e.g. after this change, or a new Mac login
 password policy): `bash scripts/k2sign/sitting.sh reenrol --key U2 --commit <sha> --run`
@@ -230,9 +230,9 @@ wire format and the plain `openssl` check: `docs/signed-approvals.md`.
 | | What | Result |
 |---|---|---|
 | (a) | CryptoKit SE key, access control `[.privateKeyUsage, .biometryAny, .or, .devicePasscode]` (Touch ID or the login password; was `.biometryCurrentSet` until 2026-10-28), no keychain entitlement, ad hoc **and** Developer ID | **open:** needs the Mac + a person (`sitting.sh 0`); the password path is proven by `sitting.sh reenrol` (proof 2) |
-| (b) | `open -W -n -a` shows the approval sheet from iTerm and from SSH; with nobody answering, an SSH-started request makes no approval | **z3mbpZ 2026-10-28:** an SSH-started helper's sheet appears on the console and approves only when answered there (reenrol runs 1–3, each with a touch); the hands-off rerun of proof 3 is open |
-| (c) | LibreSSL 3.3.6 `openssl dgst -sha256 -verify` accepts CryptoKit's DER ECDSA | **pass** (2026-10-28, z3mbp, LibreSSL 3.3.6): a CryptoKit P-256 signature (software key: the SE key's DER and PEM formats are the same) verifies, a one-byte change is refused; the test suite then uses openssl-made P-256 signatures in the same format |
-| (d) | gh attestation verify with only a read-only token in a scratch HOME | **pass on z3mbpZ (sitting 1, 2026-10-28):** `k2sign gh-selfcheck` ok as `_k2sign` with its own token. gh needs a token even for a public repo's attestations, and GitHub serves cli/cli's bundle by URL, so the signer lets the pinned gh fetch it. The token needs Contents + Attestations read-only on K2 |
+| (b) | `open -W -n -a` shows the approval sheet from iTerm and from SSH; with nobody answering, an SSH-started request makes no approval | **mac-b 2026-10-28:** an SSH-started helper's sheet appears on the console and approves only when answered there (reenrol runs 1–3, each with a touch); the hands-off rerun of proof 3 is open |
+| (c) | LibreSSL 3.3.6 `openssl dgst -sha256 -verify` accepts CryptoKit's DER ECDSA | **pass** (2026-10-28, mac-a, LibreSSL 3.3.6): a CryptoKit P-256 signature (software key: the SE key's DER and PEM formats are the same) verifies, a one-byte change is refused; the test suite then uses openssl-made P-256 signatures in the same format |
+| (d) | gh attestation verify with only a read-only token in a scratch HOME | **pass on mac-b (sitting 1, 2026-10-28):** `k2sign gh-selfcheck` ok as `_k2sign` with its own token. gh needs a token even for a public repo's attestations, and GitHub serves cli/cli's bundle by URL, so the signer lets the pinned gh fetch it. The token needs Contents + Attestations read-only on K2 |
 | (e) | a 300 MB stdin stream through `sudo -n -u` | **open:** needs sudo in a VM (the Tart `k2-newuser-base` VM), never on a signing Mac |
 
 A failure in (a) or (b) switches the approval to the passphrase fallback
@@ -256,15 +256,15 @@ cargo-zigbuild crate hashes the policy pins (`scripts/ci/cross-pins.sh`);
 otherwise it takes the GitHub path. The
 full rule list is in `docs/ci-on-k2-compute.md` ("Signing").
 
-Default nodes: L1 k2n7-vin, V1 k2n9-vin, L3 k2n8-vin, L2 k2n10-vin, V2
+Default nodes: L1 rig7-vps, V1 rig9-vps, L3 rig8-vps, L2 rig10-vps, V2
 <release node> (`scripts/lib/compute-release.sh`). The commands below name
 the V2 node `$V2N`; from the release checkout, this reads it from that
 file (check what it prints): `V2N="$(bash -c '. scripts/lib/compute-release.sh; k2cr_arm_verify_node')"; echo "V2N=$V2N"`. Every node below is pinned and
 granted; one that isn't makes release.sh fall back to GitHub for its arch,
 with a banner (never silently).
 
-**The sitting (z3mbpZ, once, and again when a release node gets a new
-key).** At z3mbpZ in a GUI terminal (iTerm), as the release user, in the
+**The sitting (mac-b, once, and again when a release node gets a new
+key).** At mac-b in a GUI terminal (iTerm), as the release user, in the
 release checkout. About 1–1.5 h, most of it the shadow build in step 5.
 Each block is one copy-paste; replace only the `<…>` parts.
 
@@ -299,7 +299,7 @@ Then share both with each release node, as the env names the build reads
 
 ```
 # WS as set above (this checkout's own handle; echo "$WS" to check)
-for N in k2n7-vin k2n9-vin k2n10-vin "$V2N"; do
+for N in rig7-vps rig9-vps rig10-vps "$V2N"; do
   k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_ID
   k2 vault grant K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_SECRET
 done
@@ -309,20 +309,20 @@ done
 `BUILD_MICROSOFT_CLIENT_ID`.) Copy some other text afterwards so the secret
 isn't left on the clipboard.
 
-**3. On each release node, at its own console** (k2n7-vin = L1,
-k2n9-vin = V1, k2n10-vin = L2, <release node> (`$V2N`) = V2; k2n8-vin too if it may stand
+**3. On each release node, at its own console** (rig7-vps = L1,
+rig9-vps = V1, rig10-vps = L2, <release node> (`$V2N`) = V2; rig8-vps too if it may stand
 in): its keyboard and screen,
-or ssh from a machine that is **not** z3mbpZ. Never copy these numbers from
-`k2 compute nodes` or anything else on z3mbpZ: the pins guard against
-z3mbpZ's own user.
+or ssh from a machine that is **not** mac-b. Never copy these numbers from
+`k2 compute nodes` or anything else on mac-b: the pins guard against
+mac-b's own user.
 
 ```
 python3 -c 'import json; s = json.load(open("/var/lib/k2node/run/status.json")); print("node_fp      ", s["node_fp"]); print("wall         ", s["wall"], " dev", s.get("dev", False)); print("owner server ", s.get("controller"), s.get("controller_fp")); [print("server       ", x["label"], x.get("fp"), x["trust"]) for x in s.get("servers", [])]'
 cat /proc/sys/kernel/yama/ptrace_scope
 ```
 
-Write down, per node: `node_fp` (64 hex), and the fingerprint on z3mbpZ's
-line (`z3thon.k2.dev`: the owner line, or a `server` line with trust `own`).
+Write down, per node: `node_fp` (64 hex), and the fingerprint on mac-b's
+line (`zoe.k2.dev`: the owner line, or a `server` line with trust `own`).
 Check:
 - `wall` is `job_user` and `dev` is `False`. A node that ever ran without
   the job wall (an install from before the wall, or any `--dev` run) needs a
@@ -332,24 +332,24 @@ Check:
   `kernel.yama.ptrace_scope >= 1`, so a job can't ptrace another process
   of its uid). If it prints 0:
   `echo 'kernel.yama.ptrace_scope = 1' | sudo tee /etc/sysctl.d/60-k2-ptrace.conf && sudo sysctl --system`
-- Release builds are `--exclusive` (alone on the node). z3mbpZ
-  (`z3thon.k2.dev`) is a tenant on the Ryzens, whose owner server is
+- Release builds are `--exclusive` (alone on the node). mac-b
+  (`zoe.k2.dev`) is a tenant on the Ryzens, whose owner server is
   rosson.k2.dev, and its share there has `exclusive: false` (11-07). On
   rosson.k2.dev, from a terminal outside K2:
-  `for N in k2n7-vin k2n8-vin k2n9-vin k2n10-vin "$V2N"; do k2 compute node servers "$N" limits z3thon.k2.dev exclusive=true; done`
+  `for N in rig7-vps rig8-vps rig9-vps rig10-vps "$V2N"; do k2 compute node servers "$N" limits zoe.k2.dev exclusive=true; done`
   Each is a widening, so it is held: approve each with
   `k2 compute node admin approve <id>` (Touch ID or the vault password;
   `k2 compute node admin list` lists the ids), or Settings → Compute →
-  Approvals. An agent may file these but never approve them. On z3mbpZ,
+  Approvals. An agent may file these but never approve them. On mac-b,
   the release checkout's workspace (`$WS` from step 2) needs grants with
   `--ci` (they already do if `--tier ci` jobs run); only <build Mac>'s owner
   sets that: `k2 compute grant <node> --workspace "$WS" --ci`.
 
-**4. The controller pin** (back at z3mbpZ). Root reads this Mac's K2 key and
+**4. The controller pin** (back at mac-b). Root reads this Mac's K2 key and
 refuses a fingerprint that isn't its own:
 
 ```
-sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <z3mbpZ's fingerprint from step 3> "$HOME/.k2/tunnel-key.pem"
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <mac-b's fingerprint from step 3> "$HOME/.k2/tunnel-key.pem"
 ```
 
 **5. A shadow build of this commit** (L1, L3, V1, L2, V2 on the nodes;
@@ -363,7 +363,7 @@ python3 -c 'import json,sys; [print(l, "missing:", [k for k in ("body", "plan", 
 
 It must end with every job verified (`two nodes`, `identical in both
 builds`), and all four lines must say `missing: none`. `missing: [...]` means
-z3mbpZ's running K2 is older than this commit's receipt route: install a
+mac-b's running K2 is older than this commit's receipt route: install a
 K2 built from this commit first.
 
 **6. The node pins.** The keys come from the receipts; the fingerprints you
@@ -372,13 +372,13 @@ whose fingerprint differs.
 
 ```
 mkdir -p ~/k2-pins
-python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L1/receipt.json" > ~/k2-pins/k2n7-vin.pem
-python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V1/receipt.json" > ~/k2-pins/k2n9-vin.pem
-python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L2/receipt.json" > ~/k2-pins/k2n10-vin.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L1/receipt.json" > ~/k2-pins/rig7-vps.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V1/receipt.json" > ~/k2-pins/rig9-vps.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L2/receipt.json" > ~/k2-pins/rig10-vps.pem
 python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V2/receipt.json" > ~/k2-pins/"$V2N".pem
-sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n7-vin "$HOME/k2-pins/k2n7-vin.pem" <k2n7-vin's node_fp from step 3>
-sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n9-vin "$HOME/k2-pins/k2n9-vin.pem" <k2n9-vin's node_fp from step 3>
-sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n10-vin "$HOME/k2-pins/k2n10-vin.pem" <k2n10-vin's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node rig7-vps "$HOME/k2-pins/rig7-vps.pem" <rig7-vps's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node rig9-vps "$HOME/k2-pins/rig9-vps.pem" <rig9-vps's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node rig10-vps "$HOME/k2-pins/rig10-vps.pem" <rig10-vps's node_fp from step 3>
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node "$V2N" "$HOME/k2-pins/$V2N.pem" <the V2 node's (<release node>) node_fp from step 3>
 ```
 
@@ -388,7 +388,7 @@ sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node "$V2N" "$HOME/k2-pi
 (cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-pins)
 ```
 
-It lists the controller from step 4 and k2n7-vin, k2n9-vin, k2n10-vin and
+It lists the controller from step 4 and rig7-vps, rig9-vps, rig10-vps and
 the V2 node (<release node>) with the fingerprints you wrote down.
 
 **8. A dry signing pass** (this commit's signer, with throwaway keys in a
@@ -408,10 +408,10 @@ python3 scripts/ci/compute_release.py evidence-bundle --state "$A" --git . --arc
 (cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-rehearse) < /tmp/k2-rehearse.json
 ```
 
-It must print `rehearsal passed: L1 on k2n7-vin; V1 on k2n9-vin; L2 on k2n10-vin; V2 on <release node> …`.
+It must print `rehearsal passed: L1 on rig7-vps; V1 on rig9-vps; L2 on rig10-vps; V2 on <release node> …`.
 Then the same with V1's receipt tampered (one byte of its signed body),
 which must be refused (exit 3, `V1: the receipt's signature does not
-verify with node k2n9-vin's pinned key`):
+verify with node rig9-vps's pinned key`):
 
 ```
 T="$(mktemp -d)"; cp -R "$A"/. "$T"/
@@ -449,8 +449,8 @@ in the signer's policy and check the daemon's baked values against it.
 
 | Key | What it is | Where it lives | Who trusts it |
 |---|---|---|---|
-| **U1** `E9111446F65EBB05` | today's key, now retired | `~/.k2-updater/k2-updater-u1.key` on z3mbpZ, password in the keychain (`k2-updater-signing-u1`) | installs **older than 0.46.6** only |
-| **U2** (new) | the new primary | `~/.k2-updater/k2-updater-u2.key` on z3mbpZ, password in the keychain (`k2-updater-signing-u2`) | **0.46.6 and newer** |
+| **U1** `E9111446F65EBB05` | today's key, now retired | `~/.k2-updater/k2-updater-u1.key` on mac-b, password in the keychain (`k2-updater-signing-u1`) | installs **older than 0.46.6** only |
+| **U2** (new) | the new primary | `~/.k2-updater/k2-updater-u2.key` on mac-b, password in the keychain (`k2-updater-signing-u2`) | **0.46.6 and newer** |
 | **U3** (new) | the offline backup | your password manager only, never on a box | **0.46.6 and newer** (if U2 is ever lost) |
 
 v0.46.4 and v0.46.5 shipped signed with U1 only (this work slipped twice), so
@@ -490,7 +490,7 @@ marked `TODO(vault)`.
 
 - `brew install minisign` (0.11 or newer: `minisign -v`).
 - A password manager entry ready for two new passwords.
-- The checkout on z3mbpZ is on current main (it has
+- The checkout on mac-b is on current main (it has
   `scripts/updater-key-ceremony.sh`).
 
 ## Steps
@@ -511,12 +511,12 @@ line from `.env`**: `release.sh` refuses to run while it is there.
 
 ### 2. Make U2 and U3
 
-Run it from a checkout of the `k2/sign-on-z3mbpz` branch (the keys land
+Run it from a checkout of the `k2/sign-on-mac-b` branch (the keys land
 together with the code; main doesn't have the script yet). It needs only
 bash, python3, minisign and `security`:
 
 ```sh
-git fetch origin && git checkout k2/sign-on-z3mbpz   # or the commit K2 names
+git fetch origin && git checkout k2/sign-on-mac-b   # or the commit K2 names
 bash scripts/updater-key-ceremony.sh generate
 ```
 
@@ -537,7 +537,7 @@ It walks you through:
    - "K2 update key U3 - password": U3's password, and nothing else.
 
    Never the clipboard, never both in one entry. Type `saved`; the file is
-   overwritten and deleted from z3mbpZ (best effort on an SSD; it is
+   overwritten and deleted from mac-b (best effort on an SSD; it is
    encrypted either way). U3's public key stays at
    `~/.k2-updater/k2-updater-u3.pub`.
 3. It prints two **public** key lines (U2 and U3) with their key ids.
@@ -557,7 +557,7 @@ it). K2 lands the keys together with the SS4/SS5 code, before the 0.46.6 tag:
 this branch never lands on main without them, because a main build installed
 before the keys exist could never self-update.
 
-### 4. Prove it on z3mbpZ
+### 4. Prove it on mac-b
 
 After the public keys have landed (on this branch, or on main once it merges):
 
@@ -652,18 +652,18 @@ SS1 threat notes.
 ## Threat notes (what 0.46.6 does and doesn't stop)
 
 - **Key theft from GitHub (SS1):** stopped. No signing key on GitHub; the
-  runner builds unsigned and z3mbpZ signs.
+  runner builds unsigned and mac-b signs.
 - **A swapped Linux release asset:** stopped. The real controls are the
   attestation (exact identity: `daemon-binaries.yml@refs/tags/v<x>`) and the
   local tag commit: the attestation's source commit and GitHub's tag must
   both equal the commit of `refs/tags/v<x>` in the checkout release.sh
-  tagged. After signing, z3mbpZ re-downloads the published binaries and
+  tagged. After signing, mac-b re-downloads the published binaries and
   checks they are the bytes it signed. The uploader / upload-time checks
   are belts only: any workflow token uploads as `github-actions[bot]`, and
   GitHub never lists two assets with one name, so they prove little.
 - **A poisoned build on the self-hosted runner:** NOT stopped. Next step:
   two independent builds (above), after 0.46.6.
-- **Same-user read on z3mbpZ:** stopped by the signing user (above): no
+- **Same-user read on mac-b:** stopped by the signing user (above): no
   process running as Rosson's user can read U1/U2 or their passwords (only
   root can), and it can't use the signer as an oracle outside an approved
   session (one approval per release, Touch ID or the Mac login password, bound to version, base commit and

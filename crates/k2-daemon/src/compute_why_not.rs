@@ -15,7 +15,7 @@
 //!
 //! - "Elsewhere" ([`elsewhere_words`]): one line on why no other node can
 //!   start the job now, in node-wide numbers ("no other node has 8 free
-//!   CPUs now: k2n10 0/12 (other servers' jobs), k2n11 2.4/14.4
+//!   CPUs now: rig10 0/12 (other servers' jobs), rig11 2.4/14.4
 //!   unreserved"), for the placement record, `get` and a follower's wait
 //!   line. The sweeper checks every node on each pass (every 5 s), so the
 //!   job moves as soon as any of them can start it.
@@ -275,8 +275,8 @@ fn others_mark(c: &Cand) -> Option<&'static str> {
 
 /// One line on why no node (`other`: no OTHER node) can start the job now,
 /// over `cands` (the online ones that can give its `--needs`), best first,
-/// in node-wide numbers: "no other node has 8 free CPUs now: k2n10 0/12
-/// (other servers' jobs), k2n11 2.4/14.4 unreserved". `None` when one of
+/// in node-wide numbers: "no other node has 8 free CPUs now: rig10 0/12
+/// (other servers' jobs), rig11 2.4/14.4 unreserved". `None` when one of
 /// them can start it now (the sweeper moves it there on its next pass) or
 /// none is online.
 pub fn elsewhere_words(cands: &[Cand], w: &Want, other: bool) -> Option<String> {
@@ -411,27 +411,27 @@ mod tests {
     fn elsewhere_names_the_best_candidates_and_why_none_fits() {
         let mut w = want(2);
         w.cpu_millis = Some(8000);
-        // The field case: k2n10's CPUs all reserved by other servers'
-        // jobs (this server's share there runs nothing), k2n11 and k2n12
+        // The field case: rig10's CPUs all reserved by other servers'
+        // jobs (this server's share there runs nothing), rig11 and rig12
         // with 2.4 of 14.4 free.
-        let set = vec![other_servers("k2n12", 14_400, 2_400, 2), other_servers("k2n10", 12_000, 0, 3), other_servers("k2n11", 14_400, 2_400, 2)];
+        let set = vec![other_servers("rig12", 14_400, 2_400, 2), other_servers("rig10", 12_000, 0, 3), other_servers("rig11", 14_400, 2_400, 2)];
         assert_eq!(
             elsewhere_words(&set, &w, true).as_deref(),
-            Some("no other node has 8 free CPUs now: k2n11 2.4/14.4 (other servers' jobs), k2n12 2.4/14.4 (other servers' jobs), k2n10 0/12 (other servers' jobs) unreserved")
+            Some("no other node has 8 free CPUs now: rig11 2.4/14.4 (other servers' jobs), rig12 2.4/14.4 (other servers' jobs), rig10 0/12 (other servers' jobs) unreserved")
         );
         // A node that can start it: no line (the sweeper moves it there).
         let mut roomy = set.clone();
-        roomy.push(other_servers("k2n9", 16_000, 9_000, 1));
+        roomy.push(other_servers("rig9", 16_000, 9_000, 1));
         assert_eq!(elsewhere_words(&roomy, &w, true), None);
         // Mixed limits: each node says its own, with the job's ask.
         let mut slots = cand("full", 30, 32, 2, 2);
         slots.offer.free.cpu_millis = 8_000;
         let mut mem = cand("small", 1, 32, 0, 4);
         mem.offer.free.cpu_millis = 8_000;
-        let mixed = vec![other_servers("k2n10", 12_000, 0, 3), slots, mem];
+        let mixed = vec![other_servers("rig10", 12_000, 0, 3), slots, mem];
         assert_eq!(
             elsewhere_words(&mixed, &w, false).as_deref(),
-            Some("no node can start it now (it asks 8 CPUs, 2G): full (full: 2 of 2 jobs run), small (mem 1/32 GB free), k2n10 (cpu 0/12 unreserved; other servers' jobs)")
+            Some("no node can start it now (it asks 8 CPUs, 2G): full (full: 2 of 2 jobs run), small (mem 1/32 GB free), rig10 (cpu 0/12 unreserved; other servers' jobs)")
         );
         // Memory alone, five nodes: four named, "+1 more".
         let five: Vec<Cand> = (1..=5).map(|i| cand(&format!("m{i}"), i, 32, 0, 4)).collect();
@@ -454,17 +454,17 @@ mod tests {
         use std::collections::BTreeMap;
         let mut w = want(2);
         w.cpu_millis = Some(8000);
-        let mut a = cand("k2n7", 30, 32, 2, 4);
+        let mut a = cand("rig7", 30, 32, 2, 4);
         a.offer.caps.cpu_millis = 12_000;
         a.offer.free.cpu_millis = 4_000;
-        let busy = [a, other_servers("k2n10", 12_000, 0, 3)];
+        let busy = [a, other_servers("rig10", 12_000, 0, 3)];
         let skipped = BTreeMap::new();
         let ex = Explain { policy: k2_core::compute::PlacementPolicy::V2, cands: &busy, skipped: &skipped, project_key: None, commit: None };
         let rec = placement_record(&busy[0], Tier::Busy, &w, &ex, 1);
         assert_eq!(rec.code, "queued_least_busy", "{rec:?}");
         assert_eq!(
             rec.why,
-            "no node has 8 free CPUs now: k2n7 4/12, k2n10 0/12 (other servers' jobs) unreserved; least busy (2 running, 0 queued) · it moves if another frees up first"
+            "no node has 8 free CPUs now: rig7 4/12, rig10 0/12 (other servers' jobs) unreserved; least busy (2 running, 0 queued) · it moves if another frees up first"
         );
     }
 }

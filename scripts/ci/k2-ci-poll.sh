@@ -2,7 +2,7 @@
 # k2-ci-poll.sh — the K2 Compute CI gate's trigger (plan-ci-release-on-
 # k2-compute-v1 §3; prd-ci-release-on-compute-stage1-v1 §4).
 #
-# On z3mbpZ it runs as a K2 scheduled job in the k2-ci workspace (a CI
+# On mac-b it runs as a K2 scheduled job in the k2-ci workspace (a CI
 # checkout, not the release one):
 #   k2 job add k2-ci-poll --cron '*/2 * * * *' --timeout 10m --workspace k2-ci -- bash scripts/ci/k2-ci-poll.sh --once
 # then, before its first tick, the statuses token (post-status.sh):

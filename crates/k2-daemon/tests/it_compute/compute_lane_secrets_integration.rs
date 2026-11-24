@@ -388,8 +388,8 @@ async fn a_lane_grant_is_sealed_to_a_seat_node() {
     let d = test_harness::start(OWNER).await;
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let ws = seed_ws(&env, "lanews");
-    active_node("ln-1", "k2n7", &ws, "linux");
-    active_node("ln-2", "k2n8", &ws, "linux");
+    active_node("ln-1", "rig7", &ws, "linux");
+    active_node("ln-2", "rig8", &ws, "linux");
     let secret_id = put_secret(&ws);
     install(vec![seat(&["ln-1", "ln-2"], Isolation::JobUid)], &["ln-1", "ln-2"]);
     let mut n1 = compute_ws::test_attach("ln-1", offer(LANE_FEATURES, Some(tenant_view(Trust::Team)), 9, "linux"));
@@ -404,7 +404,7 @@ async fn a_lane_grant_is_sealed_to_a_seat_node() {
     assert!(k2_daemon::compute_secrets::consumer("lanews/lane:only-owner", None).is_err(), "lane:<owner>/<lane>");
 
     // Not granted yet: the command names the lane form.
-    let r = run(d.port, &agent, json!({"node": "k2n7", "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig7", "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (403, scodes::NOT_GRANTED), "{}", r.body);
     assert!(j(&r)["error"]["hint"].as_str().unwrap().contains(&format!("--to compute:lanews/lane:{NODE_OWNER}/{LANE}")), "{}", r.body);
 
@@ -443,7 +443,7 @@ async fn a_lane_grant_is_sealed_to_a_seat_node() {
     assert!(trusted.iter().any(|t| t["ownerId"] == NODE_OWNER && t["secretsConsent"] == true), "{}", r.body);
 
     // Submit on each seat node; each release opens with that node's key.
-    for (nid, name, conn) in [("ln-1", "k2n7", &mut n1), ("ln-2", "k2n8", &mut n2)] {
+    for (nid, name, conn) in [("ln-1", "rig7", &mut n1), ("ln-2", "rig8", &mut n2)] {
         let r = run(d.port, &agent, json!({"node": name, "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
         assert_eq!(r.status, 200, "{}", r.body);
         let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
@@ -469,10 +469,10 @@ async fn a_lane_grant_is_sealed_to_a_seat_node() {
     // `--any` places only on the seat's nodes.
     let r = run(d.port, &agent, json!({"any": true, "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    assert!(["k2n7", "k2n8"].contains(&j(&r)["job"]["node"].as_str().unwrap()), "{}", r.body);
+    assert!(["rig7", "rig8"].contains(&j(&r)["job"]["node"].as_str().unwrap()), "{}", r.body);
 
     // Revoking the consent stops the next release at once.
-    let r = run(d.port, &agent, json!({"node": "k2n7", "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig7", "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let _ = n1.frames();
@@ -575,7 +575,7 @@ async fn per_node_grants_still_work_and_protocol_8_nodes_never_get_lane_secrets(
     let ws = seed_ws(&env, "mixws");
     active_node("own-1", "own-node", &ws, "linux");
     active_node("trust-1", "own-tenant", &ws, "linux");
-    active_node("old-1", "k2n10", &ws, "linux");
+    active_node("old-1", "rig10", &ws, "linux");
     let secret_id = put_secret(&ws);
     // old-1 is on our seat, but runs a protocol-8 k2-node: it offers
     // secret-env only as a `trust own` server would see it, and no
@@ -605,12 +605,12 @@ async fn per_node_grants_still_work_and_protocol_8_nodes_never_get_lane_secrets(
     }
 
     // The protocol-8 seat node: the lane grant covers it, the gate says no.
-    let r = run(d.port, &agent, json!({"node": "k2n10", "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
+    let r = run(d.port, &agent, json!({"node": "rig10", "secrets": [{"name": "GMAIL_CLIENT_ID"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, scodes::NEEDS_UPDATE), "{}", r.body);
     assert!(old.frames().iter().all(|f| !matches!(f, Frame::Assign(_))), "never assigned");
     // Even a forged secret_need for a job of that node is never answered
     // with a value: the node's own jobs only, and the gate again.
-    let r = run(d.port, &agent, json!({"node": "k2n10"})).await;
+    let r = run(d.port, &agent, json!({"node": "rig10"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let _ = old.frames();

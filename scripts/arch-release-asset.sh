@@ -3,7 +3,7 @@
 #
 # release.sh sources this only when a caller wants the strict check.
 # The tag job .github/workflows/arch-package.yml builds
-# dist/k2-<version>-x86_64.pkg.tar.zst on the k2-arch runner and uploads it
+# dist/k2-<version>-x86_64.pkg.tar.zst on the arch-box runner and uploads it
 # after the tag, the same way daemon-binaries.yml uploads Linux daemons.
 # If the file is already in $DIST_DIR, release.sh attaches it. A missing
 # file does not stop the release. The Mac does not compile the GUI.

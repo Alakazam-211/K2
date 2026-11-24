@@ -45,22 +45,22 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
 NOW = int(time.time())
-PL = {"mode": "auto", "node": "k2n12", "policy": "v2", "why": "soonest start"}
+PL = {"mode": "auto", "node": "rig12", "policy": "v2", "why": "soonest start"}
 JOBS = {
-    "h1": {"id": "h1000000", "short": "h1000000", "node": "k2n12", "state": "queued", "planned": True,
+    "h1": {"id": "h1000000", "short": "h1000000", "node": "rig12", "state": "queued", "planned": True,
            "argv": ["make"], "createdAt": NOW - 60, "attempt": 1, "generation": 1,
-           "queue": {"held": True, "line": "held: waiting for a node with a free slot (fits: k2n12)"},
+           "queue": {"held": True, "line": "held: waiting for a node with a free slot (fits: rig12)"},
            "wait": {"reason": "held"}, "placement": PL},
-    "p1": {"id": "p1000000", "short": "p1000000", "node": "k2n12", "state": "queued", "planned": True,
+    "p1": {"id": "p1000000", "short": "p1000000", "node": "rig12", "state": "queued", "planned": True,
            "argv": ["make"], "createdAt": NOW - 60, "attempt": 1, "generation": 1, "placement": PL},
-    "b1": {"id": "b1000000", "short": "b1000000", "node": "k2n12", "state": "queued",
+    "b1": {"id": "b1000000", "short": "b1000000", "node": "rig12", "state": "queued",
            "argv": ["make"], "createdAt": NOW - 60, "attempt": 1, "generation": 1, "placement": PL},
 }
 NODE = {"platform": "ubuntu24.04-x86_64", "state": "active", "online": True, "running": 2,
         "mine": {"running": 0, "queued": 0}, "lastSeen": NOW - 5}
-NODES = {"nodes": [dict(NODE, name="k2n12", queued=13, heldPlanned=11),
-                   dict(NODE, name="k2n15", queued=4, heldPlanned=0),
-                   dict(NODE, name="k2n17", queued=2)]}
+NODES = {"nodes": [dict(NODE, name="rig12", queued=13, heldPlanned=11),
+                   dict(NODE, name="rig15", queued=4, heldPlanned=0),
+                   dict(NODE, name="rig17", queued=2)]}
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -105,34 +105,34 @@ cd "$SANDBOX"
 
 echo "== get: a held, planned job =="
 out="$("$K2" compute get h1 2>&1)"
-expect_has "held, with where it would go" "$out" "job h1000000: held on this server (auto); planned: k2n12"
-expect_has "the placement line says planned for" "$out" "  planned for k2n12 (auto, v2): soonest start"
-expect_not "never placed on" "$out" "placed on k2n12"
+expect_has "held, with where it would go" "$out" "job h1000000: held on this server (auto); planned: rig12"
+expect_has "the placement line says planned for" "$out" "  planned for rig12 (auto, v2): soonest start"
+expect_not "never placed on" "$out" "placed on rig12"
 
 echo "== get: a queued job whose node is only planned =="
 out="$("$K2" compute get p1 2>&1)"
-expect_has "the node is planned, not bound" "$out" "job p1000000 on k2n12 (planned: held on this server): queued"
-expect_has "planned for" "$out" "  planned for k2n12 (auto, v2): soonest start"
+expect_has "the node is planned, not bound" "$out" "job p1000000 on rig12 (planned: held on this server): queued"
+expect_has "planned for" "$out" "  planned for rig12 (auto, v2): soonest start"
 
 echo "== get: a job bound to its node is unchanged =="
 out="$("$K2" compute get b1 2>&1)"
-expect_has "bound" "$out" "job b1000000 on k2n12: queued"
-expect_has "placed on" "$out" "  placed on k2n12 (auto, v2): soonest start"
+expect_has "bound" "$out" "job b1000000 on rig12: queued"
+expect_has "placed on" "$out" "  placed on rig12 (auto, v2): soonest start"
 
 echo "== jobs: a planned job is a held row =="
 out="$("$K2" compute jobs 2>&1)"
 row="$(grep '^p1000000' <<<"$out")"
 expect_has "held (auto)" "$row" "held (auto)"
-expect_has "where it would go" "$row" "would go to k2n12"
+expect_has "where it would go" "$row" "would go to rig12"
 row="$(grep '^b1000000' <<<"$out")"
-expect_has "a bound job keeps its node" "$row" "k2n12"
+expect_has "a bound job keeps its node" "$row" "rig12"
 expect_not "and no would-go" "$row" "would go to"
 
 echo "== nodes: held jobs planned here =="
 out="$("$K2" compute nodes 2>&1)"
-expect_has "heldPlanned 11" "$(grep '^k2n12' <<<"$out")" "queued 13 (this server, yours 0; 11 held, planned here)"
-expect_has "heldPlanned 0: as before" "$(grep '^k2n15' <<<"$out")" "queued 4 (this server, yours 0) "
-expect_has "no heldPlanned (an older daemon): as before" "$(grep '^k2n17' <<<"$out")" "queued 2 (this server, yours 0) "
+expect_has "heldPlanned 11" "$(grep '^rig12' <<<"$out")" "queued 13 (this server, yours 0; 11 held, planned here)"
+expect_has "heldPlanned 0: as before" "$(grep '^rig15' <<<"$out")" "queued 4 (this server, yours 0) "
+expect_has "no heldPlanned (an older daemon): as before" "$(grep '^rig17' <<<"$out")" "queued 2 (this server, yours 0) "
 
 echo "compute_planned: $pass passed, $fail failed"
 [ "$fail" = 0 ]

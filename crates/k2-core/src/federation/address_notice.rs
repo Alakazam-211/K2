@@ -15,7 +15,7 @@
 //! { "notice": { "v": 2, "fingerprint": "<sha256 spki hex>",
 //!               "to_fingerprint": "<the receiving server's fingerprint>",
 //!               "old_address": { "subdomain": "afs", "base_url": "" },
-//!               "new_address": { "subdomain": "k2n1-m4", "base_url": "" },
+//!               "new_address": { "subdomain": "rig1-mac", "base_url": "" },
 //!               "issued_at": "<RFC 3339>", "seq": 1760000000000 },
 //!   "sig": "<base64 ASN.1 ECDSA P-256 over NOTICE_SIG_PREFIX + canonical JSON of notice>" }
 //! ```
@@ -1072,7 +1072,7 @@ mod tests {
     #[test]
     fn sign_then_verify_round_trips() {
         let k = keypair();
-        let n = notice(&k, ("afs", ""), ("k2n1-m4", ""), 7, Utc::now());
+        let n = notice(&k, ("afs", ""), ("rig1-mac", ""), 7, Utc::now());
         let s = sign(&n, &k).expect("sign");
         verify(&s, &k.public_key_pem()).expect("verify");
         // Through the wire encoding too.
@@ -1102,12 +1102,12 @@ mod tests {
         let before = store.get(&f).expect("peer").clone();
         let other_before = store.get(&fo).expect("other").clone();
         let now = Utc::now();
-        let s = sign(&notice(&k, ("afs", ""), ("k2n1-m4", ""), 10, now), &k).expect("sign");
+        let s = sign(&notice(&k, ("afs", ""), ("rig1-mac", ""), 10, now), &k).expect("sign");
 
         let applied = apply(&mut store, &body(&s), &local(), now).expect("apply");
         assert_eq!(applied.changed, vec!["subdomain"]);
         let after = store.get(&f).expect("peer");
-        assert_eq!(after.subdomain, "k2n1-m4");
+        assert_eq!(after.subdomain, "rig1-mac");
         assert_eq!(after.address_seq, 10);
         assert_eq!(after.address_updated_at, Some(now));
         // Never a key, trust, capability or epoch.
@@ -1138,7 +1138,7 @@ mod tests {
             assert_eq!(err.status(), "400 Bad Request");
             assert_eq!(store.get(&f).expect("peer"), &before, "{bad}");
         }
-        for good in ["k2n1-m4", "K2N1-M4.k2.dev", "a"] {
+        for good in ["rig1-mac", "RIG1-MAC.k2.dev", "a"] {
             let (mut store, _, b) = moved_to(good, "");
             apply(&mut store, &b, &local(), Utc::now()).unwrap_or_else(|e| panic!("{good}: {e}"));
         }
@@ -1237,10 +1237,10 @@ mod tests {
     fn a_notice_that_changes_nothing_writes_nothing() {
         let k = keypair();
         let mut store = PeerStore::default();
-        let f = trusted(&mut store, &k, "k2n1-m4", "");
+        let f = trusted(&mut store, &k, "rig1-mac", "");
         let before = store.get(&f).expect("peer").clone();
         // The peer already stores the new address.
-        let s = sign(&notice(&k, ("afs", ""), ("k2n1-m4", ""), 7, Utc::now()), &k).expect("sign");
+        let s = sign(&notice(&k, ("afs", ""), ("rig1-mac", ""), 7, Utc::now()), &k).expect("sign");
         let a = apply(&mut store, &body(&s), &local(), Utc::now()).expect("no-op is accepted");
         assert!(!a.wrote, "{a:?}");
         assert!(a.changed.is_empty());
@@ -1364,14 +1364,14 @@ mod tests {
         let mut store = PeerStore::default();
         let f = trusted(&mut store, &k, "AFS.k2.dev", "http://192.168.1.5:38471/");
         let s = sign(
-            &notice(&k, ("afs", "http://192.168.1.5:38471"), ("k2n1-m4", "http://192.168.1.77:38471"), 1, Utc::now()),
+            &notice(&k, ("afs", "http://192.168.1.5:38471"), ("rig1-mac", "http://192.168.1.77:38471"), 1, Utc::now()),
             &k,
         )
         .expect("sign");
         let a = apply(&mut store, &body(&s), &local(), Utc::now()).expect("apply");
         assert_eq!(a.changed, vec!["subdomain", "base_url"]);
         let p = store.get(&f).expect("peer");
-        assert_eq!(p.subdomain, "k2n1-m4");
+        assert_eq!(p.subdomain, "rig1-mac");
         assert_eq!(p.base_url, "http://192.168.1.77:38471");
     }
 
@@ -1399,10 +1399,10 @@ mod tests {
             assert_eq!(observe_and_issue(&PeerAddress::new("afs", ""), &store, now).expect("obs"), IssueOutcome::Unchanged);
             // Losing the tunnel is not announced.
             assert_eq!(observe_and_issue(&PeerAddress::default(), &store, now).expect("obs"), IssueOutcome::Unchanged);
-            match observe_and_issue(&PeerAddress::new("k2n1-m4", ""), &store, now).expect("obs") {
+            match observe_and_issue(&PeerAddress::new("rig1-mac", ""), &store, now).expect("obs") {
                 IssueOutcome::Issued { seq, address, peers } => {
                     assert!(seq >= u64::try_from(now.timestamp_millis()).expect("ms"));
-                    assert_eq!(address, PeerAddress::new("k2n1-m4", ""));
+                    assert_eq!(address, PeerAddress::new("rig1-mac", ""));
                     assert_eq!(peers.len(), 2);
                     assert!(!peers.contains(&pending), "a pending peer is not told");
                 }
@@ -1412,7 +1412,7 @@ mod tests {
             assert_eq!(rows.len(), 2);
             for row in rows.values() {
                 assert_eq!(row.peer_known, PeerAddress::new("afs", ""));
-                assert_eq!(row.target, PeerAddress::new("k2n1-m4", ""));
+                assert_eq!(row.target, PeerAddress::new("rig1-mac", ""));
                 assert_eq!(row.status, NoticeStatus::Pending);
             }
             store.remove(&pending);
@@ -1428,7 +1428,7 @@ mod tests {
             let store = peers_with(&[(&peer, "pp")]);
             let t0 = Utc::now();
             observe_and_issue(&PeerAddress::new("afs", ""), &store, t0).expect("baseline");
-            observe_and_issue(&PeerAddress::new("k2n1-m4", ""), &store, t0).expect("issue");
+            observe_and_issue(&PeerAddress::new("rig1-mac", ""), &store, t0).expect("issue");
 
             // A ClosedPort fake: a real dial that is refused.
             let closed = crate::test_env::ClosedPort::new();
@@ -1464,10 +1464,10 @@ mod tests {
             })
             .expect("drain");
             assert_eq!(res[0].1, DeliveryOutcome::Delivered);
-            assert_eq!(receiver.get(&my_fp_at_peer).expect("me").subdomain, "k2n1-m4");
+            assert_eq!(receiver.get(&my_fp_at_peer).expect("me").subdomain, "rig1-mac");
             let row = rows().expect("rows").into_values().next().expect("row");
             assert_eq!(row.status, NoticeStatus::Delivered);
-            assert_eq!(row.peer_known, PeerAddress::new("k2n1-m4", ""));
+            assert_eq!(row.peer_known, PeerAddress::new("rig1-mac", ""));
             // Nothing more to send.
             assert!(drain_with(&me, &store, t1 + Duration::hours(3), |_, _| panic!("delivered")).expect("drain").is_empty());
         });
@@ -1480,7 +1480,7 @@ mod tests {
             let store = peers_with(&[(&keypair(), "old")]);
             let t0 = Utc::now();
             observe_and_issue(&PeerAddress::new("afs", ""), &store, t0).expect("baseline");
-            observe_and_issue(&PeerAddress::new("k2n1-m4", ""), &store, t0).expect("issue");
+            observe_and_issue(&PeerAddress::new("rig1-mac", ""), &store, t0).expect("issue");
             let res = drain_with(&me, &store, t0, |_, _| SendResult::Http(404, r#"{"error":"not found"}"#.into()))
                 .expect("drain");
             assert!(matches!(&res[0].1, DeliveryOutcome::Failed { reason, .. } if reason == "peer_too_old"), "{res:?}");
@@ -1582,7 +1582,7 @@ mod tests {
             let t0 = Utc::now();
             let lan = "http://192.168.1.40:38471";
             observe_and_issue(&PeerAddress::new("afs", lan), &store, t0).expect("baseline");
-            observe_and_issue(&PeerAddress::new("k2n1-m4", lan), &store, t0).expect("issue");
+            observe_and_issue(&PeerAddress::new("rig1-mac", lan), &store, t0).expect("issue");
             let row = rows().expect("rows").into_values().next().expect("row");
             assert_eq!(row.alternates, vec![PeerAddress::new("192.168.1.40:38471", lan)]);
 
@@ -1599,7 +1599,7 @@ mod tests {
 
             let res = drain_with(&me, &store, t0, |_, b| deliver_to(&mut receiver, &rcv, b, t0)).expect("drain");
             assert_eq!(res[0].1, DeliveryOutcome::Delivered, "{res:?}");
-            assert_eq!(receiver.get(&f).expect("me").subdomain, "k2n1-m4");
+            assert_eq!(receiver.get(&f).expect("me").subdomain, "rig1-mac");
             assert_eq!(rows().expect("rows").into_values().next().expect("row").status, NoticeStatus::Delivered);
         });
     }
@@ -1612,7 +1612,7 @@ mod tests {
             let store = peers_with(&[(&peer, "p")]);
             let t0 = Utc::now();
             observe_and_issue(&PeerAddress::new("afs", ""), &store, t0).expect("baseline");
-            observe_and_issue(&PeerAddress::new("k2n1-m4", ""), &store, t0).expect("issue");
+            observe_and_issue(&PeerAddress::new("rig1-mac", ""), &store, t0).expect("issue");
             // The peer pinned us under a name we never announced.
             let mut receiver = PeerStore::default();
             trusted(&mut receiver, &me, "someone-else", "");

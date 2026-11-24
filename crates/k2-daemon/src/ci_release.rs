@@ -790,7 +790,7 @@ mod tests {
         assert_eq!(only_keys_of(&json!({"onlyKeys": []})).unwrap(), Some(vec![]));
         assert_eq!(only_keys_of(&json!({"onlyKeys": [fp]})).unwrap(), Some(vec![fp.clone()]));
         assert_eq!(only_keys_of(&json!({"onlyKeys": format!("{fp}, {}", "b".repeat(64))})).unwrap().unwrap().len(), 2);
-        assert!(only_keys_of(&json!({"onlyKeys": ["k2n7-vin"]})).is_err());
+        assert!(only_keys_of(&json!({"onlyKeys": ["rig7-vps"]})).is_err());
         assert!(only_keys_of(&json!({"onlyKeys": [1]})).is_err());
         assert!(only_keys_of(&json!({"onlyKeys": true})).is_err());
     }

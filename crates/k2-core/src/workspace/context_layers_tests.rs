@@ -653,12 +653,12 @@ fn render_users_roster_body_shows_real_names_beside_usernames() {
         assert!(body.contains("| julie — Julie Park | member | no |"), "body:\n{body}");
         assert!(body.contains("| owner | owner | no |"), "nothing linked: the owner row; body:\n{body}");
         // Linked: the owner is that login, with its name.
-        crate::connect_users::add_user("z3thon", "password1").expect("add z3thon");
-        crate::connect_users::set_role("z3thon", crate::connect_users::Role::Owner).expect("owner");
-        crate::connect_users::set_names("z3thon", Some("Rosson"), Some("Long")).expect("names");
-        crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+        crate::connect_users::add_user("zoe", "password1").expect("add zoe");
+        crate::connect_users::set_role("zoe", crate::connect_users::Role::Owner).expect("owner");
+        crate::connect_users::set_names("zoe", Some("Rosson"), Some("Long")).expect("names");
+        crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["zoe"] })).expect("link");
         let body = render_users_roster_body("/unused");
-        assert!(body.contains("| z3thon — Rosson Long | owner | no |"), "body:\n{body}");
+        assert!(body.contains("| zoe — Rosson Long | owner | no |"), "body:\n{body}");
         assert!(!body.contains("Rosson |"), "ownerDisplayName is not read; body:\n{body}");
         assert!(body.contains("| member1 | member | no |"), "nameless rows unchanged; body:\n{body}");
         assert!(body.contains("use the username"), "teaches that names are context only; body:\n{body}");

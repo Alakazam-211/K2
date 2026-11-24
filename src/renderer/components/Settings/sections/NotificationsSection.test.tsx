@@ -617,26 +617,26 @@ describe('Settings → Notifications: People accordion (Rosson 2026-10-18)', () 
 })
 
 describe('Settings → Notifications: owner hint (person key, Q6)', () => {
-  it('says signing in as z3thon counts as you, from aliases when viewing as the owner token', async () => {
-    cli.prefs = prefs({ aliases: ['z3thon'] })
+  it('says signing in as zoe counts as you, from aliases when viewing as the owner token', async () => {
+    cli.prefs = prefs({ aliases: ['zoe'] })
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-owner-hint')).toBeTruthy())
-    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as z3thon counts as you here.')
+    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as zoe counts as you here.')
   })
 
   it('lists every linked login', async () => {
-    cli.prefs = prefs({ aliases: ['rosson', 'z3thon'] })
+    cli.prefs = prefs({ aliases: ['rosson', 'zoe'] })
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-owner-hint')).toBeTruthy())
-    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as rosson or z3thon counts as you here.')
+    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as rosson or zoe counts as you here.')
   })
 
   it('a linked login (principal owner, not the owner token) sees the hint too', async () => {
     asAdmin()
-    cli.prefs = prefs({ principal: 'owner', aliases: ['z3thon'] })
+    cli.prefs = prefs({ principal: 'owner', aliases: ['zoe'] })
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-owner-hint')).toBeTruthy())
-    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as z3thon counts as you here.')
+    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as zoe counts as you here.')
   })
 
   it('no hint when nothing maps (single owner token, no Owner login)', async () => {
@@ -690,34 +690,34 @@ function YouProbe({ authors }: { authors: string[] }): React.JSX.Element {
 
 describe('"You" for owner-linked logins (chat/ticket author stamps)', () => {
   it('owner viewer: posts by a linked login read "You"; others keep their name', async () => {
-    cli.prefs = prefs({ aliases: ['z3thon'] })
-    render(<YouProbe authors={['owner', 'z3thon', 'gina']} />)
-    await waitFor(() => expect(screen.getByTestId('you-z3thon').textContent).toBe('You'))
+    cli.prefs = prefs({ aliases: ['zoe'] })
+    render(<YouProbe authors={['owner', 'zoe', 'gina']} />)
+    await waitFor(() => expect(screen.getByTestId('you-zoe').textContent).toBe('You'))
     expect(screen.getByTestId('you-owner').textContent).toBe('You')
     expect(screen.getByTestId('you-gina').textContent).toBe('gina')
   })
 
   it('logged in AS the linked login (principal owner): its own posts and the owner token posts are "You"', async () => {
     asAdmin()
-    cli.prefs = prefs({ principal: 'owner', aliases: ['z3thon'] })
-    render(<YouProbe authors={['owner', 'z3thon']} />)
-    await waitFor(() => expect(screen.getByTestId('you-z3thon').textContent).toBe('You'))
+    cli.prefs = prefs({ principal: 'owner', aliases: ['zoe'] })
+    render(<YouProbe authors={['owner', 'zoe']} />)
+    await waitFor(() => expect(screen.getByTestId('you-zoe').textContent).toBe('You'))
     expect(screen.getByTestId('you-owner').textContent).toBe('You')
   })
 
   it('another person never sees the owner-linked login as "You"', async () => {
     asAdmin()
-    cli.prefs = prefs({ principal: 'gina', aliases: ['z3thon'] })
-    render(<YouProbe authors={['z3thon']} />)
+    cli.prefs = prefs({ principal: 'gina', aliases: ['zoe'] })
+    render(<YouProbe authors={['zoe']} />)
     await waitFor(() => expect(cli.gets).toContain('notify/prefs'))
-    expect(screen.getByTestId('you-z3thon').textContent).toBe('z3thon')
+    expect(screen.getByTestId('you-zoe').textContent).toBe('zoe')
   })
 
   it('a server without Thread push: today\'s rule (only owner is "You"), no fetch', async () => {
     noteServerVersion('local', null, [])
-    render(<YouProbe authors={['owner', 'z3thon']} />)
+    render(<YouProbe authors={['owner', 'zoe']} />)
     expect(screen.getByTestId('you-owner').textContent).toBe('You')
-    expect(screen.getByTestId('you-z3thon').textContent).toBe('z3thon')
+    expect(screen.getByTestId('you-zoe').textContent).toBe('zoe')
     expect(cli.gets).not.toContain('notify/prefs')
   })
 })

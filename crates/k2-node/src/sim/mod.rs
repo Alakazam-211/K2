@@ -22,7 +22,7 @@
 //!   wall denies `/var/k2sim` and the socket (Seatbelt, §3.3).
 //!
 //! The service shape (S0's question, IR-10): a LaunchDaemon with
-//! `UserName=_k2sim` in the system domain. The node's own smoke on k2n1-m4
+//! `UserName=_k2sim` in the system domain. The node's own smoke on rig1-mac
 //! ran a whole Simulator session (create, boot, install, launch, Safari,
 //! the helper's frames and taps) as the node's hidden job user, which runs
 //! in exactly that shape (dev.k2.node is a LaunchDaemon with `UserName`),

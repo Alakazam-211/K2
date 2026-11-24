@@ -13,7 +13,7 @@ import { expect, test } from '@playwright/test'
 
 /** Per canvas (a plain one, then one drawn from the SVG):
  *  getImageData / toDataURL / toBlob, each 'ok' or what went wrong.
- *  Measured 2026-10-27 (Playwright 1.61 on macOS, k2n3-m1). */
+ *  Measured 2026-10-27 (Playwright 1.61 on macOS, rig3-mac). */
 const EXPECTED: Record<string, string> = {
   chromium: 'plain ok/ok/ok; svg ok/ok/ok',
   // WebKit doesn't taint the SVG canvas (getImageData works), but in an

@@ -72,6 +72,8 @@ import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspaceP
 import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { MailAddressCapLine } from './MailAddressCapLine'
+import { EmptyRow, LoadingRow } from './settingsListRows'
 import { VIRTUAL_DESKTOP_FEATURE } from '@/components/Desktop/desktop-state'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
 import { BetaTag, Button, Callout, Input, OverflowMenu, SearchField, Spinner, Surface, Tag, Toggle } from '@/components/ui'
@@ -1245,26 +1247,6 @@ function BackToWorkspaces({ onBack }: { onBack: () => void }): React.JSX.Element
       <Button variant="quiet" onClick={onBack} data-testid="workspaces-back">
         &larr; All workspaces
       </Button>
-    </div>
-  )
-}
-
-/** A card row while something loads: the spinner and what is loading. */
-function LoadingRow({ label, testId }: { label: string; testId?: string }): React.JSX.Element {
-  return (
-    <div className="px-4 py-3 flex items-center gap-2 type-row text-[var(--color-text-secondary)]" role="status" data-testid={testId}>
-      <Spinner />
-      {label}&hellip;
-    </div>
-  )
-}
-
-/** A card row for an empty list: what would show here, and how to add one. */
-function EmptyRow({ title, hint, testId }: { title: string; hint: string; testId?: string }): React.JSX.Element {
-  return (
-    <div className="px-4 py-3" data-testid={testId}>
-      <div className="type-row text-[var(--color-text-primary)]">{title}</div>
-      <div className={SETTING_ROW_HINT}>{hint}</div>
     </div>
   )
 }
@@ -5053,46 +5035,6 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
 // refused server-side). Same switch as `k2 mail sending <ws> <mode>`.
 // Not on the projects row, so no fetchProjects() here.
 type MailAgentSendMode = 'off' | 'approval' | 'on'
-
-// How many hosted addresses this workspace's agent may create (0.46.18):
-// the daemon's own line from GET /cli/mail/config?workspace=
-// (`workspace.addressCap.text`), e.g. "Addresses: unlimited (this agent
-// manages email hosting)". Read only; the owner sets a cap with
-// `k2 hostmail config --workspace <ws> --address-cap <n>|none`. Hidden
-// where hosted mail can't run. Read again when "manage hosted mail" flips.
-function MailAddressCapLine({
-  project,
-}: {
-  project: ProjectWithWorkspaces
-}): React.JSX.Element | null {
-  const [text, setText] = useState<string | null>(null)
-  const manages = project.mailManageEnabled ?? 0
-
-  useEffect(() => {
-    let cancelled = false
-    daemonCliGet<{
-      supported?: boolean
-      workspace?: { addressCap?: { text?: string } }
-    }>(primaryScope(), 'mail/config', { workspace: project.path })
-      .then((d) => {
-        if (cancelled) return
-        setText(d.supported === true ? (d.workspace?.addressCap?.text ?? null) : null)
-      })
-      .catch(() => {
-        if (!cancelled) setText(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [project.path, manages])
-
-  if (!text) return null
-  return (
-    <div data-testid="mail-address-cap" className="px-4 pb-3 type-hint text-[var(--color-text-secondary)]">
-      {text}
-    </div>
-  )
-}
 
 function MailAgentSendControl({
   project,

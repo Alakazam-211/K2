@@ -20,6 +20,8 @@
 //!   order that works whatever exists (PA31 step 4, PA34).
 
 use serde::Deserialize;
+use k2_brand::{CLI_NAME, PRODUCT_NAME};
+use k2_brand::product_name;
 
 /// `pg dual <op>` operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +142,7 @@ impl ForceOids {
             return Err("force-rls: at most 5000 tables");
         }
         if self.oids.iter().any(|o| *o < 16384) {
-            return Err("force-rls: a system oid (below 16384) is never a K2 table");
+            return Err(concat!("force-rls: a system oid (below 16384) is never a ", product_name!(), " table"));
         }
         Ok(())
     }
@@ -165,7 +167,7 @@ pub fn wal_keep_ok(mb: u32) -> bool {
 /// the reload the helper sends.
 pub fn logical_conf(wal_keep_mb: u32) -> String {
     format!(
-        "# K2 (k2-root-helper pg logical-conf; do not edit): live moves.\n\
+        "# {PRODUCT_NAME} (k2-root-helper pg logical-conf; do not edit): live moves.\n\
          wal_level = logical\n\
          max_slot_wal_keep_size = {wal_keep_mb}MB\n"
     )
@@ -229,7 +231,7 @@ pub fn setup_db_sql(n: &DualNames, db: &str) -> String {
          REVOKE ALL ON SCHEMA \"{fs}\" FROM PUBLIC;\n\
          CREATE FUNCTION \"{fs}\".freeze() RETURNS event_trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $k2f$\n\
          BEGIN RAISE EXCEPTION '{fe}: a Postgres move is replicating this database; schema changes wait'\n\
-         USING HINT = 'k2 db upgrade {db} --abort or --switch first'; END $k2f$;\n\
+         USING HINT = '{CLI_NAME} db upgrade {db} --abort or --switch first'; END $k2f$;\n\
          REVOKE ALL ON FUNCTION \"{fs}\".freeze() FROM PUBLIC;\n\
          CREATE EVENT TRIGGER {ft} ON ddl_command_start EXECUTE FUNCTION \"{fs}\".freeze();\n\
          COMMENT ON EVENT TRIGGER {ft} IS '{mark}';\n\

@@ -28,6 +28,8 @@
 //! drop-in names the file by absolute path. So no unit picks one up by bare
 //! name or `ImportCredential=` glob. Cred names in systemd's reserved
 //! credential namespaces ([`RESERVED_PREFIXES`]) are refused as well.
+use k2_brand::{CLI_NAME, PRODUCT_NAME};
+use k2_brand::product_name;
 
 /// K2's own credential store: root 0700, outside systemd's search path.
 pub const CREDSTORE_DIR: &str = "/etc/k2/credstore.encrypted";
@@ -279,16 +281,16 @@ pub fn deny_reason(unit: &str, daemon_units: &[String]) -> Option<&'static str> 
         return Some("not a plain unit name (no templates, instances or prefix names)");
     }
     if daemon_units.iter().any(|d| d == unit) {
-        return Some("a K2 daemon unit (daemon.toml)");
+        return Some(concat!("a ", product_name!(), " daemon unit (daemon.toml)"));
     }
     if K2_OWN_UNITS.contains(&unit) {
-        return Some("one of K2's own units");
+        return Some(concat!("one of ", product_name!(), "'s own units"));
     }
     let stem = unit.strip_suffix(".service").unwrap_or(unit);
     for (prefix, middle) in K2_UNIT_FAMILIES {
         if let Some(rest) = stem.strip_prefix(prefix) {
             if middle.is_none_or(|m| rest.contains(m)) {
-                return Some("a unit K2 generates");
+                return Some(concat!("a unit ", product_name!(), " generates"));
             }
         }
     }
@@ -519,7 +521,7 @@ pub fn dropin_file(cred: &str) -> String {
 pub fn cred_dropin(cred: &str) -> Option<String> {
     cred_name_ok(cred).then(|| {
         format!(
-            "# Written by K2 (k2 vault systemd-cred). K2 rewrites or removes this file; don't edit it.\n\
+            "# Written by {PRODUCT_NAME} ({CLI_NAME} vault systemd-cred). {PRODUCT_NAME} rewrites or removes this file; don't edit it.\n\
              [Service]\n\
              LoadCredentialEncrypted={cred}:{}\n",
             cred_path(cred)

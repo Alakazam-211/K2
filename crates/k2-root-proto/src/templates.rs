@@ -4,6 +4,8 @@
 //! byte-compare each other's templates.
 
 use crate::paths::{STALWART_BIN, STALWART_CONFIG, STALWART_USER};
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
 /// The service unit K2 writes (upstream ships none for our layout).
 /// `recovery_admin_password`: present during install (deterministic
@@ -22,7 +24,7 @@ pub fn systemd_unit(recovery_admin_password: Option<&str>) -> String {
     };
     format!(
         "[Unit]\n\
-         Description=Stalwart mail server (managed by the K2 Mail supervisor)\n\
+         Description=Stalwart mail server (managed by the {PRODUCT_NAME} Mail supervisor)\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
          \n\
@@ -108,7 +110,7 @@ pub fn hardening_dropin() -> &'static str {
 /// The daemon re-asserts it every boot ([`handoff_dropin`] bytes compare),
 /// so a box on an older drop-in picks up a new line on update.
 pub fn handoff_dropin() -> &'static str {
-    "# K2 runtime stage H (front-door hand-off). Written by k2-root-helper\n\
+    concat!("# ", product_name!(), " runtime stage H (front-door hand-off). Written by k2-root-helper\n\
      # `daemon handoff-dropin install`; remove with `... remove`.\n\
      [Service]\n\
      KillMode=process\n\
@@ -119,7 +121,7 @@ pub fn handoff_dropin() -> &'static str {
      RuntimeDirectoryMode=0700\n\
      RuntimeDirectoryPreserve=yes\n\
      ExecStop=\n\
-     ExecStop=/bin/sh -c 'kill -TERM \"$$MAINPID\" 2>/dev/null; while kill -0 \"$$MAINPID\" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid\n"
+     ExecStop=/bin/sh -c 'kill -TERM \"$$MAINPID\" 2>/dev/null; while kill -0 \"$$MAINPID\" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid\n")
 }
 
 /// front443's socket unit (`/etc/systemd/system/k2-front-443.socket`,
@@ -145,10 +147,10 @@ pub fn front_socket_unit(service_unit: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "# K2 front443: the box :443 SNI router's socket. Written by k2-root-helper\n\
+        "# {PRODUCT_NAME} front443: the box :443 SNI router's socket. Written by k2-root-helper\n\
          # `front install`; remove with `front remove`.\n\
          [Unit]\n\
-         Description=K2 box :443 front (SNI pass-through router in the K2 daemon)\n\
+         Description=K2 box :443 front (SNI pass-through router in the {PRODUCT_NAME} daemon)\n\
          \n\
          [Socket]\n\
          ListenStream=[::]:443\n\
@@ -165,14 +167,14 @@ pub fn front_socket_unit(service_unit: &str) -> Option<String> {
 /// daemon inherits the socket's fd on every start, and the socket is
 /// listening before the daemon starts.
 pub fn front_dropin() -> &'static str {
-    "# K2 front443. Written by k2-root-helper `front install`; remove with\n\
+    concat!("# ", product_name!(), " front443. Written by k2-root-helper `front install`; remove with\n\
      # `front remove`.\n\
      [Unit]\n\
      Wants=k2-front-443.socket\n\
      After=k2-front-443.socket\n\
      \n\
      [Service]\n\
-     Sockets=k2-front-443.socket\n"
+     Sockets=k2-front-443.socket\n")
 }
 
 /// The :80 front's socket unit (`/etc/systemd/system/k2-front-80.socket`,
@@ -186,10 +188,10 @@ pub fn front80_socket_unit(service_unit: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "# K2 front: the box :80 redirect's socket. Written by k2-root-helper\n\
+        "# {PRODUCT_NAME} front: the box :80 redirect's socket. Written by k2-root-helper\n\
          # `front http install`; remove with `front http remove`.\n\
          [Unit]\n\
-         Description=K2 box :80 front (https redirect and ACME HTTP-01 in the K2 daemon)\n\
+         Description=K2 box :80 front (https redirect and ACME HTTP-01 in the {PRODUCT_NAME} daemon)\n\
          \n\
          [Socket]\n\
          ListenStream=[::]:80\n\
@@ -205,14 +207,14 @@ pub fn front80_socket_unit(service_unit: &str) -> Option<String> {
 /// The daemon unit's :80 drop-in (`<unit>.d/k2-front80.conf`). `Sockets=`
 /// adds to the :443 drop-in's (systemd merges the list).
 pub fn front80_dropin() -> &'static str {
-    "# K2 :80 front. Written by k2-root-helper `front http install`; remove\n\
+    concat!("# ", product_name!(), " :80 front. Written by k2-root-helper `front http install`; remove\n\
      # with `front http remove`.\n\
      [Unit]\n\
      Wants=k2-front-80.socket\n\
      After=k2-front-80.socket\n\
      \n\
      [Service]\n\
-     Sockets=k2-front-80.socket\n"
+     Sockets=k2-front-80.socket\n")
 }
 
 /// The recovery admin password the daemon may send to `mail render-unit`:
@@ -231,7 +233,7 @@ pub fn pg_ram_dropin() -> &'static str {
 /// `/etc/postgresql/<n>/main/conf.d/99-k2-ram.conf` (D29 engine fence).
 /// Byte-identical to the legacy `scripts/k2-pg-helper` body.
 pub fn pg_guc_conf() -> &'static str {
-    "# K2 D29 RAM fence — one query must not explode host RAM.\n\
+    concat!("# ", product_name!(), " D29 RAM fence — one query must not explode host RAM.\n\
      shared_buffers = 128MB\n\
      work_mem = 8MB\n\
      max_connections = 50\n\
@@ -239,7 +241,7 @@ pub fn pg_guc_conf() -> &'static str {
      max_parallel_workers_per_gather = 1\n\
      statement_timeout = 60s\n\
      idle_in_transaction_session_timeout = 60s\n\
-     temp_file_limit = 1GB\n"
+     temp_file_limit = 1GB\n")
 }
 
 #[cfg(test)]

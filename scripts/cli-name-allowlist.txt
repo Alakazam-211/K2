@@ -94,8 +94,6 @@
 1 cli crates/k2-root-helper/src/apps.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-root-helper/src/front.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-root-helper/src/pg_dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli crates/k2-root-proto/src/creds.rs debt: the command name typed out; use CLI_NAME or cli_name!()
-1 cli crates/k2-root-proto/src/pg_dual.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/policy.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k2-vault/src/vault/handoff_store.rs debt: the command name typed out; use CLI_NAME or cli_name!()
 1 cli crates/k5-cli/src/families/connections/write.rs debt: the command name typed out; the shell CLI's own lines, byte for byte (the k5 parity tests pin them); they go to cli_name!() with the bash CLI's; B4

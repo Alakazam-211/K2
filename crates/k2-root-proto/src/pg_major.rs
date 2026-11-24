@@ -16,6 +16,8 @@
 //! Nothing derives a port from a major: the first cluster keeps
 //! [`PRIMARY_PORT`], each further one takes the first free port in
 //! [`BAND`], and K2 records it (`sql_clusters`).
+use k2_brand::PRODUCT_NAME;
+use k2_brand::product_name;
 
 /// Majors a database may be created on or moved to.
 pub const SUPPORTED: &[u32] = &[16, 17];
@@ -73,7 +75,7 @@ impl Refusal {
     pub fn hint(&self) -> String {
         let sup = SUPPORTED.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
         match self {
-            Self::Unknown(m) => format!("Postgres {m} is not a major K2 knows (supported: {sup})"),
+            Self::Unknown(m) => format!("Postgres {m} is not a major {PRODUCT_NAME} knows (supported: {sup})"),
             Self::Unsupported(m) => format!("Postgres {m} is not supported for databases yet (supported: {sup})"),
             Self::PreviewOnly(m) => format!("Postgres {m} is a preview: the owner may use it with --preview"),
             Self::Eol(m) => format!(
@@ -81,7 +83,7 @@ impl Refusal {
                 eol(*m).map(|(y, mo, d)| format!("{y:04}-{mo:02}-{d:02}")).unwrap_or_default()
             ),
             Self::NotUpward { from, to } => {
-                format!("a database moves upward only: {from} → {to} is not a move K2 makes")
+                format!("a database moves upward only: {from} → {to} is not a move {PRODUCT_NAME} makes")
             }
         }
     }
@@ -352,12 +354,12 @@ pub fn instance_slice_dropin(major: u32) -> String {
 pub const UNATTENDED_DROPIN: &str = "/etc/apt/apt.conf.d/51k2-pgdg-unattended";
 
 pub fn unattended_dropin() -> &'static str {
-    "// K2: security and minor updates from apt.postgresql.org for the Postgres\n\
-     // majors K2 installed (pinned by /etc/apt/preferences.d/k2-pgdg.pref).\n\
+    concat!("// ", product_name!(), ": security and minor updates from apt.postgresql.org for the Postgres\n\
+     // majors ", product_name!(), " installed (pinned by /etc/apt/preferences.d/k2-pgdg.pref).\n\
      // Written by k2-root-helper `pg add-major`.\n\
      Unattended-Upgrade::Origins-Pattern {\n\
      \t\"origin=apt.postgresql.org,codename=${distro_codename}-pgdg\";\n\
-     };\n"
+     };\n")
 }
 
 /// Every psql the helper runs as postgres gets this in its environment:
@@ -424,7 +426,7 @@ pub struct MoveLogin {
 impl MoveLogin {
     pub fn validate(&self) -> Result<(), &'static str> {
         if !role_name_ok(&self.role) {
-            return Err("move-restore: the owner is not a K2 role name");
+            return Err(concat!("move-restore: the owner is not a ", product_name!(), " role name"));
         }
         if self.password.is_empty() || self.password.len() > 512 || self.password.chars().any(|c| c.is_control()) {
             return Err("move-restore: the owner's password is empty, too long or has control characters");
@@ -560,7 +562,7 @@ pub fn os_release_codename(text: &str) -> Option<String> {
 pub fn pgdg_sources(codename: &str) -> Option<String> {
     distro_major(codename)?;
     Some(format!(
-        "# K2: apt.postgresql.org for the Postgres majors K2 runs side by side.\n\
+        "# {PRODUCT_NAME}: apt.postgresql.org for the Postgres majors {PRODUCT_NAME} runs side by side.\n\
          # Written by k2-root-helper `pg add-major`; pinned by {PGDG_PREF}.\n\
          Types: deb\n\
          URIs: {PGDG_URI}\n\
@@ -589,7 +591,7 @@ pub fn pgdg_pref(codename: &str) -> Option<String> {
         five.extend(packages(m));
     }
     Some(format!(
-        "# K2: PGDG may only provide the Postgres majors K2 asked for.\n\
+        "# {PRODUCT_NAME}: PGDG may only provide the Postgres majors {PRODUCT_NAME} asked for.\n\
          # Written by k2-root-helper `pg add-major`.\n\
          Package: *\n\
          Pin: origin {PGDG_ORIGIN}\n\
@@ -607,22 +609,22 @@ pub fn pgdg_pref(codename: &str) -> Option<String> {
 }
 
 pub fn createcluster_dropin() -> &'static str {
-    "# K2: never create (and start) a cluster when a postgresql-<n> package\n\
-     # is installed; K2 creates clusters itself (`pg ensure-cluster`).\n\
-     create_main_cluster = false\n"
+    concat!("# ", product_name!(), ": never create (and start) a cluster when a postgresql-<n> package\n\
+     # is installed; ", product_name!(), " creates clusters itself (`pg ensure-cluster`).\n\
+     create_main_cluster = false\n")
 }
 
 /// `conf.d/98-k2-cluster.conf` of a K2-created cluster (§4).
 pub fn cluster_conf() -> &'static str {
-    "# K2 cluster settings. Written by k2-root-helper `pg ensure-cluster`.\n\
+    concat!("# ", product_name!(), " cluster settings. Written by k2-root-helper `pg ensure-cluster`.\n\
      listen_addresses = 'localhost'\n\
      password_encryption = 'scram-sha-256'\n\
-     wal_level = logical\n"
+     wal_level = logical\n")
 }
 
 /// The shared slice: every K2 cluster together under one cap (V47).
 pub fn slice_unit() -> &'static str {
-    "# K2: all Postgres clusters together. Written by k2-root-helper.\n\
+    concat!("# ", product_name!(), ": all Postgres clusters together. Written by k2-root-helper.\n\
      [Unit]\n\
      Description=K2 Postgres clusters (shared memory cap)\n\
      Before=slices.target\n\
@@ -631,13 +633,13 @@ pub fn slice_unit() -> &'static str {
      MemoryAccounting=yes\n\
      MemoryHigh=25%\n\
      MemoryMax=40%\n\
-     CPUWeight=50\n"
+     CPUWeight=50\n")
 }
 
 pub fn slice_dropin() -> &'static str {
-    "# K2: every postgresql@ instance in the shared slice.\n\
+    concat!("# ", product_name!(), ": every postgresql@ instance in the shared slice.\n\
      [Service]\n\
-     Slice=k2-postgres.slice\n"
+     Slice=k2-postgres.slice\n")
 }
 
 // ── Parsers ─────────────────────────────────────────────────────────────
@@ -744,7 +746,7 @@ pub fn apt_sim_refusal(sim: &str, sew_major: Option<u32>) -> Option<String> {
         match op {
             "Remv" | "Purg" => {
                 return Some(format!(
-                    "apt_would_remove: the install would remove {name}{}; K2 never removes packages (nothing changed)",
+                    "apt_would_remove: the install would remove {name}{}; {PRODUCT_NAME} never removes packages (nothing changed)",
                     sew_note(server_major)
                 ))
             }
@@ -752,7 +754,7 @@ pub fn apt_sim_refusal(sim: &str, sew_major: Option<u32>) -> Option<String> {
             // version in brackets = a version change of an installed package.
             "Inst" if guarded && w.next().is_some_and(|t| t.starts_with('[')) => {
                 return Some(format!(
-                    "apt_would_change_installed: the install would replace the installed {name}{}; K2 never changes an installed Postgres package (nothing changed)",
+                    "apt_would_change_installed: the install would replace the installed {name}{}; {PRODUCT_NAME} never changes an installed Postgres package (nothing changed)",
                     sew_note(server_major)
                 ))
             }
@@ -780,7 +782,7 @@ impl CopyRolesRequest {
         let mut seen = std::collections::HashSet::new();
         for r in &self.roles {
             if !role_name_ok(r) {
-                return Err("copy-roles: a role name is not a K2 role name");
+                return Err(concat!("copy-roles: a role name is not a ", product_name!(), " role name"));
             }
             if !seen.insert(r.as_str()) {
                 return Err("copy-roles: a role is listed twice");

@@ -35,6 +35,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::sew::{checksum_is_placeholder, hex64, pinned, SewArtifact, SewRelease, SewSidecar};
+use k2_brand::PRODUCT_NAME;
 
 // ── fixed paths ─────────────────────────────────────────────────────────
 
@@ -280,11 +281,11 @@ pub fn pinned_asr_model() -> Result<&'static SewAsrModel, String> {
 /// The model `models` pins for Sew `version` (pure).
 pub fn model_in(models: &'static [SewAsrModel], version: &str) -> Result<&'static SewAsrModel, String> {
     let m = models.iter().find(|m| m.sew_version == version).ok_or_else(|| {
-        format!("{MODEL_UNPINNED}: this K2 build pins no speech model for Sew {version} (recording needs Sew 0.9.0 or later)")
+        format!("{MODEL_UNPINNED}: this {PRODUCT_NAME} build pins no speech model for Sew {version} (recording needs Sew 0.9.0 or later)")
     })?;
     if !m.usable() {
         return Err(format!(
-            "{MODEL_UNPINNED}: this K2 build has no speech model pin for Sew {version} yet (Sew hasn't published {} with its sha256 and measured memory)",
+            "{MODEL_UNPINNED}: this {PRODUCT_NAME} build has no speech model pin for Sew {version} yet (Sew hasn't published {} with its sha256 and measured memory)",
             m.file
         ));
     }

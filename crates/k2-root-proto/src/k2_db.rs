@@ -4,6 +4,7 @@
 //! replays K2's own objects from a dump; it installs these instead, as
 //! postgres, before any tenant object exists in the target (no tenant DDL
 //! ever runs as postgres), and only the ones the dump lists ([`is_k2_entry`]).
+use k2_brand::product_name;
 
 /// The principal helpers. `k2.skin_uid()` is owned by the migrator: the
 /// principal lock counts only when the definer (the migrator) owns it, as
@@ -124,20 +125,20 @@ GRANT EXECUTE ON FUNCTION k2.actor() TO PUBLIC;
 
 /// The guard K2's internal-table policies call (the boot seal); owned by
 /// the migrator.
-pub const INTERNAL_TABLE_OK_SQL: &str = r#"CREATE OR REPLACE FUNCTION k2.internal_table_ok() RETURNS boolean
+pub const INTERNAL_TABLE_OK_SQL: &str = concat!(r#"CREATE OR REPLACE FUNCTION k2.internal_table_ok() RETURNS boolean
 LANGUAGE plpgsql
 STABLE
 SET search_path = pg_catalog, pg_temp
 AS $k2fn$
 BEGIN
   IF k2.skin_uid() IS NOT NULL THEN
-    RAISE EXCEPTION 'permission denied for K2 internal table' USING ERRCODE = 'insufficient_privilege';
+    RAISE EXCEPTION 'permission denied for "#, product_name!(), r#" internal table' USING ERRCODE = 'insufficient_privilege';
   END IF;
   RETURN true;
 END;
 $k2fn$;
 GRANT EXECUTE ON FUNCTION k2.internal_table_ok() TO PUBLIC;
-"#;
+"#);
 
 /// K2's functions in schema `k2`, as `pg_restore -l` names them, with
 /// whether the migrator owns them (else postgres).

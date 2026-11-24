@@ -6,6 +6,7 @@
 //! (`stalwartUpgradeFrom`), and the daemon downloads and checks by the
 //! same table. One table, so a helper and a daemon of the same release
 //! can never disagree.
+use k2_brand::PRODUCT_NAME;
 
 /// The PINNED Stalwart version the supervisor installs and manages.
 ///
@@ -182,7 +183,7 @@ fn artifact_in(
     arch: &str,
 ) -> Result<&'static StalwartArtifact, String> {
     let art = table.iter().find(|a| a.arch == arch).ok_or_else(|| {
-        format!("unsupported CPU architecture '{arch}' — K2 Mail ships x86_64 and aarch64")
+        format!("unsupported CPU architecture '{arch}' — {PRODUCT_NAME} Mail ships x86_64 and aarch64")
     })?;
     if checksum_is_placeholder(art) {
         return Err(format!(

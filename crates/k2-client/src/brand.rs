@@ -50,16 +50,18 @@ macro_rules! release_repo {
     };
 }
 
-/// The company that makes it.
-pub const COMPANY_NAME: &str = "Alakazam Labs";
+/// The company that makes it: the brand file's `names.company`, or the
+/// default brand's when the file leaves it out ("Alakazam Labs" in ours).
+pub const COMPANY_NAME: &str = k2_brand::names::COMPANY;
 
 /// The product with its maker: the brand file's `names.lockup`, or
 /// "<product> by <company>" when the file leaves it out ("K2 by Alakazam
 /// Labs" in ours). A partner names its own.
 pub const PRODUCT_LOCKUP: &str = k2_brand::names::LOCKUP;
 
-/// The public website.
-pub const PUBLIC_SITE: &str = "https://k2.dev";
+/// The public website: the brand file's `links.site`, or the default
+/// brand's ("https://k2.dev" in ours).
+pub const PUBLIC_SITE: &str = k2_brand::links::SITE;
 
 /// The zone boxes are named under (`<label>.k2.dev`): the hosts module's
 /// primary zone, under the name this module gives it.
@@ -73,8 +75,9 @@ pub const INFRA_ZONE: &str = crate::hosts::PRIMARY_ZONE;
 /// is served under them.
 pub const HOSTED_ZONES: &[&str] = &[crate::hosts::PRIMARY_ZONE];
 
-/// Where people write for help.
-pub const SUPPORT_EMAIL: &str = "support@k2.dev";
+/// Where people write for help: the brand file's `links.support_email`, or
+/// the default brand's ("support@k2.dev" in ours).
+pub const SUPPORT_EMAIL: &str = k2_brand::links::SUPPORT_EMAIL;
 
 /// The repo releases come from, `owner/name`.
 pub const RELEASE_REPO: &str = release_repo!();

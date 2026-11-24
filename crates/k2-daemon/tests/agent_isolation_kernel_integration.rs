@@ -1192,9 +1192,9 @@ echo "done" >> $R; exec sleep 3600
     let b_script = format!(
         r#"R={b}/results; : > $R; echo $$ > {b}/pid
 echo "secrets_dir $K2_SECRETS_DIR" >> $R
-cat {o}/MY_KEY > {b}/o1 2>&1; echo "other_secret $? $(head -c 120 {b}/o1)" >> $R
-cat {o}/.k2-passport > {b}/o2 2>&1; echo "other_passport $? $(head -c 120 {b}/o2)" >> $R
-ls {o} > {b}/o3 2>&1; echo "other_list $? $(head -c 120 {b}/o3 | tr '\n' ' ')" >> $R
+cat {o}/MY_KEY > {b}/o1 2>&1; echo "other_secret $? $(tail -c 200 {b}/o1)" >> $R
+cat {o}/.k2-passport > {b}/o2 2>&1; echo "other_passport $? $(tail -c 200 {b}/o2)" >> $R
+ls {o} > {b}/o3 2>&1; echo "other_list $? $(tail -c 200 {b}/o3 | tr '\n' ' ')" >> $R
 echo "done" >> $R; exec sleep 3600
 "#,
         b = b_ws.display(),
@@ -1240,7 +1240,7 @@ fn a_link_planted_in_dev_shm_opens_nothing_at_the_next_start() {
     let read = format!(
         r#"R={a}/r2; : > $R; echo $$ > {a}/pid2
 cat {l}/id_test > {a}/o1 2>&1; echo "through_link $? $(head -c 120 {a}/o1)" >> $R
-echo x > {l}/planted 2> {a}/e2; echo "write_through_link $? $(cat {a}/e2)" >> $R
+sh -c 'echo x > {l}/planted' 2> {a}/e2; echo "write_through_link $? $(cat {a}/e2)" >> $R
 echo "done" >> $R; exec sleep 3600
 "#,
         a = a_ws.display(),
@@ -1255,7 +1255,7 @@ echo "done" >> $R; exec sleep 3600
     }
     println!("shm link: {r2:?}");
     assert!(denied(&r2["through_link"]), "a fenced start can't read through the link: {}", r2["through_link"]);
-    assert!(!r2["write_through_link"].starts_with('0') && !ssh.join("planted").exists(), "nor write: {}", r2["write_through_link"]);
+    assert!(denied(&r2["write_through_link"]) && !ssh.join("planted").exists(), "nor write: {}", r2["write_through_link"]);
 }
 
 /// Re-review T1, the opposite row: on a box whose secrets root is under
@@ -1278,7 +1278,7 @@ fn a_fenced_session_on_a_carved_box_makes_no_top_level_dev_shm_entry() {
     d.set_fence(&a_id, true);
     let script = format!(
         r#"R={a}/r; : > $R; echo $$ > {a}/pid
-echo x > /dev/shm/{t}-f 2> {a}/e1; echo "file $? $(cat {a}/e1)" >> $R
+sh -c 'echo x > /dev/shm/{t}-f' 2> {a}/e1; echo "file $? $(cat {a}/e1)" >> $R
 mkdir /dev/shm/{t}-d 2> {a}/e2; echo "dir $? $(cat {a}/e2)" >> $R
 ln -s /tmp /dev/shm/{t}-l 2> {a}/e3; echo "link $? $(cat {a}/e3)" >> $R
 echo "done" >> $R; exec sleep 3600

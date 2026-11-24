@@ -88,6 +88,7 @@ part_web() {
     step "licence gate on fixture lockfiles";      bash tests/garden/licence-gate.sh
     step "the brand mark is static data (only its reader reads it)"; bash scripts/brand/mark-static-gate.sh
     step "release brand-mark check on made-up binaries"; bash tests/garden/brand-mark.sh
+    step "no-bash check on made-up files";         bash tests/garden/no-bash-check.sh
     step "brand name policy (brand.sh lint), offline"; bash tests/garden/brand-lint.sh
     step "k2-literal gate on broken trees";        bash tests/garden/k2-literal-gate.sh
     step "distributor pipeline template, offline"; bash tests/garden/distributor-template.sh

@@ -197,6 +197,9 @@ jobs:
       - name: Release brand-mark check on made-up binaries
         run: bash tests/garden/brand-mark.sh
 
+      - name: No-bash check on made-up files
+        run: bash tests/garden/no-bash-check.sh
+
       - name: Brand name policy (brand.sh lint), offline
         run: bash tests/garden/brand-lint.sh
 

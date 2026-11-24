@@ -17,7 +17,7 @@ fn room(prefix: &str) -> (String, String) {
     pin(&project_id, &uuid::Uuid::new_v4().to_string());
     // A person's post and its delete touch the workspace folder (compose
     // history, uploads): give it one, as the delete tests do.
-    let root = std::path::PathBuf::from(crate::thread_attachments::project_root(&project_id).expect("root"));
+    let root = crate::thread_attachments::project_root(&project_id).expect("root");
     std::fs::create_dir_all(root.join(".k2/downloads")).expect("downloads dir");
     (handle, project_id)
 }

@@ -281,6 +281,9 @@ pub struct ClientMsgKey {
 }
 
 /// What [`post_thread_keyed`] did.
+// A one-shot return value matched at once by the caller; boxing the post
+// would add an allocation per Thread post for nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum ThreadPost {
     Posted(OverlayItem, Vec<OverlayLink>),

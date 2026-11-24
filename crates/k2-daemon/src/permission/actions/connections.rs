@@ -223,7 +223,10 @@ fn local_workspace(handle: &str) -> Result<(String, String, String), String> {
 
 /// Both ends of `connections.add-between`, checked: two workspaces of this
 /// server, neither the asking one, not the same.
-fn between(ctx: &Ctx) -> Result<((String, String, String), (String, String, String)), String> {
+/// A local workspace as [`local_workspace`] answers it.
+type LocalWs = (String, String, String);
+
+fn between(ctx: &Ctx) -> Result<(LocalWs, LocalWs), String> {
     let from = local_workspace(param(ctx, "from").ok_or("name the first workspace: from=<handle>")?)?;
     let to = local_workspace(param(ctx, "to").ok_or("name the second workspace: to=<handle>")?)?;
     if from.0 == to.0 {

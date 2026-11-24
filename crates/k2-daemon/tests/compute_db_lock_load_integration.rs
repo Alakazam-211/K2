@@ -283,15 +283,15 @@ async fn compute_long_polls_and_job_churn_leave_the_ui_gets_fast() {
                 let i = (tick as usize * 7) % running.len();
                 seq[i] += 1;
                 compute_ws::test_frame(NODE_A, log(&running[i], seq[i]));
-                if tick % 10 == 0 {
+                if tick.is_multiple_of(10) {
                     compute_ws::test_frame(NODE_A, state(&running[(tick as usize / 10) % running.len()], JobState::Running));
                 }
-                if tick % 50 == 0 {
+                if tick.is_multiple_of(50) {
                     rev += 1;
                     compute_ws::test_frame(NODE_A, Frame::Offer(offer(rev, false)));
                     compute_ws::test_frame(NODE_B, Frame::Offer(offer(rev, true)));
                 }
-                if tick % 60 == 0 && ended < churn.len() {
+                if tick.is_multiple_of(60) && ended < churn.len() {
                     compute_ws::test_frame(NODE_A, state(&churn[ended], JobState::Done));
                     ended += 1;
                 }

@@ -290,6 +290,10 @@ pub fn refused_line(verb: &str, code: &str, hint: Option<&str>) -> String {
 
 /// Per App: (minute started, lines written, lines left out).
 type RefusedBudget = HashMap<String, (Instant, usize, usize)>;
+/// App → (when the seed was read, the live seed) for [`live_seed`].
+type SeedCache = Mutex<HashMap<String, (Instant, Option<String>)>>;
+/// (actor, verb, room, refusal) → (first seen, calls): one App's folded refusals.
+type FoldedRefusals = HashMap<(String, String, String, String), (Instant, usize)>;
 
 /// The App's current log file: its live deployment's, else its newest.
 fn app_log_path(app_id: &str) -> Option<std::path::PathBuf> {
@@ -332,7 +336,7 @@ fn log_refused(budget: &mut RefusedBudget, r: Refused) {
 }
 
 fn live_seed(app_id: &str) -> Option<String> {
-    static CACHE: OnceLock<Mutex<HashMap<String, (Instant, Option<String>)>>> = OnceLock::new();
+    static CACHE: OnceLock<SeedCache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some((at, s)) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(app_id) {
         if at.elapsed() < Duration::from_secs(5) {
@@ -443,7 +447,7 @@ struct AlertState {
     denials: HashMap<String, Vec<Instant>>,
     /// App → (actor, verb, room, refusal) → (first seen, calls) for the
     /// permission refusals folded in the window ([`permission_refusal`]).
-    folded: HashMap<String, HashMap<(String, String, String, String), (Instant, usize)>>,
+    folded: HashMap<String, FoldedRefusals>,
     said: HashMap<(String, String), Instant>,
     /// App → workspace (for first-use alerts raised by the writer).
     ws: HashMap<String, String>,

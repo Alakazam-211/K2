@@ -19,30 +19,30 @@
 //!   * [`config`]    — `~/.k2/tunnel.json` (the secret token lives here).
 //!   * [`render`]    — frpc v0.61 TOML renderer.
 //!   * [`connector`] — spawn / supervise / stop the `frpc` child, and
-//!                     drive the daemon-owned subdomain lease renewal
-//!                     while the tunnel is up.
+//!     drive the daemon-owned subdomain lease renewal
+//!     while the tunnel is up.
 //!   * [`failover`]  — pure multi-relay failover policy: which relay of
-//!                     the ordered fallback list frpc should dial now
-//!                     (frpc itself can't fail over — one `serverAddr`).
+//!     the ordered fallback list frpc should dial now
+//!     (frpc itself can't fail over — one `serverAddr`).
 //!   * [`relay_list`] — 0.45.7: keeps `relays` current from k2.dev
-//!                     (`GET /api/tunnel/relays`) at boot, every
-//!                     `refresh_s`, after relay switches and pairing.
+//!     (`GET /api/tunnel/relays`) at boot, every
+//!     `refresh_s`, after relay switches and pairing.
 //!   * [`names`]     : multi-zone A1, this box's names from the same
-//!                     answer, parsed and stored; read-only, unused yet.
+//!     answer, parsed and stored; read-only, unused yet.
 //!   * [`watchdog`]  — pure mid-session relay-death detection: frpc never
-//!                     exits when an ESTABLISHED session's relay dies (it
-//!                     reconnect-retries internally), so the connector
-//!                     watches its log lines and kills the stuck child to
-//!                     hand the failure to the exit-based failover path.
+//!     exits when an ESTABLISHED session's relay dies (it
+//!     reconnect-retries internally), so the connector
+//!     watches its log lines and kills the stuck child to
+//!     hand the failure to the exit-based failover path.
 //!   * [`lease`]     — subdomain claim/lease keepalive (K2SO #674): the
-//!                     daemon re-POSTs the `claim_subdomain` RPC on its own
-//!                     timer so the lease never lapses with the UI closed
-//!                     or the daemon headless.
+//!     daemon re-POSTs the `claim_subdomain` RPC on its own
+//!     timer so the lease never lapses with the UI closed
+//!     or the daemon headless.
 //!   * [`tls`]       — E2E TLS material: ECDSA key, CSR, rustls ServerConfig
-//!                     (PRD `k2-connect-e2e-encryption.md` §4/§6).
+//!     (PRD `k2-connect-e2e-encryption.md` §4/§6).
 //!   * [`cert_broker`] — E2E cert-broker client: POST the CSR to
-//!                     `cert.k2.dev/cert`, install the issued chain, and
-//!                     report renewal timing (PRD §5/§6).
+//!     `cert.k2.dev/cert`, install the issued chain, and
+//!     report renewal timing (PRD §5/§6).
 //!
 //! Public facade ([`start_tunnel`] / [`stop_tunnel`] / [`tunnel_status`])
 //! is what the daemon's `/cli/tunnel/*` routes call.

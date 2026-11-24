@@ -1103,7 +1103,7 @@ pub fn tmpdir() -> String {
     std::env::var("TMPDIR")
         .ok()
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| crate::offline::default_tmpdir().into())
+        .unwrap_or_else(crate::offline::default_tmpdir)
 }
 
 /// `_msg_inbox_stage_file <target> <local>`: the staged path, or

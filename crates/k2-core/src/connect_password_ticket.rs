@@ -31,6 +31,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use argon2::password_hash::rand_core::{OsRng, RngCore};
 use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::connect_users::{self, LoginOutcome};
 
@@ -59,6 +60,19 @@ fn tickets() -> MutexGuard<'static, HashMap<String, Pending>> {
 
 fn digest(ticket: &str) -> String {
     Sha256::digest(ticket.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The stored key matching `key` (a digest), compared in constant time
+/// against EVERY stored key: no early exit, no string `==`, no hash-map
+/// probe on the presented value.
+fn find_key(map: &HashMap<String, Pending>, key: &str) -> Option<String> {
+    let mut hit: Option<String> = None;
+    for k in map.keys() {
+        if bool::from(k.as_bytes().ct_eq(key.as_bytes())) {
+            hit = Some(k.clone());
+        }
+    }
+    hit
 }
 
 /// A freshly issued ticket (shown once).
@@ -128,11 +142,12 @@ pub fn holder(token: &str) -> Option<String> {
     if !looks_like_ticket(token) {
         return None;
     }
-    let key = digest(token);
-    let (username, epoch, expires_at) = {
+    let presented = digest(token);
+    let (key, username, epoch, expires_at) = {
         let map = tickets();
+        let key = find_key(&map, &presented)?;
         let p = map.get(&key)?;
-        (p.username.clone(), p.epoch, p.expires_at)
+        (key, p.username.clone(), p.epoch, p.expires_at)
     };
     let live = expires_at > Utc::now()
         && connect_users::live_user_epoch(&username) == Some(epoch)
@@ -146,13 +161,18 @@ pub fn holder(token: &str) -> Option<String> {
 
 /// Spend a ticket (after the change it was for).
 pub fn spend(token: &str) {
-    tickets().remove(&digest(token));
+    let mut map = tickets();
+    if let Some(key) = find_key(&map, &digest(token)) {
+        map.remove(&key);
+    }
 }
 
 /// Test seam: make a ticket expire now. `false` when no such ticket.
 #[cfg(any(test, feature = "test-util"))]
 pub fn expire_now_for_test(token: &str) -> bool {
-    match tickets().get_mut(&digest(token)) {
+    let mut map = tickets();
+    let Some(key) = find_key(&map, &digest(token)) else { return false };
+    match map.get_mut(&key) {
         Some(p) => {
             p.expires_at = Utc::now() - Duration::seconds(1);
             true
@@ -197,6 +217,39 @@ mod tests {
             assert_eq!(issue("nobody_pt1", TEMP, None), Issue::Refused);
             assert!(holder("k2pct_not-a-ticket").is_none());
             assert!(holder(&format!("{TICKET_PREFIX}{}", "0".repeat(64))).is_none());
+        });
+    }
+
+    /// Steward (0.46.18): an unknown name, a disabled login, a login with
+    /// nothing to change and a wrong password each pay for exactly one
+    /// argon2 verify, like the right password; the unknown-name dummy hash
+    /// uses the same argon2 parameters as a stored password.
+    #[test]
+    fn every_ticket_attempt_pays_for_one_argon2_verify_with_the_same_parameters() {
+        with_temp_home(|| {
+            connect_users::add_user("tmp_pt5", TEMP).expect("add");
+            connect_users::set_must_change_password("tmp_pt5", true).expect("flag");
+            connect_users::add_user("plain_pt5", TEMP).expect("add");
+            connect_users::add_user("off_pt5", TEMP).expect("add");
+            connect_users::set_must_change_password("off_pt5", true).expect("flag");
+            connect_users::set_disabled("off_pt5", true).expect("disable");
+            for (what, name, pw) in [
+                ("unknown name", "nobody_pt5", TEMP),
+                ("not a valid name", "no such name!", TEMP),
+                ("disabled login", "off_pt5", TEMP),
+                ("nothing to change", "plain_pt5", TEMP),
+                ("wrong password", "tmp_pt5", "wrong-guess"),
+                ("right password", "tmp_pt5", TEMP),
+            ] {
+                let before = connect_users::verify_hash_calls_on_this_thread();
+                let _ = issue(name, pw, None);
+                assert_eq!(connect_users::verify_hash_calls_on_this_thread() - before, 1, "{what}: one argon2 verify");
+            }
+            // Same algorithm, version and cost parameters: only salt and hash differ.
+            let params = |h: &str| h.split('$').take(4).collect::<Vec<_>>().join("$");
+            let stored = connect_users::hash_password(TEMP).expect("hash");
+            assert_eq!(params(connect_users::dummy_hash()), params(&stored));
+            assert!(params(&stored).starts_with("$argon2id$v=19$m="), "{stored}");
         });
     }
 

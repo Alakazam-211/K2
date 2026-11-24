@@ -1900,7 +1900,7 @@ async fn handle_one_request(
         // change-password only (see `connect_device_routes`).
         && path != crate::connect_device_routes::PASSWORD_TICKET
         && !(path == "/cli/auth/change-password"
-            && super::http::change_ticket_passes_web_wall(&query, cookie_only, &headers_blob))
+            && super::http::change_ticket_passes_web_wall(cookie_only, &headers_blob))
         // App phone pairing (V20): belt and braces. A phone app's native
         // call never looks like the hosted web client; this keeps a first
         // contact through the edge working too.
@@ -5937,8 +5937,9 @@ async fn handle_one_request(
             // Owner token does NOT resolve to a connect-user; only a live
             // session does, or (K2 Companion 2026-11-17) a live
             // change-password ticket, which is good for this route only and
-            // only while its login must change its password. Resolve before
-            // the blocking hop.
+            // only while its login must change its password. A ticket is
+            // taken as `Authorization: Bearer` only (0.46.18), never from
+            // `?token=` or a cookie. Resolve before the blocking hop.
             let mut ticket: Option<String> = None;
             let username = if !tok.is_empty() && super::http::ct_eq_token(&tok, state.token.as_str()) {
                 None
@@ -5947,9 +5948,9 @@ async fn handle_one_request(
             } else if super::http::pair_request_is_browser_shaped(&headers_blob) || cookie_only {
                 None
             } else {
-                let held = k2_core::connect_password_ticket::holder(&tok);
+                let held = super::http::bearer_change_ticket_holder(&headers_blob);
                 if held.is_some() {
-                    ticket = Some(tok.clone());
+                    ticket = super::http::extract_bearer(&headers_blob).map(str::to_string);
                 }
                 held
             };

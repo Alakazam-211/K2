@@ -677,7 +677,7 @@ pub fn ticket_browser_refused() -> CliResponse {
     refusal(
         "403 Forbidden",
         "device_pairing_not_from_browser",
-        "a change-password ticket is for the K2 Companion app, not a web page",
+        "this step is for the K2 Companion app, not a web page",
     )
 }
 

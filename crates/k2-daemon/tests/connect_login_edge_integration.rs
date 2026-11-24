@@ -1095,6 +1095,53 @@ async fn an_owner_with_a_temporary_password_changes_it_from_its_restricted_sessi
     });
 }
 
+/// Steward (0.46.18): the temporary-password step is limited like sign-in,
+/// by client address (the login limiter's own bucket, shared with
+/// `/cli/auth/login`) AND by username (the login's own lockout, shared
+/// with sign-in): one address can't spray names, and many addresses can't
+/// hammer one name past the lockout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_temporary_password_step_is_limited_per_address_and_locked_per_name() {
+    use k2_daemon::login_throttle::LIMIT;
+    const STEP: &str = "/cli/auth/device/password-ticket";
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("tkt_rate", "temporary-123").unwrap();
+        connect_users::set_must_change_password("tkt_rate", true).unwrap();
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        set_ingress_mode("any");
+        let port = d.tunnel_port;
+        let right = r#"{"username":"tkt_rate","password":"temporary-123"}"#;
+        let wrong = r#"{"username":"tkt_rate","password":"WRONG"}"#;
+
+        // One address, many names: LIMIT tries, then 429 for the right
+        // password too, and the same bucket closes that address's sign-in.
+        for i in 1..=LIMIT {
+            let body = format!(r#"{{"username":"tkt_spray{i}","password":"WRONG"}}"#);
+            let r = http_through_relay(port, Some("203.0.113.60"), STEP, &body, &[]);
+            assert_eq!(r.status, 401, "spray {i}: {}", r.body);
+        }
+        let r = http_through_relay(port, Some("203.0.113.60"), STEP, right, &[]);
+        assert_eq!(r.status, 429, "the spraying address is closed: {}", r.body);
+        let r = http_through_relay(port, Some("203.0.113.60"), LOGIN, right, &[]);
+        assert_rate_limited(&r, "and so is its sign-in");
+        assert_eq!(connect_users::lockout_failed_count("tkt_rate"), 0, "no try on the real name yet");
+
+        // Many addresses, one name: the third wrong password locks the
+        // name for every address, the right password included.
+        for (i, ip) in ["203.0.113.61", "203.0.113.62", "203.0.113.63"].iter().enumerate() {
+            let r = http_through_relay(port, Some(ip), STEP, wrong, &[]);
+            let want = if i < 2 { 401 } else { 423 };
+            assert_eq!(r.status, want, "wrong password {} from {ip}: {}", i + 1, r.body);
+        }
+        let r = http_through_relay(port, Some("203.0.113.64"), STEP, right, &[]);
+        assert_eq!(r.status, 423, "a fresh address with the right password: {}", r.body);
+        assert!(connect_users::is_locked("tkt_rate"), "the login's own lockout");
+        let r = http_through_relay(port, Some("203.0.113.65"), LOGIN, right, &[]);
+        assert_eq!(r.status, 401, "sign-in is locked for that name too: {}", r.body);
+    });
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 0.46.8 — a login someone else makes has a temporary password.
 // ─────────────────────────────────────────────────────────────────────

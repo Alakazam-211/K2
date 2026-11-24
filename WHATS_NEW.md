@@ -115,8 +115,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ## 0.46.18
 
 ### Fixes
-- **Resetting your own password no longer makes it temporary; when you reset someone else's, Settings says they'll choose a new one and lets you keep it instead.**
-- **A phone can choose its new password with web access off.** When someone else set your password, K2 Companion trades the temporary one for a ticket that only changes it, works once and lasts 10 minutes. Changing a password now says which went wrong: the current one was wrong, too many tries (and how long to wait), or the new one is the same as the old.
+- **Resetting your own password is never temporary.**
+- **On a server with web access off, the phone can now finish a temporary password: sign in with it, then choose your new one.**
 
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 

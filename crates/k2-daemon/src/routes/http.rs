@@ -377,15 +377,26 @@ pub(crate) fn device_session_passes_web_wall(query: &str, cookie_only: bool) -> 
 }
 
 /// K2 Companion (2026-11-17): while web access is OFF, `POST
-/// /cli/auth/change-password` passes the wall when its credential (Bearer
-/// or `?token=`, never a cookie) is a live change-password ticket
+/// /cli/auth/change-password` passes the wall when its `Authorization:
+/// Bearer` credential is a live change-password ticket
 /// (`k2_core::connect_password_ticket`) and the request isn't shaped like a
-/// browser page (the edge's own markers are allowed, as for a pair). The
-/// caller checks the path: a ticket opens no other route.
-pub(crate) fn change_ticket_passes_web_wall(query: &str, cookie_only: bool, headers_blob: &str) -> bool {
+/// browser page (the edge's own markers are allowed, as for a pair). Never
+/// `?token=` (0.46.18, Steward: a ticket stays out of URLs and logs) and
+/// never a cookie. The caller checks the path: a ticket opens no other
+/// route.
+pub(crate) fn change_ticket_passes_web_wall(cookie_only: bool, headers_blob: &str) -> bool {
     !cookie_only
         && !pair_request_is_browser_shaped(headers_blob)
-        && extract_token(query).and_then(k2_core::connect_password_ticket::holder).is_some()
+        && bearer_change_ticket_holder(headers_blob).is_some()
+}
+
+/// The login a live change-password ticket presented as `Authorization:
+/// Bearer` may change the password of; `None` for anything else (a ticket
+/// in `?token=` or a cookie is not looked at).
+pub(crate) fn bearer_change_ticket_holder(headers_blob: &str) -> Option<String> {
+    extract_bearer(headers_blob)
+        .filter(|t| k2_core::connect_password_ticket::looks_like_ticket(t))
+        .and_then(k2_core::connect_password_ticket::holder)
 }
 
 /// phone-web-off: a request whose credential is a device session that

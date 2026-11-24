@@ -648,8 +648,20 @@ pub(crate) fn hash_password(password: &str) -> Result<String, String> {
         .map_err(|e| format!("password hashing failed: {e}"))
 }
 
+thread_local! {
+    /// argon2 verifies run on this thread (tests pin that every path of a
+    /// password check pays for one, the unknown-name path included).
+    static VERIFY_HASH_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many argon2 verifies this thread has run (see [`verify_hash`]).
+pub fn verify_hash_calls_on_this_thread() -> u64 {
+    VERIFY_HASH_CALLS.with(|c| c.get())
+}
+
 /// Verify a plaintext password against a stored argon2 PHC hash.
 pub(crate) fn verify_hash(password: &str, hash: &str) -> bool {
+    VERIFY_HASH_CALLS.with(|c| c.set(c.get() + 1));
     let parsed = match PasswordHash::new(hash) {
         Ok(h) => h,
         Err(_) => return false,
@@ -1671,8 +1683,7 @@ pub fn verify(username: &str, password: &str) -> bool {
 
     // A process-wide dummy hash so the unknown/disabled branches incur the
     // same argon2 cost as a real verify — blunting user-enumeration timing.
-    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
-    let dummy = DUMMY_HASH.get_or_init(build_dummy_hash);
+    let dummy = dummy_hash();
 
     match found {
         Some(user) if !user.disabled => verify_hash(password, &user.password_hash),
@@ -1688,6 +1699,14 @@ pub fn verify(username: &str, password: &str) -> bool {
             false
         }
     }
+}
+
+/// The process-wide dummy hash [`verify`] checks an unknown or disabled
+/// name against: made like every stored hash ([`hash_password`], the same
+/// argon2 parameters), so both paths cost the same.
+pub(crate) fn dummy_hash() -> &'static str {
+    static DUMMY_HASH: OnceLock<String> = OnceLock::new();
+    DUMMY_HASH.get_or_init(build_dummy_hash)
 }
 
 fn build_dummy_hash() -> String {

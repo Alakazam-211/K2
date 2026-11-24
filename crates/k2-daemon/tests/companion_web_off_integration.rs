@@ -1148,6 +1148,14 @@ async fn a_temporary_owner_with_web_off_sets_its_password_with_a_ticket_then_sig
 
     // The ticket, and the change through it, both through the edge.
     let ticket = ticket_of(&ask_ticket(d.tunnel_port, "tp_owner", TEMP_PW), "tp_owner");
+    // Bearer only (0.46.18): the same ticket in `?token=` changes nothing,
+    // directly or through the edge, and isn't spent by trying.
+    let cp = serde_json::json!({ "currentPassword": TEMP_PW, "newPassword": NEW_PW }).to_string();
+    let r = http(d.port, "POST", &format!("/cli/auth/change-password?token={ticket}"), Some(&cp), &[]);
+    assert_eq!((r.status, r.body.as_str()), (401, r#"{"error":"unauthorized"}"#), "a ticket in ?token=");
+    let r = http(d.tunnel_port, "POST", &format!("/cli/auth/change-password?token={ticket}"), Some(&cp), EDGE);
+    assert_code(&r, 403, "WEB_CLIENT_DISABLED", "a ticket in ?token= through the edge");
+    assert!(connect_users::must_change_password("tp_owner"), "nothing changed");
     let r = change_with(d.tunnel_port, &ticket, TEMP_PW, NEW_PW, EDGE);
     assert_eq!(r.status, 200, "the Owner's own change with a ticket: {}", r.body);
     assert!(!connect_users::must_change_password("tp_owner"));
@@ -1170,4 +1178,87 @@ async fn a_temporary_owner_with_web_off_sets_its_password_with_a_ticket_then_sig
     let device = paired["token"].as_str().expect("token").to_string();
     let r = http(d.tunnel_port, "GET", "/cli/auth/whoami", None, &refs(&with(EDGE, &[&bearer(&device)])));
     assert_eq!(r.status, 200, "the paired phone through the edge with web off: {}", r.body);
+}
+
+/// The refusal a route gives, for comparing two credentials: the status and
+/// the error code (a string `error`, or `error.code`), never anything the
+/// request itself put in.
+fn refusal_shape(r: &Resp) -> (u16, String) {
+    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    let code = v["error"]["code"].as_str().or_else(|| v["error"].as_str()).unwrap_or("").to_string();
+    (r.status, code)
+}
+
+/// Steward (0.46.18): a live change-password ticket is an unknown token on
+/// every other route. For every row of the route table (GET and POST, any
+/// floor but the public ones, the change-password route itself aside), the
+/// WebSocket doors, the `/v1` API and the hook ingest, a live ticket as
+/// Bearer gets exactly the answer a dead ticket of the same shape gets, is
+/// never a success, and the answer never names the login; the ticket is
+/// still live afterwards (nothing spent or upgraded it).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_ticket_is_an_unknown_token_on_every_other_route() {
+    use k2_daemon::routes::route_policy::{self, Floor};
+    let _g = lock();
+    let _home = HomeEnv::set();
+    let d = test_harness::start(OWNER_TOKEN).await;
+    let port = d.port;
+    temp_login("tp_table");
+    let live = ticket_of(&ask_ticket(d.tunnel_port, "tp_table", TEMP_PW), "tp_table");
+    let dead = format!("k2pct_{}", "0f".repeat(32));
+    assert_ne!(live, dead);
+
+    // One request with each credential; a mismatch, a success or the
+    // login's name in the answer is a failure (all listed at the end).
+    fn check(port: u16, live: &str, dead: &str, method: &str, path: &str, extra: &[&str], fails: &mut Vec<String>) {
+        let body = (method == "POST").then_some("{}");
+        let with_live = http(port, method, path, body, &refs(&with(extra, &[&bearer(live)])));
+        let with_dead = http(port, method, path, body, &refs(&with(extra, &[&bearer(dead)])));
+        if refusal_shape(&with_live) != refusal_shape(&with_dead) {
+            fails.push(format!("{method} {path}: live {} {} vs dead {} {}", with_live.status, with_live.body, with_dead.status, with_dead.body));
+        }
+        // `logout` answers any token with its idempotent success (it ends
+        // the presented session, if there is one): no session either way.
+        let open_to_any = path == "/cli/auth/logout" && (200..300).contains(&with_dead.status);
+        if ((200..300).contains(&with_live.status) && !open_to_any) || with_live.status == 101 {
+            fails.push(format!("{method} {path}: success with a ticket: {} {}", with_live.status, with_live.body));
+        }
+        if with_live.body.contains("tp_table") {
+            fails.push(format!("{method} {path}: names the login: {}", with_live.body));
+        }
+    }
+    let mut fails: Vec<String> = Vec::new();
+    let mut rows = 0usize;
+    for r in route_policy::ROUTES {
+        for (m, floor) in [("GET", r.get), ("POST", r.post)] {
+            let Some(floor) = floor else { continue };
+            if floor == Floor::Public || r.path == "/cli/auth/change-password" {
+                continue;
+            }
+            check(port, &live, &dead, m, r.path, &[], &mut fails);
+            rows += 1;
+        }
+    }
+    assert!(rows > 1000, "walked only {rows} route rows");
+    let upgrade = ["Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version: 13"];
+    let mut doors: Vec<(&str, &str, bool)> = vec![("GET", "/events", true), ("GET", "/v1/sandboxes", false)];
+    for r in route_policy::ROUTES {
+        if r.get.is_some() && ["stream", "events", "subscribe", "grid", "socket", "/ws"].iter().any(|w| r.path.contains(w)) {
+            doors.push(("GET", r.path, true));
+        }
+    }
+    for p in route_policy::V1_POST_EXACT.iter().chain(route_policy::HOOK_POST_EXACT) {
+        doors.push(("POST", *p, false));
+    }
+    assert!(doors.len() > 8, "only {} socket and API doors", doors.len());
+    for (m, p, ws) in &doors {
+        let extra: &[&str] = if *ws { &upgrade } else { &[] };
+        check(port, &live, &dead, m, p, extra, &mut fails);
+    }
+    assert!(fails.is_empty(), "{} of {} requests treated a live ticket differently:\n{}", fails.len(), rows + doors.len(), fails.join("\n"));
+
+    // Nothing spent it: it still changes the password, once.
+    assert_eq!(k2_core::connect_password_ticket::holder(&live).as_deref(), Some("tp_table"));
+    let r = change_with(port, &live, TEMP_PW, NEW_PW, &[]);
+    assert_eq!(r.status, 200, "{}", r.body);
 }

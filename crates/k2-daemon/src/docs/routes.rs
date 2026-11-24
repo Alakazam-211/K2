@@ -876,6 +876,15 @@ fn engine_mismatch_hint(e: &dyn std::fmt::Display) -> String {
     )
 }
 
+/// What `MPC-E527` tells the caller: the kit's line (which engine's entry
+/// or stamp, for which doc), then that nothing was written and what to do.
+fn entry_engine_refused_hint(e: &dyn std::fmt::Display) -> String {
+    format!(
+        "{e}. This is a bug in the writer, not in the doc: nothing was written, and the doc and the file are as they \
+         were. Report it with the file's path"
+    )
+}
+
 /// What `MPC-E169` tells the caller: the kit's line (the doc is on the
 /// native engine, which this build doesn't have), then that only this doc
 /// is refused, nothing changed, and what to do.
@@ -1002,6 +1011,14 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         | SessionError::Blob(BlobError::Store(err @ StoreError::ForeignEngine { .. })) => {
             kit_refusal("engine_mismatch", "MPC-E520", engine_mismatch_hint(err))
         }
+        // Kit v0.24.0 (MPC-E527 `entry_engine_refused`): a store write that
+        // holds a log entry, or an engine stamp, of the other engine. Refused
+        // before anything was written; no K2 path writes one (a writer's bug),
+        // so it is named, never the 500 `store_error`. Exit 6.
+        SessionError::Store(err @ (StoreError::EntryEngineRefused { .. } | StoreError::EngineStampRefused { .. }))
+        | SessionError::Blob(BlobError::Store(
+            err @ (StoreError::EntryEngineRefused { .. } | StoreError::EngineStampRefused { .. }),
+        )) => kit_refusal("entry_engine_refused", "MPC-E527", entry_engine_refused_hint(err)),
         // Kit v0.20.0 (MPC-E169): a doc the native engine wrote (a newer
         // K2's Beta), on this build, which doesn't have it (K2 keeps the
         // native engine off). Only that doc is refused, on open and delete;
@@ -3069,6 +3086,33 @@ mod tests {
             assert_eq!(e["id"], json!(id), "{err:?}");
             assert_eq!(e["exit"], json!(exit), "{err:?}");
             assert!(e["hint"].as_str().expect("a hint").len() > 20, "{err:?}: {e:?}");
+        }
+    }
+
+    /// Kit v0.24.0 (MPC-E527): a store write holding the other engine's log
+    /// entry or engine stamp is named beside the other store refusals (K2's
+    /// code, the kit's id, exit 6), never the catch-all's 500 `store_error`,
+    /// in the session's form and the any-file store's.
+    #[test]
+    fn the_kits_v0_24_0_entry_engine_refusal_has_its_own_code_and_exit() {
+        let entry = StoreError::EntryEngineRefused { doc: 3, entry: "Yrs", stored: "other-1.0".into(), stored_format: 1 };
+        let stamp = StoreError::EngineStampRefused { doc: 3, entry: "Yrs", asked: "other-1.0".into(), asked_format: 1 };
+        let r = SessionError::Store(entry.clone()).report();
+        assert_eq!((r.id(), r.entry().name, r.exit()), ("MPC-E527", "entry_engine_refused", 6), "the kit's registry");
+        for err in [
+            SessionError::Store(entry.clone()),
+            SessionError::Blob(BlobError::Store(entry)),
+            SessionError::Store(stamp.clone()),
+            SessionError::Blob(BlobError::Store(stamp)),
+        ] {
+            let r = session_error(&err);
+            assert_eq!(r.status, "409 Conflict", "{err:?}");
+            let e = error_of(&r);
+            assert_eq!(e["code"], json!("entry_engine_refused"), "{err:?}");
+            assert_eq!(e["id"], json!("MPC-E527"), "{err:?}");
+            assert_eq!(e["exit"], json!(6), "{err:?}");
+            let hint = e["hint"].as_str().expect("a hint");
+            assert!(hint.contains("nothing was written, and the doc and the file are as they were"), "{err:?}: {hint}");
         }
     }
 

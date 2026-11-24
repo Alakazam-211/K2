@@ -314,6 +314,13 @@ pub fn durability_word(s: &StoreSettings) -> &'static str {
 /// Kit v0.23.0: `store` is what the store opens with ([`store_settings`]);
 /// the manager reports it as it runs (`SessionManager::new` sets it from
 /// the store).
+///
+/// Kit v0.24.0 returns freed memory to the OS after write-backs, at most
+/// once per `release_after_write_ms` (the kit's 30 s, kept). K2 sets no
+/// `Config::release`: the daemon runs on the system allocator (no
+/// `#[global_allocator]`, no mimalloc), so the kit's own call is the right
+/// one: glibc's `malloc_trim(0)` on Linux, and nothing on macOS and
+/// Windows, whose allocators return memory on their own.
 fn kit_config(memory_budget_bytes: u64, store: StoreSettings) -> Config {
     let mut c = Config::default();
     c.memory_budget_bytes = memory_budget_bytes;
@@ -1006,6 +1013,17 @@ mod tests {
         let c = kit_config(256 << 20, StoreSettings::DEFAULT);
         assert_eq!(c.opened_hold_ms, Config::default().opened_hold_ms, "the kit's hold");
         assert_eq!(c.opened_hold_ms, 10_000, "10 s");
+    }
+
+    /// Kit v0.24.0: freed memory goes back to the OS after write-backs at the
+    /// kit's pace (30 s), through the kit's own call: the daemon runs on the
+    /// system allocator, so K2 hands it no allocator call of its own.
+    #[test]
+    fn k2_keeps_the_kits_memory_release_after_write_backs() {
+        let c = kit_config(256 << 20, StoreSettings::DEFAULT);
+        assert_eq!(c.release_after_write_ms, Config::default().release_after_write_ms, "the kit's pace");
+        assert_eq!(c.release_after_write_ms, 30_000, "30 s");
+        assert!(c.release.is_none(), "no allocator call of K2's: the kit's malloc_trim on glibc");
     }
 
     #[test]

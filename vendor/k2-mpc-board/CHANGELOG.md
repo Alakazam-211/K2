@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.18
+
+Pairs with kit v0.24.0 (its public cut). The bridge's lock moves to it; the pack's code doesn't
+change. The kit's one pack API addition is opt-in (a container's own record, index row format 3),
+and its other changes are the host's and the native engine's (off); the bridge uses none of them.
+
+- The board crate and the bridge 0.1.18 (`Cargo.lock`, `bridge/Cargo.lock`, `fuzz/Cargo.lock`);
+  `bridge/Cargo.lock`: k2-mpc-base 0.24.0. `bridge/Cargo.toml`'s pin comment and
+  `bridge/README.md`'s kit line name v0.24.0 and its cut.
+
 ## v0.1.17
 
 Pairs with kit v0.23.0 (its public cut). The bridge's lock moves to it; the pack's code doesn't

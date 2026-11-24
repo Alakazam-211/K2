@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-board"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "miniz_oxide",
  "sha2",

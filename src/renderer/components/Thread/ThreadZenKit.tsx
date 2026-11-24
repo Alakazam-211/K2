@@ -50,6 +50,7 @@ import { threadBubbleMaxWidth, useThreadColumnNarrow } from './ThreadColumn'
 import { StashOfferCard } from '@/components/PromptStash/StashFromThread'
 import { stashOfferView } from '@/lib/prompt-stash/record'
 import { parseThreadReply, threadReplyKey } from '@/lib/thread-reply'
+import { THREAD_FOCUS_BUBBLE_STYLE, THREAD_FOCUS_ROW_STYLE, useThreadJump } from './threadFocus'
 import {
   ThreadMessageMoreButton,
   ThreadReplyQuote,
@@ -526,6 +527,10 @@ export interface ThreadBubbleProps {
    *  dimmed with its card. Off by default, so a Garden's Thread widget
    *  (which themes itself) draws it as it always has. */
   dimClosedCards?: boolean
+  /** thread-reply-to-v1: this row was just jumped to (a reply's line or a
+   *  `#N`): `data-highlight="true"` and K2 Companion's ring, for
+   *  FOCUS_HIGHLIGHT_MS (threadFocus). */
+  highlighted?: boolean
 }
 
 /** The name line over another sender's run, and your status line under
@@ -645,6 +650,7 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     (a.receipt ?? null) === (b.receipt ?? null) &&
     (a.to ?? null) === (b.to ?? null) &&
     !!a.noReply === !!b.noReply &&
+    !!a.highlighted === !!b.highlighted &&
     sameChatNode(a.quote, b.quote) &&
     sameSenderSlot(a.sender, b.sender) &&
     shallowSame(a.secret, b.secret) &&
@@ -676,6 +682,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   noReply = false,
   dimClosedCards = false,
   quote,
+  highlighted = false,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -698,6 +705,13 @@ export const ThreadBubble = memo(function ThreadBubble({
   // line above the person's words.
   const reply = useMemo(() => (kind === 'text' ? parseThreadReply(text) : null), [kind, text])
   const bodyText = reply ? reply.rest : text
+  // thread-reply-to-v1: the reply line jumps to what it answers (the
+  // daemon's `replyTo` first, else the header's `#N`), where the Thread
+  // can jump (the desktop Thread).
+  const jump = useThreadJump()
+  const replySeq = item.doc.replyTo?.seq ?? reply?.seq ?? 0
+  const onReplyJump = useMemo(() => (jump && replySeq > 0 ? () => jump(replySeq) : undefined), [jump, replySeq])
+  const highlightAttr = highlighted ? 'true' : undefined
   // The message menu (prd-thread-message-menu-v1: Reply, Reply to
   // selection, Copy, Save to stash), where the Thread knows its server (the
   // desktop Thread, a Zen conversation). Never on a secret card.
@@ -769,10 +783,11 @@ export const ThreadBubble = memo(function ThreadBubble({
         data-kind={kind}
         data-seq={item.seq}
         data-mine={mine ? '' : undefined}
+        data-highlight={highlightAttr}
         data-thread-deleted-row=""
         {...column.attrs}
         className={column.className ? `flex flex-col ${column.className}` : 'flex flex-col'}
-        style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth, minWidth: 0, ...column.style }}
+        style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth, minWidth: 0, ...column.style, ...(highlighted ? THREAD_FOCUS_ROW_STYLE : null) }}
       >
         <span data-thread-deleted="" role="note" style={DELETED_LINE_STYLE}>
           {THREAD_DELETED_LINE}
@@ -792,8 +807,9 @@ export const ThreadBubble = memo(function ThreadBubble({
         data-kind={kind}
         data-seq={item.seq}
         data-thread-system-row=""
+        data-highlight={highlightAttr}
         data-zen-message-still={still ? '' : undefined}
-        style={SYSTEM_ROW_STYLE}
+        style={highlighted ? { ...SYSTEM_ROW_STYLE, ...THREAD_FOCUS_ROW_STYLE } : SYSTEM_ROW_STYLE}
       >
         <ThreadSystemNoticeRow notice={system} viewer={viewer} />
       </div>
@@ -824,9 +840,11 @@ export const ThreadBubble = memo(function ThreadBubble({
           cut: mine ? [CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0, CHAMFER_CUT.surface] : [CHAMFER_CUT.surface, CHAMFER_CUT.surface, CHAMFER_CUT.surface, 0],
           fill: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
         }),
+        // K2 Companion's ring around the bubble's real shape (threadFocus).
+        ...(highlighted ? THREAD_FOCUS_BUBBLE_STYLE : null),
       }}
     >
-      {quote ?? (reply && <ThreadReplyQuote reply={reply} />)}
+      {quote ?? (reply && <ThreadReplyQuote reply={reply} onJump={onReplyJump} />)}
       {bodyText &&
         (foldBody ? (
           // Taller than the fold: "See more" (MessageFold). The words only;
@@ -921,6 +939,7 @@ export const ThreadBubble = memo(function ThreadBubble({
       data-seq={item.seq}
       data-status={item.doc.choice?.status || item.doc.secret?.status || item.doc.handoff?.status || ''}
       data-mine={mine ? '' : undefined}
+      data-highlight={highlightAttr}
       data-zen-message-still={still ? '' : undefined}
       data-pending={pending}
       {...column.attrs}
@@ -934,6 +953,8 @@ export const ThreadBubble = memo(function ThreadBubble({
         ...(hoverStatus ? { position: 'relative' } : {}),
         ...(pending === 'sending' ? { opacity: 0.6 } : {}),
         ...column.style,
+        // A row with no bubble (files only) wears a rounded ring instead.
+        ...(highlighted && !bubble ? THREAD_FOCUS_ROW_STYLE : {}),
       }}
       data-run={runs ? (runStart ? (tail ? 'solo' : 'first') : tail ? 'last' : 'middle') : undefined}
     >

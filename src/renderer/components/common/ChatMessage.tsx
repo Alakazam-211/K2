@@ -20,6 +20,7 @@ import {
   clearStuckBodyUserSelect,
 } from './SelectableText'
 import { MarkdownSpan, rehypeFileLinks, useFileLinkPrefixes } from './file-links'
+import { rehypeThreadRefs, ThreadRef, useThreadRefsOn } from './thread-refs'
 import { ChatCodeBlock, ChatLink } from './chat-copy'
 import { BalancedTable } from './BalancedTable'
 
@@ -40,6 +41,20 @@ const CHAT_COMPONENTS: Components = {
 const CHAT_COMPONENTS_WITH_FILE_LINKS: Components = {
   ...CHAT_COMPONENTS,
   span: MarkdownSpan as Components['span'],
+}
+
+/** A marked `#N` (thread-refs) is a ThreadRef; any other span is
+ *  MarkdownSpan's (a file candidate, or a plain span). */
+function ChatSpan(props: Record<string, unknown> & { children?: ReactNode }): JSX.Element {
+  const ref = props['data-k2-thread-ref']
+  if (typeof ref === 'string') return <ThreadRef seq={Number(ref)}>{props.children}</ThreadRef>
+  return <MarkdownSpan {...props} />
+}
+
+/** Under a `ThreadRefProvider` (the desktop Thread): `#N` of a real message or card links. */
+const CHAT_COMPONENTS_WITH_REFS: Components = {
+  ...CHAT_COMPONENTS,
+  span: ChatSpan as Components['span'],
 }
 
 /** GFM treats a single \n as a space. Chat Shift+Enter is a hard break
@@ -93,10 +108,13 @@ export const ChatMessageBody = memo(function ChatMessageBody({
     node.style.cursor = 'text'
   }, [])
   const fileLinks = useFileLinkPrefixes()
-  const rehypePlugins = useMemo<Options['rehypePlugins']>(
-    () => (fileLinks.enabled ? [[rehypeFileLinks, { prefixes: fileLinks.prefixes }]] : undefined),
-    [fileLinks.enabled, fileLinks.prefixes],
-  )
+  const refs = useThreadRefsOn()
+  const rehypePlugins = useMemo<Options['rehypePlugins']>(() => {
+    const list: NonNullable<Options['rehypePlugins']> = []
+    if (fileLinks.enabled) list.push([rehypeFileLinks, { prefixes: fileLinks.prefixes }])
+    if (refs) list.push(rehypeThreadRefs)
+    return list.length > 0 ? list : undefined
+  }, [fileLinks.enabled, fileLinks.prefixes, refs])
 
   return (
     <div
@@ -109,7 +127,7 @@ export const ChatMessageBody = memo(function ChatMessageBody({
       <Markdown
         remarkPlugins={CHAT_REMARK}
         rehypePlugins={rehypePlugins}
-        components={fileLinks.enabled ? CHAT_COMPONENTS_WITH_FILE_LINKS : CHAT_COMPONENTS}
+        components={refs ? CHAT_COMPONENTS_WITH_REFS : fileLinks.enabled ? CHAT_COMPONENTS_WITH_FILE_LINKS : CHAT_COMPONENTS}
       >
         {chatHardBreaks(text)}
       </Markdown>

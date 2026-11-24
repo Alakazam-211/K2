@@ -1,5 +1,8 @@
 import { lazy, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { FileLinkProvider, scopeFileLinkTransport, type FileLinkOpen } from '@/components/common/file-links'
+import { ThreadRefProvider, type ThreadRefProbe } from '@/components/common/thread-refs'
+import { ThreadJumpContext, useThreadFocusSeq } from '@/components/Thread/threadFocus'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import { findThreadAttachment, openThreadAttachment, openThreadFileLink } from '@/lib/thread-file-link-open'
 import { ThreadFileActionsProvider, type ThreadFileActions } from '@/components/Thread/ThreadFileObjects'
 import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
@@ -17,6 +20,7 @@ import {
   isVoidedHitl,
   retryThreadPost,
   sameThreadItem,
+  threadItemsFromSnapshot,
   type OverlayDoc,
   type OverlayThreadItem,
   type ThreadAnswerPayload,
@@ -276,7 +280,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const viewer = useMemo(() => viewerNow, [viewerKey])
   const isTabVisible = useIsTabVisible()
-  const { items, outbox, error, answer, voidCard, hasMore, loadOlder, loadAll, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
+  const { items, outbox, error, answer, voidCard, hasMore, loadOlder, loadAll, loadBack, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
     scope: roomScope,
     addr,
@@ -553,6 +557,43 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     onScrollWrite: onSearchScroll,
   })
 
+  // thread-reply-to-v1 (0.46.18): a reply's `↩ #N` line or a `#N` in a
+  // message jumps here, loading older history back through it, and the row
+  // is highlighted as K2 Companion highlights it (threadFocus).
+  const holdOldest = win.holdOldest
+  const loadBackTo = useCallback(
+    async (seq: number) => {
+      holdOldest(true)
+      try {
+        await (loadBack ? loadBack(seq) : loadOlder())
+      } finally {
+        holdOldest(false)
+      }
+    },
+    [holdOldest, loadBack, loadOlder],
+  )
+  const { focus: jumpTo, highlight } = useThreadFocusSeq({
+    list: () => listRef.current,
+    items: visible,
+    hasMore,
+    loadingOlder,
+    loadBack: loadBackTo,
+    show: win.show,
+    drawn: `${win.lo}:${win.hi}`,
+    unfollow,
+    onScrollWrite: onSearchScroll,
+  })
+  // `#N` links: only a message or card of this Thread (memory, else one
+  // read of the server for a seq older than everything loaded).
+  const refSeqs = useMemo(() => visible.filter((it) => !it.pending && it.seq > 0).map((it) => it.seq), [visible])
+  const refProbe = useCallback<ThreadRefProbe>(
+    async (seq) => {
+      const raw = await daemonCliGet<unknown>(roomScope, 'thread', { addr, limit: 1, before_seq: seq + 1 })
+      return threadItemsFromSnapshot(raw).items.some((it) => it.seq === seq && !isVoidedHitl(it.doc))
+    },
+    [roomScope, addr],
+  )
+
   // Sender pictures (Rosson 2026-11-04, 2026-11-09): two or more other
   // senders among every loaded message put each other sender's picture on
   // their left; once on, on until another Thread opens. Runs (threadRuns):
@@ -683,6 +724,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         <ThreadSenderAvatarContext.Provider value={ThreadSenderPicture}>
         <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
+        <ThreadJumpContext.Provider value={jumpTo}>
+        <ThreadRefProvider seqs={refSeqs} hasMore={hasMore} probe={refProbe} jump={jumpTo}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
           <FoldContext.Provider value={foldHost}>
           <ThreadMessageColumn
@@ -718,11 +761,14 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 tail={tails.has(it.id)}
                 runStart={starts.has(it.id)}
                 receipt={receipt?.id === it.id ? receipt.state : null}
+                highlighted={highlight != null && it.seq === highlight && !it.pending}
               />
             ))}
             <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
           </ThreadMessageColumn>
           </FoldContext.Provider>
+        </ThreadRefProvider>
+        </ThreadJumpContext.Provider>
         </FileLinkProvider>
         </ThreadFileActionsProvider>
         </ThreadSenderAvatarContext.Provider>
@@ -792,6 +838,7 @@ interface OverlayRowProps {
   tail: boolean
   runStart: boolean
   receipt: ThreadReceipt | null
+  highlighted: boolean
 }
 
 /** One Thread row, memoized (0.46.2): a keystroke, an activity frame, a
@@ -820,6 +867,7 @@ const OverlayRow = memo(
     a.tail === b.tail &&
     a.runStart === b.runStart &&
     a.receipt === b.receipt &&
+    a.highlighted === b.highlighted &&
     sameSenderSlot(a.sender, b.sender),
 )
 
@@ -839,6 +887,7 @@ export function ThreadItemRow({
   tail,
   runStart,
   receipt = null,
+  highlighted = false,
 }: {
   item: OverlayThreadItem
   /** Who is looking (`useThreadViewer` on the room's server). Defaults to
@@ -869,6 +918,8 @@ export function ThreadItemRow({
   runStart?: boolean
   /** The Thread's receipt sits on this row (threadReceipt). */
   receipt?: ThreadReceipt | null
+  /** Just jumped to (threadFocus): highlighted for a moment. */
+  highlighted?: boolean
 }): JSX.Element {
   const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const now = nowSec ?? Math.floor(Date.now() / 1000)
@@ -898,6 +949,7 @@ export function ThreadItemRow({
       tail={tail}
       runStart={runStart}
       receipt={receipt}
+      highlighted={highlighted}
       pending={pending ? (pending.state === 'failed' ? 'failed' : 'sending') : undefined}
       footer={pending && pending.state !== 'sending' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} waiting={pending.state === 'waiting'} /> : undefined}
     />

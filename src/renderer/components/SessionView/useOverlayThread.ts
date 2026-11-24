@@ -208,6 +208,9 @@ export function useOverlayThread(opts: {
   loadOlder: () => Promise<void>
   /** Every older page, to the Thread's start (a search). */
   loadAll: () => Promise<void>
+  /** Older pages back through message `seq` (a jump to it,
+   *  thread-reply-to-v1), 500 at a time, then stop. */
+  loadBack: (seq: number) => Promise<void>
   loadingOlder: boolean
   /** True once the first snapshot for this addr has landed (or failed), or
    *  the view cache had messages to show. */
@@ -847,6 +850,48 @@ export function useOverlayThread(opts: {
     }
   }, [scope, addr])
 
+  // A jump to an older message (thread-reply-to-v1): the same plain page
+  // read as loadAll, 500 at a time, stopping once message `seq` (or the
+  // Thread's start) is in memory.
+  const loadBack = useCallback(
+    async (seq: number) => {
+      if (!addr.trim() || !hasMoreRef.current || loadingOlderRef.current) return
+      const first = itemsRef.current
+      if (first.length === 0) return
+      let before = first.reduce((m, it) => (it.seq < m ? it.seq : m), Number.POSITIVE_INFINITY)
+      if (!Number.isFinite(before) || before <= seq) return
+      const requestedAddr = addr
+      loadingOlderRef.current = true
+      setLoadingOlder(true)
+      try {
+        while (addrRef.current === requestedAddr && hasMoreRef.current && before > seq) {
+          const raw = await daemonCliGet<unknown>(scope, 'thread', {
+            addr,
+            limit: OVERLAY_SEARCH_PAGE_SIZE,
+            before_seq: before,
+            ...threadCardsParams(scope),
+          })
+          if (addrRef.current !== requestedAddr) return
+          const snap = threadItemsFromSnapshot(raw)
+          hasMoreRef.current = snap.has_more
+          setHasMore(snap.has_more)
+          setItems((prev) => mergeOlderOverlayItems(prev, snap.items))
+          const next = snap.items.reduce((m, it) => (it.seq < m ? it.seq : m), Number.POSITIVE_INFINITY)
+          if (!Number.isFinite(next) || next >= before) break
+          before = next
+        }
+      } catch (e) {
+        if (addrRef.current === requestedAddr) {
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      } finally {
+        loadingOlderRef.current = false
+        setLoadingOlder(false)
+      }
+    },
+    [scope, addr],
+  )
+
   const post = useCallback(
     async (text: string, attachments?: ThreadPostAttachment[]) => {
       const trimmed = text.trim()
@@ -1055,6 +1100,7 @@ export function useOverlayThread(opts: {
     hasMore,
     loadOlder,
     loadAll,
+    loadBack,
     loadingOlder,
     loaded,
     fromCache,

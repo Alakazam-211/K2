@@ -395,6 +395,11 @@ export interface OverlayDoc {
    *  `isOwnThreadPost` decides "You" and `isAgentThreadPost` /
    *  `isPersonThreadPost` (lib/thread-viewer) who sent it. */
   author?: ThreadAuthor | SystemThreadAuthor | null
+  /** thread-reply-to-v1 (0.46.18): the message or card (by its seq in this
+   *  Thread; `cardId` on a card) this post replies to, written by the
+   *  daemon. The body still starts with the visible `↩ #N <from>:` reply.
+   *  Absent on every other post and on older servers. */
+  replyTo?: { seq: number; cardId?: string } | null
   /** thread-mine-v1 (0.46.8): the daemon's answer to "is this the reader's
    *  own post?", for the credential that read it (every read page, frame
    *  and post answer, on a person's post). It wins over the client's own

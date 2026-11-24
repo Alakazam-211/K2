@@ -360,6 +360,254 @@ fn proxy_one(mut c: TcpStream, heads: &Log, mode: ProxyMode) {
     let _ = t.join();
 }
 
+/// The server config for [`Pki`]'s certificate.
+fn server_config(pki: &Pki) -> Arc<rustls::ServerConfig> {
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![pki.leaf.clone()], pki.key.clone_key())
+        .unwrap(),
+    )
+}
+
+impl ProxyStub {
+    /// An `https://` proxy: [`ProxyStub::start`]'s, inside TLS with
+    /// [`Pki`]'s certificate (reach it as `localhost`). Its heads are the
+    /// CONNECTs as they came inside the TLS.
+    pub fn start_tls(pki: &Pki, mode: ProxyMode) -> ProxyStub {
+        let cfg = server_config(pki);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let heads: Log = Arc::default();
+        let keep = Arc::clone(&heads);
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(c) = c else { continue };
+                let (keep, cfg) = (Arc::clone(&keep), Arc::clone(&cfg));
+                std::thread::spawn(move || proxy_one_tls(c, cfg, &keep, mode));
+            }
+        });
+        ProxyStub { port, heads }
+    }
+}
+
+fn proxy_one_tls(c: TcpStream, cfg: Arc<rustls::ServerConfig>, heads: &Log, mode: ProxyMode) {
+    c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let Ok(conn) = rustls::ServerConnection::new(cfg) else {
+        return;
+    };
+    let mut s = rustls::StreamOwned::new(conn, c);
+    let mut got = Vec::new();
+    let mut b = [0u8; 1];
+    while !got.ends_with(b"\r\n\r\n") {
+        match s.read(&mut b) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => got.push(b[0]),
+        }
+    }
+    let head = String::from_utf8_lossy(&got).into_owned();
+    heads.lock().unwrap().push(head.clone());
+    let target_port = head
+        .strip_prefix("CONNECT ")
+        .and_then(|r| r.split(' ').next())
+        .and_then(|a| a.rsplit_once(':'))
+        .and_then(|(_, p)| p.parse::<u16>().ok());
+    let up = match (mode, target_port) {
+        (ProxyMode::Tunnel, Some(port)) => TcpStream::connect(("127.0.0.1", port)).ok(),
+        _ => None,
+    };
+    let Some(up) = up else {
+        let line = match mode {
+            ProxyMode::Status(line) => line,
+            _ => "407 Proxy Authentication Required",
+        };
+        let _ = s.write_all(
+            format!("HTTP/1.1 {line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
+        );
+        let _ = s.flush();
+        return;
+    };
+    let _ = s
+        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        .and_then(|()| s.flush());
+    pump(s, up);
+}
+
+/// Bytes both ways between the proxy's TLS and the upstream, on one
+/// thread (a TLS stream can't be split): short read timeouts on both.
+fn pump(mut s: rustls::StreamOwned<rustls::ServerConnection, TcpStream>, mut up: TcpStream) {
+    let tick = Some(Duration::from_millis(10));
+    s.sock.set_read_timeout(tick).unwrap();
+    up.set_read_timeout(tick).unwrap();
+    let quiet = |e: &std::io::Error| {
+        matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        )
+    };
+    let mut buf = [0u8; 16 * 1024];
+    let (mut client_open, mut up_open) = (true, true);
+    let end = std::time::Instant::now() + Duration::from_secs(60);
+    while (client_open || up_open) && std::time::Instant::now() < end {
+        if client_open {
+            match s.read(&mut buf) {
+                Ok(0) => {
+                    client_open = false;
+                    let _ = up.shutdown(Shutdown::Write);
+                }
+                Ok(n) => {
+                    if up.write_all(&buf[..n]).is_err() {
+                        return;
+                    }
+                }
+                Err(e) if quiet(&e) => {}
+                Err(_) => {
+                    client_open = false;
+                    let _ = up.shutdown(Shutdown::Write);
+                }
+            }
+        }
+        if up_open {
+            match up.read(&mut buf) {
+                Ok(0) => {
+                    up_open = false;
+                    s.conn.send_close_notify();
+                    let _ = s.flush();
+                }
+                Ok(n) => {
+                    if s.write_all(&buf[..n]).and_then(|()| s.flush()).is_err() {
+                        return;
+                    }
+                }
+                Err(e) if quiet(&e) => {}
+                Err(_) => up_open = false,
+            }
+        }
+    }
+}
+
+/// A recording SOCKS5 proxy on loopback (RFC 1928; RFC 1929 when it
+/// requires a user and password): each connection's handshake is one
+/// line in [`SocksStub::log`], then the bytes both ways to
+/// `127.0.0.1:<the request's port>` (the TLS stub; the name is not
+/// looked up).
+pub struct SocksStub {
+    pub port: u16,
+    pub log: Log,
+}
+
+impl SocksStub {
+    pub fn start(auth: Option<(&'static str, &'static str)>) -> SocksStub {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let log: Log = Arc::default();
+        let keep = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(c) = c else { continue };
+                let keep = Arc::clone(&keep);
+                std::thread::spawn(move || socks_one(c, &keep, auth));
+            }
+        });
+        SocksStub { port, log }
+    }
+
+    /// `<scheme>://[<user>:<pass>@]127.0.0.1:<port>`.
+    pub fn url(&self, scheme: &str, auth: Option<(&str, &str)>) -> String {
+        match auth {
+            Some((u, p)) => format!("{scheme}://{u}:{p}@127.0.0.1:{}", self.port),
+            None => format!("{scheme}://127.0.0.1:{}", self.port),
+        }
+    }
+}
+
+/// One SOCKS5 connection. The line: the methods offered (method 1,
+/// GSS-API, left out: a curl built with GSS-API offers it, the binary
+/// never does, and the stub never picks it), the user and password sent,
+/// and the target as the request named it.
+fn socks_one(mut c: TcpStream, log: &Log, auth: Option<(&str, &str)>) {
+    c.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+    let exact = |c: &mut TcpStream, n: usize| -> Option<Vec<u8>> {
+        let mut b = vec![0u8; n];
+        c.read_exact(&mut b).ok().map(|()| b)
+    };
+    let Some(h) = exact(&mut c, 2) else { return };
+    let Some(methods) = exact(&mut c, usize::from(h[1])) else {
+        return;
+    };
+    let offered: Vec<u8> = methods.iter().copied().filter(|m| *m != 1).collect();
+    let pick = match auth {
+        Some(_) if methods.contains(&2) => 2,
+        None if methods.contains(&0) => 0,
+        _ => 0xff,
+    };
+    let mut line = format!("socks{} methods {offered:?}", h[0]);
+    let _ = c.write_all(&[5, pick]);
+    if pick == 0xff {
+        log.lock().unwrap().push(line);
+        return;
+    }
+    if pick == 2 {
+        let Some(v) = exact(&mut c, 2) else { return };
+        let Some(user) = exact(&mut c, usize::from(v[1])) else {
+            return;
+        };
+        let Some(pl) = exact(&mut c, 1) else { return };
+        let Some(pass) = exact(&mut c, usize::from(pl[0])) else {
+            return;
+        };
+        let (user, pass) = (
+            String::from_utf8_lossy(&user).into_owned(),
+            String::from_utf8_lossy(&pass).into_owned(),
+        );
+        line.push_str(&format!(" user {user:?} pass {pass:?}"));
+        let ok = auth.is_some_and(|(u, p)| u == user && p == pass);
+        let _ = c.write_all(&[1, if ok { 0 } else { 1 }]);
+        if !ok {
+            log.lock().unwrap().push(line);
+            return;
+        }
+    }
+    let Some(req) = exact(&mut c, 4) else { return };
+    let target = match req[3] {
+        1 => exact(&mut c, 4).map(|a| format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3])),
+        3 => exact(&mut c, 1)
+            .and_then(|l| exact(&mut c, usize::from(l[0])))
+            .map(|n| String::from_utf8_lossy(&n).into_owned()),
+        4 => exact(&mut c, 16).map(|a| {
+            let mut o = [0u8; 16];
+            o.copy_from_slice(&a);
+            format!("[{}]", std::net::Ipv6Addr::from(o))
+        }),
+        t => Some(format!("<address type {t}>")),
+    };
+    let (Some(target), Some(p)) = (target, exact(&mut c, 2)) else {
+        return;
+    };
+    let port = u16::from_be_bytes([p[0], p[1]]);
+    line.push_str(&format!(" connect {target}:{port}"));
+    log.lock().unwrap().push(line);
+    let Ok(up) = TcpStream::connect(("127.0.0.1", port)) else {
+        let _ = c.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]);
+        return;
+    };
+    let _ = c.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    c.set_read_timeout(None).unwrap();
+    let (mut c2, mut up2) = (c.try_clone().unwrap(), up.try_clone().unwrap());
+    let t = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut c2, &mut up2);
+        let _ = up2.shutdown(Shutdown::Write);
+    });
+    let (mut up, mut c) = (up, c);
+    let _ = std::io::copy(&mut up, &mut c);
+    let _ = c.shutdown(Shutdown::Write);
+    let _ = t.join();
+}
+
 /// A request with the two CLIs' own lines masked: the `User-Agent`
 /// (`k5/…`, `curl/…`, or `Python-urllib/…` for the shell's Python), the hand-over `X-K5-Cli-Via` (masked) and the
 /// side's own `X-K5-Cli-Version` and `X-K5-Cli-Noun` (dropped). Also
@@ -437,10 +685,20 @@ pub fn both(
     proxy: &ProxyStub,
     tls: &TlsStub,
 ) -> [SideRun; 2] {
+    both_logged(rig, c, &proxy.heads, tls)
+}
+
+/// [`both`] with any proxy's log (a [`SocksStub`]'s lines).
+pub fn both_logged(
+    rig: &super::parity::Rig,
+    c: &super::parity::Case,
+    proxy_log: &Log,
+    tls: &TlsStub,
+) -> [SideRun; 2] {
     use super::parity::{normalise, Side};
     let mut runs = Vec::new();
     for (bash, side) in [(true, Side::Bash), (false, Side::Rust)] {
-        take(&proxy.heads);
+        take(proxy_log);
         take(&tls.log);
         take(&tls.errors);
         rig.prepare(side, c);
@@ -457,7 +715,7 @@ pub fn both(
         runs.push(SideRun {
             out,
             daemon,
-            proxy: take(&proxy.heads),
+            proxy: take(proxy_log),
             tls: take(&tls.log).iter().map(|r| masked(r)).collect(),
             tls_errors: take(&tls.errors),
         });

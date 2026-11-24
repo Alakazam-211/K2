@@ -689,6 +689,159 @@ fn talk_at_a_remote_host_through_the_proxy() {
     tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", "remote-tok-9"]);
 }
 
+/// `talk ws@https://<host>` through an `https://` proxy with a user part:
+/// TLS to the proxy (its certificate checked, `localhost` in the
+/// throwaway CA's certificate), the CONNECT and its Basic inside that
+/// TLS, the host's token only inside the tunnel's own TLS, the same
+/// screen on both sides. It used to be the shell's alone.
+#[test]
+fn talk_through_an_https_proxy() {
+    use common::tunnel::{self, ProxyMode, ProxyStub, TlsStub, HOST};
+    let rig = Rig::new(VERB, "proxytls");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let remote = TlsStub::start(&pki, 200, SCREEN);
+    let proxy = ProxyStub::start_tls(&pki, ProxyMode::Tunnel);
+    let target = format!("{HOST}:{}", remote.port);
+    let addr = leak(format!("ws@https://{target}"));
+    let url = format!("https://acme-proxy:pr0xy-s3cret@localhost:{}", proxy.port);
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    let c = env(
+        plain(
+            "ws@https://host --read-only through an https:// proxy",
+            words(vec![addr, "--read-only"]),
+            vec![],
+            0,
+            0,
+        ),
+        &[
+            ("K2_REMOTE_TOKEN", "remote-tok-9"),
+            ("https_proxy", url.as_str()),
+            ("SSL_CERT_FILE", ca.as_str()),
+        ],
+    );
+    let [b, r] = tunnel::both(&rig, &c, &proxy, &remote);
+    let basic = tunnel::basic_line("acme-proxy", "pr0xy-s3cret");
+    for run in [&r, &b] {
+        tunnel::assert_tunnel_only(c.name, run, &target, Some(&basic), "remote-tok-9");
+        assert!(
+            run.daemon.is_empty(),
+            "never this machine's daemon: {run:?}"
+        );
+    }
+    tunnel::assert_same(c.name, &b, &r);
+    assert_eq!(r.out.code, Some(0), "{r:?}");
+    assert!(r.out.stdout.contains("$ build"), "{r:?}");
+    tunnel::assert_unprinted(c.name, &[b, r], &["pr0xy-s3cret", "remote-tok-9"]);
+}
+
+/// `talk ws@https://<host>` through a SOCKS5 proxy: `socks5h://` with no
+/// authentication and with a user and password (RFC 1929), both sides
+/// against the same recording stub, the same handshake (curl's GSS-API
+/// method left out: the named difference curl-socks5-gssapi), the same
+/// requests inside the tunnel and the same screen; `socks5://` resolves
+/// the target's name here, and a name that doesn't resolve fails the same
+/// way on both, before any proxy is reached. A proxy scheme curl refuses
+/// (`ftp://`) fails the same on both, and nothing is sent anywhere.
+#[test]
+fn talk_through_a_socks5_proxy() {
+    use common::tunnel::{self, SocksStub, TlsStub, HOST};
+    let rig = Rig::new(VERB, "socks");
+    let pki = tunnel::Pki::new(&rig.dir.join("pki"));
+    let remote = TlsStub::start(&pki, 200, SCREEN);
+    let open = SocksStub::start(None);
+    let locked = SocksStub::start(Some(("acme", "pw")));
+    let target = format!("{HOST}:{}", remote.port);
+    let addr = leak(format!("ws@https://{target}"));
+    let ca = pki.ca_file.to_string_lossy().into_owned();
+    for (name, stub, url, line) in [
+        (
+            "through socks5h://",
+            &open,
+            open.url("socks5h", None),
+            Some(format!("socks5 methods [0] connect {target}")),
+        ),
+        (
+            "through socks5h:// with a user and password",
+            &locked,
+            locked.url("socks5h", Some(("acme", "pw"))),
+            Some(format!(
+                "socks5 methods [0, 2] user \"acme\" pass \"pw\" connect {target}"
+            )),
+        ),
+        (
+            "through socks5:// (a name that doesn't resolve here)",
+            &open,
+            open.url("socks5", None),
+            None,
+        ),
+        (
+            "through ftp:// (a scheme curl refuses)",
+            &open,
+            format!("ftp://127.0.0.1:{}", open.port),
+            None,
+        ),
+    ] {
+        let name = leak(format!("ws@https://host --read-only {name}"));
+        let c = env(
+            plain(name, words(vec![addr, "--read-only"]), vec![], 0, 0),
+            &[
+                ("K2_REMOTE_TOKEN", "remote-tok-9"),
+                ("https_proxy", url.as_str()),
+                ("SSL_CERT_FILE", ca.as_str()),
+            ],
+        );
+        let [b, r] = tunnel::both_logged(&rig, &c, &stub.log, &remote);
+        assert_eq!(
+            (b.out.code, &b.out.stdout, &b.out.stderr),
+            (r.out.code, &r.out.stdout, &r.out.stderr),
+            "{name}: bash, then the binary"
+        );
+        assert!(
+            b.daemon.is_empty() && r.daemon.is_empty(),
+            "{name}: {b:?} {r:?}"
+        );
+        assert_eq!(b.proxy, r.proxy, "{name}: the SOCKS handshakes");
+        let only = |t: &[(String, bool)]| t.iter().map(|(q, _)| q.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            only(&b.tls),
+            only(&r.tls),
+            "{name}: the requests in the tunnel"
+        );
+        assert!(
+            r.tls.iter().all(|(_, native)| *native),
+            "{name}: the binary's own"
+        );
+        match &line {
+            Some(l) => {
+                assert_eq!(r.proxy, [l.clone()], "{name}");
+                assert_eq!(r.out.code, Some(0), "{name}: {r:?}");
+                assert!(r.out.stdout.contains("$ build"), "{name}: {r:?}");
+                for (q, _) in &r.tls {
+                    assert!(
+                        q.contains("Authorization: Bearer remote-tok-9"),
+                        "{name}: {q}"
+                    );
+                }
+            }
+            None => {
+                assert!(
+                    r.proxy.is_empty(),
+                    "{name}: nothing reached the proxy: {r:?}"
+                );
+                assert!(r.tls.is_empty(), "{name}: nothing sent: {r:?}");
+                assert_ne!(r.out.code, Some(0), "{name}: {r:?}");
+            }
+        }
+        for run in [&b, &r] {
+            assert!(
+                run.proxy.iter().all(|l| !l.contains("remote-tok-9")),
+                "{name}: the token reached the proxy: {run:?}"
+            );
+        }
+        tunnel::assert_unprinted(name, &[b, r], &["remote-tok-9"]);
+    }
+}
+
 /// K2's shared transport rule: a token goes to another machine over
 /// https only, and "this computer" is judged by the URL as written (a
 /// 127.0.0.0/8 or ::1 literal, or exactly `localhost`), never a lookup.

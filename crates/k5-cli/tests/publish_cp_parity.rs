@@ -920,15 +920,17 @@ fn the_control_plane_itself_when_no_daemon_makes_the_call() {
     ));
 }
 
-/// With a token in `tunnel.json`, a proxy setting the binary doesn't
-/// read: the shell's (it might have to call the control plane itself).
+/// With a token in `tunnel.json` and a SOCKS proxy that is down: both
+/// sides fail to reach the control plane through it (curl's 7, never
+/// direct) and go on as they do with no control plane; the binary's own
+/// (it used to hand this to the shell).
 #[test]
-fn a_proxy_it_does_not_read_is_the_shell_s() {
-    let rig = Rig::new(VERB, "cpshell");
-    rig.check(&shell(with(
-        vec![("HTTPS_PROXY", "socks5://127.0.0.1:9".into())],
+fn a_socks_proxy_that_is_down_is_the_same_on_both() {
+    let rig = Rig::new(VERB, "cpsocks");
+    rig.check(&with(
+        vec![("HTTPS_PROXY", "socks5h://127.0.0.1:9".into())],
         case(
-            "status, a socks proxy",
+            "status, a socks proxy that is down",
             &["status"],
             &[],
             vec![relayed(200, SUBS)],
@@ -936,7 +938,7 @@ fn a_proxy_it_does_not_read_is_the_shell_s() {
             0,
             1,
         ),
-    )));
+    ));
 }
 
 #[test]

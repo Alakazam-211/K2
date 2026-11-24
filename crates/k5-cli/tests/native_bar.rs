@@ -1440,6 +1440,56 @@ fn listing(rows: &[&String]) -> String {
         .join("\n  ")
 }
 
+/// The families that read the person's proxy (curl's rule, and the
+/// Python rule for `connect`): their class R proxy probes are the ones
+/// [`the_proxy_rows_are_native`] runs. The sweeps' other families never
+/// read a proxy.
+const PROXY_FAMILIES: [&str; 8] = [
+    "talk",
+    "read",
+    "remote-session",
+    "remote",
+    "daemon",
+    "connect",
+    "wiki",
+    "publish",
+];
+
+/// Every class R probe of the proxy group in a family that reads the
+/// proxy runs natively: an `https://`, SOCKS4, SOCKS4a, SOCKS5, SOCKS5h,
+/// IPv6, user-part or scheme-less proxy, `no_proxy` with blanks, a
+/// setting curl refuses, a variable that is not UTF-8. A no-bash build
+/// has no shell to hand them to. Its own test, so that a hand-off put
+/// back (the bite) fails it without the whole bar.
+#[test]
+fn the_proxy_rows_are_native() {
+    let probes: Vec<Probe> = probes()
+        .into_iter()
+        .filter(|p| {
+            PROXY_FAMILIES.contains(&p.family.as_str())
+                && p.run_time
+                    .as_ref()
+                    .and_then(|rt| rt.variant.as_ref())
+                    .is_some_and(|v| v.group == "proxy")
+        })
+        .collect();
+    assert!(probes.len() > 50, "the proxy rows: {} probes", probes.len());
+    let refs: Vec<&Probe> = probes.iter().collect();
+    let fell: Vec<String> = run_time(&refs).into_iter().map(|p| p.form).collect();
+    println!(
+        "proxy probes: {}, handed to bash: {}",
+        probes.len(),
+        fell.len()
+    );
+    assert!(
+        fell.is_empty(),
+        "{} of {} proxy probes hand the line to bash:\n  {}",
+        fell.len(),
+        probes.len(),
+        fell.join("\n  ")
+    );
+}
+
 #[test]
 fn the_native_bar_ceiling_holds() {
     let probes = probes();

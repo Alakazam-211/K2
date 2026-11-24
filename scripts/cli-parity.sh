@@ -225,6 +225,8 @@ EXPECTED_DIFFS=(
     # cli/k2>: line <n>: warning: command substitution: ignored null byte in
     # input" on stderr; the binary drops it with no line (clone's port_text).
     # The refusal after it, its exit and that nothing is sent are the same.
+    "curl-socks5-gssapi|K5 shared transport (curl-proxy-env)|a SOCKS5 proxy (https_proxy=socks5:// or socks5h://; the check: \`talk ws@https://<host>\` at a recording SOCKS5 stand-in, crates/k5-cli/tests/talk_parity.rs, talk_through_a_socks5_proxy): a curl built with GSS-API offers SOCKS5 method 1 (GSS-API) in its greeting beside no authentication and, with a user part, user and password; the binary never offers GSS-API. A proxy that picks no authentication or user and password (method 0 or 2) sees the same handshake from both after that; one that would pick GSS-API gets it from curl and not from the binary (it refuses the binary's greeting). Every other byte to the proxy and through the tunnel is the same"
+    "connect-account-proxy-other-scheme|K5 connect login and logout through the proxy|\`connect login\` and \`connect logout\` to an https account server that isn't this computer with https_proxy set to a URL of another scheme (socks5://, https://): the shell's Python urllib sends a plain HTTP CONNECT to that host (python-proxy-other-scheme); the binary sends nothing. connect login prints \"Error: proxy <scheme>://… is not supported: only http:// proxies are\" and exits 1 before it asks for anything; connect logout's best-effort request is not sent, and its lines and exit are the same as bash's (the answer is never read by either)"
     "python-proxy-other-scheme|K5 urllib families through the proxy|a daemon at K2_HOST=https://<name> with the person's https_proxy set to a URL of another scheme (socks5://, https://; the check: \`db status\`, socks5:// at a stand-in proxy that answers every CONNECT 407): bash's Python (urllib's ProxyHandler) sends a plain HTTP CONNECT to that host whatever the scheme, in its own version's head (python-connect-host: \"HTTP/1.1\" and a Host line from 3.12, \"HTTP/1.0\" and none on 3.9 to 3.11); the binary sends nothing, prints \"Error: proxy socks5://… is not supported: only http:// proxies are\" as its first stderr line (the scheme only: the URL may hold the proxy's password) and exits non-zero (crates/k5-cli/tests/urllib_proxy_parity.rs, a_proxy_with_another_scheme_is_named)"
     "python-connect-host|K5 urllib families and clone through the proxy|the CONNECT head a Python block sends to the person's http:// proxy (the urllib families' daemon at K2_HOST=https://<name>, clone's remote; the check: \`db status\` at a stand-in proxy that answers every CONNECT 407): the binary always writes Python 3.12's, \"CONNECT <host>:<port> HTTP/1.1\", a Proxy-Authorization line when the proxy URL has a user and a password, then \"Host: <host>:<port>\"; Python 3.9 to 3.11 (macOS's python3 is 3.9) write \"CONNECT <host>:<port> HTTP/1.0\", the same Proxy-Authorization line, and no Host line. On Python 3.12 and later the two heads are the same byte for byte. The parity rows check bash's head exactly in its own version's form and compare the rest byte for byte (crates/k5-cli/tests/common/tunnel.rs, bash_heads_as_312; urllib_proxy_parity.rs, plain_http_daemon_parity.rs's preset_list_over_tls_through_the_proxy, clone_engine_parity.rs's proxy rows)"
     # NOTE (text, not a check; no difference on our nodes today): Python
@@ -2000,6 +2002,123 @@ _px407_db() {
     if [ "$side" = binary ]; then set -- "$WORK/bin/k5"; else set -- bash "$ROOT/cli/k2"; fi
     (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" TMPDIR="$tmp" K2_HOST=https://cp.example.invalid \
         K2_PORT=4711 https_proxy="$proxy" "$@" db status) >"$d/out.$side" 2>"$d/err.$side" </dev/null
+}
+
+# _socksrec_start DIR: a stand-in SOCKS5 proxy on loopback that writes
+# each greeting's methods (one line, as numbers) to DIR/log, refuses every
+# method (0xff) and closes; its port in DIR/port, its pid in DIR/pid.
+_socksrec_start() {
+    local d="$1" n
+    mkdir -p "$d/home/.k2" "$d/ws/.k2"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    rm -f "$d/port"; : >"$d/log"
+    python3 -I -c '
+import os, socket, sys
+d = sys.argv[1]
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+s.listen(8)
+open(os.path.join(d, "port.tmp"), "w").write(str(s.getsockname()[1]))
+os.rename(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+while True:
+    c, _ = s.accept()
+    c.settimeout(5)
+    got = b""
+    try:
+        while len(got) < 2 or len(got) < 2 + got[1]:
+            b = c.recv(1)
+            if not b:
+                break
+            got += b
+        c.sendall(b"\x05\xff")
+    except Exception:
+        pass
+    with open(os.path.join(d, "log"), "a") as f:
+        f.write(" ".join(str(b) for b in got) + "\n")
+    c.close()
+' "$d" &
+    echo "$!" >"$d/pid"
+    for n in $(seq 1 50); do [ -s "$d/port" ] && return 0; sleep 0.1; done
+    return 1
+}
+
+# check_curl_socks5_gssapi: K2_HOST=https://cp.example.invalid through
+# socks5h:// with a user part at the stand-in (_socksrec_start), both CLIs
+# running `whoami`. The binary's greeting offers no authentication and
+# user and password (5 2 0 2); bash's curl offers GSS-API too (5 3 0 1 2)
+# when it is built with it, else the binary's (then: not proven here).
+check_curl_socks5_gssapi() {
+    local d="$WORK/socksgss" side problems=() gss=no
+    curl --version | grep -q 'GSS-API' && gss=yes
+    _socksrec_start "$d" || { echo "the stand-in SOCKS5 proxy didn't start"; return 1; }
+    for side in bash binary; do
+        : >"$d/log"
+        if [ "$side" = bash ]; then set -- K5_CLI_VIA=rust bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+        (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" K2_HOST=https://cp.example.invalid K2_PORT=443 \
+            https_proxy="socks5h://acme:pr0xy-s3cret@127.0.0.1:$(cat "$d/port")" "$@" whoami) \
+            >"$d/out.$side" 2>"$d/err.$side" </dev/null || true
+        cp "$d/log" "$d/log.$side"
+    done
+    _px407_stop "$d"
+    [ -s "$d/log.binary" ] && ! grep -qv '^5 2 0 2$' "$d/log.binary" \
+        || problems+=("the binary's greetings: $(tr '\n' ';' <"$d/log.binary")")
+    ! grep -q 'pr0xy' "$d/out.binary" "$d/err.binary" || problems+=("the binary printed the proxy's password")
+    if [ "$gss" = yes ]; then
+        [ -s "$d/log.bash" ] && ! grep -qv '^5 3 0 1 2$' "$d/log.bash" \
+            || problems+=("bash's curl (GSS-API) greetings: $(tr '\n' ';' <"$d/log.bash")")
+    else
+        cmp -s "$d/log.bash" "$d/log.binary" || problems+=("bash's curl (no GSS-API) greetings: $(tr '\n' ';' <"$d/log.bash")")
+    fi
+    [ ${#problems[@]} -eq 0 ] || { printf '%s\n' "${problems[@]}"; return 1; }
+    if [ "$gss" = no ]; then
+        echo "this curl has no GSS-API: both greet alike here"
+        return 3
+    fi
+}
+
+# check_connect_account_proxy_other_scheme: the account server at
+# K2_CONNECT_DB_URL=https://cp.example.invalid with https_proxy=socks5://
+# at the stand-in (_px407_start). connect logout with a saved access
+# token: bash's Python sends one plain CONNECT, the binary nothing, and
+# the two print and exit alike. connect login --token-stdin: the binary
+# sends nothing, its first stderr line names the scheme only, exit 1.
+check_connect_account_proxy_other_scheme() {
+    local d="$WORK/acctscheme" side rc problems=() want
+    want="Error: proxy socks5://$(printf '\342\200\246') is not supported: only http:// proxies are"
+    _px407_start "$d" || { echo "the stand-in proxy didn't start"; return 1; }
+    for side in bash binary; do
+        : >"$d/log"
+        printf '{"access_token": "acct-tok-parity"}\n' >"$d/home/.k2/connect-account.json"
+        if [ "$side" = bash ]; then set -- K5_CLI_VIA=rust bash "$ROOT/cli/k2"; else set -- "$WORK/bin/k5"; fi
+        rc=0
+        (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" K2_CONNECT_DB_URL=https://cp.example.invalid \
+            https_proxy="socks5://acme:pr0xy-s3cret@127.0.0.1:$(cat "$d/port")" "$@" connect logout) \
+            >"$d/out.$side" 2>"$d/err.$side" </dev/null || rc=$?
+        echo "$rc" >"$d/rc.$side"
+        cp "$d/log" "$d/log.$side"
+        : >"$d/log"
+        rc=0
+        (cd "$d/ws" && exec env -i PATH="$PATH" HOME="$d/home" K2_CONNECT_DB_URL=https://cp.example.invalid \
+            https_proxy="socks5://acme:pr0xy-s3cret@127.0.0.1:$(cat "$d/port")" "$@" connect login --token-stdin) \
+            >"$d/lout.$side" 2>"$d/lerr.$side" <<<"jwt-parity" || rc=$?
+        echo "$rc" >"$d/lrc.$side"
+        cp "$d/log" "$d/llog.$side"
+    done
+    _px407_stop "$d"
+    grep -q '^CONNECT cp.example.invalid:443 HTTP/1' "$d/log.bash" \
+        || problems+=("logout: bash's Python sent no plain CONNECT: $(head -c 300 "$d/log.bash")")
+    [ ! -s "$d/log.binary" ] || problems+=("logout: the binary sent: $(head -c 300 "$d/log.binary")")
+    cmp -s "$d/out.bash" "$d/out.binary" || problems+=("logout: stdout differs: '$(head -c 300 "$d/out.binary")'")
+    cmp -s "$d/err.bash" "$d/err.binary" || problems+=("logout: stderr differs: '$(head -c 300 "$d/err.binary")'")
+    cmp -s "$d/rc.bash" "$d/rc.binary" || problems+=("logout: bash exited $(cat "$d/rc.bash"), the binary $(cat "$d/rc.binary")")
+    [ ! -s "$d/llog.binary" ] || problems+=("login: the binary sent: $(head -c 300 "$d/llog.binary")")
+    [ "$(head -n 1 "$d/lerr.binary")" = "$want" ] || problems+=("login: the binary's first stderr line: $(head -n 1 "$d/lerr.binary")")
+    [ "$(cat "$d/lrc.binary")" = 1 ] || problems+=("login: the binary exited $(cat "$d/lrc.binary"), want 1")
+    ! grep -q 'pr0xy' "$d/err.binary" "$d/lerr.binary" "$d/out.binary" "$d/lout.binary" \
+        || problems+=("the binary printed the proxy's password")
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
 }
 
 for entry in "${EXPECTED_DIFFS[@]}"; do

@@ -560,7 +560,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             return Err((
                 409,
                 "front_off",
-                concat!("the :80 front comes with ", product_name!(), "'s :443 front, which is off here: the owner runs ", cli_name!(), " front enable first. Names through ", login_name!(), " need nothing here: K2's relays redirect them").into(),
+                concat!("the :80 front comes with ", product_name!(), "'s :443 front, which is off here: the owner runs ", cli_name!(), " front enable first. Names through ", login_name!(), " need nothing here: ", product_name!(), "'s relays redirect them").into(),
             ));
         }
     }
@@ -588,7 +588,7 @@ pub fn http_set(on: bool) -> Result<Value, Refusal> {
             "relay": relay,
             "httpServing": http80::serving(),
             "restarting": false,
-            "next": if on { "K2's relays redirect http:// to https for this server's names." } else { "K2's relays no longer redirect http:// for this server's names." },
+            "next": if on { concat!(product_name!(), "'s relays redirect http:// to https for this server's names.") } else { concat!(product_name!(), "'s relays no longer redirect http:// for this server's names.") },
         }));
     }
     if on {
@@ -935,7 +935,7 @@ pub fn foreign_443_message(units: &[String]) -> String {
          certificates), then run {CLI_NAME} front enable and {CLI_NAME} front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
          for every name {PRODUCT_NAME} doesn't serve): its sites keep working and {PRODUCT_NAME} serves your App names; (2) keep it and have it \
          proxy the App's name to the App yourself, and add the name with {CLI_NAME} app domain add <app-id> <name> \
-         --external so the App takes it as its origin; or (3) on {LOGIN_NAME} Pro, point the name at K2's relays \
+         --external so the App takes it as its origin; or (3) on {LOGIN_NAME} Pro, point the name at {PRODUCT_NAME}'s relays \
          (Path B, {CLI_NAME} app domain --help): nothing on :443, no sudo. {PRODUCT_NAME} never takes :443 from another server."
     )
 }

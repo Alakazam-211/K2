@@ -420,7 +420,7 @@ fn check_address(who: &Who, cat: &Catalog, params: &HashMap<String, String>, f: 
     let res = resolve_address(e, &id, &ws.id, param(params, "address"));
     let tier = match f.pro {
         Some(true) => json!({ "pro": true }),
-        Some(false) => json!({ "pro": false, "code": sc::PRO_REQUIRED, "hint": format!("a K2 address needs {LOGIN_NAME} Pro ({})", k2_core::hosts::DASHBOARD_URL) }),
+        Some(false) => json!({ "pro": false, "code": sc::PRO_REQUIRED, "hint": format!("a {PRODUCT_NAME} address needs {LOGIN_NAME} Pro ({})", k2_core::hosts::DASHBOARD_URL) }),
         None => json!({ "pro": null, "hint": "Pro is checked when you deploy" }),
     };
     Ok(match res {
@@ -447,7 +447,7 @@ pub(crate) fn install_with(who: &Who, v: &J, cat: &Catalog, f: &Facts, h: &dyn H
         return Err(no(
             "custom_domain_later",
             400,
-            concat!("a custom domain at deploy comes in a later ", product_name!(), ": deploy with a K2 address, then add yours with ", cli_name!(), " app domain add <app> <host>"),
+            concat!("a custom domain at deploy comes in a later ", product_name!(), ": deploy with a ", product_name!(), " address, then add yours with ", cli_name!(), " app domain add <app> <host>"),
         ));
     }
     if !f.linux {

@@ -204,7 +204,7 @@ pub(crate) fn set_test_nat(v: Option<Option<bool>>) {
 /// The Path B pointer for a box behind a router (PRD §7), when Path B is
 /// open to it.
 pub const NAT_WORDING: &str = concat!("This server is on a home or office connection. Pointing your domain here would send \
-visitors to your network directly and show its address, so ", product_name!(), " uses ", login_name!(), ": your domain points at K2's relays \
+visitors to your network directly and show its address, so ", product_name!(), " uses ", login_name!(), ": your domain points at ", product_name!(), "'s relays \
 (set the records below) and your address stays hidden.");
 /// What a Mac or Windows computer offers (PRD §7, vs-live PB-A16): Path B
 /// only (front443 is Linux-only).
@@ -247,7 +247,7 @@ impl PathB {
             "why": self.why_not(),
             "used": self.used,
             "cap": cap,
-            "meter": format!("{} of {cap} names through K2's relays", self.used),
+            "meter": format!("{} of {cap} names through {PRODUCT_NAME}'s relays", self.used),
             "upgrade": (self.pro == Ok(false)).then_some(super::relay_claims::UPGRADE_URL),
             "proxy": super::relay_claims::proxy_json(),
         })
@@ -306,7 +306,7 @@ pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: O
                 "behindNat": nat,
                 "records": "shown",
                 "message": format!(
-                    "{lead} Through {LOGIN_NAME} (Pro) your domain points at K2's relays instead: no sudo, nothing on port \
+                    "{lead} Through {LOGIN_NAME} (Pro) your domain points at {PRODUCT_NAME}'s relays instead: no sudo, nothing on port \
                      443 (set the records below). Path A (the owner runs {CLI_NAME} front enable) also works."
                 ),
                 "pathB": pb,

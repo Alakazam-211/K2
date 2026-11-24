@@ -536,7 +536,7 @@ pub fn normalize_address(raw: &str) -> Result<Option<String>, String> {
     };
     if first.contains('.') {
         return Err(format!(
-            "{raw} looks like your own domain: custom domains at deploy come in a later {PRODUCT_NAME}; deploy with a K2 address, then add it with {CLI_NAME} app domain add <app> {raw}"
+            "{raw} looks like your own domain: custom domains at deploy come in a later {PRODUCT_NAME}; deploy with a {PRODUCT_NAME} address, then add it with {CLI_NAME} app domain add <app> {raw}"
         ));
     }
     if !valid_label(&first) {

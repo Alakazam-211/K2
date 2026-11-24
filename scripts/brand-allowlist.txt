@@ -11,7 +11,7 @@
 # Reasons: `keeper:` stays on purpose (who reads it); `debt:` should move
 # to the brand module. Seeded 2026-11-16 from the tree as it was.
 
-17 K2 crates/k2-daemon/src/desktop/deskd_link.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+17 K2 crates/k2-daemon/src/desktop/deskd_link.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 16 K2 crates/k2-daemon/src/mail/sieve_lockdown_live.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 16 K2 crates/k2-root-helper/src/apps.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 13 K2 src/renderer/lib/context-stack.ts debt: copy that names the product; use PRODUCT_NAME from @/lib/brand
@@ -21,9 +21,8 @@
 10 K2 crates/k2-root-helper/src/pg_major.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 10 K2 crates/k2-vault/src/vault.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 9 K2 crates/k2-client/src/cli_install.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-9 K2 crates/k2-daemon/src/apps/relay_claims.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 9 K2 crates/k2-daemon/src/sql/sysops.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-8 K2 crates/k2-daemon/src/desktop/permission.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+8 K2 crates/k2-daemon/src/desktop/permission.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 8 K2 src-tauri/src/commands/linux_pkg_update.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 src-tauri/src/commands/settings.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 7 K2 src-tauri/src/commands/updater.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -33,7 +32,7 @@
 6 K2 crates/k2-vault/src/handoff.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 5 K2 crates/k2-core/src/contract/libs.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 5 K2 crates/k2-core/src/push/vectors.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-5 K2 crates/k2-daemon/src/desktop/stream.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+5 K2 crates/k2-daemon/src/desktop/stream.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 5 K2 crates/k2-root-helper/src/podman.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 5 K2 crates/k2-signer/src/verbs.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 5 K2 crates/k2-vault/src/boxmove.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -42,30 +41,27 @@
 4 K2 crates/k2-core/src/app_templates/mod.rs keeper: K2's patched wry, the upstream repo that holds the patch (a fact, the same in every brand)
 4 K2 crates/k2-core/src/skills/version.rs keeper: markers read back: K2:MANAGED (parse_skill, hire/template upgrade and apply, migrations), the old yours line (read in files written before the new one, never written), and the # K2 heading the legacy-file check reads
 4 K2 crates/k2-core/src/workspace/skill_regen.rs keeper: the K2:MIGRATED_NOTES markers the reap reads back; K2, the software every brand builds, in the licence line (licence_line) and in the K2 repository
-4 K2 crates/k2-daemon/src/apps/custom_domain_flow.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-4 K2 crates/k2-daemon/src/desktop/routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+4 K2 crates/k2-daemon/src/desktop/routes.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 4 K2 crates/k2-daemon/src/docs/host.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-4 K2 crates/k2-daemon/src/front443/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 4 K2 crates/k2-root-helper/src/core.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 4 K2 crates/k2-root-helper/src/sew.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 4 K2 crates/k2-root-proto/src/apps.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 4 K2 crates/k2-vault/src/policy.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 crates/k2-core/src/app_templates/doctor.rs keeper: K2's patched copy, the upstream repo that holds the wry patch (a fact, the same in every brand), and the WryPatch::K2 variant (code)
-3 K2 crates/k2-core/src/desktop/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+3 K2 crates/k2-core/src/desktop/mod.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 3 K2 crates/k2-core/src/hire/template/upgrade.rs keeper: names the K2:MANAGED markers a person finds in ROLE.md
 3 K2 crates/k2-core/src/llm_accounts/wallet.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/push/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-core/src/workspace/onboarding.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-daemon/src/apps/catalog_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/compute_local.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-daemon/src/desktop/managed.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+3 K2 crates/k2-daemon/src/desktop/managed.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 3 K2 crates/k2-daemon/src/domains/acme.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/mail/doctor.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/mail/sieve_lockdown.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-daemon/src/pair_page.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+3 K2 crates/k2-daemon/src/pair_page.rs keeper: K2 Companion, the phone app's name a partner's end user sees (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 3 K2 crates/k2-daemon/src/sidecar_worktree.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 3 K2 crates/k2-daemon/src/subscription_usage.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-3 K2 crates/k2-deskd/src/server.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+3 K2 crates/k2-deskd/src/server.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 3 K2 crates/k2-release-keys/src/lib.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 crates/k2-root-helper/src/desktop.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 3 K2 crates/k2-root-helper/src/front.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -76,14 +72,15 @@
 2 K2 crates/k2-approve/src/describe.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-core/src/hire/template/format.rs keeper: wire; a built-in template's author value K2 (template.toml), and the error lines that name that value
 2 K2 crates/k2-core/src/skills/writer.rs keeper: the <!-- K2:BEGIN --> and <!-- K2:END --> markers upsert_k2_section and onboarding's block removal read back
+2 K2 crates/k2-daemon/src/apps/relay_claims.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/compute_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/connect_device_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-daemon/src/desktop/virtual_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/desktop/virtual_routes.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 2 K2 crates/k2-daemon/src/folder_trust.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-daemon/src/inbox_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/inbox_routes.rs keeper: K2 Companion, the phone app's name a partner's end user sees (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 2 K2 crates/k2-daemon/src/mail/cert_names.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 2 K2 crates/k2-daemon/src/mail/cert_owner.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-2 K2 crates/k2-daemon/src/permission/view.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+2 K2 crates/k2-daemon/src/permission/view.rs keeper: K2 Companion, the phone app's name a partner's end user sees (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 2 K2 crates/k2-node-proto/src/needs.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-node-proto/src/pkgpolicy.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 2 K2 crates/k2-node-proto/src/profiles.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
@@ -121,32 +118,32 @@
 1 K2 crates/k2-core/src/sim/ios/simctl.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/sim/ios_node/fake_node.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
 1 K2 crates/k2-core/src/skin_invites.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/suite/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/terminal/alacritty_backend.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
 1 K2 crates/k2-core/src/terminal/daemon_pty.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tool_hook/admin_channels.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/tool_hook/admin_space.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-core/src/tunnel/render.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/wiki/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/workspace/context_layers.rs keeper: wire; the built-in packs' author value K2, which hire/template/format.rs checks
 1 K2 crates/k2-core/src/workspace/harness.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/workspace/settings.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-core/src/zen/garden_access/mod.rs keeper: a Rust enum variant (Actor::K2, K2 itself as a Garden access actor), not the product's name in copy
-1 K2 crates/k2-core/src/zen/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/app_push/guest_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-core/src/zen/mod.rs keeper: K2 Companion, the phone app's name a partner's end user sees (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
+1 K2 crates/k2-daemon/src/app_push/guest_routes.rs keeper: K2 Companion, the phone app's name a partner's end user sees (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 1 K2 crates/k2-daemon/src/apps/access.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/apps/domains.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/apps/catalog_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/apps/custom_domain_flow.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/apps/grace.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/cell_identity.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/compute_preset.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/compute_secrets.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/connect_users_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/db_home_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/desktop/deskd.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
-1 K2 crates/k2-daemon/src/desktop/launch_agent.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/desktop/deskd.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
+1 K2 crates/k2-daemon/src/desktop/launch_agent.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 1 K2 crates/k2-daemon/src/domains/renew.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/egress.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/federation_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
+1 K2 crates/k2-daemon/src/front443/mod.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/jobs/runner.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/cert_trigger.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/mail/defaults.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
@@ -166,13 +163,13 @@
 1 K2 crates/k2-daemon/src/v1_host_sessions.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-daemon/src/zen_access_routes.rs debt: copy that names the product; use k2_core::brand (product_name!() in a const)
 1 K2 crates/k2-deckrender/examples/fuzz_seeds.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-deskd-proto/src/lib.rs keeper: install folder, bundle, helper or asset names that installed copies and the OS hold; they move with the new app, not with the copy
-1 K2 crates/k2-deskd/src/capture.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-deskd/src/clipboard.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-deskd/src/jpeg.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-deskd/src/mac/inject.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+1 K2 crates/k2-deskd-proto/src/lib.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
+1 K2 crates/k2-deskd/src/capture.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
+1 K2 crates/k2-deskd/src/clipboard.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
+1 K2 crates/k2-deskd/src/jpeg.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
+1 K2 crates/k2-deskd/src/mac/inject.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 1 K2 crates/k2-deskd/src/notify.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
-1 K2 crates/k2-deskd/src/x11/clipboard.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
+1 K2 crates/k2-deskd/src/x11/clipboard.rs keeper: K2 Screen, the screen helper's name a partner's end user sees in the macOS privacy prompt and Login Items (K2's ruling for 0.46.18); revisit: brand-file fields for the screen helper name and the companion app name (later step)
 1 K2 crates/k2-menubar/src/main.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-node-proto/src/refusal.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first
 1 K2 crates/k2-node-proto/src/results.rs debt: copy that names the product; this crate does not link k2-client, so it needs the name from a leaf crate first

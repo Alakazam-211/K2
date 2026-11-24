@@ -235,7 +235,7 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
             "too_many_custom_domains",
             409,
             format!(
-                "this box serves at most {} custom App names on both paths together (at most {} of them through K2's relays)",
+                "this box serves at most {} custom App names on both paths together (at most {} of them through {PRODUCT_NAME}'s relays)",
                 super::custom_domain_flow::MAX_NAMES,
                 k2_core::tunnel::custom_names::MAX_PER_BOX
             ),

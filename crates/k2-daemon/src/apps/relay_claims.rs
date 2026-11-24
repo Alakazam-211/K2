@@ -98,7 +98,7 @@ pub const BASE_ENV: &str = "K2_CUSTOM_HOSTNAMES_BASE";
 pub const CAPABILITY: &str = "customSni";
 /// What K2 says while frps refuses the custom proxy: not verified on the
 /// relay yet, or another box's live proxy still holds the name. Not a failure.
-pub const WAITING_TO_TAKE_OVER: &str = concat!("waiting to take over at K2's relay (it isn't routing this name here yet; if another server held it, that server's tunnel must let go first; ", product_name!(), " tries again)");
+pub const WAITING_TO_TAKE_OVER: &str = concat!("waiting to take over at ", product_name!(), "'s relay (it isn't routing this name here yet; if another server held it, that server's tunnel must let go first; ", product_name!(), " tries again)");
 /// Where a person upgrades to Pro.
 pub const UPGRADE_URL: &str = k2_core::hosts::DASHBOARD_URL;
 
@@ -125,7 +125,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
     let d = detail.map(|d| format!(": {d}")).unwrap_or_default();
     match code {
         "pro_required" => format!(
-            "{LOGIN_NAME} says this server's plan isn't Pro: your own domain through K2's relays needs Pro. The owner upgrades at {UPGRADE_URL}"
+            "{LOGIN_NAME} says this server's plan isn't Pro: your own domain through {PRODUCT_NAME}'s relays needs Pro. The owner upgrades at {UPGRADE_URL}"
         ),
         "cap_reached" => {
             let n = v.get("count").and_then(J::as_u64);
@@ -139,7 +139,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
                 _ => format!("the most ({default_l})"),
             };
             format!(
-                "{what} already holds {of} names through K2's relays: remove one you no longer need ({CLI_NAME} app domain rm <app-id> <name>), then try again"
+                "{what} already holds {of} names through {PRODUCT_NAME}'s relays: remove one you no longer need ({CLI_NAME} app domain rm <app-id> <name>), then try again"
             )
         }
         "hostname_claimed_elsewhere" => match detail {
@@ -187,7 +187,7 @@ pub fn words_for(code: &str, hostname: &str, v: &J) -> String {
         "supabase_error" => concat!(login_name!(), "'s database didn't answer: ", product_name!(), " tries again").to_string(),
         "dns_unavailable" => concat!(login_name!(), " couldn't look up the TXT record right now: ", product_name!(), " tries again").to_string(),
         "custom_hostnames_disabled" => {
-            concat!(login_name!(), " hasn't turned on custom names yet: Path B starts working once K2's relays do; ", product_name!(), " tries again").to_string()
+            concat!(login_name!(), " hasn't turned on custom names yet: Path B starts working once ", product_name!(), "'s relays do; ", product_name!(), " tries again").to_string()
         }
         other => format!("{LOGIN_NAME} won't route {hostname} ({other}){d}"),
     }
@@ -243,7 +243,7 @@ pub fn parse_reply(status: u16, body: &str, hostname: &str) -> Result<J, CpError
     }
     if status == 404 {
         return Err(CpError::Unreachable(
-            concat!(login_name!(), "'s custom-name service isn't open yet (HTTP 404): Path B starts working once K2's relays turn it on").into(),
+            concat!(login_name!(), "'s custom-name service isn't open yet (HTTP 404): Path B starts working once ", product_name!(), "'s relays turn it on").into(),
         ));
     }
     Err(CpError::Unreachable(format!("{LOGIN_NAME} answered HTTP {status}")))
@@ -426,7 +426,7 @@ pub fn not_pro_words() -> String {
     } else {
         ""
     };
-    format!("Your own domain through K2's relays (Path B) needs {LOGIN_NAME} Pro: upgrade at {UPGRADE_URL}.{path_a}")
+    format!("Your own domain through {PRODUCT_NAME}'s relays (Path B) needs {LOGIN_NAME} Pro: upgrade at {UPGRADE_URL}.{path_a}")
 }
 
 /// What one claim step decided.
@@ -479,7 +479,7 @@ pub fn precheck(d: &AppDomain) -> Result<(), (String, String)> {
         return Err((
             "cap_reached".into(),
             format!(
-                "this server already has {cap} of {cap} names through K2's relays (the most on Pro): remove one you no longer \
+                "this server already has {cap} of {cap} names through {PRODUCT_NAME}'s relays (the most on Pro): remove one you no longer \
                  need ({CLI_NAME} app domain rm <app-id> <name>), then try again"
             ),
         ));

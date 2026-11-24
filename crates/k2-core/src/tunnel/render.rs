@@ -127,7 +127,7 @@ pub fn render_frpc_toml_with(cfg: &TunnelConfig, local_port: u16, e2e: bool, cus
     let custom_label = proxy_label(cfg).filter(|_| e2e && !custom.is_empty());
     if let Some(label) = custom_label {
         out.push('\n');
-        out.push_str("# Path B (0.46.8): this box's own domains through K2's relays. The relay\n");
+        out.push_str(concat!("# Path B (0.46.8): this box's own domains through ", product_name!(), "'s relays. The relay\n"));
         out.push_str("# passes each TLS stream through by name; the daemon ends TLS with the\n");
         out.push_str("# name's own certificate.\n");
         out.push_str("[[proxies]]\n");

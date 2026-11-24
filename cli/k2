@@ -12634,6 +12634,9 @@ Leave the container (owner only, Linux):
                                        Run it as a sandboxed system process for a
                                        device a container can't reach. Asks for
                                        an owner confirm. Label: Open (process).
+                                       Runs as a plain process, with less
+                                       isolation from your other process Apps
+                                       than a containerised App.
   k2 app exception <app-id> off        Back to the guarded container.
 
 The box (Linux):
@@ -14414,7 +14417,9 @@ stop, not a failure. A reinstall is a new App and gets none of it back.
                   Touch ID, it refuses and asks you to set an owner
                   password first (k2 users add <your-name> --role owner
                   --keep-password, from your own terminal); then it asks
-                  for that password every time.
+                  for that password every time. On a server with no owner
+                  yet, creating the first owner login is only as strong
+                  as access to this server's terminal.
                   --purge alone drops the access above too, without the
                   safety stop.
   --json          Print the daemon's answer as JSON.
@@ -15160,6 +15165,7 @@ cmd_app_exception() {
     if [ "$mode" = on ]; then
         on_b=1
         echo "This moves App $app out of its guarded container into the process exception (a sandboxed system process${devices:+ with ${devices[*]}})." >&2
+        echo "Runs as a plain process, with less isolation from your other process Apps than a containerised App." >&2
         tok="$(_vault_confirm_token app-process-exception "$app" "process exception for App $app")" || exit 3
     fi
     _app_rt_post /cli/app/exception "$(_compute_json K2_CJ_app="$app" K2_CJ_on_b="$on_b" K2_CJ_devices_j="$dev_json" K2_CJ_reason="$reason" K2_CJ_confirmToken="$tok")"
@@ -16694,7 +16700,9 @@ THE PROCESS EXCEPTION
   can't (owner_only); ask your owner. It needs the owner's confirm: a
   call without one answers vault_confirm_required, like every other
   confirm in K2. Label "Open (process)". exec and shell don't reach it
-  yet.
+  yet. Runs as a plain process, with less isolation from your other
+  process Apps than a containerised App. Approve one only for Apps
+  you'd trust with each other's data.
 
 EGRESS (guarded Apps, --engine guarded)
   A guarded App reaches the internet only through its own proxy
@@ -53590,6 +53598,8 @@ SECURITY
   Hello, or on a Linux server an owner login's password; a server's first
   owner login is made from a terminal outside K2). The owner runs it in
   person: k2 users add <you> --role owner --keep-password
+  On a server with no owner yet, creating the first owner login is only
+  as strong as access to this server's terminal.
   Agents: don't run it; tell your owner.
 
 EXIT CODES
@@ -94963,7 +94973,9 @@ Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's pub
           (k2 app grant <app> --kind chat-key) is a permission, not a key, and revoking it ends
           that App's sessions instead.
 Person only (outside K2, with Touch ID / your login / the vault password; purge with an
-owner login's password, and with none of these it asks you to set an owner password first):
+owner login's password, and with none of these it asks you to set an owner password first; on a
+server with no owner yet, creating the first owner login is only as strong as access to this
+server's terminal):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
   k2 hostchat recovery-key                  (the owner only; shows Sew's launch key, the vault's

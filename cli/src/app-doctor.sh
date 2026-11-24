@@ -2229,6 +2229,7 @@ cmd_app_exception() {
     if [ "$mode" = on ]; then
         on_b=1
         echo "This moves App $app out of its guarded container into the process exception (a sandboxed system process${devices:+ with ${devices[*]}})." >&2
+        echo "Runs as a plain process, with less isolation from your other process Apps than a containerised App." >&2
         tok="$(_vault_confirm_token app-process-exception "$app" "process exception for App $app")" || exit 3
     fi
     _app_rt_post /cli/app/exception "$(_compute_json K2_CJ_app="$app" K2_CJ_on_b="$on_b" K2_CJ_devices_j="$dev_json" K2_CJ_reason="$reason" K2_CJ_confirmToken="$tok")"

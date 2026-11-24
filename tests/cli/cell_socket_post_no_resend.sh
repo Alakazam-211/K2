@@ -544,6 +544,7 @@ echo "== 8. _compute_send POST with a vault confirmToken (k2 app exception on) =
 # Before it sends, the command says what it does and asks for the vault
 # password (stdin is empty here; the stub vault takes any).
 PRE_ERR="This moves App shop out of its guarded container into the process exception (a sandboxed system process).
+Runs as a plain process, with less isolation from your other process Apps than a containerised App.
 Vault password: "
 post_rows /cli/app/exception '"changed": true' app exception shop on --json
 PRE_ERR=""

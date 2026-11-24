@@ -79,9 +79,11 @@ fn audit(app: &str, event: &str, who: &Who, payload: J) {
 }
 
 /// The exception's warning, shown on the way in.
-pub const WARNING: &str = "This App leaves the guarded container. It runs as a sandboxed system process (user k2appx): \
+pub const WARNING: &str = "This App leaves the guarded container. Runs as a plain process, with less isolation from your other process Apps than a containerised App. \
+It runs as a sandboxed system process (user k2appx): \
 read-only system, no homes, no capabilities, loopback only, its own caps, the k2-app AppArmor profile where AppArmor is on, \
-and only the devices you granted. Weaker than the container: process Apps share one user, so they can see each other; \
+and only the devices you granted. Weaker than the container: process Apps run under one shared App user, so they're less \
+isolated from each other; approve it only for Apps you'd trust with each other's data; \
 a deploy is a restart (no warm previous version); k2 app exec and shell don't reach it yet. \
 Use it only for a device a container can't reach. Undo: k2 app exception <app> off.";
 

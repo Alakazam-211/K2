@@ -243,7 +243,9 @@ THE PROCESS EXCEPTION
   can't (owner_only); ask your owner. It needs the owner's confirm: a
   call without one answers vault_confirm_required, like every other
   confirm in K2. Label "Open (process)". exec and shell don't reach it
-  yet.
+  yet. Runs as a plain process, with less isolation from your other
+  process Apps than a containerised App. Approve one only for Apps
+  you'd trust with each other's data.
 
 EGRESS (guarded Apps, --engine guarded)
   A guarded App reaches the internet only through its own proxy

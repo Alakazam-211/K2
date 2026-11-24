@@ -189,7 +189,9 @@ Chat-pass signing keys (K2 signs every chat pass; Sew checks it against K2's pub
           (k2 app grant <app> --kind chat-key) is a permission, not a key, and revoking it ends
           that App's sessions instead.
 Person only (outside K2, with Touch ID / your login / the vault password; purge with an
-owner login's password, and with none of these it asks you to set an owner password first):
+owner login's password, and with none of these it asks you to set an owner password first; on a
+server with no owner yet, creating the first owner login is only as strong as access to this
+server's terminal):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
   k2 hostchat recovery-key                  (the owner only; shows Sew's launch key, the vault's

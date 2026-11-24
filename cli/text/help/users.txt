@@ -130,6 +130,8 @@ SECURITY
   Hello, or on a Linux server an owner login's password; a server's first
   owner login is made from a terminal outside K2). The owner runs it in
   person: k2 users add <you> --role owner --keep-password
+  On a server with no owner yet, creating the first owner login is only
+  as strong as access to this server's terminal.
   Agents: don't run it; tell your owner.
 
 EXIT CODES

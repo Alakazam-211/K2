@@ -595,6 +595,9 @@ pub fn run(ctx: &mut Ctx, ask: &Ask) -> Answer {
                 out::stderr_line(&format!(
                     "This moves App {app} out of its guarded container into the process exception (a sandboxed system process{with})."
                 ));
+                out::stderr_line(
+                    "Runs as a plain process, with less isolation from your other process Apps than a containerised App.",
+                );
                 tok = confirm(
                     ctx,
                     "app-process-exception",

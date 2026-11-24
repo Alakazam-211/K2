@@ -18,7 +18,9 @@ stop, not a failure. A reinstall is a new App and gets none of it back.
                   Touch ID, it refuses and asks you to set an owner
                   password first (k2 users add <your-name> --role owner
                   --keep-password, from your own terminal); then it asks
-                  for that password every time.
+                  for that password every time. On a server with no owner
+                  yet, creating the first owner login is only as strong
+                  as access to this server's terminal.
                   --purge alone drops the access above too, without the
                   safety stop.
   --json          Print the daemon's answer as JSON.

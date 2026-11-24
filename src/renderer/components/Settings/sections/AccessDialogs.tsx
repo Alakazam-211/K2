@@ -296,6 +296,7 @@ export type ResetAnswer = { password: string | null; temporary: boolean }
  */
 export function PasswordResetDialog({
   who,
+  own = false,
   intro,
   rules,
   problem,
@@ -307,6 +308,8 @@ export function PasswordResetDialog({
   onClose,
 }: {
   who: string
+  /** The viewer's own login: the done step talks to them, not about them. */
+  own?: boolean
   intro: React.ReactNode
   /** The server's password rules, in a sentence. */
   rules: string
@@ -361,7 +364,11 @@ export function PasswordResetDialog({
         }
       >
         <p className={DIALOG_MUTED} data-testid="reset-password-msg">
-          {done.temporary ? `Password reset for ${who}. ${MUST_CHANGE_NOTE}` : `Password reset for ${who}.`}
+          {done.temporary
+            ? `Password reset for ${who}. ${MUST_CHANGE_NOTE}`
+            : own
+              ? `Password reset for ${who}. It’s yours to keep: K2 won’t ask you to change it.`
+              : `Password reset for ${who}.`}
         </p>
         {done.password ? (
           <Surface chamfer material="tile">
@@ -369,9 +376,13 @@ export function PasswordResetDialog({
           </Surface>
         ) : null}
         <div data-testid="reset-next-steps">
-          <p className={DIALOG_LABEL}>Send it to {who}</p>
+          <p className={DIALOG_LABEL}>{own && !done.temporary ? 'What you do next' : `Send it to ${who}`}</p>
           <ol className={`${DIALOG_MUTED} list-decimal pl-5 space-y-0.5`}>
-            <li>{done.password ? 'Copy the password' : 'Take the password you typed'} and send it to {who} somewhere only they can read it.</li>
+            {own && !done.temporary ? (
+              <li>{done.password ? 'Copy the password and keep it somewhere safe.' : 'Use the password you typed.'}</li>
+            ) : (
+              <li>{done.password ? 'Copy the password' : 'Take the password you typed'} and send it to {who} somewhere only they can read it.</li>
+            )}
             <li>{signIn}</li>
             {done.temporary ? <li>{PRODUCT_NAME} then asks them to choose their own password.</li> : null}
           </ol>

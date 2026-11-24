@@ -264,6 +264,12 @@ async fn web_off_lets_a_paired_phone_through_and_keeps_browsers_out() {
     }
     let r = http(port, "POST", "/cli/auth/login", Some(r#"{"username":"phone_user","password":"password123","web":true}"#), EDGE);
     assert_code(&r, 403, "WEB_CLIENT_DISABLED", "web off + password login via the edge");
+    // 0.46.18: the wall's refused sign-in is in the access audit, under
+    // the name it was for, never with the password.
+    let walled: Vec<Value> = audit_rows(port, "login").into_iter().filter(|e| e["outcome"] == "web_client_disabled").collect();
+    assert_eq!(walled.len(), 1, "{walled:?}");
+    assert_eq!((walled[0]["user"].clone(), walled[0]["client"].clone()), (Value::from("phone_user"), Value::from("web")), "{walled:?}");
+    assert!(!walled[0].to_string().contains("password123"), "{walled:?}");
 
     // 3. A forged header without a valid device session → refused.
     for (what, hdrs) in [
@@ -484,6 +490,12 @@ async fn who_a_pairing_code_signs_in_as() {
     connect_users::set_must_change_password("crew", true).expect("flag crew");
     let r = http(port, "POST", &format!("/cli/auth/device/pair-code?token={OWNER_TOKEN}"), Some(r#"{"user":"crew"}"#), &[]);
     assert_code(&r, 409, "password_change_required", "owner token naming a must-change login");
+    assert_eq!(
+        r.json()["error"]["hint"],
+        "This password is temporary. Sign in on the desktop and choose a new one, then pair from Settings → Network → Companion with a QR code.",
+        "{}",
+        r.body
+    );
 
     // Pending codes per login are capped at 3: the oldest stops working.
     let codes: Vec<String> = (0..4).map(|_| owner_code(port, "boss")).collect();

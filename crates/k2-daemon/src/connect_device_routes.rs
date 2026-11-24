@@ -358,7 +358,7 @@ fn password_change_required() -> CliResponse {
     refusal(
         "409 Conflict",
         "password_change_required",
-        "that login must change its password before a phone can be paired to it",
+        crate::connect_users_routes::TEMPORARY_PASSWORD_HINT,
     )
 }
 

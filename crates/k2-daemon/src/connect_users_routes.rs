@@ -275,9 +275,8 @@ struct SetPasswordReq {
     password: String,
     /// PRD connect-login-edge-only R1: when set, the target must rotate at
     /// next login (their sessions are revoked). Absent = `true` (someone
-    /// else chose the password, so it is temporary), except an owner-token
-    /// reset of one of the owner's own logins (0.46.8; before, the owner
-    /// token defaulted to `false`).
+    /// else chose the password, so it is temporary). The caller's own
+    /// login is never temporary, whatever this says (0.46.18).
     #[serde(default)]
     must_change_password: Option<bool>,
     /// The owner token on an owner login: a token from this computer's own
@@ -321,42 +320,72 @@ pub enum SetPasswordActor {
     },
 }
 
+/// The words a temporary password's refusals and restricted sign-in carry
+/// (0.46.18): what the person does next, from the phone or the desktop.
+pub const TEMPORARY_PASSWORD_HINT: &str = "This password is temporary. Sign in on the desktop and choose a new one, then pair from Settings → Network → Companion with a QR code.";
+
+/// What a set-password that landed did, for its audit row (0.46.18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetPasswordFacts {
+    /// The new password is temporary (chosen again at the next sign-in).
+    pub must_change_password: bool,
+    /// The target is the caller's own login.
+    pub own_login: bool,
+}
+
+impl SetPasswordFacts {
+    /// The audit row's `detail` (never a secret).
+    pub fn audit_detail(&self) -> serde_json::Value {
+        serde_json::json!({
+            "mustChangePassword": self.must_change_password,
+            "ownLogin": self.own_login,
+        })
+    }
+}
+
+/// [`set_password_reply`]'s answer and, when it landed, what it did.
+pub struct SetPasswordReply {
+    pub response: CliResponse,
+    pub facts: Option<SetPasswordFacts>,
+}
+
 /// `POST /cli/users/set-password` `{username,password[,mustChangePassword]}`
-/// → `{"success":true,"mustChangePassword":<bool>}`. Revokes the target's
-/// live sessions server-side (set_password always does; the flag adds the
-/// forced rotation on top).
+/// → `{"success":true,"mustChangePassword":<bool>,"ownLogin":<bool>}`.
+/// Revokes the target's live sessions server-side (set_password always
+/// does; the flag adds the forced rotation on top).
 ///
-/// Rules (R1):
+/// Rules (R1, 0.46.18):
 /// - target resolved via `can_act_on(actor_role, target_role)` → 403;
-/// - a session may not target ITSELF → 400 (use `/cli/auth/change-password`);
-/// - `mustChangePassword` defaults `true` (a temporary password), except
-///   the owner token on one of the owner's own logins (`ownerAccounts`):
-///   that is a self change and defaults `false`.
+/// - the caller's OWN login (the owner token on one of the owner's linked
+///   logins, `ownerAccounts`; a session on its own username) is a self
+///   change: never temporary, whatever the body says. A session's own
+///   reset ends that login's sessions too, the caller's included;
+/// - anyone else's: `mustChangePassword` defaults `true` (a temporary
+///   password); `false` lets them keep it.
 pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliResponse {
+    set_password_reply(actor, body).response
+}
+
+/// [`handle_set_password_as`] with what it did (the dispatcher audits it).
+pub fn set_password_reply(actor: &SetPasswordActor, body: &[u8]) -> SetPasswordReply {
+    let refused = |response: CliResponse| SetPasswordReply { response, facts: None };
     let req: SetPasswordReq = match serde_json::from_slice(body) {
         Ok(r) => r,
-        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+        Err(e) => return refused(CliResponse::bad_request(format!("invalid JSON body: {e}"))),
     };
     let target = match connect_users::normalize_username(&req.username) {
         Ok(u) => u,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(e) => return refused(CliResponse::bad_request(e)),
     };
-    let (actor_role, self_target, default_flag) = match actor {
-        SetPasswordActor::OwnerToken => {
-            (connect_users::Role::Owner, false, !is_owner_linked_login(&target))
-        }
-        SetPasswordActor::Session { username, role } => (*role, username == &target, true),
+    let (actor_role, own_login) = match actor {
+        SetPasswordActor::OwnerToken => (connect_users::Role::Owner, is_owner_linked_login(&target)),
+        SetPasswordActor::Session { username, role } => (*role, username == &target),
     };
-    if self_target {
-        return CliResponse::bad_request(
-            "use /cli/auth/change-password to change your own password".to_string(),
-        );
-    }
     let Some(target_role) = connect_users::role_for_user(&target) else {
-        return CliResponse::bad_request(format!("user '{target}' not found"));
+        return refused(CliResponse::bad_request(format!("user '{target}' not found")));
     };
     if !connect_users::can_act_on(actor_role, target_role) {
-        return CliResponse {
+        return refused(CliResponse {
             status: "403 Forbidden",
             content_type: "application/json",
             body: serde_json::json!({
@@ -367,28 +396,32 @@ pub fn handle_set_password_as(actor: &SetPasswordActor, body: &[u8]) -> CliRespo
                 )
             })
             .to_string(),
-        };
+        });
     }
     if matches!(actor, SetPasswordActor::OwnerToken) && target_role == connect_users::Role::Owner {
         if let Err(r) = owner_login_gate("password", &target, req.confirm_token.as_deref()) {
-            return r;
+            return refused(r);
         }
     }
     if let Err(e) = connect_users::set_password(&target, &req.password) {
-        return CliResponse::bad_request(e);
+        return refused(CliResponse::bad_request(e));
     }
-    let must = req.must_change_password.unwrap_or(default_flag);
+    let must = !own_login && req.must_change_password.unwrap_or(true);
     if must {
         if let Err(e) = connect_users::set_must_change_password(&target, true) {
-            return CliResponse::bad_request(e);
+            return refused(CliResponse::bad_request(e));
         }
         // set_password already revoked; revoke again so the flag and the
         // revocation are never observed apart (belt + braces, idempotent).
         connect_users::revoke_user_sessions(&target);
     }
-    CliResponse::ok_json(
-        serde_json::json!({ "success": true, "mustChangePassword": must }).to_string(),
-    )
+    SetPasswordReply {
+        response: CliResponse::ok_json(
+            serde_json::json!({ "success": true, "mustChangePassword": must, "ownLogin": own_login })
+                .to_string(),
+        ),
+        facts: Some(SetPasswordFacts { must_change_password: must, own_login }),
+    }
 }
 
 /// `POST /cli/users/unlock` `{username}` →
@@ -866,17 +899,20 @@ pub fn handle_login_from(body: &[u8], ip: Option<&str>) -> LoginReply {
     let expires_at = (chrono::Utc::now()
         + chrono::Duration::days(connect_users::session_ttl_days()))
     .to_rfc3339();
-    let response = CliResponse::ok_json(
-        serde_json::json!({
-            "token": token,
-            "username": username,
-            "expiresAt": expires_at,
-            // K2 Cloud S1: always-present boolean so clients can branch
-            // without feature-detecting field absence.
-            "mustChangePassword": connect_users::must_change_password(&username),
-        })
-        .to_string(),
-    );
+    let must_change = connect_users::must_change_password(&username);
+    let mut body = serde_json::json!({
+        "token": token,
+        "username": username,
+        "expiresAt": expires_at,
+        // K2 Cloud S1: always-present boolean so clients can branch
+        // without feature-detecting field absence.
+        "mustChangePassword": must_change,
+    });
+    // 0.46.18: a temporary password's restricted session says what to do.
+    if must_change {
+        body["hint"] = serde_json::Value::String(TEMPORARY_PASSWORD_HINT.to_string());
+    }
+    let response = CliResponse::ok_json(body.to_string());
     LoginReply {
         response,
         user: req.username,
@@ -1562,7 +1598,83 @@ mod tests {
             assert_eq!(r.status, "200 OK", "body: {}", r.body);
             let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
             assert_eq!(v["mustChangePassword"], serde_json::json!(false), "{v}");
+            assert_eq!(v["ownLogin"], serde_json::json!(true), "{v}");
             assert!(!connect_users::must_change_password("rst_me"));
+
+            // 0.46.18: your own password is never temporary, even when the
+            // body asks for it, and the audit facts say so.
+            let reply = set_password_reply(
+                &SetPasswordActor::OwnerToken,
+                br#"{"username":"rst_me","password":"newpass126","mustChangePassword":true}"#,
+            );
+            assert_eq!(reply.response.status, "200 OK", "body: {}", reply.response.body);
+            assert_eq!(reply.facts, Some(SetPasswordFacts { must_change_password: false, own_login: true }));
+            assert!(!connect_users::must_change_password("rst_me"));
+            let other = set_password_reply(
+                &SetPasswordActor::OwnerToken,
+                br#"{"username":"rst_other","password":"newpass127"}"#,
+            );
+            assert_eq!(other.facts, Some(SetPasswordFacts { must_change_password: true, own_login: false }));
+            assert_eq!(
+                other.facts.expect("facts").audit_detail(),
+                serde_json::json!({ "mustChangePassword": true, "ownLogin": false })
+            );
+        });
+    }
+
+    /// 0.46.18: a session resetting its own login keeps the password, for
+    /// any role that reaches the route; someone else's is temporary unless
+    /// the body says false. A refused reset has no facts.
+    #[test]
+    fn a_sessions_own_reset_is_kept_and_someone_elses_is_temporary() {
+        with_temp_home(|| {
+            connect_users::add_user("ses_me", "password1").expect("add");
+            connect_users::set_role("ses_me", connect_users::Role::Owner).expect("owner");
+            connect_users::add_user("ses_other", "password1").expect("add");
+            let me = SetPasswordActor::Session { username: "ses_me".to_string(), role: connect_users::Role::Owner };
+
+            let reply = set_password_reply(&me, br#"{"username":"ses_me","password":"newpass123"}"#);
+            assert_eq!(reply.response.status, "200 OK", "body: {}", reply.response.body);
+            let v: serde_json::Value = serde_json::from_str(&reply.response.body).expect("json");
+            assert_eq!((v["mustChangePassword"].clone(), v["ownLogin"].clone()), (serde_json::json!(false), serde_json::json!(true)), "{v}");
+            assert_eq!(reply.facts, Some(SetPasswordFacts { must_change_password: false, own_login: true }));
+            assert!(!connect_users::must_change_password("ses_me"));
+            let reply = set_password_reply(&me, br#"{"username":"ses_me","password":"newpass124","mustChangePassword":true}"#);
+            assert_eq!(reply.facts, Some(SetPasswordFacts { must_change_password: false, own_login: true }));
+            assert!(!connect_users::must_change_password("ses_me"), "never temporary for yourself");
+
+            let reply = set_password_reply(&me, br#"{"username":"ses_other","password":"newpass125"}"#);
+            assert_eq!(reply.facts, Some(SetPasswordFacts { must_change_password: true, own_login: false }));
+            assert!(connect_users::must_change_password("ses_other"));
+            let reply = set_password_reply(&me, br#"{"username":"ses_other","password":"newpass126","mustChangePassword":false}"#);
+            assert_eq!(reply.facts, Some(SetPasswordFacts { must_change_password: false, own_login: false }));
+            assert!(!connect_users::must_change_password("ses_other"), "Let them keep this password");
+
+            let reply = set_password_reply(&me, br#"{"username":"ses_ghost","password":"newpass127"}"#);
+            assert_eq!(reply.response.status, "400 Bad Request", "body: {}", reply.response.body);
+            assert_eq!(reply.facts, None);
+        });
+    }
+
+    /// 0.46.18: a temporary password's sign-in says what to do next; an
+    /// ordinary one carries no hint.
+    #[test]
+    fn a_restricted_sign_in_carries_the_temporary_password_hint() {
+        with_temp_home(|| {
+            connect_users::add_user("hint_user", "password1").expect("add");
+            let r = handle_login(br#"{"username":"hint_user","password":"password1"}"#);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v.get("hint"), None, "{v}");
+            connect_users::set_must_change_password("hint_user", true).expect("flag");
+            let r = handle_login(br#"{"username":"hint_user","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "body: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["mustChangePassword"], serde_json::json!(true), "{v}");
+            assert_eq!(
+                v["hint"],
+                "This password is temporary. Sign in on the desktop and choose a new one, then pair from Settings → Network → Companion with a QR code.",
+                "{v}"
+            );
         });
     }
 

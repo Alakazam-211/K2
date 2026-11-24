@@ -65,6 +65,7 @@ const SIGN_IN_FAILURES: Record<string, string> = {
   locked: 'couldn’t sign in: locked out after too many tries',
   rate_limited: `couldn’t sign in: too many tries, so ${PRODUCT_NAME} is waiting`,
   blocked_ingress: 'was blocked: came in by a route this server doesn’t accept',
+  web_client_disabled: 'was blocked: web access to this server is off',
 }
 
 /** Sign-in results as a short value for the opened record. */
@@ -74,6 +75,7 @@ const SIGN_IN_RESULT: Record<string, string> = {
   locked: 'Account locked after too many tries',
   rate_limited: `Too many tries; ${PRODUCT_NAME} made them wait`,
   blocked_ingress: 'Blocked: this server doesn’t accept sign-ins that way',
+  web_client_disabled: 'Blocked: web access to this server is off',
 }
 
 /** True when the sentence already says everything the outcome does. */

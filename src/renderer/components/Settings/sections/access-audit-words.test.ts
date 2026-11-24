@@ -120,6 +120,7 @@ describe('org_chart.switch', () => {
 describe('other events read as before', () => {
   it.each([
     ['login', 'ok', 'signed in'],
+    ['login', 'web_client_disabled', 'was blocked: web access to this server is off'],
     ['logout', 'ok', 'signed out'],
     ['vault-handoff', 'ok send GITHUB_TOKEN to acme 7 pending', 'sent a secret'],
     ['vault-carry', 'ok import 2 from v1 into acme', 'imported secrets into this server’s vault'],

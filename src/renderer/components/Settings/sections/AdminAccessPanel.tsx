@@ -644,7 +644,8 @@ export function AdminAccessPanel(): React.JSX.Element {
         <ResetPasswordDialog
           user={dialog.user}
           policy={policy}
-          ownLogin={ownerAccounts.loaded && ownerAccounts.isLinked(dialog.user.username)}
+          ownLogin={(ownerAccounts.loaded && ownerAccounts.isLinked(dialog.user.username)) || who.username === dialog.user.username}
+          ownSession={who.username === dialog.user.username}
           onClose={() => setDialog(null)}
           onDone={() => void loadUsers()}
         />

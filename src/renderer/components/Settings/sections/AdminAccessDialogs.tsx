@@ -306,44 +306,75 @@ export function AddPersonDialog({
 }
 
 
-/** Reset someone's K2 login password: the shared dialog, made by K2 (shown
- *  once) or typed, against this server's password rules. */
+/** Before a reset of someone else's password: what happens at their next
+ *  sign-in, unless the box is ticked. */
+export const RESET_TEMPORARY_NOTE = 'They’ll be asked to choose a new password when they next sign in.'
+export const RESET_KEEP_LABEL = 'Let them keep this password'
+export const RESET_KEPT_NOTE = 'They keep the password you set.'
+/** A reset of your own login, signed in with that login: every device signs
+ *  in again. */
+export const RESET_OWN_SESSION_NOTE = 'Every device signed in with it, this one too, signs in again with the new one.'
+
+/** Reset a K2 login password: the shared dialog, made by K2 (shown once)
+ *  or typed, against this server's password rules. Your own login keeps
+ *  the new password; someone else's is temporary unless you let them keep
+ *  it. The daemon decides too (0.46.18) and says which in its answer. */
 export function ResetPasswordDialog({
   user,
   policy,
   ownLogin,
+  ownSession = false,
   onClose,
   onDone,
 }: {
   user: K2User
   policy: PasswordPolicy
-  /** The owner's own linked login: the password is kept, not temporary. */
+  /** The viewer's own login (linked to the owner, or the login they signed
+   *  in with): the password is kept, never temporary. */
   ownLogin: boolean
+  /** The viewer signed in with this very login (its sessions end). */
+  ownSession?: boolean
   onClose: () => void
   onDone: () => void
 }): React.JSX.Element {
   const who = user.username
+  const [keep, setKeep] = useState(false)
   return (
     <PasswordResetDialog
       who={who}
+      own={ownLogin}
       intro={
         ownLogin
-          ? 'This is your own login. Your current password stops working, and you keep the new one.'
-          : `${who}’s current password stops working right away. The new one is temporary: when they next sign in, ${PRODUCT_NAME} asks them to choose their own.`
+          ? `This is your own login. Your current password stops working, and you keep the new one.${ownSession ? ` ${RESET_OWN_SESSION_NOTE}` : ''}`
+          : `${who}’s current password stops working right away.`
       }
       rules={policyWords(policy)}
       problem={(pw) => passwordProblem(pw, policy)}
-      makeHint={`${PRODUCT_NAME} shows it once, after the reset, for you to copy and send to ${who}.`}
-      signIn={`They sign in to this server from their ${PRODUCT_NAME} app with it.`}
+      makeHint={ownLogin ? `${PRODUCT_NAME} shows it once, after the reset, for you to copy.` : `${PRODUCT_NAME} shows it once, after the reset, for you to copy and send to ${who}.`}
+      signIn={ownLogin ? 'Sign in with it on your phone and your other devices.' : `They sign in to this server from their ${PRODUCT_NAME} app with it.`}
+      extra={
+        ownLogin ? null : (
+          <div className="space-y-2" data-testid="reset-temporary">
+            <p className={MUTED} data-testid="reset-temporary-note">
+              {keep ? RESET_KEPT_NOTE : RESET_TEMPORARY_NOTE}
+            </p>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <Checkbox className="mt-0.5" checked={keep} onChange={(e) => setKeep(e.target.checked)} aria-label={RESET_KEEP_LABEL} />
+              <span className={SETTING_ROW_LABEL}>{RESET_KEEP_LABEL}</span>
+            </label>
+          </div>
+        )
+      }
       onClose={onClose}
       onDone={onDone}
       submit={async (typed) => {
         const pw = typed ?? makePassword(policy)
-        // No flag: the daemon decides (temporary, except the owner's own
-        // linked login) and says which in its answer.
-        const res = await userPost('/set-password', { username: who, password: pw })
+        // Your own login is never temporary; someone else's is unless the
+        // box is ticked. The daemon's answer says which it did.
+        const temporary = !ownLogin && !keep
+        const res = await userPost('/set-password', { username: who, password: pw, mustChangePassword: temporary })
         if (!res.ok) throw new Error(await errText(res))
-        return { password: pw, temporary: await answeredTemporary(res, false) }
+        return { password: pw, temporary: await answeredTemporary(res, temporary) }
       }}
     />
   )

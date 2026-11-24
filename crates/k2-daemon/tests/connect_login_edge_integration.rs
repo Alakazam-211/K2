@@ -934,18 +934,28 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
         );
         assert_eq!(r.status, 403, "Member session 403; body={}", r.body);
 
-        // Self-target from a session: 400.
+        // 0.46.18: a session resetting its OWN login keeps the password
+        // (never temporary, even when the body asks), and that login's
+        // sessions end, the caller's included.
         let boss = connect_users::create_session("boss");
         let r = http(
             d.port,
             "POST",
             &format!("{path}?token={boss}"),
-            Some(r#"{"username":"boss","password":"selfpass123"}"#),
+            Some(r#"{"username":"boss","password":"selfpass123","mustChangePassword":true}"#),
             &[],
         );
-        assert_eq!(r.status, 400, "self-target 400; body={}", r.body);
-        assert!(r.body.contains("change-password"), "{}", r.body);
-        assert!(connect_users::validate_session(&boss).is_some(), "self-target is a no-op");
+        assert_eq!(r.status, 200, "own reset from a session; body={}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!((j["mustChangePassword"].clone(), j["ownLogin"].clone()), (serde_json::json!(false), serde_json::json!(true)), "{j}");
+        assert!(!connect_users::must_change_password("boss"), "your own password is never temporary");
+        assert!(connect_users::validate_session(&boss).is_none(), "the login's sessions end");
+        let r = http(d.port, "POST", LOGIN, Some(r#"{"username":"boss","password":"selfpass123"}"#), &[]);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(j["mustChangePassword"], false, "a full session, not a restricted one: {j}");
+        assert_eq!(j.get("hint"), None, "{j}");
+        let boss = connect_users::create_session("boss");
 
         // Unknown target: 400.
         let r = http(
@@ -966,7 +976,7 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
         // Every attempt that passed the credential gate is audited as a
         // set-password event on the target (gate-level 403s — Admin /
         // Member / no token — never reach the handler and are not
-        // attributable, so they are not recorded): 3 ok + self-target 400
+        // attributable, so they are not recorded): 3 ok + the own reset
         // + unknown-target 400.
         let sp = audit_events_for("set-password");
         let outcomes: Vec<(String, String)> = sp
@@ -979,9 +989,18 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
                 ("target".to_string(), "ok".to_string()),
                 ("target".to_string(), "ok".to_string()),
                 ("target".to_string(), "ok".to_string()),
-                ("boss".to_string(), "rejected:400".to_string()),
+                ("boss".to_string(), "ok".to_string()),
                 ("ghost".to_string(), "rejected:400".to_string()),
             ],
+            "{sp:?}"
+        );
+        // 0.46.18: a reset that landed says whether it is temporary and
+        // whether it was the caller's own login; a refused one has neither.
+        let details: Vec<serde_json::Value> = sp.iter().map(|e| e["detail"].clone()).collect();
+        let want = |must: bool, own: bool| serde_json::json!({ "mustChangePassword": must, "ownLogin": own });
+        assert_eq!(
+            details,
+            vec![want(true, false), want(true, false), want(false, false), want(false, true), serde_json::Value::Null],
             "{sp:?}"
         );
         for e in &sp {
@@ -994,6 +1013,85 @@ async fn set_password_matrix_owner_token_owner_session_admin_member_self() {
             vec!["owner-token", "user:boss", "user:boss", "user:boss", "user:boss"],
             "{sp:?}"
         );
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 0.46.18 — an Owner login with a temporary password chooses its own.
+// ─────────────────────────────────────────────────────────────────────
+
+const TEMPORARY_HINT: &str = "This password is temporary. Sign in on the desktop and choose a new one, then pair from Settings → Network → Companion with a QR code.";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_owner_with_a_temporary_password_changes_it_from_its_restricted_session() {
+    let _g = lock();
+    with_temp_home(|| {
+        connect_users::add_user("boss", "password123").unwrap();
+        connect_users::set_role("boss", Role::Owner).unwrap();
+        connect_users::add_user("chief", "password123").unwrap();
+        connect_users::set_role("chief", Role::Owner).unwrap();
+        // Another Owner resets boss's password: someone else's, so it is
+        // temporary by default.
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let chief = connect_users::create_session("chief");
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/users/set-password?token={chief}"),
+            Some(r#"{"username":"boss","password":"temporary-123"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!((j["mustChangePassword"].clone(), j["ownLogin"].clone()), (serde_json::json!(true), serde_json::json!(false)), "{j}");
+        assert!(connect_users::must_change_password("boss"));
+
+        // Sign-in: a restricted session that says what to do.
+        let r = http(d.port, "POST", LOGIN, Some(r#"{"username":"boss","password":"temporary-123"}"#), &[]);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(j["mustChangePassword"], true, "{j}");
+        assert_eq!(j["hint"], TEMPORARY_HINT, "{j}");
+        let restricted = j["token"].as_str().expect("token").to_string();
+
+        // Everything else is closed, a pairing code included.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/auth/device/pair-code?token={restricted}"),
+            Some(r#"{"password":"temporary-123"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 403, "{}", r.body);
+        assert!(r.body.contains("password_change_required"), "{}", r.body);
+
+        // The way out: change-password with the temporary one. No owner
+        // check stands in the way of an Owner's own change.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/auth/change-password?token={restricted}"),
+            Some(r#"{"currentPassword":"temporary-123","newPassword":"chosen-pass-456"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "an Owner's own change from its restricted session: {}", r.body);
+        assert!(!connect_users::must_change_password("boss"));
+        assert!(connect_users::validate_session(&restricted).is_none(), "the restricted session ends");
+        let r = http(d.port, "POST", LOGIN, Some(r#"{"username":"boss","password":"chosen-pass-456"}"#), &[]);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let j: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(j["mustChangePassword"], false, "{j}");
+        let full = j["token"].as_str().expect("token").to_string();
+
+        // And now a phone can be paired to it.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/auth/device/pair-code?token={full}"),
+            Some(r#"{"password":"chosen-pass-456"}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "pair-code after the change: {}", r.body);
     });
 }
 

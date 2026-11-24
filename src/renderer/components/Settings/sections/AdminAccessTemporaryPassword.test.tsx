@@ -15,6 +15,7 @@ const cli = vi.hoisted(() => ({
   users: [] as Json[],
   fetches: [] as Array<{ path: string; method: string; body: Json | undefined }>,
   linked: [] as string[],
+  whoami: { owner: true, role: 'owner' } as Json,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -62,6 +63,7 @@ beforeEach(() => {
   ]
   cli.fetches = []
   cli.linked = []
+  cli.whoami = { owner: true, role: 'owner' }
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -69,7 +71,7 @@ beforeEach(() => {
       const path = new URL(url).pathname
       const body = init?.body ? (JSON.parse(String(init.body)) as Json) : undefined
       cli.fetches.push({ path, method, body })
-      if (path === '/cli/auth/whoami') return json({ owner: true, role: 'owner' })
+      if (path === '/cli/auth/whoami') return json(cli.whoami)
       if (path === '/cli/users' && method === 'GET') return json({ users: cli.users })
       if (path === '/cli/users/policy') return json({ minLength: 8 })
       if (path === '/cli/users/add' && method === 'POST') {
@@ -80,8 +82,10 @@ beforeEach(() => {
       }
       if (path === '/cli/users/set-password' && method === 'POST') {
         if (!body) throw new Error('set-password without a body')
-        // The daemon's default: temporary unless it is the owner's own login.
-        const must = typeof body.mustChangePassword === 'boolean' ? body.mustChangePassword : !cli.linked.includes(String(body.username))
+        // The daemon (0.46.18): your own login is never temporary;
+        // someone else's is unless the body says false.
+        const own = cli.linked.includes(String(body.username)) || cli.whoami.username === body.username
+        const must = !own && body.mustChangePassword !== false
         const row = cli.users.find((u) => u.username === body.username)
         if (!row) throw new Error(`no user ${String(body.username)}`)
         row.mustChangePassword = must
@@ -171,13 +175,15 @@ describe('Admin Access: temporary passwords', () => {
     expect(within(done).getByTestId('added-user-msg').textContent).toContain('K2 won’t show this password again')
   })
 
-  it('Reset password shows the note, sends no flag, and reports the temporary answer', async () => {
+  it('Reset password for someone else: says they choose a new one, sends true, and reports the temporary answer', async () => {
     render(<K2ConnectSection panel="people" />)
     await screen.findByTestId('temporary-password-gina')
     cli.users[1].mustChangePassword = false
     menuItem('gina', /Reset password/)
     const form = screen.getByTestId('reset-form-gina')
-    expect(form.textContent).toContain('The new one is temporary: when they next sign in, K2 asks them to choose their own.')
+    expect(within(form).getByTestId('reset-temporary-note').textContent).toBe('They’ll be asked to choose a new password when they next sign in.')
+    const keep = within(form).getByLabelText('Let them keep this password') as HTMLInputElement
+    expect(keep.checked).toBe(false)
     // The reset dialog's own words, not the add form's.
     expect(form.textContent).toContain('K2 shows it once, after the reset, for you to copy and send to gina.')
     expect(form.textContent).not.toContain('after you add them')
@@ -185,8 +191,45 @@ describe('Admin Access: temporary passwords', () => {
     act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'reset-123' } }))
     act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
     expect((await screen.findByTestId('reset-password-msg')).textContent).toBe(`Password reset for gina. ${MUST_CHANGE_NOTE}`)
-    expect(lastBody('/cli/users/set-password')).toEqual({ username: 'gina', password: 'reset-123' })
+    expect(lastBody('/cli/users/set-password')).toEqual({ username: 'gina', password: 'reset-123', mustChangePassword: true })
     expect((await screen.findByTestId('temporary-password-gina')).textContent).toBe('Temporary password')
+  })
+
+  it('Reset password for someone else with "Let them keep this password" ticked: sends false and is not temporary', async () => {
+    render(<K2ConnectSection panel="people" />)
+    await screen.findByTestId('temporary-password-gina')
+    menuItem('gina', /Reset password/)
+    const form = screen.getByTestId('reset-form-gina')
+    act(() => void fireEvent.click(within(form).getByLabelText('Let them keep this password')))
+    expect(within(form).getByTestId('reset-temporary-note').textContent).toBe('They keep the password you set.')
+    act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
+    act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'reset-124' } }))
+    act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
+    const done = await screen.findByTestId('reset-done-dialog')
+    expect(within(done).getByTestId('reset-password-msg').textContent).toBe('Password reset for gina.')
+    expect(done.textContent).not.toContain(ASKS_TO_CHOOSE)
+    expect(lastBody('/cli/users/set-password')).toEqual({ username: 'gina', password: 'reset-124', mustChangePassword: false })
+    await waitFor(() => expect(document.querySelector('[data-testid="temporary-password-gina"]')).toBeNull())
+  })
+
+  it('Reset password on your own login, signed in with it: no checkbox, kept, and says every device signs in again', async () => {
+    cli.whoami = { owner: false, role: 'owner', username: 'z3thon' }
+    render(<K2ConnectSection panel="people" />)
+    await screen.findByTestId('temporary-password-gina')
+    menuItem('z3thon', /Reset password/)
+    const form = screen.getByTestId('reset-form-z3thon')
+    expect(form.textContent).toContain('This is your own login. Your current password stops working, and you keep the new one.')
+    expect(form.textContent).toContain('Every device signed in with it, this one too, signs in again with the new one.')
+    expect(within(form).queryByLabelText('Let them keep this password')).toBeNull()
+    expect(form.textContent).not.toContain('They’ll be asked to choose a new password')
+    act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
+    act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'mine-1235' } }))
+    act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
+    const done = await screen.findByTestId('reset-done-dialog')
+    expect(within(done).getByTestId('reset-password-msg').textContent).toBe('Password reset for z3thon. It’s yours to keep: K2 won’t ask you to change it.')
+    expect(done.textContent).not.toContain(ASKS_TO_CHOOSE)
+    expect(done.textContent).not.toContain('Send it to z3thon')
+    expect(lastBody('/cli/users/set-password')).toEqual({ username: 'z3thon', password: 'mine-1235', mustChangePassword: false })
   })
 
   it("Reset password on the owner's own linked login: kept, and says so", async () => {
@@ -197,10 +240,13 @@ describe('Admin Access: temporary passwords', () => {
     menuItem('z3thon', /Reset password/)
     const form = screen.getByTestId('reset-form-z3thon')
     expect(form.textContent).toContain('This is your own login. Your current password stops working, and you keep the new one.')
+    expect(form.textContent).not.toContain('Every device signed in with it')
+    expect(within(form).queryByLabelText('Let them keep this password')).toBeNull()
     act(() => void fireEvent.click(within(form).getByRole('radio', { name: 'Type one' })))
     act(() => void fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'mine-1234' } }))
     act(() => void fireEvent.click(within(form).getByRole('button', { name: 'Reset password' })))
-    expect((await screen.findByTestId('reset-password-msg')).textContent).toBe('Password reset for z3thon.')
+    expect((await screen.findByTestId('reset-password-msg')).textContent).toBe('Password reset for z3thon. It’s yours to keep: K2 won’t ask you to change it.')
+    expect(lastBody('/cli/users/set-password')).toEqual({ username: 'z3thon', password: 'mine-1234', mustChangePassword: false })
     expect(document.querySelector('[data-testid="temporary-password-z3thon"]')).toBeNull()
   })
 })

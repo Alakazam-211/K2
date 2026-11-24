@@ -1854,7 +1854,21 @@ async fn handle_one_request(
         && super::http::is_web_client_request(&headers_blob)
         && !super::http::device_session_passes_web_wall(&query, cookie_only)
     {
-        let _ = stream.read(&mut buf).await;
+        if is_post && path == "/cli/auth/login" {
+            // 0.46.18: a sign-in the wall refuses is in the access audit,
+            // under the name it was for (never the password).
+            let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "login",
+                &crate::connect_users_routes::login_body_username(&body),
+                "web_client_disabled",
+                ingress.as_str(),
+                relay_client_ip(ingress, stream).map(|ip| ip.to_string()).unwrap_or_else(|| "-".to_string()),
+                "web",
+            ));
+        } else {
+            let _ = stream.read(&mut buf).await;
+        }
         let r = super::http::web_client_disabled_response();
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
@@ -4820,9 +4834,9 @@ async fn handle_one_request(
             //
             // PRD connect-login-edge-only R1: the actor is resolved HERE
             // (owner token vs Owner-role session + its username) so the
-            // handler can apply `can_act_on`, refuse a self-target (400 —
-            // use change-password), default `mustChangePassword` by actor
-            // kind, and revoke the target's sessions when the flag is set.
+            // handler can apply `can_act_on`, keep a reset of the caller's
+            // own login (0.46.18: never temporary), default someone else's
+            // to temporary, and revoke the target's sessions.
             let actor = super::http::set_password_actor(&query, state.token.as_str());
             let Some(actor) = actor else {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -4847,11 +4861,15 @@ async fn handle_one_request(
                 }
             };
             // argon2 re-hash — spawn_blocking.
-            let r = tokio::task::spawn_blocking(move || {
-                crate::connect_users_routes::handle_set_password_as(&actor, &body_bytes)
+            let reply = tokio::task::spawn_blocking(move || {
+                crate::connect_users_routes::set_password_reply(&actor, &body_bytes)
             })
             .await
-            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            .unwrap_or_else(|e| crate::connect_users_routes::SetPasswordReply {
+                response: crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")),
+                facts: None,
+            });
+            let r = reply.response;
             let outcome = if r.status.starts_with("200") {
                 "ok".to_string()
             } else {
@@ -4862,17 +4880,25 @@ async fn handle_one_request(
                  outcome={outcome} ingress={}",
                 ingress.as_str()
             );
-            k2_core::auth_audit::record(
-                &k2_core::auth_audit::AuditEvent::new(
-                    "set-password",
-                    &target_for_audit,
-                    outcome,
-                    ingress.as_str(),
-                    "-",
-                    if web_client_header { "web" } else { "api" },
-                )
-                .with_actor(&actor_for_audit),
-            );
+            let event = k2_core::auth_audit::AuditEvent::new(
+                "set-password",
+                &target_for_audit,
+                outcome,
+                ingress.as_str(),
+                "-",
+                if web_client_header { "web" } else { "api" },
+            )
+            .with_actor(&actor_for_audit);
+            // 0.46.18: a reset that landed says whether it is temporary
+            // and whether it was the caller's own login.
+            match reply.facts {
+                Some(facts) => {
+                    if let Err(e) = k2_core::auth_audit::try_record_detail(&event, facts.audit_detail()) {
+                        k2_core::log_debug!("[auth_audit] WARN could not append audit record: {e}");
+                    }
+                }
+                None => k2_core::auth_audit::record(&event),
+            }
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         "/cli/users/unlock" => {

@@ -458,7 +458,11 @@ async fn an_agent_with_manage_apps_may_grant_upload_and_set_drop_folders() {
     assert_eq!(r.status, 200, "an agent grants files:upload: {}", r.body);
     let r = post(port, "/cli/skin/roles/paths", &agent, json!({ "name": role, "handle": docs.handle, "upload": ["Inbox"] })).await;
     assert_eq!(r.status, 200, "an agent sets drop folders: {}", r.body);
-    // files:download stays person-only (unchanged).
+    // files:download stays person-only (unchanged): // 0.46.18 (0eddc3af9b, App-role papercuts): an agent's room line on a
+    // box-wide role is no bare refusal but one held request whose card is the
+    // owner's alone; it changes nothing until a person approves.
     let r = post(port, "/cli/skin/roles/room", &agent, json!({ "name": role, "handle": docs.handle, "caps": ["files:download"] })).await;
-    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(r.json()["request"]["status"], "pending", "{}", r.body);
+    assert!(r.json()["reasons"].to_string().contains("only the owner approves it"), "{}", r.body);
 }

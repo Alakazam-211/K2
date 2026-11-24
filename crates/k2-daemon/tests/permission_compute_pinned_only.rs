@@ -234,6 +234,9 @@ async fn an_agent_asks_on_a_card_to_switch_a_nodes_pinned_only_mode() {
                 "params": { "node": "pcp-n1", "on": word },
                 "approvers": "owner or admin",
                 "command": ask_line("pcp-n1", word),
+                // The rebrand's `tail` (the Ask line after the command's
+                // name) beside `command`, on every requestable refusal (0.46.18).
+                "tail": ask_line("pcp-n1", word).strip_prefix("k2 ").expect("the Ask line starts with the command").to_string(),
             }),
             "{}",
             r.body

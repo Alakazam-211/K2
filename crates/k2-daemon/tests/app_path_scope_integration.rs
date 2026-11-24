@@ -591,7 +591,9 @@ async fn cli_role_paths_round_trip() {
     };
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
 
-    ok_out(run(s(&["app", "role", "create", &role])).await, "role create");
+    // 0.46.18 (ca37e6c4a8): `role create` names its scope; this test's role
+    // is the owner's box-wide one, as an unscoped role was before.
+    ok_out(run(s(&["app", "role", "create", &role, "--box-wide"])).await, "role create");
     ok_out(run(s(&["app", "role", "room", &role, &h, "--caps", "files:read,files:write"])).await, "role room");
     let out = ok_out(
         run(s(&["app", "role", "paths", &role, &h, "--read", "jobs/J1/,jobs/J3", "--write", "jobs/J1/photos/", "--upload-dir", "jobs/J1/photos"])).await,

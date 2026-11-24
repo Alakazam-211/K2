@@ -315,7 +315,13 @@ async fn guests_cannot_write_agent_config_unless_the_owner_opts_in() {
         let r = post(port, &hook, "/cli/skin/roles", serde_json::json!({"name": "agent-r", "roomAccess": [{"handle": a.handle, "caps": ["files:read", "files:write"]}]}));
         assert_eq!(r.status, 200, "agent role without opt-in; {}", r.body);
         let r = post(port, &hook, "/cli/skin/roles/room", serde_json::json!({"name": "agent-r", "handle": a.handle, "caps": flagged}));
-        owner_only(&r, "agent adds the opt-in to a room");
+        // 0.46.18 (0eddc3af9b, App-role papercuts): an agent's room line on a
+        // box-wide role is no bare refusal but one held request whose card is the
+        // owner's alone; it changes nothing until a person approves.
+        assert_eq!(r.status, 202, "agent adds the opt-in to a room; {}", r.body);
+        assert_eq!(r.json()["request"]["status"], "pending", "{}", r.body);
+        assert!(r.json()["reasons"].to_string().contains("only the owner approves it"), "{}", r.body);
+        assert!(r.body.contains("files:agentconfig"), "agent adds the opt-in to a room; {}", r.body);
         let r = post(port, &hook, "/cli/skin/roles/update", serde_json::json!({"name": "agent-r", "roomAccess": [{"handle": a.handle, "caps": flagged}]}));
         owner_only(&r, "agent updates a role to carry the opt-in");
         // agent-app-users S2: an agent adds App users only (one of its Apps).

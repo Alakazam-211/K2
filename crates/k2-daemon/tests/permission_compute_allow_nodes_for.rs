@@ -273,13 +273,16 @@ async fn a_managing_agent_asks_to_change_another_workspaces_node_list() {
         let hint = v["error"]["hint"].as_str().unwrap_or("");
         assert!(hint.contains("pcanf-boss manages pcanf-engine (it hired pcanf-engine)"), "{body}: {hint}");
         // The values print in key order: the change, then the workspace.
-        let command = format!("k2 permission request {ACTION} {key}={value} target={} --why \"<what you need it for>\"", eng.handle);
+        let tail = format!("permission request {ACTION} {key}={value} target={} --why \"<what you need it for>\"", eng.handle);
+        let command = format!("k2 {tail}");
         let mut params = serde_json::Map::new();
         params.insert("target".into(), json!(eng.handle));
         params.insert(key.into(), json!(value));
         assert_eq!(
             v["permission"],
-            json!({ "action": ACTION, "params": params, "approvers": "owner or admin", "command": command }),
+            // The rebrand's `tail` (the Ask line after the command's name),
+            // beside `command`, on every requestable refusal (0.46.18).
+            json!({ "action": ACTION, "params": params, "approvers": "owner or admin", "command": command, "tail": tail }),
             "{body}: {v}"
         );
     }

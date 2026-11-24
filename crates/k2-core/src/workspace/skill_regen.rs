@@ -600,7 +600,7 @@ for this conversation. Same first-arg grammar as `"#, cli_name!(), r#" msg`.
 ```
 
 Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
-To point your person at a card or message, reply to it: `k2 thread <addr> --reply-to '#<card or seq>' '…'`.
+To point your person at a card or message, reply to it: `"#, cli_name!(), r#" thread <addr> --reply-to '#<card or seq>' '…'`.
 They click the reply line to jump there; a `#N` in your text that names a message or card on this Thread is a link too.
 
 `sales` is whoever is pinned Chat *now*. `sales/reviewer` is durable.

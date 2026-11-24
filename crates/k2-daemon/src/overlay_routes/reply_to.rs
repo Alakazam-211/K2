@@ -94,7 +94,7 @@ pub(crate) fn build(conversation_id: &str, seq: i64, words: &str) -> Result<(Str
         return Err(error_json(
             "400 Bad Request",
             "reply_header_not_allowed",
-            "send only your words with replyTo; K2 writes the reply header and quote",
+            concat!("send only your words with replyTo; ", k2_core::product_name!(), " writes the reply header and quote"),
         ));
     }
     let item = match overlay::find_thread_message(conversation_id, &overlay::MessageRef::Seq(seq)) {

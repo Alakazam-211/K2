@@ -749,10 +749,19 @@ pub fn hire_print(raw: &str, view: View, as_json: bool) -> Shown {
         View::Unlink => unlink(&d, &mut out).map(|()| Exit::Ok),
         View::Root => root(&d, &mut out).map(|()| Exit::Ok),
     };
+    // The hire root's doctor notes go to stderr: stdout stays the root.
+    let mut notes = String::new();
+    if view == View::Root {
+        if let Some(Value::Array(lines)) = at(&d, "doctor") {
+            for line in lines {
+                notes.push_str(&format!("doctor: {}\n", sv(Some(line))));
+            }
+        }
+    }
     match done {
         Ok(exit) => Shown {
             stdout: out,
-            stderr: String::new(),
+            stderr: notes,
             exit,
         },
         Err(r) => raised(out, String::new(), &r),
@@ -1128,11 +1137,6 @@ fn root(d: &Value, out: &mut String) -> Result<(), Raise> {
         ""
     };
     out.push_str(&format!("{}{default}\n", sv(r)));
-    if let Some(Value::Array(lines)) = at(d, "doctor") {
-        for line in lines {
-            out.push_str(&format!("doctor: {}\n", sv(Some(line))));
-        }
-    }
     Ok(())
 }
 
@@ -1286,7 +1290,7 @@ mod tests {
         let p = hire_print(r#"{"root": "/srv/h", "default": true}"#, View::Root, false);
         assert_eq!(p.stdout, "/srv/h  (default)\n");
         let p = hire_print(r#"{"root": "/srv/h", "default": false, "doctor": ["one", "two"]}"#, View::Root, false);
-        assert_eq!(p.stdout, "/srv/h\ndoctor: one\ndoctor: two\n");
+        assert_eq!((p.stdout.as_str(), p.stderr.as_str()), ("/srv/h\n", "doctor: one\ndoctor: two\n"));
         let p = hire_print(
             r#"{"instances": [{"id": "i1", "status": "live", "members": [{"handle": "a"}, {"handle": "b"}], "apiKeyId": "abcdefghij"}]}"#,
             View::Instances,

@@ -100,7 +100,7 @@ elif view == "unlink":
 elif view == "root":
     print("%s%s" % (d.get("root"), "  (default)" if d.get("default") else ""))
     for line in d.get("doctor") or []:
-        print("doctor: %s" % line)
+        print("doctor: %s" % line, file=sys.stderr)
 elif view == "who":
     s = d.get("sender") or {}
     print("Delivery %s" % d.get("id"))

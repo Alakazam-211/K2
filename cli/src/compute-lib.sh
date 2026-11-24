@@ -471,6 +471,7 @@ if verb == "nodes":
         print("code waiting for %s (expires %s)" % (c["name"], time.strftime("%H:%M", time.localtime(c["expiresAt"]))))
     if isinstance(v.get("allowNodes"), list):
         print("node list (%s): jobs go only to %s (k2 compute allow-nodes)" % (v.get("allowNodesWorkspace") or "this workspace", ", ".join(v["allowNodes"]) or "nothing"))
+        print("  " + ("fixed: new nodes do not join it" if v.get("allowNodesFixed") else "follows new nodes: each node newly added to this server joins it"))
 elif verb == "info":
     print(node_line(v))
     for l in reserve_lines(v) + leftover_lines(v):

@@ -352,6 +352,12 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
     if let Some(w) = &ws {
         out["allowNodes"] = crate::compute_allow::names_of(w).map(serde_json::Value::from).unwrap_or_default();
         out["allowNodesWorkspace"] = crate::compute_routes::ws_handle(w).into();
+        // 0.46.18: whether a node newly added to this server joins it.
+        if out["allowNodes"].is_array() {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            out["allowNodesFixed"] = k2_core::compute::allow::is_fixed(&conn, w).into();
+        }
     }
     if detail {
         out["controllerMachine"] = controller_machine();

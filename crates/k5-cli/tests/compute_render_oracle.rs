@@ -301,7 +301,7 @@ fn nodes() {
         {"name":"n5","online":true,"offer":{"control":"paused","controlBy":"owner"},"rollout":{"node":"rolled_back","toVersion":"0.46.1"}},
         {"name":"n6","online":true,"offer":{"refusal":{"code":"disk_full"}},"rollout":{"code":"waiting_idle","node":"pending","state":"running"}},
         {"name":"n7","online":true,"offer":{"available":false,"unavailable":["gpu","disk"]},"update":{"state":"offered","version":"0.47"}}
-    ],"waitingCodes":[{"name":"n9","expiresAt":{now+300}}],"allowNodes":["n1","n2"],"allowNodesWorkspace":"/w/a"}"#;
+    ],"waitingCodes":[{"name":"n9","expiresAt":{now+300}}],"allowNodes":["n1","n2"],"allowNodesWorkspace":"/w/a","allowNodesFixed":true}"#;
     let one = format!(r#"{{"nodes":[{NODE_FULL}],"allowNodes":[]}}"#);
     render_check(
         "nodes",

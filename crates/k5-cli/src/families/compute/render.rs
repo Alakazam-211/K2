@@ -902,6 +902,14 @@ fn nodes(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
             ),
         )?;
         cx.print(&t);
+        // 0.46.18: whether a node newly added to this server joins it.
+        let l = ln!("print(\"  \" + (\"fixed: new nodes do not join it\"");
+        let fixed = cx.at(l, p::get(v, "allowNodesFixed"))?;
+        cx.print(if p::truthy(&fixed) {
+            "  fixed: new nodes do not join it"
+        } else {
+            "  follows new nodes: each node newly added to this server joins it"
+        });
     }
     Ok(())
 }

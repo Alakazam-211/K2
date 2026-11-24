@@ -33,8 +33,13 @@ Agents:
                  list: k2 permission request compute.allow-nodes nodes=N[,N…]
                  --why "…" (Allow adds exactly those). Only nodes granted to it
                  (else allow_nodes_not_granted); --clear opens every granted node,
-                 so ask for the nodes it needs. Nodes by name; a node removed and
-                 enrolled again is a new node, off the list until added
+                 so ask for the nodes it needs. Nodes by name
+  k2 compute allow-nodes --fixed on|off [--workspace WS]
+                 a node newly added to this server (a new machine, or one
+                 removed and enrolled again) joins every list unless the list is
+                 fixed. --fixed on keeps the list as it is; off lets new nodes
+                 join again (a person's: the owner or an Admin, from a terminal
+                 outside K2; anyone else gets allow_nodes_fixed_needs_person)
   k2 compute git-access [--json] | grant --github <owner>/<repo>[,…] | revoke … | setup …
                  let this workspace's jobs read private GitHub repos: git clone
                  and fetch just work, with short-lived read-only tokens, and the

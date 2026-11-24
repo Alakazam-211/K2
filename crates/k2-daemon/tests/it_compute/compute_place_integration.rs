@@ -1430,6 +1430,94 @@ async fn a_node_list_is_set_shown_and_cleared_and_an_agent_only_narrows_it() {
     assert_eq!(r.status, 405, "a mutating route answers GET with 405: {}", r.body);
 }
 
+/// 0.46.18 (Rosson 2026-11-23): a node confirmed on this server joins every
+/// node list that follows new nodes (the default, so lists made before
+/// 0.46.18 too), never a fixed one and never a workspace with no list;
+/// each join is one `allow_nodes` event. `--fixed on|off` is a person's,
+/// on a list that exists, and both views show it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_node_joins_following_lists_but_not_fixed_ones() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let fol = seed_ws(&env, "nnfol");
+    let fix = seed_ws(&env, "nnfix");
+    let none = seed_ws(&env, "nnnone");
+    active_node("nna");
+    for ws in [&fol, &fix, &none] {
+        grant("nna", ws, None, 2);
+    }
+    for ws in [&fol, &fix] {
+        let r = post(port, ALLOW_SET, OWNER, json!({"workspace": ws.id, "nodes": "nna"})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(j(&r)["fixed"], false, "a list follows new nodes by default: {}", r.body);
+    }
+
+    // --fixed: a person's, on a list that exists, and only on or off.
+    let agent = passport(&fix);
+    let r = post(port, ALLOW_SET, &agent, json!({"fixed": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "allow_nodes_fixed_needs_person".to_string()), "{}", r.body);
+    let r = post(port, ALLOW_SET, OWNER, json!({"workspace": none.id, "fixed": true})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "no list to fix: {}", r.body);
+    let r = post(port, ALLOW_SET, OWNER, json!({"workspace": fix.id, "fixed": "maybe"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(port, ALLOW_SET, OWNER, json!({"workspace": fix.id, "fixed": true, "add": "nna"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "one ask at a time: {}", r.body);
+    let r = post(port, ALLOW_SET, OWNER, json!({"workspace": fix.id, "fixed": true})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str(), j(&r)["fixed"].as_bool()), (200, Some("fixed"), Some(true)), "{}", r.body);
+    let r = post(port, ALLOW_SET, OWNER, json!({"workspace": fix.id, "fixed": "on"})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str()), (200, Some("same")), "{}", r.body);
+    let r = get(port, ALLOW, &agent, "").await;
+    assert_eq!(j(&r)["fixed"], true, "{}", r.body);
+    let r = get(port, "/cli/compute/nodes", OWNER, &format!("workspace={}", fix.id)).await;
+    assert_eq!(j(&r)["allowNodesFixed"], true, "{}", r.body);
+    let r = get(port, "/cli/compute/nodes", OWNER, &format!("workspace={}", fol.id)).await;
+    assert_eq!(j(&r)["allowNodesFixed"], false, "{}", r.body);
+    let r = get(port, "/cli/compute/nodes", OWNER, &format!("workspace={}", none.id)).await;
+    assert!(j(&r).get("allowNodesFixed").is_none(), "no list, no flag: {}", r.body);
+
+    // A new node: it joins the following list only.
+    let confirm = |name: &'static str| async move {
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let labels = std::collections::BTreeMap::from([("os".to_string(), "linux".to_string())]);
+            store::insert_pending_node(&conn, name, name, &format!("{name:0>64}"), "pem", &labels, "owner", "123456", 1).expect("pending node");
+        }
+        let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": name, "sas": "123456"})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        j(&r)["joinedLists"].as_array().unwrap_or_else(|| panic!("no joinedLists: {}", r.body)).iter().map(|h| h.as_str().unwrap_or("?").to_string()).collect::<Vec<_>>()
+    };
+    let joined = confirm("nnb").await;
+    assert!(joined.contains(&"nnfol".to_string()) && !joined.contains(&"nnfix".to_string()) && !joined.contains(&"nnnone".to_string()), "{joined:?}");
+    let shown = |ws: &Ws| {
+        let q = format!("workspace={}", ws.id);
+        async move { j(&get(port, ALLOW, OWNER, &q).await) }
+    };
+    assert_eq!(listed(&shown(&fol).await), ["nna", "nnb"]);
+    assert_eq!(listed(&shown(&fix).await), ["nna"], "a fixed list stays as it is");
+    assert_eq!(shown(&none).await["list"], false, "no list stays no list");
+    let follows: i64 = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT COUNT(*) FROM compute_events WHERE kind = 'allow_nodes' AND workspace_id = ?1 AND node_id = 'nnb' AND detail_json LIKE '%\"follow\":true%'",
+            params![fol.id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(follows, 1, "the join is audited");
+
+    // Unfixed, the next node joins it too.
+    let r = post(port, ALLOW_SET, OWNER, json!({"workspace": fix.id, "fixed": false})).await;
+    assert_eq!((r.status, j(&r)["change"].as_str(), j(&r)["fixed"].as_bool()), (200, Some("fixed"), Some(false)), "{}", r.body);
+    let joined = confirm("nnc").await;
+    assert!(joined.contains(&"nnfol".to_string()) && joined.contains(&"nnfix".to_string()), "{joined:?}");
+    assert_eq!(listed(&shown(&fix).await), ["nna", "nnc"]);
+    assert_eq!(listed(&shown(&fol).await), ["nna", "nnb", "nnc"]);
+}
+
 /// With a list, a named node off it is refused (the owner too, every way a
 /// job ships source), auto and `--any` only see the list, and the counts
 /// say so; without one, everything behaves as before.

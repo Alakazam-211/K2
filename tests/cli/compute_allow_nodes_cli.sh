@@ -15,6 +15,9 @@
 # beside it (white-label C5): the CLI prints the template with its own
 # names (k2, K2), never the server's (zz, Globex Desk); a daemon that sends
 # no template (old-ws) has its hint printed as sent.
+# 0.46.18: `--fixed on|off` sends `fixed` true or false and nothing else
+# (any other word is a usage error, exit 2); the list says whether it is
+# fixed or follows new nodes, and so does `k2 compute nodes`.
 
 set -euo pipefail
 
@@ -64,6 +67,13 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
         self.wfile.write(b)
+    def do_GET(self):
+        u = urlparse(self.path)
+        with open(LOG, "a") as f:
+            f.write(json.dumps({"path": u.path, "body": None}) + "\n")
+        if u.path == "/cli/compute/nodes":
+            return self.reply(200, {"nodes": [], "allowNodes": ["k2n13-vin"], "allowNodesWorkspace": "builder", "allowNodesFixed": True})
+        return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
@@ -72,6 +82,9 @@ class H(BaseHTTPRequestHandler):
             f.write(json.dumps({"path": u.path, "body": body}) + "\n")
         if u.path != "/cli/compute/allow-nodes/set":
             return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
+        if "fixed" in body:
+            return self.reply(200, {"workspace": "builder", "list": True, "change": "fixed", "fixed": body["fixed"],
+                                    "nodes": [{"name": "k2n13-vin", "state": "active", "granted": True}]})
         if body.get("workspace") in ("other-ws", "old-ws"):
             ws = body["workspace"]
             t = "an agent changes only its own workspace's compute node list, never %s's: a person runs {cli} compute allow-nodes --add <node> --workspace %s from a terminal outside {product}" % (ws, ws)
@@ -148,6 +161,34 @@ set -e
 expect_eq "no template (an older daemon) exits 3" "$rc" "3"
 expect_has "no template: the hint as sent" "$err" "a person runs zz compute allow-nodes --add <node> --workspace old-ws from a terminal outside Globex Desk"
 
+echo "== --fixed on|off: a person's flag, shown on the list =="
+last_body() { tail -1 "$LOG" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["body"], sort_keys=True))'; }
+set +e
+out="$("$K2" compute allow-nodes --fixed on --workspace builder 2>&1 </dev/null)"; rc=$?
+set -e
+expect_eq "--fixed on exits 0" "$rc" "0"
+expect_eq "--fixed on sends fixed true only" "$(last_body)" '{"fixed": true, "workspace": "builder"}'
+expect_has "a fixed list says so" "$out" "fixed: a node newly added to this server does not join it"
+set +e
+out="$("$K2" compute allow-nodes --fixed off --workspace builder 2>&1 </dev/null)"; rc=$?
+set -e
+expect_eq "--fixed off exits 0" "$rc" "0"
+expect_eq "--fixed off sends fixed false" "$(last_body)" '{"fixed": false, "workspace": "builder"}'
+expect_has "a following list says so" "$out" "follows new nodes: a node newly added to this server joins it"
+before="$(wc -l < "$LOG")"
+set +e
+err="$("$K2" compute allow-nodes --fixed maybe --workspace builder 2>&1 </dev/null >/dev/null)"; rc=$?
+set -e
+expect_eq "--fixed maybe is a usage error" "$rc" "2"
+expect_has "--fixed names its words" "$err" "(--fixed takes on or off)"
+expect_eq "a usage error sends nothing" "$(wc -l < "$LOG")" "$before"
+set +e
+out="$("$K2" compute nodes --workspace builder 2>&1 </dev/null)"; rc=$?
+set -e
+expect_eq "nodes exits 0" "$rc" "0"
+expect_has "nodes: the list" "$out" "node list (builder): jobs go only to k2n13-vin"
+expect_has "nodes: fixed" "$out" "  fixed: new nodes do not join it"
+
 echo "== help and study name the card =="
 help="$("$K2" compute --help)"
 expect_has "help: the card" "$help" "k2 permission request compute.allow-nodes nodes=N[,N…]"
@@ -156,6 +197,8 @@ study="$("$K2" study compute)"
 expect_has "study: the card" "$study" 'k2 permission request compute.allow-nodes nodes=N[,N…] --why "…"'
 expect_has "study: exactly those" "$study" "Allow adds exactly those nodes"
 expect_has "study: the code" "$study" "allow_nodes_not_granted"
+expect_has "help: --fixed" "$help" "k2 compute allow-nodes --fixed on|off [--workspace WS]"
+expect_has "study: new nodes join" "$study" "a node newly added to this server joins"
 
 echo
 echo "compute allow-nodes CLI: $pass passed, $fail failed"

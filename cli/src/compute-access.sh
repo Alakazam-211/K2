@@ -64,17 +64,25 @@ if v.get("resent"):
 # argument shows it; nodes (or --add/--remove/--clear) change it. The
 # daemon decides who may: the owner or an Admin any way; an agent only
 # narrows its own (adding or --clear: allow_nodes_needs_person, exit 3).
+# --fixed on|off (0.46.18, a person's): whether a node newly added to this
+# server joins the list (it does unless the list is fixed).
 cmd_compute_allow_nodes() {
-    local nodes="" add="" remove="" clear="" workspace="" as_json=0
-    local usage="usage: k2 compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear] [--workspace WS] [--json]"
+    local nodes="" add="" remove="" clear="" fixed="" workspace="" as_json=0
+    local usage="usage: k2 compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear | --fixed on|off] [--workspace WS] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --add|--remove|--workspace)
+            --add|--remove|--workspace|--fixed)
                 [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage ($1 needs a value)" >&2; exit 2; }
                 case "$1" in
                     --add) add="${add:+$add,}$2" ;;
                     --remove) remove="${remove:+$remove,}$2" ;;
                     --workspace) workspace="$2" ;;
+                    --fixed)
+                        case "$2" in
+                            on) fixed=1 ;;
+                            off) fixed=0 ;;
+                            *) echo "$usage (--fixed takes on or off)" >&2; exit 2 ;;
+                        esac ;;
                 esac
                 shift 2 ;;
             --clear) clear=1; shift ;;
@@ -85,13 +93,13 @@ cmd_compute_allow_nodes() {
     done
     local ws
     ws="$(_compute_ws "$workspace")"
-    if [ -z "$nodes$add$remove$clear" ]; then
+    if [ -z "$nodes$add$remove$clear$fixed" ]; then
         local q=""
         [ -n "$ws" ] && q="workspace=$(urlencode "$ws")"
         _compute_call GET /cli/compute/allow-nodes "$q"
     else
         _compute_call POST /cli/compute/allow-nodes/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_nodes="$nodes" \
-            K2_CJ_add="$add" K2_CJ_remove="$remove" K2_CJ_clear_b="$clear")"
+            K2_CJ_add="$add" K2_CJ_remove="$remove" K2_CJ_clear_b="$clear" K2_CJ_fixed_b="$fixed")"
     fi
     [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -113,6 +121,10 @@ if v.get("list"):
         names.append(name)
     print("%s: jobs go only to %s" % (v.get("workspace"), ", ".join(names)))
     print("  a node off the list is refused (node_not_allowed); --any, moves and retries stay on the list")
+    if v.get("fixed"):
+        print("  fixed: a node newly added to this server does not join it (k2 compute allow-nodes --fixed off lets new nodes join)")
+    else:
+        print("  follows new nodes: a node newly added to this server joins it (k2 compute allow-nodes --fixed on stops that)")
 else:
     print("%s: no node list (its jobs may go to any node granted to it)" % v.get("workspace"))
 if v.get("failedQueued"):

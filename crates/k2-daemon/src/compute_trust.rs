@@ -2363,6 +2363,9 @@ pub fn seat_enrolled(node_id: &str, seat: &SeatRow) {
     let _ = trust::set_node_seat(&conn, node_id, Some(&seat.id));
     let _ = store::set_tenant_of(&conn, node_id, &seat.owner_id);
     store::record_event(&conn, &by, "seat_node_confirmed", Some(node_id), None, None, json!({"seat": seat.id, "owner": seat.owner_id}));
+    // 0.46.18: a node new to this server joins every node list that
+    // follows new nodes, as a confirmed one does.
+    crate::compute_allow::follow_new_node(&conn, node_id, &by);
 }
 
 /// `/cli/compute/jobs/receipt`: why a receipt is void, if its key was

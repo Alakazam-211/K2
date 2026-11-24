@@ -1,5 +1,5 @@
 //! `compute allow-nodes [<node>[,<node>…] | --add NODE[,…] | --remove
-//! NODE[,…] | --clear] [--workspace WS] [--json]`, as
+//! NODE[,…] | --clear | --fixed on|off] [--workspace WS] [--json]`, as
 //! `cmd_compute_allow_nodes` answers it (`cli/src/compute-access.sh`):
 //! no change asked is one GET of `/cli/compute/allow-nodes` (this
 //! checkout's workspace outside a session); a change is one POST of
@@ -22,7 +22,7 @@ pub const SET: &str = "/cli/compute/allow-nodes/set";
 pub const USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
-    " compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear] [--workspace WS] [--json]"
+    " compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear | --fixed on|off] [--workspace WS] [--json]"
 );
 
 macro_rules! line {
@@ -38,6 +38,8 @@ pub struct Ask {
     pub add: String,
     pub remove: String,
     pub clear: bool,
+    /// `--fixed on` / `--fixed off` (0.46.18).
+    pub fixed: Option<bool>,
     pub workspace: String,
     pub json: bool,
 }
@@ -57,7 +59,7 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
     while i < words.len() {
         let w = words[i];
         match w {
-            "--add" | "--remove" | "--workspace" => {
+            "--add" | "--remove" | "--workspace" | "--fixed" => {
                 let v = match words.get(i + 1) {
                     Some(v) if !v.is_empty() => *v,
                     _ => return Words::Usage(format!("{USAGE} ({w} needs a value)")),
@@ -65,6 +67,13 @@ pub fn parse(words: &[&str]) -> Words<Ask> {
                 match w {
                     "--add" => append(&mut a.add, v),
                     "--remove" => append(&mut a.remove, v),
+                    "--fixed" => {
+                        a.fixed = match v {
+                            "on" => Some(true),
+                            "off" => Some(false),
+                            _ => return Words::Usage(format!("{USAGE} (--fixed takes on or off)")),
+                        }
+                    }
                     _ => a.workspace = v.to_string(),
                 }
                 i += 2;
@@ -98,13 +107,21 @@ pub fn body(a: &Ask, ws: &str) -> String {
     if a.clear {
         pairs.push(("clear", Value::Bool(true)));
     }
+    if let Some(f) = a.fixed {
+        pairs.push(("fixed", Value::Bool(f)));
+    }
     dumps(&object(pairs))
 }
 
 /// The request and what it prints.
 pub fn send(cp: &mut Cp<'_>, a: &Ask) -> Exit {
     let ws = cp.ws(&a.workspace);
-    let answer = if a.nodes.is_empty() && a.add.is_empty() && a.remove.is_empty() && !a.clear {
+    let answer = if a.nodes.is_empty()
+        && a.add.is_empty()
+        && a.remove.is_empty()
+        && !a.clear
+        && a.fixed.is_none()
+    {
         let q = if ws.is_empty() {
             String::new()
         } else {
@@ -176,6 +193,20 @@ fn read(body: &[u8], out: &mut String) -> Result<(), Raise> {
         let joined = p::join(", ", &Value::Array(names)).map_err(at(l))?;
         out.push_str(&format!("{}: jobs go only to {joined}\n", p::str_of(&ws)));
         out.push_str("  a node off the list is refused (node_not_allowed); --any, moves and retries stay on the list\n");
+        let l = line!("if v.get(\"fixed\")");
+        if p::truthy(&p::get(&v, "fixed").map_err(at(l))?) {
+            out.push_str(concat!(
+                "  fixed: a node newly added to this server does not join it (",
+                cli_name!(),
+                " compute allow-nodes --fixed off lets new nodes join)\n"
+            ));
+        } else {
+            out.push_str(concat!(
+                "  follows new nodes: a node newly added to this server joins it (",
+                cli_name!(),
+                " compute allow-nodes --fixed on stops that)\n"
+            ));
+        }
     } else {
         let l = line!("print(\"%s: no node list");
         let ws = p::get(&v, "workspace").map_err(at(l))?;
@@ -239,6 +270,23 @@ mod tests {
             parse(&["-x"]),
             Words::Usage(format!("{USAGE} (unknown flag '-x')"))
         );
+        // 0.46.18: --fixed on|off, nothing else.
+        let Words::Ask(a) = parse(&["--fixed", "on"]) else {
+            panic!("not an ask");
+        };
+        assert_eq!(a.fixed, Some(true));
+        let Words::Ask(a) = parse(&["--fixed", "off", "--workspace", "w"]) else {
+            panic!("not an ask");
+        };
+        assert_eq!((a.fixed, a.workspace.as_str()), (Some(false), "w"));
+        assert_eq!(
+            parse(&["--fixed", "yes"]),
+            Words::Usage(format!("{USAGE} (--fixed takes on or off)"))
+        );
+        assert_eq!(
+            parse(&["--fixed"]),
+            Words::Usage(format!("{USAGE} (--fixed needs a value)"))
+        );
         // `--add --json`: the flag's value, so no --json.
         let Words::Ask(a) = parse(&["--add", "--json"]) else {
             panic!("not an ask");
@@ -258,6 +306,11 @@ mod tests {
             body(&a, "acme"),
             r#"{"workspace": "acme", "nodes": "a", "clear": true}"#
         );
+        let a = Ask {
+            fixed: Some(false),
+            ..Ask::default()
+        };
+        assert_eq!(body(&a, "acme"), r#"{"workspace": "acme", "fixed": false}"#);
     }
 
     #[test]
@@ -267,7 +320,13 @@ mod tests {
         );
         assert_eq!(
             r.stdout,
-            "no change\nacme: jobs go only to mini (paused), n9 (removed), big (no grant)\n  a node off the list is refused (node_not_allowed); --any, moves and retries stay on the list\n  ended 1 queued job(s) on nodes that left the list (failed/node_not_allowed): 01234567\n  asked 2 job(s) back from a shared node's queue (they never start there)\n"
+            "no change\nacme: jobs go only to mini (paused), n9 (removed), big (no grant)\n  a node off the list is refused (node_not_allowed); --any, moves and retries stay on the list\n  follows new nodes: a node newly added to this server joins it (k2 compute allow-nodes --fixed on stops that)\n  ended 1 queued job(s) on nodes that left the list (failed/node_not_allowed): 01234567\n  asked 2 job(s) back from a shared node's queue (they never start there)\n"
+        );
+        let r = reader(br#"{"list":true,"workspace":"acme","nodes":[{"name":"mini","granted":true}],"fixed":true}"#);
+        assert!(
+            r.stdout.ends_with("  fixed: a node newly added to this server does not join it (k2 compute allow-nodes --fixed off lets new nodes join)\n"),
+            "{}",
+            r.stdout
         );
         let r = reader(br#"{"list":true,"nodes":[{"name":5,"granted":true}]}"#);
         assert_eq!(r.exit, Exit::Error);

@@ -19,6 +19,15 @@
 //! Who changes it is the route's business (`k2-daemon` `compute_allow`):
 //! the owner or an Admin in person any way; an agent only narrows its own
 //! workspace's ([`change`] says which a request is).
+//!
+//! **New nodes join (0.46.18, Rosson 2026-11-23).** A list follows new
+//! nodes by default: a node newly added to this server joins every list
+//! that exists ([`follow_new_node`]), so a new machine never waits on a
+//! person per list. A person may fix a list (`k2 compute allow-nodes
+//! --fixed on`): then only a person changes it. The flag is its own key
+//! (`allow_nodes_fixed:<workspace id>`, value `1`), so no migration: a list
+//! without it follows, which is what every list made before 0.46.18 does.
+//! Clearing the list drops the flag with it.
 
 use std::collections::BTreeSet;
 
@@ -30,6 +39,80 @@ pub const KEY_PREFIX: &str = "allow_nodes:";
 /// The settings key for one workspace's list.
 pub fn key(workspace_id: &str) -> String {
     format!("{KEY_PREFIX}{workspace_id}")
+}
+
+/// The `compute_admin_settings` key prefix of the "fixed" flag (0.46.18).
+pub const FIXED_PREFIX: &str = "allow_nodes_fixed:";
+
+/// The settings key for one workspace's "fixed" flag.
+pub fn fixed_key(workspace_id: &str) -> String {
+    format!("{FIXED_PREFIX}{workspace_id}")
+}
+
+/// Is the workspace's list fixed (new nodes don't join it)? A read error
+/// counts as fixed: never widen a list K2 can't read the flag of.
+pub fn is_fixed(conn: &Connection, workspace_id: &str) -> bool {
+    match conn
+        .query_row("SELECT value FROM compute_admin_settings WHERE key = ?1", params![fixed_key(workspace_id)], |r| r.get::<_, String>(0))
+        .optional()
+    {
+        Ok(None) => false,
+        Ok(Some(v)) => v.trim() != "0",
+        Err(_) => true,
+    }
+}
+
+/// Fix the list (`true`) or let it follow new nodes again (`false`).
+pub fn set_fixed(conn: &Connection, workspace_id: &str, fixed: bool, by: &str, at: i64) -> Result<(), String> {
+    if fixed {
+        conn.execute(
+            "INSERT INTO compute_admin_settings (key, value, updated_by, updated_at) VALUES (?1, '1', ?2, ?3) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at",
+            params![fixed_key(workspace_id), by, at],
+        )
+    } else {
+        conn.execute("DELETE FROM compute_admin_settings WHERE key = ?1", params![fixed_key(workspace_id)])
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Every workspace id that has a list, sorted.
+pub fn workspaces_with_lists(conn: &Connection) -> Vec<String> {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT substr(key, ?2) FROM compute_admin_settings WHERE substr(key, 1, ?3) = ?1 ORDER BY key",
+    ) else {
+        return Vec::new();
+    };
+    stmt.query_map(params![KEY_PREFIX, KEY_PREFIX.len() as i64 + 1, KEY_PREFIX.len() as i64], |r| r.get::<_, String>(0))
+        .map(|rows| rows.filter_map(Result::ok).filter(|w| !w.is_empty()).collect())
+        .unwrap_or_default()
+}
+
+/// A node was just added to this server: put it on every list that
+/// follows new nodes (not fixed, readable, not on it yet). Returns the
+/// workspace ids whose list it joined. A list K2 can't read is left as it
+/// is (it allows nothing until a person sets it again).
+pub fn follow_new_node(conn: &Connection, node_id: &str, by: &str, at: i64) -> Result<Vec<String>, String> {
+    let node_id = node_id.trim();
+    if node_id.is_empty() {
+        return Err("no node id".into());
+    }
+    let mut joined = Vec::new();
+    for ws in workspaces_with_lists(conn) {
+        if is_fixed(conn, &ws) {
+            continue;
+        }
+        let Ok(Some(e)) = get(conn, &ws) else { continue };
+        if e.nodes.iter().any(|n| n == node_id) {
+            continue;
+        }
+        let mut nodes = e.nodes;
+        nodes.push(node_id.to_string());
+        set(conn, &ws, Some(&nodes), by, at)?;
+        joined.push(ws);
+    }
+    Ok(joined)
 }
 
 /// One workspace's list, as stored.
@@ -76,7 +159,8 @@ pub fn set(conn: &Connection, workspace_id: &str, nodes: Option<&[String]>, by: 
                 params![key(workspace_id), value, by, at],
             )
         }
-        None => conn.execute("DELETE FROM compute_admin_settings WHERE key = ?1", params![key(workspace_id)]),
+        // No list, no flag: a list set again later follows new nodes.
+        None => conn.execute("DELETE FROM compute_admin_settings WHERE key IN (?1, ?2)", params![key(workspace_id), fixed_key(workspace_id)]),
     }
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -209,6 +293,42 @@ mod tests {
         assert!(!allows(&c, "ws1", "k2n9"));
         c.execute("UPDATE compute_admin_settings SET value = '[]' WHERE key = ?1", params![key("ws1")]).expect("empty row");
         assert!(!allows(&c, "ws1", "k2n9"), "an empty stored list allows nothing");
+    }
+
+    /// 0.46.18: a new node joins every list that follows new nodes (the
+    /// default, so every list made before 0.46.18 too), never a fixed one,
+    /// never a workspace with no list, and never a list it is on already.
+    #[test]
+    fn a_new_node_joins_following_lists_but_not_fixed_ones() {
+        let c = conn();
+        set(&c, "follows", Some(&v(&["n1"])), "owner", 1).expect("set");
+        set(&c, "fixed", Some(&v(&["n1"])), "owner", 1).expect("set");
+        set(&c, "has-it", Some(&v(&["n1", "n9"])), "owner", 1).expect("set");
+        set_fixed(&c, "fixed", true, "owner", 2).expect("fix");
+        assert!(is_fixed(&c, "fixed") && !is_fixed(&c, "follows") && !is_fixed(&c, "none"));
+        assert_eq!(workspaces_with_lists(&c), v(&["fixed", "follows", "has-it"]), "the flag is not a list");
+
+        let joined = follow_new_node(&c, "n9", "new-node:owner", 5).expect("follow");
+        assert_eq!(joined, v(&["follows"]));
+        let e = get(&c, "follows").expect("read").expect("a list");
+        assert_eq!(e.nodes, v(&["n1", "n9"]));
+        assert_eq!((e.updated_by.as_str(), e.updated_at), ("new-node:owner", 5));
+        assert_eq!(get(&c, "fixed").expect("read").expect("a list").nodes, v(&["n1"]), "a fixed list stays");
+        assert_eq!(get(&c, "has-it").expect("read").expect("a list").updated_at, 1, "already on it: untouched");
+        assert_eq!(get(&c, "none").expect("read"), None, "no list stays no list");
+        assert_eq!(follow_new_node(&c, "n9", "x", 6).expect("again"), Vec::<String>::new(), "once only");
+
+        // Unfixed, the next node joins it too; a cleared list drops its flag.
+        set_fixed(&c, "fixed", false, "owner", 7).expect("unfix");
+        assert_eq!(follow_new_node(&c, "n10", "x", 8).expect("follow"), v(&["fixed", "follows", "has-it"]));
+        set_fixed(&c, "fixed", true, "owner", 9).expect("fix");
+        set(&c, "fixed", None, "owner", 10).expect("clear");
+        assert!(!is_fixed(&c, "fixed"), "clearing the list drops the flag");
+
+        // A list K2 can't read is left alone (it allows nothing).
+        c.execute("UPDATE compute_admin_settings SET value = 'not json' WHERE key = ?1", params![key("follows")]).expect("bad row");
+        assert_eq!(follow_new_node(&c, "n11", "x", 11).expect("follow"), v(&["has-it"]));
+        assert!(follow_new_node(&c, " ", "x", 12).is_err());
     }
 
     #[test]

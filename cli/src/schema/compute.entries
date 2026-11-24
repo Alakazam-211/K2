@@ -34,13 +34,14 @@
     },
     {
       "name": "compute allow-nodes",
-      "usage": "k2 compute allow-nodes [<node>[,<node>…] | --add N | --remove N | --clear] [--workspace WS] [--json]",
-      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). An agent may only narrow its own; adding a node or --clear is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3).",
+      "usage": "k2 compute allow-nodes [<node>[,<node>…] | --add N | --remove N | --clear | --fixed on|off] [--workspace WS] [--json]",
+      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). A node newly added to this server joins every list that isn't fixed. An agent may only narrow its own; adding a node, --clear or --fixed is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3).",
       "args": [{"name": "node", "required": false}],
       "flags": [
         {"name": "--add", "arg": "NODE[,NODE…]", "description": "Add nodes to the list (a person)."},
         {"name": "--remove", "arg": "NODE[,NODE…]", "description": "Take nodes off the list."},
         {"name": "--clear", "arg": null, "description": "Remove the list: any granted node again (a person)."},
+        {"name": "--fixed", "arg": "on|off", "description": "on: new nodes don't join the list; off: they do again (a person)."},
         {"name": "--workspace", "arg": "WS", "description": "Which workspace."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]

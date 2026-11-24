@@ -33119,8 +33119,13 @@ Agents:
                  list: k2 permission request compute.allow-nodes nodes=N[,N…]
                  --why "…" (Allow adds exactly those). Only nodes granted to it
                  (else allow_nodes_not_granted); --clear opens every granted node,
-                 so ask for the nodes it needs. Nodes by name; a node removed and
-                 enrolled again is a new node, off the list until added
+                 so ask for the nodes it needs. Nodes by name
+  k2 compute allow-nodes --fixed on|off [--workspace WS]
+                 a node newly added to this server (a new machine, or one
+                 removed and enrolled again) joins every list unless the list is
+                 fixed. --fixed on keeps the list as it is; off lets new nodes
+                 join again (a person's: the owner or an Admin, from a terminal
+                 outside K2; anyone else gets allow_nodes_fixed_needs_person)
   k2 compute git-access [--json] | grant --github <owner>/<repo>[,…] | revoke … | setup …
                  let this workspace's jobs read private GitHub repos: git clone
                  and fetch just work, with short-lived read-only tokens, and the
@@ -34364,6 +34369,7 @@ if verb == "nodes":
         print("code waiting for %s (expires %s)" % (c["name"], time.strftime("%H:%M", time.localtime(c["expiresAt"]))))
     if isinstance(v.get("allowNodes"), list):
         print("node list (%s): jobs go only to %s (k2 compute allow-nodes)" % (v.get("allowNodesWorkspace") or "this workspace", ", ".join(v["allowNodes"]) or "nothing"))
+        print("  " + ("fixed: new nodes do not join it" if v.get("allowNodesFixed") else "follows new nodes: each node newly added to this server joins it"))
 elif verb == "info":
     print(node_line(v))
     for l in reserve_lines(v) + leftover_lines(v):
@@ -37651,17 +37657,25 @@ if v.get("resent"):
 # argument shows it; nodes (or --add/--remove/--clear) change it. The
 # daemon decides who may: the owner or an Admin any way; an agent only
 # narrows its own (adding or --clear: allow_nodes_needs_person, exit 3).
+# --fixed on|off (0.46.18, a person's): whether a node newly added to this
+# server joins the list (it does unless the list is fixed).
 cmd_compute_allow_nodes() {
-    local nodes="" add="" remove="" clear="" workspace="" as_json=0
-    local usage="usage: k2 compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear] [--workspace WS] [--json]"
+    local nodes="" add="" remove="" clear="" fixed="" workspace="" as_json=0
+    local usage="usage: k2 compute allow-nodes [<node>[,<node>…] | --add NODE[,NODE…] | --remove NODE[,NODE…] | --clear | --fixed on|off] [--workspace WS] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
-            --add|--remove|--workspace)
+            --add|--remove|--workspace|--fixed)
                 [ $# -ge 2 ] && [ -n "$2" ] || { echo "$usage ($1 needs a value)" >&2; exit 2; }
                 case "$1" in
                     --add) add="${add:+$add,}$2" ;;
                     --remove) remove="${remove:+$remove,}$2" ;;
                     --workspace) workspace="$2" ;;
+                    --fixed)
+                        case "$2" in
+                            on) fixed=1 ;;
+                            off) fixed=0 ;;
+                            *) echo "$usage (--fixed takes on or off)" >&2; exit 2 ;;
+                        esac ;;
                 esac
                 shift 2 ;;
             --clear) clear=1; shift ;;
@@ -37672,13 +37686,13 @@ cmd_compute_allow_nodes() {
     done
     local ws
     ws="$(_compute_ws "$workspace")"
-    if [ -z "$nodes$add$remove$clear" ]; then
+    if [ -z "$nodes$add$remove$clear$fixed" ]; then
         local q=""
         [ -n "$ws" ] && q="workspace=$(urlencode "$ws")"
         _compute_call GET /cli/compute/allow-nodes "$q"
     else
         _compute_call POST /cli/compute/allow-nodes/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_nodes="$nodes" \
-            K2_CJ_add="$add" K2_CJ_remove="$remove" K2_CJ_clear_b="$clear")"
+            K2_CJ_add="$add" K2_CJ_remove="$remove" K2_CJ_clear_b="$clear" K2_CJ_fixed_b="$fixed")"
     fi
     [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -37700,6 +37714,10 @@ if v.get("list"):
         names.append(name)
     print("%s: jobs go only to %s" % (v.get("workspace"), ", ".join(names)))
     print("  a node off the list is refused (node_not_allowed); --any, moves and retries stay on the list")
+    if v.get("fixed"):
+        print("  fixed: a node newly added to this server does not join it (k2 compute allow-nodes --fixed off lets new nodes join)")
+    else:
+        print("  follows new nodes: a node newly added to this server joins it (k2 compute allow-nodes --fixed on stops that)")
 else:
     print("%s: no node list (its jobs may go to any node granted to it)" % v.get("workspace"))
 if v.get("failedQueued"):
@@ -60698,13 +60716,14 @@ cmd_schema() {
     },
     {
       "name": "compute allow-nodes",
-      "usage": "k2 compute allow-nodes [<node>[,<node>…] | --add N | --remove N | --clear] [--workspace WS] [--json]",
-      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). An agent may only narrow its own; adding a node or --clear is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3).",
+      "usage": "k2 compute allow-nodes [<node>[,<node>…] | --add N | --remove N | --clear | --fixed on|off] [--workspace WS] [--json]",
+      "description": "Show or set this workspace's node list. With one, its jobs go only to those nodes (a node named off it: node_not_allowed, exit 3). A node newly added to this server joins every list that isn't fixed. An agent may only narrow its own; adding a node, --clear or --fixed is a person's, from a terminal outside K2 (an agent gets allow_nodes_needs_person, exit 3).",
       "args": [{"name": "node", "required": false}],
       "flags": [
         {"name": "--add", "arg": "NODE[,NODE…]", "description": "Add nodes to the list (a person)."},
         {"name": "--remove", "arg": "NODE[,NODE…]", "description": "Take nodes off the list."},
         {"name": "--clear", "arg": null, "description": "Remove the list: any granted node again (a person)."},
+        {"name": "--fixed", "arg": "on|off", "description": "on: new nodes don't join the list; off: they do again (a person)."},
         {"name": "--workspace", "arg": "WS", "description": "Which workspace."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
@@ -73524,6 +73543,10 @@ NODE LIST (0.46.8)
   exit 3: a person grants the node first) and only your own list.
   --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
+  New nodes join (0.46.18): a node newly added to this server joins
+  every list unless a person fixed it (k2 compute allow-nodes --fixed
+  on|off, the owner or an Admin). The list shows which it is (fixed, or
+  follows new nodes), and so does k2 compute nodes.
 
 GRANT LIMITS (0.46.17)
   Your grant on each node caps your jobs there: the longest job, how many
@@ -74878,6 +74901,8 @@ COMMON ERRORS
                          (compute.allow-nodes nodes=N for an add)
   allow_nodes_not_granted  adding a node not granted to your workspace: a
                          person grants it first; exit 3, can't be requested
+  allow_nodes_fixed_needs_person  --fixed on|off: a person's (the owner or an
+                         Admin); exit 3, can't be requested
   job_network_invalid    --network other than none, or a --netns-dummy name or
                          address outside the rules (NETWORK); exit 2
   job_network_needs_update  --network none / --netns-dummy, but no node for you

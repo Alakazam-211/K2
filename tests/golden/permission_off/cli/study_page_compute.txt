@@ -123,6 +123,10 @@ NODE LIST (0.46.8)
   exit 3: a person grants the node first) and only your own list.
   --clear opens every granted node at once: ask for the nodes you need.
   Queued jobs on a node that leaves the list end failed/node_not_allowed.
+  New nodes join (0.46.18): a node newly added to this server joins
+  every list unless a person fixed it (k2 compute allow-nodes --fixed
+  on|off, the owner or an Admin). The list shows which it is (fixed, or
+  follows new nodes), and so does k2 compute nodes.
 
 GRANT LIMITS (0.46.17)
   Your grant on each node caps your jobs there: the longest job, how many
@@ -1477,6 +1481,8 @@ COMMON ERRORS
                          (compute.allow-nodes nodes=N for an add)
   allow_nodes_not_granted  adding a node not granted to your workspace: a
                          person grants it first; exit 3, can't be requested
+  allow_nodes_fixed_needs_person  --fixed on|off: a person's (the owner or an
+                         Admin); exit 3, can't be requested
   job_network_invalid    --network other than none, or a --netns-dummy name or
                          address outside the rules (NETWORK); exit 2
   job_network_needs_update  --network none / --netns-dummy, but no node for you

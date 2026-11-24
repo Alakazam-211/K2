@@ -49,6 +49,7 @@ fn traceback(c: Case) -> Case {
 }
 
 const ALLOW_LIST: &str = r#"{"workspace":"acme","list":true,"nodes":[{"name":"mini","state":"active","granted":true},{"name":"big","state":"paused"},{"id":"n9"}]}"#;
+const ALLOW_FIXED: &str = r#"{"workspace":"acme","change":"fixed","list":true,"fixed":true,"nodes":[{"name":"mini","state":"active","granted":true}]}"#;
 const ALLOW_SET: &str = r#"{"workspace":"acme","change":"same","list":false,"failedQueued":["0123456789abcdef","fedcba9876543210"],"withdrawn":3}"#;
 
 #[test]
@@ -92,6 +93,34 @@ fn compute_allow_nodes() {
             owner_and_port,
             0,
             1,
+        ),
+        // 0.46.18: --fixed on|off, and the list's fixed line both ways.
+        case(
+            "--fixed on",
+            &["allow-nodes", "--fixed", "on", "--workspace", "acme"],
+            &[],
+            vec![ok(ALLOW_FIXED)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--fixed off",
+            &["allow-nodes", "--fixed", "off"],
+            &[],
+            vec![ok(ALLOW_LIST)],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "--fixed with another word",
+            &["allow-nodes", "--fixed", "yes"],
+            &[],
+            vec![],
+            owner_and_port,
+            2,
+            0,
         ),
         sess(case(
             "a session's own, on the cell socket",

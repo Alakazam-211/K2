@@ -858,7 +858,7 @@ fn node_confirm(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::
             "the code doesn't match what this server computed. Don't confirm: remove the node and enroll again (k2 compute node remove <name>)",
         ));
     }
-    let auto_granted = {
+    let (auto_granted, joined_lists) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::confirm_node(&conn, &n.id, &who.label(), compute::now()).map_err(|e| no("not_pending", 409, e))?;
@@ -869,7 +869,9 @@ fn node_confirm(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::
         for ws in &granted {
             store::record_event(&conn, &who.label(), "grant", Some(&n.id), Some(ws), None, serde_json::json!({"auto": true}));
         }
-        granted
+        // 0.46.18: and joins every node list that follows new nodes.
+        let joined = crate::compute_allow::follow_new_node(&conn, &n.id, &who.label());
+        (granted, joined)
     };
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "node_confirmed"}));
     if let Some(m) = mgr {
@@ -882,7 +884,7 @@ fn node_confirm(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::
     } else {
         format!("granted to every workspace with compute on ({}); k2 compute grant {} --workspace <ws> for others", handles.join(", "), n.name)
     };
-    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "active", "autoGranted": handles, "next": next}))
+    Ok(serde_json::json!({"ok": true, "node": n.name, "state": "active", "autoGranted": handles, "joinedLists": joined_lists, "next": next}))
 }
 
 fn node_remove(who: &Who, body: &[u8]) -> R<serde_json::Value> {

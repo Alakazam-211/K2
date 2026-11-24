@@ -23,6 +23,13 @@
 //! workspace (`allow_nodes_not_granted` otherwise, before any card), and
 //! never for another workspace's list (`forbidden`, naming who can).
 //! A Member login can read it, not change it.
+//!
+//! **New nodes join (0.46.18).** A list follows new nodes unless a person
+//! fixed it (`--fixed on|off`, the owner or an Admin only:
+//! `allow_nodes_fixed_needs_person` for anyone else, not requestable): a
+//! node confirmed on this server joins every following list
+//! ([`follow_new_node`], from `node confirm` and a seat node's enrolment),
+//! one `allow_nodes` event per list (`follow: true`).
 
 use std::collections::HashMap;
 
@@ -65,6 +72,30 @@ pub const NEEDS_PERSON: &str = "allow_nodes_needs_person";
 pub const NOT_GRANTED: &str = "allow_nodes_not_granted";
 /// Skip code in a placement record: on the grant, off the list.
 pub const SKIP: &str = "not_allowed";
+/// Anyone but a person setting `--fixed` (exit 3, not requestable).
+pub const FIXED_NEEDS_PERSON: &str = "allow_nodes_fixed_needs_person";
+
+/// A node was just added to this server (`node confirm`, a seat node):
+/// it joins every node list that follows new nodes, each change one
+/// `allow_nodes` event (`follow: true`). Returns the handles of the
+/// workspaces whose list it joined.
+pub(crate) fn follow_new_node(conn: &rusqlite::Connection, node_id: &str, by: &str) -> Vec<String> {
+    let joined = match allow::follow_new_node(conn, node_id, &format!("new-node:{by}"), compute::now()) {
+        Ok(j) => j,
+        Err(e) => {
+            store::record_event(conn, by, "allow_nodes_follow_failed", Some(node_id), None, None, serde_json::json!({"why": e}));
+            return Vec::new();
+        }
+    };
+    let name = name_of(conn, node_id);
+    joined
+        .iter()
+        .map(|ws| {
+            store::record_event(conn, by, "allow_nodes", Some(node_id), Some(ws), None, serde_json::json!({"follow": true, "added": [name]}));
+            crate::compute_routes::ws_handle(ws)
+        })
+        .collect()
+}
 
 /// The workspace's list as names (a removed node shows as its id with
 /// `(removed)`), or `None` when it has none. A read error is a list with
@@ -252,6 +283,8 @@ pub(crate) fn view(ws: &Ws) -> R<serde_json::Value> {
             "workspace": ws.handle,
             "list": true,
             "nodes": e.nodes.iter().map(|id| node_json(&conn, &ws.id, id)).collect::<Vec<_>>(),
+            // 0.46.18: a node newly added to this server joins it unless fixed.
+            "fixed": allow::is_fixed(&conn, &ws.id),
             "updatedBy": e.updated_by,
             "updatedAt": e.updated_at,
             "note": format!("{}'s jobs go only to these nodes (named, --any, moves and retries alike)", ws.handle),
@@ -294,13 +327,17 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
     let clear = b(&v, "clear") == Some(true);
     let (nodes, add, remove) = (names_in(&v, "nodes")?, names_in(&v, "add")?, names_in(&v, "remove")?);
-    let asks = [!nodes.is_empty(), !add.is_empty(), !remove.is_empty(), clear].iter().filter(|x| **x).count();
+    let fixed = fixed_in(&v)?;
+    let asks = [!nodes.is_empty(), !add.is_empty(), !remove.is_empty(), clear, fixed.is_some()].iter().filter(|x| **x).count();
     if asks != 1 {
         return Err(named_no(
             compute::codes::BAD_REQUEST,
             400,
-            format!("say one of: the whole list ({CLI_SLOT} compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, or --clear"),
+            format!("say one of: the whole list ({CLI_SLOT} compute allow-nodes linux-1,arch-1), --add NODE, --remove NODE, --clear, or --fixed on|off"),
         ));
+    }
+    if let Some(on) = fixed {
+        return set_fixed(who, s(&v, "workspace"), on);
     }
     let ws = target_ws(who, s(&v, "workspace")).map_err(|r| other_workspace(who, s(&v, "workspace"), r))?;
     let resolve = |names: &[String]| -> R<Vec<String>> {
@@ -431,6 +468,62 @@ pub(crate) fn set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     .into();
     out["failedQueued"] = failed.into();
     out["withdrawn"] = withdrawn.into();
+    Ok(out)
+}
+
+/// `fixed`: `true` / `false`, or `on` / `off` (`None` when absent).
+fn fixed_in(v: &serde_json::Value) -> R<Option<bool>> {
+    match v.get("fixed") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Bool(x)) => Ok(Some(*x)),
+        Some(serde_json::Value::String(t)) if matches!(t.trim(), "on" | "true") => Ok(Some(true)),
+        Some(serde_json::Value::String(t)) if matches!(t.trim(), "off" | "false") => Ok(Some(false)),
+        Some(_) => Err(no(compute::codes::BAD_REQUEST, 400, "fixed is on or off (k2 compute allow-nodes --fixed on|off)")),
+    }
+}
+
+/// `--fixed on|off`: whether a node newly added to this server joins the
+/// list (0.46.18). A person's only (the owner or an Admin), and only on a
+/// list that exists.
+fn set_fixed(who: &Who, requested: Option<&str>, on: bool) -> R<serde_json::Value> {
+    if !who.is_admin() {
+        let words = if on { "fixing" } else { "un-fixing" };
+        return Err(no(
+            FIXED_NEEDS_PERSON,
+            403,
+            format!(
+                "{words} a compute node list decides whether new machines may receive its workspace's code, so only a person does it: \
+                 the owner or an Admin, from a terminal outside {PRODUCT_NAME} (k2 compute allow-nodes --fixed on|off --workspace <ws>)"
+            ),
+        ));
+    }
+    let ws = target_ws(who, requested)?;
+    let was = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let has = allow::get(&conn, &ws.id).map_err(|e| no("internal", 500, format!("the node list of {} can't be read: {e}", ws.handle)))?;
+        if has.is_none() {
+            return Err(no(
+                compute::codes::BAD_REQUEST,
+                400,
+                format!(
+                    "workspace {} has no node list to fix (its jobs may go to any node granted to it); set one first: \
+                     k2 compute allow-nodes <node>[,<node>…] --workspace {}",
+                    ws.handle, ws.handle
+                ),
+            ));
+        }
+        let was = allow::is_fixed(&conn, &ws.id);
+        if was != on {
+            allow::set_fixed(&conn, &ws.id, on, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
+        }
+        was
+    };
+    if was != on {
+        audit(who, "allow_nodes_fixed", None, Some(&ws.id), None, serde_json::json!({"fixed": on}));
+    }
+    let mut out = view(&ws)?;
+    out["change"] = if was == on { "same" } else { "fixed" }.into();
     Ok(out)
 }
 

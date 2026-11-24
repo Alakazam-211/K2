@@ -96,8 +96,8 @@
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
-      "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--expect 12m|unknown] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem, and --expect with how long it takes (unknown only on a first run; a finished job prints the value to pass next time). Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
         {"name": "--os", "arg": "linux|macos", "description": "Only nodes of that OS."},
@@ -145,6 +145,7 @@
         {"name": "--artifact", "arg": "GLOB", "description": "Keep files matching GLOB, relative to the job's working directory (repeatable)."},
         {"name": "--artifacts", "arg": "GLOB", "description": "The same as --artifact."},
         {"name": "--json", "arg": null, "description": "One result object on stdout (logs go to stderr)."},
+        {"name": "--expect", "arg": "12m|unknown", "description": "How long the job takes (2h, 12m, 90s): give it on every run, so the queue puts quick jobs ahead of long ones (long ones still start within a bounded time). unknown only on a first run; a finished job prints the value to pass next time (took 11m40s; next time: --expect 12m)."},
         {"name": "--queue-timeout", "arg": "2h|off", "description": "How long it may wait to start (default 2h attached or --wait, 24h --detach, 48h --tier batch)."},
         {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
@@ -161,15 +162,16 @@
     },
     {
       "name": "compute test",
-      "usage": "k2 compute test [<node>] [--shards N] [--partition hash|count] [--profile P] [--runner CMD] [--preset NAME] [run flags] [-- <nextest args>]",
-      "description": "A cargo-nextest suite split across nodes (nextest --partition), JUnit kept and parsed, one combined result. It takes run's flags except --wait, --failures, --max-wait, --quiet and --priority (the code refuses those here; --critical and --tier work).",
+      "usage": "k2 compute test [<node>] [--shards N] [--partition hash|count] [--profile P] [--runner CMD] [--preset NAME] [--expect 12m|unknown] [run flags] [-- <nextest args>]",
+      "description": "A cargo-nextest suite split across nodes (nextest --partition), JUnit kept and parsed, one combined result. It takes run's flags except --wait, --failures, --max-wait, --quiet and --priority (the code refuses those here; --critical and --tier work). Give --expect on every test, as for run (unknown only on a first run).",
       "args": [{"name": "node", "required": false, "description": "Pin to this node (not with --shards above 1)."}, {"name": "nextest args", "required": false, "description": "After --: nextest's own arguments."}],
       "flags": [
         {"name": "--shards", "arg": "N", "description": "How many shards (1 to 16), each on its own node."},
         {"name": "--partition", "arg": "hash|count", "description": "How nextest splits the suite across the shards (nextest --partition hash or count; default hash). Only with --shards above 1."},
         {"name": "--profile", "arg": "P", "description": "Use the repo's own nextest profile."},
         {"name": "--runner", "arg": "CMD", "description": "Replace cargo nextest run."},
-        {"name": "--preset", "arg": "NAME", "description": "The .k2/compute.toml preset, as for run."}
+        {"name": "--preset", "arg": "NAME", "description": "The .k2/compute.toml preset, as for run."},
+        {"name": "--expect", "arg": "12m|unknown", "description": "How long the suite takes: give it on every test, as for run (unknown only on a first run; a finished job prints the value to pass next time)."}
       ]
     },
     {

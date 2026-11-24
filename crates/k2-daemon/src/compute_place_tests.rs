@@ -1581,6 +1581,7 @@ fn userns_plan(userns: bool) -> Plan {
     .expect("a plan");
     p.userns = userns;
     p
+}
 
 /// The Gardener 11-24: a node with free slots took no moved job while
 /// anything was queued on it, even a Batch job waiting for idle or one too

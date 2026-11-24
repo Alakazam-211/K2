@@ -290,6 +290,14 @@ pub fn get(cx: &mut Cx, j: &Value, full: bool) -> Result<(), Raise> {
         p::pct("  exit: %s  signal: %s  attempt %s (generation %s)", &args),
     )?;
     cx.print(&t);
+    // --expect: what a finished job took, and the value to pass next time.
+    let l = ln!("if j.get(\"state\") == \"done\" and j.get(\"took\"):");
+    if p::eq_s(&g(cx, l, "state")?, "done") && p::truthy(&g(cx, l, "took")?) {
+        let l = ln!("print(\"  %s\" % j[\"took\"])");
+        let took = i(cx, l, "took")?;
+        let t = cx.at(l, p::pct("  %s", &[took]))?;
+        cx.print(&t);
+    }
 
     attempts(cx, j)?;
     queue_lines(cx, j)?;
@@ -571,7 +579,8 @@ fn queue_lines(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
             } else {
                 e
             };
-            let l = ln!("print(\"  ahead: %-9s %-9s %-14s %s  %s%s\"");
+            let est = cx.at(ln!("est = a.get(\"estSecs\")"), p::get(&a, "estSecs"))?;
+            let l = ln!("print(\"  ahead: %-9s %-9s %-14s %s%s  %s%s\"");
             let short = p::or(cx.at(l, p::get(&a, "short"))?, s("-"));
             let state = cx.at(l, p::get(&a, "state"))?;
             let ws = p::or(cx.at(l, p::get(&a, "workspace"))?, s("(other)"));
@@ -581,6 +590,15 @@ fn queue_lines(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
                 let m = cx.at(l, p::floordiv(&age, &p::int(60)))?;
                 let sec = cx.at(l, p::rem(&age, &p::int(60)))?;
                 cx.at(l, p::pct("%dm%02ds", &[m, sec]))?
+            };
+            // --expect: the run time K2 expects of each job ahead.
+            let est = if p::is_none(&est) {
+                String::new()
+            } else {
+                let x = cx.at(l, p::add(&est, &p::int(59)))?;
+                let x = cx.at(l, p::floordiv(&x, &p::int(60)))?;
+                let m = cx.at(l, p::max2(&p::int(1), &x))?;
+                cx.at(l, p::pct(" ~%dm", &[m]))?
             };
             let argv = p::or(cx.at(l, p::get(&a, "argv"))?, s(""));
             let reason = if p::truthy(&cx.at(l, p::get(&a, "reason"))?) {
@@ -593,8 +611,8 @@ fn queue_lines(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
             let t = cx.at(
                 l,
                 p::pct(
-                    "  ahead: %-9s %-9s %-14s %s  %s%s",
-                    &[short, state, ws, s(&el), argv, s(&reason)],
+                    "  ahead: %-9s %-9s %-14s %s%s  %s%s",
+                    &[short, state, ws, s(&el), s(&est), argv, s(&reason)],
                 ),
             )?;
             cx.print(&t);
@@ -636,6 +654,21 @@ fn queue_lines(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
 
 fn rest(cx: &mut Cx, j: &Value) -> Result<(), Raise> {
     let g = |cx: &Cx, line: u32, k: &str| cx.at(line, p::get(j, k));
+    // --expect: how long K2 expects an unfinished job to run.
+    let ex = g(cx, ln!("ex = j.get(\"expected\")"), "expected")?;
+    let l = ln!("if isinstance(ex, dict) and ex.get(\"words\") and j.get(\"state\") not in");
+    if p::is_dict(&ex) && p::truthy(&cx.at(l, p::get(&ex, "words"))?) {
+        let st = g(cx, l, "state")?;
+        let ended = ["done", "failed", "cancelled", "timeout", "interrupted", "unknown"]
+            .iter()
+            .any(|x| p::eq_s(&st, x));
+        if !ended {
+            let l = ln!("print(\"  expected: %s\" % ex[\"words\"])");
+            let w = cx.at(l, p::idx(&ex, "words"))?;
+            let t = cx.at(l, p::pct("  expected: %s", &[w]))?;
+            cx.print(&t);
+        }
+    }
     let stl = or_dict(g(cx, ln!("stl = j.get(\"stall\") or {}"), "stall")?);
     let l = ln!("if \"stallSecs\" in stl:");
     if cx.at(l, p::has(&stl, "stallSecs"))? {

@@ -32,6 +32,7 @@ const VALUED: &[&str] = &[
     "--artifact",
     "--artifacts",
     "--queue-timeout",
+    "--expect",
     "--retries",
     "--stall-timeout",
     "--tier",

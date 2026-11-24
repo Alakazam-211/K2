@@ -782,6 +782,12 @@ pub fn end_with_ids(bodies: &[Vec<u8>], json: bool, limit: Exit) -> (Shown, Vec<
                 took
             );
             out::stderr_line(line.trim_end_matches('\n'));
+            // --expect: what it took, and the value to pass next time.
+            if super::is_str(st, "done") {
+                if let Some(t) = get(p, "took").filter(|t| py::truthy(t)) {
+                    out::stderr_line(&format!("  {}", py::str_of(t)));
+                }
+            }
             if let Some(hint) = get(p, "hint").filter(|h| py::truthy(h)) {
                 out::stderr_line(&format!("  hint: {}", py::str_of(hint)));
             }
@@ -998,6 +1004,11 @@ pub fn any_reader(body: &[u8], json: bool) -> Result<Option<AnyEnded>, Raise> {
         what,
         took
     ));
+    if super::is_str(st.as_ref(), "done") {
+        if let Some(t) = get(p, "took").filter(|t| py::truthy(t)) {
+            out::stderr_line(&format!("  {}", py::str_of(t)));
+        }
+    }
     let id = match get(p, "id") {
         Some(v) if py::truthy(v) => py::str_of(v),
         _ => String::new(),

@@ -3,7 +3,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network="" strict="" userns="" no_addr_filter=""
+    local network="" strict="" userns="" no_addr_filter="" expect="" expect_unknown=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -156,6 +156,17 @@ sys.exit(0 if ok else 1)'; then
                 case "${2:-}" in
                     off|none|0) stall=0 ;;
                     *) stall="$(_compute_secs "${2:-}")" ;;
+                esac
+                shift 2 ;;
+            # --expect 12m|unknown: how long the job takes, so the queue
+            # puts quick jobs ahead of long ones. Give it on every run;
+            # unknown only on a first run (a finished job prints the value
+            # to pass next time).
+            --expect)
+                case "${2:-}" in
+                    unknown) expect_unknown=1; expect="" ;;
+                    *) expect="$(_compute_secs "${2:-}" 2>/dev/null)" || { echo "usage: --expect <duration>|unknown (e.g. --expect 12m; unknown only on a first run)" >&2; exit 2; }
+                       expect_unknown="" ;;
                 esac
                 shift 2 ;;
             --raw) raw=1; shift ;;
@@ -322,7 +333,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
-        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
+        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_expectSecs_n="$expect" K2_CJ_expectUnknown_b="$expect_unknown" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_cpusBurst_n="$cpus_burst" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
@@ -729,7 +740,7 @@ cmd_compute_test() {
                 _need_value "$@"
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
+            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--expect|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns|--no-addr-filter) pass+=("$1"); shift ;;

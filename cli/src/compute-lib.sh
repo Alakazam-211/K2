@@ -606,6 +606,9 @@ elif verb == "get":
         print("  " + " · ".join(times))
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
+    if j.get("state") == "done" and j.get("took"):
+        # --expect: what it took, and the value to pass next time.
+        print("  %s" % j["took"])
     rows = j.get("attempts") or []
     if len(rows) > 1:
         # Every attempt: a retry or move K2 made on its own says why.
@@ -651,9 +654,11 @@ elif verb == "get":
             print("  the node runs %s job(s) from this workspace at a time" % q["parallel"])
         for a in q.get("ahead") or []:
             age = a.get("elapsedSecs") if a.get("elapsedSecs") is not None else a.get("ageSecs")
-            print("  ahead: %-9s %-9s %-14s %s  %s%s" % (
+            est = a.get("estSecs")
+            print("  ahead: %-9s %-9s %-14s %s%s  %s%s" % (
                 a.get("short") or "-", a.get("state"), a.get("workspace") or "(other)",
                 ("%dm%02ds" % (age // 60, age % 60)) if age is not None else "-",
+                (" ~%dm" % max(1, (est + 59) // 60)) if est is not None else "",
                 a.get("argv") or "", "  (" + a["reason"] + ")" if a.get("reason") else ""))
     wt = j.get("wait") or {}
     if wt and not j.get("queue") and wt.get("words"):
@@ -661,6 +666,10 @@ elif verb == "get":
         print("  %s%s" % (wt["words"], (", ~%s left (%s)" % (dur(wt["etaSecs"]), wt.get("etaBasis"))) if wt.get("etaSecs") is not None else ""))
     elif wt.get("etaSecs") is not None and j.get("queue") and not j["queue"].get("onNode"):
         print("  ETA ~%s (estimate from earlier runs)" % dur(wt["etaSecs"]))
+    ex = j.get("expected")
+    if isinstance(ex, dict) and ex.get("words") and j.get("state") not in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown"):
+        # --expect: how long K2 expects it to run (the queue orders by it).
+        print("  expected: %s" % ex["words"])
     stl = j.get("stall") or {}
     if "stallSecs" in stl:
         # CE-10: the stall watch of a running job.

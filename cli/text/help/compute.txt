@@ -166,6 +166,14 @@ Agents:
                                 it is refused (mem_auto_no_history, exit 2). The
                                 run's note says what it picked; k2 compute
                                 rightsize shows the numbers (preview: ciPreview)
+                 --expect 12m|unknown  always pass it too: how long the job takes
+                                (2h, 12m, 90s). The queue puts quick jobs ahead
+                                of long ones (a long one still starts within a
+                                bounded time). unknown only on a first run; a
+                                finished job prints the value to pass next time
+                                (took 11m40s; next time: --expect 12m), and get
+                                says what K2 expects (expected: ~25m by its
+                                last 8 earlier runs)
                  [--env K=V]... [--cpus N | N+M]  N+M: N guaranteed, up to M on idle cores
                                 (every job always gets its --cpus; k2 study compute: IDLE CORES)
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
@@ -320,13 +328,14 @@ Agents:
                  the node uses its pin (rust@stable is for a repo without one).
                  Cargo builds in $CARGO_TARGET_DIR (the log prints it), not ./target
                  -- <command…>
-  k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
+  k2 compute test [<node>] [--shards N] [--expect 12m|unknown] [run flags] [-- <nextest args>]
                  a cargo-nextest suite split across nodes (nextest --partition),
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
                  (--preset NAME is the .k2/compute.toml preset, as for run).
                  Run flags except --wait, --failures, --max-wait, --quiet and
                  --priority (exit 2; --critical and --tier priority work).
+                 --expect on every test, as for run (unknown only on a first run).
                  --partition hash|count: how nextest splits the suite across
                  the shards (default hash; only with --shards above 1)
   k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--label k=v]

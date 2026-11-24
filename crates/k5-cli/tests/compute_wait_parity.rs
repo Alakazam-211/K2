@@ -203,6 +203,29 @@ fn compute_wait_for_each_job() {
             1,
         ),
         case(
+            "a done job's took line (--expect), before its hint",
+            &["wait", "j"],
+            &[],
+            vec![ok(
+                r#"{"short":"j","state":"done","exitCode":0,"node":"n","startedAt":1000,"endedAt":1700,"took":"took 11m40s; next time: --expect 12m","nextExpect":"--expect 12m","hint":"h"}"#,
+            )],
+            owner_and_port,
+            0,
+            1,
+        ),
+        case(
+            "a took that is no string, and none on a failed job",
+            &["wait", "j", "k"],
+            &[],
+            vec![
+                ok(r#"{"short":"j","state":"done","exitCode":0,"took":["a",1,{"b":null}]}"#),
+                ok(r#"{"short":"k","state":"failed","reason":"x","took":"took 1m"}"#),
+            ],
+            owner_and_port,
+            3,
+            2,
+        ),
+        case(
             "an empty hint says nothing",
             &["wait", "j"],
             &[],
@@ -290,6 +313,18 @@ fn compute_wait_for_each_job() {
 fn compute_wait_any() {
     let rig = Rig::new(VERB, "waitany");
     let v = vec![
+        case(
+            "the first to end prints its took line",
+            &["wait", "aaaa1111", "bbbb2222", "--any"],
+            &[],
+            vec![
+                ok(RUNNING),
+                ok(r#"{"id":"bbbb2222cccc","short":"bbbb2222","state":"done","node":"n2","exitCode":0,"took":"took 1m05s; next time: --expect 2m"}"#),
+            ],
+            owner_and_port,
+            0,
+            2,
+        ),
         case(
             "the second ends first",
             &["wait", "aaaa1111", "bbbb2222", "--any"],

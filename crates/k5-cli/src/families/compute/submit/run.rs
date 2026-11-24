@@ -94,6 +94,10 @@ pub struct Ask {
     pub qtimeout: String,
     pub retries: String,
     pub stall: String,
+    /// `--expect <duration>`, in seconds (`""`: not given, or `unknown`).
+    pub expect: String,
+    /// `--expect unknown` (a first run).
+    pub expect_unknown: bool,
     pub nshards: String,
     pub plan: bool,
     pub gate: bool,
@@ -561,6 +565,25 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
                 }
                 shift2!();
             }
+            // --expect 12m|unknown: how long the job takes (the queue
+            // orders by it). A missing or bad value is one usage line.
+            "--expect" => {
+                const EXPECT: &str = "usage: --expect <duration>|unknown (e.g. --expect 12m; unknown only on a first run)";
+                match val(i) {
+                    "unknown" => {
+                        a.expect_unknown = true;
+                        a.expect = String::new();
+                    }
+                    other => {
+                        match secs::<Ask>(other)? {
+                            Ok(v) => a.expect = v,
+                            Err(_) => return usage(EXPECT),
+                        }
+                        a.expect_unknown = false;
+                    }
+                }
+                shift2!();
+            }
             "--raw" => {
                 a.raw = true;
                 i += 1;
@@ -815,6 +838,8 @@ pub fn body(a: &Ask, cwd: &str, repo_dir: &str, ws: &str, client: &str) -> Strin
         ("retries", num(&a.retries)),
         ("stallSecs", num(&a.stall)),
         ("shards", num(&a.nshards)),
+        ("expectSecs", num(&a.expect)),
+        ("expectUnknown", flag(a.expect_unknown)),
         ("plan", b(a.plan)),
         ("detach", b(a.detach)),
         ("dirty", b(a.dirty)),

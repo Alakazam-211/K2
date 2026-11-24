@@ -5,8 +5,11 @@ k2 study compute — run builds and tests on your owner's other machines
 
 WHEN
   Slow builds/tests, or another OS/arch:
-    k2 compute run --mem 24G --dirty -- cargo nextest run -p k2-core
+    k2 compute run --mem 24G --expect 12m --dirty -- cargo nextest run -p k2-core
   (the tools it needs go in --needs: MEMORY below has a whole K2 line)
+  Give --expect <time> on every k2 compute run/test (unknown only on a first
+  run); a finished job prints the value to pass next time. Quick jobs then
+  don't wait behind long ones.
   --dirty sends your uncommitted changes too: no commit needed to check
   work in progress. Iterate there, not on this machine.
   Not for work that needs your logins, keychain or this machine's files.

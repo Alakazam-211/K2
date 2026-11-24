@@ -34130,6 +34130,14 @@ Agents:
                                 it is refused (mem_auto_no_history, exit 2). The
                                 run's note says what it picked; k2 compute
                                 rightsize shows the numbers (preview: ciPreview)
+                 --expect 12m|unknown  always pass it too: how long the job takes
+                                (2h, 12m, 90s). The queue puts quick jobs ahead
+                                of long ones (a long one still starts within a
+                                bounded time). unknown only on a first run; a
+                                finished job prints the value to pass next time
+                                (took 11m40s; next time: --expect 12m), and get
+                                says what K2 expects (expected: ~25m by its
+                                last 8 earlier runs)
                  [--env K=V]... [--cpus N | N+M]  N+M: N guaranteed, up to M on idle cores
                                 (every job always gets its --cpus; k2 study compute: IDLE CORES)
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
@@ -34284,13 +34292,14 @@ Agents:
                  the node uses its pin (rust@stable is for a repo without one).
                  Cargo builds in $CARGO_TARGET_DIR (the log prints it), not ./target
                  -- <command…>
-  k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
+  k2 compute test [<node>] [--shards N] [--expect 12m|unknown] [run flags] [-- <nextest args>]
                  a cargo-nextest suite split across nodes (nextest --partition),
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
                  (--preset NAME is the .k2/compute.toml preset, as for run).
                  Run flags except --wait, --failures, --max-wait, --quiet and
                  --priority (exit 2; --critical and --tier priority work).
+                 --expect on every test, as for run (unknown only on a first run).
                  --partition hash|count: how nextest splits the suite across
                  the shards (default hash; only with --shards above 1)
   k2 compute prewarm [--preset NAME | --needs …] [--os …] [--distro …] [--arch …] [--label k=v]
@@ -35387,6 +35396,9 @@ elif verb == "get":
         print("  " + " · ".join(times))
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
+    if j.get("state") == "done" and j.get("took"):
+        # --expect: what it took, and the value to pass next time.
+        print("  %s" % j["took"])
     rows = j.get("attempts") or []
     if len(rows) > 1:
         # Every attempt: a retry or move K2 made on its own says why.
@@ -35432,9 +35444,11 @@ elif verb == "get":
             print("  the node runs %s job(s) from this workspace at a time" % q["parallel"])
         for a in q.get("ahead") or []:
             age = a.get("elapsedSecs") if a.get("elapsedSecs") is not None else a.get("ageSecs")
-            print("  ahead: %-9s %-9s %-14s %s  %s%s" % (
+            est = a.get("estSecs")
+            print("  ahead: %-9s %-9s %-14s %s%s  %s%s" % (
                 a.get("short") or "-", a.get("state"), a.get("workspace") or "(other)",
                 ("%dm%02ds" % (age // 60, age % 60)) if age is not None else "-",
+                (" ~%dm" % max(1, (est + 59) // 60)) if est is not None else "",
                 a.get("argv") or "", "  (" + a["reason"] + ")" if a.get("reason") else ""))
     wt = j.get("wait") or {}
     if wt and not j.get("queue") and wt.get("words"):
@@ -35442,6 +35456,10 @@ elif verb == "get":
         print("  %s%s" % (wt["words"], (", ~%s left (%s)" % (dur(wt["etaSecs"]), wt.get("etaBasis"))) if wt.get("etaSecs") is not None else ""))
     elif wt.get("etaSecs") is not None and j.get("queue") and not j["queue"].get("onNode"):
         print("  ETA ~%s (estimate from earlier runs)" % dur(wt["etaSecs"]))
+    ex = j.get("expected")
+    if isinstance(ex, dict) and ex.get("words") and j.get("state") not in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown"):
+        # --expect: how long K2 expects it to run (the queue orders by it).
+        print("  expected: %s" % ex["words"])
     stl = j.get("stall") or {}
     if "stallSecs" in stl:
         # CE-10: the stall watch of a running job.
@@ -35836,7 +35854,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network="" strict="" userns="" no_addr_filter=""
+    local network="" strict="" userns="" no_addr_filter="" expect="" expect_unknown=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -35989,6 +36007,17 @@ sys.exit(0 if ok else 1)'; then
                 case "${2:-}" in
                     off|none|0) stall=0 ;;
                     *) stall="$(_compute_secs "${2:-}")" ;;
+                esac
+                shift 2 ;;
+            # --expect 12m|unknown: how long the job takes, so the queue
+            # puts quick jobs ahead of long ones. Give it on every run;
+            # unknown only on a first run (a finished job prints the value
+            # to pass next time).
+            --expect)
+                case "${2:-}" in
+                    unknown) expect_unknown=1; expect="" ;;
+                    *) expect="$(_compute_secs "${2:-}" 2>/dev/null)" || { echo "usage: --expect <duration>|unknown (e.g. --expect 12m; unknown only on a first run)" >&2; exit 2; }
+                       expect_unknown="" ;;
                 esac
                 shift 2 ;;
             --raw) raw=1; shift ;;
@@ -36155,7 +36184,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
-        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
+        K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_expectSecs_n="$expect" K2_CJ_expectUnknown_b="$expect_unknown" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_cpusBurst_n="$cpus_burst" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
@@ -36562,7 +36591,7 @@ cmd_compute_test() {
                 _need_value "$@"
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
+            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--expect|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns|--no-addr-filter) pass+=("$1"); shift ;;
@@ -37246,6 +37275,8 @@ for j in bodies:
         code, what = 3, st + ((" (%s)" % j["reason"]) if j.get("reason") else "")
         errs.append(json.dumps({"error": st, "reason": j.get("reason") or "", "hint": "k2 compute get %s; k2 compute retry %s" % (j.get("short"), j.get("short"))}))
     sys.stderr.write("[k2 compute] job %s on %s: %s%s\n" % (j.get("short"), j.get("node"), what, took))
+    if st == "done" and j.get("took"):
+        sys.stderr.write("  %s\n" % j["took"])
     if j.get("hint"):
         sys.stderr.write("  hint: %s\n" % j["hint"])
     if code != 0:
@@ -37315,6 +37346,8 @@ elif st == "done":
 else:
     code, what = 3, st + ((" (%s)" % j["reason"]) if j.get("reason") else "")
 sys.stderr.write("[k2 compute] job %s on %s ended first: %s%s\n" % (j.get("short"), j.get("node"), what, took))
+if st == "done" and j.get("took"):
+    sys.stderr.write("  %s\n" % j["took"])
 if os.environ.get("K2_CP_JSON") == "1":
     print(json.dumps(j))
 print("RC %d %s" % (code, j.get("id") or ""))')"
@@ -61916,8 +61949,8 @@ cmd_schema() {
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
-      "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem. Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--expect 12m|unknown] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem, and --expect with how long it takes (unknown only on a first run; a finished job prints the value to pass next time). Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
         {"name": "--os", "arg": "linux|macos", "description": "Only nodes of that OS."},
@@ -61965,6 +61998,7 @@ cmd_schema() {
         {"name": "--artifact", "arg": "GLOB", "description": "Keep files matching GLOB, relative to the job's working directory (repeatable)."},
         {"name": "--artifacts", "arg": "GLOB", "description": "The same as --artifact."},
         {"name": "--json", "arg": null, "description": "One result object on stdout (logs go to stderr)."},
+        {"name": "--expect", "arg": "12m|unknown", "description": "How long the job takes (2h, 12m, 90s): give it on every run, so the queue puts quick jobs ahead of long ones (long ones still start within a bounded time). unknown only on a first run; a finished job prints the value to pass next time (took 11m40s; next time: --expect 12m)."},
         {"name": "--queue-timeout", "arg": "2h|off", "description": "How long it may wait to start (default 2h attached or --wait, 24h --detach, 48h --tier batch)."},
         {"name": "--stall-timeout", "arg": "30m|off", "description": "A job that prints nothing that long ends (default 30m; 2h for Priority and CI); off for a job that goes quiet."},
         {"name": "--shards", "arg": "N", "description": "N jobs, {shard}/{shards} in the command, each on its own node when it can (no node named)."},
@@ -61981,15 +62015,16 @@ cmd_schema() {
     },
     {
       "name": "compute test",
-      "usage": "k2 compute test [<node>] [--shards N] [--partition hash|count] [--profile P] [--runner CMD] [--preset NAME] [run flags] [-- <nextest args>]",
-      "description": "A cargo-nextest suite split across nodes (nextest --partition), JUnit kept and parsed, one combined result. It takes run's flags except --wait, --failures, --max-wait, --quiet and --priority (the code refuses those here; --critical and --tier work).",
+      "usage": "k2 compute test [<node>] [--shards N] [--partition hash|count] [--profile P] [--runner CMD] [--preset NAME] [--expect 12m|unknown] [run flags] [-- <nextest args>]",
+      "description": "A cargo-nextest suite split across nodes (nextest --partition), JUnit kept and parsed, one combined result. It takes run's flags except --wait, --failures, --max-wait, --quiet and --priority (the code refuses those here; --critical and --tier work). Give --expect on every test, as for run (unknown only on a first run).",
       "args": [{"name": "node", "required": false, "description": "Pin to this node (not with --shards above 1)."}, {"name": "nextest args", "required": false, "description": "After --: nextest's own arguments."}],
       "flags": [
         {"name": "--shards", "arg": "N", "description": "How many shards (1 to 16), each on its own node."},
         {"name": "--partition", "arg": "hash|count", "description": "How nextest splits the suite across the shards (nextest --partition hash or count; default hash). Only with --shards above 1."},
         {"name": "--profile", "arg": "P", "description": "Use the repo's own nextest profile."},
         {"name": "--runner", "arg": "CMD", "description": "Replace cargo nextest run."},
-        {"name": "--preset", "arg": "NAME", "description": "The .k2/compute.toml preset, as for run."}
+        {"name": "--preset", "arg": "NAME", "description": "The .k2/compute.toml preset, as for run."},
+        {"name": "--expect", "arg": "12m|unknown", "description": "How long the suite takes: give it on every test, as for run (unknown only on a first run; a finished job prints the value to pass next time)."}
       ]
     },
     {
@@ -75014,8 +75049,11 @@ k2 study compute — run builds and tests on your owner's other machines
 
 WHEN
   Slow builds/tests, or another OS/arch:
-    k2 compute run --mem 24G --dirty -- cargo nextest run -p k2-core
+    k2 compute run --mem 24G --expect 12m --dirty -- cargo nextest run -p k2-core
   (the tools it needs go in --needs: MEMORY below has a whole K2 line)
+  Give --expect <time> on every k2 compute run/test (unknown only on a first
+  run); a finished job prints the value to pass next time. Quick jobs then
+  don't wait behind long ones.
   --dirty sends your uncommitted changes too: no commit needed to check
   work in progress. Iterate there, not on this machine.
   Not for work that needs your logins, keychain or this machine's files.

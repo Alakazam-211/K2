@@ -390,7 +390,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// and K2's reminders and heartbeats, never the harness's own scheduler.
 /// Bumped to 67 (0.46.18): `k2 thread <addr> --reply-to '#N' "…"` replies
 /// to a message or card, to point the person at it.
-pub const SKILL_VERSION_WORKSPACE: u32 = 67;
+/// Bumped to 68 (0.46.18, both 67 lines landed together): the Compute nodes block passes `--expect` (how
+/// long the job takes; `unknown` only on a first run).
+pub const SKILL_VERSION_WORKSPACE: u32 = 68;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

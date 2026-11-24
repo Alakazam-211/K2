@@ -808,7 +808,7 @@ Run `"#, cli_name!(), r#" heartbeat --help` for the full surface.
 Builds and tests on your owner's other machines. Read `"#, cli_name!(), r#" study compute` first.
 ```
 "#, cli_name!(), r#" compute nodes                                       # what you may use, and who is on the critical path
-"#, cli_name!(), r#" compute run --mem 24G --dirty -- cargo nextest run -p <crate>   # "#, product_name!(), r#" picks the node; your uncommitted work too
+"#, cli_name!(), r#" compute run --mem 24G --dirty --expect 12m -- cargo nextest run -p <crate>   # "#, product_name!(), r#" picks the node; your uncommitted work too
 "#, cli_name!(), r#" compute run --mem 8G --wait -- <command>            # prints the id, then streams; exits with its code
 "#, cli_name!(), r#" compute run --mem 8G --detach -- <command>          # prints a job id
 "#, cli_name!(), r#" compute run --os macos --mem 8G -- <command>        # macOS only (an Xcode build)
@@ -821,6 +821,8 @@ Builds and tests on your owner's other machines. Read `"#, cli_name!(), r#" stud
 **Don't name a node** unless you must pin one: "#, product_name!(), r#" picks a granted node that can start the job now (a warm one if it isn't busier), else the shortest wait, and prints `placed on <node> (auto): <why>`.
 
 **Always pass `--mem`** with what the job needs: without it the job reserves 4 GB and is stopped above it.
+
+**Give `--expect <time>`** on every `"#, cli_name!(), r#" compute run`/`test` (`unknown` only on a first run); a finished job prints the value to pass next time. Quick jobs then don't wait behind long ones.
 
 **Priority = the critical path.** Use `--tier priority` only when one result is blocking others (the next builder, an integration pass, a release). One submitter on this server at a time: if `"#, cli_name!(), r#" compute nodes` shows someone else on the critical path, use Normal unless the coordinator named you. Priority is optional: if work is independent, leave everything Normal. It all still runs, in parallel, just more slowly.
 
@@ -2457,6 +2459,11 @@ mod tests {
             assert!(body.contains(want), "k2-cli skill's Compute nodes block must show {want}");
         }
         assert!(!body.contains("--any"), "k2-cli skill no longer teaches --any");
+        // --expect (SKILL_VERSION_WORKSPACE 66→67): every run says how long
+        // it takes, so the queue orders by it.
+        for want in ["--dirty --expect 12m", "**Give `--expect <time>`**", "`unknown` only on a first run"] {
+            assert!(body.contains(want), "k2-cli skill's Compute nodes block must show {want}");
+        }
         // W6 (0.40.30): the agent-preset surface + custom-agent contract
         // pointer (SKILL_VERSION_WORKSPACE bumped 7→8 for this section).
         assert!(

@@ -1735,7 +1735,11 @@ impl Py {
         if !files.is_empty() && !has_files {
             return Err(self.die_with(
                 "server_too_old",
-                "this server's K2 doesn't take files on project lines (it needs project chats on the Thread)",
+                concat!(
+                    "this server's ",
+                    k2_client::product_name!(),
+                    " doesn't take files on project lines (it needs project chats on the Thread)"
+                ),
             ));
         }
         let name = or(

@@ -139,7 +139,10 @@ pub(super) fn refuse_card_route(path: &str, params: &HashMap<String, String>) ->
         error_json(
             "400 Bad Request",
             "project_messages_only",
-            "a project's chat takes messages and files only (POST /cli/thread/post, or k2 project msg)",
+            format!(
+                "a project's chat takes messages and files only (POST /cli/thread/post, or {} project msg)",
+                k2_core::brand::CLI_NAME
+            ),
         )
     })
 }

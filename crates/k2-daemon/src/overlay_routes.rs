@@ -24,6 +24,8 @@ pub(crate) mod message_delete;
 pub(crate) mod notice_resend;
 pub(crate) mod reply_to;
 mod body;
+mod past_handles;
+use past_handles::past_addresses;
 mod context_line;
 use context_line::thread_context_line;
 #[cfg(test)]
@@ -883,24 +885,6 @@ fn snapshot_json(
         "pastAddresses": past_addresses(resolved),
     });
     with_rev_and_instance(moved_from_value(body, resolved), rev)
-}
-
-/// `ws/<n>` and each retired `ws/<name>` of a sidecar conversation.
-fn past_addresses(resolved: &ResolvedOverlay) -> Vec<String> {
-    if resolved.canonical_alias {
-        return Vec::new();
-    }
-    let Some((ws, _)) = k2_core::workspace_session_handles::split_workspace_handle(&resolved.addr)
-    else {
-        return Vec::new();
-    };
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    k2_core::workspace_session_handles::past_handles_for(&conn, &resolved.project_id, &resolved.conversation_id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|h| k2_core::workspace_session_handles::format_address(ws, Some(&h)))
-        .collect()
 }
 
 const OVERLAY_PAGE_DEFAULT: usize = 25;

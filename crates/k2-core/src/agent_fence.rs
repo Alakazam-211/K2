@@ -1181,10 +1181,17 @@ mod tests {
         let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env, own_secrets: None };
         let v = default_view_in(&i, &[secrets.clone()]).unwrap();
         assert!(!covers(&v.ro, &other) && !covers(&v.rw, &other) && !covers(&v.ro, &own), "{:?}", v.ro);
-        // A folder outside every root, named as the session's own: nothing.
+        // A folder outside every root, named as the session's own: nothing is
+        // opened for it, so the view is the one that names no folder. (Is it
+        // open at all? That depends on where the temp folder sits: under a
+        // system rule such as /tmp or /var, it is open like the rest there.)
+        let unnamed = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env, own_secrets: None };
         let i = ViewInputs { home: &home, k2_home: &k2, workspace: &ws, tmp_dir: &tmp, env: &env, own_secrets: Some(&other) };
-        let v = default_view_in(&i, &[own.clone()]).unwrap();
-        assert!(!covers(&v.ro, &other) && !covers(&v.rw, &other), "{:?}", v.ro);
+        assert_eq!(
+            default_view_in(&i, &[own.clone()]).unwrap(),
+            default_view_in(&unnamed, &[own.clone()]).unwrap(),
+            "a folder outside every root, named as the session's own, opens nothing"
+        );
         // A link in the hooks folder: the folder stays out.
         std::os::unix::fs::symlink(home.join(".ssh"), k2.join("hooks/x")).unwrap();
         let v = default_view_in(&i, &[]).unwrap();

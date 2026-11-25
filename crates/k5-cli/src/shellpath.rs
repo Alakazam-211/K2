@@ -105,8 +105,8 @@ pub fn canonpath_os(path: &OsStr) -> Option<PathBuf> {
 
 /// `dirname <p>` as the system's `dirname` prints it (POSIX's steps):
 /// trailing `/`s off, then the last part, then the `/`s before it; `/`
-/// when nothing is left of a rooted path, `.` of one with no `/`. A
-/// leading `//` is kept where the platform's `dirname` keeps it.
+/// when nothing is left of a rooted path, `.` of one with no `/`. GNU's
+/// and macOS's alike: `//a` is `/`, `//a/b` is `//a`.
 pub fn dirname(p: &[u8]) -> &[u8] {
     let mut end = p.len();
     while end > 1 && p[end - 1] == b'/' {
@@ -123,17 +123,10 @@ pub fn dirname(p: &[u8]) -> &[u8] {
         cut -= 1;
     }
     if cut == 0 {
-        return if DIRNAME_KEEPS_DOUBLE && slash == 1 {
-            b"//"
-        } else {
-            b"/"
-        };
+        return b"/";
     }
     &p[..cut]
 }
-
-/// Whether `dirname //a` is `//` (else `/`).
-const DIRNAME_KEEPS_DOUBLE: bool = false;
 
 /// What `CDPATH` does to one `cd <dir>`.
 #[derive(Debug, Clone, PartialEq, Eq)]

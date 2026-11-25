@@ -243,7 +243,7 @@ EXPECTED_DIFFS=(
     "clone-url-empty-host|the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
     "clone-proxy-unread|the clone engine's port|a clone request to an https server that isn't this computer with the person's https_proxy set to a URL of another scheme (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>, and with https_proxy=https://127.0.0.1:<port>): the binary sends nothing and prints one usage line on stderr naming the scheme, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"proxy socks5://\\u2026 is not supported: only http:// proxies are\"} (https:// the same). The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy), in its own version's head (python-connect-host), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3. (A blank-separated no_proxy is no longer part of it: the binary reads no_proxy as the shell's Python does, K2's one proxy rule.)"
     "home-unset-prefix|native lane step 2 (one refusal at the front, never a guessed home)|no HOME in the environment (the check: \`whoami\` and \`help\` with env -i, a port setting given): bash's prelude stops under set -u at K2_HOME=\"\${HOME}/.k2\" with \"<path to cli/k2>: line <n>: HOME: unbound variable\", exit 1; the binary refuses at its front before it reads or sends anything, \"HOME isn't set; set it to your home folder and try again\", exit 1. Neither prints on stdout or sends. A K*_PORT setting that is no port is refused first on both (exit 2), and an empty HOME is a HOME"
-    "cd-option-prefix|native lane step 2 (a folder cd reads as an option)|a --workspace folder whose name starts with - and holds a letter cd doesn't take (the check: \`changes list --workspace -ws\` where -ws is a folder): both print cd's two lines on stderr, \"cd: -w: invalid option\" and cd's usage line (bash 3.2's \"cd: usage: cd [-L|-P] [dir]\", 4.4 and later's \"cd: usage: cd [-L|[-P [-e]] [-@]] [dir]\"), send nothing and exit as cd does under set -e (1 on 3.2, 2 from 4.4); bash puts \"<path to cli/k2>: line <n>: \" before the first line, the binary doesn't. The bash side is /bin/bash, the one the binary hands lines to and models"
+    "cd-option-prefix|native lane step 2 (a folder cd reads as an option)|a --workspace folder whose name starts with - and holds a letter cd doesn't take (the check: \`changes list --workspace -ws\` where -ws is a folder): both print cd's two lines on stderr, \"cd: -w: invalid option\" and the usage line /bin/bash's own cd prints (3.2's \"cd: usage: cd [-L|-P] [dir]\", 4.4 to 5.2's \"cd: usage: cd [-L|[-P [-e]] [-@]] [dir]\", 5.3's \"cd: usage: cd [-L|[-P [-e]]] [-@] [dir]\"; the check takes it from that bash, and the binary reads the same form out of the bash program), send nothing and exit as cd does under set -e (1 on 3.2, 2 from 4.4); bash puts \"<path to cli/k2>: line <n>: \" before the first line, the binary doesn't. The bash side is /bin/bash, the one the binary hands lines to and models"
     "sim-install-dash-path|native lane step 2 (a native refusal for input bash only half-handles)|\`sim install <path>\` with a path starting with - (the check: \`sim install -app.apk\` where -app.apk is a file, a port and an owner token on disk but nothing listening): bash's dirname and basename read the path as their options, and the run stops with the system tools' own usage lines (GNU's or BSD's words), exit 1; the binary sends nothing too and prints its usage error, \"Error: <cli> sim install: a path starting with \\\"-\\\" can't be read safely; use ./<path> instead\" and the JSON error line, exit 1 as bash's. Only the words differ. The binary's side is checked in crates/k5-cli/tests/home_pwd_cdpath_parity.rs too, against a stub that must get no request"
 )
 
@@ -328,14 +328,19 @@ check_sim_install_dash_path() {
 # check_cd_option_prefix: `changes list --workspace -ws` in a folder that
 # holds a folder named -ws, a port and an owner token on disk but nothing
 # listening (neither side may ask). The bash side is /bin/bash, the one
-# the binary models (macOS's 3.2; 4.4 or later elsewhere).
+# the binary hands lines to and models. What that bash's cd prints (its
+# usage line) and how the run ends are taken from it here, not written in
+# per version: x=$(cd -ws && pwd) under set -e, in that same bash.
 check_cd_option_prefix() {
-    local d="$WORK/dcd" rc out err problems=() want=2 usage
-    usage='cd: usage: cd [-L|[-P [-e]] [-@]] [dir]'
-    if [ "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')" -lt 4 ]; then
-        want=1 usage='cd: usage: cd [-L|-P] [dir]'
-    fi
+    local d="$WORK/dcd" rc out err problems=() want usage
     mkdir -p "$d/home/.k2" "$d/ws/-ws"
+    want=0; (cd "$d/ws" && /bin/bash -c 'set -e; x="$(cd -ws && pwd)"' >/dev/null 2>"$d/cd.err") || want=$?
+    usage="$(sed -n 2p "$d/cd.err")"
+    case "$usage" in
+        'cd: usage: '*) ;;
+        *) problems+=("/bin/bash's cd gave no usage line: $(head -c 300 "$d/cd.err")") ;;
+    esac
+    [ "$want" != 0 ] || problems+=("/bin/bash's cd -ws did not fail")
     printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
     printf '1\n' >"$d/home/.k2/heartbeat.port"
     out="$d/out" err="$d/err"

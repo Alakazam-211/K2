@@ -204,20 +204,46 @@ const CD_OPTIONS: &[u8] = if cfg!(target_os = "macos") {
     b"eLP"
 };
 
-/// `cd`'s usage line, as `builtin_usage` prints it.
-pub const CD_USAGE: &str = if cfg!(target_os = "macos") {
-    "cd: usage: cd [-L|-P] [dir]"
-} else {
-    "cd: usage: cd [-L|[-P [-e]] [-@]] [dir]"
-};
+/// `cd`'s usage text (its `short_doc`, which `builtin_usage` prints after
+/// `cd: usage: `) by bash version, newest first, and how the run ends
+/// after `x=$(cd "$d" && pwd)` fails on a bad option under `set -e`.
+const CD_USAGES: [(&str, crate::exit::Exit); 3] = [
+    // bash 5.3.
+    ("cd [-L|[-P [-e]]] [-@] [dir]", crate::exit::Exit::Usage),
+    // bash 4.4 to 5.2.
+    ("cd [-L|[-P [-e]] [-@]] [dir]", crate::exit::Exit::Usage),
+    // bash 3.2 (macOS's /bin/bash): cd's status is 1 there.
+    ("cd [-L|-P] [dir]", crate::exit::Exit::Error),
+];
 
-/// How the run ends after `x=$(cd "$d" && pwd)` fails on a bad option
-/// under `set -e`: `cd`'s status (3.2: 1; 4.4 and later: 2, `EX_USAGE`).
-pub const CD_USAGE_EXIT: crate::exit::Exit = if cfg!(target_os = "macos") {
-    crate::exit::Exit::Error
-} else {
-    crate::exit::Exit::Usage
-};
+/// `cd`'s usage text and the run's end for the bash whose program is
+/// `bash` (its bytes): the form of [`CD_USAGES`] that the program holds,
+/// as bash builds the line from that text. With no program to read (a box
+/// with no bash), the form for this system's usual `/bin/bash`: 3.2's on
+/// macOS, 4.4 to 5.2's elsewhere.
+pub fn cd_usage_in(bash: Option<&[u8]>) -> (&'static str, crate::exit::Exit) {
+    let held = |u: &str| bash.is_some_and(|b| b.windows(u.len()).any(|w| w == u.as_bytes()));
+    if let Some(form) = CD_USAGES.iter().find(|(u, _)| held(u)) {
+        return *form;
+    }
+    CD_USAGES[if cfg!(target_os = "macos") { 2 } else { 1 }]
+}
+
+/// [`cd_usage_in`] for the bash the binary hands lines to: `/bin/bash`,
+/// or off macOS `/usr/bin/bash` when that one is missing; read once.
+pub fn cd_usage() -> (&'static str, crate::exit::Exit) {
+    static FOUND: std::sync::OnceLock<(&'static str, crate::exit::Exit)> =
+        std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let places: &[&str] = if cfg!(target_os = "macos") {
+            &["/bin/bash"]
+        } else {
+            &["/bin/bash", "/usr/bin/bash"]
+        };
+        let bytes = places.iter().find_map(|p| std::fs::read(p).ok());
+        cd_usage_in(bytes.as_deref())
+    })
+}
 
 /// What `cd` makes of a word as its first argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,7 +277,7 @@ pub fn cd_dash(dir: &str) -> CdDash {
 /// the binary doesn't: the named difference `cd-option-prefix`) and the
 /// usage line.
 pub fn cd_refusal(c: char) -> String {
-    format!("cd: -{c}: invalid option\n{CD_USAGE}\n")
+    format!("cd: -{c}: invalid option\ncd: usage: {}\n", cd_usage().0)
 }
 
 /// Whether the binary leaves `x=$(cd <dir> && pwd)` to the shell, for a
@@ -268,14 +294,14 @@ pub fn cd_to_shell(dir: &str) -> bool {
 
 /// `x=$(cd <dir> && pwd)` under `set -e` with an option `cd` doesn't
 /// take: bash's two lines on stderr ([`cd_refusal`]) and the run's end
-/// ([`CD_USAGE_EXIT`]). `None` for any other `dir`.
+/// ([`cd_usage`]). `None` for any other `dir`.
 pub fn cd_refused(dir: &str) -> Option<crate::exit::Exit> {
     let CdDash::Invalid(c) = cd_dash(dir) else {
         return None;
     };
     // As bash's own write: one that fails is not an error of its own.
     let _ = crate::out::write_flushed(&mut std::io::stderr().lock(), cd_refusal(c).as_bytes());
-    Some(CD_USAGE_EXIT)
+    Some(cd_usage().1)
 }
 
 /// `chdir` would enter `p`: a folder (links followed) with search
@@ -378,8 +404,30 @@ mod tests {
         assert_eq!(cd_dash("-e"), e);
         assert_eq!(
             cd_refusal('w'),
-            format!("cd: -w: invalid option\n{CD_USAGE}\n")
+            format!("cd: -w: invalid option\ncd: usage: {}\n", cd_usage().0)
         );
+    }
+
+    /// cd's usage text is the form the bash program holds (5.3, 4.4 to
+    /// 5.2, 3.2), else this system's usual one.
+    #[test]
+    fn cd_s_usage_is_the_bash_program_s() {
+        use crate::exit::Exit;
+        let prog = |doc: &str| format!("\0junk\0{doc}\0more\0").into_bytes();
+        for (doc, exit) in [
+            ("cd [-L|[-P [-e]]] [-@] [dir]", Exit::Usage),
+            ("cd [-L|[-P [-e]] [-@]] [dir]", Exit::Usage),
+            ("cd [-L|-P] [dir]", Exit::Error),
+        ] {
+            assert_eq!(cd_usage_in(Some(&prog(doc))), (doc, exit), "{doc}");
+        }
+        let usual = if cfg!(target_os = "macos") {
+            ("cd [-L|-P] [dir]", Exit::Error)
+        } else {
+            ("cd [-L|[-P [-e]] [-@]] [dir]", Exit::Usage)
+        };
+        assert_eq!(cd_usage_in(None), usual);
+        assert_eq!(cd_usage_in(Some(b"no bash here")), usual);
     }
 
     /// Pinned from bash 3.2 and 5.2: which names `CDPATH` is read for,

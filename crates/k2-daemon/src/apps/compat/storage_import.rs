@@ -201,7 +201,7 @@ pub fn enc_path(name: &str) -> String {
 /// A redirect from the source (0.46.18): the egress client follows none,
 /// and K2 doesn't yet re-vet each hop, so the import stops and says so.
 /// 0.46.19: up to 3 hops, each re-vetted through the egress gate.
-pub const REDIRECT_NOT_FOLLOWED: &str = "the source answered a redirect; K2 doesn't follow it yet";
+pub const REDIRECT_NOT_FOLLOWED: &str = concat!("the source answered a redirect; ", k2_core::product_name!(), " doesn't follow it yet");
 
 fn redirect_refusal(what: &str, r: &reqwest::Response) -> StorageError {
     let to = r.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).and_then(|l| url::Url::parse(l).ok()).and_then(|u| u.host_str().map(str::to_string));

@@ -103,7 +103,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Logins and passwords
 - **Resetting your own password is never temporary.**
 - **On a server with web access off, the phone can now finish a temporary password: sign in with it, then choose your new one.**
-- **A new hosted server's first owner is the person whose k2.dev account it belongs to.** You claim it from your k2.dev dashboard, choosing the login's username and password. Only the k2.dev dashboard can do this, only for the account the server is linked to, and only while the server has no owner login; after that it is refused. Agents and the server's own token can't reach it.
+- **A new hosted server's first owner login comes from your k2.dev account again.** As before, it is there when the server is ready, and you can reveal its initial password on your k2.dev dashboard. The k2.dev dashboard now sets it up directly. Only the dashboard can do this, only for the account the server is linked to, and only while the server has no owner login; after that it is refused. Agents and the server's own token can't reach it.
 - **The server setup script works again.** Since 0.46.15 it stopped when it made the first owner. It no longer makes an owner login at all: making an owner takes a person present. A hosted server's owner claims it from k2.dev. On a self-hosted server you run `k2 users add <you> --role owner` from your own SSH login. `K2_OWNER_USER` now stops the script before it starts, and the website-management login is made a Member until the owner claims the server.
 
 ### Wiki

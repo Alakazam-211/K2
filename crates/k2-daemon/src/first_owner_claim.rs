@@ -5,11 +5,14 @@
 //! computer's own user check (`presence::OWNER_LOGIN`), and a Linux server
 //! with no owner login has no password to check. A hosted server is linked
 //! to the buyer's k2.dev account, so its first owner comes from there: the
-//! account holder signs in at k2.dev, picks a username and password, and the
-//! k2.dev dashboard sends them here over the server's K2 Connect tunnel,
-//! signed with the dashboard's edge key. The person chose the password, and
-//! K2 Web signs the claim only for the account that owns this server's
-//! subdomain (its side of the contract).
+//! k2.dev dashboard's backend sends the first owner login (the username and
+//! initial password it keeps for the buyer's "reveal") here over the
+//! server's K2 Connect tunnel, signed with the dashboard's edge key, right
+//! after provisioning. K2 Web signs a claim only for a server row its own
+//! records link to that buyer's account (its side of the contract,
+//! `.k2/prds/contract-first-owner-claim-v1.md`). A retry after a lost
+//! answer gets 409 `owner_exists`; the dashboard confirms it is its own
+//! login by signing in with it.
 //!
 //! Every one of these must hold, or nothing is made:
 //!

@@ -881,7 +881,7 @@ fi
 # A self-hosted server's owner makes theirs from their own SSH login:
 # k2 users add <you> --role owner. K2_OWNER_USER stops the run before any
 # work (above).
-log "first owner: none made here; the k2.dev account holder claims it from their dashboard (self-hosted: k2 users add <you> --role owner, from your own SSH login)"
+log "first owner: none made here; the k2.dev dashboard makes it for the linked account (claim-first-owner; self-hosted: k2 users add <you> --role owner, from your own SSH login)"
 
 # ── 9b. website-management service user (K2 Cloud only) ─────────────
 # The login the k2.dev control plane uses to proxy the server modal's
@@ -1139,7 +1139,7 @@ echo "  recorder:  ${REC_LINE}"
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
 if true; then
 echo ""
-echo "  Next (hosted: the account holder claims the owner from k2.dev; interactive self-host, from your own SSH login):"
+echo "  Next (hosted: the k2.dev dashboard makes the owner for the linked account; interactive self-host, from your own SSH login):"
 echo "    k2 users add <you> --role owner   # prompts for password"
 [ -z "${K2_TUNNEL_TOKEN:-}" ] && echo "    k2 connect login                 # pair purchased *.k2.dev subdomain"
 echo "  Automation fallback still works: K2_TUNNEL_TOKEN + K2_SUBDOMAIN env."

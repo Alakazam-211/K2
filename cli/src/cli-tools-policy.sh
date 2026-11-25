@@ -556,7 +556,9 @@ if _k5_via.get("X-K2-Py-Session-Sock") and _k5_via.get("X-K2-Py-Session-Hash"):
             except _k5_urlreq.URLError as e:
                 if not isinstance(e.reason, _K5SockGone):
                     raise
-                req.remove_header("X-K2-Via-Tcp")
+                # urllib keeps the name as str.capitalize() makes it, and
+                # remove_header takes it only spelled that way.
+                req.remove_header("X-K2-Via-Tcp".capitalize())
                 return None
     if _k5_urlreq._opener is None:
         _k5_urlreq.install_opener(_k5_urlreq.build_opener())

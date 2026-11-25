@@ -78,6 +78,10 @@ native_bar	V	app	app user meta --json
 native_bar	V	agent	agent isolation
 native_bar	V	agent	agent isolation layout
 native_bar	V	agent	agent whois
+# compute node label and labels (this server's node labels) go to bash: take each row out when its form is native
+native_bar	V	compute	compute node label
+native_bar	V	compute	compute node labels
+native_bar	V	compute	compute node labels --json
 parity	-	db	db cluster basebackup --json
 parity	-	db	db cluster backups --json
 parity	-	db	db cluster restore --json

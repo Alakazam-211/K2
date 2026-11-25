@@ -69,8 +69,8 @@ fn is_include(key: &str) -> bool {
 /// parsed by gix-config as git parses it: a UTF-8 BOM skipped, any bytes
 /// (not only UTF-8), quoted subsections with `]` or escapes in them, keys
 /// on the header's own line, values continued over lines. Section and
-/// name are lowercased, the subsection kept; a key with no `=` reads
-/// `true`. A file gix-config can't parse is an `Err`: the guard counts it
+/// name are lowercased, the subsection kept; a key with no `=` reads as
+/// an empty value (a boolean to [`names_program`]). A file gix-config can't parse is an `Err`: the guard counts it
 /// as naming a program, the trust scan reports it.
 pub(crate) fn config_entries(bytes: &[u8]) -> Result<Vec<(String, BString)>, String> {
     let file = gix::config::File::from_bytes_no_includes(bytes, gix::config::file::Metadata::api(), Default::default())
@@ -98,7 +98,7 @@ pub(crate) fn config_entries(bytes: &[u8]) -> Result<Vec<(String, BString)>, Str
             let key = format!("{prefix}.{lower}");
             let values = body.values(&lower);
             if values.is_empty() {
-                out.push((key, BString::from("true")));
+                out.push((key, BString::default()));
             } else {
                 out.extend(values.into_iter().map(|v| (key.clone(), v)));
             }
@@ -426,7 +426,8 @@ mod tests {
         assert_eq!(entries(b"[core]\n# caf\xe9\n[filter \"x\"]\n\tclean = c\n"), vec![kv("filter.x.clean", "c")]);
         assert_eq!(entries(b"[filter \"a]b\"] clean = c\n"), vec![kv("filter.a]b.clean", "c")]);
         assert_eq!(entries(b"[Filter.A \"b\"]\n\tCLEAN = c\n"), vec![kv("filter.a.b.clean", "c")]);
-        assert_eq!(entries(b"[core]\n\tfsmonitor\n"), vec![kv("core.fsmonitor", "true")]);
+        assert_eq!(entries(b"[core]\n\tfsmonitor\n"), vec![kv("core.fsmonitor", "")]);
+        assert!(!names_program("core.fsmonitor", ""), "a bare fsmonitor is git's own monitor");
         let continued = entries(b"[core]\n\tsshCommand = a \\\n b\n");
         assert_eq!(continued.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["core.sshcommand"], "{continued:?}");
         let escaped = entries(b"[filter \"a\\\"]b\"]\n\tclean = c\n");
@@ -448,11 +449,15 @@ mod tests {
         let d = fx::init("guard-keys");
         let cfg = d.join(".git/config");
         let base = std::fs::read(&cfg).expect("config");
+        // Opened once, before the config changes: program_keys reads the
+        // files from disk itself (gix's own open would refuse some of the
+        // configs below, which `check` turns into a refusal of its own).
+        let repo = crate::gitx::discover(&d).expect("repo");
         let with = |extra: &[u8]| {
             let mut b = base.clone();
             b.extend_from_slice(extra);
             std::fs::write(&cfg, b).expect("write config");
-            super::program_keys(&crate::gitx::discover(&d).expect("repo"))
+            super::program_keys(&repo)
         };
         assert!(with(b"").is_empty(), "a fresh repo names no program");
         assert!(with(b"[include]\n\tpath = missing.cfg\n").is_empty(), "a missing include is skipped");
@@ -468,6 +473,6 @@ mod tests {
         assert_eq!(with(b"[include]\n\tpath = loop.cfg\n"), vec!["include.path (too deep)"]);
         std::fs::write(&cfg, &base).expect("restore");
         std::fs::write(d.join(".git/config.worktree"), b"[core]\n\tfsmonitor = ./w\n").expect("worktree config");
-        assert_eq!(super::program_keys(&crate::gitx::discover(&d).expect("repo")), vec!["core.fsmonitor"]);
+        assert_eq!(super::program_keys(&repo), vec!["core.fsmonitor"]);
     }
 }

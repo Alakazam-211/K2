@@ -577,9 +577,9 @@ fn a_filter_in_config_git_reads_any_way_needs_trust() {
     }
 }
 
-/// An include K2 can't read or parse counts as naming a program: one that
-/// is a directory, one with a non-UTF-8 byte (its filter is still found),
-/// and one that isn't valid config.
+/// An include K2 can't read or parse refuses: one that is a directory
+/// counts as naming a program, one with a non-UTF-8 byte still names its
+/// filter, and one that isn't valid config leaves the repository unopenable.
 #[cfg(unix)]
 #[test]
 fn an_include_that_cant_be_read_or_parsed_needs_trust() {
@@ -594,7 +594,9 @@ fn an_include_that_cant_be_read_or_parsed_needs_trust() {
     for (tag, extra, key) in [
         ("guard-inc-dir", None, "include.path (can't be read)"),
         ("guard-inc-non-utf8", Some(non_utf8), "filter.x.clean"),
-        ("guard-inc-broken", Some(broken), "include.path (can't be parsed)"),
+        // gix's own open follows includes, so it can't open this repo at
+        // all: refused as a repository K2 can't open.
+        ("guard-inc-broken", Some(broken), "can't open this repository"),
     ] {
         let d = repo_with_config(tag, "x", base.as_bytes());
         match extra {

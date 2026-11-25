@@ -201,6 +201,55 @@ else
 fi
 if [ "$(passport_over_tcp 2>/dev/null)" = 0 ]; then ok "k2 app shell sent no passport over TCP"; else bad "k2 app shell sent its passport over TCP"; fi
 
+# A body from stdin with its URL and credential on fd 3
+# (cli_post_json_stdin: `workspace api-key --key-stdin`), in a fenced
+# session so the call carries the passport.
+api_key() { # extra env words…
+    mv "$FAKE_HOME/.k2/heartbeat.token" "$WORK/owner.aside"
+    : >"$LOG_FILE"
+    # shellcheck disable=SC2086
+    (cd "$WS" && printf 'sk-test-key-1\n' | env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" \
+        K2_PROJECT_PATH="$WS" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 "$@" \
+        "$K2_CLI" workspace api-key ws1 --key-stdin >/dev/null 2>&1) || true
+    mv "$WORK/owner.aside" "$FAKE_HOME/.k2/heartbeat.token"
+}
+on_route() { # via path viaTcp-flag
+    "$PY" -c 'import json, sys
+print(sum(1 for l in open(sys.argv[1]) for r in [json.loads(l)]
+          if r["via"] == sys.argv[2] and r["path"] == sys.argv[3] and (r.get("viaTcp") == "1") == (sys.argv[4] == "1")
+          and r.get("auth") == "Bearer " + sys.argv[5]))' "$LOG_FILE" "$1" "$2" "$3" "$PASSPORT"
+}
+echo "== a body on stdin with its credential on fd 3 goes over the socket too"
+api_key K2_HOOK_SOCK="$SOCK"
+if [ "$(on_route uds /cli/workspace/api-key 1)" -gt 0 ]; then ok "workspace api-key --key-stdin went over the socket, marked"; else bad "workspace api-key --key-stdin never reached the socket: $(cat "$LOG_FILE")"; fi
+if [ "$(passport_over_tcp 2>/dev/null)" = 0 ]; then ok "workspace api-key --key-stdin sent no passport over TCP"; else bad "workspace api-key --key-stdin sent its passport over TCP"; fi
+api_key K2_HOOK_SOCK="$SOCK" K2_VIA_TCP=1
+if [ "$(on_route tcp /cli/workspace/api-key 0)" -gt 0 ]; then ok "BITE: with K2_VIA_TCP=1 the fd-3 request goes to TCP"; else bad "BITE: the fd-3 request never reached TCP with the reroute off: $(cat "$LOG_FILE")"; fi
+
+echo "== a socket that refuses the connect: TCP, and no mark on it"
+DEAD="$SOCK_DIR/dead.sock"
+"$PY" -c 'import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind(sys.argv[1]); s.close()' "$DEAD"
+[ -S "$DEAD" ] || bad "the dead socket is no socket"
+marked_tcp() {
+    "$PY" -c 'import json, sys
+print(sum(1 for l in open(sys.argv[1]) for r in [json.loads(l)] if r["via"] == "tcp" and r.get("viaTcp") is not None))' "$LOG_FILE"
+}
+: >"$LOG_FILE"
+(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" K2_PROJECT_PATH="$WS" \
+    K2_HOOK_SOCK="$DEAD" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 \
+    "$K2_CLI" workspace list >/dev/null 2>&1 </dev/null) || true
+if [ "$(passport_over_tcp 2>/dev/null)" -gt 0 ] && [ "$(marked_tcp)" = 0 ]; then ok "curl: the passport went to TCP, unmarked"; else bad "curl over a refusing socket: $(cat "$LOG_FILE")"; fi
+mv "$FAKE_HOME/.k2/heartbeat.token" "$WORK/owner.aside"
+: >"$LOG_FILE"
+(cd "$WS" && env -i PATH="/usr/bin:/bin" HOME="$FAKE_HOME" K2_HOME="$FAKE_HOME/.k2" K2_PROJECT_PATH="$WS" \
+    K2_HOOK_SOCK="$DEAD" K2_HOOK_TOKEN="$PASSPORT" K2_AGENT_CGROUP=a-ws1 \
+    "$K2_CLI" agent context list >/dev/null 2>&1 </dev/null) || true
+mv "$WORK/owner.aside" "$FAKE_HOME/.k2/heartbeat.token"
+if [ "$(on_route tcp /cli/context/layers 0)" -gt 0 ] && [ "$(marked_tcp)" = 0 ]; then ok "the embedded Python: the passport went to TCP, unmarked"; else bad "the embedded Python over a refusing socket: $(cat "$LOG_FILE")"; fi
+api_key K2_HOOK_SOCK="$DEAD"
+if [ "$(on_route tcp /cli/workspace/api-key 0)" -gt 0 ] && [ "$(marked_tcp)" = 0 ]; then ok "fd 3: the passport went to TCP, unmarked"; else bad "fd 3 over a refusing socket: $(cat "$LOG_FILE")"; fi
+
 echo "== bite: K2_VIA_TCP=1 sends them to TCP again"
 run_all K2_VIA_TCP=1
 n="$(passport_over_tcp 2>/dev/null)"

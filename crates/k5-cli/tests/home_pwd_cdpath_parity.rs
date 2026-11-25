@@ -365,7 +365,9 @@ fn cdpath_set() {
                 "workspace open .k2, CDPATH set",
                 &["open", ".k2"],
                 &[],
-                vec![ok(r#"{"ok":true,"workspace":{"id":"w1","name":"x","path":"/srv/x"}}"#)],
+                vec![ok(
+                    r#"{"ok":true,"workspace":{"id":"w1","name":"x","path":"/srv/x"}}"#,
+                )],
                 owner_and_port,
                 0,
                 1,
@@ -470,7 +472,11 @@ fn sim_install_refuses_a_dash_path() {
     rig.prepare(Side::Bash, &c);
     let b = rig.run(true, &c);
     let sent = rig.read(Side::Bash, false, c.name);
-    assert!(sent.is_empty(), "bash sent {} request(s): {b:?}", sent.len());
+    assert!(
+        sent.is_empty(),
+        "bash sent {} request(s): {b:?}",
+        sent.len()
+    );
     assert_eq!((b.code, b.stdout.as_str()), (Some(1), ""), "bash: {b:?}");
     assert!(
         b.stderr.starts_with("dirname: ") && b.stderr.contains("\nbasename: "),

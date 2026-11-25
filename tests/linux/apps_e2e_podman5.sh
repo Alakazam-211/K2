@@ -270,7 +270,9 @@ echo "== one App can't signal another App's processes =="
 # from inside its wall: none is in hello's pid namespace, so each is
 # ESRCH. Then the same KILLs from hello's own host uid, outside any
 # namespace: each App runs in its own id range with no capabilities, so
-# each is EPERM. other stays live, with the same main pid.
+# each is EPERM. Each App has its own pid and user namespace, and hello
+# sees no more pids than its container holds. other stays live, with the
+# same main pid.
 O="$WS/other"
 runuser -u k2 -- mkdir -p "$O"
 printf '{"schema":1,"kind":"app","id":"other","name":"Other","version":"1.0.0","host":{"mode":"cmd","start":["node","server.mjs"],"health":{"path":"/healthz"},"drainSecs":3}}\n' >"$O/manifest.json"
@@ -301,6 +303,15 @@ OUNIT="$(asapp systemctl --user list-units --type=service --no-legend 'k2app-oth
 OCG="$(asapp systemctl --user show -p ControlGroup --value "$OUNIT")"
 OPIDS="$(find "/sys/fs/cgroup$OCG" -name cgroup.procs -exec cat {} + | sort -un | paste -sd, -)"
 case ",$OPIDS," in *",$PO,"*) ;; *) fail "other's main pid $PO is not in its unit's cgroup ($OCG: $OPIDS)" ;; esac
+# ESRCH alone would also pass if the two Apps shared one pid namespace
+# that held neither's host pids, so the namespaces themselves: each App's
+# pid and user namespace is its own, and neither is the host's.
+for ns in pid user; do
+	NH="$(readlink "/proc/$PH/ns/$ns")"; NO="$(readlink "/proc/$PO/ns/$ns")"; N1="$(readlink "/proc/1/ns/$ns")"
+	[ -n "$NH" ] && [ -n "$NO" ] && [ -n "$N1" ] || fail "the $ns namespaces: hello '$NH', other '$NO', host '$N1'"
+	[ "$NH" != "$NO" ] || fail "hello and other share one $ns namespace ($NH)"
+	[ "$NH" != "$N1" ] && [ "$NO" != "$N1" ] || fail "an App is in the host's $ns namespace ($N1): hello $NH, other $NO"
+done
 # Signal 0 first (it only asks): a host pid that is also a pid number in
 # hello's own namespace would name one of hello's own processes, and the
 # KILL must never reach those.
@@ -318,6 +329,12 @@ assert got == {p: "ESRCH" for p in want}, (v["sig"], got)
 print("    from inside hello: signal", v["sig"], "to", len(want), "of other's host pids, each ESRCH; hello sees pids", sorted(v["visible"]))
 PY
 done
+# hello sees only its own processes: no more pids inside than its
+# container's cgroup holds (the payload cgroup: conmon and pasta sit
+# outside the container's namespace).
+HPIDS="$(find "/sys/fs/cgroup$CG" -path '*libpod-payload*' -name cgroup.procs -exec cat {} + | sort -un | grep -c .)"
+HSEEN="$(jq_ 'print(len(v["visible"]))' /tmp/sigother.json)"
+[ "$HPIDS" -ge 1 ] && [ "$HSEEN" -ge 1 ] && [ "$HSEEN" -le "$HPIDS" ] || fail "hello sees $HSEEN pids, its container's cgroup holds $HPIDS ($CG)"
 UH="$(ps -o uid= -p "$PH" | tr -d ' ')"
 GH="$(ps -o gid= -p "$PH" | tr -d ' ')"
 [ -n "$UH" ] && [ "$UH" != 0 ] && [ "$UH" != "$(id -u k2app)" ] || fail "hello's host uid: '$UH'"
@@ -333,7 +350,7 @@ except OSError as e:
 done
 [ "$(curl -s "http://127.0.0.1:$FO/")" = o1 ] || fail "other stopped answering after hello's KILLs"
 [ "$(asapp podman inspect "$CO" --format '{{.State.Pid}}')" = "$PO" ] || fail "other's main pid changed after hello's KILLs"
-ok "hello can't signal other: KILL from inside its wall is ESRCH for each of other's $(echo "${OPIDS//,/ }" | wc -w) host pids, and from hello's host uid $UH EPERM; other still live (pid $PO)"
+ok "hello can't signal other: own pid and user namespaces each; hello sees $HSEEN pids (its cgroup holds $HPIDS); KILL from inside its wall is ESRCH for each of other's $(echo "${OPIDS//,/ }" | wc -w) host pids, and from hello's host uid $UH EPERM; other still live (pid $PO)"
 K2 app uninstall other --purge >/dev/null
 for _ in $(seq 1 60); do
 	has other "$(asapp systemctl --user list-units --type=service --no-legend)" || break

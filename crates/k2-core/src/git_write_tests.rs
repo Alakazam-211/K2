@@ -591,12 +591,13 @@ fn an_include_that_cant_be_read_or_parsed_needs_trust() {
     non_utf8.extend_from_slice(format!("[filter \"x\"]\n\tclean = {prog}\n").as_bytes());
     let mut broken = format!("[filter \"x\"\n\tclean = {prog}\n").into_bytes();
     broken.extend_from_slice(b"\xff\n");
-    for (tag, extra, key) in [
-        ("guard-inc-dir", None, "include.path (can't be read)"),
-        ("guard-inc-non-utf8", Some(non_utf8), "filter.x.clean"),
-        // gix's own open follows includes, so it can't open this repo at
-        // all: refused as a repository K2 can't open.
-        ("guard-inc-broken", Some(broken), "can't open this repository"),
+    for (tag, extra, key, stage_opens) in [
+        ("guard-inc-dir", None, "include.path (can't be read)", true),
+        ("guard-inc-non-utf8", Some(non_utf8), "filter.x.clean", true),
+        // gix's own open follows includes and errors on this one (it isn't
+        // skipped), so the guard refuses the repository as one K2 can't
+        // open, and the stage stops at its own open, before git runs.
+        ("guard-inc-broken", Some(broken), "can't open this repository", false),
     ] {
         let d = repo_with_config(tag, "x", base.as_bytes());
         match extra {
@@ -606,7 +607,12 @@ fn an_include_that_cant_be_read_or_parsed_needs_trust() {
         let e = crate::git_write_guard::check(&d).expect_err(tag);
         assert_needs_trust(&e, &[key], &prog);
         let e = stage_file(s(&d), "a.txt").expect_err(tag);
-        assert_needs_trust(&e, &[key], &prog);
+        if stage_opens {
+            assert_needs_trust(&e, &[key], &prog);
+        } else {
+            assert!(crate::gitx::discover(&d).is_err(), "{tag}: gix can't open it");
+            assert!(e.starts_with("Not a git repository"), "{tag}: refused at the open: {e}");
+        }
         assert!(ran(&marks).is_empty(), "{tag}: nothing ran");
     }
 }

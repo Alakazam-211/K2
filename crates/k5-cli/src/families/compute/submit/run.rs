@@ -129,8 +129,13 @@ pub struct Ask {
     /// `--no-addr-filter` (0.46.18): with `--userns` and `--network none`
     /// only (the daemon checks): no per-job address filter.
     pub no_addr_filter: bool,
-    /// `--label` (always an object once read).
+    /// `--label k=v` (always an object once read).
     pub labels: Option<Value>,
+    /// `--label WORD` (no `=`, 0.46.18): this server's labels; `None`
+    /// when there are none (the shell leaves the key out).
+    pub server_labels: Option<Value>,
+    /// `--for <version>` (0.46.18).
+    pub for_version: String,
     /// `--env` (always an object once read).
     pub env: Option<Value>,
     pub needs: Option<Value>,
@@ -399,6 +404,10 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             }
             "--label" => {
                 labels.push(val(i).to_string());
+                shift2!();
+            }
+            "--for" => {
+                a.for_version = val(i).to_string();
                 shift2!();
             }
             "--detach" | "-d" => {
@@ -674,10 +683,19 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
     }
     // The cpus as a number (`int()` or `float()` in `_compute_json`).
     a.cpus = Num::of(&cpus)?;
-    a.labels = match pairs(&labels, "usage: --label key=value") {
+    // `--label k=v` is the node's own label, `--label WORD` this
+    // server's (0.46.18); an empty one is the usage line.
+    if labels.iter().any(|l| l.trim().is_empty()) {
+        return usage("usage: --label key=value | --label WORD");
+    }
+    let (node_labels, words): (Vec<String>, Vec<String>) = labels.into_iter().partition(|l| l.contains('='));
+    a.labels = match pairs(&node_labels, "usage: --label key=value") {
         Ok(v) => Some(v),
         Err(line) => return usage(line),
     };
+    if !words.is_empty() {
+        a.server_labels = Some(strs(&words));
+    }
     a.env = match pairs(&envs, "usage: --env NAME=value") {
         Ok(v) => Some(v),
         Err(line) => return usage(line),
@@ -829,6 +847,8 @@ pub fn body(a: &Ask, cwd: &str, repo_dir: &str, ws: &str, client: &str) -> Strin
             "labels",
             Some(a.labels.clone().unwrap_or(Value::Object(vec![]))),
         ),
+        ("serverLabels", a.server_labels.clone()),
+        ("forVersion", st(&a.for_version)),
         ("env", Some(a.env.clone().unwrap_or(Value::Object(vec![])))),
         ("argv", Some(strs(&a.argv))),
         ("needs", a.needs.clone()),

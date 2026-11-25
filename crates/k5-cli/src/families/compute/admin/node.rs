@@ -52,7 +52,7 @@ macro_rules! render_line {
 pub const USAGE: &str = concat!(
     "usage: ",
     cli_name!(),
-    " compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …"
+    " compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|label|labels|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …"
 );
 pub const ADD_USAGE: &str = concat!(
     "usage: ",
@@ -259,7 +259,8 @@ pub fn parse(words: &[&str]) -> Option<Words<Ask>> {
             }
             Some(Words::Ask(Ask::TakeOwner(rest[0].to_string())))
         }
-        "servers" | "packages" | "pkg" | "health" => None,
+        // This server's node labels (0.46.18): the shell answers them.
+        "servers" | "packages" | "pkg" | "health" | "label" | "labels" => None,
         _ => usage(USAGE),
     }
 }

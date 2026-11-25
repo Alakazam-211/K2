@@ -215,11 +215,11 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || crate::compute_trust::is_route(p) || crate::compute_provenance::is_route(p) || crate::ci_routes::is_route(p) || crate::compute_retention::is_route(p)
+    ROUTES.contains(&p) || crate::compute_trust::is_route(p) || crate::compute_provenance::is_route(p) || crate::ci_routes::is_route(p) || crate::compute_retention::is_route(p) || crate::compute_node_labels::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p) || crate::compute_provenance::POST_ROUTES.contains(&p) || crate::ci_routes::POST_ROUTES.contains(&p) || crate::compute_retention::POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p) || crate::compute_provenance::POST_ROUTES.contains(&p) || crate::ci_routes::POST_ROUTES.contains(&p) || crate::compute_retention::POST_ROUTES.contains(&p) || crate::compute_node_labels::POST_ROUTES.contains(&p)
 }
 
 pub fn is_socket(p: &str) -> bool {
@@ -707,6 +707,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/nodes/rename" => node_rename(&who, body, mgr),
         "/cli/compute/nodes/pause" => crate::compute_node_flags::node_pause(&who, body, mgr),
         "/cli/compute/nodes/pinned-only" => crate::compute_node_flags::node_pinned_only(&who, body),
+        // This server's own node labels (0.46.18): read; add/remove.
+        p if crate::compute_node_labels::is_route(p) => crate::compute_node_labels::handle(p, &who, body, params, mgr),
         "/cli/compute/nodes/routes" => node_routes(&who, body, mgr),
         // Package requests (protocol 7, prd-compute-self-serve-environments).
         p if crate::compute_pkg::is_route(p) => crate::compute_pkg::handle(p, &who, body, params),
@@ -1897,6 +1899,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let supersede_key = supersede_from(v)?;
     let submitter_name = submitter_name_from(v)?;
     let tag = tag_from(v)?;
+    // `--for <version>` (0.46.18): the release the job is for, kept on it.
+    let for_version = crate::compute_node_labels::for_from(v)?;
     let said = expect_from(v)?;
     // Never stuck (G3/G4): queue timeout, infra retries. Batch: 48 h.
     let tun = compute::retry::tuning();
@@ -1953,7 +1957,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if !only.is_empty() && !any {
         return Err(no(codes::BAD_REQUEST, 400, "--only is for auto-placement; this job names a node, which pins it there. Leave the node off, or drop --only"));
     }
-    let any = any && crate::compute_cache_pin::check_submit(ws, v, cache.as_deref(), &avoid, &only)?.is_none(); // pinned to its cache's node
+    let cache_pin = crate::compute_cache_pin::check_submit(ws, v, cache.as_deref(), &avoid, &only)?;
+    // `--label WORD` (0.46.18): this server's labels, for auto-placement.
+    let server_labels = crate::compute_node_labels::from_run(v, any, cache_pin.as_ref())?;
+    let any = any && cache_pin.is_none(); // pinned to its cache's node
     let filter = store::AnyFilter {
         os: s(&v, "os").map(str::to_string),
         arch: s(&v, "arch").map(str::to_string),
@@ -1965,6 +1972,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         avoid, avoid_names,
         distro: distro_from(v)?,
         only,
+        server_labels,
     };
     let mut want = crate::compute_place::Want {
         ws_id: ws.id.clone(),
@@ -2520,6 +2528,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         effective: effective.clone(),
         cpu_hints,
         tag: tag.clone(),
+        for_version,
         cpus_burst,
         expect_secs: said.secs(),
         expect_unknown: said == estimate::Said::Unknown,

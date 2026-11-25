@@ -956,6 +956,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // workspace. Enroll/confirm/remove/grant/pause/policy are NOT here.
         "/cli/compute/nodes",
         "/cli/compute/nodes/info",
+        // 0.46.18: this server's node labels, read (changing them is the
+        // owner's, an Admin's or a manager's: not here, as node pause).
+        "/cli/compute/nodes/labels",
         "/cli/compute/run",
         // 0.46.7 (CE-18): Batch jobs that install --needs on granted nodes.
         "/cli/compute/prewarm",

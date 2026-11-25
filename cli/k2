@@ -34588,7 +34588,7 @@ Agents:
                  gets git_access_needs_person, exit 3, and asks on a card; with
                  no GitHub credential yet, git_access_needs_setup and the
                  setup card first); k2 compute git-access --help
-  k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
+  k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v|WORD]
                  No node: K2 picks one of the nodes granted to you that can
                  start the job now (a warm one if it isn't busier), and
                  prints where and why ("placed on …"). None free: it is
@@ -34601,6 +34601,11 @@ Agents:
                  exit 2).
                  It prefers a node that already has the --needs tools.
                  --label k=v picks nodes by a label the node has.
+                 --label WORD (no =, repeatable): only nodes this server
+                 labelled with every such WORD (k2 compute node labels); the
+                 placement line names them ("label release · starts now …").
+                 --for <version> records which release the job is for
+                 (0.46.19; get --json shows forVersion).
                  [--distro ubuntu|ubuntu@24.04|debian|arch]  only nodes of that
                                 distro: its /etc/os-release ID or ID_LIKE (Ubuntu
                                 counts as debian), the version on a dot prefix
@@ -35075,6 +35080,13 @@ Owner / admin (refused for agents and inside K2 terminals, except where
   k2 compute node pause|drain|resume <name>    this server stops/starts assigning
   k2 compute node pinned-only <name> on|off    on: only jobs that name the node run
                    there; K2 never chooses it by itself (owner or Admin)
+  k2 compute node labels [<node>] [--json]     this server's own labels on each node
+                   (an agent: its granted nodes). Never sent to the node; another
+                   server using the node never sees them
+  k2 compute node label <node> add|remove <label>...   letters, digits and
+                   . _ : / - (no =), like release or for:0.46.18; jobs ask with
+                   run --label <label>. Owner, Admin, or an agent with "Allow
+                   managing compute nodes"
   k2 compute node route add|rm <name> <url>    LAN or tailnet URL the node may dial
 Sharing a node with other K2 servers (the node's owner server; 0.46.3):
   k2 compute node servers <node> [list [--refresh]] [--json]   every server on it: slot, state,
@@ -36431,7 +36443,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network="" strict="" userns="" no_addr_filter="" expect="" expect_unknown=""
+    local network="" strict="" userns="" no_addr_filter="" expect="" expect_unknown="" for_version=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -36523,7 +36535,11 @@ sys.exit(0 if ok else 1)'; then
             # /etc/os-release ID or ID_LIKE, the version on a dot prefix.
             --distro) distro="$(_compute_distro_arg "${2:-}")" || exit 2; shift 2 ;;
             --arch) _need_value "$@"; arch="${2:-}"; shift 2 ;;
+            # --label k=v: the node's own label; --label WORD (no =, 0.46.18):
+            # this server's label (k2 compute node label); the daemon checks.
             --label) _need_value "$@"; labels+=("${2:-}"); shift 2 ;;
+            # --for <version> (0.46.18): the release this job is for.
+            --for) _need_value "$@"; for_version="${2:-}"; shift 2 ;;
             --detach|-d) detach=1; shift ;;
             --dirty) dirty=1; shift ;;
             --sha) _need_value "$@"; sha="${2:-}"; shift 2 ;;
@@ -36667,16 +36683,23 @@ sys.exit(0 if ok else 1)'; then
     fi
     local client
     client="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-    local argv_json labels_json env_json
+    local argv_json labels_json env_json server_labels_json
     argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
+    # --label k=v → labels (the node's own); --label WORD → serverLabels
+    # (this server's, 0.46.18; only sent when there is one).
     labels_json="$(python3 -c '
 import json, sys
 out = {}
 for l in sys.argv[1:]:
-    if "=" not in l:
-        sys.stderr.write("usage: --label key=value\n"); sys.exit(2)
+    if not l.strip():
+        sys.stderr.write("usage: --label key=value | --label WORD\n"); sys.exit(2)
+    if "=" not in l: continue
     k, v = l.split("=", 1); out[k] = v
 print(json.dumps(out))' "${labels[@]+"${labels[@]}"}")" || exit 2
+    server_labels_json="$(python3 -c '
+import json, sys
+out = [l for l in sys.argv[1:] if "=" not in l]
+print(json.dumps(out) if out else "")' "${labels[@]+"${labels[@]}"}")"
     env_json="$(python3 -c '
 import json, sys
 out = {}
@@ -36760,7 +36783,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     fi
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
-        K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
+        K2_CJ_labels_j="$labels_json" K2_CJ_serverLabels_j="$server_labels_json" K2_CJ_forVersion="$for_version" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
         K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_expectSecs_n="$expect" K2_CJ_expectUnknown_b="$expect_unknown" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_cpusBurst_n="$cpus_burst" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
@@ -37168,7 +37191,7 @@ cmd_compute_test() {
                 _need_value "$@"
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--expect|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
+            --os|--distro|--arch|--label|--for|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--expect|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns|--no-addr-filter) pass+=("$1"); shift ;;
@@ -38136,6 +38159,50 @@ print(json.dumps({"code": v["enroll"], "expiresAt": v["expiresAt"], "name": v["n
             _compute_call POST /cli/compute/nodes/pinned-only "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: pinned-only %s%s. %s." % (v["node"], "on" if v["pinnedOnly"] else "off", "" if v.get("changed") else " (it already was)", v["note"]))'
             ;;
+        labels)
+            # This server's own labels on its nodes (0.46.18): never sent
+            # to the node, never seen by another server using it. Anyone
+            # who may list nodes reads them (an agent: its granted nodes).
+            local lb_node="" lb_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) lb_json=1; shift ;;
+                    -*) echo "usage: k2 compute node labels [<node>] [--json]" >&2; exit 2 ;;
+                    *) [ -z "$lb_node" ] || { echo "usage: k2 compute node labels [<node>] [--json]" >&2; exit 2; }; lb_node="$1"; shift ;;
+                esac
+            done
+            local lb_q=""
+            [ -n "$lb_node" ] && lb_q="node=$(urlencode "$lb_node")"
+            _compute_call GET /cli/compute/nodes/labels "$lb_q"
+            if [ "$lb_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+rows=v.get("nodes") or []
+if not rows: print("no nodes")
+for r in rows: print("%s: %s" % (r["node"], ", ".join(r["labels"]) or "(no labels)"))
+print("(%s)" % v["note"])'
+            ;;
+        label)
+            # k2 compute node label <node> add|remove <label>... (0.46.18):
+            # the owner, an Admin, or an agent with "Allow managing compute
+            # nodes". Jobs ask for them with k2 compute run --label <label>.
+            local lb_usage="usage: k2 compute node label <node> add|remove <label>..."
+            [ $# -ge 3 ] || { echo "$lb_usage" >&2; exit 2; }
+            local lb_node="$1" lb_op="$2"; shift 2
+            local lb_key
+            case "$lb_op" in add) lb_key=add ;; remove|rm) lb_key=remove ;; *) echo "$lb_usage" >&2; exit 2 ;; esac
+            local lb_list
+            lb_list="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
+            if [ "$lb_key" = "add" ]; then
+                body="$(_compute_json K2_CJ_node="$lb_node" K2_CJ_add_j="$lb_list")"
+            else
+                body="$(_compute_json K2_CJ_node="$lb_node" K2_CJ_remove_j="$lb_list")"
+            fi
+            _compute_call POST /cli/compute/nodes/labels/set "$body" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print("%s: %s%s. %s." % (v["node"], ("labels " + ", ".join(v["labels"])) if v["labels"] else "no labels", "" if v.get("changed") else " (no change)", v["note"]))'
+            ;;
         route|routes)
             local op="${1:-}"
             [ $# -ge 3 ] || { echo "usage: k2 compute node route add|rm <name> <url>" >&2; exit 2; }
@@ -38327,7 +38394,7 @@ if "node" in v:
     print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
             ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|label|labels|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
             exit 2
             ;;
     esac
@@ -62537,14 +62604,15 @@ cmd_schema() {
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--expect 12m|unknown] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v|WORD]... [--for VERSION] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--expect 12m|unknown] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
       "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem, and --expect with how long it takes (unknown only on a first run; a finished job prints the value to pass next time). Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
         {"name": "--os", "arg": "linux|macos", "description": "Only nodes of that OS."},
         {"name": "--arch", "arg": "A", "description": "Only nodes of that architecture (x86_64)."},
         {"name": "--distro", "arg": "ID[@VERSION]", "description": "Only nodes of that distro: its /etc/os-release ID or ID_LIKE (ubuntu, ubuntu@24.04, debian, arch)."},
-        {"name": "--label", "arg": "k=v", "description": "Pick nodes by a label the node has."},
+        {"name": "--label", "arg": "k=v|WORD", "description": "k=v: pick nodes by a label the node has. WORD (no =): only nodes this server labelled WORD (k2 compute node label); repeatable, every one must match; not with a named node."},
+        {"name": "--for", "arg": "VERSION", "description": "The release this job is for (0.46.19); kept on the job."},
         {"name": "--avoid", "arg": "NODE", "description": "K2 never picks that node for this job (repeatable). Not with a named node (avoid_with_pinned_node, exit 2)."},
         {"name": "--only", "arg": "NODE", "description": "K2 picks only among these nodes (repeatable). Not with a named node."},
         {"name": "--preset", "arg": "NAME", "description": "Settings from .k2/compute.toml: [defaults], then [presets.NAME]; a flag beats both."},
@@ -62942,7 +63010,7 @@ cmd_schema() {
     },
     {
       "name": "compute node",
-      "usage": "k2 compute node add|confirm|remove|rename|retire|pause|drain|resume|pinned-only|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages|take-owner …",
+      "usage": "k2 compute node add|confirm|remove|rename|retire|pause|drain|resume|pinned-only|label|labels|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages|take-owner …",
       "description": "Enroll, manage and administer compute nodes.",
       "args": [{"name": "verb", "required": true}],
       "flags": []
@@ -63011,6 +63079,22 @@ cmd_schema() {
       "usage": "k2 compute node pinned-only <name> on|off",
       "description": "on: only jobs that name the node run there; K2 never chooses it by itself. Owner or Admin.",
       "args": [{"name": "name", "required": true}, {"name": "on|off", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "compute node labels",
+      "usage": "k2 compute node labels [<node>] [--json]",
+      "description": "This server's own labels on each node (an agent: its granted nodes). Never sent to the node, never seen by another server using it.",
+      "args": [{"name": "node", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute node label",
+      "usage": "k2 compute node label <node> add|remove <label>...",
+      "description": "Add or remove this server's labels on a node (letters, digits and . _ : / -, no =). Jobs ask for them with k2 compute run --label <label>. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
+      "args": [{"name": "node", "required": true}, {"name": "add|remove", "required": true}, {"name": "label", "required": true}],
       "flags": []
     },
     {
@@ -76349,6 +76433,24 @@ CODES (0.46.7)
     queued_est_wait        nothing free: it waits where the estimated wait
                            (earlier runs' durations) is shortest, and moves
                            if another node frees up first.
+
+THIS SERVER'S NODE LABELS (0.46.18)
+  A label is a word this server puts on a node it uses, so its jobs can
+  go only there:
+    k2 compute node label node-a add release for:0.46.18
+    k2 compute run --label release --mem 8G --expect 10m -- make test
+  The job goes only to nodes carrying every --label WORD asked, and the
+  placement line names them ("placed on node-a (auto): label release ·
+  starts now …"). A node without them is skipped ("1 without the label
+  release here"); none left: the usual no-node refusal. --label WORD is
+  for auto-placement: with a node named it is refused (exit 2).
+  The labels are this server's own: kept in its database, never sent to
+  the node, never seen by another server that uses the same node (it has
+  its own). A word has no = (key=value is the node's own label, set on
+  the machine): letters, digits and . _ : / -, at most 64, at most 32 per
+  node. Read: k2 compute node labels [<node>] (an agent sees its granted
+  nodes). Change: the owner, an Admin, or an agent with "Allow managing
+  compute nodes"; jobs already queued or running are not moved.
 
 WHOSE JOB, AND WHICH (0.46.7)
   --tag NAME on run/test labels the job (1 to 64 characters, each one of

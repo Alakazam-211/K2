@@ -4584,14 +4584,15 @@ exit: 0
     },
     {
       "name": "compute run",
-      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--expect 12m|unknown] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
+      "usage": "k2 compute run [<node>] [--os linux|macos] [--arch A] [--distro ID[@VERSION]] [--label k=v|WORD]... [--for VERSION] [--avoid N]... [--only N]... [--preset NAME] [--mem 16G|auto[:8G]] [--expect 12m|unknown] [--cpus N|N+M] [--needs tool@ver,…] [--env K=V]... [--secret NAME[=ENVNAME]]... [--sha REV] [--dirty] [--no-source] [--repo DIR] [--with DIR[@SHA]]... [--cache NAME] [--cache-required] [--timeout D] [--queue-timeout 2h|off] [--stall-timeout 30m|off] [--retries N] [--tag NAME] [--detach | --wait [--failures] [--max-wait 9m] [--quiet]] [--now] [--same-node-as JOB] [--priority --why \"…\"] [--tier standard|priority|batch|ci] [--strict] [--exclusive --why \"…\"] [--gpu [any|amd|intel]] [--gpu-mem 4G] [--network none] [--netns-dummy NAME=ADDR/PREFIX]... [--userns] [--no-addr-filter] [--shards N] [--artifact GLOB]... [--plan|--dry-run] [--json] [--workspace WS] -- <command…>",
       "description": "Run a command on a compute node. No node: K2 picks one of the nodes granted to you and prints where and why; name a node only to pin the job there (a pinned job never moves; still waiting after 15 minutes, it gets one [compute] message naming a node that could start it now). Always pass --mem, and --expect with how long it takes (unknown only on a first run; a finished job prints the value to pass next time). Exit: the command's own (attached runs), 2 bad usage, 3 infra with a JSON code on stderr, 130 you detached with Ctrl-C (the job keeps running). --network none (0.46.15): the job gets no network whatever its node's setting (Linux: a network namespace of its own, loopback only; macOS: no remote IP, no DNS); a job can only narrow its network. --netns-dummy (Linux only, at most 4, implies --network none): a dummy interface with that address in the job's own namespace, up before the job starts. A node that can't run it at that network never gets it: job_network_needs_update, exit 3. More: k2 study compute.",
       "args": [{"name": "node", "required": false, "description": "Pin the job to this node (full name or a start that fits only one). Leave it off unless the job needs that machine."}, {"name": "command", "required": true, "description": "After --: the command to run."}],
       "flags": [
         {"name": "--os", "arg": "linux|macos", "description": "Only nodes of that OS."},
         {"name": "--arch", "arg": "A", "description": "Only nodes of that architecture (x86_64)."},
         {"name": "--distro", "arg": "ID[@VERSION]", "description": "Only nodes of that distro: its /etc/os-release ID or ID_LIKE (ubuntu, ubuntu@24.04, debian, arch)."},
-        {"name": "--label", "arg": "k=v", "description": "Pick nodes by a label the node has."},
+        {"name": "--label", "arg": "k=v|WORD", "description": "k=v: pick nodes by a label the node has. WORD (no =): only nodes this server labelled WORD (k2 compute node label); repeatable, every one must match; not with a named node."},
+        {"name": "--for", "arg": "VERSION", "description": "The release this job is for (0.46.19); kept on the job."},
         {"name": "--avoid", "arg": "NODE", "description": "K2 never picks that node for this job (repeatable). Not with a named node (avoid_with_pinned_node, exit 2)."},
         {"name": "--only", "arg": "NODE", "description": "K2 picks only among these nodes (repeatable). Not with a named node."},
         {"name": "--preset", "arg": "NAME", "description": "Settings from .k2/compute.toml: [defaults], then [presets.NAME]; a flag beats both."},
@@ -4989,7 +4990,7 @@ exit: 0
     },
     {
       "name": "compute node",
-      "usage": "k2 compute node add|confirm|remove|rename|retire|pause|drain|resume|pinned-only|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages|take-owner …",
+      "usage": "k2 compute node add|confirm|remove|rename|retire|pause|drain|resume|pinned-only|label|labels|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages|take-owner …",
       "description": "Enroll, manage and administer compute nodes.",
       "args": [{"name": "verb", "required": true}],
       "flags": []
@@ -5058,6 +5059,22 @@ exit: 0
       "usage": "k2 compute node pinned-only <name> on|off",
       "description": "on: only jobs that name the node run there; K2 never chooses it by itself. Owner or Admin.",
       "args": [{"name": "name", "required": true}, {"name": "on|off", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "compute node labels",
+      "usage": "k2 compute node labels [<node>] [--json]",
+      "description": "This server's own labels on each node (an agent: its granted nodes). Never sent to the node, never seen by another server using it.",
+      "args": [{"name": "node", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
+      "name": "compute node label",
+      "usage": "k2 compute node label <node> add|remove <label>...",
+      "description": "Add or remove this server's labels on a node (letters, digits and . _ : / -, no =). Jobs ask for them with k2 compute run --label <label>. Owner or admin (refused for agents and inside K2 terminals, unless \"Let this agent manage compute nodes\" is on for that agent).",
+      "args": [{"name": "node", "required": true}, {"name": "add|remove", "required": true}, {"name": "label", "required": true}],
       "flags": []
     },
     {

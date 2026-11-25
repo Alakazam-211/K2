@@ -22,6 +22,7 @@ const VALUED: &[&str] = &[
     "--distro",
     "--arch",
     "--label",
+    "--for",
     "--env",
     "--secret",
     "--cpus",

@@ -63,6 +63,11 @@ pub mod why_not;
 #[path = "compute_place_lock_tests.rs"]
 mod lock_tests;
 
+/// This server's node labels in placement (`--label WORD`, 0.46.18).
+#[cfg(test)]
+#[path = "compute_place_label_tests.rs"]
+mod label_tests;
+
 // ── controller awake time ────────────────────────────────────────────
 
 static AWAKE_SINCE: AtomicI64 = AtomicI64::new(0);
@@ -1198,6 +1203,9 @@ pub mod skip {
     /// 0.46.18: the node runs `--userns` jobs, the workspace's grant there
     /// doesn't say `--userns`.
     pub const USERNS_NOT_GRANTED: &str = k2_core::compute::proto::userns::codes::USERNS_NOT_GRANTED;
+    /// 0.46.18 (`--label WORD`): the node doesn't carry every label the job
+    /// asks for, on this server (`k2_core::compute::server_labels`).
+    pub const SERVER_LABEL: &str = "server_label";
 }
 
 /// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
@@ -1284,7 +1292,7 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
     // main lock (a read never waits behind a writer, nor holds one up),
     // never a lock per node.
     let snap = k2_core::db::read(|conn| PlaceSnapshot::read(conn, w));
-    let PlaceSnapshot { nodes: rows, cache_at, permit, pinned_only, mut grants, queued, active } = snap;
+    let PlaceSnapshot { nodes: rows, cache_at, permit, pinned_only, server_labels, mut grants, queued, active } = snap;
     let waits = SoloWaits::of(&queued, &active, now);
     let by_node = |list: &[JobRow], id: &str| -> Vec<JobRow> { list.iter().filter(|j| j.node_id == id).cloned().collect() };
     let feats = required_features(w);
@@ -1380,6 +1388,11 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
             || w.filter.labels.iter().any(|(k, x)| !label_matches(k, x, label(k)))
         {
             skipped(&mut out, skip::OS_ARCH_LABEL);
+            continue;
+        }
+        // `--label WORD` (0.46.18): this server's own labels on the node.
+        if !server_labels.has_all(&n.id, &w.filter.server_labels) {
+            skipped(&mut out, skip::SERVER_LABEL);
             continue;
         }
         // `--distro` (protocol 7): ID or ID_LIKE, the version on a dot.
@@ -1565,6 +1578,9 @@ pub struct PlaceSnapshot {
     pub cache_at: Option<String>,
     pub permit: k2_core::compute::allow::Permit,
     pub pinned_only: k2_core::compute::pinned_only::Pinned,
+    /// This server's node labels (`--label WORD`, 0.46.18); read only when
+    /// the job asks for one.
+    pub server_labels: k2_core::compute::server_labels::Labels,
     /// This workspace's grants, by node.
     pub grants: HashMap<String, store::GrantRow>,
     /// Every queued job, oldest first ([`store::queued_jobs`]).
@@ -1582,6 +1598,7 @@ impl PlaceSnapshot {
             permit: k2_core::compute::allow::permit(conn, &w.ws_id),
             // The nodes that take only jobs that name them: for auto only.
             pinned_only: k2_core::compute::pinned_only::all(conn),
+            server_labels: if w.filter.server_labels.is_empty() { Default::default() } else { k2_core::compute::server_labels::all(conn) },
             nodes: store::list_nodes(conn, false),
             grants: store::grants(conn, None, Some(&w.ws_id)).into_iter().map(|g| (g.node_id.clone(), g)).collect(),
             queued: store::queued_jobs(conn),
@@ -1922,6 +1939,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::USERNS_OWNER_ONLY => "where this server is a tenant (--userns is only for nodes it owns)".to_string(),
         skip::USERNS_NEEDS_UPDATE => format!("with a k2-node too old for {}", if w.no_addr_filter { "--userns --no-addr-filter" } else { "--userns" }),
         skip::USERNS_NOT_GRANTED => "where your grant doesn't say --userns".to_string(),
+        skip::SERVER_LABEL => format!("without the label{} {} here", if w.filter.server_labels.len() == 1 { "" } else { "s" }, w.filter.server_labels.join(", ")),
         other => other.to_string(),
     };
     format!("{n} {what}")
@@ -2025,6 +2043,11 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
         Some(b) => format!("{b} · {why}"),
         None => why,
     };
+    // `--label WORD` (0.46.18): the labels it matched, first.
+    let why = match labels_words(w) {
+        Some(l) => format!("{l} · {why}"),
+        None => why,
+    };
     store::Placement {
         mode: "auto".into(),
         policy: ex.policy.as_wire().into(),
@@ -2037,6 +2060,16 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
         considered,
         skipped,
         at: now,
+    }
+}
+
+/// "labels release, for:0.46.18": this server's labels a job asked for
+/// (every node it can go to carries them all).
+pub fn labels_words(w: &Want) -> Option<String> {
+    match w.filter.server_labels.as_slice() {
+        [] => None,
+        [one] => Some(format!("label {one}")),
+        many => Some(format!("labels {}", many.join(", "))),
     }
 }
 

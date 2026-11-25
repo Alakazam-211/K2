@@ -450,6 +450,7 @@ pub mod compute_manage;
 pub mod compute_move;
 // What this server lets a node take: its pause and pinned-only handlers.
 pub mod compute_node_flags;
+pub mod compute_node_labels;
 // Package requests through nodes (0.46.9, self-serve environments).
 pub mod compute_pkg;
 pub mod compute_place;

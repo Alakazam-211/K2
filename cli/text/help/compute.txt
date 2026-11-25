@@ -53,7 +53,7 @@ Agents:
                  gets git_access_needs_person, exit 3, and asks on a card; with
                  no GitHub credential yet, git_access_needs_setup and the
                  setup card first); k2 compute git-access --help
-  k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
+  k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v|WORD]
                  No node: K2 picks one of the nodes granted to you that can
                  start the job now (a warm one if it isn't busier), and
                  prints where and why ("placed on …"). None free: it is
@@ -66,6 +66,11 @@ Agents:
                  exit 2).
                  It prefers a node that already has the --needs tools.
                  --label k=v picks nodes by a label the node has.
+                 --label WORD (no =, repeatable): only nodes this server
+                 labelled with every such WORD (k2 compute node labels); the
+                 placement line names them ("label release · starts now …").
+                 --for <version> records which release the job is for
+                 (0.46.19; get --json shows forVersion).
                  [--distro ubuntu|ubuntu@24.04|debian|arch]  only nodes of that
                                 distro: its /etc/os-release ID or ID_LIKE (Ubuntu
                                 counts as debian), the version on a dot prefix
@@ -540,6 +545,13 @@ Owner / admin (refused for agents and inside K2 terminals, except where
   k2 compute node pause|drain|resume <name>    this server stops/starts assigning
   k2 compute node pinned-only <name> on|off    on: only jobs that name the node run
                    there; K2 never chooses it by itself (owner or Admin)
+  k2 compute node labels [<node>] [--json]     this server's own labels on each node
+                   (an agent: its granted nodes). Never sent to the node; another
+                   server using the node never sees them
+  k2 compute node label <node> add|remove <label>...   letters, digits and
+                   . _ : / - (no =), like release or for:0.46.18; jobs ask with
+                   run --label <label>. Owner, Admin, or an agent with "Allow
+                   managing compute nodes"
   k2 compute node route add|rm <name> <url>    LAN or tailnet URL the node may dial
 Sharing a node with other K2 servers (the node's owner server; 0.46.3):
   k2 compute node servers <node> [list [--refresh]] [--json]   every server on it: slot, state,

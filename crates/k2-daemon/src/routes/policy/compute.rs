@@ -79,6 +79,10 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/nodes/enroll-code", Owner),
     get("/cli/compute/nodes/health", Member),
     get("/cli/compute/nodes/info", Member),
+    // This server's own node labels (0.46.18): members read (an agent its
+    // granted nodes); the owner, an Admin or a manager agent changes them.
+    get("/cli/compute/nodes/labels", Member),
+    post("/cli/compute/nodes/labels/set", Admin),
     // Package requests (0.46.9, prd-compute-self-serve-environments §12.2):
     // members with a grant read and ask; the owner or an Admin, in person,
     // decide (the handler refuses passports); the policy is an operator's

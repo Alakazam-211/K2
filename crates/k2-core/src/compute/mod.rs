@@ -33,6 +33,7 @@ pub mod local;
 pub mod logs;
 pub mod message;
 pub mod pinned_only;
+pub mod server_labels;
 pub mod pkgreq;
 pub mod result;
 pub mod retry;

@@ -711,6 +711,11 @@ pub struct JobCtl {
     /// `A-Za-z0-9._:/-`). `jobs --tag` filters on `$.k2ctl.tag`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// `--for <version>` (0.46.18): the release this job's work is for
+    /// (`0.46.19`), as the submitter said it. Kept on the job for the
+    /// release-line rules; placement doesn't read it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub for_version: Option<String>,
     /// `--expect <duration>` (design-compute-duration-aware-queue-v1): how
     /// long the submitter said it takes, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -924,6 +929,11 @@ pub struct AnyFilter {
     /// ids (every move and retry too). Empty = any granted node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub only: Vec<String>,
+    /// `--label WORD` (0.46.18): only nodes that carry every one of these
+    /// labels for this server (`super::server_labels`; never the node's
+    /// own `k=v` labels, which are [`AnyFilter::labels`]). Normalized.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub server_labels: Vec<String>,
 }
 
 impl AnyFilter {

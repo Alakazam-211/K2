@@ -69,6 +69,50 @@ print(json.dumps({"code": v["enroll"], "expiresAt": v["expiresAt"], "name": v["n
             _compute_call POST /cli/compute/nodes/pinned-only "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: pinned-only %s%s. %s." % (v["node"], "on" if v["pinnedOnly"] else "off", "" if v.get("changed") else " (it already was)", v["note"]))'
             ;;
+        labels)
+            # This server's own labels on its nodes (0.46.18): never sent
+            # to the node, never seen by another server using it. Anyone
+            # who may list nodes reads them (an agent: its granted nodes).
+            local lb_node="" lb_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) lb_json=1; shift ;;
+                    -*) echo "usage: k2 compute node labels [<node>] [--json]" >&2; exit 2 ;;
+                    *) [ -z "$lb_node" ] || { echo "usage: k2 compute node labels [<node>] [--json]" >&2; exit 2; }; lb_node="$1"; shift ;;
+                esac
+            done
+            local lb_q=""
+            [ -n "$lb_node" ] && lb_q="node=$(urlencode "$lb_node")"
+            _compute_call GET /cli/compute/nodes/labels "$lb_q"
+            if [ "$lb_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+rows=v.get("nodes") or []
+if not rows: print("no nodes")
+for r in rows: print("%s: %s" % (r["node"], ", ".join(r["labels"]) or "(no labels)"))
+print("(%s)" % v["note"])'
+            ;;
+        label)
+            # k2 compute node label <node> add|remove <label>... (0.46.18):
+            # the owner, an Admin, or an agent with "Allow managing compute
+            # nodes". Jobs ask for them with k2 compute run --label <label>.
+            local lb_usage="usage: k2 compute node label <node> add|remove <label>..."
+            [ $# -ge 3 ] || { echo "$lb_usage" >&2; exit 2; }
+            local lb_node="$1" lb_op="$2"; shift 2
+            local lb_key
+            case "$lb_op" in add) lb_key=add ;; remove|rm) lb_key=remove ;; *) echo "$lb_usage" >&2; exit 2 ;; esac
+            local lb_list
+            lb_list="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
+            if [ "$lb_key" = "add" ]; then
+                body="$(_compute_json K2_CJ_node="$lb_node" K2_CJ_add_j="$lb_list")"
+            else
+                body="$(_compute_json K2_CJ_node="$lb_node" K2_CJ_remove_j="$lb_list")"
+            fi
+            _compute_call POST /cli/compute/nodes/labels/set "$body" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print("%s: %s%s. %s." % (v["node"], ("labels " + ", ".join(v["labels"])) if v["labels"] else "no labels", "" if v.get("changed") else " (no change)", v["note"]))'
+            ;;
         route|routes)
             local op="${1:-}"
             [ $# -ge 3 ] || { echo "usage: k2 compute node route add|rm <name> <url>" >&2; exit 2; }
@@ -260,7 +304,7 @@ if "node" in v:
     print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
             ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|label|labels|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
             exit 2
             ;;
     esac

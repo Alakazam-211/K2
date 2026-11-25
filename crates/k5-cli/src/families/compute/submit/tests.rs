@@ -47,9 +47,11 @@ fn run_words() {
         usage(run::parse(&["--timeout", "1x", "--", "x"])),
         "usage: bad duration '1x' (use 2h, 90m, 1h30m, 300s)"
     );
+    // A word with no `=` is this server's label (0.46.18); an empty one
+    // is the usage line.
     assert_eq!(
-        usage(run::parse(&["--label", "nokey", "--", "x"])),
-        "usage: --label key=value"
+        usage(run::parse(&["--label", " ", "--", "x"])),
+        "usage: --label key=value | --label WORD"
     );
     assert_eq!(
         usage(run::parse(&["--wait", "--detach", "--", "x"])),
@@ -110,6 +112,17 @@ fn run_body() {
     assert_eq!(
         body,
         r#"{"any": true, "labels": {}, "env": {}, "argv": ["sh", "-c", "x | y"], "plan": false, "detach": true, "dirty": false, "noSource": false, "exclusive": false, "clientJobId": "c", "strict": true}"#
+    );
+    // `--label WORD` (no `=`) goes to serverLabels, `k=v` stays the node's
+    // own; `--for` is forVersion (0.46.18), right after the labels as the
+    // shell sends them.
+    let a = ask(run::parse(&[
+        "--label", "release", "--label", "os=linux", "--label", "for:0.46.18", "--for", "0.46.19", "--detach", "--", "true",
+    ]));
+    let body = run::body(&a, "", "", "", "c");
+    assert_eq!(
+        body,
+        r#"{"any": true, "labels": {"os": "linux"}, "serverLabels": ["release", "for:0.46.18"], "forVersion": "0.46.19", "env": {}, "argv": ["true"], "plan": false, "detach": true, "dirty": false, "noSource": false, "exclusive": false, "clientJobId": "c"}"#
     );
     assert_eq!(run::client_job_id().len(), 32);
 }

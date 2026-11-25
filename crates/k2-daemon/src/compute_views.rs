@@ -534,6 +534,10 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     }
     // CE-9: the job's own tag, who sent it, and an owner-token mark.
     v["tag"] = j.ctl.tag.clone().into();
+    // `--for <version>` (0.46.18), only when the job says one.
+    if let Some(f) = &j.ctl.for_version {
+        v["forVersion"] = f.clone().into();
+    }
     // 0.46.8: pinned (a node named: it never moves on its own; k2 compute
     // move <id> --auto releases it) or auto (K2 may move it while queued).
     v["pinned"] = (j.ctl.any.is_none() && j.ctl.shards.is_empty()).into();

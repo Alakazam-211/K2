@@ -3,7 +3,7 @@ cmd_compute_run() {
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
     local preset="" now=0 cache_required=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
-    local network="" strict="" userns="" no_addr_filter="" expect="" expect_unknown=""
+    local network="" strict="" userns="" no_addr_filter="" expect="" expect_unknown="" for_version=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=() netns_dummies=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -95,7 +95,11 @@ sys.exit(0 if ok else 1)'; then
             # /etc/os-release ID or ID_LIKE, the version on a dot prefix.
             --distro) distro="$(_compute_distro_arg "${2:-}")" || exit 2; shift 2 ;;
             --arch) _need_value "$@"; arch="${2:-}"; shift 2 ;;
+            # --label k=v: the node's own label; --label WORD (no =, 0.46.18):
+            # this server's label (k2 compute node label); the daemon checks.
             --label) _need_value "$@"; labels+=("${2:-}"); shift 2 ;;
+            # --for <version> (0.46.18): the release this job is for.
+            --for) _need_value "$@"; for_version="${2:-}"; shift 2 ;;
             --detach|-d) detach=1; shift ;;
             --dirty) dirty=1; shift ;;
             --sha) _need_value "$@"; sha="${2:-}"; shift 2 ;;
@@ -239,16 +243,23 @@ sys.exit(0 if ok else 1)'; then
     fi
     local client
     client="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
-    local argv_json labels_json env_json
+    local argv_json labels_json env_json server_labels_json
     argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
+    # --label k=v → labels (the node's own); --label WORD → serverLabels
+    # (this server's, 0.46.18; only sent when there is one).
     labels_json="$(python3 -c '
 import json, sys
 out = {}
 for l in sys.argv[1:]:
-    if "=" not in l:
-        sys.stderr.write("usage: --label key=value\n"); sys.exit(2)
+    if not l.strip():
+        sys.stderr.write("usage: --label key=value | --label WORD\n"); sys.exit(2)
+    if "=" not in l: continue
     k, v = l.split("=", 1); out[k] = v
 print(json.dumps(out))' "${labels[@]+"${labels[@]}"}")" || exit 2
+    server_labels_json="$(python3 -c '
+import json, sys
+out = [l for l in sys.argv[1:] if "=" not in l]
+print(json.dumps(out) if out else "")' "${labels[@]+"${labels[@]}"}")"
     env_json="$(python3 -c '
 import json, sys
 out = {}
@@ -332,7 +343,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
     fi
     local body
     body="$(_compute_json K2_CJ_node="$node" K2_CJ_any_b="$any" K2_CJ_os="$os" K2_CJ_distro="$distro" K2_CJ_arch="$arch" K2_CJ_avoid_j="$avoid_json" K2_CJ_only_j="$only_json" \
-        K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
+        K2_CJ_labels_j="$labels_json" K2_CJ_serverLabels_j="$server_labels_json" K2_CJ_forVersion="$for_version" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
         K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_expectSecs_n="$expect" K2_CJ_expectUnknown_b="$expect_unknown" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
         K2_CJ_cpus_n="$cpus" K2_CJ_cpusBurst_n="$cpus_burst" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
@@ -740,7 +751,7 @@ cmd_compute_test() {
                 _need_value "$@"
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--distro|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--expect|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
+            --os|--distro|--arch|--label|--for|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--expect|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as|--avoid|--only|--network|--netns-dummy)
                 _need_value "$@"
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--receipt-v2|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--cache-required|--plan|--userns|--no-addr-filter) pass+=("$1"); shift ;;

@@ -703,6 +703,24 @@ CODES (0.46.7)
                            (earlier runs' durations) is shortest, and moves
                            if another node frees up first.
 
+THIS SERVER'S NODE LABELS (0.46.18)
+  A label is a word this server puts on a node it uses, so its jobs can
+  go only there:
+    k2 compute node label node-a add release for:0.46.18
+    k2 compute run --label release --mem 8G --expect 10m -- make test
+  The job goes only to nodes carrying every --label WORD asked, and the
+  placement line names them ("placed on node-a (auto): label release ·
+  starts now …"). A node without them is skipped ("1 without the label
+  release here"); none left: the usual no-node refusal. --label WORD is
+  for auto-placement: with a node named it is refused (exit 2).
+  The labels are this server's own: kept in its database, never sent to
+  the node, never seen by another server that uses the same node (it has
+  its own). A word has no = (key=value is the node's own label, set on
+  the machine): letters, digits and . _ : / -, at most 64, at most 32 per
+  node. Read: k2 compute node labels [<node>] (an agent sees its granted
+  nodes). Change: the owner, an Admin, or an agent with "Allow managing
+  compute nodes"; jobs already queued or running are not moved.
+
 WHOSE JOB, AND WHICH (0.46.7)
   --tag NAME on run/test labels the job (1 to 64 characters, each one of
   A-Z a-z 0-9 . _ : / -):

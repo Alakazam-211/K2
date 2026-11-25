@@ -19,7 +19,13 @@
 //! | [`CHANNEL_MEMBER_ADD_REMOVE`], [`CHANNEL_MEMBERS_CAN_LEAVE`], [`HTTP_TYPING`], [`READ_STATE_UNREAD_COUNT`], [`MEMBER_CHANNELS_LEVEL_ONLY`], [`AGENTS_DM_WITH_BOX_PEOPLE`], [`CALL_CANCEL`] | Sew 0.10.0 (people and channels on Home, HOME1; DM call cancel): read together as [`HomeChatFeatures`] (`tool_hook::sew_home_chat_features()`). Before 0.10.0 each Home path takes its fallback |
 //! | [`FEED_HEAD`], [`PERSON_CHANNEL_NOTIFY`], [`FEED_ALL_MESSAGES`] | Home chat pushes: read together as [`HomePushFeatures`] (`tool_hook::sew_home_push_features()`). Sew 0.10.6 has the first two; 0.11.0 adds the third |
 //!
-//! The pin, Sew 0.11.4, reports exactly 0.11.3's fifty-one flags
+//! The pin, Sew 0.11.5, reports fifty-three flags ([`SEW_0_11_5_REPORTED`]):
+//! its published x86_64 release binary's `sew version --json` (binary sha256
+//! d147b708…a61d, git 52f53768, run on a compute node) lists 0.11.4's
+//! fifty-one plus `feed_attachment_info` and `message_get`. Both are off in
+//! Sew unless turned on; K2 gates on neither and turns neither on. The same
+//! schema (max 1100101, min 30001, 83 migrations).
+//! Sew 0.11.4 reports exactly 0.11.3's fifty-one flags
 //! ([`SEW_0_11_3_REPORTED`]): its published x86_64 release binary's `sew
 //! version --json` (binary sha256 fb635e69…1bc8, git 6cd5e23f, run on a
 //! compute node) lists the same set, and the same schema (max 1100101, min
@@ -234,8 +240,8 @@ pub const SEW_0_11_1_REPORTED: [&str; 51] = [
     "voice_invites", "voice_media_path", "voice_record_cap", "voice_started_feed", "voice_video_cap",
 ];
 
-/// Sew 0.11.3's flags (and the pin's, Sew 0.11.4, whose release binary
-/// reports the same fifty-one), exactly as 0.11.3's published x86_64 release
+/// Sew 0.11.3's flags (and 0.11.4's, whose release binary reports the
+/// same fifty-one), exactly as 0.11.3's published x86_64 release
 /// binary reports them (`sew version --json` from Sew, binary sha256
 /// 5e3b768d…6485, git 1c95fa34; fifty-one), sorted. The same set as
 /// 0.11.1's; its schema is max 1100101, min 30001, 83 migrations.
@@ -248,6 +254,27 @@ pub const SEW_0_11_3_REPORTED: [&str; 51] = [
     "dm_read_receipts", "feed_all_messages", "feed_head", "group_dm_names", "home_client",
     "home_client_owner_approval", "http_typing", "import_identity_map", "k2_managed_avatar", "k2_managed_guard",
     "member_channels_level_only", "member_external_id", "mgmt_recording_reads", "mgmt_voice_states",
+    "person_channel_notify", "person_notifications", "principal_erase", "principal_relink", "private_spaces",
+    "read_state_unread_count", "recording_controls", "recording_required", "server_governed_space", "space_unbind",
+    "turn_relay_only", "voice_channel_closing", "voice_invites", "voice_media_path", "voice_record_cap",
+    "voice_started_feed", "voice_video_cap",
+];
+
+/// The pin's flags: Sew 0.11.5's exactly as its published x86_64 release
+/// binary reports them (`sew version --json`, binary sha256 d147b708…a61d,
+/// git 52f53768, run on a compute node 2026-11-25; fifty-three), sorted.
+/// 0.11.3's (and 0.11.4's) fifty-one plus `feed_attachment_info` and
+/// `message_get`, both off in Sew unless turned on; K2 gates on neither and
+/// turns neither on. Its schema is max 1100101, min 30001, 83 migrations.
+#[cfg(any(test, feature = "test-util"))]
+pub const SEW_0_11_5_REPORTED: [&str; 53] = [
+    "agents_dm_with_box_people", "app_channel_create", "app_controls", "app_governed_spaces", "app_member_channels",
+    "app_mode_gate", "app_origin", "app_origins", "app_participant_links", "app_quotas", "app_recording",
+    "app_scoped_sessions", "app_session_member_role", "app_voice_channel_create", "call_cancel", "call_credential",
+    "call_stats_native", "channel_member_add_remove", "channel_members_can_leave", "dm_order_activity",
+    "dm_read_receipts", "feed_all_messages", "feed_attachment_info", "feed_head", "group_dm_names", "home_client",
+    "home_client_owner_approval", "http_typing", "import_identity_map", "k2_managed_avatar", "k2_managed_guard",
+    "member_channels_level_only", "member_external_id", "message_get", "mgmt_recording_reads", "mgmt_voice_states",
     "person_channel_notify", "person_notifications", "principal_erase", "principal_relink", "private_spaces",
     "read_state_unread_count", "recording_controls", "recording_required", "server_governed_space", "space_unbind",
     "turn_relay_only", "voice_channel_closing", "voice_invites", "voice_media_path", "voice_record_cap",
@@ -828,7 +855,7 @@ mod tests {
         assert!(home.call_cancel && home.http_typing && home.member_channels_level_only, "{home:?}");
     }
 
-    /// Sew 0.11.3 (and the pin, 0.11.4, which reports the same fifty-one),
+    /// Sew 0.11.3 (and 0.11.4, which reports the same fifty-one),
     /// as 0.11.3's published release binary reports its
     /// flags ([`SEW_0_11_3_REPORTED`]): fifty-one, exactly 0.11.1's (no flag
     /// added or removed in 0.11.2 or 0.11.3). Every Home chat push gate opens.
@@ -842,6 +869,43 @@ mod tests {
         assert_eq!(SEW_0_11_3_REPORTED, SEW_0_11_1_REPORTED, "0.11.3 reports exactly 0.11.1's flags");
         let all = HomePushFeatures { feed_head: true, person_channel_notify: true, feed_all_messages: true };
         assert_eq!(HomePushFeatures::from_flags(&SEW_0_11_3_REPORTED), all);
+    }
+
+    /// The pin, Sew 0.11.5, as its published release binary reports its
+    /// flags ([`SEW_0_11_5_REPORTED`]): fifty-three, 0.11.3's (and 0.11.4's)
+    /// fifty-one plus `feed_attachment_info` and `message_get`. K2 gates on
+    /// neither: every gate reads as it did on 0.11.4, and the two new names
+    /// are only kept in the recorded list.
+    #[test]
+    fn sew_0_11_5_reports_two_flags_more_than_0_11_4() {
+        let got: Vec<&str> = SEW_0_11_5_REPORTED.to_vec();
+        let mut sorted = got.clone();
+        sorted.sort();
+        assert_eq!(got, sorted, "Sew lists its flags sorted");
+        assert_eq!(got.len(), 53);
+        let mut want: Vec<&str> = SEW_0_11_3_REPORTED.to_vec();
+        want.extend(["feed_attachment_info", "message_get"]);
+        want.sort();
+        assert_eq!(got, want, "0.11.4's fifty-one plus the two new flags");
+        let all = HomePushFeatures { feed_head: true, person_channel_notify: true, feed_all_messages: true };
+        assert_eq!(HomePushFeatures::from_flags(&SEW_0_11_5_REPORTED), all);
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let before: Vec<String> = SEW_0_11_3_REPORTED.iter().map(|s| s.to_string()).collect();
+        let after: Vec<String> = SEW_0_11_5_REPORTED.iter().map(|s| s.to_string()).collect();
+        assert!(note(&conn, "chat", &before, 1).unwrap());
+        let (rec, voice, home) = (
+            RecordingFeatures::read(&conn, "chat").unwrap(),
+            VoiceFeatures::read(&conn, "chat").unwrap(),
+            HomeChatFeatures::read(&conn, "chat").unwrap(),
+        );
+        assert!(note(&conn, "chat", &after, 2).unwrap());
+        assert_eq!(list(&conn, "chat").unwrap().len(), 53);
+        assert!(has(&conn, "chat", "feed_attachment_info").unwrap() && has(&conn, "chat", "message_get").unwrap());
+        assert_eq!(HomePushFeatures::read(&conn, "chat").unwrap(), all);
+        assert_eq!(RecordingFeatures::read(&conn, "chat").unwrap(), rec);
+        assert_eq!(VoiceFeatures::read(&conn, "chat").unwrap(), voice);
+        assert_eq!(HomeChatFeatures::read(&conn, "chat").unwrap(), home);
     }
 
     /// Sew 0.7.0's six voice flags (sew-56 v1.1d §5), read from one list.

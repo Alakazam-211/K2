@@ -70,7 +70,7 @@ Agents:
                  labelled with every such WORD (k2 compute node labels); the
                  placement line names them ("label release · starts now …").
                  --for <version> records which release the job is for
-                 (0.46.19; get --json shows forVersion).
+                 (get --json shows forVersion).
                  [--distro ubuntu|ubuntu@24.04|debian|arch]  only nodes of that
                                 distro: its /etc/os-release ID or ID_LIKE (Ubuntu
                                 counts as debian), the version on a dot prefix

@@ -4592,7 +4592,7 @@ exit: 0
         {"name": "--arch", "arg": "A", "description": "Only nodes of that architecture (x86_64)."},
         {"name": "--distro", "arg": "ID[@VERSION]", "description": "Only nodes of that distro: its /etc/os-release ID or ID_LIKE (ubuntu, ubuntu@24.04, debian, arch)."},
         {"name": "--label", "arg": "k=v|WORD", "description": "k=v: pick nodes by a label the node has. WORD (no =): only nodes this server labelled WORD (k2 compute node label); repeatable, every one must match; not with a named node."},
-        {"name": "--for", "arg": "VERSION", "description": "The release this job is for (0.46.19); kept on the job."},
+        {"name": "--for", "arg": "VERSION", "description": "The release this job is for; kept on the job."},
         {"name": "--avoid", "arg": "NODE", "description": "K2 never picks that node for this job (repeatable). Not with a named node (avoid_with_pinned_node, exit 2)."},
         {"name": "--only", "arg": "NODE", "description": "K2 picks only among these nodes (repeatable). Not with a named node."},
         {"name": "--preset", "arg": "NAME", "description": "Settings from .k2/compute.toml: [defaults], then [presets.NAME]; a flag beats both."},

@@ -712,7 +712,7 @@ pub struct JobCtl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     /// `--for <version>` (0.46.18): the release this job's work is for
-    /// (`0.46.19`), as the submitter said it. Kept on the job for the
+    /// (`1.2.0`), as the submitter said it. Kept on the job for the
     /// release-line rules; placement doesn't read it yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub for_version: Option<String>,

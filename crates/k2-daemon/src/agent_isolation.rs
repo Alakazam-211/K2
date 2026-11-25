@@ -26,8 +26,8 @@
 //!   owner; an Admin may only turn it on): per agent, off by default.
 //!
 //! The claim is "labelled by agent" ([`k2_core::agent_cgroup::CLAIM`]),
-//! with what a fenced agent can still reach said beside it: until the
-//! Unix-socket block lands, systemd's buses and the owner's tmux (kernel rows
+//! with what a fenced agent can still reach said beside it: unless the
+//! Unix-socket block enforces (it records by default), systemd's buses and the owner's tmux (kernel rows
 //! 4, P2, P7). Never "cannot be forged" while that holds.
 
 use std::path::{Path, PathBuf};

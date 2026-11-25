@@ -145,12 +145,12 @@ pub const FOR_MAX: usize = 32;
 /// `forVersion` in a `run` body (`--for <version>`, 0.46.18): the release
 /// the job's work is for, kept on the job (`JobCtl::for_version`). A
 /// version: starts with a digit, then digits, letters and `. + -`, at most
-/// [`FOR_MAX`] (`0.46.19`, `0.47.0-rc1`); a leading `v` is dropped.
+/// [`FOR_MAX`] (`1.2.0`, `1.3.0-rc1`); a leading `v` is dropped.
 pub(crate) fn for_from(v: &serde_json::Value) -> R<Option<String>> {
     let raw = match v.get("forVersion") {
         None | Some(serde_json::Value::Null) => return Ok(None),
         Some(serde_json::Value::String(t)) => t.trim(),
-        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--for is a version, like 0.46.19")),
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--for is a version, like 1.2.0")),
     };
     let t = raw.strip_prefix('v').unwrap_or(raw);
     let ok = !t.is_empty()
@@ -158,7 +158,7 @@ pub(crate) fn for_from(v: &serde_json::Value) -> R<Option<String>> {
         && t.starts_with(|c: char| c.is_ascii_digit())
         && t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'));
     if !ok {
-        return Err(no(codes::BAD_REQUEST, 400, format!("--for is a version, like 0.46.19 (got '{raw}')")));
+        return Err(no(codes::BAD_REQUEST, 400, format!("--for is a version, like 1.2.0 (got '{raw}')")));
     }
     Ok(Some(t.to_string()))
 }

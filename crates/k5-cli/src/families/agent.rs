@@ -40,9 +40,8 @@
 //! Handed to the shell, before anything is printed or sent: a word that is
 //! not UTF-8, `-h` or `--help` anywhere on the line (the shell's
 //! `_wants_help` prints the help and asks nothing), a `HOME` that is not
-//! UTF-8 (with none set, the password database's folder, as the shell's
-//! Python reads it, when that is UTF-8), a port curl won't take, and a
-//! `python3` the binary can't tell.
+//! set or not UTF-8, a port curl won't take, and a `python3` the binary
+//! can't tell.
 //!
 //! # Where this differs from the shell (named differences)
 //!
@@ -272,7 +271,7 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
     if !python::family_native(python::here()) {
         return None;
     }
-    python_home_known()?;
+    std::env::var_os("HOME")?.to_str()?;
     for name in k2_client::env_names::PROJECT_PATH {
         if let Some(v) = std::env::var_os(name) {
             v.to_str()?;
@@ -529,30 +528,8 @@ fn py_strip(text: &str) -> &str {
     text.trim_matches(space)
 }
 
-/// The home the shell's Python reads for `~`: `HOME` when it is set, else
-/// this user's folder in the password database (bash sets a `HOME` of its
-/// own when none is set, but doesn't export it). `None`: no entry for this
-/// user, so Python leaves `~` as it is.
-pub(crate) fn python_home() -> Option<String> {
-    match std::env::var("HOME") {
-        Ok(h) => Some(h),
-        Err(_) => crate::out::pylib::path::passwd_home(None).flatten(),
-    }
-}
-
-/// `Some` when the binary can tell [`python_home`]: a `HOME` that is
-/// UTF-8, or, with none, a password database entry (or none) whose folder
-/// is UTF-8.
-pub(crate) fn python_home_known() -> Option<()> {
-    match std::env::var_os("HOME") {
-        Some(h) => h.to_str().map(|_| ()),
-        None => crate::out::pylib::path::passwd_home(None).map(|_| ()),
-    }
-}
-
-/// `os.path.expanduser(p)`: `~` and `~/…` from [`python_home`] ([`run`]
-/// hands the line to the shell when the binary can't tell it). A `~name`
-/// is kept as it is.
+/// `os.path.expanduser(p)`: `~` and `~/…` from `HOME` (set: [`run`]
+/// hands a line with no `HOME` to the shell). A `~name` is kept as it is.
 fn expanduser(p: &str) -> String {
     let Some(rest) = p.strip_prefix('~') else {
         return p.to_string();
@@ -560,9 +537,7 @@ fn expanduser(p: &str) -> String {
     if !(rest.is_empty() || rest.starts_with('/')) {
         return p.to_string();
     }
-    let Some(home) = python_home() else {
-        return p.to_string();
-    };
+    let home = std::env::var("HOME").unwrap_or_default();
     let home = home.trim_end_matches('/');
     let joined = format!("{home}{rest}");
     if joined.is_empty() {

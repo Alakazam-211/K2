@@ -244,10 +244,9 @@ pub fn os() -> Os {
     }
 }
 
-/// `$HOME` as the shell writes it into a path (bash's own when none is
-/// set, [`crate::offline::shell_home`]).
+/// `$HOME` as the shell writes it into a path.
 pub(super) fn user_home() -> String {
-    crate::offline::shell_home(&crate::offline::Env::current())
+    std::env::var_os("HOME")
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_default()
 }

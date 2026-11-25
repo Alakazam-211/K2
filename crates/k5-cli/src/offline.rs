@@ -76,25 +76,10 @@ pub enum Handoff {
     Pwd,
 }
 
-/// The environment, as one list, and where bash would find this user's
-/// home folder when `HOME` is not set ([`shell_home`]).
+/// The environment, as one list.
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     vars: Vec<(OsString, OsString)>,
-    passwd: Passwd,
-}
-
-/// Where the password database's home folder comes from.
-#[derive(Debug, Clone, Default)]
-enum Passwd {
-    /// Not looked up: the binary can't tell (the default for a made-up
-    /// environment, so a test never reads the real database).
-    #[default]
-    Unknown,
-    /// This machine's database.
-    System,
-    /// A fixed entry: this user's folder, or `None` for no entry (tests).
-    Entry(Option<OsString>),
 }
 
 impl Env {
@@ -102,38 +87,16 @@ impl Env {
     pub fn current() -> Env {
         Env {
             vars: std::env::vars_os().collect(),
-            passwd: Passwd::System,
         }
     }
 
-    /// An environment of these pairs (tests). The password database is
-    /// not read: with no `HOME`, [`shell_home`] can't tell.
+    /// An environment of these pairs (tests).
     pub fn of(pairs: &[(&str, &str)]) -> Env {
         Env {
             vars: pairs
                 .iter()
                 .map(|(k, v)| (OsString::from(k), OsString::from(v)))
                 .collect(),
-            passwd: Passwd::Unknown,
-        }
-    }
-
-    /// This environment with a fixed password database entry for this
-    /// user: its home folder, or `None` for no entry (tests).
-    pub fn with_passwd_home(mut self, dir: Option<&str>) -> Env {
-        self.passwd = Passwd::Entry(dir.map(OsString::from));
-        self
-    }
-
-    /// This user's home folder in the password database: `Some(None)`
-    /// for no entry, `None` when the binary can't tell.
-    fn passwd_home(&self) -> Option<Option<OsString>> {
-        match &self.passwd {
-            Passwd::Unknown => None,
-            Passwd::System => {
-                crate::out::pylib::path::passwd_home(None).map(|d| d.map(OsString::from))
-            }
-            Passwd::Entry(d) => Some(d.clone()),
         }
     }
 
@@ -193,8 +156,7 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     if env.any_named("BASH_FUNC_") {
         return Err(Handoff::Startup("BASH_FUNC_".into()));
     }
-    let home = shell_home(env).ok_or(Handoff::Unset("HOME"))?;
-    let home = home.as_os_str();
+    let home = env.get("HOME").ok_or(Handoff::Unset("HOME"))?;
     let path = env.get("PATH").ok_or(Handoff::Unset("PATH"))?;
     let path = SearchPath::new(path);
     path.need("cat")?;
@@ -263,7 +225,7 @@ fn home_in(home: &OsStr) -> PathBuf {
     }
 }
 
-/// The shell's K2 home in `env` ([`home_in`] of [`shell_home`]). Off
+/// The shell's K2 home in `env` ([`home_in`]), when `HOME` is set. Off
 /// Unix, where there is no shell, the K2 home k2-client finds for `env`
 /// ([`crate::home::k2_home_with`]: the home override, else the K2 home
 /// folder in the user's home, `HOME` or else `USERPROFILE`).
@@ -271,27 +233,44 @@ pub fn shell_k2_home(env: &Env) -> Option<PathBuf> {
     if !cfg!(unix) {
         return windows_k2_home(env);
     }
-    shell_home(env).map(|h| home_in(&h))
+    env.get("HOME").map(home_in)
 }
 
-/// This user's home folder in this machine's password database:
-/// `Some(None)` for no entry, `None` when the binary can't tell.
-pub fn system_passwd_home() -> Option<Option<OsString>> {
-    Env::current().passwd_home()
+/// The front's check for `HOME` ([`home_check`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeCheck {
+    /// `HOME` is set (empty too: `set -u` doesn't trip on that).
+    Go,
+    /// No `HOME`: the binary's refusal ([`HOME_UNSET_LINE`]), exit 1,
+    /// before anything is read or sent.
+    Refuse,
+    /// No `HOME`, and bash would run something of its own first (its
+    /// startup settings): the shell's.
+    Shell,
 }
 
-/// The shell's `$HOME`: `HOME` as it is when it is set (empty too), else
-/// what bash puts there at start when it is not: this user's folder in
-/// the password database, or `/` when the database has no entry for this
-/// user (bash's `sh_get_home_dir`). bash doesn't export the one it sets,
-/// so a program it starts sees no `HOME` (Python then reads the database
-/// too: [`crate::out::pylib::path::expanduser`]). `None`: the binary
-/// can't tell (a database folder that is not UTF-8, or no database here).
-pub fn shell_home(env: &Env) -> Option<OsString> {
-    if let Some(h) = env.get("HOME") {
-        return Some(h.to_os_string());
+/// The refusal with no `HOME` (K2's ruling; the named difference
+/// `home-unset-prefix`). bash's prelude stops there too, under `set -u`
+/// at `K2_HOME="${HOME}/.k2"`, with its own words: `<path to cli/k2>:
+/// line <n>: HOME: unbound variable`, exit 1. The binary never guesses
+/// the password database's home folder instead: under `sudo`, a service
+/// unit or a container that can be another K2 home, so another identity
+/// and token, a silent act as someone else.
+pub const HOME_UNSET_LINE: &str = "HOME isn't set; set it to your home folder and try again";
+
+/// The front's check for `HOME`, after the port check (the shell checks
+/// a `K*_PORT` setting first) and before the line is routed. Reads
+/// nothing but the environment. Unix only: off Unix it is always `Go`.
+pub fn home_check(env: &Env) -> HomeCheck {
+    // Off Unix there is no shell prelude, and HOME is often not set
+    // (USERPROFILE is): the binary's own rule applies ([`shell_k2_home`]).
+    if !cfg!(unix) || env.get("HOME").is_some() {
+        return HomeCheck::Go;
     }
-    Some(env.passwd_home()?.unwrap_or_else(|| OsString::from("/")))
+    if STARTUP.iter().any(|n| env.get(n).is_some()) || env.any_named("BASH_FUNC_") {
+        return HomeCheck::Shell;
+    }
+    HomeCheck::Refuse
 }
 
 /// [`shell_k2_home`] off Unix: k2-client's rule over `env`.
@@ -869,31 +848,22 @@ mod tests {
         assert_eq!(pwd("rel"), here);
     }
 
-    /// With no `HOME`, the shell's is the password database's folder for
-    /// this user, `/` with no entry; a made-up environment never reads
-    /// the real database.
+    /// No `HOME` is the front's refusal; an empty one is a `HOME`; with
+    /// bash's startup settings the line is the shell's.
     #[test]
-    fn the_shell_s_home_with_none_set() {
-        let d = scratch("pwhome");
-        std::fs::create_dir_all(d.join(".k2")).unwrap();
-        let none = Env::of(&[]);
-        assert_eq!(shell_home(&none), None);
-        assert_eq!(shell_k2_home(&none), None);
-        let set = Env::of(&[("HOME", "/h")]).with_passwd_home(Some(s(&d)));
-        assert_eq!(shell_home(&set), Some(OsString::from("/h")));
-        let empty = Env::of(&[("HOME", "")]).with_passwd_home(Some(s(&d)));
-        assert_eq!(shell_home(&empty), Some(OsString::new()));
-        let db = Env::of(&[]).with_passwd_home(Some(s(&d)));
-        assert_eq!(shell_home(&db), Some(d.clone().into_os_string()));
-        assert_eq!(shell_k2_home(&db), Some(d.join(".k2")));
-        let no_entry = Env::of(&[]).with_passwd_home(None);
-        assert_eq!(shell_home(&no_entry), Some(OsString::from("/")));
-        // The prelude reads the port and token from that home.
-        let path = bin(&d, &["cat", "dirname", "sed"]);
-        std::fs::write(d.join(".k2/heartbeat.port"), "41000\n").unwrap();
-        let env = Env::of(&[("PATH", &path)]).with_passwd_home(Some(s(&d)));
-        let p = prelude(&env, &d).expect("the prelude");
-        assert!(p.port && !p.token, "{p:?}");
+    fn the_home_check() {
+        assert_eq!(home_check(&Env::of(&[("HOME", "/h")])), HomeCheck::Go);
+        assert_eq!(home_check(&Env::of(&[("HOME", "")])), HomeCheck::Go);
+        assert_eq!(home_check(&Env::of(&[])), HomeCheck::Refuse);
+        assert_eq!(
+            home_check(&Env::of(&[("BASH_ENV", "/x")])),
+            HomeCheck::Shell
+        );
+        assert_eq!(
+            home_check(&Env::of(&[("BASH_FUNC_x%%", "() { :; }")])),
+            HomeCheck::Shell
+        );
+        assert_eq!(shell_k2_home(&Env::of(&[])), None);
     }
 
     /// The walk up runs `dirname`'s steps: `/w/.` goes up to `/w`, not `/`.

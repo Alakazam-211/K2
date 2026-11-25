@@ -42,8 +42,8 @@
 //! there is one copy of each: any form with `-h` or `--help` before any
 //! bare `--` (the help,
 //! which the front sends to a page or the shell, [`crate::front`]: help
-//! never acts); a word that is not UTF-8; a `HOME` that is not UTF-8
-//! (or, with none set, a password database folder that is not); a port that is set but is no port curl takes; a `python3`
+//! never acts); a word that is not UTF-8; a `HOME` that is not set or
+//! not UTF-8; a port that is set but is no port curl takes; a `python3`
 //! the binary can't tell; and the shared Codex server check.
 //!
 //! Where this differs from the shell: an answer that is not UTF-8 is read
@@ -262,8 +262,8 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if !python::family_native(python::here()) {
         return None;
     }
-    // `_agent_conf_fetch` reads a path from `HOME` (Python's).
-    super::agent::python_home_known()?;
+    // `_agent_conf_fetch` reads a path from `HOME`.
+    std::env::var_os("HOME")?.to_str()?;
     for name in k2_client::env_names::PROJECT_PATH {
         if let Some(v) = std::env::var_os(name) {
             v.to_str()?;

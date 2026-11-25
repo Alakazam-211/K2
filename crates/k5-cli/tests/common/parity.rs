@@ -219,6 +219,12 @@ pub enum Compare {
     /// the binary's doesn't (K2's ruling, the named difference
     /// `cd-option-prefix`). Everything as [`Compare::Exact`] but that.
     CdOptionPrefix,
+    /// No `HOME` (K2's ruling, the named difference `home-unset-prefix`):
+    /// bash's prelude stops under `set -u` with `<cli/k2>: line <n>: HOME:
+    /// unbound variable`; the binary refuses at its front in K2's words
+    /// ([`k5_cli::offline::HOME_UNSET_LINE`]). Everything else as
+    /// [`Compare::Exact`] (exit 1, nothing on stdout, nothing sent).
+    HomeUnset,
 }
 
 /// Each `k2-update.` followed by six letters or digits (the random part
@@ -956,6 +962,23 @@ impl Rig {
                 r.stderr.starts_with("cd: -"),
                 "{name}: the binary's cd error: {:?}",
                 r.stderr
+            );
+        } else if c.compare == Compare::HomeUnset {
+            let head = format!("{}: line ", cli_k2().display());
+            let bash_said = b.stderr.strip_prefix(&head).and_then(|t| {
+                t.trim_start_matches(|ch: char| ch.is_ascii_digit())
+                    .strip_prefix(": ")
+            });
+            assert_eq!(
+                bash_said,
+                Some("HOME: unbound variable\n"),
+                "{name}: bash's stderr: {:?}",
+                b.stderr
+            );
+            assert_eq!(
+                r.stderr,
+                format!("{}\n", k5_cli::offline::HOME_UNSET_LINE),
+                "{name}: the binary's refusal"
             );
         } else if let Compare::MktempTried { stem } = c.compare {
             let rust = (r.code, r.stderr.as_str());

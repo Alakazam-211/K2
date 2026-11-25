@@ -243,9 +243,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     {
         return None;
     }
-    // The shell's `${HOME}` (bash's own when none is set), as text.
-    let home = crate::offline::shell_home(&crate::offline::Env::current())
-        .and_then(|h| h.into_string().ok());
+    let home = std::env::var("HOME").ok();
     let act = parse(&words, &settings.project, home.as_deref());
     let prep = match &act {
         Act::Shell => return None,

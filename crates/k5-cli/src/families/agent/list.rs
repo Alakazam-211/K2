@@ -49,8 +49,7 @@ pub fn list(client: &mut Client, closing: &mut Closing, as_json: bool) -> Exit {
         }
         return Exit::Error;
     }
-    // No database entry: Python's `expanduser("~")` is `~` itself.
-    let home = super::python_home().unwrap_or_else(|| "~".to_string());
+    let home = std::env::var("HOME").unwrap_or_default();
     reader(&String::from_utf8_lossy(&held.raw), as_json, &home).print()
 }
 

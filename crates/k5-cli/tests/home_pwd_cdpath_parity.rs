@@ -8,12 +8,11 @@
 //!   it is, bash 4.4 and later (Linux) tidy it for `pwd`. Each OS's rows
 //!   run on that OS, with that bash first on `PATH` (the test fails
 //!   otherwise).
-//! - HOME unset ([`k5_cli::offline::shell_home`]): bash sets `HOME` to
-//!   this user's folder in the password database. The rows read that
-//!   folder for real, so the test first fails when it holds a K2 home,
-//!   and every row brings its own port (the stub's) and a made-up
-//!   passport, with the owner fallback off: nothing real is read or
-//!   reached. Rows are picked whose output names no folder of that home.
+//! - HOME unset ([`k5_cli::offline::home_check`]): bash's prelude stops
+//!   under `set -u` at its K2 home, for every command; the binary refuses
+//!   at its front, in K2's words (the named difference
+//!   `home-unset-prefix`), and reads and sends nothing first. An empty
+//!   `HOME` is a `HOME`.
 //! - `CDPATH` ([`k5_cli::shellpath::cdpath`]): searched only for a
 //!   relative name not starting with `.` or `..` parts; no entry has it,
 //!   `cd` goes as with none; a non-empty entry that has it is where `cd`
@@ -99,84 +98,156 @@ fn a_pwd_bash_would_tidy() {
     }
 }
 
-/// The password database's folder for this user holds no K2 home (the
-/// test says only whether one is there, never the folder).
-fn passwd_home_has_no_k2_home() {
-    let home = k5_cli::offline::system_passwd_home()
-        .expect("the password database's folder for this user, as text")
-        .expect("an entry for this user in the password database");
-    for name in [".k2", ".k2so"] {
-        let there = std::path::Path::new(&home).join(name).exists();
-        assert!(
-            !there,
-            "the password database's home folder holds {name} (present): the HOME-unset rows would read it"
-        );
-    }
-}
-
-/// Settings with no `HOME`: the stub's port, a made-up passport, the
-/// owner fallback off.
-fn no_home() -> Vec<(&'static str, String)> {
-    with_passport(&[("K2_NO_OWNER_FALLBACK", "1"), ("HOME", UNSET)])
-}
-
+/// No `HOME`: every form stops at the front (`home-unset-prefix`, K2's
+/// ruling): one kind of form each, a page, a daemon call, an offline line
+/// and `--version`. Nothing is sent.
 #[test]
-fn home_unset() {
-    passwd_home_has_no_k2_home();
-    let rows: Vec<(&'static str, Case)> = vec![
-        (
-            "permission",
-            case(
-                "permission help, HOME unset",
-                &["help"],
-                &[],
-                vec![ok(ON)],
-                nothing,
-                0,
-                1,
-            ),
-        ),
-        (
-            "agent",
-            case(
-                "agent list, HOME unset",
-                &["list"],
-                &[],
-                vec![ok(r#"{"ok":true,"agents":[]}"#)],
-                nothing,
-                0,
-                1,
-            ),
-        ),
-        (
-            "focus-group",
-            case(
-                "focus-group list, HOME unset",
-                &["list"],
-                &[],
-                vec![ok(r#"{"ok":true,"groups":[]}"#)],
-                nothing,
-                0,
-                1,
-            ),
-        ),
-        (
-            "publish",
-            case(
-                "publish subdomain list, HOME unset",
-                &["subdomain", "list"],
-                &[],
-                vec![ok(r#"{"ok":true,"subdomains":[]}"#)],
-                nothing,
-                0,
-                1,
-            ),
-        ),
+fn home_unset_is_refused_at_the_front() {
+    let rows: Vec<(&'static str, &'static [&'static str])> = vec![
+        ("permission", &["help"]),
+        ("agent", &["list"]),
+        ("study", &["errors"]),
+        ("whoami", &[]),
+        ("", &["--version"]),
     ];
-    for (verb, c) in rows {
+    for (verb, args) in rows {
         let rig = Rig::new(verb, "nohome");
-        rig.check(&with(no_home(), c));
+        rig.check(&with(
+            vec![("HOME", UNSET.to_string()), ("K2_PORT", PORT.to_string())],
+            Case {
+                compare: Compare::HomeUnset,
+                ..case(
+                    leak(format!("{verb} {}, HOME unset", args.join(" "))),
+                    args,
+                    &[],
+                    vec![],
+                    owner_and_port,
+                    1,
+                    0,
+                )
+            },
+        ));
     }
+}
+
+/// A `K*_PORT` setting that is no port is refused before `HOME` is read,
+/// on both sides (exit 2).
+#[test]
+fn a_bad_port_setting_comes_first() {
+    let rig = Rig::new("agent", "nohome-port");
+    rig.check(&with(
+        vec![("HOME", UNSET.to_string()), ("K2_PORT", "70000".to_string())],
+        case(
+            "agent list, HOME unset, K2_PORT 70000",
+            &["list"],
+            &[],
+            vec![],
+            nothing,
+            2,
+            0,
+        ),
+    ));
+}
+
+/// `HOME` set but empty: `set -u` doesn't trip on it; both read the K2
+/// home `/.k2` (none) and go on with the settings given.
+#[test]
+fn an_empty_home_is_a_home() {
+    for (verb, args, replies, requests) in [
+        ("permission", &["help"][..], vec![ok(ON)], 1),
+        ("agent", &["list"][..], vec![ok(r#"{"ok":true,"agents":[]}"#)], 1),
+    ] {
+        let rig = Rig::new(verb, "emptyhome");
+        let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
+        rig.check(&with(
+            with_passport(&[("HOME", ""), ("K2_NO_OWNER_FALLBACK", "1")]),
+            case(
+                leak(format!("{verb} {}, HOME empty", args.join(" "))),
+                args,
+                &[],
+                replies,
+                nothing,
+                0,
+                requests,
+            ),
+        ));
+    }
+}
+
+/// A file a read would hang on.
+fn fifo(p: &std::path::Path) {
+    let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: a valid C string and a plain mode.
+    let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o600) };
+    assert_eq!(rc, 0, "mkfifo {}", p.display());
+}
+
+/// With no `HOME`, the binary reads no K2 home, token or passport file and
+/// sends nothing before its refusal, for every router form (and its
+/// `--help`): every place a read could reach holds FIFOs (a read hangs, the
+/// run passes its deadline and the test fails), and the stub must get no
+/// request.
+#[test]
+fn home_unset_reads_and_sends_nothing() {
+    let rig = Rig::new("homefifo", "all");
+    let k2home = rig.dir.join("fifo-k2home");
+    let secrets = rig.dir.join("fifo-secrets");
+    for d in [&k2home, &secrets, &rig.proj.join(".k2")] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    for f in [
+        "heartbeat.port",
+        "heartbeat.token",
+        "daemon.port",
+        "daemon.token",
+        "settings.json",
+        "tunnel.json",
+        "connect-account.json",
+    ] {
+        fifo(&k2home.join(f));
+    }
+    fifo(&secrets.join(".k2-passport"));
+    let port = rig.stub().port.to_string();
+    let table = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/router_forms.tsv");
+    let forms = std::fs::read_to_string(table).expect("router_forms.tsv");
+    let mut lines: Vec<Vec<String>> = Vec::new();
+    for row in forms.lines().filter(|l| !l.starts_with('#')).skip(1) {
+        let r: Vec<&str> = row.split('\t').collect();
+        if r[2] != "-" {
+            continue;
+        }
+        let words: Vec<String> = (if r[1] == "-" { r[0] } else { r[1] })
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let mut help = words.clone();
+        help.push("--help".into());
+        lines.push(words);
+        lines.push(help);
+    }
+    assert!(lines.len() > 3000, "only {} lines", lines.len());
+    let want = format!("{}\n", k5_cli::offline::HOME_UNSET_LINE);
+    for argv in &lines {
+        let mut cmd = std::process::Command::new(BIN);
+        cmd.env_clear()
+            .env("PATH", std::env::var_os("PATH").expect("PATH"))
+            .env("TMPDIR", rig.dir.join("tmp-rust"))
+            .env("K5_HOME_OVERRIDE", &k2home)
+            .env("K2_SECRETS_DIR", &secrets)
+            .env("K2_PORT", &port)
+            .env("K2_HOOK_TOKEN", PASSPORT)
+            .current_dir(&rig.proj)
+            .args(argv);
+        let who = format!("{}: HOME unset", argv.join(" "));
+        let o = run_within(&mut cmd, None, std::time::Duration::from_secs(20), &who);
+        let got = (
+            o.status.code(),
+            o.stdout.is_empty(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        );
+        assert_eq!(got, (Some(1), true, want.clone()), "{who}");
+    }
+    assert!(rig.stub().take_log().is_empty(), "a request reached the stub");
 }
 
 /// A `CDPATH` folder with `ws/` in it.

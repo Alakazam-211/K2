@@ -157,6 +157,17 @@ fn main() {
         port::Check::Shell => std::process::exit(shell(&args).code()),
     }
     trace::mark("port");
+    // No `HOME`: the shell's prelude stops at its K2 home (`set -u`), so
+    // every command stops here, before anything is read or sent (K2's
+    // ruling: never a guessed home, see offline::HOME_UNSET_LINE).
+    match offline::home_check(&offline::Env::current()) {
+        offline::HomeCheck::Go => {}
+        offline::HomeCheck::Refuse => {
+            out::stderr_line(offline::HOME_UNSET_LINE);
+            std::process::exit(Exit::Error.code());
+        }
+        offline::HomeCheck::Shell => std::process::exit(shell(&args).code()),
+    }
     // The shell's Codex tab gate (`_cli_codex_tab_gate`), before the front
     // routes, prints or sends anything: a Codex call K2 can't confirm runs
     // only the help words. A stray `--` is refused first (the route).

@@ -125,6 +125,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - When something can't be asked for with a card, K2 now tells you how to send feedback about it, where agents are allowed to report problems.
 - **On a server with no owner login, purge now asks you to set an owner password first, then uses it.** `k2 app uninstall --purge` and `k2 hostchat purge` failed with `no_confirm_method` and no next step on a server with no owner login, vault password or Touch ID. They now refuse with the one command to run first, from your own terminal on that server: `k2 users add <your-name> --role owner --keep-password`. After that, each purge asks for that login's password. A server with a vault password or Touch ID uses it as before, and agents still can't purge.
 - **`k2 desktop env` works in terminals K2 opens for an agent** (`k2 terminal spawn --agent <name>`), whatever program they run. A person's own shell tab is still refused.
+### Licences
+- Licence notices for third-party code now ship with the app, the server package and the web app.
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

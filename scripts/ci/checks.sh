@@ -47,6 +47,8 @@ step() { echo ""; echo "── checks: $* ──"; }
 
 part_web() {
     step "Arch/Omarchy packaging lock";            bash tests/packaging/arch-omarchy-bundle.sh
+    step "third-party notices ship in every output (no build)"; bash scripts/check-third-party-notices.sh
+    step "third-party notices check on broken copies"; bash tests/packaging/third-party-notices.sh
     step "Arch PKGBUILD sources, sums, syntax";    bash scripts/check-arch-pkgbuild.sh
     step "Arch PKGBUILD check on broken fixtures"; bash tests/packaging/check-arch-pkgbuild.sh
     step "Published Arch package never changes (stubbed)"; bash tests/packaging/arch-upload-pkg.sh
@@ -148,6 +150,8 @@ part_web() {
     step "k2 desktop on a Linux server (stub daemon)"; bash tests/cli/desktop_virtual_cli.sh
     step "k2 desktop ask and the Mac's permission steps (stub daemon)"; bash tests/cli/desktop_ask_cli.sh
     step "vite build hosted web";                  bun run vite:build:web
+    step "the web build carries the third-party notices"
+    bash scripts/check-third-party-notices.sh --web-out "out/web/app/$(node -p 'require("./package.json").version')"
 }
 
 part_rust_check() {

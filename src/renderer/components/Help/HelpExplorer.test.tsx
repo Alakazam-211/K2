@@ -112,6 +112,26 @@ describe('the rail lists the CLI tools and the pages', () => {
     expect(screen.getByTestId('help-noun-k2:vault')).toBeTruthy()
   })
 
+  // Kessel Steward G2: the web app links the licence notices its build
+  // carries (scripts/notices/web-notices-plugin.mjs); the desktop app has
+  // them in its resources, so no link there.
+  it('the web app links Third-party notices under Pages; the desktop app does not', () => {
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
+    expect(screen.queryByTestId('help-rail-notices')).toBeNull()
+    cleanup()
+    vi.stubEnv('VITE_WEB', 'true')
+    try {
+      render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
+      const link = screen.getByTestId('help-rail-notices')
+      expect(link.textContent).toBe('Third-party notices')
+      expect(link.getAttribute('href')).toBe(`${import.meta.env.BASE_URL}notices/index.html`)
+      expect(link.getAttribute('target')).toBe('_blank')
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('a family shows only its nouns; k2-node shows its commands', () => {
     render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     fireEvent.click(screen.getByTestId('help-rail-k2-mail'))

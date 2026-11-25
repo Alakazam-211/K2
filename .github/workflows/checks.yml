@@ -32,6 +32,14 @@ jobs:
       - name: Arch/Omarchy packaging lock (O14–O27 files)
         run: bash tests/packaging/arch-omarchy-bundle.sh
 
+      # Kessel Steward G2/G3: the third-party notices file ships in the app,
+      # the server .deb, the Arch package and the web build.
+      - name: Third-party notices ship in every output (no build)
+        run: bash scripts/check-third-party-notices.sh
+
+      - name: Third-party notices check on broken copies
+        run: bash tests/packaging/third-party-notices.sh
+
       # The Arch package only builds on k2-arch after a tag. These are the
       # text-level breaks (sum drift, missing source, shell syntax) that
       # do not need Arch. 0.43.0 died at the tag on a stale k2.install sum.
@@ -261,6 +269,9 @@ jobs:
       # publish. Catches Vite graph / asset / CSS regressions typecheck misses.
       - name: Vite build hosted web
         run: bun run vite:build:web
+
+      - name: The web build carries the third-party notices
+        run: bash scripts/check-third-party-notices.sh --web-out "out/web/app/$(node -p 'require("./package.json").version')"
 
   rust:
     name: cargo check -D warnings (k2-core, k2-daemon)

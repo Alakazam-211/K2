@@ -27,6 +27,7 @@ import {
   type SearchResult,
 } from './cli-explorer'
 import { CLI_NAME, PRODUCT_NAME } from '@/lib/brand'
+import { isWebClient } from '@/lib/is-web'
 
 const MONO = "'MesloLGM Nerd Font', Menlo, Monaco, monospace"
 const SANS = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif"
@@ -659,6 +660,20 @@ export default function HelpExplorer({
               Glossary
               {glossary.status === 'error' ? <span className="text-[var(--color-text-muted)]"> · offline</span> : null}
             </RailButton>
+            {isWebClient() ? (
+              // The web build's licence notices (scripts/notices/web-notices-plugin.mjs).
+              // The desktop app carries the same files in its resources.
+              <a
+                href={`${import.meta.env.BASE_URL}notices/index.html`}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="help-rail-notices"
+                className="block w-full text-left truncate py-[3px] pr-2 text-[12px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] no-underline"
+                style={{ paddingLeft: 10 }}
+              >
+                Third-party notices
+              </a>
+            ) : null}
           </nav>
           <div ref={mainRef} className="flex-1 min-w-0 overflow-y-auto" style={{ padding: '12px 18px 18px' }} data-testid="help-main">
             {target.kind === 'tool' && tool ? renderTool(tool) : null}

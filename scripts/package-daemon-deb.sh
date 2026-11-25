@@ -12,6 +12,9 @@
 #                                                 switch runs it)
 #   /usr/lib/systemd/user/k2-daemon.service     — systemd USER unit
 #   /usr/lib/systemd/user/k2-daemon-home.service — creates ~/.k2 first
+#   /usr/share/doc/k2-daemon/THIRD-PARTY-NOTICES.md — third-party licence
+#                                                 notices (resources/)
+#   /usr/share/doc/k2-daemon/LICENSE.md         — K2's own licence
 #
 # The unit mirrors the macOS launchd agent (dev.k2.daemon, see
 # crates/k2-client/src/wake.rs `DaemonPlist::canonical`): plain
@@ -109,6 +112,13 @@ install -D -m 0755 "$NODE_BIN" "$PKGROOT/usr/bin/k2-node"
 # The k5 command's program, where k2-client's cli_install looks for it
 # (beside the daemon). Off by default.
 install -D -m 0755 "$K5_BIN" "$PKGROOT/usr/bin/k5-cli"
+# Licence notices (Kessel Steward G3, release sign-off area): the binaries
+# above carry third-party code (the PostgreSQL parser, SQLite, ...) whose
+# licences want their notices shipped with it.
+# scripts/check-third-party-notices.sh checks the built .deb below.
+install -D -m 0644 "$PROJECT_DIR/resources/THIRD-PARTY-NOTICES.md" \
+    "$PKGROOT/usr/share/doc/k2-daemon/THIRD-PARTY-NOTICES.md"
+install -D -m 0644 "$PROJECT_DIR/LICENSE.md" "$PKGROOT/usr/share/doc/k2-daemon/LICENSE.md"
 install -d "$PKGROOT/usr/lib/systemd/user"
 cat > "$PKGROOT/usr/lib/systemd/user/k2-daemon.service" <<'UNIT'
 # k2-daemon systemd USER unit — Linux twin of the macOS launchd agent
@@ -207,5 +217,6 @@ OUT_DIR="$PROJECT_DIR/dist"
 mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/k2-daemon_${VERSION}_${ARCH}.deb"
 dpkg-deb --build --root-owner-group "$PKGROOT" "$OUT"
+bash "$PROJECT_DIR/scripts/check-third-party-notices.sh" --deb "$OUT"
 echo "package-daemon-deb: built $OUT"
 dpkg-deb --info "$OUT"

@@ -198,6 +198,19 @@ pub fn enc_path(name: &str) -> String {
         .collect()
 }
 
+/// A redirect from the source (0.46.18): the egress client follows none,
+/// and K2 doesn't yet re-vet each hop, so the import stops and says so.
+/// 0.46.19: up to 3 hops, each re-vetted through the egress gate.
+pub const REDIRECT_NOT_FOLLOWED: &str = "the source answered a redirect; K2 doesn't follow it yet";
+
+fn redirect_refusal(what: &str, r: &reqwest::Response) -> StorageError {
+    let to = r.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).and_then(|l| url::Url::parse(l).ok()).and_then(|u| u.host_str().map(str::to_string));
+    StorageError::unavailable(match to {
+        Some(h) => format!("{what}: {REDIRECT_NOT_FOLLOWED} (HTTP {}, to {h})", r.status()),
+        None => format!("{what}: {REDIRECT_NOT_FOLLOWED} (HTTP {})", r.status()),
+    })
+}
+
 fn retryable(s: reqwest::StatusCode) -> bool {
     s.as_u16() == 429 || s.is_server_error()
 }
@@ -220,6 +233,7 @@ async fn src_json(c: &reqwest::Client, src: &Source, method: reqwest::Method, pa
                 let text = r.text().await.map_err(|e| StorageError::unavailable(format!("{url}: {e}")))?;
                 return serde_json::from_str(&text).map_err(|e| StorageError::unavailable(format!("{url}: not JSON: {e}")));
             }
+            Ok(r) if r.status().is_redirection() => return Err(redirect_refusal(&url, &r)),
             Ok(r) if retryable(r.status()) => last = format!("{url}: HTTP {}", r.status()),
             Ok(r) => {
                 let st = r.status();
@@ -301,6 +315,7 @@ async fn fetch(c: &reqwest::Client, src: &Source, o: &SrcObject, part: &PathBuf)
             200 => false,
             // The partial file is already the whole object.
             416 if have > 0 && o.size() == Some(have) => return Ok(()),
+            _ if st.is_redirection() => return Err(redirect_refusal(&format!("{}/{}", o.bucket, o.name), &resp)),
             _ if retryable(st) => {
                 last = format!("HTTP {st}");
                 backoff(t).await;
@@ -686,6 +701,28 @@ mod tests {
         assert_eq!(etag_md5("\"5eb63bbbe01eeed093cb22bb8f5acdc3-4\""), None, "a multipart eTag is not an MD5");
         assert_eq!(etag_md5("W/\"x\""), None);
         assert_eq!(enc_path("org 1/a#b/c%.jpg"), "org%201/a%23b/c%25.jpg");
+    }
+
+    /// A source that answers a redirect (0.46.18): the import stops with
+    /// REDIRECT_NOT_FOLLOWED and names the host it was sent to; nothing is
+    /// fetched from it. (Test builds let the loopback mock's IP literal
+    /// through the egress gate; release builds refuse it.)
+    #[tokio::test]
+    async fn a_redirect_from_the_source_is_refused_by_name() {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let srv = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf).unwrap();
+            s.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://cdn.example.com/storage/v1/bucket\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let src = Source { base: format!("http://127.0.0.1:{port}"), key: "k".into() };
+        let c = client(&src).expect("a test build reaches the loopback mock");
+        let e = src_buckets(&c, &src).await.expect_err("a redirect is no bucket list");
+        assert!(e.message.contains(REDIRECT_NOT_FOLLOWED) && e.message.contains("cdn.example.com"), "{}", e.message);
+        srv.join().unwrap();
     }
 
     #[test]

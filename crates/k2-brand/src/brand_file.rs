@@ -1779,7 +1779,7 @@ pub const RETIRED: &[RetiredName] = &[RetiredName { name: "abc", block_begin: "#
         let text =
             "id = \"gd\"\nschema = 1\n[names]\nproduct = \"Globex Desk\"\n[cli]\nname = \"gd\"\n\
             aliases = [{ name = \"gdold\", mode = \"notice\" }]\n";
-        let t = TempBrand::new("apart", Some(&partner(text)));
+        let t = TempBrand::new("markers-apart", Some(&partner(text)));
         let out = render(&load(&t.file(), &default_file()).expect("loads"));
         for line in [
             "pub const PATH_BLOCK_BEGIN: &str = \"# >>> Globex Desk CLI >>>\";\n",

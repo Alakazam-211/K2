@@ -34,6 +34,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Voice
 - **Sew 0.11.4: calls use less battery on weak connections.**
+- **Sew 0.11.5: security updates in its TLS and mail libraries.**
 
 ### Recording calls
 - **Recording stays off until the server's owner turns it on.** Nothing is recorded on a new or updated server. "Recording on this server" and "Record calls in direct messages" are two separate switches, both off. The owner or an admin turns each one on in person, with Touch ID, their login or the vault password. An agent can't turn either on: it asks on a card, and the person who allows it there confirms the same way.

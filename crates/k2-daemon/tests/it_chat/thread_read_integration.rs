@@ -700,29 +700,14 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0]["data"]["badgeKey"], gina_key.as_str(), "{}", got[0]);
         assert_eq!(got[0]["body"], format!("New message in {project_name}"), "the phone's previews off: content-free: {}", got[0]);
-        // The owner's switch off (her phone's previews back on): content-free
-        // again. A second project, so the push isn't held in the first one's
-        // window.
-        ok(
-            port,
-            "POST",
-            &format!("/cli/push/register-device?token={gina}"),
-            Some(serde_json::json!({ "deviceId": gina_dev, "platform": "apns", "token": format!("apns-gina-{}", uuid::Uuid::new_v4()), "previews": true })),
-        );
-        ok(port, "POST", &format!("/cli/settings/update?token={OWNER_TOKEN}"), Some(serde_json::json!({ "pushMessagePreviews": false })));
-        let name2 = format!("Push2 {}", &conv[..6]);
-        let g2 = ok(port, "POST", &format!("/cli/project-group/create?token={OWNER_TOKEN}"), Some(serde_json::json!({ "name": name2 })));
-        let gid2 = g2["group"]["id"].as_str().or_else(|| g2["id"].as_str()).unwrap_or_else(|| panic!("group id: {g2}")).to_string();
-        let mark = gateway_mark();
-        ok(port, "POST", &format!("/cli/project-group/msg?token={OWNER_TOKEN}"), Some(serde_json::json!({ "group": gid2, "body": "status" })));
-        let got = wait_pushes(mark, 1, |p| p["data"]["kind"] == "project" && p["data"]["groupId"] == gid2.as_str());
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0]["body"], format!("New message in {name2}"), "the owner's switch off: content-free: {}", got[0]);
 
         // Privacy (0.46.1): nothing this test sent through the relay names a
         // person: no `principal` key, no username, not the owner.
         let all: Vec<J> = gateway_calls().lock().expect("calls")[test_start..].iter().map(|c| c["payload"].clone()).collect();
-        assert_eq!(all.len(), 6, "2 Thread + 1 muted-Thread + 3 project pushes");
+        // Five: on the shared push token a server has 5 Thread-bucket pushes
+        // an hour, and project chat pushes share that bucket since P6. The
+        // owner's switch off is its own test below (a fresh daemon).
+        assert_eq!(all.len(), 5, "2 Thread + 1 muted-Thread + 2 project pushes");
         for p in &all {
             assert!(p["data"].get("principal").is_none(), "principal in {p}");
             let wire = p.to_string();
@@ -734,6 +719,35 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         for (tok, id) in [(OWNER_TOKEN, owner_dev), (gina.as_str(), gina_dev)] {
             ok(port, "POST", &format!("/cli/push/unregister-device?token={tok}"), Some(serde_json::json!({ "deviceId": id })));
         }
+    });
+}
+
+/// The owner's push_message_previews switch off (P6, 0.46.18): a project
+/// chat push still goes, content-free ("New message in <project>"), never
+/// with the line. Its own daemon: the shared push token's Thread bucket (5
+/// an hour) is the other test's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_project_push_with_the_owners_previews_off_still_goes_content_free() {
+    let _g = lock();
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = d.port;
+        isolate_read_state();
+        let gina = login(port, "trpgina2");
+        let _gina_dev = register(port, &gina, "gina2");
+        let gina_key = unread(port, &gina)["badgeKey"].as_str().expect("gina badgeKey").to_string();
+        ok(port, "POST", &format!("/cli/settings/update?token={OWNER_TOKEN}"), Some(serde_json::json!({ "pushMessagePreviews": false })));
+        let name = format!("Quiet {}", &uuid::Uuid::new_v4().to_string()[..6]);
+        let g = ok(port, "POST", &format!("/cli/project-group/create?token={OWNER_TOKEN}"), Some(serde_json::json!({ "name": name })));
+        let gid = g["group"]["id"].as_str().or_else(|| g["id"].as_str()).unwrap_or_else(|| panic!("group id: {g}")).to_string();
+        let mark = gateway_mark();
+        ok(port, "POST", &format!("/cli/project-group/msg?token={OWNER_TOKEN}"), Some(serde_json::json!({ "group": gid, "body": "status update" })));
+        let got = wait_pushes(mark, 1, |p| p["data"]["kind"] == "project" && p["data"]["groupId"] == gid.as_str());
+        assert_eq!(got.len(), 1, "the switch off still sends the push: {got:?}");
+        assert_eq!(got[0]["data"]["badgeKey"], gina_key.as_str(), "{}", got[0]);
+        assert_eq!(got[0]["body"], format!("New message in {name}"), "content-free: {}", got[0]);
+        assert!(!got[0].to_string().contains("status update"), "{}", got[0]);
+        drop(d);
     });
 }
 

@@ -29,8 +29,14 @@ use std::ptr::NonNull;
 /// # Ownership and lifetime
 ///
 /// - The handle holds a strong reference (a retain) on the session; each
-///   clone takes another, and dropping one releases it. It is `Send` and
-///   `Sync`.
+///   clone takes another, and dropping one releases it. It is `Send`,
+///   `Sync`, `Clone` and `Debug`: holding, cloning, sending and dropping it
+///   need no `unsafe`. Only [`capture_session`](ApplePreview::capture_session)
+///   and [`new_preview_layer`](ApplePreview::new_preview_layer) are `unsafe`
+///   to call.
+/// - Take it from the camera source itself, right after opening it: a
+///   wrapper `FrameSource` that doesn't forward `apple_preview` answers
+///   `None`.
 /// - The session runs while the source is open. Pausing the source
 ///   ([`FrameSource::set_paused`]) stops only the frames to the caller: the
 ///   session, and so the preview, keeps running. An interruption (iOS: a
@@ -39,8 +45,12 @@ use std::ptr::NonNull;
 /// - Dropping the source stops the session, and once a handle has been
 ///   taken, also takes the camera input and the source's video output out
 ///   of it. A layer or handle that outlives the source then holds a
-///   stopped, empty session: no camera, no new frames. Take the layer down
-///   when the source goes.
+///   stopped, empty session: no camera, no new frames. kessel-video doesn't
+///   clear the layer's picture, and whether AVFoundation shows the last
+///   frame or nothing once the input is gone is not promised (a stopped
+///   preview keeps its last frame), so never rely on it going black: take
+///   the layer down (or hide it) when the source goes. Each camera flip or
+///   reopen is a new source with a new session, so it needs a new layer.
 /// - [`capture_session`](ApplePreview::capture_session) lends the pointer
 ///   (+0); [`new_preview_layer`](ApplePreview::new_preview_layer) gives the
 ///   caller an owned layer (+1). The layer keeps its own strong reference

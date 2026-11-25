@@ -300,10 +300,20 @@ On macOS and iOS:
   never mirrored. kessel-video never turns the layer: in a portrait-only
   interface AVFoundation's default is right; an interface that rotates
   sets the layer connection's rotation from
-  `AVCaptureDevice.RotationCoordinator`'s preview angle. Dropping the
-  source stops the session and empties it, so take the layer down then.
+  `AVCaptureDevice.RotationCoordinator`'s preview angle.
   `capture_session()` lends the session itself for a host that builds its
-  own preview, under the rules in its safety docs.
+  own preview, under the rules in its safety docs. Take the handle from the
+  camera source right after `open_camera`, before wrapping the source: a
+  wrapper `FrameSource` that doesn't forward `apple_preview` answers
+  `None`. The handle is `Send`, `Sync`, `Clone` and `Debug`; holding,
+  cloning and dropping it needs no `unsafe`.
+- **When the source drops**, its session stops and loses its camera input
+  and video output. The layer then gets no new frames, and kessel-video
+  doesn't clear it: it may keep showing the last frame (a stopped preview
+  layer does), so don't count on it going black. Remove or hide the layer
+  when you drop the source. A camera flip or a reopen is a new source with
+  a new session: make a new layer for it and take the old one down in the
+  same main-thread step.
 
   ```swift
   // ptr: the NonNull<c_void> from new_preview_layer, on the main thread.

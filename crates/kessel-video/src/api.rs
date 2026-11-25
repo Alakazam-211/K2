@@ -50,6 +50,16 @@ pub trait FrameSource: Send {
     /// sources, the fake and null backends' sources, and (the default)
     /// sources from other crates. Each call gives a new handle on the same
     /// session.
+    ///
+    /// A wrapper that forwards `FrameSource` method by method answers the
+    /// default `None` here unless it forwards this method too. So take the
+    /// handle from the camera source itself, right after
+    /// [`VideoBackend::open_camera`] returns and before wrapping it.
+    ///
+    /// [`crate::ApplePreview`] is `Send`, `Sync`, `Clone` and `Debug`.
+    /// Holding, cloning, sending and dropping it needs no `unsafe`; only
+    /// its two pointer methods (`capture_session`, `new_preview_layer`)
+    /// are `unsafe` to call.
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
     fn apple_preview(&self) -> Option<crate::ApplePreview> {
         None

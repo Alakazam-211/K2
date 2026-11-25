@@ -170,7 +170,7 @@ yours.
 | 4 | ceiling-zero | `scripts/brand/ceiling-zero-gate.sh`: every command line is answered by K5's own program. A tag where any command still falls through to the old shell CLI (which prints K5's names) is refused, and so is one with a run-time row (class R: a command under an unusual environment or input) when your brand has no shell CLI |
 | 5 | lint | `scripts/brand.sh lint` on your brand, then `--live` when `lint_live = on` |
 | 6 | build | K5's own Linux release build with `K2_BRAND_DIR` set to your brand folder. **SECRETS** for a real build: your mail sign-in clients |
-| 7 | judge | the output judges read everything the CLI prints for every help and study page: no other brand's name, and each of your names in its place. K5's own list of lines it still owes a fix ("debt") is not carried into your build: any such line fails it. Then every binary must carry your brand mark, and only yours |
+| 7 | judge | the output judges read everything the CLI prints for every help and study page: no other brand's name, and each of your names in its place. K5's own list of lines it still owes a fix ("debt") is not carried into your build: any such line fails it. Then every marked binary must carry your brand mark, and only yours, and no binary may carry a copy of the shell CLI, as text, packed or by its hash (`scripts/brand/check-no-bash.py`) |
 | 8 | keys | a report: does the build trust your update key, and none of K5's? |
 | 9 | check | in the ship job: the output is a real build (not a dry run) of your brand, unchanged since step 6; with `publish = on`, step 8 must pass |
 | 10 | sign | `hooks/sign.sh` with your signing key. **SECRETS** |

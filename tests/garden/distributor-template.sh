@@ -121,8 +121,9 @@ if scan "$T/bite" 2>/dev/null; then die "a planted two-character command passed 
 ok
 
 # ── the driver, on scratch repos ──────────────────────────────────────
-# A stand-in K5 repo: the brand tools of this tree, a ceiling file, a
-# Cargo.lock, and release tags with and without them.
+# A stand-in K5 repo: the brand tools of this tree, cli/k2 (what the
+# no-bash check looks for), a ceiling file, a Cargo.lock, and release tags
+# with and without them.
 U="$T/k5"
 CEIL="crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 git init -q "$U"
@@ -133,6 +134,7 @@ git -C "$U" add -A && git -C "$U" commit -qm old && git -C "$U" tag v0.46.9
 mkdir -p "$U/scripts" "$U/crates/k2-brand" "$U/crates/k2-release-keys/src" "$U/$(dirname "$CEIL")"
 cp -R "$HERE/scripts/brand" "$U/scripts/brand"
 cp "$HERE/scripts/brand.sh" "$U/scripts/brand.sh"
+mkdir -p "$U/cli" && cp "$HERE/cli/k2" "$U/cli/k2"
 cp -R "$HERE/brand" "$U/brand"
 echo "// stand-in" > "$U/crates/k2-brand/build.rs"
 echo "// stand-in" > "$U/crates/k2-release-keys/src/lib.rs"
@@ -159,6 +161,10 @@ git -C "$U" tag vp8-decoder-v0.1.2
 # never sees it, but check and dry-run take any release tag.
 lockfile "libc 0.2.170" "libgit2-sys 0.17.0+1.8.1" "pg_query 6.2.1"
 release v0.46.10
+# A tag from before the no-bash check: the other brand tools, but no
+# scripts/brand/check-no-bash.py. Older than first_tag too.
+git -C "$U" rm -q scripts/brand/check-no-bash.py
+release v0.46.11
 sha() { git -C "$U" rev-parse "$1^{commit}"; }
 
 # A stand-in distributor repo: the template, with K5 on disk.
@@ -187,6 +193,18 @@ pick; [ "$out" = "v0.47.2 $(sha v0.47.2)" ] || die "pick: the tag once its hold 
 drv check v0.46.9
 [ "$rc" = 1 ] && [[ "$out" == *"REFUSED at step 2: v0.46.9 has no scripts/brand.sh: it predates brand builds"* ]] \
     || die "check: an old tag: $out"; ok
+drv check v0.46.11
+[ "$rc" = 1 ] && [[ "$out" == *"REFUSED at step 2: v0.46.11 has no scripts/brand/check-no-bash.py: it predates brand builds"* ]] \
+    && [[ "$out" != *"step 3"* ]] || die "check: a tag with no no-bash check: $out"; ok
+# Step 7 runs the no-bash check on every binary it built, the root helper
+# too, with the tag's cli/k2 (the build needs cargo, so this reads the
+# driver), and a refusal stops the build.
+grep -qF 'python3 "$K5/scripts/brand/check-no-bash.py" --cli "$K5/cli/k2" $BINS)' "$D" \
+    || die "step 7 does not run check-no-bash.py over \$BINS"
+grep -qF '|| refuse "a binary carries a copy of the shell CLI (above)"' "$D" || die "step 7 does not refuse on a copy"
+[[ " $(sed -n 's/^BINS="\(.*\)"$/\1/p' "$D") " == *" k2-root-helper "* ]] || die "BINS has no k2-root-helper"
+[ "$(sed -n '/^    step 7 /,/^    step 8 /p' "$D" | grep -c 'check-no-bash.py')" = 1 ] || die "the no-bash check is not in step 7"
+ok
 drv check v0.47.0
 [ "$rc" = 1 ] && [[ "$out" == *"ceiling-zero: REFUSED"* ]] && [[ "$out" == *"REFUSED at step 4"* ]] \
     || die "check: a tag that falls through: $out"; ok

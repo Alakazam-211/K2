@@ -34,8 +34,10 @@
 #   6 build     K5's Linux release build with K2_BRAND_DIR = your brand
 #               folder (SECRETS for a real build: your mail sign-in clients)
 #   7 judge     the CLI's output names your brand only (the output judges,
-#               with none of K5's debt rows), and every binary carries your
-#               brand mark alone (scripts/brand/check-brand-mark.py)
+#               with none of K5's debt rows), every marked binary carries
+#               your brand mark alone (scripts/brand/check-brand-mark.py),
+#               and no binary carries a copy of the shell CLI, as text,
+#               packed or by its hash (scripts/brand/check-no-bash.py)
 #   8 keys      a report: the build trusts your update key and none of K5's
 #   9 check     the output is a real build of your brand, unchanged; with
 #               publish = on, step 8's report must pass
@@ -162,8 +164,8 @@ TOOLS="scripts/brand.sh scripts/brand/lint.py brand/reserved-names.txt
 scripts/brand/licence-gate.sh scripts/brand/copyleft-crates.txt
 scripts/brand/ceiling-zero-gate.sh scripts/brand/collect-outputs.sh
 scripts/brand/output-judges.py scripts/brand/output-keep.txt
-scripts/brand/check-brand-mark.py crates/k2-brand/build.rs
-crates/k2-release-keys/src/lib.rs"
+scripts/brand/check-brand-mark.py scripts/brand/check-no-bash.py cli/k2
+crates/k2-brand/build.rs crates/k2-release-keys/src/lib.rs"
 
 gates() { # gates <tag> <sha or empty> <dry: yes|no>
     local tag="$1" sha="$2" dry="$3" got f last id
@@ -304,7 +306,7 @@ cmd_build() { # cmd_build <tag> <sha> <out> <dry>
     export K2_BRAND_DIR="$BRAND"
     build_linux "$C_target" "$out" "$dry"
 
-    step 7 "the output judges and the brand mark"
+    step 7 "the output judges, the brand mark and no shell CLI"
     judge="$WORK/judge"
     rm -rf "$judge"
     mkdir -p "$judge"
@@ -319,6 +321,11 @@ cmd_build() { # cmd_build <tag> <sha> <out> <dry>
     # shellcheck disable=SC2086
     (cd "$out/bin" && python3 "$K5/scripts/brand/check-brand-mark.py" --brand "$id" $MARKED) \
         || refuse "a binary is not marked as your brand alone"
+    # Every binary, the root helper too: none may carry the shell CLI.
+    # cli/k2 is only what the check looks for; nothing runs it.
+    # shellcheck disable=SC2086
+    (cd "$out/bin" && python3 "$K5/scripts/brand/check-no-bash.py" --cli "$K5/cli/k2" $BINS) \
+        || refuse "a binary carries a copy of the shell CLI (above)"
 
     step 8 "which update keys the build trusts"
     k5_update_keys > "$out/k5-update-keys.txt"

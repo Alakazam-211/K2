@@ -483,7 +483,8 @@ _k2_py_session_sock_lines() {
     # The mark (_envn AGENT_CGROUP), read plainly: nothing else is needed
     # outside a placed session.
     [ -n "${K5_AGENT_CGROUP:-}${K2_AGENT_CGROUP:-}${K2SO_AGENT_CGROUP:-}" ] || return 0
-    _cli_skip_uds && return 0
+    # Not _cli_skip_uds: the Python routes only a loopback request with
+    # exactly this passport (a remote host's token never matches).
     sock="$(_hook_sock)"
     { [ -n "$sock" ] && [ -S "$sock" ]; } || return 0
     h="$(printf '%s' "$SCOPED_TOKEN" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)"
@@ -788,6 +789,10 @@ class _K2NoRedirect(_k2_ur.HTTPRedirectHandler):
         k2_redirect_refused("refused: %s answered %s, sending K2 to %s; K2 does not follow a redirect with your token or password, so nothing was sent there" % (here, code, there))
 
 _k2_ur.install_opener(_k2_ur.build_opener(_K2ProxyRule(), _K2NoRedirect(), K2TLSHandler()))
+# A block that ran _K5_PY_HTTP first: its session socket handler goes on
+# the new opener too, so the session passport still goes over the socket.
+if "_K5SessionSock" in globals():
+    _k2_ur._opener.add_handler(_K5SessionSock())
 '
 export _K2_PY_PROXY_RULE
 # _K2_PY_TLS: which CAs the embedded Python trusts for https, in one place.
@@ -899,7 +904,10 @@ _k2_via_session_sock() {
     # mark): elsewhere a passport works over TCP as before.
     _envn_into mark AGENT_CGROUP
     [ -n "$mark" ] || return 1
-    _cli_skip_uds && return 1
+    # _cli_skip_uds doesn't count: a call kept off the cell socket's own
+    # routes (_K2_FORCE_TCP) still carries the passport to this machine's
+    # daemon, and a remote host's call carries its own token, which the
+    # credential test below never takes for the passport.
     case "$url" in http://127.0.0.1:*|http://localhost:*|http://\[::1\]:*) ;; *) return 1 ;; esac
     case "$cfg" in *"Authorization: Bearer ${SCOPED_TOKEN}"*) ;; *) return 1 ;; esac
     for a in "$@"; do

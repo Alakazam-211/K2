@@ -32,8 +32,8 @@
 //! compute verb with the compute library's own settings in the
 //! environment ([`cp::shells`]), a word that is not UTF-8, `HOOK_SOCK` set with a `CODEX_` variable exported, a
 //! port that is set but is no number, a `python3` the binary can't tell,
-//! and a `--workspace` folder bash's `cd` would treat apart (`CDPATH`
-//! set, or a folder it can't enter).
+//! and a `--workspace` folder bash's `cd` would treat apart (one `CDPATH`
+//! moves it to, or a folder it can't enter).
 
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
@@ -605,20 +605,15 @@ fn verb(words: &[&str]) -> Result<Form, Form> {
     Ok(form)
 }
 
-/// A `--workspace` selection the binary leaves to the shell: bash's
-/// `cd` would read `CDPATH` for it, or can't enter it.
+/// A `--workspace` selection the binary leaves to the shell: `CDPATH`
+/// moves bash's `cd` to another folder for it ([`super::sim::cd_moved`]),
+/// or it can't enter it.
 pub fn sel_is_shells(sel: &str) -> bool {
     let p = Path::new(sel);
     if !p.is_dir() {
         return false;
     }
-    let cdpath = std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
-    let dotted = sel.starts_with('/')
-        || sel == "."
-        || sel == ".."
-        || sel.starts_with("./")
-        || sel.starts_with("../");
-    (cdpath && !dotted) || !enterable(p)
+    super::sim::cd_moved(sel) || !enterable(p)
 }
 
 #[cfg(unix)]

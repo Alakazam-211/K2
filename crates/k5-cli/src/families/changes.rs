@@ -31,14 +31,15 @@
 //! Hand-backs to the shell, decided before anything is printed or sent:
 //! a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port
 //! curl won't take, a `python3` the binary can't tell, and a
-//! `--workspace` folder `cd` reads as an option or one `CDPATH` would
-//! move (bash prints its own error there). An answer that is not
+//! `--workspace` folder `cd` reads as options it takes or one `CDPATH`
+//! moves ([`crate::shellpath::cd_to_shell`]). One named as an option `cd`
+//! doesn't take is `cd`'s usage error ([`crate::shellpath::cd_refused`]). An answer that is not
 //! UTF-8 is read with U+FFFD for each bad byte.
 
 pub mod diff;
 pub mod render;
 
-use super::sim::{cd_pwd, cd_searches, die, logical_pwd, Die};
+use super::sim::{cd_pwd, die, logical_pwd, Die};
 use super::{curl_port, get, py_space, Shown};
 use crate::daemon::{self, Settings};
 use crate::exit::Exit;
@@ -865,11 +866,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             ));
         }
         if let Some(ws) = verb.ws() {
-            let cdpath = std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
-            if !ws.is_empty()
-                && Path::new(ws).is_dir()
-                && (ws.starts_with('-') || (cdpath && cd_searches(ws)))
-            {
+            if !ws.is_empty() && Path::new(ws).is_dir() && crate::shellpath::cd_to_shell(ws) {
                 return None;
             }
         }
@@ -931,6 +928,13 @@ fn run_with(
             return Exit::Usage;
         }
         _ => {}
+    }
+    // `_changes_target`'s `cd` with a folder named as an option it
+    // doesn't take: its error, and `set -e` ends the run.
+    if let Some(ws) = verb.ws().filter(|w| !w.is_empty() && Path::new(w).is_dir()) {
+        if let Some(exit) = crate::shellpath::cd_refused(ws) {
+            return exit;
+        }
     }
     settings.port = settings.port_text.as_deref().and_then(curl_port);
     let client = match settings.client(would_refuse) {

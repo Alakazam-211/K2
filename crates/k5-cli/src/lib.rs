@@ -105,6 +105,7 @@ pub mod prompt;
 pub mod python;
 pub mod retired;
 pub mod route;
+pub mod shellpath;
 pub mod spec;
 pub mod sysrand;
 pub mod text;

@@ -135,7 +135,7 @@ fn the_texts_are_the_shell_s() {
         assert!(text.contains(t), "sim.sh has no {t:?}");
     }
     // The binary says its own name where the shell says k2.
-    let d = parse("stop", &["x".into()], &|_| true, false);
+    let d = parse("stop", &["x".into()], &|_| true, &|_| false);
     assert_eq!(
         d,
         Parsed::Die(usage(format!("{n} sim stop takes no arguments: x")))
@@ -144,7 +144,7 @@ fn the_texts_are_the_shell_s() {
 
 fn plan(sub: &str, rest: &[&str]) -> Parsed {
     let rest: Vec<String> = rest.iter().map(|w| w.to_string()).collect();
-    parse(sub, &rest, &|p| p == "app.apk", false)
+    parse(sub, &rest, &|p| p == "app.apk", &|_| false)
 }
 
 fn act_body(sub: &str, rest: &[&str], ws: &str) -> String {

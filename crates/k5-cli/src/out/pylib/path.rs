@@ -237,7 +237,7 @@ pub fn expanduser(p: &str, _home: Option<&str>) -> Option<String> {
 /// (Python's `KeyError`); `None` for a folder that is not UTF-8, a
 /// lookup out of memory, or no database here.
 #[cfg(unix)]
-fn passwd_home(name: Option<&str>) -> Option<Option<String>> {
+pub(crate) fn passwd_home(name: Option<&str>) -> Option<Option<String>> {
     use std::ffi::{CStr, CString};
     let name = match name {
         Some(n) => Some(CString::new(n).ok()?),
@@ -282,6 +282,12 @@ fn passwd_home(name: Option<&str>) -> Option<Option<String>> {
     }
 }
 
+
+/// No password database to read here: the binary can't tell.
+#[cfg(not(unix))]
+pub(crate) fn passwd_home(_name: Option<&str>) -> Option<Option<String>> {
+    None
+}
 
 /// `cd <dir> && pwd` off Unix, where no shell runs it: `dir` from `pwd`
 /// unless it is absolute, `.` parts gone and each `..` taking one back,

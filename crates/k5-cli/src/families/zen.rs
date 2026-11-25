@@ -277,7 +277,7 @@ pub fn changes_hint_in(env: &Env, words: &[&str]) -> std::io::Result<()> {
     let Some(root) = env.first(&["K5_PROJECT_PATH", "K2_PROJECT_PATH", "K2SO_PROJECT_PATH"]) else {
         return Ok(());
     };
-    if env.get("HOME") == Some(root) {
+    if crate::offline::shell_home(env).as_deref() == Some(root) {
         return Ok(());
     }
     let dot = dot_dir(Path::new(root));

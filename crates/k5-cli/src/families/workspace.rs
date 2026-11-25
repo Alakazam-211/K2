@@ -178,8 +178,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         Form::Register(verb, Ok(ask)) => {
             let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
             let pwd = pwd.to_str()?.to_string();
-            let cdpath = std::env::var_os("CDPATH").is_some();
-            let path = register::path(verb, &ask.target, &pwd, cdpath)?;
+            let path = register::path(verb, &ask.target, &pwd, &super::sim::cd_moved)?;
             Ready::Register(verb, ask, path)
         }
         Form::Update(Ok(u)) => {

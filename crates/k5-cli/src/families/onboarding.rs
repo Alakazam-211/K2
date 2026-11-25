@@ -11,8 +11,9 @@
 //! 3. One request over TCP, its answer as it came (a refusal's body with
 //!    exit 0, as the shell's), and the EXIT trap's lines.
 //!
-//! The shell answers a folder `cd` can't enter (its own line names the
-//! script) and a set `CDPATH`, a word that is not UTF-8, a port curl
+//! A set `CDPATH` is read as `cd` reads it ([`crate::shellpath`]). The
+//! shell answers a folder `cd` can't enter (its own line names the
+//! script), a `CDPATH` that is not UTF-8, a word that is not UTF-8, a port curl
 //! won't take and a `python3` the binary can't tell. A line with `-h` or
 //! `--help` in it is the shell's too: since 0.46.17 it prints the
 //! onboarding help and sends nothing (`adopt --help` sent an adopt of a
@@ -24,6 +25,7 @@ use crate::exit::Exit;
 use crate::out;
 use crate::passport;
 use crate::prelude::{self, Closing};
+use crate::shellpath::{self, CdPath};
 use crate::transport::encode::quote;
 use crate::transport::{Call, Channel, Error};
 use k2_client::cli_name;
@@ -150,6 +152,21 @@ pub fn cd_pwd(pwd: &Path, dir: &str) -> Option<String> {
     crate::out::pylib::path::cd_pwd(pwd, dir)
 }
 
+/// `$(cd "$dir" && pwd)` from `pwd`, `CDPATH` read as `cd` reads it
+/// ([`shellpath::cdpath`]): a folder found through an entry that is not
+/// empty is printed by `cd` too, so the value holds it twice, on two
+/// lines. `None` where `cd` would fail (the shell's own line).
+fn cd_in(pwd: &Path, dir: &str) -> Option<String> {
+    match shellpath::cdpath(dir) {
+        CdPath::NotSearched | CdPath::NoMatch => cd_pwd(pwd, dir),
+        CdPath::Found { path, prints } => {
+            let to = cd_pwd(pwd, &path)?;
+            Some(if prints { format!("{to}\n{to}") } else { to })
+        }
+        CdPath::Unknown => None,
+    }
+}
+
 /// `k5 onboarding ...`: `args` is the whole command line after
 /// `argv[0]`. `None`: the shell CLI answers it.
 pub fn run(args: &[OsString]) -> Option<Exit> {
@@ -165,9 +182,6 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     if !crate::python::family_native(crate::python::here()) {
         return None;
     }
-    if std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty()) {
-        return None;
-    }
     let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
     // Where `cd` would fail, the shell's own line is the answer.
     let target = match &ask {
@@ -177,7 +191,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
             } else {
                 folder.clone()
             };
-            Some(cd_pwd(&pwd, &f)?)
+            Some(cd_in(&pwd, &f)?)
         }
         Ask::Stop(_) => None,
     };

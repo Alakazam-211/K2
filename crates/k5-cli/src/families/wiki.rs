@@ -56,8 +56,9 @@
 //! read or a control-plane base it doesn't send to itself, a word that is
 //! not UTF-8, a command line with `-h` or `--help` before any bare `--`
 //! ([`crate::front`]),
-//! a `--workspace` folder that `cd` reads as an option or that `CDPATH`
-//! would move (bash's own edges), a port that is set but is no port
+//! a `--workspace` folder that `cd` reads as options it takes or that
+//! `CDPATH` moves (bash's own edges; one named as an option `cd` doesn't
+//! take is `cd`'s usage error here), a port that is set but is no port
 //! curl takes, and a `python3` the binary can't tell. An answer that is
 //! not UTF-8 is read with U+FFFD for each bad byte, as
 //! [`super::inbox`].
@@ -507,13 +508,12 @@ fn base_refusal(url: &str) -> Option<String> {
         .then(|| crate::transport::remote::plain_http_line(url))
 }
 
-/// A `--workspace` folder bash's `cd` reads otherwise: an option (a
-/// leading `-`), or a relative name `CDPATH` would look for elsewhere.
+/// A `--workspace` folder bash's `cd` reads otherwise: options it takes
+/// (a leading `-`), or a relative name `CDPATH` moves to another folder
+/// ([`crate::shellpath::cd_to_shell`]; an option it doesn't take is its
+/// usage error, [`crate::shellpath::cd_refused`]).
 fn handed_back(ws: &str) -> bool {
-    let cdpath = std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
-    !ws.is_empty()
-        && Path::new(ws).is_dir()
-        && (ws.starts_with('-') || (cdpath && super::sim::cd_searches(ws)))
+    !ws.is_empty() && Path::new(ws).is_dir() && crate::shellpath::cd_to_shell(ws)
 }
 
 /// `_wiki_err CODE HINT`: its line on stderr.
@@ -557,6 +557,13 @@ fn run_with(args: &[OsString], form: Form, mut settings: Settings, connect: Conn
     };
     if verb == Verb::Location(true) {
         if let Some(exit) = approve_guard(&settings, o.json) {
+            return exit;
+        }
+    }
+    // `_wiki_apply_project`'s `cd` with a folder named as an option it
+    // doesn't take: its error, and `set -e` ends the run.
+    if !o.workspace.is_empty() && Path::new(&o.workspace).is_dir() {
+        if let Some(exit) = crate::shellpath::cd_refused(&o.workspace) {
             return exit;
         }
     }

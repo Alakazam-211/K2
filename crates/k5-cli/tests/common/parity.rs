@@ -77,6 +77,9 @@ pub const BULLETIN: &str =
 pub const GARBAGE: &[u8] = b"garbage\r\n\r\n";
 /// A case's setting for the stub's port, filled in for the side that runs.
 pub const PORT: &str = "{port}";
+/// A case's value for a variable that each side runs without (`HOME`
+/// too, which the rig sets otherwise).
+pub const UNSET: &str = "{unset}";
 
 pub fn cli_k2() -> PathBuf {
     let p = super::cli_src().join("../k2");
@@ -211,6 +214,11 @@ pub enum Compare {
     /// name filled in; the binary prints the template. That is
     /// `scripts/cli-parity.sh`'s named difference `doc-mktemp-wording`.
     MktempTried { stem: &'static str },
+    /// `cd` with a folder named as an option it doesn't take: bash's error
+    /// line starts with the script's path and line (`<cli/k2>: line <n>: `),
+    /// the binary's doesn't (K2's ruling, the named difference
+    /// `cd-option-prefix`). Everything as [`Compare::Exact`] but that.
+    CdOptionPrefix,
 }
 
 /// Each `k2-update.` followed by six letters or digits (the random part
@@ -508,12 +516,19 @@ impl Rig {
             .iter()
             .map(|(k, v)| (k.to_string(), self.fill(side, v)))
             .collect();
-        cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        for (k, v) in &env {
+            if v == UNSET {
+                cmd.env_remove(k);
+            } else {
+                cmd.env(k, v);
+            }
+        }
         if bash {
             cmd.env("K5_CLI_VIA", "rust");
             let lookup = |name: &str| {
                 env.iter()
                     .find(|(k, _)| k == name)
+                    .filter(|(_, v)| v != UNSET)
                     .map(|(_, v)| OsString::from(v))
             };
             let args: Vec<OsString> = self.argv(case).into_iter().map(OsString::from).collect();
@@ -923,6 +938,19 @@ impl Rig {
                 mask_temp_names(&r.stderr),
                 mask_temp_names(&b.stderr),
                 "{name}: stderr (mktemp's name masked)"
+            );
+        } else if c.compare == Compare::CdOptionPrefix {
+            let head = format!("{}: line ", cli_k2().display());
+            let after = b
+                .stderr
+                .strip_prefix(&head)
+                .and_then(|t| t.trim_start_matches(|ch: char| ch.is_ascii_digit()).strip_prefix(": "))
+                .unwrap_or_else(|| panic!("{name}: bash's cd error has no line prefix: {:?}", b.stderr));
+            assert_eq!(r.stderr, after, "{name}: stderr but bash's line prefix");
+            assert!(
+                r.stderr.starts_with("cd: -"),
+                "{name}: the binary's cd error: {:?}",
+                r.stderr
             );
         } else if let Compare::MktempTried { stem } = c.compare {
             let rust = (r.code, r.stderr.as_str());

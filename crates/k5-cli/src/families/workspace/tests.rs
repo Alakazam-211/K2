@@ -584,23 +584,23 @@ fn paths_as_bash_resolves_them() {
     assert_eq!(canonpath(&format!("{d}/a//b/")), Some(format!("{d}/a/b")));
     // `open`: a folder as `cd` names it, anything else as typed.
     assert_eq!(
-        path(Verb::Open, &format!("{d}/a/../a/b/"), "/x", false),
+        path(Verb::Open, &format!("{d}/a/../a/b/"), "/x", &|_| false),
         Some(format!("{d}/a/b"))
     );
     assert_eq!(
-        path(Verb::Open, "no such/dir", &d, false),
+        path(Verb::Open, "no such/dir", &d, &|_| false),
         Some("no such/dir".into())
     );
     assert_eq!(
-        path(Verb::Open, &format!("{d}/file"), "/x", false),
+        path(Verb::Open, &format!("{d}/file"), "/x", &|_| false),
         Some(format!("{d}/file"))
     );
     assert_eq!(
-        path(Verb::Open, &format!("//{}", &d[1..]), "/x", false),
+        path(Verb::Open, &format!("//{}", &d[1..]), "/x", &|_| false),
         None
     );
     assert_eq!(
-        path(Verb::Create, &format!("{d}/a"), "/x", true),
+        path(Verb::Create, &format!("{d}/a"), "/x", &|_| true),
         Some(format!("{d}/a"))
     );
     std::fs::remove_dir_all(&d).unwrap();

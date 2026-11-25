@@ -7,8 +7,8 @@
 //! line for line.
 //!
 //! The shell answers these itself (`None`): `-h` or `--help` anywhere,
-//! `app doctor` without `--store` (the box and reach doctors), `CDPATH`
-//! set, and a folder `cd` can't enter or whose path is not UTF-8 or ends
+//! `app doctor` without `--store` (the box and reach doctors), a folder
+//! `CDPATH` moves `cd` to ([`crate::families::sim::cd_moved`]), and a folder `cd` can't enter or whose path is not UTF-8 or ends
 //! in a newline.
 
 use super::call::{Cj, Ctx};
@@ -50,7 +50,7 @@ fn help(words: &[&str]) -> bool {
 /// `(cd "$p" && pwd -P)` for a folder `[ -d ]` found: `None` where the
 /// binary can't be sure to get what the shell gets.
 fn abs(folder: &str) -> Option<String> {
-    if std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty()) {
+    if crate::families::sim::cd_moved(folder) {
         return None;
     }
     let p = std::fs::canonicalize(folder).ok()?;

@@ -312,7 +312,7 @@ fn this_tz() -> String {
 fn here() -> String {
     match std::env::var("K2_PROJECT_PATH") {
         Ok(p) if !p.is_empty() => p,
-        _ => offline::shell_pwd(&Env::current())
+        _ => offline::shell_pwd_var(&Env::current())
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default(),
     }

@@ -130,7 +130,7 @@ pub fn parse(verb: &str, words: &[&str], here: &Here) -> Top {
             } else {
                 target
             };
-            match register::path(RegisterVerb::Open, target, &here.pwd, cdpath()) {
+            match register::path(RegisterVerb::Open, target, &here.pwd, &cd_moved) {
                 Some(p) => Top::Other(Ask::Preview(p)),
                 None => Top::Shell,
             }
@@ -138,8 +138,8 @@ pub fn parse(verb: &str, words: &[&str], here: &Here) -> Top {
     }
 }
 
-fn cdpath() -> bool {
-    std::env::var_os("CDPATH").is_some()
+fn cd_moved(dir: &str) -> bool {
+    crate::families::sim::cd_moved(dir)
 }
 
 fn remove(words: &[&str], here: &Here) -> Top {
@@ -177,7 +177,7 @@ fn remove(words: &[&str], here: &Here) -> Top {
     if target.is_empty() {
         return stop(&REMOVE_USAGE, Exit::Error);
     }
-    let Some(path) = register::path(RegisterVerb::Open, &target, &here.pwd, cdpath()) else {
+    let Some(path) = register::path(RegisterVerb::Open, &target, &here.pwd, &cd_moved) else {
         return Top::Shell;
     };
     Top::Other(Ask::Remove(Remove {

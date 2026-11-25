@@ -640,7 +640,7 @@ fn python_names() -> Vec<&'static str> {
     ]
     .concat()
     .into_iter()
-    .chain(["CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "HOME", "PWD"])
+    .chain(["CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "HOME"])
     .collect()
 }
 
@@ -662,6 +662,10 @@ pub fn run(args: &[OsString], words: &[&str]) -> Option<Exit> {
             v.to_str()?;
         }
     }
+    // `PWD` as bash exports it: one that names no folder is the real path.
+    crate::offline::shell_pwd_var(&crate::offline::Env::current())
+        .ok()?
+        .to_str()?;
     let mktemp = match &form {
         Form::Ask(Ok(w)) if w.reads_stdin() => Some(super::super::update::shell_program(
             &crate::offline::Env::current(),

@@ -119,7 +119,8 @@ pub fn parse(words: &[&str], resolve: &dyn Fn(&str) -> Option<String>) -> Option
                 ));
             }
             if !from.is_empty() && !from.starts_with('/') {
-                if std::env::var_os("CDPATH").is_some() {
+                // `CDPATH` read first: `cd` may find it there alone.
+                if super::sim::cd_moved(&from) {
                     return None;
                 }
                 if !std::path::Path::new(&from).is_dir() {
@@ -158,8 +159,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
         .collect::<Option<_>>()?;
     let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
     let pwd = pwd.to_str()?.to_string();
-    let cdpath = std::env::var_os("CDPATH").is_some();
-    let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, cdpath);
+    let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, &super::sim::cd_moved);
     let form = parse(&words, &resolve)?;
     if !python::family_native(python::here()) {
         return None;

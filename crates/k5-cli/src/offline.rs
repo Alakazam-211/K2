@@ -71,14 +71,30 @@ pub enum Handoff {
     Unreadable(PathBuf),
     /// A file the prelude reads with `$(cat …)` holds a NUL.
     Nul(PathBuf),
-    /// `PWD` is a path the shell would tidy (`.`, `..`, `//`).
+    /// The current folder has no path the system can give (`getcwd`
+    /// fails), or the shell's walk up from its `pwd` never reaches `/`.
     Pwd,
 }
 
-/// The environment, as one list.
+/// The environment, as one list, and where bash would find this user's
+/// home folder when `HOME` is not set ([`shell_home`]).
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     vars: Vec<(OsString, OsString)>,
+    passwd: Passwd,
+}
+
+/// Where the password database's home folder comes from.
+#[derive(Debug, Clone, Default)]
+enum Passwd {
+    /// Not looked up: the binary can't tell (the default for a made-up
+    /// environment, so a test never reads the real database).
+    #[default]
+    Unknown,
+    /// This machine's database.
+    System,
+    /// A fixed entry: this user's folder, or `None` for no entry (tests).
+    Entry(Option<OsString>),
 }
 
 impl Env {
@@ -86,16 +102,38 @@ impl Env {
     pub fn current() -> Env {
         Env {
             vars: std::env::vars_os().collect(),
+            passwd: Passwd::System,
         }
     }
 
-    /// An environment of these pairs (tests).
+    /// An environment of these pairs (tests). The password database is
+    /// not read: with no `HOME`, [`shell_home`] can't tell.
     pub fn of(pairs: &[(&str, &str)]) -> Env {
         Env {
             vars: pairs
                 .iter()
                 .map(|(k, v)| (OsString::from(k), OsString::from(v)))
                 .collect(),
+            passwd: Passwd::Unknown,
+        }
+    }
+
+    /// This environment with a fixed password database entry for this
+    /// user: its home folder, or `None` for no entry (tests).
+    pub fn with_passwd_home(mut self, dir: Option<&str>) -> Env {
+        self.passwd = Passwd::Entry(dir.map(OsString::from));
+        self
+    }
+
+    /// This user's home folder in the password database: `Some(None)`
+    /// for no entry, `None` when the binary can't tell.
+    fn passwd_home(&self) -> Option<Option<OsString>> {
+        match &self.passwd {
+            Passwd::Unknown => None,
+            Passwd::System => {
+                crate::out::pylib::path::passwd_home(None).map(|d| d.map(OsString::from))
+            }
+            Passwd::Entry(d) => Some(d.clone()),
         }
     }
 
@@ -155,7 +193,8 @@ pub fn prelude(env: &Env, cwd: &Path) -> Result<Prelude, Handoff> {
     if env.any_named("BASH_FUNC_") {
         return Err(Handoff::Startup("BASH_FUNC_".into()));
     }
-    let home = env.get("HOME").ok_or(Handoff::Unset("HOME"))?;
+    let home = shell_home(env).ok_or(Handoff::Unset("HOME"))?;
+    let home = home.as_os_str();
     let path = env.get("PATH").ok_or(Handoff::Unset("PATH"))?;
     let path = SearchPath::new(path);
     path.need("cat")?;
@@ -224,7 +263,7 @@ fn home_in(home: &OsStr) -> PathBuf {
     }
 }
 
-/// The shell's K2 home in `env` ([`home_in`]), when `HOME` is set. Off
+/// The shell's K2 home in `env` ([`home_in`] of [`shell_home`]). Off
 /// Unix, where there is no shell, the K2 home k2-client finds for `env`
 /// ([`crate::home::k2_home_with`]: the home override, else the K2 home
 /// folder in the user's home, `HOME` or else `USERPROFILE`).
@@ -232,7 +271,27 @@ pub fn shell_k2_home(env: &Env) -> Option<PathBuf> {
     if !cfg!(unix) {
         return windows_k2_home(env);
     }
-    env.get("HOME").map(home_in)
+    shell_home(env).map(|h| home_in(&h))
+}
+
+/// This user's home folder in this machine's password database:
+/// `Some(None)` for no entry, `None` when the binary can't tell.
+pub fn system_passwd_home() -> Option<Option<OsString>> {
+    Env::current().passwd_home()
+}
+
+/// The shell's `$HOME`: `HOME` as it is when it is set (empty too), else
+/// what bash puts there at start when it is not: this user's folder in
+/// the password database, or `/` when the database has no entry for this
+/// user (bash's `sh_get_home_dir`). bash doesn't export the one it sets,
+/// so a program it starts sees no `HOME` (Python then reads the database
+/// too: [`crate::out::pylib::path::expanduser`]). `None`: the binary
+/// can't tell (a database folder that is not UTF-8, or no database here).
+pub fn shell_home(env: &Env) -> Option<OsString> {
+    if let Some(h) = env.get("HOME") {
+        return Some(h.to_os_string());
+    }
+    Some(env.passwd_home()?.unwrap_or_else(|| OsString::from("/")))
 }
 
 /// [`shell_k2_home`] off Unix: k2-client's rule over `env`.
@@ -318,29 +377,52 @@ impl<'a> SearchPath<'a> {
     }
 }
 
-/// The shell's `pwd` at start: `PWD` when it is an absolute path to this
-/// folder, else the folder's real path. A `PWD` bash would tidy first
-/// (`.`, `..`, `//`, a trailing `/`) goes to the shell.
+/// The shell's `pwd` at start (what `pwd` and `$(pwd)` print), as bash
+/// sets it from an exported `PWD` that names this folder (the same file as
+/// `.`); else, or with no `PWD`, the folder's real path (`getcwd`):
+///
+/// - bash 3.2 (macOS's `/bin/bash`): that `PWD` as it is, `.`, `..`, `//`
+///   and a trailing `/` too, and a relative one;
+/// - bash 4.4 and later (Linux): an absolute one, tidied as a logical `cd`
+///   tidies a path ([`crate::shellpath::canonpath`]), or the real path
+///   when a check there fails. (bash 4.2, an old Linux's, keeps it as it
+///   is, as 3.2 does; that one is not modelled.)
+///
+/// `$PWD` itself is [`shell_pwd_var`].
 pub fn shell_pwd(env: &Env) -> Result<PathBuf, Handoff> {
-    let real = || std::env::current_dir().map_err(|_| Handoff::Pwd);
-    let Some(pwd) = env.get("PWD").and_then(|p| p.to_str()) else {
-        return real();
-    };
-    if !pwd.starts_with('/') {
-        return real();
+    match kept_pwd(env) {
+        Some(pwd) if cfg!(target_os = "macos") => Ok(PathBuf::from(pwd)),
+        Some(pwd) => match crate::shellpath::canonpath_os(pwd) {
+            Some(tidy) => Ok(tidy),
+            None => real_cwd(),
+        },
+        None => real_cwd(),
     }
-    if pwd != "/"
-        && (pwd.ends_with('/')
-            || pwd.contains("//")
-            || pwd.split('/').any(|c| c == "." || c == ".."))
-    {
-        return Err(Handoff::Pwd);
+}
+
+/// The shell's `$PWD` at start: an exported `PWD` that names this folder
+/// stays as it is (bash 3.2 and 4.4 and later alike; a relative one only
+/// for 3.2), else bash sets it to the real path.
+pub fn shell_pwd_var(env: &Env) -> Result<PathBuf, Handoff> {
+    match kept_pwd(env) {
+        Some(pwd) => Ok(PathBuf::from(pwd)),
+        None => real_cwd(),
     }
-    if same_file(Path::new(pwd), Path::new(".")) {
-        Ok(PathBuf::from(pwd))
-    } else {
-        real()
+}
+
+/// The exported `PWD` bash keeps at start: one that names this folder,
+/// and (bash 4.4 and later) is absolute.
+fn kept_pwd(env: &Env) -> Option<&OsStr> {
+    let pwd = env.get("PWD").filter(|p| !p.is_empty())?;
+    if !cfg!(target_os = "macos") && !crate::shellpath::bytes(pwd).starts_with(b"/") {
+        return None;
     }
+    same_file(Path::new(pwd), Path::new(".")).then_some(pwd)
+}
+
+/// `getcwd`, bash's fallback.
+fn real_cwd() -> Result<PathBuf, Handoff> {
+    std::env::current_dir().map_err(|_| Handoff::Pwd)
 }
 
 #[cfg(unix)]
@@ -376,10 +458,16 @@ fn project(env: &Env, home: &OsStr, path: &SearchPath, cwd: &Path) -> Result<OsS
                     break;
                 }
                 path.need("dirname")?;
-                dir = match dir.parent() {
-                    Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-                    _ => PathBuf::from("/"),
-                };
+                // `$(dirname "$_dir")`: its newlines at the end dropped.
+                let up = crate::shellpath::dirname(crate::shellpath::bytes(dir.as_os_str()));
+                let up = bytes_path(trim_newlines(up.to_vec()));
+                // By bytes: a `Path` compares by parts, and `/w/.` is `/w`.
+                if up.as_os_str() == dir.as_os_str() {
+                    // `.` (bash 3.2 keeps a relative `PWD`): the shell's
+                    // walk never ends.
+                    return Err(Handoff::Pwd);
+                }
+                dir = up;
             }
             if found.is_none() && git.usable() {
                 path.need("sed")?;
@@ -729,35 +817,100 @@ mod tests {
         assert_eq!(strip_dot_git(b""), b"");
     }
 
+    /// bash's `pwd` and `$PWD` at start, from an exported `PWD` (pinned
+    /// from bash 3.2 on macOS and 5.2 on Linux): one that names this folder
+    /// is kept (3.2) or tidied for `pwd` (4.4 and later); one that names
+    /// another folder, or none, is the real path.
     #[test]
     fn the_shell_s_pwd() {
-        let here = std::env::current_dir().unwrap();
-        let real = std::fs::canonicalize(&here).unwrap();
-        assert_eq!(shell_pwd(&Env::of(&[])).unwrap(), here);
-        let h = here.to_str().unwrap();
-        assert_eq!(
-            shell_pwd(&Env::of(&[("PWD", h)])).unwrap(),
-            PathBuf::from(h)
-        );
-        assert_eq!(
-            shell_pwd(&Env::of(&[("PWD", "/")])).unwrap(),
-            here,
-            "/ is another folder"
-        );
-        assert_eq!(shell_pwd(&Env::of(&[("PWD", "rel")])).unwrap(), here);
-        for odd in [
+        let real = std::env::current_dir().unwrap();
+        let h = real.to_str().unwrap().to_string();
+        // As bytes: a `Path` compares by parts (`/a/.` is `/a`).
+        let here = OsString::from(&h);
+        let os = |p: PathBuf| p.into_os_string();
+        let pwd = |v: &str| os(shell_pwd(&Env::of(&[("PWD", v)])).unwrap());
+        let var = |v: &str| os(shell_pwd_var(&Env::of(&[("PWD", v)])).unwrap());
+        assert_eq!(os(shell_pwd(&Env::of(&[])).unwrap()), here);
+        assert_eq!(os(shell_pwd_var(&Env::of(&[])).unwrap()), here);
+        assert_eq!(pwd(&h), here);
+        assert_eq!(pwd("/"), here, "/ is another folder");
+        assert_eq!(pwd(""), here);
+        assert_eq!(pwd("/no/such/folder"), here);
+        let parent = real.parent().unwrap().to_str().unwrap();
+        let last = real.file_name().unwrap().to_str().unwrap();
+        let up = parent.rsplit('/').next().unwrap();
+        let shapes = [
             format!("{h}/"),
             format!("{h}/."),
-            format!("{h}/../x"),
-            "//x".to_string(),
-        ] {
-            assert_eq!(
-                shell_pwd(&Env::of(&[("PWD", &odd)])),
-                Err(Handoff::Pwd),
-                "{odd}"
-            );
+            format!("{h}/./"),
+            format!("{parent}/../{up}/{last}"),
+            format!("/{h}"),
+            format!("{h}//"),
+        ];
+        for odd in &shapes {
+            assert_eq!(var(odd), OsString::from(odd), "$PWD keeps {odd}");
+            let tidy = if cfg!(target_os = "macos") {
+                OsString::from(odd)
+            } else if odd.starts_with("//") {
+                OsString::from(format!("/{h}"))
+            } else {
+                here.clone()
+            };
+            assert_eq!(pwd(odd), tidy, "pwd of {odd}");
         }
-        assert!(real.is_absolute());
+        // A relative PWD: bash 3.2 keeps one that names this folder.
+        let dot = if cfg!(target_os = "macos") {
+            OsString::from(".")
+        } else {
+            here.clone()
+        };
+        assert_eq!(pwd("."), dot);
+        assert_eq!(var("."), dot);
+        assert_eq!(pwd("rel"), here);
+    }
+
+    /// With no `HOME`, the shell's is the password database's folder for
+    /// this user, `/` with no entry; a made-up environment never reads
+    /// the real database.
+    #[test]
+    fn the_shell_s_home_with_none_set() {
+        let d = scratch("pwhome");
+        std::fs::create_dir_all(d.join(".k2")).unwrap();
+        let none = Env::of(&[]);
+        assert_eq!(shell_home(&none), None);
+        assert_eq!(shell_k2_home(&none), None);
+        let set = Env::of(&[("HOME", "/h")]).with_passwd_home(Some(s(&d)));
+        assert_eq!(shell_home(&set), Some(OsString::from("/h")));
+        let empty = Env::of(&[("HOME", "")]).with_passwd_home(Some(s(&d)));
+        assert_eq!(shell_home(&empty), Some(OsString::new()));
+        let db = Env::of(&[]).with_passwd_home(Some(s(&d)));
+        assert_eq!(shell_home(&db), Some(d.clone().into_os_string()));
+        assert_eq!(shell_k2_home(&db), Some(d.join(".k2")));
+        let no_entry = Env::of(&[]).with_passwd_home(None);
+        assert_eq!(shell_home(&no_entry), Some(OsString::from("/")));
+        // The prelude reads the port and token from that home.
+        let path = bin(&d, &["cat", "dirname", "sed"]);
+        std::fs::write(d.join(".k2/heartbeat.port"), "41000\n").unwrap();
+        let env = Env::of(&[("PATH", &path)]).with_passwd_home(Some(s(&d)));
+        let p = prelude(&env, &d).expect("the prelude");
+        assert!(p.port && !p.token, "{p:?}");
+    }
+
+    /// The walk up runs `dirname`'s steps: `/w/.` goes up to `/w`, not `/`.
+    #[test]
+    fn the_walk_up_is_dirname_s() {
+        let d = scratch("walk");
+        let ws = d.join("ws");
+        std::fs::create_dir_all(ws.join(".k2")).unwrap();
+        std::fs::create_dir_all(ws.join("a")).unwrap();
+        let path = bin(&d, &["cat", "dirname", "sed", "uname"]);
+        let env = Env::of(&[("HOME", s(&d)), ("PATH", &path)]);
+        let p = SearchPath::new(env.get("PATH").unwrap());
+        let from = |cwd: String| project(&env, env.get("HOME").unwrap(), &p, Path::new(&cwd));
+        let w = s(&ws);
+        assert_eq!(from(format!("{w}/a/.")), Ok(OsString::from(w)));
+        assert_eq!(from(format!("{w}/.")), Ok(OsString::from(format!("{w}/."))));
+        assert_eq!(from(format!("{w}/a/")), Ok(OsString::from(w)));
     }
 
     #[test]

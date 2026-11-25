@@ -288,7 +288,7 @@ pub fn folder(dir: &str) -> Option<Option<String>> {
     if dir.is_empty() || dir.starts_with('-') || dir.contains('\n') {
         return None;
     }
-    if std::env::var_os("CDPATH").is_some() && !dir.starts_with('/') {
+    if crate::families::sim::cd_moved(dir) {
         return None;
     }
     let pwd = super::tools::pwd()?;

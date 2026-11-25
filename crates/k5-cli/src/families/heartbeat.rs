@@ -971,8 +971,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     }
     let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
     let pwd = pwd.to_str()?.to_string();
-    let cdpath = std::env::var_os("CDPATH").is_some();
-    let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, cdpath);
+    let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, &super::sim::cd_moved);
     let form = if help_alone {
         Form::RemindHelp
     } else {

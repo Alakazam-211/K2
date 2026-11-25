@@ -443,7 +443,8 @@ fn platform() -> Result<String, String> {
 }
 
 /// `_k2_refuse_if_airgap`: its line, then exit 1, when air-gap is on;
-/// `Some(None)` when it is off. `None`: the shell's (no `HOME`).
+/// `Some(None)` when it is off. `None`: the shell's (a `HOME` the binary
+/// can't tell, [`crate::offline::shell_home`]).
 pub(super) fn airgap_refusal() -> Option<Option<Exit>> {
     let (state, file) = crate::airgap::state(&Env::current())?;
     Some(crate::airgap::refusal(state, &file).map(|mut line| {
@@ -607,7 +608,8 @@ pub fn plist_text(label: &str, bin: &str, home: &str) -> String {
 }
 
 /// `cmd_daemon_install …` after the router's gates; `words` are the
-/// words after `install`. `None`: the shell's (no `HOME`).
+/// words after `install`. `None`: the shell's (a `HOME` the binary can't
+/// tell).
 pub fn run(s: &Settings, words: &[String]) -> Option<Exit> {
     if let Some(stop) = airgap_refusal()? {
         return Some(stop);

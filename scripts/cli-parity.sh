@@ -240,6 +240,7 @@ EXPECTED_DIFFS=(
     "clone-url-not-printable|the clone engine's port|a clone server URL with a byte outside printable ASCII anywhere in it, a blank too (the remote URL as typed, or this server's address from K2_HOST): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"<url> isn't an address k2 sends to itself\"} (json.dumps, so the check's é is \\u00e9). The check: \`clone preview ws1 --host 'http://127.0.0.1:<port>/#café' --token-stdin --json\`; the shell's Python tries it: urllib drops the fragment and sends its POST / to <port> (the check's listener answers 403, so bash prints {\"error\": \"error\", \"hint\": \"recorded\"}, exit 3)"
     "clone-url-empty-host|the clone engine's port|a clone server URL with an empty host before a port (the check: \`clone preview ws1 --host https://:<port> --token-stdin --json\`): the binary sends nothing and prints one usage line on stderr, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"https://:<port> isn't an address k2 sends to itself\"}. The shell's Python tries the empty name: where the resolver makes it this computer (macOS) it connects to <port> and then raises at the TLS step (a traceback ending \"ValueError: check_hostname requires server_hostname\", exit 1); where the lookup fails, {\"error\": \"daemon_unreachable\", \"hint\": \"remote server https://:<port>: ...\"}, exit 3"
     "clone-proxy-unread|the clone engine's port|a clone request to an https server that isn't this computer with the person's https_proxy set to a URL of another scheme (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>, and with https_proxy=https://127.0.0.1:<port>): the binary sends nothing and prints one usage line on stderr naming the scheme, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"proxy socks5://\\u2026 is not supported: only http:// proxies are\"} (https:// the same). The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy), in its own version's head (python-connect-host), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3. (A blank-separated no_proxy is no longer part of it: the binary reads no_proxy as the shell's Python does, K2's one proxy rule.)"
+    "cd-option-prefix|native lane step 2 (K2's ruling on a folder cd reads as an option)|a --workspace folder whose name starts with - and holds a letter cd doesn't take (the check: \`changes list --workspace -ws\` where -ws is a folder): both print cd's two lines on stderr, \"cd: -w: invalid option\" and cd's usage line (bash 3.2's \"cd: usage: cd [-L|-P] [dir]\", 4.4 and later's \"cd: usage: cd [-L|[-P [-e]] [-@]] [dir]\"), send nothing and exit as cd does under set -e (1 on 3.2, 2 from 4.4); bash puts \"<path to cli/k2>: line <n>: \" before the first line, the binary doesn't. The bash side is /bin/bash, the one the binary hands lines to and models"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -264,6 +265,37 @@ check_version_offline() {
             || problems+=("the binary as $name printed '$(head -c 200 "$out")', want exactly 'k2 $cli_version'")
         [ ! -s "$err" ] || problems+=("the binary as $name wrote on stderr: $(head -c 200 "$err")")
     done
+    [ ${#problems[@]} -eq 0 ] && return 0
+    printf '%s\n' "${problems[@]}"
+    return 1
+}
+
+# check_cd_option_prefix: `changes list --workspace -ws` in a folder that
+# holds a folder named -ws, a port and an owner token on disk but nothing
+# listening (neither side may ask). The bash side is /bin/bash, the one
+# the binary models (macOS's 3.2; 4.4 or later elsewhere).
+check_cd_option_prefix() {
+    local d="$WORK/dcd" rc out err problems=() want=2 usage
+    usage='cd: usage: cd [-L|[-P [-e]] [-@]] [dir]'
+    if [ "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"')" -lt 4 ]; then
+        want=1 usage='cd: usage: cd [-L|-P] [dir]'
+    fi
+    mkdir -p "$d/home/.k2" "$d/ws/-ws"
+    printf 'owner-tok-parity\n' >"$d/home/.k2/heartbeat.token"
+    printf '1\n' >"$d/home/.k2/heartbeat.port"
+    out="$d/out" err="$d/err"
+    rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" /bin/bash "$ROOT/cli/k2" changes list --workspace -ws) >"$out" 2>"$err" </dev/null || rc=$?
+    [ "$rc" = "$want" ] || problems+=("bash exited $rc, want $want")
+    [ ! -s "$out" ] || problems+=("bash printed on stdout: $(head -c 200 "$out")")
+    [ "$(wc -l <"$err" | tr -d ' ')" = 2 ] \
+        && grep -qx "^.*: line [0-9]*: cd: -w: invalid option" "$err" \
+        && [ "$(sed -n 2p "$err")" = "$usage" ] \
+        || problems+=("bash wrote: $(head -c 300 "$err")")
+    rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" "$WORK/bin/k2" changes list --workspace -ws) >"$out" 2>"$err" </dev/null || rc=$?
+    [ "$rc" = "$want" ] || problems+=("the binary exited $rc, want $want")
+    [ ! -s "$out" ] || problems+=("the binary printed on stdout: $(head -c 200 "$out")")
+    [ "$(cat "$err")" = "$(printf 'cd: -w: invalid option\n%s' "$usage")" ] \
+        || problems+=("the binary wrote: $(head -c 300 "$err")")
     [ ${#problems[@]} -eq 0 ] && return 0
     printf '%s\n' "${problems[@]}"
     return 1

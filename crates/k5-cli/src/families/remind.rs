@@ -469,8 +469,7 @@ pub fn run(args: &[OsString]) -> Option<Exit> {
     words.extend(rest);
     let pwd = daemon::logical_cwd(std::env::var_os("PWD")).ok()?;
     let pwd = pwd.to_str()?.to_string();
-    let cdpath = std::env::var_os("CDPATH").is_some();
-    let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, cdpath);
+    let resolve = |w: &str| register::path(RegisterVerb::Open, w, &pwd, &super::sim::cd_moved);
     let form = parse(&words, &resolve)?;
     // `remind` alone (or with an empty first word, and no time) is the
     // help page, after the gates ([`run_with`]), as `heartbeat remind`

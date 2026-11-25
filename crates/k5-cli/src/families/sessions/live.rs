@@ -22,8 +22,9 @@
 //!    owner's view, else 1).
 //! 5. The EXIT trap's lines ([`crate::prelude::Closing`]).
 //!
-//! The shell answers it when `CDPATH` is set, or the folder is one `cd`
-//! can't enter. An answer that is not UTF-8: the shell's Python raises on
+//! The shell answers it when `CDPATH` moves `cd` to another folder
+//! ([`crate::families::sim::cd_moved`]), or the folder is one `cd` can't
+//! enter. An answer that is not UTF-8: the shell's Python raises on
 //! it; this reads it with U+FFFD.
 
 use super::super::sidecar::py_slice;
@@ -75,7 +76,7 @@ pub fn folder(path: &str) -> Option<Option<String>> {
     if path.is_empty() || !std::path::Path::new(path).is_dir() {
         return None;
     }
-    if std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty()) {
+    if crate::families::sim::cd_moved(path) {
         return Some(None);
     }
     let Ok(pwd) = crate::daemon::logical_cwd(std::env::var_os("PWD")) else {

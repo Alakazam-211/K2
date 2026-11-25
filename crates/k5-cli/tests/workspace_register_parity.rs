@@ -23,7 +23,9 @@
 //!   accepted (7) is tried again, then its line, exit 1. Each with one
 //!   request.
 //! - What the binary hands to the shell: help, a doubled `/`, a relative
-//!   `open` while `CDPATH` is set, a port that is no port.
+//!   `open` that `CDPATH` finds in one of its folders, a port that is no
+//!   port. (A `CDPATH` that has no such folder leaves `cd` as it is:
+//!   tests/home_pwd_cdpath_parity.rs.)
 
 #![cfg(unix)]
 
@@ -573,6 +575,7 @@ fn workspace_create_with_a_daemon_that_never_answers() {
 #[test]
 fn workspace_create_and_open_hand_these_to_the_shell() {
     let rig = Rig::new(VERB, "shell");
+    let proj = rig.proj.to_string_lossy().into_owned();
     let v = vec![
         shell(case(
             "create --help",
@@ -602,9 +605,9 @@ fn workspace_create_and_open_hand_these_to_the_shell() {
             1,
         )),
         shell(case(
-            "open: a relative folder while CDPATH is set",
+            "open: a relative folder CDPATH finds (cd prints it)",
             &["open", "sub"],
-            &[("CDPATH", "/nonexistent-k5-cdpath")],
+            &[("CDPATH", proj.as_str())],
             vec![ok(MADE)],
             folders,
             0,

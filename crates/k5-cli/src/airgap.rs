@@ -203,7 +203,8 @@ pub fn state_with(env: &Env, file: &Path) -> State {
 }
 
 /// `_k2_airgap_state` in `env`, and the settings file it reads. `None`
-/// when `HOME` is not set (the shell stops before this).
+/// when the binary can't tell the shell's `HOME`
+/// ([`crate::offline::shell_home`]).
 pub fn state(env: &Env) -> Option<(State, PathBuf)> {
     let file = settings_file(env)?;
     Some((state_with(env, &file), file))

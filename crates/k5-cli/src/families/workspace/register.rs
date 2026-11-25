@@ -27,7 +27,7 @@
 //! The shell answers a path the binary can't resolve exactly as bash
 //! does: one with a newline in it, a doubled `/`, `.` or `..` that bash's
 //! checks would refuse, a folder the binary may not enter, and a relative
-//! path for `open`'s `cd` while `CDPATH` is set.
+//! path that `CDPATH` moves `open`'s `cd` to another folder for.
 
 use super::{print_or_fail, ws_request, Stop, Ws};
 use crate::exit::Exit;
@@ -122,42 +122,8 @@ fn enterable(_p: &str) -> bool {
 }
 
 /// bash's `sh_canonpath(path, PATH_CHECKDOTDOT | PATH_CHECKEXISTS)`, the
-/// folder a logical `cd` goes to, for an absolute `path` that does not
-/// start with `//`: empty parts and `.` dropped, `..` taking off the part
-/// before it once what is there so far is a folder, each part kept only
-/// when what is there so far is a folder. `None` where a check fails
-/// (bash's `cd` then goes another way).
-pub fn canonpath(path: &str) -> Option<String> {
-    let joined = |parts: &[&str]| {
-        if parts.is_empty() {
-            "/".to_string()
-        } else {
-            format!("/{}", parts.join("/"))
-        }
-    };
-    let mut parts: Vec<&str> = Vec::new();
-    for el in path.split('/').filter(|e| !e.is_empty()) {
-        match el {
-            "." => {}
-            ".." => {
-                // `/..` is `/`.
-                if !parts.is_empty() {
-                    if !is_dir(&joined(&parts)) {
-                        return None;
-                    }
-                    parts.pop();
-                }
-            }
-            el => {
-                parts.push(el);
-                if !is_dir(&joined(&parts)) {
-                    return None;
-                }
-            }
-        }
-    }
-    Some(joined(&parts))
-}
+/// folder a logical `cd` goes to: [`crate::shellpath::canonpath`].
+pub use crate::shellpath::canonpath;
 
 /// `$(cd "$dir" && pwd)` for an absolute `dir` that is a folder, when the
 /// binary is sure of it: the logical name, and whether `cd` got there.
@@ -212,9 +178,15 @@ pub fn abs_path(p: &str, pwd: &str) -> Option<String> {
     Some(format!("{base}{tail}"))
 }
 
-/// The path the verb sends for `target`, `pwd` being `$PWD` and `cdpath`
-/// whether `CDPATH` is set. `None`: the shell's.
-pub fn path(verb: Verb, target: &str, pwd: &str, cdpath: bool) -> Option<String> {
+/// The path the verb sends for `target`, `pwd` being `$PWD` and
+/// `cd_moved` whether `CDPATH` moves `cd` to another folder for a name
+/// ([`crate::families::sim::cd_moved`]). `None`: the shell's.
+pub fn path(
+    verb: Verb,
+    target: &str,
+    pwd: &str,
+    cd_moved: &dyn Fn(&str) -> bool,
+) -> Option<String> {
     if target.contains('\n') {
         return None;
     }
@@ -226,7 +198,7 @@ pub fn path(verb: Verb, target: &str, pwd: &str, cdpath: bool) -> Option<String>
             }
             let absolute = if target.starts_with('/') {
                 target.to_string()
-            } else if cdpath {
+            } else if cd_moved(target) {
                 return None;
             } else if pwd.ends_with('/') {
                 format!("{pwd}{target}")

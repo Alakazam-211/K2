@@ -35,8 +35,10 @@
 //! a word that is not UTF-8, `HOOK_SOCK` with a `CODEX_` variable, a port
 //! curl won't take, a `python3` the binary can't tell; and three of
 //! bash's own edges, where bash prints its own error line: a
-//! `--workspace` folder or an install path `cd` or `dirname` reads as an
-//! option (a leading `-`) or one `CDPATH` would move, a duration with
+//! `--workspace` folder `cd` reads as options it takes or one `CDPATH`
+//! moves ([`crate::shellpath::cd_to_shell`]; one named as an option `cd`
+//! doesn't take is `cd`'s usage error here), an install path `dirname`
+//! reads as an option (a leading `-`) or one `CDPATH` would move, a duration with
 //! other than ASCII in it (Python's `\d` and `float` take any digits), and
 //! a number past bash's 64-bit range. An answer that is not UTF-8 is read
 //! with U+FFFD for each bad byte, as [`super::inbox`].
@@ -442,9 +444,15 @@ const BUTTONS: &[&str] = &[
 ];
 
 /// The verb's words after `_sim_common` (`rest`), as its function reads
-/// them. `exists`: `[ -e <path> ]`; `cdpath`: `CDPATH` is set.
-pub fn parse(sub: &str, rest: &[String], exists: &dyn Fn(&str) -> bool, cdpath: bool) -> Parsed {
-    match parse_verb(sub, rest, exists, cdpath) {
+/// them. `exists`: `[ -e <path> ]`; `cd_moved`: `CDPATH` moves `cd <dir>`
+/// ([`crate::shellpath::cd_unmoved`]).
+pub fn parse(
+    sub: &str,
+    rest: &[String],
+    exists: &dyn Fn(&str) -> bool,
+    cd_moved: &dyn Fn(&str) -> bool,
+) -> Parsed {
+    match parse_verb(sub, rest, exists, cd_moved) {
         Ok(p) => p,
         Err(d) => Parsed::Die(d),
     }
@@ -473,7 +481,7 @@ fn parse_verb(
     sub: &str,
     rest: &[String],
     exists: &dyn Fn(&str) -> bool,
-    cdpath: bool,
+    cd_moved: &dyn Fn(&str) -> bool,
 ) -> Result<Parsed, Die> {
     let n = name();
     let plan = match sub {
@@ -598,7 +606,7 @@ fn parse_verb(
                 ));
             }
             let dir = dirname(p);
-            if p.starts_with('-') || dir.starts_with('-') || (cdpath && cd_searches(&dir)) {
+            if p.starts_with('-') || dir.starts_with('-') || cd_moved(&dir) {
                 return Ok(Parsed::Shell);
             }
             // The absolute path is made once the plan runs (`cd`).
@@ -1073,14 +1081,11 @@ pub fn basename(p: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
-/// Whether `cd <dir>` searches `CDPATH` for it: a relative name that does
-/// not start with `./` or `../` (or is `.` or `..`).
-pub fn cd_searches(dir: &str) -> bool {
-    !(dir.starts_with('/')
-        || dir == "."
-        || dir == ".."
-        || dir.starts_with("./")
-        || dir.starts_with("../"))
+/// Whether `CDPATH` moves `cd <dir>`: an entry has it
+/// ([`crate::shellpath::cdpath`]; a `CDPATH` the binary can't read counts
+/// too). Where it doesn't, `cd` goes as with no `CDPATH`.
+pub fn cd_moved(dir: &str) -> bool {
+    !crate::shellpath::cd_unmoved(dir)
 }
 
 /// `cd <dir> && pwd` from the logical folder `pwd`: the path by its words
@@ -1671,16 +1676,12 @@ fn handed_back(words: &[&str]) -> bool {
     let Ok(c) = common(&words[1..]) else {
         return false;
     };
-    let cdpath = std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
     let ws = &c.workspace;
-    if !ws.is_empty()
-        && Path::new(ws).is_dir()
-        && (ws.starts_with('-') || (cdpath && cd_searches(ws)))
-    {
+    if !ws.is_empty() && Path::new(ws).is_dir() && crate::shellpath::cd_to_shell(ws) {
         return true;
     }
     matches!(
-        parse(words[0], &c.rest, &|p| Path::new(p).exists(), cdpath),
+        parse(words[0], &c.rest, &|p| Path::new(p).exists(), &cd_moved),
         Parsed::Shell
     )
 }
@@ -1762,8 +1763,14 @@ impl Run {
             Err(d) => return d.print(),
         };
         self.json = c.json;
-        let cdpath = std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
-        let parsed = parse(sub, &c.rest, &|p| Path::new(p).exists(), cdpath);
+        let parsed = parse(sub, &c.rest, &|p| Path::new(p).exists(), &cd_moved);
+        // `_sim_target`'s `cd` with a folder named as an option it doesn't
+        // take: its error, and `set -e` ends the run.
+        if !c.workspace.is_empty() && Path::new(&c.workspace).is_dir() {
+            if let Some(exit) = crate::shellpath::cd_refused(&c.workspace) {
+                return exit;
+            }
+        }
         let ws = self.target(&c.workspace);
         let plan = match parsed {
             Parsed::Plan(p) => p,

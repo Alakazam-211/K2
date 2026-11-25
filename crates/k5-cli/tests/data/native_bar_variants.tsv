@@ -153,7 +153,7 @@ fsb-home-connect-daemon-port	fs	no	K5_HOME_OVERRIDE={fresh:home-connect-daemon-p
 fsb-home-connect-logout-ipv6	fs	no	K5_HOME_OVERRIDE={fresh:home-connect-logout-ipv6}	-	-	a K2 home whose settings.json connectDbUrl is http://[::1]:9, with a saved access token
 fsb-home-remote-tokens-nul	fs	no	K5_HOME_OVERRIDE={fresh:home-remote-tokens-nul}	-	-	a K2 home whose connect-tokens.json is not JSON (a NUL)
 fsb-home-remote-hosts-type	fs	no	K5_HOME_OVERRIDE={fresh:home-remote-hosts-type}	-	-	a K2 home whose connect-hosts.json has a hostname that is not a string
-fsb-oldhome-remote-tokens	fs	no	HOME={fresh:oldhome} K5_HOME_OVERRIDE={k2home}	-	-	HOME holds an old .k2so home whose connect-tokens.json is a list; the binary keeps its K2 home by the override
+fsb-oldhome-remote-tokens	fs	no	HOME={fresh:oldhome} K5_HOME_OVERRIDE={k2home}	-	-	HOME holds an old home (the brand's legacy name, .k2so with ours) whose connect-tokens.json is a list; the binary keeps its K2 home by the override
 fsb-cwd-sess-latin1	fs	no	-	-	cwd={fx}/sess-latin1	a project whose .k2/sessions holds a name that is not UTF-8
 fsb-cwd-sess-noread	fs	no	-	-	cwd={fx}/sess-noread	a project whose .k2/sessions can be entered, not listed (mode 0100)
 fsb-cwd-sess-subnoread	fs	no	-	-	cwd={fx}/sess-subnoread	a project whose session folder s1 can be entered, not listed (mode 0100)

@@ -688,7 +688,7 @@ fn stage_run_time() -> Machine {
         port.as_bytes(),
         0o644,
     );
-    let homes: [(&str, &str, &[u8]); 27] = [
+    let homes: [(&str, &str, &[u8]); 26] = [
         ("k2home-port-bad", "heartbeat.port", b"70000\n"),
         ("k2home-port-bad", "heartbeat.token", b"owner-tok-7171\n"),
         ("k2home-connect", "heartbeat.token", b"owner-tok-7171\n"),
@@ -746,12 +746,15 @@ fn stage_run_time() -> Machine {
             "connect-hosts.json",
             b"[{\"hostname\":1}]",
         ),
-        ("oldhome", ".k2so/connect-tokens.json", b"[]"),
         ("sess-subnoread", ".k2/sessions/s1/archive.ndjson", b"{}\n"),
     ];
     for (dir, file, bytes) in homes {
         put(&fx.join(dir).join(file), bytes, 0o644);
     }
+    // The old home is the brand's legacy name (`.k2so` with ours; a brand
+    // with no alias has its command's name), as the binary looks for it.
+    let legacy = format!(".{}", k2_client::cli_install::LEGACY_NAME);
+    put(&fx.join("oldhome").join(legacy).join("connect-tokens.json"), b"[]", 0o644);
     fs::create_dir_all(fx.join("home-c-port-bad-token-dir/.k2/heartbeat.token")).unwrap();
     fs::create_dir_all(fx.join("home-empty/.k2")).unwrap();
     // A PATH with cat on it and nothing else (no ps, no python3).

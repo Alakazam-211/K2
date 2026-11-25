@@ -1999,17 +1999,9 @@ async fn handle_one_request(
     // and agents included). The reason is only audited.
     if path == crate::first_owner_claim::PATH {
         let body = if is_post { super::http::read_post_body(&mut *stream, &mut buf).await } else { let _ = stream.read(&mut buf).await; Vec::new() };
-        let verdict = if ingress != Ingress::Tunnel {
-            Err("off_tunnel".to_string())
-        } else if !is_post {
-            Err("not_post".to_string())
-        } else {
-            let header = super::http::extract_header(&headers_blob, k2_core::edge_attest::HEADER_NAME);
-            let expected_sub = k2_core::tunnel::config::load().map(|c| c.subdomain.trim().to_ascii_lowercase()).unwrap_or_default();
-            k2_core::edge_attest::verify_dashboard(header, "POST", &path, &body, &expected_sub, k2_core::edge_attest::now_unix())
-                .map_err(|e| format!("bad_attest:{}", e.reason()))
-        };
-        match verdict {
+        let header = super::http::extract_header(&headers_blob, k2_core::edge_attest::HEADER_NAME);
+        let expected_sub = k2_core::tunnel::config::load().map(|c| c.subdomain.trim().to_ascii_lowercase()).unwrap_or_default();
+        match crate::first_owner_claim::admit(ingress, is_post, header, &path, &body, &expected_sub, k2_core::edge_attest::now_unix()) {
             Ok(att) => {
                 let via = format!("edge:{}", att.kid);
                 let r = tokio::task::spawn_blocking(move || crate::first_owner_claim::handle(&body, &via))

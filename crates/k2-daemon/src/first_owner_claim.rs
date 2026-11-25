@@ -37,6 +37,7 @@ use std::sync::Mutex;
 use k2_core::connect_users::{self, Role};
 
 use crate::cli_response::CliResponse;
+use crate::routes::dispatcher::Ingress;
 
 pub const PATH: &str = "/cli/users/claim-first-owner";
 pub const AUDIT_EVENT: &str = "first-owner-claim";
@@ -75,6 +76,28 @@ fn audit(user: &str, outcome: &str, ingress: &str) {
 /// caller's plain 404.
 pub fn audit_refused(body: &[u8], reason: &str, ingress: &str) {
     audit(&body_username(body), &format!("deny {reason}"), ingress);
+}
+
+/// The door's own check, before the claim is read: the tunnel, a POST, and
+/// the dashboard's signature over (`path`, `body`, `expected_sub`). `Err`
+/// carries the audit reason; the wire answer is always the same plain 404.
+pub fn admit(
+    ingress: Ingress,
+    is_post: bool,
+    header: Option<&str>,
+    path: &str,
+    body: &[u8],
+    expected_sub: &str,
+    now: i64,
+) -> Result<k2_core::edge_attest::Attestation, String> {
+    match ingress {
+        Ingress::Tunnel => {}
+        Ingress::Loopback | Ingress::Lan | Ingress::App => return Err("off_tunnel".to_string()),
+    }
+    if !is_post {
+        return Err("not_post".to_string());
+    }
+    k2_core::edge_attest::verify_dashboard(header, "POST", path, body, expected_sub, now).map_err(|e| format!("bad_attest:{}", e.reason()))
 }
 
 fn json_err(status: &'static str, code: &str, message: &str) -> CliResponse {
@@ -130,3 +153,7 @@ pub fn handle(body: &[u8], ingress: &str) -> CliResponse {
     audit(&user, &format!("ok account={account}"), ingress);
     CliResponse::ok_json(serde_json::json!({ "success": true, "username": user, "role": "owner" }).to_string())
 }
+
+#[cfg(test)]
+#[path = "first_owner_claim_tests.rs"]
+mod tests;

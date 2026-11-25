@@ -219,7 +219,9 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
     }
     let batch = pr::new_id();
     let now = compute::now();
-    let mut filed: Vec<PkgRow> = Vec::new();
+    // Row ids in this answer: new ones (this batch) and reused open ones.
+    let mut ids: Vec<String> = Vec::new();
+    let mut reused: Vec<String> = Vec::new();
     let mut cant: Vec<String> = Vec::new();
     for n in nodes {
         if is_mac(n) {
@@ -247,6 +249,20 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
                 continue;
             }
         }
+        let origin = if n.is_tenant() { pr::SENT } else { pr::OWN };
+        // 0.46.18: the same ask already waits (same node, workspace and
+        // package set): reuse it, so the owner sees one request and one
+        // card, and deciding it settles every submit that hit it.
+        let same = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            pr::open_same(&conn, &n.id, Some(&ws.id), origin, &canon, now)
+        };
+        if let Some(r) = same {
+            reused.push(r.id.clone());
+            ids.push(r.id);
+            continue;
+        }
         let open = {
             let db = k2_core::db::shared();
             let conn = db.lock();
@@ -255,7 +271,6 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
         if open >= pkgpolicy::MAX_OPEN_PER_SERVER as i64 {
             return Err(no(pcodes::TOO_MANY_PENDING, 429, format!("{} package requests from {} already wait on {}; wait for the owner's answer ({CLI_NAME} compute node packages requests)", open, ws.handle, n.name)));
         }
-        let origin = if n.is_tenant() { pr::SENT } else { pr::OWN };
         let server = if n.is_tenant() { n.owner_label.clone().unwrap_or_else(|| "its owner".into()) } else { "own".into() };
         let row = {
             let db = k2_core::db::shared();
@@ -291,19 +306,20 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
             }
         }
         crate::compute_routes::audit(who, "pkg_requested", Some(&n.id), Some(&ws.id), job, json!({"request": row.id, "batch": batch, "names": canon, "origin": origin, "why": why}));
-        filed.push(row);
+        ids.push(row.id);
     }
-    if filed.is_empty() {
+    if ids.is_empty() {
         return Err(no(pcodes::REQUESTS_UNSUPPORTED, 409, format!("It can't be requested. {}", cant.join("; "))).with("cant", cant));
     }
     // An online own node answers with its dry run within a moment: wait for
     // it, so the card shows every package and the size.
     let deadline = Instant::now() + DRY_WAIT;
+    let mut filed: Vec<PkgRow>;
     loop {
         let fresh: Vec<PkgRow> = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            pr::batch(&conn, &batch)
+            ids.iter().filter_map(|id| pr::get(&conn, id)).collect()
         };
         let waiting = fresh.iter().any(|r| r.origin == pr::OWN && r.dry.is_none() && crate::compute_ws::is_online(&r.node_id) && has_feature_id(&r.node_id, pkgpolicy::FEATURE_PKG_REQUESTS));
         filed = fresh;
@@ -312,8 +328,20 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
         }
         std::thread::sleep(Duration::from_millis(150));
     }
+    // 0.46.18: what the node's dry run says is already installed there
+    // needs nobody's approval (the job's own install step finds it and
+    // installs nothing).
+    let filed = settle_already(who, filed);
+    let all_installed = filed.iter().all(|r| r.state == state::INSTALLED);
+    let already: Vec<String> = filed.iter().filter(|r| r.state == state::INSTALLED).map(|r| node_name(&r.node_id)).collect();
+    // The id the card and the agent name: this batch when anything new was
+    // filed, else the reused request's own batch.
+    let id = if filed.iter().any(|r| r.batch_id == batch) { batch.clone() } else { filed.first().map(|r| r.batch_id.clone()).unwrap_or_else(|| batch.clone()) };
+    let mut reused_batches: Vec<String> = filed.iter().filter(|r| reused.contains(&r.id)).map(|r| r.batch_id.clone()).collect();
+    reused_batches.dedup();
+    let batch = id;
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({"compute": "pkg_request", "id": batch}));
-    let own = filed.iter().any(|r| r.origin == pr::OWN);
+    let own = filed.iter().any(|r| r.origin == pr::OWN && r.state == state::PENDING);
     let summary = pr::summary(&filed, &node_name);
     let sent: Vec<String> = filed.iter().filter(|r| r.origin == pr::SENT).map(|r| format!("{} ({})", node_name(&r.node_id), r.server)).collect();
     let mut hint = Vec::new();
@@ -323,12 +351,49 @@ pub(crate) fn file(who: &Who, ws: &crate::compute_routes::Ws, session: Option<&s
     if !sent.is_empty() {
         hint.push(format!("asked the node's owner for {}: you hear back here when they decide", sent.join(", ")));
     }
+    if !reused_batches.is_empty() {
+        hint.push(format!("the same ask already waits ({}), so no new request was filed", reused_batches.join(", ")));
+    }
+    if !already.is_empty() {
+        hint.push(format!("already installed on {}: nothing to approve", already.join(", ")));
+    }
     Ok(json!({
         "pkgHeld": own,
+        "allInstalled": all_installed,
         "request": { "id": batch, "summary": summary, "rows": filed.iter().map(row_json).collect::<Vec<_>>() },
+        "reused": reused_batches,
         "cant": cant,
         "hint": hint.join("; "),
     }))
+}
+
+/// The note on a request the node's dry run found already installed.
+pub(crate) const ALREADY_NOTE: &str = "already installed on the node: nothing to approve or install";
+
+/// 0.46.18: this server's own pending rows whose node's dry run says every
+/// asked name is already installed there are settled `installed` (nobody
+/// approves what nobody installs), and the node's open entry for each is
+/// closed. Anything else is returned as it was.
+fn settle_already(who: &Who, rows: Vec<PkgRow>) -> Vec<PkgRow> {
+    let now = compute::now();
+    rows.into_iter()
+        .map(|r| {
+            if r.origin != pr::OWN || r.state != state::PENDING || !pr::already_installed(&r) {
+                return r;
+            }
+            let fresh = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                pr::set_state(&conn, &r.id, state::INSTALLED, None, Some(ALREADY_NOTE), None, now);
+                pr::get(&conn, &r.id)
+            };
+            if let Some(nr) = &r.node_request {
+                crate::compute_ws::send_frame(&r.node_id, Frame::PkgRequestDecide(PkgRequestDecide { id: nr.clone(), note: Some(ALREADY_NOTE.to_string()) }));
+            }
+            crate::compute_routes::audit(who, "pkg_already_installed", Some(&r.node_id), r.workspace_id.as_deref(), r.job_id.as_deref(), json!({"request": r.id, "names": r.names}));
+            fresh.unwrap_or(r)
+        })
+        .collect()
 }
 
 fn has_feature_id(node_id: &str, f: &str) -> bool {
@@ -372,7 +437,21 @@ fn decide(who: &Who, body: &[u8]) -> R<Value> {
     let approve = v.get("approve").and_then(Value::as_bool).ok_or_else(|| no(pcodes::PACKAGE_NOT_APPROVED, 400, "approve: true or false"))?;
     let add = v.get("add").and_then(Value::as_bool).unwrap_or(false);
     let note = crate::compute_routes::s(&v, "note").map(|n| n.chars().filter(|c| !c.is_control()).take(400).collect::<String>());
-    decide_batch(who, id, approve, add, note.as_deref())
+    // 0.46.18: the card on this request (it carries the batch id) closes
+    // with the same outcome, so deciding in either place settles both.
+    let mut batches: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        pr::batch(&conn, id).into_iter().flat_map(|r| [r.batch_id, r.id]).collect()
+    };
+    batches.sort();
+    batches.dedup();
+    let out = decide_batch(who, id, approve, add, note.as_deref())?;
+    let decided = out["rows"].as_array().is_some_and(|rows| rows.iter().any(|r| r["state"] != state::PENDING));
+    if decided {
+        crate::permission::actions::compute::close_package_cards(&batches, approve, add, who);
+    }
+    Ok(out)
 }
 
 /// Decide every pending row of a batch (the card's apply and deny call

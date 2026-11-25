@@ -49,7 +49,7 @@ thread_local! {
     static ANSWER_INGRESS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// The answer's `reveal` / `mode` while `apply` runs (0.46.6,
     /// `apps.user-password-reset`), checked by the action's gate first.
-    static ANSWER_OPTS: std::cell::RefCell<AnswerOpts> = const { std::cell::RefCell::new(AnswerOpts { reveal: false, mode: None }) };
+    static ANSWER_OPTS: std::cell::RefCell<AnswerOpts> = const { std::cell::RefCell::new(AnswerOpts { reveal: false, mode: None, always: false }) };
 }
 
 /// What an Allow carried beyond its label (0.46.6): `reveal` (this client
@@ -58,6 +58,10 @@ thread_local! {
 pub(crate) struct AnswerOpts {
     pub reveal: bool,
     pub mode: Option<String>,
+    /// The person picked the card's "from now on" option (0.46.18): an
+    /// action whose standing half is the same call (`compute.packages`:
+    /// `Always allow on <node>` adds to the node's list) reads it in apply.
+    pub always: bool,
 }
 
 /// The answer `apply` is running for: `reveal` and the mode the action's
@@ -233,6 +237,7 @@ fn decision_of(label_text: &str) -> Option<Decision> {
         label::ALWAYS | label::ALWAYS_CHAT_REFRESH | label::ALWAYS_VAULT_SEND => Some(Decision::Always),
         label::DENY => Some(Decision::Deny),
         label::CLOSE => Some(Decision::Close),
+        t if t.starts_with(label::ALWAYS_PACKAGES_PREFIX) => Some(Decision::Always),
         _ => None,
     }
 }
@@ -266,6 +271,7 @@ pub(crate) fn answer(
     let opts = AnswerOpts {
         reveal: truthy(params.get("reveal")),
         mode: params.get("mode").map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+        always: false,
     };
 
     // What to decide: (request, decision).
@@ -303,6 +309,8 @@ pub(crate) fn answer(
             super::actions::chat_refresh::offers_always(&reqs[0])
         } else if answer == label::ALWAYS_VAULT_SEND {
             super::actions::vault_send::offers_always(&reqs[0])
+        } else if answer.starts_with(label::ALWAYS_PACKAGES_PREFIX) {
+            super::actions::compute::offers_always(&reqs[0])
         } else {
             crate::apps::held_cards::offers_always(&reqs[0])
         };
@@ -519,10 +527,10 @@ fn decide_one(
     // A card that shows its approver a secret (0.46.6): the mode must be
     // one it offers now, and a password or a link needs a client that can
     // show it. Refused here, before anything is decided.
-    let mut applied_opts = AnswerOpts::default();
+    let mut applied_opts = AnswerOpts { always: d == Decision::Always, ..AnswerOpts::default() };
     if matches!(d, Decision::Allow | Decision::Always) && super::actions::password_reset::is_reveal(&req.action) {
         let mode = super::actions::password_reset::gate_answer(req, opts.mode.as_deref(), opts.reveal, via)?;
-        applied_opts = AnswerOpts { reveal: opts.reveal, mode: Some(mode) };
+        applied_opts = AnswerOpts { reveal: opts.reveal, mode: Some(mode), always: d == Decision::Always };
     }
 
     // `publish.pin`: Allow never carries a PIN. The site must have one first,
@@ -597,7 +605,9 @@ fn decide_one(
             } else {
                 message
             };
-            if d == Decision::Always {
+            // `compute.packages`: "Always allow on <node>" was the apply
+            // itself (it read `always`); there is no second write.
+            if d == Decision::Always && req.action != super::actions::compute::PACKAGES.id {
                 // The one-off is done; the switch is a second write through
                 // the Settings route, as this person. Its refusal never
                 // undoes the one-off: the card says what happened.

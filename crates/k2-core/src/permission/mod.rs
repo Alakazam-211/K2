@@ -84,6 +84,12 @@ pub mod label {
     /// `vault.send` (0.46.11): send now, then let the agent send the same
     /// secrets to the same agent itself (a standing send grant).
     pub const ALWAYS_VAULT_SEND: &str = "Allow, and let it send this itself from now on";
+    /// `compute.packages` (0.46.18): the card's third option is
+    /// `Always allow on <node>`: install, and add these exact names to that
+    /// node's approved list (as `approve --add`). The node's name follows
+    /// this prefix; an answer is matched on the prefix. Plain `Allow` is
+    /// "Allow once" there.
+    pub const ALWAYS_PACKAGES_PREFIX: &str = "Always allow on ";
 }
 
 /// Access Audit events (PRD §6.5).

@@ -1764,26 +1764,147 @@ fn apply_packages(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied 
     let Some(id) = text_param(ctx, "request").filter(|id| is_package_request(id)) else {
         return Applied::Refused { code: "bad_params".into(), message: "the request names no package request (cpr_…)".into() };
     };
-    match crate::compute_pkg::decide_batch(&who_of(who), id, true, false, None) {
+    // 0.46.18: "Always allow on <node>" (the card's third option) adds
+    // these exact names to the node's approved list, as `approve --add`;
+    // plain Allow is "Allow once".
+    let always = super::super::answer::current_answer().always;
+    match crate::compute_pkg::decide_batch(&who_of(who), id, true, always, None) {
         Ok(v) => {
             let rows = v["rows"].as_array().cloned().unwrap_or_default();
             let on = |st: &str| -> Vec<String> {
                 rows.iter().filter(|r| r["state"] == st).filter_map(|r| r["node"].as_str().map(str::to_string)).collect()
             };
             let (sent, offline) = (on("approved"), on(k2_core::compute::proto::pkgpolicy::state::PENDING));
+            // An older k2-node takes names onto its list one by one, either way.
+            let legacy = rows.iter().any(|r| r["note"].as_str().is_some_and(|n| n.contains("older k2-node")));
             let mut msg = Vec::new();
             if !sent.is_empty() {
-                msg.push(format!("Root installs them on {} now, after its dry run and guards; you hear back when it's done. Then run your job again.", sent.join(", ")));
+                let nodes = sent.join(", ");
+                if legacy {
+                    msg.push(format!("Allowed: {nodes} runs an older k2-node, so the packages go on its approved list either way, and its next job installs them."));
+                } else {
+                    msg.push(chosen_line(always, &nodes));
+                    msg.push("Root installs them now, after its dry run and guards; you hear back when it's done. Then run your job again.".to_string());
+                }
             }
             if !offline.is_empty() {
                 msg.push(format!(
-                    "{} is offline, so it waits there: a person approves it in Settings → Cores → Compute → Machine settings → Waiting for you when it's back.",
-                    offline.join(", ")
+                    "{} is offline, so it waits there and nothing was installed: a person decides it in Settings → Cores → Compute → Machine settings → Waiting for you when it's back{}.",
+                    offline.join(", "),
+                    if always { " (Allow and add to the approved list is the same as Always allow)" } else { "" }
                 ));
             }
             Applied::Done { message: msg.join(" ") }
         }
         Err(r) => Applied::Refused { code: r.code.to_string(), message: r.hint },
+    }
+}
+
+/// The card's first words after a package Allow: which of the two the
+/// person picked, plainly (0.46.18).
+pub(crate) fn chosen_line(always: bool, nodes: &str) -> String {
+    if always {
+        format!("Always allow on {nodes}: root installs these packages and adds them to {nodes}'s approved list, so later jobs that need them don't ask again.")
+    } else {
+        format!("Allow once: root installs these packages on {nodes} this time; they stay off its approved list (jobs still find them while they stay installed).")
+    }
+}
+
+/// The batch's node names (the card's `{nodes}`), for this workspace.
+fn package_nodes(ctx: &Ctx, id: &str) -> String {
+    let rows = package_rows(ctx, id);
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let mut nodes: Vec<String> = rows.iter().map(|r| k2_core::compute::store::node_by_id(&conn, &r.node_id).map(|n| n.name).unwrap_or_else(|| r.node_id.clone())).collect();
+    nodes.dedup();
+    if nodes.is_empty() {
+        "its node".to_string()
+    } else {
+        nodes.join(", ")
+    }
+}
+
+/// The card offers `Always allow on <node>` while its request still waits
+/// here for this server's people (0.46.18). Single cards only (the answer
+/// path refuses it on a batch card, as every "from now on" option).
+pub(crate) fn offers_always(req: &k2_core::permission::request::PermissionRequest) -> bool {
+    always_label(req).is_some()
+}
+
+/// `Always allow on <its node(s)>`, when [`offers_always`].
+pub(crate) fn always_label(req: &k2_core::permission::request::PermissionRequest) -> Option<String> {
+    use k2_core::compute::pkgreq as pr;
+    if req.action != PACKAGES.id || !compute_on() {
+        return None;
+    }
+    let ctx = crate::permission::present::ctx_of(req);
+    let id = text_param(&ctx, "request").filter(|id| is_package_request(id))?;
+    let rows = package_rows(&ctx, id);
+    let now = k2_core::compute::now();
+    if !rows.iter().any(|r| r.state == k2_core::compute::proto::pkgpolicy::state::PENDING && r.origin != pr::SENT && r.expires_at > now) {
+        return None;
+    }
+    Some(format!("{}{}", k2_core::permission::label::ALWAYS_PACKAGES_PREFIX, package_nodes(&ctx, id)))
+}
+
+/// [`always_label`] for a card's view (the request by its display id).
+pub(crate) fn always_label_for(request_id: &str) -> Option<String> {
+    match crate::permission::store::get_by_display_id(request_id) {
+        Ok(Some(req)) => always_label(&req),
+        _ => None,
+    }
+}
+
+/// 0.46.18: a package request decided somewhere else (Settings, the CLI)
+/// closes every open card on it with that outcome, so the card and the
+/// list never disagree. A card being answered right now is the one
+/// deciding: it is no longer open, so it keeps its own answer.
+pub(crate) fn close_package_cards(batch_ids: &[String], approved: bool, add: bool, who: &crate::compute_routes::Who) {
+    use crate::permission::{answer, present, store};
+    use k2_core::permission::label;
+    use k2_core::permission::request::RequestState;
+    let open: Vec<k2_core::permission::request::PermissionRequest> = store::open(None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.action == PACKAGES.id && r.held_ref.as_deref().is_some_and(|h| batch_ids.iter().any(|b| b == h.trim())))
+        .collect();
+    if open.is_empty() {
+        return;
+    }
+    let by = match who {
+        crate::compute_routes::Who::Login { username, .. } => username.clone(),
+        _ => "owner".to_string(),
+    };
+    let via = if by == "owner" { "desktop" } else { "web" };
+    let author = if by == "owner" { k2_core::overlay::PostAuthor::owner() } else { k2_core::overlay::PostAuthor::user(&by) };
+    let now = k2_core::overlay::now_secs();
+    for r in &open {
+        let ctx = present::ctx_of(r);
+        let nodes = text_param(&ctx, "request").map(|id| package_nodes(&ctx, id)).unwrap_or_else(|| "its node".to_string());
+        let (state, lbl, msg) = if approved {
+            let lbl = if add { format!("{}{nodes}", label::ALWAYS_PACKAGES_PREFIX) } else { label::ALLOW.to_string() };
+            (RequestState::Approved, lbl, format!("{} Decided in Settings → Cores → Compute or on the command line.", chosen_line(add, &nodes)))
+        } else {
+            (RequestState::Denied, label::DENY.to_string(), "Denied in Settings → Cores → Compute or on the command line.".to_string())
+        };
+        match store::cas_open_to(r.id.as_str(), state) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                k2_core::log_debug!("[permission] close package card {}: {e}", r.id);
+                continue;
+            }
+        }
+        let d = store::Decided { state, by: Some(by.as_str()), via: Some(via), reason: None, message: Some(msg.as_str()), at: now };
+        if let Err(e) = store::decide(r.id.as_str(), &d) {
+            k2_core::log_debug!("[permission] close package card {}: {e}", r.id);
+        }
+        if let (Some(c), Some(k)) = (r.conversation_id.as_deref(), r.card_id.as_deref()) {
+            present::refresh_card(c, k, present::CardClose::Answer { label: &lbl, by: Some(author.clone()) });
+        }
+        if let Ok(Some(done)) = store::get(r.id.as_str()) {
+            answer::audit(k2_core::permission::audit_event::ANSWER, &by, via, &done);
+        }
     }
 }
 

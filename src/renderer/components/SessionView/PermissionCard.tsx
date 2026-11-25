@@ -52,6 +52,8 @@ import {
   type PostalPairFriend,
 } from './PostalPairCard'
 import {
+  allowButtonLabel,
+  alwaysOptionOf,
   APP_USERS_SWITCH_COVERS,
   approverWord,
   DENY_REASON_MAX,
@@ -371,7 +373,7 @@ function AnswerControls({
   // A Postal friend request reads in the Postal tab's words.
   const isPostal = item.action === POSTAL_PAIR_ACCEPT_ACTION
   const denyLabel = isPostal ? POSTAL_PAIR_LABEL.deny : PERMISSION_LABEL.deny
-  const allowLabel = isPostal ? POSTAL_PAIR_LABEL.allow : PERMISSION_LABEL.allow
+  const allowLabel = isPostal ? POSTAL_PAIR_LABEL.allow : allowButtonLabel(item.action, always)
   if (step.kind === 'confirm' && actions.confirmScope && confirmAction && item.proof.secretId) {
     return (
       <div data-testid="permission-confirm-sheet" className="flex flex-col gap-1">
@@ -766,14 +768,7 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         nowSec={now}
         batchItem={false}
         offered={offered}
-        always={
-          options?.find(
-            (o) =>
-              o.label === PERMISSION_LABEL.always ||
-              o.label === PERMISSION_LABEL.alwaysChatRefresh ||
-              o.label === PERMISSION_LABEL.alwaysVaultSend,
-          )?.label
-        }
+        always={alwaysOptionOf((options ?? []).map((o) => o.label))}
         denyOnly={options !== undefined && options.length > 0 && !options.some((o) => o.label === PERMISSION_LABEL.allow)}
         onReveal={view.reveal ? setRevealed : undefined}
         postal={postal}

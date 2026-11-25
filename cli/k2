@@ -38457,7 +38457,9 @@ k2 compute node packages — system packages on a compute node (0.46.9)
         covered files the same request by itself. Held for this server's
         owner: exit 2, and the Ask with: line puts it on their card. You
         get a [compute] message when the owner decides; then run your job
-        again
+        again. Names already installed on the node pass without asking, and
+        asking again for the same names on the same node while a request
+        waits reuses that request (one request, one card)
   k2 compute node packages requests [--node N] [--state S] [--limit N] [--json]
         your requests (the owner or an Admin outside K2: every request).
         S: pending, approved, installed, denied, failed, expired or all.
@@ -38468,7 +38470,9 @@ k2 compute node packages — system packages on a compute node (0.46.9)
         it that fits one is enough). The card in chat and Settings → Cores →
         Compute → Machine settings → Waiting for you are the main path. approve --add also puts the
         names on that server's approved list, so the next ask for them
-        needs no card
+        needs no card. On the card: Allow is Allow once, and Always allow
+        on <node> is approve --add. Deciding on the card, in Settings or
+        here settles the same request everywhere
   k2 compute node packages policy <node> [--json]
         what this server may install there without asking
   k2 compute node packages policy <node> [<server>] [level=list|profiles|official]

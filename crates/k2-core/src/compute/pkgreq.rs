@@ -120,6 +120,37 @@ pub fn open_count(conn: &Connection, node_id: &str, workspace_id: Option<&str>) 
     .unwrap_or(0)
 }
 
+/// The same names in any order, once each: what [`open_same`] compares.
+pub fn name_set(names: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = names.iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// A still-open (pending, not past its end) row for the same node, the
+/// same workspace, the same origin and exactly the same package set
+/// (0.46.18): a refused submit or a second ask reuses it instead of filing
+/// a duplicate the owner would see twice. The oldest such row.
+pub fn open_same(conn: &Connection, node_id: &str, workspace_id: Option<&str>, origin: &str, names: &[String], now: i64) -> Option<PkgRow> {
+    let want = name_set(names);
+    let mut st = conn
+        .prepare(&format!(
+            "SELECT {COLS} FROM compute_pkg_requests WHERE node_id = ?1 AND origin = ?2 AND state = 'pending' AND expires_at > ?3 \
+             AND ((?4 IS NULL AND workspace_id IS NULL) OR workspace_id = ?4) ORDER BY created_at, rowid"
+        ))
+        .ok()?;
+    let rows: Vec<PkgRow> = st.query_map(params![node_id, origin, now, workspace_id], row).map(|it| it.flatten().collect()).unwrap_or_default();
+    rows.into_iter().find(|r| name_set(&r.names) == want)
+}
+
+/// The node's own dry run says every asked name is already installed
+/// there (0.46.18): nothing to approve, nothing to install. Never true
+/// without a dry run, or with a guard's refusal on it.
+pub fn already_installed(r: &PkgRow) -> bool {
+    r.dry.as_ref().is_some_and(|d| d.refusal.is_none() && !r.names.is_empty() && r.names.iter().all(|n| d.already.iter().any(|a| a == n)))
+}
+
 pub fn insert(conn: &Connection, n: &NewRow<'_>) -> Result<PkgRow, String> {
     let id = new_id();
     conn.execute(
@@ -286,5 +317,40 @@ mod tests {
         assert!(r.add_to_list && r.decided_by.as_deref() == Some("owner") && r.state == "installed");
         set_node_info(&conn, &a.id, "npr_1", None, None);
         assert_eq!(by_node_request(&conn, "n1", "npr_1").unwrap().id, a.id);
+    }
+
+    /// 0.46.18: the open row for the same node, workspace, origin and
+    /// package set (any order) is found; another set, node, workspace,
+    /// origin, a decided row or one past its end is not.
+    #[test]
+    fn open_same_finds_only_the_same_open_ask() {
+        let conn = db();
+        let names = vec!["libssl-dev".to_string(), "libgtk-3-dev".to_string()];
+        let a = insert(&conn, &NewRow { batch_id: "cpr_b1", origin: OWN, node_id: "n1", server: "own", workspace_id: Some("w1"), asked_by: "tests", names: &names, now: 100, ..Default::default() }).unwrap();
+        let swapped = vec!["libgtk-3-dev".to_string(), "libssl-dev".to_string(), "libssl-dev".to_string()];
+        assert_eq!(open_same(&conn, "n1", Some("w1"), OWN, &swapped, 200).map(|r| r.id), Some(a.id.clone()), "same set, any order");
+        assert!(open_same(&conn, "n1", Some("w1"), OWN, &names[..1], 200).is_none(), "a smaller set is another ask");
+        assert!(open_same(&conn, "n2", Some("w1"), OWN, &names, 200).is_none(), "another node");
+        assert!(open_same(&conn, "n1", Some("w2"), OWN, &names, 200).is_none(), "another workspace");
+        assert!(open_same(&conn, "n1", Some("w1"), SENT, &names, 200).is_none(), "another origin");
+        assert!(open_same(&conn, "n1", Some("w1"), OWN, &names, 100 + pkgpolicy::REQUEST_TTL_SECS).is_none(), "past its end");
+        assert!(set_state(&conn, &a.id, "denied", Some("owner"), None, None, 150));
+        assert!(open_same(&conn, "n1", Some("w1"), OWN, &names, 200).is_none(), "a decided row is never reused");
+    }
+
+    /// 0.46.18: "already installed" only when the node's dry run lists
+    /// every asked name as there, with no guard refusal.
+    #[test]
+    fn already_installed_reads_the_nodes_dry_run() {
+        let conn = db();
+        let names = vec!["libpq-dev".to_string(), "pkg-config".to_string()];
+        let mk = |dry: Option<DrySummary>| {
+            let r = insert(&conn, &NewRow { batch_id: "cpr_x", origin: OWN, node_id: "n1", server: "own", asked_by: "t", names: &names, dry: dry.as_ref(), now: 1, ..Default::default() }).unwrap();
+            already_installed(&r)
+        };
+        assert!(!mk(None), "no dry run: unknown, so not installed");
+        assert!(mk(Some(DrySummary { already: names.clone(), ..Default::default() })));
+        assert!(!mk(Some(DrySummary { already: vec!["libpq-dev".into()], installs: vec!["pkg-config".into()], ..Default::default() })), "one still to install");
+        assert!(!mk(Some(DrySummary { already: names.clone(), refusal: Some("package_denied: x".into()), ..Default::default() })), "a refusal never passes");
     }
 }

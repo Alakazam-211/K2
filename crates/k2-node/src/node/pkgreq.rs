@@ -242,8 +242,21 @@ impl Node {
                 return;
             }
         };
+        // 0.46.18: the offer reports these names from now on (installed or
+        // not), so a name installed by hand, or by an "Allow once" approval,
+        // reads as installed at this server's next submit instead of asking
+        // again.
+        self.note_pkg_asked(t.slot, &names);
         let (b2, h2, n2) = (b.clone(), h.clone(), names.clone());
-        let dry = tokio::task::spawn_blocking(move || crate::pkgsys::dry_summary(b2.as_ref(), &h2, &n2)).await.ok();
+        let me = self.clone();
+        let dry = tokio::task::spawn_blocking(move || {
+            let d = crate::pkgsys::dry_summary(b2.as_ref(), &h2, &n2);
+            me.refresh_pkg_cache();
+            d
+        })
+        .await
+        .ok();
+        self.notify_offers();
         let natives: BTreeMap<String, Vec<String>> = names.iter().filter_map(|n| h.natives(n).map(|v| (n.clone(), v))).collect();
         let now = self.now();
         let id = format!("npr_{}", k2_node_proto::crypto::random_id().unwrap_or_default().chars().take(16).collect::<String>());

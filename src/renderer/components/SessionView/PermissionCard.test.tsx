@@ -232,6 +232,28 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: always, confirmToken: 'tok_1' }))
   })
 
+  it('the package card reads Allow once and Always allow on <node>, and each answers with the daemon’s label', async () => {
+    const always = 'Always allow on node-a'
+    const view = { ...CONFIRM_VIEW, action: 'compute.packages', proof: { kind: 'click' } }
+    let actions = actionsMock()
+    draw(permissionDoc({ view, options: ['Allow', 'Deny', always] }), actions)
+    expect(text('permission-allow')).toBe('Allow once')
+    expect(text('permission-always')).toBe(always)
+    fireEvent.click(screen.getByTestId('permission-always'))
+    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: always }))
+    cleanup()
+    actions = actionsMock()
+    draw(permissionDoc({ view, options: ['Allow', 'Deny', always] }), actions)
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: 'Allow' }))
+    cleanup()
+    // Without the daemon's third option (another server's node, a batch):
+    // the plain Allow, no Always.
+    draw(permissionDoc({ view, options: ['Allow', 'Deny'] }), actionsMock())
+    expect(text('permission-allow')).toBe('Allow')
+    expect(screen.queryByTestId('permission-always')).toBeNull()
+  })
+
   it('cancel goes back to the buttons; without a server to confirm on, it says where to', () => {
     const actions = actionsMock()
     draw(permissionDoc({ view: CONFIRM_VIEW }), actions)

@@ -488,6 +488,9 @@ pub(crate) fn prompt_and_options(reqs: &[PermissionRequest], batch: bool) -> (St
         if super::actions::vault_send::offers_always(first) {
             options.push(super::actions::vault_send::ALWAYS_LABEL.to_string());
         }
+        if let Some(l) = super::actions::compute::always_label(first) {
+            options.push(l);
+        }
         return (prompt, options);
     }
     let ws = workspace_handle(&reqs[0].workspace_id);

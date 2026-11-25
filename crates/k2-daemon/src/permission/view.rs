@@ -470,6 +470,10 @@ fn approver_options(state: RequestState, answer: Option<&str>, item: &ItemView) 
         _ if super::actions::vault_send::offers_always_for(&item.action, &item.request_id) => {
             labels(&[label::ALLOW, label::DENY, label::ALWAYS_VAULT_SEND])
         }
+        _ if item.action == super::actions::compute::PACKAGES.id => match super::actions::compute::always_label_for(&item.request_id) {
+            Some(l) => labels(&[label::ALLOW, label::DENY, l.as_str()]),
+            None => answer_labels(),
+        },
         _ => answer_labels(),
     }
 }

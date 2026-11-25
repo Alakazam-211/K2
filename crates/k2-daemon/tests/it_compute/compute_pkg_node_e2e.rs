@@ -381,3 +381,247 @@ async fn request_card_approve_and_the_node_installs() {
     runner.abort();
     let _ = std::fs::remove_file(&admin_sock);
 }
+
+// ── 0.46.18: installed passes, one ask one request, once vs always ───
+
+/// The real node, enrolled and confirmed as `name`, with root's executor
+/// and the scripted package manager `fake` (nothing real is installed).
+struct Rig {
+    layout: Layout,
+    runner: tokio::task::JoinHandle<()>,
+    admin_sock: PathBuf,
+}
+
+impl Rig {
+    fn approved_list(&self) -> String {
+        std::fs::read_to_string(self.layout.config.join("k2-node-packages.toml")).unwrap_or_default()
+    }
+    fn stop(self) {
+        self.runner.abort();
+        let _ = std::fs::remove_file(&self.admin_sock);
+    }
+}
+
+async fn rig(env: &Env, port: u16, name: &str, fake: Arc<FakeBackend>) -> Rig {
+    let base = format!("http://127.0.0.1:{port}");
+    let r = post(port, "/cli/compute/nodes/enroll-code", OWNER, json!({"name": name, "url": base})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let es = k2_node_proto::pairing::EnrollString::parse(j(&r)["enroll"].as_str().unwrap()).expect("enroll string");
+    let dir = env.home.join(format!("node-{name}"));
+    let layout = Layout::new(dir.join("home"), dir.join("config"));
+    layout.ensure().unwrap();
+    std::fs::create_dir_all(&layout.config).unwrap();
+    std::fs::write(layout.policy(), "availability = \"always\"\nforeign_locks = []\nwrite_smoke_lock = \"\"\ndisk_floor_gb = 0\nmax_parallel = 2\n").unwrap();
+    let key = k2_node::identity::load_or_create_key(&layout.key()).unwrap();
+    let mut sock = k2_node::session::connect(&base, k2_node::session::ENROLL_PATH).await.expect("enroll connect");
+    let done = k2_node::enroll::enroll_on(&mut sock, &key, &base, &k2_node::enroll::Credential::Code(es), name, &Default::default(), k2_node::util::now())
+        .await
+        .expect("enroll");
+    k2_node::identity::write_pin(&layout.pin(), &done.pin).unwrap();
+    let r = post(port, "/cli/compute/nodes/confirm", OWNER, json!({"node": name, "sas": done.sas})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let backend: Arc<dyn Backend> = fake;
+    let controller = k2_core::compute::controller_key().unwrap();
+    acfg::write(
+        &layout.config.join(acfg::ADMIN_FILE),
+        &AdminFile {
+            remote_admin: "full".into(),
+            controller_fp: Some(controller.fingerprint()),
+            controller_key: Some(k2_node_proto::crypto::b64(controller.spki_der())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let admin_sock = k2_core::test_env::short_tmp(format!("k2pkg-{}.sock", &k2_node_proto::crypto::random_id().unwrap()[..10]));
+    let paths = ExecPaths { config_dir: layout.config.clone(), state_dir: dir.join("admin-state"), home: layout.home.clone(), binary: dir.join("bin/k2-node") };
+    k2_node::admin::exec::ensure_state_dir(&paths.state_dir).unwrap();
+    let exec = Arc::new(Executor::new(paths, Arc::new(SystemPlatform) as Arc<dyn Platform>));
+    exec.set_pkg_backend(ubuntu(), backend.clone());
+    let listener = k2_node::admin::server::bind(&admin_sock, None).unwrap();
+    let me = unsafe { libc::geteuid() };
+    let e2 = exec.clone();
+    std::thread::spawn(move || {
+        let rule = k2_node::admin::server::PeerRule { allowed_uids: vec![me] };
+        let _ = k2_node::admin::server::serve(&e2, &rule, listener, &|| false);
+    });
+    let mut o = NodeOptions::new(layout.clone());
+    o.dev = true;
+    o.config_poll = Duration::from_millis(100);
+    o.backoff_min = Duration::from_millis(50);
+    o.backoff_max = Duration::from_millis(300);
+    o.offer_every = Duration::from_secs(1);
+    o.keep_awake = false;
+    o.use_cgroups = false;
+    o.admin_socket = admin_sock.clone();
+    o.facts = Some(k2_node::config::MachineFacts { cores: 8, mem_bytes: 32 << 30, disk_total_bytes: 1 << 40, has_battery: false, is_macos: false });
+    o.pkg_backend = Some(backend);
+    o.pkg_host = Some(ubuntu());
+    let node = Node::open(o).await.expect("node open");
+    node.spawn_background();
+    let runner = tokio::spawn(k2_node::session::run_forever(node.clone()));
+    let nm = name.to_string();
+    wait_for("a protocol 7 offer with package requests", 30, move || {
+        let nm = nm.clone();
+        Box::pin(async move {
+            let r = get(port, "/cli/compute/nodes", OWNER, "").await;
+            r.status == 200
+                && j(&r)["nodes"].as_array().unwrap().iter().any(|n| n["name"] == nm.as_str() && n["offer"]["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "pkg-requests")))
+        })
+    })
+    .await;
+    Rig { layout, runner, admin_sock }
+}
+
+/// Every request row (any state) whose names are exactly `names`.
+async fn rows_for(port: u16, names: &[&str]) -> Vec<Value> {
+    let r = get(port, "/cli/compute/nodes/packages/requests", OWNER, "state=all&limit=500").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mut want: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    j(&r)["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| {
+            let mut have: Vec<String> = x["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_string()).collect();
+            have.sort();
+            have == want
+        })
+        .cloned()
+        .collect()
+}
+
+/// The `sys:` need's state in a plan on `node` (what the node's offer says).
+async fn plan_need(port: u16, agent: &str, node: &str, pkg: &str) -> String {
+    let body = json!({"node": node, "argv": ["true"], "needs": [format!("sys:{pkg}")], "noSource": true, "plan": true, "clientJobId": format!("pkgplan-{}", uuid::Uuid::new_v4().simple())});
+    let r = post(port, "/cli/compute/run", agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    let need = format!("sys:{pkg}");
+    let row = v["needs"].as_array().unwrap_or_else(|| panic!("no needs in the plan: {v}")).iter().find(|n| n["need"] == need.as_str()).cloned();
+    row.unwrap_or_else(|| panic!("no {need} in {v}"))["state"].as_str().unwrap_or_else(|| panic!("no state for {need} in {v}")).to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn installed_packages_pass_one_ask_is_one_request_and_once_differs_from_always() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws("pkgtests");
+    let agent = passport(&ws);
+
+    let fake = Arc::new(FakeBackend::new(Mgr::Apt));
+    for p in ["zlib1g-dev", "libpq-dev", "libssl-dev"] {
+        fake.add(p, &[], 100);
+    }
+    // Installed by hand at the machine: on no approved list, never asked.
+    fake.state.lock().unwrap().installed.insert("zlib1g-dev".into());
+    let rig = rig(&env, port, "node-a", fake.clone()).await;
+    let r = post(port, "/cli/compute/agents/set", OWNER, json!({"workspace": "pkgtests", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "node-a", "workspace": "pkgtests", "maxJobSecs": 7200, "maxDiskGb": 20, "maxParallel": 4, "maxQueued": 20})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let run = |pkg: &str| json!({"node": "node-a", "argv": ["true"], "needs": [format!("sys:{pkg}")], "noSource": true, "detach": true, "clientJobId": format!("pkgjob-{}", uuid::Uuid::new_v4().simple())});
+
+    // The mutating package routes are POST only.
+    for path in ["/cli/compute/nodes/packages/decide", "/cli/compute/nodes/packages/request"] {
+        let r = get(port, path, OWNER, "request=cpr_x&approve=true").await;
+        assert_eq!(r.status, 405, "{path} on GET: {}", r.body);
+    }
+
+    // (a) Installed but on no list: the submit goes on (the node's dry run
+    // says it's there), nothing installs, and the one request it filed is
+    // settled as already installed.
+    assert_eq!(plan_need(port, &agent, "node-a", "zlib1g-dev").await, "ask", "the node never reported it before");
+    let r = post(port, "/cli/compute/run", &agent, run("zlib1g-dev")).await;
+    assert_eq!(r.status, 200, "installed on the node, so no approval is needed: {}", r.body);
+    let rows = rows_for(port, &["zlib1g-dev"]).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        (rows[0]["state"].as_str(), rows[0]["note"].as_str()),
+        (Some("installed"), Some("already installed on the node: nothing to approve or install")),
+        "{rows:?}"
+    );
+    assert!(fake.state.lock().unwrap().installs.is_empty(), "nothing was installed");
+    assert!(!rig.approved_list().contains("zlib1g-dev"), "and nothing was listed: {}", rig.approved_list());
+    // The node reports it from now on: the next submit asks nothing at all.
+    wait_for("the node to report zlib1g-dev installed", 20, || {
+        let a = agent.clone();
+        Box::pin(async move { plan_need(port, &a, "node-a", "zlib1g-dev").await == "ready" })
+    })
+    .await;
+    let r = post(port, "/cli/compute/run", &agent, run("zlib1g-dev")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(rows_for(port, &["zlib1g-dev"]).await.len(), 1, "no second request");
+
+    // (c) One ask, one request: the same refused submit twice reuses it.
+    let r = post(port, "/cli/compute/run", &agent, run("libpq-dev")).await;
+    assert_eq!((r.status, j(&r)["error"]["code"].as_str()), (403, Some("package_not_approved")), "{}", r.body);
+    let first = j(&r)["error"]["request"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/compute/run", &agent, run("libpq-dev")).await;
+    assert_eq!((r.status, j(&r)["error"]["code"].as_str()), (403, Some("package_not_approved")), "{}", r.body);
+    assert_eq!(j(&r)["error"]["request"].as_str(), Some(first.as_str()), "the open request is reused: {}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains(&format!("request {first} already waits")), "{}", r.body);
+    let r = post(port, "/cli/compute/nodes/packages/request", &agent, json!({"nodes": ["node-a"], "names": ["libpq-dev"], "why": "again"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        (j(&r)["request"]["id"].as_str(), j(&r)["reused"][0].as_str()),
+        (Some(first.as_str()), Some(first.as_str())),
+        "the request verb reuses it too: {}",
+        r.body
+    );
+    assert_eq!(rows_for(port, &["libpq-dev"]).await.len(), 1, "one row for the same node and names");
+
+    // (b) Allow once: installs, stays off the list, and the next submit
+    // passes with no new request (the node reports what it installed).
+    let r = post(port, "/cli/compute/nodes/packages/decide", OWNER, json!({"request": first, "approve": true, "add": false})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    wait_for("libpq-dev to install", 30, || {
+        let b = first.clone();
+        Box::pin(async move { row_state(port, &b).await == "installed" })
+    })
+    .await;
+    assert!(fake.state.lock().unwrap().installed.contains("libpq-dev"));
+    assert!(!rig.approved_list().contains("libpq-dev"), "Allow once never lists it: {}", rig.approved_list());
+    wait_for("the node to report libpq-dev installed", 20, || {
+        let a = agent.clone();
+        Box::pin(async move { plan_need(port, &a, "node-a", "libpq-dev").await == "ready" })
+    })
+    .await;
+    let r = post(port, "/cli/compute/run", &agent, run("libpq-dev")).await;
+    assert_eq!(r.status, 200, "allowed once and installed: the job goes on: {}", r.body);
+    assert_eq!(rows_for(port, &["libpq-dev"]).await.len(), 1, "no new request after Allow once");
+
+    // Always allow: installs and lists it; the next submit passes.
+    let r = post(port, "/cli/compute/run", &agent, run("libssl-dev")).await;
+    assert_eq!((r.status, j(&r)["error"]["code"].as_str()), (403, Some("package_not_approved")), "{}", r.body);
+    let always = j(&r)["error"]["request"].as_str().unwrap().to_string();
+    let r = post(port, "/cli/compute/nodes/packages/decide", OWNER, json!({"request": always, "approve": true, "add": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    wait_for("libssl-dev to install", 30, || {
+        let b = always.clone();
+        Box::pin(async move { row_state(port, &b).await == "installed" })
+    })
+    .await;
+    assert!(rig.approved_list().contains("\"libssl-dev\""), "Always allow lists it: {}", rig.approved_list());
+    wait_for("the node to report libssl-dev installed", 20, || {
+        let a = agent.clone();
+        Box::pin(async move { plan_need(port, &a, "node-a", "libssl-dev").await == "ready" })
+    })
+    .await;
+    let r = post(port, "/cli/compute/run", &agent, run("libssl-dev")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(rows_for(port, &["libssl-dev"]).await.len(), 1, "no new request after Always allow");
+    // What the node approved and installed, as Settings reads it.
+    let r = get(port, "/cli/compute/nodes/packages", OWNER, "node=node-a").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = j(&r)["packages"].clone();
+    let has = |k: &str, n: &str| p[k].as_array().unwrap_or_else(|| panic!("no {k} in {p}")).iter().any(|x| x == n);
+    assert!(has("approved", "libssl-dev") && !has("approved", "libpq-dev"), "{p}");
+    for n in ["zlib1g-dev", "libpq-dev", "libssl-dev"] {
+        assert!(has("installed", n), "{n} reads installed: {p}");
+    }
+
+    rig.stop();
+}

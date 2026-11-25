@@ -2209,20 +2209,29 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             }
             if !ask.is_empty() && !opts.dry {
                 let filed = crate::compute_pkg::file(who, ws, opts.session.as_deref(), &ws.handle, std::slice::from_ref(&node), &ask, Some("a job's --needs"), None)?;
+                // 0.46.18: installed there already (the node's own dry run
+                // says so), though on no list: the job goes on; its install
+                // step finds them and installs nothing.
+                let already = filed["allInstalled"] == true;
                 let id = filed["request"]["id"].as_str().unwrap_or_default().to_string();
-                let to = if node.is_tenant() { format!("{}'s owner ({})", node.name, node.owner_label.as_deref().unwrap_or("another server")) } else { "this server's owner or an Admin".to_string() };
-                return Err(no(
-                    k2_core::compute::proto::pkgpolicy::codes::PACKAGE_NOT_APPROVED,
-                    403,
-                    format!(
-                        "'{}' needs its owner's approval to install {}: request {id} is filed for {to}. Run the job again once it's installed ({CLI_NAME} compute node packages requests shows it)",
-                        node.name,
-                        ask.join(", ")
-                    ),
-                )
-                .with("request", id)
-                .with("node", node.name.clone())
-                .with("packages", ask));
+                if already {
+                    k2_core::log_debug!("[compute] {} already has {} (request {id} settled): the job goes on", node.name, ask.join(", "));
+                } else {
+                    let to = if node.is_tenant() { format!("{}'s owner ({})", node.name, node.owner_label.as_deref().unwrap_or("another server")) } else { "this server's owner or an Admin".to_string() };
+                    let again = if filed["reused"].as_array().is_some_and(|a| !a.is_empty()) { "already waits" } else { "is filed" };
+                    return Err(no(
+                        k2_core::compute::proto::pkgpolicy::codes::PACKAGE_NOT_APPROVED,
+                        403,
+                        format!(
+                            "'{}' needs its owner's approval to install {}: request {id} {again} for {to}. Run the job again once it's installed ({CLI_NAME} compute node packages requests shows it)",
+                            node.name,
+                            ask.join(", ")
+                        ),
+                    )
+                    .with("request", id)
+                    .with("node", node.name.clone())
+                    .with("packages", ask));
+                }
             }
         }
     }

@@ -14,7 +14,7 @@ use k2_core::permission::request::RequestState;
 use serde_json::{json, Value};
 
 use super::super::held::tests::{
-    agent, answer_as, apply_as, ask, ask_ok, ask_refused, below_floor, card_of, id_of, last_turn, login, not_requestable, refused_code, row,
+    agent, answer_as, apply_as, ask, ask_ok, ask_refused, below_floor, card_of, card_status, id_of, last_turn, login, not_requestable, refused_code, row,
     seed, view, Ws,
 };
 use super::super::Answerer;
@@ -1333,4 +1333,168 @@ fn pinned_only_allow_flips_the_node_as_the_person_and_deny_changes_nothing() {
     assert!(!pinned(&node_id), "allow turned it off");
     let last = pinned_events(&node_id).pop().expect("an event");
     assert_eq!((last.0.as_str(), &last.1["on"], &last.1["via"]), ("owner", &json!(false), &json!("permission-card")));
+}
+
+// ── 0.46.18: Allow once / Always allow on <node>, cards settle both ways ──
+
+/// `node_id` online with package requests: a live session for the package
+/// routes (`compute_ws`) and the fake admin channel that records each
+/// signed command (`compute_admin`). Detached on drop.
+struct LivePkgNode(String);
+impl LivePkgNode {
+    fn attach(node_id: &str) -> LivePkgNode {
+        use k2_core::compute::proto::frames::{self as fr, Offer};
+        // No `admin` in the offer: that would pin the approval key on
+        // attach. The fake admin channel below takes the commands.
+        let feats = [k2_core::compute::proto::pkgpolicy::FEATURE_PKG_STATUS, k2_core::compute::proto::pkgpolicy::FEATURE_PKG_REQUESTS];
+        let offer = Offer {
+            share: None,
+            revision: 1,
+            control: fr::Control::Active,
+            control_by: None,
+            control_at: None,
+            availability: fr::Availability { ok: true, reasons: vec![] },
+            caps: fr::Caps { cpu_millis: 8000, mem_bytes: 8 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 },
+            free: fr::Free { cpu_millis: 8000, mem_bytes: 8 << 30, disk_free_bytes: 500 << 30, gpus: 0 },
+            slots: vec![],
+            running: 0,
+            parallel_max: 1,
+            refusal: None,
+            labels: [("os".to_string(), "linux".to_string())].into(),
+            tools: BTreeMap::new(),
+            protocol: 7,
+            boot_id: "b".into(),
+            ledger_id: "l".into(),
+            node_version: "0.46.18".into(),
+            features: feats.iter().map(|f| f.to_string()).collect(),
+            host: None,
+            pkg: None,
+            sim: None,
+        };
+        // The receiving end is dropped: what the package routes send the
+        // node over the session is not what these tests read.
+        drop(crate::compute_ws::test_attach(node_id, offer));
+        nodes::register(node_id, true, &[wire::FEATURE_ADMIN, feats[0], feats[1]]);
+        LivePkgNode(node_id.to_string())
+    }
+}
+impl Drop for LivePkgNode {
+    fn drop(&mut self) {
+        crate::compute_ws::test_detach(&self.0);
+        nodes::set_online(&self.0, false);
+    }
+}
+
+/// The `packages.allow` commands sent to `node_id`: their `add` flags.
+fn allow_adds(node_id: &str) -> Vec<bool> {
+    nodes::take_sent(node_id)
+        .into_iter()
+        .filter_map(|f| match f {
+            Frame::Admin(a) => Some(a.cmd),
+            _ => None,
+        })
+        .map(|c| serde_json::from_slice::<Value>(&crypto::unb64(&c.body_b64).expect("b64 body")).expect("command json"))
+        .filter(|body| body["verb"] == wire::VERB_PACKAGES_ALLOW)
+        .map(|body| body["args"]["add"].as_bool().unwrap_or_else(|| panic!("no add flag: {body}")))
+        .collect()
+}
+
+/// The labels the card's stored doc offers (what every client reads).
+fn card_options(ws: &Ws, card: &str) -> Vec<String> {
+    let d = serde_json::to_value(k2_core::overlay::get_thread_doc(&ws.conv, card).expect("doc read").expect("card doc")).expect("doc json");
+    d["choice"]["options"].as_array().unwrap_or_else(|| panic!("no options: {d}")).iter().map(|o| o["label"].as_str().expect("label").to_string()).collect()
+}
+
+/// The card offers Allow (once) and `Always allow on <node>`; each answer
+/// sends exactly that to the node (`add` false / true), the request row
+/// records it, and the answer says plainly which was picked.
+#[test]
+fn the_package_card_offers_allow_once_and_always_allow_on_its_node() {
+    let _db = k2_core::db::scoped_for_test();
+    use k2_core::compute::pkgreq::OWN;
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgal");
+    let (node, name) = list_node(&ws, "pk-al", true);
+    let _live = LivePkgNode::attach(&node);
+    let admin = login("pkgala", Role::Admin);
+    let always = format!("Always allow on {name}");
+
+    let id = file_pkg(&ws, &node, "pending", OWN, "own");
+    let v = ask_ok(&ws, "compute.packages", json!({ "request": id }));
+    assert_eq!(card_options(&ws, &card_of(&v)), ["Allow".to_string(), "Deny".to_string(), always.clone()]);
+    let (s, a) = answer_as(&admin, &ws, &card_of(&v), json!({ "answer": always }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Approved);
+    assert_eq!(allow_adds(&node), [true], "Always allow adds to the node's list");
+    let rows = pkg_rows(&id);
+    assert_eq!((rows[0].state.as_str(), rows[0].add_to_list), ("approved", true), "{rows:?}");
+    let msg = a["action"]["result"]["message"].as_str().unwrap_or_else(|| panic!("no message: {a}"));
+    assert!(msg.starts_with(&format!("Always allow on {name}: root installs these packages and adds them to {name}'s approved list")), "{msg}");
+
+    let id = file_pkg(&ws, &node, "pending", OWN, "own");
+    let v = ask_ok(&ws, "compute.packages", json!({ "request": id }));
+    let (s, a) = answer_as(&admin, &ws, &card_of(&v), json!({ "answer": "Allow" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(allow_adds(&node), [false], "Allow is once: nothing is added to the list");
+    let rows = pkg_rows(&id);
+    assert_eq!((rows[0].state.as_str(), rows[0].add_to_list), ("approved", false), "{rows:?}");
+    let msg = a["action"]["result"]["message"].as_str().unwrap_or_else(|| panic!("no message: {a}"));
+    assert!(msg.starts_with(&format!("Allow once: root installs these packages on {name} this time; they stay off its approved list")), "{msg}");
+
+    // A label the card doesn't offer (another node's name) still reads as
+    // Always allow, matched on its prefix; a made-up answer is refused.
+    let id = file_pkg(&ws, &node, "pending", OWN, "own");
+    let v = ask_ok(&ws, "compute.packages", json!({ "request": id }));
+    let (s, a) = answer_as(&admin, &ws, &card_of(&v), json!({ "answer": "Always allow everything" }));
+    assert_eq!((s.as_str(), &a["error"]["code"]), ("400 Bad Request", &json!("usage")), "{a}");
+    assert!(row(&id).is_answerable());
+}
+
+/// Deciding a package request in Settings (or with the CLI: the same
+/// route) closes its open card with the same answer, and the agent's card
+/// can't decide it a second time.
+#[test]
+fn deciding_a_package_request_in_settings_closes_its_card() {
+    let _db = k2_core::db::scoped_for_test();
+    use k2_core::compute::pkgreq::OWN;
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("pkgst");
+    let (node, name) = list_node(&ws, "pk-st", true);
+    let decide = |body: Value| crate::compute_pkg::handle(crate::compute_pkg::DECIDE, &Who::Owner, body.to_string().as_bytes(), &HashMap::new()).map_err(|e| (e.status, e.code.to_string()));
+
+    // Denied in Settings: the card reads denied.
+    let id = file_pkg(&ws, &node, "pending", OWN, "own");
+    let card = card_of(&ask_ok(&ws, "compute.packages", json!({ "request": id })));
+    decide(json!({ "request": id, "approve": false, "note": "not on this box" })).expect("denied");
+    assert_eq!(pkg_rows(&id)[0].state, "denied");
+    let r = row(&id);
+    assert_eq!((r.state, r.answered_by.as_deref()), (RequestState::Denied, Some("owner")), "{r:?}");
+    assert!(r.result_message.as_deref().unwrap_or("").starts_with("Denied in Settings"), "{r:?}");
+    assert_eq!(card_status(&ws, &card), "answered");
+    let admin = login("pkgsta", Role::Admin);
+    let (s, a) = answer_as(&admin, &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!(s, "409 Conflict", "the card was settled in Settings: {a}");
+    assert_eq!(pkg_rows(&id)[0].state, "denied", "and stays denied");
+
+    // Allowed and added in Settings, the node online: the card reads
+    // Always allow on <node>, with the same words the card would say.
+    let _live = LivePkgNode::attach(&node);
+    let id = file_pkg(&ws, &node, "pending", OWN, "own");
+    let card = card_of(&ask_ok(&ws, "compute.packages", json!({ "request": id })));
+    decide(json!({ "request": id, "approve": true, "add": true })).expect("approved");
+    assert_eq!(allow_adds(&node), [true]);
+    let r = row(&id);
+    assert_eq!(r.state, RequestState::Approved, "{r:?}");
+    assert!(r.result_message.as_deref().unwrap_or("").starts_with(&format!("Always allow on {name}:")), "{r:?}");
+    assert_eq!(card_status(&ws, &card), "answered");
+
+    // Offline, an approval decides nothing yet: the card stays open.
+    drop(_live);
+    let id = file_pkg(&ws, &node, "pending", OWN, "own");
+    let card = card_of(&ask_ok(&ws, "compute.packages", json!({ "request": id })));
+    decide(json!({ "request": id, "approve": true })).expect("held while offline");
+    assert!(row(&id).is_answerable(), "the request still waits, so its card does too");
+    assert_eq!(card_status(&ws, &card), "pending");
 }

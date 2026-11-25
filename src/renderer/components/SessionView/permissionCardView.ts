@@ -65,7 +65,34 @@ export const PERMISSION_LABEL = {
   /** `vault.send` (0.46.11): send now, then let the agent send the same
    *  secrets to the same agent itself (a standing send grant). */
   alwaysVaultSend: 'Allow, and let it send this itself from now on',
+  /** `compute.packages` (0.46.18): the daemon's third option is this
+   *  prefix and the node's name (`Always allow on node-a`): install, and
+   *  add those packages to that node's approved list. Plain `Allow` is
+   *  "Allow once" on that card. */
+  alwaysPackagesPrefix: 'Always allow on ',
 } as const
+
+/** The compute package card's action id (`compute.packages`). */
+export const COMPUTE_PACKAGES_ACTION = 'compute.packages'
+
+/** The "from now on" option the daemon offers among `labels`, if any. */
+export function alwaysOptionOf(labels: readonly string[]): string | undefined {
+  return labels.find(
+    (l) =>
+      l === PERMISSION_LABEL.always ||
+      l === PERMISSION_LABEL.alwaysChatRefresh ||
+      l === PERMISSION_LABEL.alwaysVaultSend ||
+      l.startsWith(PERMISSION_LABEL.alwaysPackagesPrefix),
+  )
+}
+
+/** The Allow button's words: "Allow once" on a package card that also
+ *  offers "Always allow on <node>"; the answer sent is still `Allow`. */
+export function allowButtonLabel(action: string, always: string | undefined): string {
+  return action === COMPUTE_PACKAGES_ACTION && always?.startsWith(PERMISSION_LABEL.alwaysPackagesPrefix)
+    ? 'Allow once'
+    : PERMISSION_LABEL.allow
+}
 
 /** What "Let this agent manage its Apps' users" covers: the daemon's
  *  `held_cards::SWITCH_COVERS`, word for word (a daemon test reads this

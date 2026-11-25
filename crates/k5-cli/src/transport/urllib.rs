@@ -464,6 +464,14 @@ impl Opener {
         }
     }
 
+    /// Sets the session socket of an opener made from a client whose
+    /// credential was swapped for the block's own token (a block that reads
+    /// its token itself). `sock` only when that token is the session's
+    /// passport.
+    pub fn set_session_sock(&mut self, sock: Option<PathBuf>) {
+        self.session_sock = sock;
+    }
+
     /// `_K5SessionSock`'s test (`_k5_on_socket`): the cell socket when
     /// this is an identity session's opener, the URL is plain http
     /// (`tls` false), its host (`netloc` with the port and any brackets

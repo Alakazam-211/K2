@@ -419,15 +419,24 @@ impl Client {
 
     /// The cell socket that a request carrying the session's passport goes
     /// over first in an identity session (Agent Isolation M1): with
-    /// [`Client::passport_on_socket`], a passport, its socket a socket
-    /// (`[ -S ]`) and no remote host forcing TCP, the five things the
-    /// shell's `_k2_via_session_sock` and `_k2_py_session_sock_lines`
-    /// read. `None` outside an identity session.
+    /// [`Client::passport_on_socket`], a passport and its socket a socket
+    /// (`[ -S ]`), as the shell's `_k2_via_session_sock` and
+    /// `_k2_py_session_sock_lines` read them. `None` outside an identity
+    /// session. [`Client::force_tcp`] doesn't count: a call that keeps off
+    /// the cell socket's own routes (a `tcp` compute call, `focus-group
+    /// list`, the publish PIN) still carries the passport to this
+    /// machine's daemon, and a remote host's call carries its own token
+    /// to its own address, never the passport ([`super::super::remote::apply`]).
     pub fn session_socket(&self) -> Option<&Path> {
         if !self.passport_on_socket {
             return None;
         }
-        self.cell_socket()
+        match &self.auth {
+            Auth::Passport {
+                sock: Some(sock), ..
+            } if is_socket(sock) => Some(sock),
+            _ => None,
+        }
     }
 
     /// `_k2_via_session_sock` for one curl request: the cell socket and
@@ -997,8 +1006,18 @@ mod session_tests {
         let mut c = identity_client(4100, &path);
         c.passport_on_socket = false;
         assert!(!routed(&c, Kind::Request));
+        // A call kept off the cell socket's own routes still carries the
+        // passport here: it goes over the socket, marked.
         let mut c = identity_client(4100, &path);
         c.force_tcp = true;
+        assert!(routed(&c, Kind::Request));
+        assert!(routed(&c, Kind::ComputeGet));
+        // A remote host: its own token, never the passport.
+        crate::transport::remote::apply(
+            &mut c,
+            &crate::transport::remote::base("http://127.0.0.1:4200").unwrap(),
+            "remote-tok".into(),
+        );
         assert!(!routed(&c, Kind::Request));
         let c = identity_client(4100, &file);
         assert!(!routed(&c, Kind::Request));

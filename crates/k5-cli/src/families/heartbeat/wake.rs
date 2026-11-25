@@ -314,10 +314,17 @@ impl Wake {
             }
         }
         let setup = &setup;
+        // In an identity session the block's token is the session's
+        // passport, and its requests go over the session socket first.
+        let sock = client
+            .session_socket()
+            .filter(|_| client.passport().is_some_and(|p| p.as_str() == setup.token))
+            .map(std::path::Path::to_path_buf);
         let saved = std::mem::replace(&mut client.auth, Auth::Owner(setup.token.clone()));
         let opener = Opener::from_client(client);
         client.auth = saved;
         let mut opener = opener;
+        opener.set_session_sock(sock);
         opener.host = "127.0.0.1".into();
         opener.port = setup.port.parse().unwrap_or(0);
         opener.netloc = format!("127.0.0.1:{}", setup.port);

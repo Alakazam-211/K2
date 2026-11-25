@@ -392,7 +392,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// to a message or card, to point the person at it.
 /// Bumped to 68 (0.46.18, both 67 lines landed together): the Compute nodes block passes `--expect` (how
 /// long the job takes; `unknown` only on a first run).
-pub const SKILL_VERSION_WORKSPACE: u32 = 68;
+/// Bumped to 69 (0.46.18): tiers stop a running job in one case, a CI job
+/// displacing a Standard job (queued again as the same job, not failed).
+pub const SKILL_VERSION_WORKSPACE: u32 = 69;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

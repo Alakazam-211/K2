@@ -267,6 +267,27 @@ pub fn current(args: &[OsString]) -> Verdict {
     )
 }
 
+/// True in an identity session: the exec helper set `AGENT_CGROUP` (under
+/// its K5_, K2_ and K2SO_ names; empty counts as unset), as the shell's
+/// passport reroute reads it.
+pub fn identity_session(lookup: impl Fn(&str) -> Option<OsString>) -> bool {
+    env_names::first_nonempty_os_in(env_names::AGENT_CGROUP, &lookup).is_some()
+}
+
+/// True when a call goes to the shell before any native code runs: in an
+/// identity session, a call that carries the session's passport
+/// ([`Verdict::Passport`]). The shell sends those requests over the
+/// session socket; the binary's own client would send them over TCP.
+pub fn identity_hand_off(facts: Facts, identity: bool) -> bool {
+    identity && decide(facts, || Ancestry::Unknown) == Verdict::Passport
+}
+
+/// [`identity_hand_off`] for this process and its arguments.
+pub fn identity_hand_off_here(args: &[OsString]) -> bool {
+    let lookup = |name: &str| std::env::var_os(name);
+    identity_hand_off(facts(args, lookup), identity_session(lookup))
+}
+
 /// What the shell CLI gets for `verdict`: [`WOULD_REFUSE_VAR`]`=1` when the
 /// call is counted, and the name taken out of the environment otherwise,
 /// so a value from the caller never stands.
@@ -287,6 +308,37 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(OsString::from).collect()
+    }
+
+    /// In an identity session a passport call goes to the shell; a call
+    /// with no passport, an offline verb, and any call outside an identity
+    /// session stay native. An empty mark is no mark.
+    #[test]
+    fn an_identity_session_hands_its_passport_calls_to_the_shell() {
+        let list = args(&["agent", "context", "list"]);
+        let help = args(&["agent", "context", "--help"]);
+        let cases: &[(&[(&str, &str)], &Vec<OsString>, bool)] = &[
+            (&[("K2_AGENT_CGROUP", "/k2agents.slice/a.scope"), ("K2_HOOK_TOKEN", "sess.p")], &list, true),
+            (&[("K5_AGENT_CGROUP", "/k2agents.slice/a.scope"), ("K2_HOOK_TOKEN", "sess.p")], &list, true),
+            (&[("K2_AGENT_CGROUP", "/k2agents.slice/a.scope"), ("K2_HOOK_TOKEN", "sess.p")], &help, false),
+            (&[("K2_AGENT_CGROUP", "/k2agents.slice/a.scope"), ("K2_CELL", "canonical")], &list, false),
+            (&[("K2_AGENT_CGROUP", ""), ("K2_HOOK_TOKEN", "sess.p")], &list, false),
+            (&[("K2_HOOK_TOKEN", "sess.p")], &list, false),
+            (&[], &list, false),
+        ];
+        for (pairs, words, want) in cases {
+            let lookup = lookup_in(pairs);
+            let got = identity_hand_off(facts_of(words, &lookup), identity_session(&lookup));
+            assert_eq!(got, *want, "{pairs:?} {words:?}");
+        }
+    }
+
+    fn facts_of(words: &[OsString], lookup: &impl Fn(&str) -> Option<OsString>) -> Facts {
+        super::facts(words, lookup)
+    }
+
+    fn lookup_in<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |name| pairs.iter().find(|(n, _)| *n == name).map(|(_, v)| OsString::from(v))
     }
 
     fn facts(

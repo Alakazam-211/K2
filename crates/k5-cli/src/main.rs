@@ -171,6 +171,22 @@ fn main() {
     k5_cli::brand_check::session();
     let route = front::route(&args);
     trace::mark("route");
+    // In an identity session a call that carries the session's passport
+    // goes to the shell, which sends it over the session socket. The
+    // binary's own verbs (version, cli) and a refused `--` stay here.
+    if passport::identity_hand_off_here(&args)
+        && !matches!(
+            route,
+            Route::Version
+                | Route::VersionCheck
+                | Route::CliStatus { .. }
+                | Route::CliHelp
+                | Route::CliWord
+                | Route::NoDashdash
+        )
+    {
+        std::process::exit(shell(&args).code());
+    }
     let exit = match route {
         Route::Version => print(&front::version_line(embedded::version()), Exit::Ok),
         Route::VersionCheck => version_check(&args),

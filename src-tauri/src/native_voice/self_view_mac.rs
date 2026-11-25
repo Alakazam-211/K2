@@ -16,6 +16,16 @@
 //! mirror is the layer's transform, set on the main thread; while it changes
 //! frames are dropped ([`FrameGate`]) so none shows the wrong way round.
 //!
+//! The zero-hop preview (feature `native-self-view-preview`): when Sew
+//! offers the camera's own session ([`PreviewSource`]), the main thread
+//! makes an `AVCaptureVideoPreviewLayer` on it ([`reconcile`]), puts it just
+//! above the display layer (below the close button) and hides the display
+//! layer, in one transaction; from then frames aren't pushed. A new
+//! generation's layer replaces the old in that same step; `PreviewGone`, a
+//! layer that can't be made, or the sink closing takes it down and shows the
+//! display layer again (black until the next frame). The mirror is the
+//! preview connection's, set when the layer is made.
+//!
 //! The layer's own `enqueueSampleBuffer:` / `flush` (deprecated in macOS 15
 //! for `sampleBufferRenderer`, which they forward to) work on every macOS K2
 //! runs on. Every send is objc2's (`C-unwind`), inside `objc2::exception::catch`,
@@ -23,6 +33,7 @@
 
 use std::ffi::{c_void, CStr};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use objc2::encode::{Encode, Encoding, RefEncode};
@@ -31,7 +42,10 @@ use objc2::{msg_send, sel};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 use tauri_plugin_sew_voice::native::NativePayload;
 
-use super::{panel_frame, pts_90k, CssRect, FrameGate, FrameOutcome, Gate, ScreenRect, PANEL_H, PANEL_W};
+use super::{
+    panel_frame, path_of, preview_swap, pts_90k, CssRect, FrameGate, FrameOutcome, Gate, PreviewSlot, PreviewSwap,
+    ScreenRect, SelfPath, PANEL_H, PANEL_W,
+};
 
 pub const SUPPORTED: bool = true;
 
@@ -164,6 +178,36 @@ unsafe fn ns_string(s: &CStr) -> Obj {
     }
 }
 
+// ── The zero-hop preview's source ────────────────────────────────────────
+
+/// A camera source's own capture session, which makes preview layers:
+/// kessel-video's `ApplePreview` (Sew's `PreviewHandle`).
+pub trait PreviewSource: Send + Sync + 'static {
+    /// A new `AVCaptureVideoPreviewLayer *` on the session, mirrored as
+    /// asked, owned by the caller (+1). Err: a code for the log.
+    ///
+    /// # Safety
+    /// The main thread only; the caller releases the layer exactly once.
+    unsafe fn new_layer(&self, mirrored: bool) -> Result<NonNull<c_void>, String>;
+}
+
+#[cfg(feature = "native-self-view-preview")]
+impl PreviewSource for tauri_plugin_sew_voice::sew_call_client::PreviewHandle {
+    unsafe fn new_layer(&self, mirrored: bool) -> Result<NonNull<c_void>, String> {
+        // SAFETY: our caller's contract is new_preview_layer's (the main
+        // thread; it releases the +1 layer once). `Some`: K2's mirror rule,
+        // not kessel-video's front-camera-only default.
+        unsafe { self.new_preview_layer(Some(mirrored)) }.map_err(|e| e.code().to_string())
+    }
+}
+
+/// What Sew offers: the source, and the mirror K2 wants on its layer.
+#[derive(Clone)]
+struct Offer {
+    source: Arc<dyn PreviewSource>,
+    mirror: bool,
+}
+
 // ── The display: frames, on the sink's thread ────────────────────────────
 
 struct Inner {
@@ -171,6 +215,14 @@ struct Inner {
     /// The AVSampleBufferDisplayLayer (the panel keeps it), 0 until the
     /// panel exists.
     layer: usize,
+    /// The preview Sew offers now (sink's thread); its layer is made on the
+    /// main thread.
+    preview: PreviewSlot<Offer>,
+    /// The generation whose preview layer is up (set on the main thread):
+    /// frames aren't pushed while one is.
+    installed: Option<u64>,
+    /// The frame path's line is in the log for this sink.
+    buffers_logged: bool,
 }
 
 type MainRunner = Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
@@ -186,6 +238,8 @@ struct Panel {
     layer: usize,
     /// The window it is a child of now, 0 while hidden.
     parent: usize,
+    /// The preview layer that is up: its generation and the layer (+1, ours).
+    preview: Option<(u64, usize)>,
 }
 
 static PANEL: Mutex<Option<Panel>> = Mutex::new(None);
@@ -195,15 +249,69 @@ impl Display {
         let main: MainRunner = Box::new(move |f| {
             let _ = app.run_on_main_thread(f);
         });
-        Display { inner: Arc::new(Mutex::new(Inner { gate: FrameGate::default(), layer: 0 })), main }
+        let inner = Inner {
+            gate: FrameGate::default(),
+            layer: 0,
+            preview: PreviewSlot::default(),
+            installed: None,
+            buffers_logged: false,
+        };
+        Display { inner: Arc::new(Mutex::new(inner)), main }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+        lock_inner(&self.inner)
+    }
+
+    /// Sew's `PreviewReady` (sink's thread): the main thread makes its layer.
+    #[cfg_attr(not(feature = "native-self-view-preview"), allow(dead_code))]
+    pub fn preview_ready(&self, source: Arc<dyn PreviewSource>, mirror: bool, generation: u64) {
+        let changed = self.lock().preview.ready(generation, Offer { source, mirror });
+        if changed {
+            self.post_reconcile();
+        } else {
+            log_debug!("[native-voice] camera self_view preview {generation} ignored (stale)");
+        }
+    }
+
+    /// Sew's `PreviewGone` (sink's thread): its layer comes down.
+    #[cfg_attr(not(feature = "native-self-view-preview"), allow(dead_code))]
+    pub fn preview_gone(&self, generation: u64) {
+        if self.lock().preview.gone(generation) {
+            self.post_reconcile();
+        }
+    }
+
+    /// The sink closed: any preview comes down, and the next sink starts afresh.
+    pub fn preview_clear(&self) {
+        let had = {
+            let mut inner = self.lock();
+            let had = inner.preview.wanted_generation().is_some() || inner.installed.is_some();
+            inner.preview.clear();
+            inner.buffers_logged = false;
+            had
+        };
+        if had {
+            self.post_reconcile();
+        }
+    }
+
+    fn post_reconcile(&self) {
+        let shared = self.inner.clone();
+        (self.main)(Box::new(move || {
+            let mut slot = PANEL.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = slot.as_mut() {
+                reconcile(&shared, p);
+            }
+        }));
     }
 
     /// One camera frame (its buffer borrowed for this call).
     pub fn frame(&self, payload: &NativePayload, mirror: bool, discontinuity: bool, timestamp_us: u64) -> FrameOutcome {
+        let installed = self.lock().installed;
+        if matches!(path_of(installed), SelfPath::Preview { .. }) {
+            return FrameOutcome::Preview;
+        }
         let Some(buffer) = payload.apple_pixel_buffer().filter(|p| !p.is_null()) else {
             return FrameOutcome::NoBuffer;
         };
@@ -227,7 +335,13 @@ impl Display {
             Gate::Push { flush } => {
                 let pts = pts_90k(timestamp_us);
                 match guarded(|| unsafe { push(layer, buffer, flush, pts) }) {
-                    Ok(true) => FrameOutcome::Shown,
+                    Ok(true) => {
+                        if !inner.buffers_logged {
+                            inner.buffers_logged = true;
+                            log_debug!("[native-voice] camera self_view path=buffers (the camera's frames)");
+                        }
+                        FrameOutcome::Shown
+                    }
                     _ => FrameOutcome::Dropped,
                 }
             }
@@ -261,6 +375,8 @@ impl Display {
             *slot = Some(made);
         }
         let Some(p) = slot.as_mut() else { return Err("no_panel".into()) };
+        // A preview offered before the panel existed goes up now.
+        reconcile(&self.inner, p);
         let (panel, old_parent) = (p.panel as Obj, p.parent as Obj);
         guarded(|| unsafe { place(panel, parent, old_parent, anchor) })?;
         p.parent = parent as usize;
@@ -292,6 +408,126 @@ impl Display {
             let _: () = msg_send![panel, orderOut: null];
         });
         p.parent = 0;
+    }
+}
+
+fn lock_inner(inner: &Mutex<Inner>) -> std::sync::MutexGuard<'_, Inner> {
+    inner.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+// ── The preview layer (main thread) ──────────────────────────────────────
+
+/// Main thread, with the panel: bring the preview layer that is up to the
+/// one Sew offers now. The offer is read under the lock, the layer made
+/// outside it, and the offer checked again before it goes up (a newer one
+/// may have come meanwhile: then round again).
+fn reconcile(shared: &Mutex<Inner>, p: &mut Panel) {
+    let display = p.layer as Obj;
+    loop {
+        let wanted = lock_inner(shared).preview.wanted();
+        let installed = p.preview.map(|(g, _)| g);
+        let (generation, offer) = match preview_swap(installed, wanted.as_ref().map(|(g, _)| *g)) {
+            PreviewSwap::Keep => return,
+            PreviewSwap::Remove(old) => {
+                let old_layer = p.preview.take().map_or(std::ptr::null_mut(), |(_, l)| l as Obj);
+                // SAFETY: the main thread; `old_layer` is ours (+1) and in
+                // the panel's tree, `display` the panel's display layer.
+                let _ = guarded(|| unsafe { swap_layers(display, old_layer, None) });
+                lock_inner(shared).installed = None;
+                log_debug!("[native-voice] camera self_view path=buffers (preview {old} gone)");
+                return;
+            }
+            PreviewSwap::Install(new) | PreviewSwap::Replace { new, .. } => match wanted {
+                Some((_, offer)) => (new, offer),
+                None => return,
+            },
+        };
+        // SAFETY: the main thread (every caller of reconcile is on it); the
+        // +1 layer is ours: released in swap_layers when it comes down, or
+        // below if it never goes up.
+        let made = match guarded(|| unsafe { offer.source.new_layer(offer.mirror) }) {
+            Ok(Ok(layer)) => layer,
+            Ok(Err(why)) | Err(why) => {
+                log_debug!(
+                    "[native-voice] camera self_view preview {generation} failed ({}): path=buffers",
+                    super::code(&why)
+                );
+                lock_inner(shared).preview.failed(generation);
+                continue;
+            }
+        };
+        let new_layer = made.as_ptr() as Obj;
+        let mut inner = lock_inner(shared);
+        if inner.preview.wanted_generation() != Some(generation) {
+            drop(inner);
+            // SAFETY: the +1 layer from new_layer, never put up: released once.
+            unsafe { CFRelease(new_layer as *const c_void) };
+            continue;
+        }
+        let old_layer = p.preview.take().map_or(std::ptr::null_mut(), |(_, l)| l as Obj);
+        // SAFETY: the main thread; `display` is the panel's display layer,
+        // `old_layer` ours (+1, or null), `new_layer` ours (+1) and live.
+        match guarded(|| unsafe { swap_layers(display, old_layer, Some(new_layer)) }) {
+            Ok(()) => {
+                p.preview = Some((generation, new_layer as usize));
+                inner.installed = Some(generation);
+                // The display layer is hidden: drop what it holds, so a
+                // fallback starts black, never on an old frame.
+                // SAFETY: the panel's live display layer, on the main thread.
+                let _ = guarded(|| unsafe { flush_layer(display, true) });
+                drop(inner);
+                log_debug!(
+                    "[native-voice] camera self_view path=preview generation={generation} mirror={} (zero hop)",
+                    offer.mirror
+                );
+                return;
+            }
+            Err(why) => {
+                inner.installed = None;
+                inner.preview.failed(generation);
+                drop(inner);
+                log_debug!("[native-voice] camera self_view preview {generation} failed ({why}): path=buffers");
+                // A layer that may or may not be in the tree: out, then
+                // released. The old one (if any) was released in the step
+                // that failed or is still ours: an exception there leaks it
+                // rather than releasing it twice.
+                // SAFETY: the main thread; `new_layer` is ours (+1).
+                let _ = guarded(|| unsafe { swap_layers(display, new_layer, None) });
+                continue;
+            }
+        }
+    }
+}
+
+/// Main thread, one transaction: `old` (a preview layer, ours: +1) out of
+/// the tree and released; `new` (ours, +1, kept by the panel) in just above
+/// the display layer and filling the panel; the display layer hidden while a
+/// preview is up, shown again when none is.
+unsafe fn swap_layers(display: Obj, old: Obj, new: Option<Obj>) {
+    let txn = cls(c"CATransaction").ok();
+    if let Some(t) = txn {
+        let _: () = msg_send![t, begin];
+        let _: () = msg_send![t, setDisableActions: true];
+    }
+    if let Some(new) = new {
+        let root: Obj = msg_send![display, superlayer];
+        if !root.is_null() {
+            let _: () = msg_send![new, setVideoGravity: AVLayerVideoGravityResizeAspectFill];
+            let bounds: NSRect = msg_send![root, bounds];
+            let _: () = msg_send![new, setFrame: bounds];
+            // kCALayerWidthSizable (2) | kCALayerHeightSizable (16).
+            let _: () = msg_send![new, setAutoresizingMask: 18u32];
+            // Just above the display layer: below the close button's layer.
+            let _: () = msg_send![root, insertSublayer: new, above: display];
+        }
+    }
+    if !old.is_null() {
+        let _: () = msg_send![old, removeFromSuperlayer];
+        CFRelease(old as *const c_void);
+    }
+    let _: () = msg_send![display, setHidden: new.is_some()];
+    if let Some(t) = txn {
+        let _: () = msg_send![t, commit];
     }
 }
 
@@ -493,7 +729,7 @@ unsafe fn make_panel() -> Result<Panel, String> {
         let _: () = msg_send![button, setAutoresizingMask: 9usize];
         let _: () = msg_send![content, addSubview: button];
     }
-    Ok(Panel { panel: panel as usize, layer: layer as usize, parent: 0 })
+    Ok(Panel { panel: panel as usize, layer: layer as usize, parent: 0, preview: None })
 }
 
 /// On `parent` (a child of it, so it moves with it), placed by `anchor`.

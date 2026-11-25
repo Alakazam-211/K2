@@ -245,6 +245,13 @@ browser-pane = ["tauri/unstable"]
 # 20 GB for a release link. `cargo check -p k2 --no-default-features` still
 # builds without it (the renderer then stays on the seat path).
 native-voice = ["dep:tauri-plugin-sew-voice", "dep:zeroize"]
+# The native self-view's zero-hop preview (macOS): Sew's PreviewReady /
+# PreviewGone on the `local:camera` sink, shown as an AVCaptureVideoPreviewLayer
+# on the camera's own session. Needs tauri-plugin-sew-voice 0.9.6 (Sew 0.11.6,
+# kessel-video 0.1.9): with the 0.9.5 pin above it doesn't build, so it is off.
+# Once the pin moves to 0.9.6, add it to `default` (or drop the gate). Without
+# it the self-view draws the camera's frames as in 0.46.17.
+native-self-view-preview = ["native-voice"]
 
 [dev-dependencies]
 # Benchmark framework for src-tauri/benches/*.rs. Dev-only; never ships in

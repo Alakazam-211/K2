@@ -29,6 +29,18 @@
 //!
 //! Opening and closing run on a thread of their own ([`self_loop`]): the
 //! command and the sink's consumer only queue.
+//!
+//! The zero-hop preview (cargo feature `native-self-view-preview`, macOS;
+//! needs tauri-plugin-sew-voice 0.9.6): on the same sink Sew also offers
+//! `PreviewReady { preview, facing, generation }`, a handle on the camera's
+//! own `AVCaptureSession` (kessel-video's `ApplePreview`), and
+//! `PreviewGone { generation }`. The window then shows an
+//! `AVCaptureVideoPreviewLayer` on that session, drawn by the system straight
+//! from the camera, instead of the frames through this code; one generation
+//! per camera source, so a flip or a reopen swaps the layer in one
+//! main-thread step ([`PreviewSlot`], [`preview_swap`]). Until a layer is up
+//! (an older Sew, no offer, or a layer that couldn't be made) the frames draw
+//! the picture exactly as before ([`path_of`]); the log says which path.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
@@ -65,6 +77,7 @@ mod platform {
             FrameOutcome::NoBuffer
         }
         pub fn flush(&self, _remove_image: bool) {}
+        pub fn preview_clear(&self) {}
         pub fn show<R: tauri::Runtime>(&self, _window: &tauri::Window<R>, _anchor: Option<CssRect>) -> Result<(), String> {
             Err("unsupported".into())
         }
@@ -428,6 +441,113 @@ pub enum FrameOutcome {
     Dropped,
     /// No OS buffer in it (CPU planes): this display can't draw it.
     NoBuffer,
+    /// The zero-hop preview draws the picture: the frame isn't needed.
+    Preview,
+}
+
+// ── The zero-hop preview ────────────────────────────────────────────────
+
+/// Which picture the window draws: the camera's frames through this code
+/// (the fallback, and the only path before Sew offers a preview), or the
+/// system's preview straight from the camera's session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfPath {
+    Buffers,
+    Preview { generation: u64 },
+}
+
+/// The path the frames see: the preview only once its layer is up (until
+/// then the frames keep the picture going).
+pub fn path_of(installed: Option<u64>) -> SelfPath {
+    match installed {
+        Some(generation) => SelfPath::Preview { generation },
+        None => SelfPath::Buffers,
+    }
+}
+
+/// The preview Sew offers now (`PreviewReady` / `PreviewGone`), one per
+/// camera source (`generation`). Updated on the sink's thread, read on the
+/// main thread, which makes the layer ([`preview_swap`]).
+#[derive(Debug)]
+pub struct PreviewSlot<P> {
+    offered: Option<(u64, P)>,
+    /// The newest generation heard of: an older one is stale.
+    latest: Option<u64>,
+}
+
+impl<P> Default for PreviewSlot<P> {
+    fn default() -> Self {
+        PreviewSlot { offered: None, latest: None }
+    }
+}
+
+impl<P: Clone> PreviewSlot<P> {
+    /// `PreviewReady`: true when the wanted layer changed. A generation no
+    /// newer than one already heard of (a repeat, or one that went or
+    /// failed) changes nothing.
+    pub fn ready(&mut self, generation: u64, preview: P) -> bool {
+        if self.latest.is_some_and(|l| generation <= l) {
+            return false;
+        }
+        self.latest = Some(generation);
+        self.offered = Some((generation, preview));
+        true
+    }
+
+    /// `PreviewGone`: true when it was the one offered (its layer comes down).
+    pub fn gone(&mut self, generation: u64) -> bool {
+        self.latest = Some(self.latest.map_or(generation, |l| l.max(generation)));
+        self.take_if(generation)
+    }
+
+    /// Its layer couldn't be made: the frames draw the picture until the
+    /// next generation. True when it was the one offered.
+    pub fn failed(&mut self, generation: u64) -> bool {
+        self.take_if(generation)
+    }
+
+    /// The sink closed: nothing offered, and the next sink starts afresh.
+    pub fn clear(&mut self) {
+        *self = PreviewSlot::default();
+    }
+
+    /// The layer wanted now, if any.
+    pub fn wanted(&self) -> Option<(u64, P)> {
+        self.offered.clone()
+    }
+
+    pub fn wanted_generation(&self) -> Option<u64> {
+        self.offered.as_ref().map(|(g, _)| *g)
+    }
+
+    fn take_if(&mut self, generation: u64) -> bool {
+        if self.wanted_generation() == Some(generation) {
+            self.offered = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// On the main thread: from the layer that is up to the one wanted. A
+/// replace takes the old layer down in the same step as the new one goes up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewSwap {
+    Keep,
+    Install(u64),
+    Remove(u64),
+    Replace { old: u64, new: u64 },
+}
+
+pub fn preview_swap(installed: Option<u64>, wanted: Option<u64>) -> PreviewSwap {
+    match (installed, wanted) {
+        (None, None) => PreviewSwap::Keep,
+        (Some(a), Some(b)) if a == b => PreviewSwap::Keep,
+        (None, Some(new)) => PreviewSwap::Install(new),
+        (Some(old), None) => PreviewSwap::Remove(old),
+        (Some(old), Some(new)) => PreviewSwap::Replace { old, new },
+    }
 }
 
 // ── The log's counts ────────────────────────────────────────────────────
@@ -440,6 +560,8 @@ pub struct SelfCounts {
     pub no_buffer: AtomicU64,
     pub discontinuities: AtomicU64,
     pub mirrored: AtomicU64,
+    /// Frames not needed: the zero-hop preview drew the picture.
+    pub previewed: AtomicU64,
     /// The feed now: 0 off, 1 live, 2 paused.
     pub feed: AtomicU8,
 }
@@ -458,7 +580,7 @@ impl SelfCounts {
 pub fn stats_line(stats: &NativeSinkStats, counts: &SelfCounts) -> String {
     let n = |a: &AtomicU64| a.load(Ordering::Relaxed);
     format!(
-        "camera self_view feed={} frames_in={} frames_out={} fps={:.1} dropped_queue_full={} consumer_us_avg={} shown={} dropped={} no_buffer={} discontinuities={} mirrored={}",
+        "camera self_view feed={} frames_in={} frames_out={} fps={:.1} dropped_queue_full={} consumer_us_avg={} shown={} dropped={} no_buffer={} discontinuities={} mirrored={} previewed={}",
         counts.feed_name(),
         stats.frames_in,
         stats.frames_out,
@@ -470,6 +592,7 @@ pub fn stats_line(stats: &NativeSinkStats, counts: &SelfCounts) -> String {
         n(&counts.no_buffer),
         n(&counts.discontinuities),
         n(&counts.mirrored),
+        n(&counts.previewed),
     )
 }
 
@@ -528,6 +651,7 @@ impl NativeVideoConsumer for SelfViewFeed {
                 match self.display.frame(&f.payload, mirror, f.discontinuity, f.timestamp_us) {
                     FrameOutcome::Shown => add(&self.counts.shown),
                     FrameOutcome::Dropped => add(&self.counts.dropped),
+                    FrameOutcome::Preview => add(&self.counts.previewed),
                     FrameOutcome::NoBuffer => {
                         if self.counts.no_buffer.fetch_add(1, Ordering::Relaxed) == 0 {
                             let _ = self.tx.send(ToSelf::NoBuffer);
@@ -536,6 +660,15 @@ impl NativeVideoConsumer for SelfViewFeed {
                 }
             }
             NativeVideoEvent::Reset { .. } => self.display.flush(false),
+            // The zero-hop preview (Sew 0.11.6, plugin 0.9.6): a layer on the
+            // camera's own session, mirrored by K2's desktop rule (not
+            // kessel-video's `None`, which mirrors only a front camera).
+            #[cfg(all(feature = "native-self-view-preview", target_os = "macos"))]
+            NativeVideoEvent::PreviewReady { preview, facing, generation, .. } => {
+                self.display.preview_ready(Arc::new(preview), desktop_mirror(facing), generation);
+            }
+            #[cfg(all(feature = "native-self-view-preview", target_os = "macos"))]
+            NativeVideoEvent::PreviewGone { generation, .. } => self.display.preview_gone(generation),
             _ => {}
         }
     }
@@ -577,6 +710,8 @@ impl<R: Runtime> SelfOps for RealOps<R> {
             sink.close();
         }
         self.display.flush(true);
+        // No events after the close: a preview still up comes down.
+        self.display.preview_clear();
     }
 
     fn show(&mut self, window: &str, anchor: Option<CssRect>) -> Result<(), String> {

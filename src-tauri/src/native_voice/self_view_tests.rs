@@ -332,6 +332,7 @@ fn the_stats_line_is_counts_only() {
         "{line}"
     );
     assert!(line.contains("shown=288 dropped=2 no_buffer=0"), "{line}");
+    assert!(line.ends_with("mirrored=0 previewed=0"), "{line}");
 }
 
 #[test]
@@ -345,4 +346,104 @@ fn codes_are_kept_short_and_plain() {
 fn the_state_the_page_reads_is_snake_case_json() {
     let s = SelfViewState { available: true, showing: true, reason: None };
     assert_eq!(serde_json::to_value(&s).unwrap(), serde_json::json!({"available": true, "showing": true, "reason": null}));
+}
+
+// ── The zero-hop preview ────────────────────────────────────────────────
+
+/// What the main thread does with the slot, as `reconcile` does: the swap
+/// from the layer that is up to the one wanted, then that one is up.
+fn swap(slot: &PreviewSlot<&'static str>, installed: &mut Option<u64>) -> PreviewSwap {
+    let s = preview_swap(*installed, slot.wanted_generation());
+    *installed = slot.wanted_generation();
+    s
+}
+
+#[test]
+fn with_no_preview_offered_the_frames_draw_the_picture() {
+    // An older Sew, another OS, or no offer yet: the 0.46.17 path.
+    let slot: PreviewSlot<&str> = PreviewSlot::default();
+    let mut installed = None;
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Keep);
+    assert_eq!(path_of(installed), SelfPath::Buffers);
+    assert_eq!(slot.wanted(), None);
+}
+
+#[test]
+fn an_offered_preview_goes_up_and_comes_down_when_it_goes() {
+    let mut slot = PreviewSlot::default();
+    let mut installed = None;
+    assert!(slot.ready(1, "cam-a"));
+    assert_eq!(slot.wanted(), Some((1, "cam-a")));
+    // Until the main thread has put it up, the frames keep the picture.
+    assert_eq!(path_of(installed), SelfPath::Buffers);
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Install(1));
+    assert_eq!(path_of(installed), SelfPath::Preview { generation: 1 });
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Keep);
+
+    assert!(slot.gone(1));
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Remove(1));
+    assert_eq!(path_of(installed), SelfPath::Buffers);
+}
+
+#[test]
+fn a_new_generation_replaces_the_old_layer_in_one_step() {
+    // A flip or a reopen: Sew sends the old one's PreviewGone first, but the
+    // main thread may run only once both are in: one replace, no gap.
+    let mut slot = PreviewSlot::default();
+    let mut installed = None;
+    slot.ready(1, "front");
+    swap(&slot, &mut installed);
+    assert!(slot.gone(1));
+    assert!(slot.ready(2, "back"));
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Replace { old: 1, new: 2 });
+    assert_eq!(slot.wanted(), Some((2, "back")));
+    // A newer offer with no PreviewGone before it replaces too.
+    assert!(slot.ready(3, "external"));
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Replace { old: 2, new: 3 });
+}
+
+#[test]
+fn stale_offers_and_goes_change_nothing() {
+    let mut slot = PreviewSlot::default();
+    slot.ready(5, "now");
+    // A PreviewGone for an older generation leaves the current one up.
+    assert!(!slot.gone(4));
+    assert_eq!(slot.wanted_generation(), Some(5));
+    // A repeat, or an older generation offered late, is ignored.
+    assert!(!slot.ready(5, "again"));
+    assert!(!slot.ready(3, "old"));
+    assert_eq!(slot.wanted(), Some((5, "now")));
+    // Once gone, it isn't taken again.
+    assert!(slot.gone(5));
+    assert!(!slot.ready(5, "now"));
+    assert_eq!(slot.wanted(), None);
+}
+
+#[test]
+fn a_layer_that_cannot_be_made_falls_back_to_the_frames_until_the_next_generation() {
+    let mut slot = PreviewSlot::default();
+    let mut installed = Some(1);
+    slot.ready(1, "a");
+    slot.ready(2, "b");
+    // Making generation 2's layer failed: generation 1's (a stale source)
+    // comes down too, and the frames draw the picture.
+    assert!(slot.failed(2));
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Remove(1));
+    assert_eq!(path_of(installed), SelfPath::Buffers);
+    assert!(!slot.failed(2), "only the offered generation fails");
+    assert!(!slot.ready(2, "b"), "no retry loop on the same source");
+    assert!(slot.ready(3, "c"), "the next source tries again");
+}
+
+#[test]
+fn a_closed_sink_takes_the_preview_down_and_the_next_sink_starts_afresh() {
+    let mut slot = PreviewSlot::default();
+    let mut installed = None;
+    slot.ready(7, "a");
+    swap(&slot, &mut installed);
+    slot.clear();
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Remove(7));
+    // A new sink's numbers may start lower: taken.
+    assert!(slot.ready(1, "b"));
+    assert_eq!(swap(&slot, &mut installed), PreviewSwap::Install(1));
 }

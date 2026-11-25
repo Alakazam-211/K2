@@ -274,18 +274,20 @@ pub fn identity_session(lookup: impl Fn(&str) -> Option<OsString>) -> bool {
     env_names::first_nonempty_os_in(env_names::AGENT_CGROUP, &lookup).is_some()
 }
 
-/// True when a call goes to the shell before any native code runs: in an
-/// identity session, a call that carries the session's passport
-/// ([`Verdict::Passport`]). The shell sends those requests over the
-/// session socket; the binary's own client would send them over TCP.
-pub fn identity_hand_off(facts: Facts, identity: bool) -> bool {
-    identity && decide(facts, || Ancestry::Unknown) == Verdict::Passport
+/// True when a call goes to the shell before any native code runs: on
+/// Windows (`windows`), in an identity session, a call that carries the
+/// session's passport ([`Verdict::Passport`]). Elsewhere never: the
+/// binary's own client sends the passport over the session socket
+/// ([`crate::daemon::passport_on_socket`]). Windows keeps the hand-off
+/// until its lane has built and run the native reroute there.
+pub fn identity_hand_off(facts: Facts, identity: bool, windows: bool) -> bool {
+    windows && identity && decide(facts, || Ancestry::Unknown) == Verdict::Passport
 }
 
-/// [`identity_hand_off`] for this process and its arguments.
+/// [`identity_hand_off`] for this process, its arguments and this OS.
 pub fn identity_hand_off_here(args: &[OsString]) -> bool {
     let lookup = |name: &str| std::env::var_os(name);
-    identity_hand_off(facts(args, lookup), identity_session(lookup))
+    identity_hand_off(facts(args, lookup), identity_session(lookup), cfg!(windows))
 }
 
 /// What the shell CLI gets for `verdict`: [`WOULD_REFUSE_VAR`]`=1` when the
@@ -310,11 +312,13 @@ mod tests {
         list.iter().map(OsString::from).collect()
     }
 
-    /// In an identity session a passport call goes to the shell; a call
-    /// with no passport, an offline verb, and any call outside an identity
-    /// session stay native. An empty mark is no mark.
+    /// In an identity session a passport call is no longer handed to the
+    /// shell: it stays native, and its client sends the passport over the
+    /// session socket (true below). A call with no passport, an offline
+    /// verb, and any call outside an identity session have nothing to
+    /// reroute. An empty mark is no mark.
     #[test]
-    fn an_identity_session_hands_its_passport_calls_to_the_shell() {
+    fn an_identity_session_s_passport_calls_stay_native_on_the_socket() {
         let list = args(&["agent", "context", "list"]);
         let help = args(&["agent", "context", "--help"]);
         let cases: &[(&[(&str, &str)], &Vec<OsString>, bool)] = &[
@@ -328,9 +332,25 @@ mod tests {
         ];
         for (pairs, words, want) in cases {
             let lookup = lookup_in(pairs);
-            let got = identity_hand_off(facts_of(words, &lookup), identity_session(&lookup));
+            let verdict = decide(facts_of(words, &lookup), || Ancestry::Unknown);
+            let got = verdict == Verdict::Passport && crate::daemon::passport_on_socket(&lookup);
             assert_eq!(got, *want, "{pairs:?} {words:?}");
+            let identity = identity_session(&lookup);
+            // Off Windows no front-door rule sends it to the shell.
+            assert!(!identity_hand_off(facts_of(words, &lookup), identity, false), "{pairs:?} {words:?}");
+            // On Windows the same calls are still handed to the shell.
+            assert_eq!(
+                identity_hand_off(facts_of(words, &lookup), identity, true),
+                *want,
+                "{pairs:?} {words:?}"
+            );
         }
+        // This build's answer follows its OS.
+        let lookup = lookup_in(&[("K2_AGENT_CGROUP", "a-ws1"), ("K2_HOOK_TOKEN", "sess.p")]);
+        assert_eq!(
+            identity_hand_off(facts_of(&list, &lookup), identity_session(&lookup), cfg!(windows)),
+            cfg!(windows)
+        );
     }
 
     fn facts_of(words: &[OsString], lookup: &impl Fn(&str) -> Option<OsString>) -> Facts {

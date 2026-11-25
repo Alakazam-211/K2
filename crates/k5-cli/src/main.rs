@@ -182,10 +182,13 @@ fn main() {
     k5_cli::brand_check::session();
     let route = front::route(&args);
     trace::mark("route");
-    // In an identity session a call that carries the session's passport
-    // goes to the shell, which sends it over the session socket. The
-    // binary's own verbs (version, cli) and a refused `--` stay here. A
-    // build with no shell CLI refuses it, exit 70, and sends nothing.
+    // On Windows an identity session's passport call goes to the shell
+    // (`passport::identity_hand_off`); a build with no shell CLI refuses
+    // it, exit 70, and sends nothing. Elsewhere it routes as any other:
+    // the binary's own client sends the passport over the session socket,
+    // and a verb it doesn't answer goes to the shell as every such verb
+    // does. The binary's own verbs (version, cli) and a refused `--` stay
+    // here.
     if passport::identity_hand_off_here(&args)
         && !matches!(
             route,

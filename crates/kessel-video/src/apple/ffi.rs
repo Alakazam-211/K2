@@ -112,8 +112,6 @@ unsafe impl Encode for ClockArg {
     const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("OpaqueCMClock", &[]));
 }
 
-/// `kCMTimeFlags_Valid`.
-pub const CM_TIME_VALID: u32 = 1;
 /// `kCMTimeFlags_ImpliedValueFlagsMask`: positive infinity, negative
 /// infinity, indefinite.
 pub const CM_TIME_IMPLIED_VALUE: u32 = 4 | 8 | 16;

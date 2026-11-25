@@ -250,6 +250,18 @@ async function signals() {
   return out;
 }
 
+// Another App's processes (apps_e2e_podman5.sh): the test hands this App
+// the host pids of a second App's unit and asks it to send each `sig`.
+// Each answer is "sent" or the error code (ESRCH: no such process here,
+// EPERM: not allowed); `visible` is every pid this App can see.
+function signalPids(pids, sig) {
+  const out = {};
+  for (const p of pids) {
+    try { process.kill(p, sig); out[p] = "sent"; } catch (e) { out[p] = e.code || String(e); }
+  }
+  return { sig, pids: out, visible: fs.readdirSync("/proc").filter((x) => /^\d+$/.test(x)).map(Number) };
+}
+
 const server = http.createServer(async (req, res) => {
   inflight++;
   try {
@@ -271,6 +283,11 @@ const server = http.createServer(async (req, res) => {
     } else if (u.pathname === "/signals") {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(await signals()));
+    } else if (u.pathname === "/signal-pids") {
+      const pids = (u.searchParams.get("pids") || "").split(",").filter((x) => /^\d+$/.test(x)).map(Number);
+      res.setHeader("content-type", "application/json");
+      const s = u.searchParams.get("sig") || "SIGKILL";
+      res.end(JSON.stringify(signalPids(pids, /^\d+$/.test(s) ? Number(s) : s)));
     } else if (u.pathname === "/flood") {
       for (let i = 0; i < 20000; i++) console.log(`flood ${TAG} line ${i}`);
       res.end("flooded\n");

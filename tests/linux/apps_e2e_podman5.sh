@@ -18,8 +18,10 @@
 # nothing; a tampered tarball never reaches the helper; --install-podman
 # installs the pinned bundle and the box is ready; a second prepare keeps
 # it; a guarded hello App goes live behind K2's Podman (its Quadlet unit
-# calls /opt/k2/podman/bin/podman) with the wall intact; other users keep
-# the distro's Quadlet; uninstall waits for Apps, then removes only K2's.
+# calls /opt/k2/podman/bin/podman) with the wall intact; a second App's
+# processes can't be signalled from hello's wall or from hello's host uid;
+# other users keep the distro's Quadlet; uninstall waits for Apps, then
+# removes only K2's.
 set -Eeuo pipefail
 
 IT="${1:-/it}"
@@ -261,6 +263,83 @@ CG="$(asapp systemctl --user show -p ControlGroup --value "$UNIT")"
 MM="$(find "/sys/fs/cgroup$CG" -name memory.max -path '*libpod-payload*' -exec cat {} \; | head -n1)"
 [ "$MM" = "268435456" ] || fail "the App's 256M cap: memory.max=$MM under $CG"
 ok "its memory cap holds (memory.max $MM in the payload cgroup)"
+
+echo "== one App can't signal another App's processes =="
+# A second guarded App beside hello. hello is handed every host pid of
+# other's unit (the App, podman-init, conmon, pasta) and sends each KILL
+# from inside its wall: none is in hello's pid namespace, so each is
+# ESRCH. Then the same KILLs from hello's own host uid, outside any
+# namespace: each App runs in its own id range with no capabilities, so
+# each is EPERM. other stays live, with the same main pid.
+O="$WS/other"
+runuser -u k2 -- mkdir -p "$O"
+printf '{"schema":1,"kind":"app","id":"other","name":"Other","version":"1.0.0","host":{"mode":"cmd","start":["node","server.mjs"],"health":{"path":"/healthz"},"drainSecs":3}}\n' >"$O/manifest.json"
+printf 'o1' >"$O/tag.txt"
+printf '{"daemonPort": %s, "hostIp": "%s"}\n' "$DPORT" "$HOSTIP" >"$O/facts.json"
+cp "$IT/tests/guarded-fixture/server.mjs" "$O/server.mjs"
+chown -R k2:k2 "$O"
+K2 app install other --memory 256M >/dev/null
+K2 app deploy other "$O" --engine guarded --no-wait >/dev/null || true
+r=""
+for _ in $(seq 1 600); do
+	r="$(K2 app deployment other --json 2>/dev/null | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin)["deployment"]["result"])
+except Exception: print("?")')"
+	case "$r" in pending | starting | "?") sleep 1 ;; *) break ;; esac
+done
+[ "$r" = live ] || { K2 app deployment other --json 2>&1 | tail -c 3000; K2 app logs other 2>&1 | tail -n 40; fail "other guarded deploy: $r"; }
+FO="$(K2 app list --json | python3 -c "import json,sys; print([a for a in json.load(sys.stdin)['apps'] if a['appId']=='other'][0]['frontPort'])")"
+[ "$(curl -s "http://127.0.0.1:$FO/")" = o1 ] || fail "front other"
+CH="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-hello--' | head -n1)"
+CO="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-other--' | head -n1)"
+[ -n "$CH" ] && [ -n "$CO" ] || fail "the two containers: hello '$CH', other '$CO'"
+PH="$(asapp podman inspect "$CH" --format '{{.State.Pid}}')"
+PO="$(asapp podman inspect "$CO" --format '{{.State.Pid}}')"
+OUNIT="$(asapp systemctl --user list-units --type=service --no-legend 'k2app-other*' | awk '{print $1}' | head -n1)"
+[ -n "$OUNIT" ] || fail "other's unit"
+OCG="$(asapp systemctl --user show -p ControlGroup --value "$OUNIT")"
+OPIDS="$(find "/sys/fs/cgroup$OCG" -name cgroup.procs -exec cat {} + | sort -un | paste -sd, -)"
+case ",$OPIDS," in *",$PO,"*) ;; *) fail "other's main pid $PO is not in its unit's cgroup ($OCG: $OPIDS)" ;; esac
+# Signal 0 first (it only asks): a host pid that is also a pid number in
+# hello's own namespace would name one of hello's own processes, and the
+# KILL must never reach those.
+for sig in 0 SIGKILL; do
+	curl -s "http://127.0.0.1:$FA/signal-pids?sig=$sig&pids=$OPIDS" >/tmp/sigother.json
+	python3 - /tmp/sigother.json "$OPIDS" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+want = [int(p) for p in sys.argv[2].split(",")]
+assert len(want) >= 2, want
+both = set(v["visible"]) & set(want)
+assert not both, f"pid numbers both in hello's namespace and among other's host pids: {sorted(both)}; rerun"
+got = {int(k): r for k, r in v["pids"].items()}
+assert got == {p: "ESRCH" for p in want}, (v["sig"], got)
+print("    from inside hello: signal", v["sig"], "to", len(want), "of other's host pids, each ESRCH; hello sees pids", sorted(v["visible"]))
+PY
+done
+UH="$(ps -o uid= -p "$PH" | tr -d ' ')"
+GH="$(ps -o gid= -p "$PH" | tr -d ' ')"
+[ -n "$UH" ] && [ "$UH" != 0 ] && [ "$UH" != "$(id -u k2app)" ] || fail "hello's host uid: '$UH'"
+for p in ${OPIDS//,/ }; do
+	[ "$(ps -o uid= -p "$p" | tr -d ' ')" != "$UH" ] || fail "other's pid $p runs as hello's host uid $UH"
+	r="$(setpriv --reuid="$UH" --regid="$GH" --clear-groups --inh-caps=-all --bounding-set=-all -- \
+		python3 -c 'import errno, os, sys
+try:
+    os.kill(int(sys.argv[1]), 9); print("sent")
+except OSError as e:
+    print(errno.errorcode[e.errno])' "$p")"
+	[ "$r" = EPERM ] || fail "KILL from hello's host uid $UH to other's pid $p: $r"
+done
+[ "$(curl -s "http://127.0.0.1:$FO/")" = o1 ] || fail "other stopped answering after hello's KILLs"
+[ "$(asapp podman inspect "$CO" --format '{{.State.Pid}}')" = "$PO" ] || fail "other's main pid changed after hello's KILLs"
+ok "hello can't signal other: KILL from inside its wall is ESRCH for each of other's $(echo "${OPIDS//,/ }" | wc -w) host pids, and from hello's host uid $UH EPERM; other still live (pid $PO)"
+K2 app uninstall other --purge >/dev/null
+for _ in $(seq 1 60); do
+	has other "$(asapp systemctl --user list-units --type=service --no-legend)" || break
+	sleep 1
+done
+if has other "$(asapp systemctl --user list-units --type=service --no-legend)"; then fail "other's unit still there after uninstall"; fi
 
 echo "== uninstall waits for Apps =="
 set +e

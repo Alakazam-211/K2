@@ -21,7 +21,8 @@ fn a_soak_is_batch_or_over_two_hours_and_unknown_is_not_one() {
 }
 
 fn row(id: &str, tier: &str) -> JobRow {
-    JobRow { id: id.into(), tier: tier.into(), state: "running".into(), ..Default::default() }
+    // A submit with no --retries gets one (compute_routes): displaceable.
+    JobRow { id: id.into(), tier: tier.into(), state: "running".into(), ctl: store::JobCtl { retries: 1, ..Default::default() }, ..Default::default() }
 }
 
 #[test]
@@ -32,18 +33,69 @@ fn only_our_running_standard_non_soak_jobs_are_eligible() {
         assert!(!eligible(&row("x", t), ci), "{t} is never displaced");
     }
     assert!(!eligible(&JobRow { est_secs: Some(3 * 3600), ..row("long", "normal") }, ci), "expected 3 h: a soak");
-    let timed = JobRow { ctl: store::JobCtl { timeout_secs: Some(3 * 3600), ..Default::default() }, ..row("t", "normal") };
+    let timed = JobRow { ctl: store::JobCtl { timeout_secs: Some(3 * 3600), retries: 1, ..Default::default() }, ..row("t", "normal") };
     assert!(!eligible(&timed, ci), "--timeout 3h: a soak");
     assert!(!eligible(&JobRow { state: "finishing".into(), ..row("f", "normal") }, ci), "finishing: left alone");
     assert!(!eligible(&JobRow { node_queued: true, state: "assigned".into(), ..row("q", "normal") }, ci), "in a node's queue: not running");
     assert!(!eligible(&JobRow { reason: Some("cancel_requested".into()), ..row("c", "normal") }, ci), "being cancelled");
     assert!(!eligible(&JobRow { reason: Some(DISPLACE_REQUESTED.into()), ..row("d", "normal") }, ci), "already being ended");
     let once = JobRow {
-        ctl: store::JobCtl { displaced: vec![Displaced { by: ci.into(), node_id: "n".into(), generation: 1, pinned: true, ..Default::default() }], ..Default::default() },
+        ctl: store::JobCtl { displaced: vec![Displaced { by: ci.into(), node_id: "n".into(), generation: 1, pinned: true, ..Default::default() }], retries: 1, ..Default::default() },
         ..row("p", "normal")
     };
     assert!(!eligible(&once, ci), "at most once per CI job");
     assert!(eligible(&once, "another-ci"), "another CI job may");
+    // --no-retry / --retries 0 (a deploy, a publish): never re-run from the start.
+    let no_retry = JobRow { ctl: store::JobCtl { retries: 0, ..Default::default() }, ..row("n", "normal") };
+    assert!(!eligible(&no_retry, ci), "a --no-retry job is never displaced");
+    // A row from before retries were options: retry_interrupted says.
+    assert!(eligible(&JobRow { ctl: store::JobCtl::default(), retry_interrupted: true, ..row("old-r", "normal") }, ci));
+    assert!(!eligible(&JobRow { ctl: store::JobCtl::default(), retry_interrupted: false, ..row("old-n", "normal") }, ci));
+}
+
+/// A `--no-retry` Standard job on the node a CI job needs is skipped: the
+/// CI job ends another job there, or waits when there is none.
+#[test]
+fn a_no_retry_job_is_never_displaced() {
+    let _db = k2_core::db::scoped_for_test();
+    let db = k2_core::db::shared();
+    let now = compute::now();
+    let (only, mixed) = ("dsp-noretry-g1", "dsp-noretry-g2");
+    let no_retry = |conn: &rusqlite::Connection, id: &str, node: &str, since: i64| {
+        let j = job(conn, id, node, "ws-a", "normal", false, None, None, now - 900);
+        let mut ctl = j.ctl.clone();
+        ctl.retries = 0;
+        store::set_job_ctl(conn, &j.id, &ctl).expect("no retry");
+        running(conn, &j.id, since);
+        get(&j.id)
+    };
+    let (deploy1, deploy2, std, ci1, ci2) = {
+        let conn = db.lock();
+        node(&conn, only, &["ws-a", "ws-ci"]);
+        node(&conn, mixed, &["ws-a", "ws-ci"]);
+        let deploy1 = no_retry(&conn, "d15g0000000000000000000000000001", only, now - 30);
+        let deploy2 = no_retry(&conn, "d15g0000000000000000000000000002", mixed, now - 30);
+        let std = job(&conn, "d15g0000000000000000000000000003", mixed, "ws-a", "normal", false, None, None, now - 900);
+        running(&conn, &std.id, now - 600);
+        let ci1 = job(&conn, "d15g0000000000000000000000000004", only, "ws-ci", "ci", false, None, None, now - 60);
+        let ci2 = job(&conn, "d15g0000000000000000000000000005", mixed, "ws-ci", "ci", false, None, None, now - 60);
+        (deploy1, deploy2, std, ci1, ci2)
+    };
+    assert_eq!(deploy1.ctl.retries, 0);
+    let mut c1 = compute_ws::test_attach(only, solo_offer(1, 1));
+    let mut c2 = compute_ws::test_attach(mixed, solo_offer(2, 2));
+    c1.frames();
+    c2.frames();
+    sweep(now);
+    assert!(cancels(&c1.frames()).is_empty(), "the only job there is --no-retry: nothing is ended");
+    assert_eq!(get(&deploy1.id).reason, None);
+    assert_eq!(ci_words(&ci1.id).as_deref(), Some(format!("waiting: no displaceable job on {only}").as_str()));
+    // The --no-retry job ran the least, but the older Standard job is ended.
+    assert_eq!(cancels(&c2.frames()), vec![(std.id.clone(), FRAME_REASON.to_string())]);
+    assert_eq!(get(&deploy2.id).reason, None, "the --no-retry job keeps running");
+    assert!(ci_words(&ci2.id).is_some_and(|w| w.starts_with("displacing")));
+    compute_ws::test_detach(only);
+    compute_ws::test_detach(mixed);
 }
 
 fn v(id: &str, ran: i64, warm: bool) -> Victim {
@@ -203,7 +255,7 @@ fn job(conn: &rusqlite::Connection, id: &str, node: &str, ws: &str, tier: &str, 
         no_addr_filter: false,
         with: Vec::new(),
     };
-    let ctl = store::JobCtl { any: auto.then(Default::default), timeout_secs: timeout, ..Default::default() };
+    let ctl = store::JobCtl { any: auto.then(Default::default), timeout_secs: timeout, retries: 1, ..Default::default() };
     store::insert_job(conn, &store::NewJob { plan: &plan, client_job_id: id, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl }).expect("insert job");
     conn.execute(
         "UPDATE compute_jobs SET tier = ?2, est_secs = ?3, submitter = ?4 WHERE id = ?1",

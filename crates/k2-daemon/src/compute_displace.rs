@@ -105,6 +105,16 @@ pub fn eligible(v: &JobRow, ci_id: &str) -> bool {
         && !matches!(v.reason.as_deref(), Some("cancel_requested") | Some(DISPLACE_REQUESTED))
         && !share::pending::any(v.reason.as_deref())
         && !v.ctl.displaced.iter().any(|d| d.by == ci_id)
+        && !no_retry(v)
+}
+
+/// A job that must never be re-run from the start (`--no-retry` or
+/// `--retries 0`: a deploy, a publish): never displaced. The same rule as
+/// the retry path's (a row from before retries were options retries an
+/// interruption once).
+pub fn no_retry(v: &JobRow) -> bool {
+    let allowed = if v.ctl == store::JobCtl::default() && v.retry_interrupted { 1 } else { v.ctl.retries };
+    allowed == 0
 }
 
 /// One job the CI job may end, as the choice reads it.

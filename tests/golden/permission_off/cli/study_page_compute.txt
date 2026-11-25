@@ -355,10 +355,11 @@ DISPLACEMENT (0.46.18: a CI job takes the node it needs)
   A CI-tier job that no node can start ends this server's own running
   Standard jobs on the node it needs, enough to fit, then starts there
   within about a minute. Only CI jobs do this (CI needs a grant with --ci).
-  - Never ended: CI and Priority jobs, other servers' jobs, and soaks. A
-    SOAK is a Batch job, or one expected to run over 2 h (its earlier runs
-    or --expect), or one with --timeout over 2 h. An unknown run time is
-    not a soak.
+  - Never ended: CI and Priority jobs, other servers' jobs, --no-retry
+    (--retries 0) jobs such as a deploy or a publish, and soaks. A SOAK is
+    a Batch job, or one expected to run over 2 h (its earlier runs or
+    --expect), or one with --timeout over 2 h. An unknown run time is not
+    a soak.
   - Which one: the one that has run the least first; in the same minute,
     one whose --cache is warm on that node goes last.
   - Go elsewhere first: nothing is ended while another node that fits

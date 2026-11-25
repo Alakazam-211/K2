@@ -14,8 +14,10 @@
 #    (scripts/brand/check-brand-mark.py), and none carries the shell CLI
 #    (brand/xy says cli.no_bash = true; scripts/brand/check-no-bash.py
 #    --bins, which refuses a listed program that is not there). The bite:
-#    the same k5 built from a copy of brand/xy that says no_bash = false
-#    carries it, and the check finds it.
+#    k5, the root helper and the daemon built from a copy of brand/xy that
+#    says no_bash = false carry it, each its own way, and the check finds
+#    each: k5's gzip member and its BLAKE3, the root helper's raw deflate
+#    copy and its sha256, the daemon's plain text.
 # 3. What that binary prints for every help and study form
 #    (scripts/brand/collect-outputs.sh), read by the three output judges
 #    (scripts/brand/output-judges.py).
@@ -141,21 +143,38 @@ for plant in 'Run k2 msg k2 hi' 'XY keeps your agents' 'Run {cli} app list' 'Sig
     fi
     echo "planted '$plant': $want, as it should"
 done
-step "the bite: xy with no_bash = false carries the shell CLI, and the check finds it"
+step "the bite: xy with no_bash = false carries the shell CLI in k5, the root helper and the daemon, and the check finds each"
 BITE_BRAND="$W/xy-bash"
 mkdir -p "$BITE_BRAND"
 sed 's/^no_bash = true$/no_bash = false/' brand/xy/brand.toml > "$BITE_BRAND/brand.toml"
 grep -qx 'no_bash = false' "$BITE_BRAND/brand.toml" || { echo "xy build: brand/xy has no 'no_bash = true' line to flip" >&2; exit 1; }
-K2_BRAND_DIR="$BITE_BRAND" cargo build --locked -p k5-cli --bin k5-cli
+# Each program and what the check must name in it: <program>|<finding>.
+BITES="k5-cli|a gzip member that inflates to the shell CLI, byte for byte
+k5-cli|the shell CLI's BLAKE3 (hex), as text
+k2-root-helper|a raw deflate stream that inflates to the shell CLI, byte for byte
+k2-root-helper|the shell CLI's sha256 (hex), as text
+k2-daemon|the shell CLI's first two lines, as text"
+for b in k5-cli k2-root-helper k2-daemon; do
+    K2_BRAND_DIR="$BITE_BRAND" cargo build --locked -p "$b" --bin "$b"
+done
 rc=0
-python3 scripts/brand/check-no-bash.py --cli cli/k2 "$BIN" > /dev/null 2> "$W/bite-nb.err" || rc=$?
-if [ "$rc" != 1 ] || ! grep -qF "a gzip member that inflates to the shell CLI, byte for byte" "$W/bite-nb.err"; then
+python3 scripts/brand/check-no-bash.py --cli cli/k2 "$XY_TARGET/debug/k5-cli" "$XY_TARGET/debug/k2-root-helper" \
+    "$XY_TARGET/debug/k2-daemon" > /dev/null 2> "$W/bite-nb.err" || rc=$?
+if [ "$rc" != 1 ] || ! grep -qF "REFUSED: the build carries the shell CLI" "$W/bite-nb.err"; then
     echo "xy build: the no_bash = false build was not refused as it should be (rc $rc):" >&2
     cat "$W/bite-nb.err" >&2
     exit 1
 fi
-grep -F "check-no-bash:" "$W/bite-nb.err" | head -n 2
-echo "no_bash = false: refused, as it should be"
+while IFS='|' read -r b want; do
+    line="$(grep -F "check-no-bash: $XY_TARGET/debug/$b: at byte " "$W/bite-nb.err" | grep -F ": $want" | sed -n 1p)"
+    if [ -z "$line" ]; then
+        echo "xy build: the no_bash = false $b was not refused for '$want':" >&2
+        cat "$W/bite-nb.err" >&2
+        exit 1
+    fi
+    echo "$line"
+done <<< "$BITES"
+echo "no_bash = false: k5, the root helper and the daemon refused, each for its own copy, as they should be"
 
 echo ""
 echo "xy build: passed"

@@ -658,7 +658,8 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         assert!(muted.is_empty(), "a muted Thread never pushes the person who muted it: {muted:?}");
 
         // Project chat: gina's OWN post never pushes her phone; the owner's does.
-        let g = ok(port, "POST", &format!("/cli/project-group/create?token={OWNER_TOKEN}"), Some(serde_json::json!({ "name": format!("Push {}", &conv[..6]) })));
+        let project_name = format!("Push {}", &conv[..6]);
+        let g = ok(port, "POST", &format!("/cli/project-group/create?token={OWNER_TOKEN}"), Some(serde_json::json!({ "name": project_name })));
         let gid = g["group"]["id"].as_str().or_else(|| g["id"].as_str()).unwrap_or_else(|| panic!("group id: {g}")).to_string();
         let mark = gateway_mark();
         ok(port, "POST", &format!("/cli/project-group/msg?token={gina}"), Some(serde_json::json!({ "group": gid, "body": "hi all" })));
@@ -666,7 +667,12 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         let got = wait_pushes(mark, 1, |p| project_push(p) && p["data"]["badgeKey"] == owner_key.as_str());
         assert_eq!(got.len(), 1, "the owner's phone hears gina's post: {got:?}");
         assert_eq!(got[0]["title"], "K2");
-        assert!(!got[0].to_string().contains("hi all"), "content-free: {}", got[0]);
+        // Since project chats on the Thread (P6, 0.46.18) a project push
+        // follows the Thread push's preview rule: the owner's
+        // push_message_previews switch (on by default), then each phone's
+        // own previews. This test predates P6, when a project push was
+        // always content-free. Both on: the latest line.
+        assert!(got[0]["body"].as_str().is_some_and(|b| b.contains("hi all")), "a preview with the switch and the phone on: {}", got[0]);
         assert!(got[0]["data"]["unreadTotal"].as_str().is_some_and(|t| t.parse::<i64>().is_ok_and(|n| n >= 1)), "{}", got[0]);
         assert_eq!(got[0]["data"]["waitingTotal"], "0");
         std::thread::sleep(Duration::from_millis(1500));
@@ -681,16 +687,42 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         let any = wait_pushes(mark, 0, |p| project_push(p));
         assert!(any.is_empty(), "the owner muted it and gina wrote it: no push at all: {any:?}");
         // Gina gets the owner's line (the owner's own post skips the owner).
+        // Her phone's own previews are off: content-free.
+        ok(
+            port,
+            "POST",
+            &format!("/cli/push/register-device?token={gina}"),
+            Some(serde_json::json!({ "deviceId": gina_dev, "platform": "apns", "token": format!("apns-gina-{}", uuid::Uuid::new_v4()), "previews": false })),
+        );
         let mark = gateway_mark();
         ok(port, "POST", &format!("/cli/project-group/msg?token={OWNER_TOKEN}"), Some(serde_json::json!({ "group": gid, "body": "here" })));
         let got = wait_pushes(mark, 1, |p| project_push(p));
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0]["data"]["badgeKey"], gina_key.as_str(), "{}", got[0]);
+        assert_eq!(got[0]["body"], format!("New message in {project_name}"), "the phone's previews off: content-free: {}", got[0]);
+        // The owner's switch off (her phone's previews back on): content-free
+        // again. A second project, so the push isn't held in the first one's
+        // window.
+        ok(
+            port,
+            "POST",
+            &format!("/cli/push/register-device?token={gina}"),
+            Some(serde_json::json!({ "deviceId": gina_dev, "platform": "apns", "token": format!("apns-gina-{}", uuid::Uuid::new_v4()), "previews": true })),
+        );
+        ok(port, "POST", &format!("/cli/settings/update?token={OWNER_TOKEN}"), Some(serde_json::json!({ "pushMessagePreviews": false })));
+        let name2 = format!("Push2 {}", &conv[..6]);
+        let g2 = ok(port, "POST", &format!("/cli/project-group/create?token={OWNER_TOKEN}"), Some(serde_json::json!({ "name": name2 })));
+        let gid2 = g2["group"]["id"].as_str().or_else(|| g2["id"].as_str()).unwrap_or_else(|| panic!("group id: {g2}")).to_string();
+        let mark = gateway_mark();
+        ok(port, "POST", &format!("/cli/project-group/msg?token={OWNER_TOKEN}"), Some(serde_json::json!({ "group": gid2, "body": "status" })));
+        let got = wait_pushes(mark, 1, |p| p["data"]["kind"] == "project" && p["data"]["groupId"] == gid2.as_str());
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["body"], format!("New message in {name2}"), "the owner's switch off: content-free: {}", got[0]);
 
         // Privacy (0.46.1): nothing this test sent through the relay names a
         // person: no `principal` key, no username, not the owner.
         let all: Vec<J> = gateway_calls().lock().expect("calls")[test_start..].iter().map(|c| c["payload"].clone()).collect();
-        assert_eq!(all.len(), 5, "2 Thread + 1 muted-Thread + 2 project pushes");
+        assert_eq!(all.len(), 6, "2 Thread + 1 muted-Thread + 3 project pushes");
         for p in &all {
             assert!(p["data"].get("principal").is_none(), "principal in {p}");
             let wire = p.to_string();

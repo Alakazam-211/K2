@@ -29,7 +29,7 @@ fresh() {
 import os, re, shutil, sys
 root, dst = sys.argv[1], sys.argv[2]
 s = open(os.path.join(root, "resources/THIRD-PARTY-NOTICES.md"), encoding="utf-8").read()
-for names in re.findall(r"<!-- BEGIN FILE(?: lines=\d+-\d+)?: ([^>]+?) -->", s):
+for names in re.findall(r"<!-- BEGIN (?:FILE(?: lines=\d+-\d+)?|COMMENTS): ([^>]+?) -->", s):
     for n in names.split():
         os.makedirs(os.path.dirname(os.path.join(dst, n)), exist_ok=True)
         shutil.copyfile(os.path.join(root, n), os.path.join(dst, n))
@@ -111,6 +111,20 @@ expect_fail "one of several same-bytes files changed" "part 5's copy of vendor/k
 fresh
 printf 'changed\n' >> "$WORK/t/crates/k2-vault/data/public_suffix_list.dat"
 expect_pass "a line range copy ignores lines after it"
+
+# Mermaid's bundled licence comments change in the vendored file.
+fresh
+edit src/renderer/public/vendor/mermaid.min.js "js-yaml 4.1.1" "js-yaml 4.1.2"
+expect_fail "the bundle's licence comments changed, part 5's copy not" "bundled licence comments differs"
+
+# The MPL-2.0 text twice, or not at all.
+fresh
+printf '\nMozilla Public License Version 2.0\n' >> "$WORK/t/resources/THIRD-PARTY-NOTICES.md"
+expect_fail "the MPL-2.0 text twice" "MPL-2.0 text exactly once"
+
+fresh
+edit resources/THIRD-PARTY-NOTICES.md "https://github.com/Alakazam-211/K2/blob/v<version>/crates/k2-vault/data/public_suffix_list.dat" "the repo"
+expect_fail "the Public Suffix List's repo path is gone" "lacks: https://github.com/Alakazam-211/K2/blob"
 
 # A new NOTICE.md entry pointing at a licence file that does not ship.
 fresh

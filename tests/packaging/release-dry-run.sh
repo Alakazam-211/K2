@@ -102,7 +102,7 @@ for w in \
     "[dry] would: bash scripts/sign-daemon.sh $V --from-dir" \
     "[dry] would: bash scripts/sign-root-helper.sh $V" \
     "[dry] would: register the evidence with the signing user" \
-    "[dry] would: download libgit2-1.8.1.tar.gz (https://github.com/libgit2/libgit2/archive/refs/tags/v1.8.1.tar.gz), check its pinned sha256 and attach it to v$V" \
+    "[dry] would: fetch v1.8.1 from https://github.com/libgit2/libgit2.git, check commit 36f7e21ad757a3dacc58cf7944329da6bc1d6e96, git archive it as libgit2-1.8.1-source.tar.gz (tar sha256 pinned) and attach it to v$V" \
     "[dry] would: download libgit2-sys-0.17.0-1.8.1.crate" \
     "[dry] skipped: the signing approval" \
     "[dry] skipped: update-key signature u1 of K2.app.tar.gz"; do

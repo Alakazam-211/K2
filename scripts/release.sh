@@ -2046,13 +2046,14 @@ else
 fi
 
 # Source archives (release sign-off area): earlier
-# releases included libgit2, so every release attaches its source, downloaded
-# here and checked against the sha256 pins in
-# scripts/lib/release-source-archives.sh. A failure stops the release before
-# the tag is pushed.
+# releases included libgit2, so every release attaches its source: an archive
+# of libgit2's v1.8.1 tag (commit and tar sha256 pinned) and the libgit2-sys
+# .crate (sha256 pinned), both in scripts/lib/release-source-archives.sh. A
+# failure stops the release before the tag is pushed.
 # shellcheck source=scripts/lib/release-source-archives.sh
 source "$PROJECT_DIR/scripts/lib/release-source-archives.sh"
 if k2dry_on; then
+    k2dry_would "fetch $K2_LIBGIT2_TAG from $K2_LIBGIT2_REPO, check commit $K2_LIBGIT2_COMMIT, git archive it as $K2_LIBGIT2_ASSET (tar sha256 pinned) and attach it to $TAG"
     for _sa in "${K2_SOURCE_ARCHIVES[@]}"; do
         k2dry_would "download ${_sa%%|*} ($(cut -d'|' -f2 <<<"$_sa")), check its pinned sha256 and attach it to $TAG"
     done

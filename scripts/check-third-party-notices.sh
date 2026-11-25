@@ -119,6 +119,21 @@ for line in notice.splitlines():
                 fail(f"NOTICE.md points to {ref}, which does not ship; copy it into part 5")
 if not blocks:
     fail("part 5 has no FILE blocks")
+# COMMENTS blocks: the /*! Bundled license information */ comments a
+# prebuilt file keeps, joined by blank lines.
+cpat = re.compile(r"<!-- BEGIN COMMENTS: (\S+) -->\n~~~~text\n(.*?)~~~~\n<!-- END COMMENTS -->\n", re.S)
+cblocks = list(cpat.finditer(s))
+if s.count("<!-- BEGIN COMMENTS") != len(cblocks):
+    fail("a BEGIN COMMENTS block is malformed")
+for m in cblocks:
+    n, text = m.group(1), m.group(2)
+    full = os.path.join(root, n)
+    if not os.path.isfile(full):
+        fail(f"part 5 copies the licence comments of {n}, which is gone")
+        continue
+    found = re.findall(r"/\*! Bundled license information:[\s\S]*?\*/", open(full, encoding="utf-8").read())
+    if not found or text != "\n\n".join(found) + "\n":
+        fail(f"part 5's copy of {n}'s bundled licence comments differs from the file (copy them in again)")
 sys.exit(1 if bad else 0)
 PY
 }
@@ -185,7 +200,14 @@ check_file() {
         "### libssh2 and OpenSSL in earlier releases" \
         "Copyright (C) 2004-2007 Sara Golemon" \
         "OpenSSL 3 ships no NOTICE file" \
-        "## 5. Licence texts NOTICE.md points to"
+        "## 5. Licence texts NOTICE.md points to" \
+        "commit \`36f7e21ad757a3dacc58cf7944329da6bc1d6e96\`" \
+        "libgit2-1.8.1-source.tar.gz" \
+        "https://github.com/Alakazam-211/K2/blob/v<version>/crates/k2-vault/data/public_suffix_list.dat" \
+        "https://publicsuffix.org/list/public_suffix_list.dat" \
+        "#### Mermaid's bundled dependencies" \
+        "K2 takes it under the **Apache License 2.0**" \
+        "##### Known incomplete"
     do
         grep -qF -- "$needle" "$FILE" || bad "$FILE_REL lacks: $needle"
     done
@@ -194,6 +216,8 @@ check_file() {
         bad "$FILE_REL has no $BEGIN_MARK / $END_MARK pair around its copy of NOTICE.md"
     elif ! notice_copy | cmp -s - "$ROOT/NOTICE.md"; then
         bad "$FILE_REL's copy of NOTICE.md differs from NOTICE.md (run scripts/check-third-party-notices.sh --sync)"
+    elif [ "$(grep -c '^Mozilla Public License Version 2.0$' "$FILE")" != 1 ]; then
+        bad "$FILE_REL must hold the MPL-2.0 text exactly once (the Public Suffix List and the shiki grammars share it)"
     elif [ "$problems" -eq "$before" ]; then
         ok "$FILE_REL holds the third-party notices and NOTICE.md unchanged"
     fi

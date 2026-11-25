@@ -78,6 +78,20 @@ pub fn open(path: impl AsRef<Path>) -> Result<gix::Repository, OpenError> {
     finish(ts.to_thread_local(), path)
 }
 
+/// Is there a repository at or above `path` by gix's path search alone
+/// (nothing opened, no config read)? `false` only for gix's "no repository
+/// here"; any other failure (IO, an untrusted candidate) is `true`, so a
+/// caller that refuses on `true` fails closed ([`crate::git_write_guard`]).
+pub fn repository_above(path: &Path) -> bool {
+    use gix::discover::upwards::Error as E;
+    match gix::discover::upwards(path) {
+        Ok(_) => true,
+        Err(e) => !e
+            .downcast_any_ref::<E>()
+            .is_some_and(|e| matches!(e, E::NoGitRepository { .. } | E::NoGitRepositoryWithinCeiling { .. } | E::NoGitRepositoryWithinFs { .. })),
+    }
+}
+
 fn finish(mut repo: gix::Repository, asked: &Path) -> Result<gix::Repository, OpenError> {
     if repo.git_dir_trust() != gix::sec::Trust::Full {
         return Err(OpenError::Untrusted(asked.display().to_string()));

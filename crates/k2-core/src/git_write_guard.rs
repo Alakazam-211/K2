@@ -13,18 +13,26 @@
 //! machine ([`mark_k2_made`]). A clone from another server is never
 //! K2-made: the record lives in this machine's K2 home, not in the repo.
 //!
+//! The config is read with gix-config, as git reads it (any bytes, a BOM,
+//! quoted subsections), and the guard fails closed: a config file or
+//! include it can't read, parse or resolve counts as naming a program, and
+//! a repository it can't open (one git may still open) is refused too.
+//!
 //! The refusal names the keys, never their values, and nothing runs.
 
 use std::path::{Path, PathBuf};
 
-use crate::cli_folder_trust::{gate, scan};
+use gix::bstr::{BStr, BString, ByteSlice};
+
+use crate::cli_folder_trust::gate;
 
 /// Includes followed at most this deep (git's own limit is 10).
 const MAX_INCLUDE_DEPTH: usize = 10;
 
-/// Does `key` (git's form: section and name lowercased, subsection kept)
-/// name a program git runs on its own? `value` tells a boolean
-/// `core.fsmonitor` (git's built-in monitor, no program) from a path.
+/// Does `key` (git's form: `section[.subsection].name`) name a program git
+/// runs on its own? `value` tells a boolean `core.fsmonitor` (git's
+/// built-in monitor, no program) from a path, and a boolean `pager.<cmd>`
+/// from a pager command.
 pub fn names_program(key: &str, value: &str) -> bool {
     let lower = key.to_ascii_lowercase();
     let parts: Vec<&str> = lower.split('.').collect();
@@ -34,11 +42,16 @@ pub fn names_program(key: &str, value: &str) -> bool {
         ("merge", "driver") => sub,
         ("diff", "command" | "textconv") => sub,
         ("diff", "external") => !sub,
-        ("core", "sshcommand" | "gitproxy" | "askpass" | "editor" | "pager" | "hookspath") => !sub,
+        ("core", "sshcommand" | "gitproxy" | "askpass" | "editor" | "pager" | "hookspath" | "alternaterefscommand") => !sub,
         ("core", "fsmonitor") => !sub && !is_git_bool(value),
         ("credential", "helper") => true,
-        ("gpg", "program") => true,
+        ("gpg", "program" | "defaultkeycommand") => true,
         ("sequence", "editor") => !sub,
+        ("interactive", "difffilter") => !sub,
+        ("pager", _) => parts.len() == 2 && !is_git_bool(value),
+        ("trailer", "command" | "cmd") => sub,
+        ("difftool" | "mergetool", "cmd") => sub,
+        ("remote", "uploadpack" | "receivepack") => sub,
         _ => false,
     }
 }
@@ -52,59 +65,175 @@ fn is_include(key: &str) -> bool {
     lower == "include.path" || (lower.starts_with("includeif.") && lower.ends_with(".path"))
 }
 
-/// An include's path, as git resolves it: `~/` from HOME, relative to the
-/// including file's folder.
-fn include_target(from: &Path, value: &str) -> Option<PathBuf> {
-    if value.is_empty() {
-        return None;
+/// The `(section[.subsection].name, value)` entries of one git config file,
+/// parsed by gix-config as git parses it: a UTF-8 BOM skipped, any bytes
+/// (not only UTF-8), quoted subsections with `]` or escapes in them, keys
+/// on the header's own line, values continued over lines. Section and
+/// name are lowercased, the subsection kept; a key with no `=` reads
+/// `true`. A file gix-config can't parse is an `Err`: the guard counts it
+/// as naming a program, the trust scan reports it.
+pub(crate) fn config_entries(bytes: &[u8]) -> Result<Vec<(String, BString)>, String> {
+    let file = gix::config::File::from_bytes_no_includes(bytes, gix::config::file::Metadata::api(), Default::default())
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for section in file.sections() {
+        let header = section.header();
+        let name = header.name().to_str_lossy().to_ascii_lowercase();
+        // git joins a dotted section name and a quoted subsection the same
+        // way (`[filter.a "b"]` is driver `a.b`), so the key is built as
+        // git builds it and [`names_program`] splits it at the first and
+        // last dot.
+        let prefix = match header.subsection_name() {
+            Some(sub) => format!("{name}.{}", sub.to_str_lossy()),
+            None => name,
+        };
+        let body = section.body();
+        let mut seen: Vec<String> = Vec::new();
+        for value_name in body.value_names() {
+            let lower = value_name.to_ascii_lowercase();
+            if seen.contains(&lower) {
+                continue;
+            }
+            seen.push(lower.clone());
+            let key = format!("{prefix}.{lower}");
+            let values = body.values(&lower);
+            if values.is_empty() {
+                out.push((key, BString::from("true")));
+            } else {
+                out.extend(values.into_iter().map(|v| (key.clone(), v)));
+            }
+        }
     }
-    if let Some(rest) = value.strip_prefix("~/") {
-        return std::env::var_os("HOME").map(|h| PathBuf::from(h).join(rest));
-    }
-    let p = PathBuf::from(value);
-    Some(if p.is_absolute() { p } else { from.parent().unwrap_or(Path::new(".")).join(p) })
+    Ok(out)
 }
 
-/// Walk one config file and its includes; push program keys into `out`.
-fn read_file(path: &Path, depth: usize, out: &mut Vec<String>, worktree_config: &mut bool) {
-    let Ok(text) = std::fs::read_to_string(path) else { return };
-    for (key, value) in scan::git_config_entries(&text) {
-        if key.eq_ignore_ascii_case("extensions.worktreeconfig") && matches!(value.to_ascii_lowercase().as_str(), "true" | "yes" | "on" | "1") {
-            *worktree_config = true;
+/// An include's path, as git resolves it: `~/` (or `~`) from HOME,
+/// relative to the including file's folder. `Err` when K2 can't resolve it
+/// the way git would (`~user/`, `%(prefix)/`, an empty or unrepresentable
+/// path): such an include counts as naming a program.
+fn include_target(from: &Path, value: &BStr) -> Result<PathBuf, ()> {
+    if value.is_empty() || value.starts_with(b"%(") {
+        return Err(());
+    }
+    let path = bytes_path(value)?;
+    let text = path.to_string_lossy().to_string();
+    if text == "~" || text.starts_with("~/") {
+        let home = std::env::var_os("HOME").ok_or(())?;
+        return Ok(PathBuf::from(home).join(text[1..].trim_start_matches('/')));
+    }
+    if text.starts_with('~') {
+        return Err(());
+    }
+    Ok(if path.is_absolute() { path } else { from.parent().unwrap_or(Path::new(".")).join(path) })
+}
+
+#[cfg(unix)]
+fn bytes_path(v: &BStr) -> Result<PathBuf, ()> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(v)))
+}
+
+#[cfg(not(unix))]
+fn bytes_path(v: &BStr) -> Result<PathBuf, ()> {
+    v.to_str().map(PathBuf::from).map_err(|_| ())
+}
+
+/// Walk one config file and every file it includes (each include followed
+/// whatever its `includeIf` condition: a superset of what git reads), and
+/// push program keys into `out`. Fails closed: a file that exists but
+/// can't be read or parsed, an include K2 can't resolve, and one past
+/// git's depth each push an entry, so the guard refuses. A missing file is
+/// skipped, as git skips it.
+fn read_file(path: &Path, label: &str, depth: usize, out: &mut Vec<String>) {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(_) => {
+            out.push(format!("{label} (can't be read)"));
+            return;
         }
-        if names_program(&key, &value) {
+    };
+    let Ok(entries) = config_entries(&bytes) else {
+        out.push(format!("{label} (can't be parsed)"));
+        return;
+    };
+    for (key, value) in entries {
+        if names_program(&key, &value.to_str_lossy()) {
             out.push(key);
         } else if is_include(&key) {
-            match include_target(path, &value) {
-                Some(t) if depth < MAX_INCLUDE_DEPTH && t.is_file() => read_file(&t, depth + 1, out, worktree_config),
-                // An include K2 can't read (missing, too deep): it may name
-                // a program, so it counts as one.
-                Some(t) if t.exists() || depth >= MAX_INCLUDE_DEPTH => out.push(key),
-                _ => {}
+            match include_target(path, value.as_bstr()) {
+                Err(()) => out.push(format!("{key} (can't be followed)")),
+                Ok(_) if depth >= MAX_INCLUDE_DEPTH => out.push(format!("{key} (too deep)")),
+                Ok(t) => read_file(&t, &key, depth + 1, out),
             }
         }
     }
 }
 
 /// The program-naming keys in `repo`'s own config: `<common dir>/config`,
-/// a linked worktree's own `config` and `config.worktree`, the main
-/// `config.worktree` when `extensions.worktreeConfig` is on, and every file
-/// they include. Sorted, once each. Never global or system config.
+/// the git dir's own `config` (a linked worktree's), `config.worktree` in
+/// either (read whether or not `extensions.worktreeConfig` is on), and
+/// every file they include. Sorted, once each. Never global or system
+/// config. A file that can't be read or parsed is listed too (fail closed).
 pub fn program_keys(repo: &gix::Repository) -> Vec<String> {
     let common = repo.common_dir().to_path_buf();
     let git_dir = repo.git_dir().to_path_buf();
-    let mut out = Vec::new();
-    let mut worktree_config = false;
-    read_file(&common.join("config"), 0, &mut out, &mut worktree_config);
-    if git_dir != common {
-        read_file(&git_dir.join("config"), 0, &mut out, &mut worktree_config);
+    let mut files: Vec<PathBuf> = Vec::new();
+    for f in [common.join("config"), git_dir.join("config"), git_dir.join("config.worktree"), common.join("config.worktree")] {
+        if !files.contains(&f) {
+            files.push(f);
+        }
     }
-    if worktree_config || git_dir != common {
-        read_file(&git_dir.join("config.worktree"), 0, &mut out, &mut worktree_config);
+    let mut out = Vec::new();
+    for f in &files {
+        let label = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "config".into());
+        read_file(f, &label, 0, &mut out);
     }
     out.sort();
     out.dedup();
     out
+}
+
+/// What the guard found at a folder.
+enum Found {
+    /// No repository at or above the folder: nothing to check.
+    NotARepo,
+    Repo(gix::Repository),
+    /// A repository is there, but K2 can't open it the way git will (gix
+    /// refuses it, or git would take a nearer `.git` than gix did). The
+    /// folder is the one holding the nearest `.git`, else the one asked.
+    Unopenable(PathBuf),
+}
+
+/// The folder at or above `dir` that holds a `.git` entry (a directory, a
+/// worktree's `.git` file, or anything else by that name), canonical.
+fn nearest_dot_git(dir: &Path) -> Option<PathBuf> {
+    let start = dunce::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    start.ancestors().find(|a| std::fs::symlink_metadata(a.join(".git")).is_ok()).map(Path::to_path_buf)
+}
+
+/// Tell "not a repository" (nothing to check) from "a repository K2 can't
+/// open" (refused, see [`check`]).
+fn find(dir: &Path) -> Found {
+    let nearest = nearest_dot_git(dir);
+    match crate::gitx::discover(dir) {
+        Ok(repo) => {
+            // git takes the nearest `.git`; gix opening one further up (or
+            // a bare repo) means it skipped the one git will use.
+            if let Some(n) = &nearest {
+                let workdir = repo.workdir().and_then(|w| dunce::canonicalize(w).ok());
+                if workdir.as_ref() != Some(n) {
+                    return Found::Unopenable(n.clone());
+                }
+            }
+            Found::Repo(repo)
+        }
+        Err(_) => match nearest {
+            None if !crate::gitx::repository_above(dir) => Found::NotARepo,
+            Some(n) => Found::Unopenable(n),
+            None => Found::Unopenable(dir.to_path_buf()),
+        },
+    }
 }
 
 // ── K2-made repositories ────────────────────────────────────────────────
@@ -173,23 +302,31 @@ pub fn is_trusted(workdir: &Path) -> bool {
 
 /// `Ok` when K2's git may write in the repository holding `dir`; else
 /// `git_config_runs_programs: …` naming the keys and how to trust the
-/// workspace. A folder that isn't a repository has nothing to check.
+/// workspace. A folder that isn't a repository has nothing to check; a
+/// repository K2 can't open (git may still open it and run what it names)
+/// is refused until the workspace is trusted, like one whose config names
+/// a program or can't be read.
 pub fn check(dir: &Path) -> Result<(), String> {
-    let Ok(repo) = crate::gitx::discover(dir) else { return Ok(()) };
-    let keys = program_keys(&repo);
-    if keys.is_empty() || is_k2_made(&repo) {
-        return Ok(());
-    }
-    let workdir = repo.workdir().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
+    let (workdir, what) = match find(dir) {
+        Found::NotARepo => return Ok(()),
+        Found::Unopenable(folder) => (folder, format!("{} can't open this repository to read them", crate::brand::PRODUCT_NAME)),
+        Found::Repo(repo) => {
+            let keys = program_keys(&repo);
+            if keys.is_empty() || is_k2_made(&repo) {
+                return Ok(());
+            }
+            let workdir = repo.workdir().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
+            (workdir, keys.join(", "))
+        }
+    };
     if is_trusted(&workdir) {
         return Ok(());
     }
     let folder = workdir.to_string_lossy().to_string();
     Err(format!(
-        "{}: this repository's own git settings run programs ({}), and this workspace isn't trusted, so {} won't run git here. \
+        "{}: this repository's own git settings may run programs ({what}), and this workspace isn't trusted, so {} won't run git here. \
          Trust the workspace first: on its trust card, or {}",
         crate::git::refusal::GIT_CONFIG_RUNS_PROGRAMS,
-        keys.join(", "),
         crate::brand::PRODUCT_NAME,
         gate::decide_hint(&folder)
     ))
@@ -251,6 +388,9 @@ mod tests {
             "core.sshCommand", "core.gitProxy", "core.askPass", "core.editor", "core.pager", "core.hooksPath",
             "credential.helper", "credential.https://example.com.helper",
             "gpg.program", "gpg.ssh.program", "gpg.x509.program", "sequence.editor",
+            "gpg.ssh.defaultKeyCommand", "core.alternateRefsCommand", "interactive.diffFilter",
+            "pager.log", "trailer.sign.command", "trailer.sign.cmd", "difftool.x.cmd", "mergetool.x.cmd",
+            "remote.origin.uploadpack", "remote.origin.receivepack", "filter.a]b.clean", "filter.a.b.clean",
         ] {
             assert!(names_program(k, "/some/program"), "{k}");
         }
@@ -258,13 +398,76 @@ mod tests {
         for (k, v) in [
             ("core.fsmonitor", "true"),
             ("core.fsmonitor", "false"),
+            ("pager.log", "false"),
             ("filter.lfs.required", "true"),
             ("merge.ff", "only"),
             ("diff.renames", "true"),
             ("user.name", "x"),
             ("core.autocrlf", "true"),
+            ("remote.origin.url", "https://example.com/x.git"),
         ] {
             assert!(!names_program(k, v), "{k} = {v}");
         }
+    }
+
+    fn entries(bytes: &[u8]) -> Vec<(String, String)> {
+        super::config_entries(bytes).expect("parses").into_iter().map(|(k, v)| (k, v.to_string())).collect()
+    }
+
+    /// The config is read as git reads it, where a line-by-line text reader
+    /// went wrong: a BOM, a non-UTF-8 byte, a `]` in a quoted subsection
+    /// with the key on the header's line, a dotted section name with a
+    /// quoted subsection, a key with no value, a value continued over
+    /// lines, an escaped quote in a subsection.
+    #[test]
+    fn config_entries_read_as_git_reads() {
+        let kv = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(entries(b"\xef\xbb\xbf[filter \"x\"]\n\tclean = c\n"), vec![kv("filter.x.clean", "c")]);
+        assert_eq!(entries(b"[core]\n# caf\xe9\n[filter \"x\"]\n\tclean = c\n"), vec![kv("filter.x.clean", "c")]);
+        assert_eq!(entries(b"[filter \"a]b\"] clean = c\n"), vec![kv("filter.a]b.clean", "c")]);
+        assert_eq!(entries(b"[Filter.A \"b\"]\n\tCLEAN = c\n"), vec![kv("filter.a.b.clean", "c")]);
+        assert_eq!(entries(b"[core]\n\tfsmonitor\n"), vec![kv("core.fsmonitor", "true")]);
+        let continued = entries(b"[core]\n\tsshCommand = a \\\n b\n");
+        assert_eq!(continued.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["core.sshcommand"], "{continued:?}");
+        let escaped = entries(b"[filter \"a\\\"]b\"]\n\tclean = c\n");
+        assert_eq!(escaped.len(), 1, "{escaped:?}");
+        assert!(names_program(&escaped[0].0, &escaped[0].1), "{escaped:?}");
+        assert_eq!(
+            entries(b"[filter \"x\"]\n\tclean = one\n\tclean = two\n"),
+            vec![kv("filter.x.clean", "one"), kv("filter.x.clean", "two")]
+        );
+        assert!(super::config_entries(b"[filter \"x\"\n\tclean = c\n").is_err(), "an unclosed header doesn't parse");
+    }
+
+    /// Fail closed: a config file or include that can't be read, parsed or
+    /// resolved is listed as a program key; a missing include is skipped
+    /// (git skips it too); every include is followed whatever its
+    /// `includeIf` condition.
+    #[test]
+    fn program_keys_fail_closed() {
+        let d = fx::init("guard-keys");
+        let cfg = d.join(".git/config");
+        let base = std::fs::read(&cfg).expect("config");
+        let with = |extra: &[u8]| {
+            let mut b = base.clone();
+            b.extend_from_slice(extra);
+            std::fs::write(&cfg, b).expect("write config");
+            super::program_keys(&crate::gitx::discover(&d).expect("repo"))
+        };
+        assert!(with(b"").is_empty(), "a fresh repo names no program");
+        assert!(with(b"[include]\n\tpath = missing.cfg\n").is_empty(), "a missing include is skipped");
+        std::fs::create_dir_all(d.join(".git/adir")).expect("dir");
+        assert_eq!(with(b"[include]\n\tpath = adir\n"), vec!["include.path (can't be read)"]);
+        std::fs::write(d.join(".git/bad.cfg"), b"[x\n").expect("bad");
+        assert_eq!(with(b"[include]\n\tpath = bad.cfg\n"), vec!["include.path (can't be parsed)"]);
+        assert_eq!(with(b"[include]\n\tpath = ~nobody/x.cfg\n"), vec!["include.path (can't be followed)"]);
+        assert_eq!(with(b"[include]\n\tpath = %(prefix)/x.cfg\n"), vec!["include.path (can't be followed)"]);
+        std::fs::write(d.join(".git/f.cfg"), b"[filter \"x\"]\n\tsmudge = s\n").expect("f");
+        assert_eq!(with(b"[includeIf \"onbranch:never\"]\n\tpath = f.cfg\n"), vec!["filter.x.smudge"]);
+        std::fs::write(d.join(".git/loop.cfg"), b"[include]\n\tpath = loop.cfg\n").expect("loop");
+        assert_eq!(with(b"[include]\n\tpath = loop.cfg\n"), vec!["include.path (too deep)"]);
+        std::fs::write(&cfg, &base).expect("restore");
+        std::fs::write(d.join(".git/config.worktree"), b"[core]\n\tfsmonitor = ./w\n").expect("worktree config");
+        assert_eq!(super::program_keys(&crate::gitx::discover(&d).expect("repo")), vec!["core.fsmonitor"]);
     }
 }

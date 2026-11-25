@@ -524,3 +524,113 @@ fn clean_and_k2_made_repos_need_no_trust_but_a_copy_does() {
     assert_needs_trust(&e, &["filter.x.clean"], &prog);
     assert!(ran(&marks).is_empty());
 }
+
+/// A repo whose `.gitattributes` sends every .txt through filter `driver`,
+/// with one commit, a.txt changed, and `config` (bytes) as `.git/config`.
+#[cfg(unix)]
+fn repo_with_config(tag: &str, driver: &str, config: &[u8]) -> PathBuf {
+    let d = fx::init(tag);
+    write(&d, ".gitattributes", format!("*.txt filter={driver}\n"));
+    write(&d, "a.txt", "a\n");
+    fx::commit_all(&d, "base");
+    write(&d, "a.txt", "changed\n");
+    std::fs::write(d.join(".git/config"), config).expect("write config");
+    d
+}
+
+/// Config git reads and a line-by-line text reader misreads still names
+/// its filter: a non-UTF-8 byte anywhere in the file, a UTF-8 BOM before
+/// the first section, and a `]` inside a quoted subsection with the key on
+/// the header's own line. Untrusted, the stage is refused and the filter
+/// never runs; trusted, the person's git runs it (the config is real).
+#[cfg(unix)]
+#[test]
+fn a_filter_in_config_git_reads_any_way_needs_trust() {
+    let _home = trust_env();
+    let marks = fx::tmp("guard-forms-marks");
+    let prog = marker_prog(&marks, "filter");
+    let base = "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tautocrlf = false\n[user]\n\tname = K2 Test\n\temail = k2-test@example.com\n";
+    let mut non_utf8 = base.as_bytes().to_vec();
+    non_utf8.extend_from_slice(b"# caf\xe9\n");
+    non_utf8.extend_from_slice(format!("[filter \"x\"]\n\tclean = {prog}\n").as_bytes());
+    let mut bom = b"\xef\xbb\xbf".to_vec();
+    bom.extend_from_slice(format!("[filter \"x\"]\n\tclean = {prog}\n{base}").as_bytes());
+    let bracket = format!("{base}[filter \"a]b\"] clean = {prog}\n").into_bytes();
+    for (tag, driver, config, key) in [
+        ("guard-non-utf8", "x", non_utf8, "filter.x.clean"),
+        ("guard-bom", "x", bom, "filter.x.clean"),
+        ("guard-bracket", "a]b", bracket, "filter.a]b.clean"),
+    ] {
+        let d = repo_with_config(tag, driver, &config);
+        let before = fx::ls_files_stage(&d);
+        let e = crate::git_write_guard::check(&d).expect_err(tag);
+        assert_needs_trust(&e, &[key], &prog);
+        let e = stage_file(s(&d), "a.txt").expect_err(tag);
+        assert_needs_trust(&e, &[key], &prog);
+        assert!(ran(&marks).is_empty(), "{tag}: the filter never ran: {:?}", ran(&marks));
+        assert_eq!(fx::ls_files_stage(&d), before, "{tag}: the index is untouched");
+
+        crate::cli_folder_trust::gate::decide(s(&d), crate::cli_folder_trust::gate::Decision::Always, "owner", None).expect("trust");
+        stage_file(s(&d), "a.txt").unwrap_or_else(|e| panic!("{tag}: stage once trusted: {e}"));
+        assert_eq!(ran(&marks), vec!["filter.ran".to_string()], "{tag}: git really runs this filter once trusted");
+        std::fs::remove_file(marks.join("filter.ran")).expect("clear mark");
+    }
+}
+
+/// An include K2 can't read or parse counts as naming a program: one that
+/// is a directory, one with a non-UTF-8 byte (its filter is still found),
+/// and one that isn't valid config.
+#[cfg(unix)]
+#[test]
+fn an_include_that_cant_be_read_or_parsed_needs_trust() {
+    let _home = trust_env();
+    let marks = fx::tmp("guard-inc-marks");
+    let prog = marker_prog(&marks, "filter");
+    let base = "[core]\n\trepositoryformatversion = 0\n\tbare = false\n[include]\n\tpath = extra.cfg\n";
+    let mut non_utf8 = b"# caf\xe9\n".to_vec();
+    non_utf8.extend_from_slice(format!("[filter \"x\"]\n\tclean = {prog}\n").as_bytes());
+    let mut broken = format!("[filter \"x\"\n\tclean = {prog}\n").into_bytes();
+    broken.extend_from_slice(b"\xff\n");
+    for (tag, extra, key) in [
+        ("guard-inc-dir", None, "include.path (can't be read)"),
+        ("guard-inc-non-utf8", Some(non_utf8), "filter.x.clean"),
+        ("guard-inc-broken", Some(broken), "include.path (can't be parsed)"),
+    ] {
+        let d = repo_with_config(tag, "x", base.as_bytes());
+        match extra {
+            Some(bytes) => std::fs::write(d.join(".git/extra.cfg"), bytes).expect("include"),
+            None => std::fs::create_dir_all(d.join(".git/extra.cfg")).expect("include dir"),
+        }
+        let e = crate::git_write_guard::check(&d).expect_err(tag);
+        assert_needs_trust(&e, &[key], &prog);
+        let e = stage_file(s(&d), "a.txt").expect_err(tag);
+        assert_needs_trust(&e, &[key], &prog);
+        assert!(ran(&marks).is_empty(), "{tag}: nothing ran");
+    }
+}
+
+/// A repository git opens but K2 can't (sha256 objects; K2's gix is built
+/// for sha1 only) is refused, not taken for "not a repository"; a folder
+/// with no repository at all needs nothing.
+#[cfg(unix)]
+#[test]
+fn a_repository_k2_cant_open_is_refused() {
+    let _home = trust_env();
+    let marks = fx::tmp("guard-open-marks");
+    let prog = marker_prog(&marks, "filter");
+    let d = fx::tmp("guard-sha256");
+    fx::git(&d, &["init", "-q", "--object-format=sha256", "-b", "main"]);
+    fx::git(&d, &["config", "filter.x.clean", &prog]);
+    write(&d, ".gitattributes", "*.txt filter=x\n");
+    write(&d, "sub/a.txt", "a\n");
+    assert!(crate::gitx::discover(&d).is_err(), "K2's gix can't open a sha256 repository");
+    let e = crate::git_write_guard::check(&d).expect_err("a repository K2 can't open is refused");
+    assert_needs_trust(&e, &["can't open this repository"], &prog);
+    let e = crate::git_write_guard::check(&d.join("sub")).expect_err("from a folder inside it too");
+    assert!(e.starts_with("git_config_runs_programs: "), "{e}");
+    assert!(stage_file(s(&d), "sub/a.txt").is_err(), "no stage");
+    assert!(ran(&marks).is_empty(), "the filter never ran");
+
+    let plain = fx::tmp("guard-no-repo");
+    crate::git_write_guard::check(&plain).expect("no repository, nothing to check");
+}

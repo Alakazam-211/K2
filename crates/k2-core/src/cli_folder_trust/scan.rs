@@ -836,7 +836,18 @@ impl Scanner<'_> {
         let rel = ".git/config";
         if let Got::Text(text) = self.read(rel, "git") {
             let before = self.findings.len();
-            for (key, value) in git_config_entries(&text) {
+            // Read as git reads it (gix-config: a BOM, quoted subsections
+            // with `]`, keys on the header line), the same reader as K2's
+            // git write guard. A config it can't parse is a finding.
+            let entries = match crate::git_write_guard::config_entries(text.as_bytes()) {
+                Ok(entries) => entries,
+                Err(_) => {
+                    self.unparseable("git", rel, &text, "git config");
+                    Vec::new()
+                }
+            };
+            for (key, value) in entries {
+                let value = value.to_string();
                 if let Some(what) = risky_git_key(&key, &value) {
                     if what == "core.hooksPath" {
                         self.hash_invoked_dir(&value);
@@ -1329,44 +1340,6 @@ fn dotenv_pairs(text: &str) -> Vec<(String, String)> {
             Some((k.to_string(), v.to_string()))
         })
         .collect()
-}
-
-/// `(section[.subsection].key, value)` pairs of a git config file, keys
-/// lowercased except the subsection (git's own rule).
-pub(crate) fn git_config_entries(text: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut section = String::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        let mut line = line;
-        if let Some(h) = line.strip_prefix('[') {
-            let (head, rest) = h.split_once(']').unwrap_or((h, ""));
-            let head = head.trim();
-            section = match head.split_once(|c: char| c.is_whitespace()) {
-                Some((name, sub)) => format!("{}.{}", name.to_ascii_lowercase(), sub.trim().trim_matches('"')),
-                None => match head.split_once('.') {
-                    Some((name, sub)) => format!("{}.{}", name.to_ascii_lowercase(), sub),
-                    None => head.to_ascii_lowercase(),
-                },
-            };
-            // git allows `[core] fsmonitor = x` on the header's own line.
-            let rest = rest.trim();
-            if rest.is_empty() || rest.starts_with('#') || rest.starts_with(';') {
-                continue;
-            }
-            line = rest;
-        }
-        let (k, v) = match line.split_once('=') {
-            Some((k, v)) => (k.trim(), v.trim()),
-            None => (line, "true"),
-        };
-        let v = v.split(" #").next().unwrap_or(v).split(" ;").next().unwrap_or(v).trim().trim_matches('"');
-        out.push((format!("{section}.{}", k.to_ascii_lowercase()), v.to_string()));
-    }
-    out
 }
 
 fn is_git_bool(v: &str) -> bool {
@@ -1907,6 +1880,25 @@ mod tests {
             ("pagerlog", "[pager]\n\tlog = ./p\n", "pager"),
         ] {
             pair(&format!("git2-{tag}"), rel, cfg, "[core]\n\tbare = false\n[pager]\n\tlog = false\n", (rel, what));
+        }
+    }
+
+    /// `.git/config` is read as git reads it (gix-config): a UTF-8 BOM
+    /// before the first section, a `]` inside a quoted subsection with the
+    /// key on the header's line, and a dotted section name with a quoted
+    /// subsection (`[filter.a "b"]` is driver `a.b`) all name their
+    /// program; a config git can't parse either is a finding.
+    #[test]
+    fn git_config_read_as_git_reads_it() {
+        let rel = ".git/config";
+        let clean = "\u{feff}[core]\n\tbare = false\n[remote \"a]b\"]\n\turl = https://example.com/x.git\n";
+        for (tag, cfg, what) in [
+            ("bom", "\u{feff}[filter \"x\"]\n\tclean = ./c\n", "filter"),
+            ("bracket", "[filter \"a]b\"] clean = ./c\n", "filter"),
+            ("dotted", "[filter.a \"b\"]\n\tclean = ./c\n", "filter"),
+            ("unparseable", "[filter \"x\"\n\tclean = ./c\n", "unparseable"),
+        ] {
+            pair(&format!("git3-{tag}"), rel, cfg, clean, (rel, what));
         }
     }
 

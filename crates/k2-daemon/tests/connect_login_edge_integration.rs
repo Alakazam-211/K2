@@ -2200,3 +2200,58 @@ async fn first_owner_claim_takes_only_the_dashboards_signature_on_the_tunnel() {
         );
     });
 }
+
+/// The portal's shape (K2 Web, 11-24): one signed claim makes the buyer's
+/// owner AND k2.dev's website-management login `k2cloud` (an owner too,
+/// its password made here and returned once). Then the portal works as
+/// today, as a k2cloud SESSION: making another login an owner from an
+/// owner login's own session takes no presence check (3b7f130915: "An
+/// owner login's own session needs no such check"). A repeat is 409 with no
+/// new password, and no password reaches the audit log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_owner_claim_makes_the_buyer_and_k2cloud_owners_and_the_portal_session_works() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed_claim();
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let body = r#"{"username":"buyer","password":"initial-pass-123","opsUsername":"k2cloud","k2Account":"acct-42"}"#;
+        let r = signed_claim(&d, &signer, body, SUB);
+        assert_eq!(r.status, 200, "the claim; body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("claim JSON");
+        assert_eq!(v["username"], "buyer");
+        assert_eq!(v["opsUsername"], "k2cloud");
+        let ops_pw = v["opsPassword"].as_str().expect("opsPassword").to_string();
+        assert_eq!(ops_pw.len(), 23, "a generated xxxxx-xxxxx-xxxxx-xxxxx password: {ops_pw}");
+        assert_eq!(owners(), vec!["buyer".to_string(), "k2cloud".to_string()]);
+
+        // The buyer's revealed initial password signs in.
+        let login = attested_login(&d, &signer, r#"{"username":"buyer","password":"initial-pass-123"}"#, now(), &random_nonce(), "203.0.113.7", SUB, &[]);
+        assert_eq!(login.status, 200, "buyer signs in; body={}", login.body);
+
+        // The portal: a dashboard-signed k2cloud login, then `?token=`.
+        let ops_body = serde_json::json!({"username": "k2cloud", "password": ops_pw}).to_string();
+        let login = attested_login(&d, &signer, &ops_body, now(), &random_nonce(), "203.0.113.7", SUB, &[]);
+        assert_eq!(login.status, 200, "k2cloud signs in; body={}", login.body);
+        let session = serde_json::from_str::<serde_json::Value>(&login.body).expect("login JSON")["token"].as_str().expect("token").to_string();
+        // Add a user, then make them an owner, as the portal does.
+        let r = http(d.tunnel_port, "POST", &format!("/cli/users/add?token={session}"), Some(r#"{"username":"cofounder","password":"cofounder-pass-1","mustChangePassword":false}"#), &[]);
+        assert_eq!(r.status, 200, "the portal adds a user; body={}", r.body);
+        let r = http(d.tunnel_port, "POST", &format!("/cli/users/set-role?token={session}"), Some(r#"{"username":"cofounder","role":"owner"}"#), &[]);
+        assert_eq!(r.status, 200, "an owner login's own session makes an owner, no presence check; body={}", r.body);
+        assert_eq!(connect_users::role_for_user("cofounder"), Some(Role::Owner));
+        // (The owner token's 403 vault_presence_required is the presence
+        // suite's: this test build answers that check with its fake.)
+
+        // A retry of the same claim: 409, no password.
+        let r = signed_claim(&d, &signer, body, SUB);
+        assert_eq!(r.status, 409, "a repeat; body={}", r.body);
+        assert_eq!(error_code(&r), "owner_exists");
+        assert!(!r.body.contains("opsPassword"), "no new password on a repeat: {}", r.body);
+
+        let rows = audit_events_for("first-owner-claim");
+        assert_eq!(rows[0]["outcome"], "ok account=acct-42 ops=k2cloud");
+        let all = serde_json::to_string(&audit_events()).expect("audit JSON");
+        assert!(!all.contains("initial-pass-123"), "the buyer's password is never audited");
+        assert!(!all.contains(&ops_pw), "k2cloud's password is never audited");
+    });
+}

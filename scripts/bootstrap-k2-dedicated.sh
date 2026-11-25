@@ -37,9 +37,9 @@
 #                          probe (temp API key → POST /v1/sandboxes) (default: 1)
 #
 # Environment contract — passed through to provision-k2-server.sh (Standard):
-#   K2_TUNNEL_TOKEN K2_SUBDOMAIN K2_OPS_USER
-#   (0.46.18: no owner login is made; the k2.dev account holder claims the
-#   first owner from their dashboard. K2_OWNER_USER set stops the run.)
+#   K2_TUNNEL_TOKEN K2_SUBDOMAIN
+#   (0.46.18: no login is made; the k2.dev dashboard makes the owner and the
+#   website-management login. K2_OWNER_USER or K2_OPS_USER stops the run.)
 #   K2_CALLBACK_URL K2_CALLBACK_TOKEN K2_VERSION
 #   K2_RUN_USER            daemon service account              (default: k2)
 #   K2_UNIT_NAME           systemd unit name                   (default: k2-daemon)

@@ -259,6 +259,8 @@ k2_curl() {
 # Step 9: this run makes no owner (claimed from k2.dev); stop before any work.
 if [ "$BAKE_ONLY" != 1 ] && [ -n "${K2_OWNER_USER:-}" ]; then
 	die "K2_OWNER_USER is set, but this script no longer makes an owner login: a server's first owner is claimed from the k2.dev dashboard of the account it is linked to (POST /cli/users/claim-first-owner). Unset K2_OWNER_USER and re-run. Self-hosted: after this run, k2 users add <you> --role owner from your own SSH login"
+elif [ "$BAKE_ONLY" != 1 ] && [ -n "${K2_OPS_USER:-}" ]; then
+	die "K2_OPS_USER is set, but this script no longer makes the website-management login: the k2.dev claim makes it, an owner, with the first owner (POST /cli/users/claim-first-owner, opsUsername). Unset K2_OPS_USER and re-run"
 fi
 
 case "$(uname -m)" in
@@ -874,39 +876,17 @@ fi
 # ── 9. first owner user ──────────────────────────────────────────────
 # This step makes no owner (0.46.18). Since 0.46.15 the owner token can't
 # make an owner login without this computer's own user check, a person
-# present, and an automated run is not one. A hosted server's first owner
-# is the person whose k2.dev account it is linked to: they claim it from
-# their k2.dev dashboard (POST /cli/users/claim-first-owner, signed by the
-# dashboard, over the tunnel, only while the server has no owner login).
+# present, and an automated run is not one. A hosted server's first
+# owners come from k2.dev: once this run is done and /boot-status is
+# ready, the k2.dev dashboard's backend makes the buyer's owner login (the
+# initial password it keeps for the buyer's reveal) and the
+# website-management login (k2cloud, its password made by the server and
+# returned to k2.dev) in one signed call: POST /cli/users/claim-first-owner,
+# over the tunnel, only while the server has no owner login.
 # A self-hosted server's owner makes theirs from their own SSH login:
-# k2 users add <you> --role owner. K2_OWNER_USER stops the run before any
-# work (above).
-log "first owner: none made here; the k2.dev dashboard makes it for the linked account (claim-first-owner; self-hosted: k2 users add <you> --role owner, from your own SSH login)"
-
-# ── 9b. website-management service user (K2 Cloud only) ─────────────
-# The login the k2.dev control plane uses to proxy the server modal's
-# actions (user management, subdomain re-pairing) over the tunnel.
-# Customer-visible in their user list; deleting it opts out of website
-# management. Only created when K2_OPS_USER is set (hosted provisioning);
-# self-host runs never get it. Since 0.46.18 it is made a Member: the
-# owner who claims the server makes it an owner (the k2.dev claim flow
-# does that with the new owner's own session, which needs no further
-# check). A Member login keeps the server claimable (no owner login).
-OPS_PASSWORD=""
-if [ -n "${K2_OPS_USER:-}" ]; then
-	OPS_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
-	export K2_OPS_USER OPS_PASSWORD
-	log "creating service user '${K2_OPS_USER}' (website management; a Member until the owner claims this server)"
-	OPS_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"password":os.environ["OPS_PASSWORD"],"mustChangePassword":False}))')
-	OPS_RES=$(mktemp)
-	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$OPS_BODY" "" -sS -o "$OPS_RES" -w '%{http_code}' -X POST)
-	if [ "$HTTP" != "200" ]; then
-		grep -qi "exist" "$OPS_RES" || die "ops users/add failed ($HTTP): $(cat "$OPS_RES")"
-		log "ops user already exists — leaving its password and role unchanged"
-		OPS_PASSWORD=""
-	fi
-	rm -f "$OPS_RES"
-fi
+# k2 users add <you> --role owner. K2_OWNER_USER and K2_OPS_USER stop the
+# run before any work (above).
+log "first owner: none made here; the k2.dev dashboard makes the owner and website-management logins (claim-first-owner; self-hosted: k2 users add <you> --role owner, from your own SSH login)"
 
 # ── 9c. Sew (chat + voice) + Home chat + voice rooms ───────────────
 # Every server gets Sew by default (Rosson, 2026-11-17: "Sew should be set
@@ -1112,14 +1092,16 @@ fi
 # ── 10. control-plane callback ───────────────────────────────────────
 if [ -n "${K2_CALLBACK_URL:-}" ]; then
 	log "posting provisioning callback"
-	export CB_OPS_PASSWORD="${OPS_PASSWORD:-}"
+	# 0.46.18: no logins are made here (ownerUser/opsUser/opsPassword stay
+	# in the shape, empty); the k2.dev claim makes them and returns
+	# k2cloud's password to k2.dev itself.
 	CB=$(python3 -c 'import json,os;print(json.dumps({
 		"status":"online",
 		"subdomain":os.environ.get("K2_SUBDOMAIN",""),
 		"ownerUser":"",
 		"firstOwner":"claim",
-		"opsUser":os.environ.get("K2_OPS_USER",""),
-		"opsPassword":os.environ.get("CB_OPS_PASSWORD",""),
+		"opsUser":"",
+		"opsPassword":"",
 	}))')
 	curl -fsS -X POST "$K2_CALLBACK_URL" \
 		${K2_CALLBACK_TOKEN:+-H "Authorization: Bearer $K2_CALLBACK_TOKEN"} \

@@ -117,3 +117,39 @@ fn an_existing_login_is_never_promoted_and_a_weak_password_is_refused() {
     let r = handle(b"not json", "edge:k2-edge-dash-unit");
     assert_eq!(status(&r), "400 Bad Request");
 }
+
+#[test]
+fn the_ops_login_is_made_with_the_owner_or_nothing_is() {
+    let _home = k2_core::test_env::TempHome::new();
+    let _ = k2_core::db::init_for_tests();
+    // The same name twice: refused, nothing made.
+    let r = handle(br#"{"username":"buyer","password":"initial-pass-123","opsUsername":"Buyer"}"#, "edge:k2-edge-dash-unit");
+    assert_eq!(status(&r), "400 Bad Request", "{}", r.body);
+    assert!(connect_users::role_for_user("buyer").is_none());
+    // An ops name that exists: 409 naming it, and the buyer isn't made.
+    connect_users::add_user("k2cloud", "old-ops-pass-1").expect("add");
+    let r = handle(br#"{"username":"buyer","password":"initial-pass-123","opsUsername":"k2cloud"}"#, "edge:k2-edge-dash-unit");
+    assert_eq!(code(&r), "username_taken", "{}", r.body);
+    assert!(r.body.contains("k2cloud"), "{}", r.body);
+    assert!(connect_users::role_for_user("buyer").is_none(), "nothing made");
+    assert_eq!(connect_users::role_for_user("k2cloud"), Some(Role::Member), "never promoted");
+    connect_users::remove_user("k2cloud").expect("remove");
+    // Both, in one claim: two owners, k2cloud's password returned once.
+    let r = handle(br#"{"username":"buyer","password":"initial-pass-123","opsUsername":"k2cloud"}"#, "edge:k2-edge-dash-unit");
+    assert_eq!(status(&r), "200 OK", "{}", r.body);
+    let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+    let pw = v["opsPassword"].as_str().expect("opsPassword");
+    assert_eq!(connect_users::role_for_user("k2cloud"), Some(Role::Owner));
+    assert_eq!(connect_users::role_for_user("buyer"), Some(Role::Owner));
+    assert!(connect_users::verify("k2cloud", pw), "the returned password is k2cloud's");
+    assert!(connect_users::verify("buyer", "initial-pass-123"));
+}
+
+#[test]
+fn a_claim_without_an_ops_name_returns_no_ops_fields() {
+    let _home = k2_core::test_env::TempHome::new();
+    let _ = k2_core::db::init_for_tests();
+    let r = handle(br#"{"username":"solo","password":"initial-pass-123"}"#, "edge:k2-edge-dash-unit");
+    assert_eq!(status(&r), "200 OK", "{}", r.body);
+    assert!(!r.body.contains("ops"), "{}", r.body);
+}

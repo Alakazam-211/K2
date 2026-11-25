@@ -31,6 +31,12 @@
 //! 4. A new username (an existing login is never promoted or re-keyed) and
 //!    a password that meets the server's policy.
 //!
+//! With `opsUsername` (k2.dev's website-management login, `k2cloud`) the
+//! same claim also makes that login an owner, with a password this server
+//! makes and returns once (`opsPassword`) — the portal then works as a
+//! k2cloud session, as before. Both names must be new; if the second
+//! can't be made, the first is taken back (the server stays claimable).
+//!
 //! One claim at a time (a process lock around the check and the write).
 //! Every attempt is audited (`first-owner-claim`, with the k2.dev account
 //! the dashboard names); the password never is.
@@ -56,6 +62,10 @@ struct ClaimReq {
     /// signature is what vouches for it).
     #[serde(default, rename = "k2Account")]
     k2_account: Option<String>,
+    /// The website-management login (k2.dev's `k2cloud`), made an owner in
+    /// the same claim with a password this server makes and returns.
+    #[serde(default, rename = "opsUsername")]
+    ops_username: Option<String>,
     #[serde(default, rename = "firstName")]
     first_name: Option<String>,
     #[serde(default, rename = "lastName")]
@@ -143,18 +153,64 @@ pub fn handle(body: &[u8], ingress: &str) -> CliResponse {
             return CliResponse::internal_error(e);
         }
     }
-    if connect_users::role_for_user(&req.username).is_some() {
-        audit(&req.username, &format!("deny exists account={account}"), ingress);
-        return json_err("409 Conflict", "username_taken", "a login with that username already exists on this server: pick another username");
+    let user = match connect_users::normalize_username(&req.username) {
+        Ok(u) => u,
+        Err(e) => {
+            audit(&req.username, &format!("deny invalid account={account}"), ingress);
+            return CliResponse::bad_request(e);
+        }
+    };
+    let ops = match req.ops_username.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
+        None => None,
+        Some(o) => match connect_users::normalize_username(o) {
+            Ok(o) if o == user => {
+                audit(&user, &format!("deny invalid account={account}"), ingress);
+                return CliResponse::bad_request("opsUsername must differ from username");
+            }
+            Ok(o) => Some(o),
+            Err(e) => {
+                audit(&user, &format!("deny invalid account={account}"), ingress);
+                return CliResponse::bad_request(format!("opsUsername: {e}"));
+            }
+        },
+    };
+    for name in std::iter::once(&user).chain(ops.iter()) {
+        if connect_users::role_for_user(name).is_some() {
+            audit(&user, &format!("deny exists:{name} account={account}"), ingress);
+            return json_err("409 Conflict", "username_taken", &format!("a login named {name} already exists on this server: nothing was made"));
+        }
     }
     let new = connect_users::NewLogin { role: Some(Role::Owner), must_change_password: false, shares: Default::default(), fixed_password: false };
-    if let Err(e) = connect_users::add_user_with_role(&req.username, &req.password, req.first_name.as_deref(), req.last_name.as_deref(), &new) {
-        audit(&req.username, &format!("deny invalid account={account}"), ingress);
+    if let Err(e) = connect_users::add_user_with_role(&user, &req.password, req.first_name.as_deref(), req.last_name.as_deref(), &new) {
+        audit(&user, &format!("deny invalid account={account}"), ingress);
         return CliResponse::bad_request(e);
     }
-    let user = connect_users::normalize_username(&req.username).unwrap_or_else(|_| req.username.trim().to_ascii_lowercase());
-    audit(&user, &format!("ok account={account}"), ingress);
-    CliResponse::ok_json(serde_json::json!({ "success": true, "username": user, "role": "owner" }).to_string())
+    // The website-management login: an owner too, with a password this
+    // server makes (returned once, in this answer only). If it can't be
+    // made, the first owner is taken back so the server stays claimable.
+    let ops_password = match &ops {
+        None => None,
+        Some(o) => {
+            let pw = k2_core::skin::generate_password();
+            if let Err(e) = connect_users::add_user_with_role(o, &pw, None, None, &new) {
+                let undo = connect_users::remove_user(&user);
+                audit(&user, &format!("deny ops_failed undo={} account={account}", if undo.is_ok() { "ok" } else { "FAILED" }), ingress);
+                return match undo {
+                    Ok(()) => CliResponse::internal_error(format!("the website-management login could not be made ({e}); nothing was kept")),
+                    Err(u) => CliResponse::internal_error(format!("the website-management login could not be made ({e}), and taking back {user} failed ({u})")),
+                };
+            }
+            Some(pw)
+        }
+    };
+    let ops_line = ops.as_deref().map(|o| format!(" ops={o}")).unwrap_or_default();
+    audit(&user, &format!("ok account={account}{ops_line}"), ingress);
+    let mut out = serde_json::json!({ "success": true, "username": user, "role": "owner" });
+    if let (Some(o), Some(pw)) = (ops, ops_password) {
+        out["opsUsername"] = serde_json::Value::String(o);
+        out["opsPassword"] = serde_json::Value::String(pw);
+    }
+    CliResponse::ok_json(out.to_string())
 }
 
 #[cfg(test)]

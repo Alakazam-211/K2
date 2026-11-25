@@ -41,7 +41,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-step() { echo ""; echo "── xy build: $* ──"; }
+# Each step ends with an M line, "M xy step <n>=<rc> (<min> min): <name>",
+# so a run cut short still shows how far it got.
+STEP_N=0 STEP_NAME="" STEP_AT=$SECONDS
+step_done() { [ "$STEP_N" = 0 ] || echo "M xy step $STEP_N=$1 ($(( (SECONDS - STEP_AT) / 60 )) min): $STEP_NAME"; }
+step() { step_done 0; STEP_N=$((STEP_N + 1)) STEP_NAME="$*" STEP_AT=$SECONDS; echo ""; echo "── xy build: $* ──"; }
 
 export RUSTFLAGS="${RUSTFLAGS:--D warnings}"
 export K2_BRAND_DIR=brand/xy
@@ -68,6 +72,7 @@ W="$(mktemp -d "$XY_PARENT/k2-xy-corpus.XXXXXX")"
 XY_MAX_TARGET_GB="${XY_MAX_TARGET_GB:-50}"
 cleanup() {
     local rc=$? kb
+    step_done "$rc"
     kb="$(du -sk "$XY_TARGET" 2>/dev/null | awk '{ print $1 }')"
     echo "M xy target size: $(du -sh "$XY_TARGET" 2>/dev/null | awk '{ print $1 }') (${kb:-0} KB; limit ${XY_MAX_TARGET_GB} GB)"
     rm -rf "$XY_TARGET" "$W"
@@ -99,6 +104,7 @@ MARKED="$(sed -e 's/#.*//' "$LIST" | awk '$2 == "marked" { print $1 }')"
 step "cargo build of every program the brand ships ($(echo $SHIPPED)), K2_BRAND_DIR=brand/xy"
 for b in $SHIPPED; do
     cargo build --locked -p "$b" --bin "$b"
+    echo "M xy build $b=0 ($(( (SECONDS - STEP_AT) / 60 )) min into the step)"
 done
 BIN="$XY_TARGET/debug/k5-cli"
 step "the marked programs carry the xy brand mark, and only it ($(echo $MARKED))"
@@ -156,6 +162,7 @@ k2-root-helper|the shell CLI's sha256 (hex), as text
 k2-daemon|the shell CLI's first two lines, as text"
 for b in k5-cli k2-root-helper k2-daemon; do
     K2_BRAND_DIR="$BITE_BRAND" cargo build --locked -p "$b" --bin "$b"
+    echo "M xy bite build $b=0 ($(( (SECONDS - STEP_AT) / 60 )) min into the step)"
 done
 rc=0
 python3 scripts/brand/check-no-bash.py --cli cli/k2 "$XY_TARGET/debug/k5-cli" "$XY_TARGET/debug/k2-root-helper" \
@@ -173,8 +180,11 @@ while IFS='|' read -r b want; do
         exit 1
     fi
     echo "$line"
+    echo "M xy bite $b=0: refused for '$want'"
 done <<< "$BITES"
 echo "no_bash = false: k5, the root helper and the daemon refused, each for its own copy, as they should be"
 
+step_done 0
+STEP_N=0
 echo ""
 echo "xy build: passed"

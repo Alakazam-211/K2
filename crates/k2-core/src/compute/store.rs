@@ -784,6 +784,37 @@ pub struct JobCtl {
     /// [`super::share::ASK_SETTLE_SECS`]. Cleared when the generation ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_ask: Option<NodeAsk>,
+    /// Displacement (0.46.18): each time a CI job ended one of this job's
+    /// runs to take its node. The run comes back as a new generation of
+    /// the same job (no retry used); an auto job avoids that node for a
+    /// while, a pinned one is next on it. Controller-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub displaced: Vec<Displaced>,
+}
+
+/// One displacement of a job's run (0.46.18, [`JobCtl::displaced`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Displaced {
+    /// The CI job that took the node.
+    pub by: String,
+    /// Who sent that CI job (its submitter, else its requester).
+    #[serde(default)]
+    pub by_who: String,
+    pub node_id: String,
+    /// When the node was told to end the run.
+    pub at: i64,
+    /// How long the run had run by then.
+    #[serde(default)]
+    pub ran_secs: i64,
+    /// The generation that was ended.
+    pub generation: i64,
+    /// A pinned job: no avoid, next on its node.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pinned: bool,
+    /// When it was queued again (None while the node is still ending it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requeued_at: Option<i64>,
 }
 
 /// An ask a shared node owes an answer to (0.46.17).

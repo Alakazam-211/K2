@@ -539,6 +539,10 @@ elif verb == "jobs":
             state, node, reason = "held (auto)", "-", ("would go to %s" % j["node"]) if j.get("planned") is True and j.get("node") else "waits for a free slot"
         elif state == "queued" and "pinned" in j:
             state += " (pin)" if j["pinned"] else " (auto)"
+        # 0.46.18: displaced and queued again, being ended, or a CI job
+        # displacing (or why it waits).
+        if j.get("displacement"):
+            reason = j["displacement"]
         # 0.46.16: WHEN = started (the real start) and queued.
         print("%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), node[:12], state, "-" if j.get("exitCode") is None else j["exitCode"], reason, when_col(j), (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":

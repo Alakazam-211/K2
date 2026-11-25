@@ -1151,6 +1151,13 @@ fn jobs(cx: &mut Cx, v: &Value) -> Result<(), Raise> {
             };
             state = cx.at(l, p::iadd(&state, &s(tail)))?;
         }
+        // 0.46.18: displaced and queued again, being ended, or a CI job
+        // displacing (or why it waits).
+        let l = ln!("if j.get(\"displacement\"):");
+        if p::truthy(&cx.at(l, p::get(&j, "displacement"))?) {
+            let l = ln!("reason = j[\"displacement\"]");
+            reason = cx.at(l, p::idx(&j, "displacement"))?;
+        }
         let l = ln!("print(\"%s  %-2s %-12s %-15s exit %-4s %-22s %-34s %-16s %-24s %s\"");
         let short = cx.at(l, p::idx(&j, "short"))?;
         let tier = cx.at(l, p::get(&j, "tier"))?;

@@ -346,9 +346,40 @@ TIERS (queue lines, like an airport; 0.46.6)
   `k2 compute status` shows someone else on Priority, use Standard unless
   the coordinator named you; a second submitter's Priority still submits,
   with one note (critical_path_taken) on stderr.
-  Tiers never stop a running job. They only order the queue: nothing is
-  reserved, nothing is killed or paused. A node starts a job only when its
-  slots AND memory both fit, whatever the line or turn.
+  Tiers only order the queue, with one exception (0.46.18): a CI job may
+  end one of this server's running Standard jobs on the node it needs
+  (DISPLACEMENT below). Nothing else is reserved, killed or paused. A
+  node starts a job only when its slots AND memory both fit, whatever the
+  line or turn.
+DISPLACEMENT (0.46.18: a CI job takes the node it needs)
+  A CI-tier job that no node can start ends this server's own running
+  Standard jobs on the node it needs, enough to fit, then starts there
+  within about a minute. Only CI jobs do this (CI needs a grant with --ci).
+  - Never ended: CI and Priority jobs, other servers' jobs, and soaks. A
+    SOAK is a Batch job, or one expected to run over 2 h (its earlier runs
+    or --expect), or one with --timeout over 2 h. An unknown run time is
+    not a soak.
+  - Which one: the one that has run the least first; in the same minute,
+    one whose --cache is warm on that node goes last.
+  - Go elsewhere first: nothing is ended while another node that fits
+    starts the CI job now or should free a slot within about 5 min.
+  - The ended job is NOT a failure: the same job (same id) is queued again
+    as a new generation, no retry used. An auto job avoids that node for
+    30 min; a job pinned to the node is next on it, and is displaced at
+    most once per CI job. k2 compute wait (and wait --follow) carries on to
+    its final run and exit code ("moved: displaced by <job> (<who>),
+    re-queued as the same job"); k2 compute fetch gets the final run's
+    files.
+  - It shows in get, jobs and status: "displaced by <job> (<who>),
+    re-queued as the same job; next on node-x" (pinned) or "…; avoiding
+    node-x for 24m" (auto), "ending: displaced by …" while
+    the node stops it, and on the CI job "displacing …" or "waiting: no
+    displaceable job on node-x". k2 compute status adds a 24 h counter:
+    runs ended and minutes lost (time run before, plus a re-run's time
+    over its usual run).
+  - Build-ahead work: use the standard tier with an honest --timeout (or
+    --expect). A long run that must not be ended uses --tier batch, or a
+    --timeout over 2 h, and is never placed on a node labelled release.
   No auto job (no node named), whatever its tier, waits in a node's own
   queue (0.46.17): it is held on this server until a node that fits has a
   free slot, then goes to the first that has one, CI first, then

@@ -82,6 +82,15 @@ fn run(cx: &mut Cx, body: &[u8]) -> Result<(), Raise> {
     for n in cx.at(l, p::iter(&rows))? {
         node(cx, &n)?;
     }
+    // 0.46.18: runs ended for CI jobs in the last 24 h, minutes lost.
+    let l = ln!("d = v.get(\"displacement\") or {}");
+    let d = p::or(cx.at(l, p::get(&v, "displacement"))?, dict());
+    let l = ln!("if d.get(\"line\"):");
+    if p::truthy(&cx.at(l, p::get(&d, "line"))?) {
+        let l = ln!("print(d[\"line\"])");
+        let x = cx.at(l, p::idx(&d, "line"))?;
+        cx.print(&p::str_of(&x));
+    }
     let l = ln!("m = v.get(\"controllerMachine\") or {}");
     let m = p::or(cx.at(l, p::get(&v, "controllerMachine"))?, dict());
     if p::truthy(&m) {
@@ -390,6 +399,22 @@ fn node(cx: &mut Cx, n: &Value) -> Result<(), Raise> {
             ),
         )?;
         cx.print(&line);
+    }
+    // 0.46.18: a run being ended for a CI job, a displaced job queued
+    // again, or a CI job displacing (or why it waits).
+    let l = ln!("for j in (st.get(\"running\") or []) + (st.get(\"queued\") or []):");
+    let running = p::or(g(cx, l, "running")?, list());
+    let queued = p::or(g(cx, l, "queued")?, list());
+    let both = cx.at(l, p::add(&running, &queued))?;
+    for j in cx.at(l, p::iter(&both))? {
+        let l = ln!("if j.get(\"displacement\"):\n            print(\"      %s: %s\"");
+        if p::truthy(&cx.at(l, p::get(&j, "displacement"))?) {
+            let l = ln!("print(\"      %s: %s\" % (j.get(\"short\") or \"-\", j[\"displacement\"]))");
+            let short = p::or(cx.at(l, p::get(&j, "short"))?, s("-"));
+            let x = cx.at(l, p::idx(&j, "displacement"))?;
+            let t = cx.at(l, p::pct("      %s: %s", &[short, x]))?;
+            cx.print(&t);
+        }
     }
     let l = ln!("if any(j.get(\"pinned\") for j in st.get(\"queued\") or []):");
     let queued = p::or(g(cx, l, "queued")?, list());

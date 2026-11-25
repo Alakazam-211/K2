@@ -773,6 +773,7 @@ async fn run_session(
             .filter_map(|j| {
                 let reason = match j.reason.as_deref() {
                     Some("cancel_requested") => "cancelled",
+                    Some(crate::compute_displace::DISPLACE_REQUESTED) => crate::compute_displace::FRAME_REASON,
                     Some(marker) if j.node_queued && pending::any(Some(marker)) => {
                         // Asked again on this session: the node gets the
                         // whole wait to answer before K2 settles it.
@@ -1395,6 +1396,12 @@ fn apply_observation(
     }
     let now = compute::now();
     let asked = job.reason.as_deref();
+    // 0.46.18: a run ended for a CI job is queued again as the same job.
+    if crate::compute_displace::owes_requeue(asked, state) {
+        drop(conn);
+        crate::compute_displace::requeue(job_id);
+        return;
+    }
     // ── a shared node's queue (protocol 3) ──
     if state == JobState::Queued && reason == Some(pshare::codes::NODE_QUEUED) {
         // The node took the job into its queue: it stays `assigned` here
@@ -1450,6 +1457,7 @@ fn apply_observation(
     }
     // Keep a pending cancel visible until the node reports the end.
     let keep_cancel = asked == Some("cancel_requested") && !state.is_terminal();
+    let keep_displace = asked == Some(crate::compute_displace::DISPLACE_REQUESTED) && !state.is_terminal();
     // V57: a cancel without --force (or a withdraw) lost the race with the
     // start: the node left the job running and said so.
     let lost_race = asked == Some(pending::CANCEL) && !state.is_terminal();
@@ -1458,6 +1466,8 @@ fn apply_observation(
     }
     let reason = if keep_cancel {
         Some("cancel_requested")
+    } else if keep_displace {
+        Some(crate::compute_displace::DISPLACE_REQUESTED)
     } else if lost_race {
         Some(pshare::codes::JOB_STARTED)
     } else {
@@ -2316,6 +2326,7 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     // Jobs we think are on the node that its ledger never saw: the assign
     // was lost. Never re-sent blindly (§11.5): they become `unknown`.
     let mut lost = Vec::new();
+    let mut displaced = Vec::new();
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2328,6 +2339,10 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
                 }
                 continue;
             }
+            if !seen.contains(&format!("{}#{}", j.id, j.generation)) && j.reason.as_deref() == Some(crate::compute_displace::DISPLACE_REQUESTED) {
+                displaced.push(j.id); // 0.46.18: queued again as the same job
+                continue;
+            }
             if !seen.contains(&format!("{}#{}", j.id, j.generation)) {
                 let _ = store::set_job_state(&conn, &j.id, JobState::Unknown, Some("not_on_node"), None, compute::now());
                 store::record_event(&conn, "controller", "job_unknown", Some(node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({}));
@@ -2336,6 +2351,9 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
         }
     }
     seen.clear();
+    displaced.iter().for_each(|id| {
+        crate::compute_displace::requeue(id);
+    });
     for id in lost {
         if !crate::compute_place::after_attempt(&id) {
             finalize(&id);
@@ -3153,7 +3171,7 @@ pub fn send_frame(node_id: &str, f: Frame) -> bool {
     send_to(node_id, f)
 }
 
-fn send_to(node_id: &str, f: Frame) -> bool {
+pub(crate) fn send_to(node_id: &str, f: Frame) -> bool {
     let tx = with_engine(|e| e.conns.get(node_id).map(|c| c.tx.clone()));
     tx.is_some_and(|tx| tx.send(Out::Frame(Box::new(f))).is_ok())
 }
@@ -3207,7 +3225,8 @@ fn qjob_of(j: &store::JobRow, offer: Option<&Offer>) -> scheduler::QueuedJob {
     scheduler::QueuedJob {
         id: j.id.clone(),
         workspace_id: j.workspace_id.clone(),
-        created_at: j.created_at,
+        // 0.46.18: a displaced pinned job is next on its node (oldest there).
+        created_at: if crate::compute_displace::next_on_node(j) { 0 } else { j.created_at },
         exclusive: j.exclusive,
         cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
         mem_bytes: plan.as_ref().and_then(|p| crate::compute_place::plan_mem_on(p, offer)),

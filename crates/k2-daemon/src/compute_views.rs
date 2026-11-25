@@ -367,6 +367,8 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
         }
     }
     if detail {
+        // 0.46.18: runs ended for CI jobs in the last 24 h, and the minutes lost.
+        out["displacement"] = crate::compute_displace::counter(compute::now());
         out["controllerMachine"] = controller_machine();
         out["notYet"] = "hand-run lock files (sew-ci, k2-release, runner) with holder and age, build-cache size against its cap, \
             and pinned long-runners need node reporting, which nodes don't send yet. Locks a node already refuses \
@@ -558,6 +560,14 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     }
     v["submittedBy"] = compute::result::submitted_by(j).into();
     v["via"] = compute::result::via(j).into();
+    // 0.46.18: each time a CI job displaced it, and its line now (queued
+    // again, being ended, or a CI job's displacement).
+    if !j.ctl.displaced.is_empty() {
+        v["displaced"] = crate::compute_displace::shown(j);
+    }
+    if let Some(w) = crate::compute_displace::line(j, compute::now()) {
+        v["displacement"] = w.into();
+    }
     // CE-9: the commit chosen at submit, so a sourced job never shows a
     // null commit before the node reports what ran (`srcCommit`).
     v["submitCommit"] = j.plan().and_then(|p| p.src.map(|s| s.commit)).or_else(|| j.src_commit.clone()).into();
@@ -617,7 +627,7 @@ fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
         _ => pshare::codes::NODE_QUEUED.to_string(),
     };
     let line = format!("queued on {node}{place}{eta}{why}");
-    serde_json::json!({
+    let mut q = serde_json::json!({
         "onNode": true,
         "where": "node",
         "position": j.node_pos,
@@ -632,7 +642,10 @@ fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
         "message": line,
         "line": line,
         "seenAt": j.node_seen_at,
-    })
+    });
+    // 0.46.18: displaced and queued again, or a CI job's displacement.
+    crate::compute_displace::decorate(j, &mut q);
+    q
 }
 
 /// The numbers behind a node-queued job's wait (L6): its ask, the node's
@@ -814,6 +827,11 @@ fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &schedul
         e["position"] = (*p).into();
     }
     priority_who(r, &mut e);
+    // 0.46.18: displaced (queued again, being ended) or displacing; only
+    // on a row the caller may read.
+    if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
+        crate::compute_displace::entry(r, now, &mut e);
+    }
     e
 }
 
@@ -937,7 +955,7 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     }
     let timed = j.est_secs.is_some_and(|e| e > 0) || before.iter().any(|(_, q)| q.est_secs.is_some_and(|e| e > 0));
     let order_words = timed.then_some(ORDER_WORDS);
-    Some(serde_json::json!({
+    let mut q = serde_json::json!({
         "where": if on_shared || held { "server" } else { "node" },
         "position": pos,
         "of": queued.len(),
@@ -958,7 +976,10 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
         "aheadTiers": {"ci": ahead_ci, "priority": ahead_p},
         "expected": expected,
         "order": order_words,
-    }))
+    });
+    // 0.46.18: displaced and queued again, or a CI job's displacement.
+    crate::compute_displace::decorate(j, &mut q);
+    Some(q)
 }
 
 /// How a queue's order reads once run times are known.

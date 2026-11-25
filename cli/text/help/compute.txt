@@ -294,7 +294,12 @@ Agents:
                                  it holds nobody up; once started it runs to its end. Always
                                  detached (no --wait); 48h queue timeout; --timeout is still capped
                                  by the grant's max per job (ask the owner for --max-time)
-                      --tier ci  release and CI gates: next free slot (needs a grant with --ci)
+                      --tier ci  release and CI gates: next free slot (needs a grant with --ci). With
+                                 no slot free where it fits, it ends this server's Standard jobs
+                                 there (least run first); each is queued again as the same job,
+                                 not failed. A soak (Batch, or --expect/--timeout over 2 h) is
+                                 never ended: build-ahead work uses standard with an honest
+                                 --timeout (k2 study compute: DISPLACEMENT)
                  [--tier standard|priority|batch|ci]   the same as the flags above
                  [--gate]       = --tier ci (kept for scripts)   [--critical] = --priority
                  [--supersede KEY]   cancel your older QUEUED jobs with the same KEY (never a running one)

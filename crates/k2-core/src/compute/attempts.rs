@@ -90,6 +90,9 @@ pub mod next {
     /// ([`super::super::share::ASK_SETTLE_SECS`]): K2 took it back itself
     /// and told the node not to run it.
     pub const WITHDRAW_UNANSWERED: &str = "withdraw_unanswered";
+    /// A CI job ended the run to take its node (0.46.18 displacement):
+    /// queued again as the same job, no retry used.
+    pub const DISPLACED: &str = "displaced";
 }
 
 /// The record of `j`'s current generation, as it ends now.
@@ -206,6 +209,7 @@ pub fn next_words(next: &str, node: &str, then: Option<&str>) -> String {
         next::NODE_LOST => format!("{node} went offline before it started it; placed again{elsewhere} (no retry used)"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue; placed again{elsewhere} (no retry used)"),
         next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({CLI_NAME} compute move); placed again{elsewhere} (no retry used)"),
+        next::DISPLACED => format!("ended on {node} to make room for a CI job; queued again as the same job{elsewhere} (not a failure, no retry used)"),
         next::WITHDRAW_UNANSWERED => format!(
             "{node} didn't answer a request to give it back within {}; {k2} took it back ({node} is told not to run it) and placed it again{elsewhere} (no retry used)",
             ask_settle_words(),
@@ -225,9 +229,31 @@ pub fn move_words(next: &str, node: &str, then: Option<&str>) -> Option<String> 
         next::NODE_LOST => format!("{node} went offline before it started it"),
         next::NOT_ON_NODE => format!("{node} no longer had it in its queue"),
         next::PULLED_BACK => format!("taken back from {node}'s queue as asked ({CLI_NAME} compute move)"),
+        next::DISPLACED => format!("ended on {node} to make room for a CI job"),
         next::WITHDRAW_UNANSWERED => format!("{node} didn't answer a request to give it back within {}; {k2} took it back ({node} is told not to run it)", ask_settle_words(), k2 = crate::brand::PRODUCT_NAME),
         _ => return None,
     })
+}
+
+/// A displaced generation's follower line (0.46.18):
+/// `displaced by 9c1e2f3a (k2/ci-runner), re-queued as the same job`.
+pub fn displaced_words(j: &JobRow, generation: i64) -> Option<String> {
+    let d = j.ctl.displaced.iter().rev().find(|d| d.generation == generation)?;
+    let who = if d.by_who.is_empty() { String::new() } else { format!(" ({})", d.by_who) };
+    Some(format!("displaced by {}{who}, re-queued as the same job", message::short(&d.by)))
+}
+
+/// A displaced generation's "then" (`get`'s attempts): which CI job took
+/// the node, after how long, and where the run went.
+pub fn displaced_next(j: &JobRow, generation: i64, node: &str, then: Option<&str>) -> Option<String> {
+    let d = j.ctl.displaced.iter().rev().find(|d| d.generation == generation)?;
+    let who = if d.by_who.is_empty() { String::new() } else { format!(" ({})", d.by_who) };
+    let elsewhere = then.map(|t| format!(" on {t}")).unwrap_or_default();
+    let ran = super::share::human_secs(d.ran_secs.max(0) as u64);
+    Some(format!(
+        "displaced by {}{who} on {node} after {ran}; queued again as the same job{elsewhere} (not a failure, no retry used)",
+        message::short(&d.by)
+    ))
 }
 
 /// "3 min" ([`super::share::ASK_SETTLE_SECS`]).
@@ -299,10 +325,11 @@ pub fn list_json(j: &JobRow, names: &HashMap<String, String>) -> Vec<serde_json:
             "detail": r.detail,
             "exitCode": r.exit_code,
             "why": end_words(&r.state, r.reason.as_deref(), r.started_at.is_some(), &node),
-            "next": next_words(&r.next, &node, then.as_deref()),
+            "next": displaced_next(j, r.generation, &node, then.as_deref()).unwrap_or_else(|| next_words(&r.next, &node, then.as_deref())),
             "nextCode": r.next,
             // A move (no retry used) in a few words; null for a retry.
-            "moved": move_words(&r.next, &node, then.as_deref()),
+            // A displaced run names the CI job that took its node.
+            "moved": displaced_words(j, r.generation).or_else(|| move_words(&r.next, &node, then.as_deref())),
             "log": log_json(&j.id, r.generation, &logs_cmd),
             "artifacts": artifacts_json(asked, r.started_at.is_some(), true, r.outputs.as_ref(), r.reason.as_deref(), &node, &fetch),
         }));

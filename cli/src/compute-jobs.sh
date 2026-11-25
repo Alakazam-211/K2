@@ -721,8 +721,16 @@ for n in rows:
     for j in st.get("queued") or []:
         print("    queued  %s%-9s #%-3s %-8s %-6s %-12s %s%s%s" % (tag(j), j.get("short") or "-", j.get("position") or "?", mmss(j.get("ageSecs")), pin(j), j.get("workspace") or "(other)",
             j.get("argv") or "", "  (" + j["reason"] + ")" if j.get("reason") else "", pwhy(j)))
+    # 0.46.18: a run being ended for a CI job, a displaced job queued
+    # again, or a CI job displacing (or why it waits).
+    for j in (st.get("running") or []) + (st.get("queued") or []):
+        if j.get("displacement"):
+            print("      %s: %s" % (j.get("short") or "-", j["displacement"]))
     if any(j.get("pinned") for j in st.get("queued") or []):
         print("      pinned jobs wait for this node only: k2 compute move <id> --auto lets K2 move them")
+d = v.get("displacement") or {}
+if d.get("line"):
+    print(d["line"])
 m = v.get("controllerMachine") or {}
 if m:
     s = "controller %s: disk %s free of %s" % (m.get("name"), gb(m.get("diskFreeBytes")), gb(m.get("diskTotalBytes")))

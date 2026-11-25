@@ -204,11 +204,14 @@ impl Want {
     }
 
     pub fn of_job(j: &JobRow, plan: &Plan) -> Self {
+        let mut filter = j.ctl.any.clone().unwrap_or_default();
+        // 0.46.18: a displaced auto job stays off that node for a while.
+        filter.avoid.extend(crate::compute_displace::avoiding(&j.ctl, compute::now()));
         Want {
             ws_id: j.workspace_id.clone(),
             admin: j.ctl.admin,
             auto: j.ctl.any.is_some(),
-            filter: j.ctl.any.clone().unwrap_or_default(),
+            filter,
             needs: plan.needs.clone(),
             artifacts: !plan.artifacts.is_empty(),
             exclusive: plan.exclusive,
@@ -1162,6 +1165,9 @@ pub mod skip {
     pub const NOT_ALLOWED: &str = crate::compute_allow::SKIP;
     /// Granted, but the job says `--avoid` it (0.46.8).
     pub const AVOIDED: &str = "avoided";
+    /// A soak (Batch, or over 2 h) on a node labelled `release` (0.46.18,
+    /// [`crate::compute_displace::kept_off`]).
+    pub const RELEASE_NODE: &str = "release_node";
     /// Protocol 7: another distro than `--distro` (or an older node that
     /// doesn't say).
     pub const DISTRO: &str = "distro";
@@ -1326,6 +1332,11 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         // `--avoid` (0.46.8): never this node, for this job, in any move.
         if w.auto && w.filter.avoids(&n.id, &n.name) {
             skipped(&mut out, skip::AVOIDED);
+            continue;
+        }
+        // 0.46.18: a soak never goes on a node a release needs.
+        if crate::compute_displace::kept_off(w, &server_labels.of(&n.id)) {
+            skipped(&mut out, skip::RELEASE_NODE);
             continue;
         }
         // `--only` (0.46.9): never a node off the job's own list.
@@ -1598,7 +1609,8 @@ impl PlaceSnapshot {
             permit: k2_core::compute::allow::permit(conn, &w.ws_id),
             // The nodes that take only jobs that name them: for auto only.
             pinned_only: k2_core::compute::pinned_only::all(conn),
-            server_labels: if w.filter.server_labels.is_empty() { Default::default() } else { k2_core::compute::server_labels::all(conn) },
+            // …and for a soak, which never goes on a `release` node (0.46.18).
+            server_labels: if w.filter.server_labels.is_empty() && !crate::compute_displace::soak_want(w) { Default::default() } else { k2_core::compute::server_labels::all(conn) },
             nodes: store::list_nodes(conn, false),
             grants: store::grants(conn, None, Some(&w.ws_id)).into_iter().map(|g| (g.node_id.clone(), g)).collect(),
             queued: store::queued_jobs(conn),
@@ -1925,6 +1937,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::UNAVAILABLE => "unavailable now (paused, draining, window, disk or lock)".to_string(),
         skip::NOT_ALLOWED => "off this workspace's node list".to_string(),
         skip::AVOIDED => "you avoid (--avoid)".to_string(),
+        skip::RELEASE_NODE => "kept for releases (a soak: Batch, or over 2 h, never goes on a node labelled release)".to_string(),
         skip::DISTRO => format!("of another --distro{}", w.filter.distro.as_deref().map(|d| format!(" than {d}")).unwrap_or_default()),
         skip::NO_PACKAGE_MAPPING => concat!("that can't install a sys: package you need (no name for their distro, or ", product_name!(), " never installs it)").to_string(),
         skip::PACKAGE_ASK => "that need their owner's approval for a sys: package".to_string(),
@@ -2598,6 +2611,11 @@ pub fn sweep(now: i64) {
             continue;
         }
         let mins = (now - offline_since(n, now)) / 60;
+        // 0.46.18: a run its node was told to end for a CI job is queued
+        // again as the same job (no retry used), whatever became of it.
+        if j.reason.as_deref() == Some(crate::compute_displace::DISPLACE_REQUESTED) && crate::compute_displace::requeue(&j.id) {
+            continue;
+        }
         if j.node_queued && j.reason.as_deref() != Some("cancel_requested") {
             // V56: it never started there. A new generation (the node, if
             // it comes back, drops the stale row: V47), no retry used, no
@@ -2688,6 +2706,9 @@ pub fn sweep(now: i64) {
     if changed {
         compute_ws::notify_change();
     }
+    // 0.46.18: a CI job no node can start may end our own Standard runs
+    // on the node it needs (after the moves above had their chance).
+    crate::compute_displace::sweep(now);
 }
 
 /// Reserve the first busy node (placement's order) that `j` fits and no

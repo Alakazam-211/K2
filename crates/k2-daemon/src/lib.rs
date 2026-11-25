@@ -444,6 +444,8 @@ pub mod compute_local;
 // Auto jobs held on this server until a node that fits has a free slot
 // (0.46.17): the hold, its words, and the dispatch order.
 pub mod compute_hold;
+// A CI job may end our own Standard runs on the node it needs (0.46.18).
+pub mod compute_displace;
 // "Allow managing compute nodes" (`compute_manage`, 0194).
 pub mod compute_manage;
 // `k2 compute move` and `--avoid` (0.46.8): queued jobs to auto or a node.

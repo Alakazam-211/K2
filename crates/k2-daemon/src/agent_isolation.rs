@@ -1236,6 +1236,14 @@ mod tests {
         assert!(unnamed.is_empty(), "spawn sites not yet decided (wrapped, or not an agent's command, in SPAWN_SITES): {unnamed:?}");
         let stale: Vec<&&str> = named.keys().filter(|f| !found.iter().any(|x| x == *f)).collect();
         assert!(stale.is_empty(), "SPAWN_SITES names files that no longer start a process: {stale:?}");
+        // The rows that say "test-only" stay test-only: the module that
+        // starts the process is compiled for tests alone (its `mod` line
+        // under `#[cfg(test)]`), so no shipped build carries the spawn.
+        let compat = read("apps/compat/mod.rs");
+        assert!(
+            compat.contains("#[cfg(test)]\nmod storage_real_pg;"),
+            "apps/compat/storage_real_pg.rs is listed as test-only, so apps/compat/mod.rs keeps `mod storage_real_pg;` under #[cfg(test)]"
+        );
         for (f, why) in SPAWN_SITES {
             if why.starts_with("WRAPPED") {
                 assert!(read(f).contains("agent_cgroup::wrap("), "{f} is named wrapped but never calls agent_cgroup::wrap");

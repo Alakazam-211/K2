@@ -944,8 +944,13 @@ impl Rig {
             let after = b
                 .stderr
                 .strip_prefix(&head)
-                .and_then(|t| t.trim_start_matches(|ch: char| ch.is_ascii_digit()).strip_prefix(": "))
-                .unwrap_or_else(|| panic!("{name}: bash's cd error has no line prefix: {:?}", b.stderr));
+                .and_then(|t| {
+                    t.trim_start_matches(|ch: char| ch.is_ascii_digit())
+                        .strip_prefix(": ")
+                })
+                .unwrap_or_else(|| {
+                    panic!("{name}: bash's cd error has no line prefix: {:?}", b.stderr)
+                });
             assert_eq!(r.stderr, after, "{name}: stderr but bash's line prefix");
             assert!(
                 r.stderr.starts_with("cd: -"),

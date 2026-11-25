@@ -72,7 +72,10 @@ pub fn canonpath_bytes(path: &[u8]) -> Option<Vec<u8>> {
                     if !is_dir(&out) {
                         return None;
                     }
-                    let cut = out[base..].iter().rposition(|b| *b == b'/').map_or(base, |i| base + i);
+                    let cut = out[base..]
+                        .iter()
+                        .rposition(|b| *b == b'/')
+                        .map_or(base, |i| base + i);
                     out.truncate(cut);
                 }
             }

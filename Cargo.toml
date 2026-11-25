@@ -209,11 +209,11 @@ vte = { path = "third_party/vte" }
 # (third_party/SEW-VENDOR.txt). Never fetched from a registry or git.
 sew-proto = { path = "third_party/sew-proto" }
 # Native voice (src-tauri's `native-voice` feature, prd-k2-voice-rooms-v1 §14).
-# THE ONE PLACE that says where Sew's crates come from. Sew release 0.11.4:
+# THE ONE PLACE that says where Sew's crates come from. Sew release 0.11.5:
 # every Sew crate comes from crates.io and needs no row: sew-call-client and
-# tauri-plugin-sew-voice 0.9.4 (0.8.2 was their first crates.io release, 0.8.1
+# tauri-plugin-sew-voice 0.9.5 (0.8.2 was their first crates.io release, 0.8.1
 # and older came from Sew's public mirror by git), sew-proto, sew-lkproto,
-# sew-mls-crypto, sew-e2ee, sew-lk-compat and sew-noise 0.11.4, and sew-str0m
+# sew-mls-crypto, sew-e2ee, sew-lk-compat and sew-noise 0.11.5, and sew-str0m
 # 0.25.6 (the str0m fork, library name `str0m`) with sew-str0m-is. Their sew-proto
 # 0.11 is crates.io's, beside the vendored 0.3 above that sew-client uses (that
 # path patch only matches 0.3).

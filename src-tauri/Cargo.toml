@@ -126,8 +126,12 @@ parking_lot = "0.12"
 # kessel-audio 0.2.5, K2's in-tree crate): no API change. The call engine no longer keeps a
 # core busy while it rejoins after a lost connection or while a video layer waits behind a
 # lower one (less battery and heat on weak networks), so native_voice is unchanged.
-# K2 doesn't use tauri-plugin-sew-app (0.6.4 is a breaking change for its hosts).
-tauri-plugin-sew-voice = { version = "=0.9.4", optional = true, features = ["video", "dfn3"] }
+# Sew 0.11.5 (0.9.5, with sew-call-client 0.9.5 and the other Sew crates 0.11.5; needs
+# kessel-audio 0.2.5, K2's in-tree crate): a security update (rustls, lettre and zstd
+# advisories), no API change, so native_voice is unchanged.
+# K2 doesn't use tauri-plugin-sew-app (0.6.4 was a breaking change for its hosts; 0.6.5,
+# mirror-only, isn't added either).
+tauri-plugin-sew-voice = { version = "=0.9.5", optional = true, features = ["video", "dfn3"] }
 zeroize = { version = "1", optional = true }
 
 # 0.46.4: removed direct deps no src-tauri source used (they came over

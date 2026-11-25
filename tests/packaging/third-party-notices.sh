@@ -23,6 +23,17 @@ fresh() {
     cp "$ROOT/scripts/package-daemon-deb.sh" "$WORK/t/scripts/"
     cp "$ROOT/scripts/notices/web-notices-plugin.mjs" "$WORK/t/scripts/notices/"
     cp "$ROOT/packaging/arch/PKGBUILD" "$WORK/t/packaging/arch/"
+    # Every file part 5 copies (its BEGIN FILE blocks name them), so the
+    # copy checks against the same bytes.
+    python3 -I - "$ROOT" "$WORK/t" <<'PY'
+import os, re, shutil, sys
+root, dst = sys.argv[1], sys.argv[2]
+s = open(os.path.join(root, "resources/THIRD-PARTY-NOTICES.md"), encoding="utf-8").read()
+for names in re.findall(r"<!-- BEGIN FILE(?: lines=\d+-\d+)?: ([^>]+?) -->", s):
+    for n in names.split():
+        os.makedirs(os.path.dirname(os.path.join(dst, n)), exist_ok=True)
+        shutil.copyfile(os.path.join(root, n), os.path.join(dst, n))
+PY
 }
 
 run() { K2_NOTICES_ROOT="$WORK/t" bash "$CHECK" "$@" >"$WORK/out" 2>&1; }
@@ -83,6 +94,31 @@ expect_fail "SQLite's dedication is gone" "lacks: The author disclaims copyright
 fresh
 edit resources/THIRD-PARTY-NOTICES.md "Written offer:" "Offer:"
 expect_fail "the libgit2 source offer is gone" "lacks: Written offer:"
+
+fresh
+edit resources/THIRD-PARTY-NOTICES.md "OpenSSL 3 ships no NOTICE file" "OpenSSL 3"
+expect_fail "the OpenSSL note is gone" "lacks: OpenSSL 3 ships no NOTICE file"
+
+# Part 5: a pointed-to licence file changes, its copy does not.
+fresh
+printf 'one more line\n' >> "$WORK/t/third_party/wry/LICENSE-MIT"
+expect_fail "a licence file changed, part 5's copy not" "part 5's copy of third_party/wry/LICENSE-MIT differs"
+
+fresh
+printf 'one more line\n' >> "$WORK/t/vendor/k2-mpc-cad/LICENSE-APACHE"
+expect_fail "one of several same-bytes files changed" "part 5's copy of vendor/k2-mpc-cad/LICENSE-APACHE differs"
+
+fresh
+printf 'changed\n' >> "$WORK/t/crates/k2-vault/data/public_suffix_list.dat"
+expect_pass "a line range copy ignores lines after it"
+
+# A new NOTICE.md entry pointing at a licence file that does not ship.
+fresh
+mkdir -p "$WORK/t/third_party/newdep"
+printf 'MIT\n' > "$WORK/t/third_party/newdep/LICENSE"
+printf '\n| **License** | **MIT** — full text in `third_party/newdep/LICENSE` |\n' >> "$WORK/t/NOTICE.md"
+K2_NOTICES_ROOT="$WORK/t" bash "$CHECK" --sync >/dev/null 2>&1 || true
+expect_fail "a new pointer to a non-shipping file" "NOTICE.md points to third_party/newdep/LICENSE, which does not ship"
 
 fresh
 edit src-tauri/tauri.conf.json '"../resources/THIRD-PARTY-NOTICES.md", ' ''

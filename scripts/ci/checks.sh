@@ -49,6 +49,7 @@ part_web() {
     step "Arch/Omarchy packaging lock";            bash tests/packaging/arch-omarchy-bundle.sh
     step "third-party notices ship in every output (no build)"; bash scripts/check-third-party-notices.sh
     step "third-party notices check on broken copies"; bash tests/packaging/third-party-notices.sh
+    step "release source archives (stub curl)";    bash tests/packaging/release-source-archives.sh
     step "Arch PKGBUILD sources, sums, syntax";    bash scripts/check-arch-pkgbuild.sh
     step "Arch PKGBUILD check on broken fixtures"; bash tests/packaging/check-arch-pkgbuild.sh
     step "Published Arch package never changes (stubbed)"; bash tests/packaging/arch-upload-pkg.sh
@@ -79,6 +80,7 @@ part_web() {
     step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh
     step "Release path maps and build-path gate";  bash tests/packaging/build-paths.sh
     step "bun install";                            bun install --frozen-lockfile
+    step "third-party notices' npm licence copies"; bash scripts/check-third-party-notices.sh --npm
     step "k2-home gate";                           bash scripts/k2-home-gate.sh
     step "k2-home gate's .k2 half on broken trees"; bash tests/garden/k2-home-dot-gate.sh
     step "brand inventory script";                 bash tests/garden/brand-inventory.sh

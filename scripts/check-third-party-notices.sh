@@ -12,6 +12,9 @@
 #                                                      Resources, or Tauri's
 #                                                      resource dir on Windows
 #                                                      or Linux)
+#   scripts/check-third-party-notices.sh --npm         part 5's npm copies
+#                                                      against node_modules
+#                                                      (after bun install)
 #   scripts/check-third-party-notices.sh --sync        copy NOTICE.md into
 #                                                      THIRD-PARTY-NOTICES.md
 #                                                      (part 4), then check
@@ -20,7 +23,10 @@
 # third-party-notices.sh points it at broken copies).
 #
 # The file, resources/THIRD-PARTY-NOTICES.md, is kept by hand. Its part 4 is
-# NOTICE.md byte for byte, between the BEGIN/END NOTICE.md markers.
+# NOTICE.md byte for byte, between the BEGIN/END NOTICE.md markers. Its part 5
+# holds the licence files NOTICE.md points to that do not ship themselves:
+# each BEGIN FILE block is checked against its file, and each repo file a
+# NOTICE.md "full text(s) in `...`" names must have one.
 #
 # The three outputs and where the file lands in each:
 #   desktop app   src-tauri/tauri.conf.json bundle.resources
@@ -70,6 +76,87 @@ sync_notice() {
     echo "check-third-party-notices: copied NOTICE.md into $FILE_REL"
 }
 
+# Part 5's FILE blocks: each holds its file(s) byte for byte (lines=a-b: those
+# lines only). And every repo file NOTICE.md's "full text(s) in `…`" names
+# has a block, unless it ships itself (resources/notices/, in every package).
+check_file_blocks() {
+    python3 -I - "$FILE" "$ROOT" <<'PY'
+import os, re, sys
+path, root = sys.argv[1], sys.argv[2]
+s = open(path, encoding="utf-8").read()
+bad = 0
+def fail(msg):
+    global bad
+    print(f"  FAIL: {msg}", file=sys.stderr)
+    bad += 1
+pat = re.compile(r"<!-- BEGIN FILE(?: lines=(\d+)-(\d+))?: ([^>]+?) -->\n~~~~text\n(.*?)~~~~\n<!-- END FILE -->\n", re.S)
+blocks = list(pat.finditer(s))
+if s.count("<!-- BEGIN FILE") != len(blocks):
+    fail("a BEGIN FILE block is malformed (want: marker, ~~~~text, the bytes, ~~~~, <!-- END FILE -->)")
+covered = set()
+for m in blocks:
+    a, b, names, text = m.group(1), m.group(2), m.group(3).split(), m.group(4)
+    for n in names:
+        covered.add(n)
+        full = os.path.join(root, n)
+        if not os.path.isfile(full):
+            fail(f"part 5 copies {n}, which is gone")
+            continue
+        want = open(full, encoding="utf-8").read()
+        if a:
+            want = "".join(want.splitlines(keepends=True)[int(a) - 1 : int(b)])
+        if not want.endswith("\n"):
+            want += "\n"
+        if text != want:
+            fail(f"part 5's copy of {n} differs from the file (copy it in again)")
+notice = open(os.path.join(root, "NOTICE.md"), encoding="utf-8").read()
+for line in notice.splitlines():
+    for seg in re.findall(r"full texts?[^|]*", line):
+        for ref in re.findall(r"`([^`\s]+)`", seg):
+            if ref.startswith("resources/notices/"):
+                continue
+            if os.path.isfile(os.path.join(root, ref)) and ref not in covered:
+                fail(f"NOTICE.md points to {ref}, which does not ship; copy it into part 5")
+if not blocks:
+    fail("part 5 has no FILE blocks")
+sys.exit(1 if bad else 0)
+PY
+}
+
+# Part 5's NPM blocks: the package's file in node_modules (after bun install)
+# at the version bun.lock pins.
+check_npm_blocks() {
+    python3 -I - "$FILE" "$ROOT" <<'PY'
+import json, os, re, sys
+path, root = sys.argv[1], sys.argv[2]
+s = open(path, encoding="utf-8").read()
+lock = open(os.path.join(root, "bun.lock"), encoding="utf-8").read()
+blocks = list(re.finditer(r"<!-- BEGIN NPM: (\S+)@([0-9][^ ]*) (\S+) -->\n~~~~text\n(.*?)~~~~\n<!-- END NPM -->\n", s, re.S))
+bad = 0
+if not blocks or s.count("<!-- BEGIN NPM") != len(blocks):
+    print("  FAIL: no NPM blocks, or a malformed one", file=sys.stderr); bad += 1
+for m in blocks:
+    pkg, ver, fname, text = m.groups()
+    if f'"{pkg}@{ver}"' not in lock:
+        print(f"  FAIL: bun.lock no longer pins {pkg}@{ver} (copy the new version's {fname} in)", file=sys.stderr); bad += 1
+        continue
+    d = os.path.join(root, "node_modules", pkg)
+    try:
+        got_ver = json.load(open(os.path.join(d, "package.json")))["version"]
+        want = open(os.path.join(d, fname), encoding="utf-8").read()
+    except OSError as e:
+        print(f"  FAIL: {pkg}: {e} (run bun install first)", file=sys.stderr); bad += 1
+        continue
+    if got_ver != ver:
+        print(f"  FAIL: node_modules has {pkg} {got_ver}, part 5 names {ver}", file=sys.stderr); bad += 1
+    elif text != (want if want.endswith("\n") else want + "\n"):
+        print(f"  FAIL: part 5's copy of {pkg}/{fname} differs from node_modules", file=sys.stderr); bad += 1
+    else:
+        print(f"  ok: part 5's {pkg}@{ver} {fname} matches node_modules")
+sys.exit(1 if bad else 0)
+PY
+}
+
 # The file itself: the notices it must hold, and NOTICE.md unchanged.
 check_file() {
     if [ ! -f "$FILE" ]; then
@@ -94,10 +181,15 @@ check_file() {
         "Written offer:" \
         "LINKING EXCEPTION" \
         "GNU GENERAL PUBLIC LICENSE" \
-        "GNU LESSER GENERAL PUBLIC LICENSE"
+        "GNU LESSER GENERAL PUBLIC LICENSE" \
+        "### libssh2 and OpenSSL in earlier releases" \
+        "Copyright (C) 2004-2007 Sara Golemon" \
+        "OpenSSL 3 ships no NOTICE file" \
+        "## 5. Licence texts NOTICE.md points to"
     do
         grep -qF -- "$needle" "$FILE" || bad "$FILE_REL lacks: $needle"
     done
+    check_file_blocks || bad "$FILE_REL: part 5's copies of files (above)"
     if ! grep -qxF "$BEGIN_MARK" "$FILE" || ! grep -qxF "$END_MARK" "$FILE"; then
         bad "$FILE_REL has no $BEGIN_MARK / $END_MARK pair around its copy of NOTICE.md"
     elif ! notice_copy | cmp -s - "$ROOT/NOTICE.md"; then
@@ -208,7 +300,8 @@ case "${1:-}" in
     --web-out) [ -n "${2:-}" ] || { echo "usage: $0 --web-out <dir>" >&2; exit 2; }; check_web_out "$2" ;;
     --deb) [ -n "${2:-}" ] || { echo "usage: $0 --deb <file.deb>" >&2; exit 2; }; check_deb "$2" ;;
     --app) [ -n "${2:-}" ] || { echo "usage: $0 --app <resources dir>" >&2; exit 2; }; check_app "$2" ;;
-    *) echo "usage: $0 [--sync | --web-out <dir> | --deb <file.deb> | --app <resources dir>]" >&2; exit 2 ;;
+    --npm) check_npm_blocks || bad "$FILE_REL: part 5's npm copies (above)" ;;
+    *) echo "usage: $0 [--sync | --npm | --web-out <dir> | --deb <file.deb> | --app <resources dir>]" >&2; exit 2 ;;
 esac
 
 if [ "$problems" -gt 0 ]; then

@@ -40,6 +40,9 @@ jobs:
       - name: Third-party notices check on broken copies
         run: bash tests/packaging/third-party-notices.sh
 
+      - name: Release source archives (stub curl)
+        run: bash tests/packaging/release-source-archives.sh
+
       # The Arch package only builds on k2-arch after a tag. These are the
       # text-level breaks (sum drift, missing source, shell syntax) that
       # do not need Arch. 0.43.0 died at the tag on a stale k2.install sum.
@@ -168,6 +171,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Third-party notices' npm licence copies match node_modules
+        run: bash scripts/check-third-party-notices.sh --npm
 
       - name: k2-home gate (PRD prd-k2so-cleanup-v1 §5)
         run: bash scripts/k2-home-gate.sh

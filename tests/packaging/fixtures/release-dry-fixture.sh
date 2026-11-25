@@ -85,7 +85,8 @@ chmod +x "$stub"/*
 cd "$src"
 mkdir -p scripts/lib scripts/ci cli/src src-tauri crates/k2-core crates/k2-daemon crates/k2-menubar
 cp "$ROOT/scripts/release.sh" "$ROOT/scripts/release-lock.sh" "$ROOT/scripts/daemon-manifest.sh" "$ROOT/scripts/release-timings.sh" scripts/
-cp "$ROOT/scripts/lib/release-dry.sh" "$ROOT/scripts/lib/notary.sh" "$ROOT/scripts/lib/release-timer.sh" "$ROOT/scripts/lib/release-repo.sh" scripts/lib/
+cp "$ROOT/scripts/lib/release-dry.sh" "$ROOT/scripts/lib/notary.sh" "$ROOT/scripts/lib/release-timer.sh" "$ROOT/scripts/lib/release-repo.sh" \
+    "$ROOT/scripts/lib/release-source-archives.sh" scripts/lib/
 printf '{\n  "name": "k2",\n  "version": "0.0.1"\n}\n' > package.json
 printf '{\n  "version": "0.0.1"\n}\n' > src-tauri/tauri.conf.json
 for c in src-tauri crates/k2-core crates/k2-daemon crates/k2-menubar; do

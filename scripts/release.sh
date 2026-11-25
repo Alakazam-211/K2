@@ -2045,6 +2045,26 @@ else
     echo "  WARNING: arch-package.yml on the k2-arch runner uploads it after the tag." >&2
 fi
 
+# Source archives (release sign-off area): earlier
+# releases included libgit2, so every release attaches its source, downloaded
+# here and checked against the sha256 pins in
+# scripts/lib/release-source-archives.sh. A failure stops the release before
+# the tag is pushed.
+# shellcheck source=scripts/lib/release-source-archives.sh
+source "$PROJECT_DIR/scripts/lib/release-source-archives.sh"
+if k2dry_on; then
+    for _sa in "${K2_SOURCE_ARCHIVES[@]}"; do
+        k2dry_would "download ${_sa%%|*} ($(cut -d'|' -f2 <<<"$_sa")), check its pinned sha256 and attach it to $TAG"
+    done
+else
+    _sa_list="$(k2_fetch_source_archives "$DIST_DIR/source-archives")" \
+        || { echo "ERROR: the source archives (above) did not download or did not match their pins" >&2; exit 1; }
+    while IFS= read -r _sa; do
+        ASSETS+=("$_sa")
+        echo "  Asset: ${_sa%%#*} (source archive, sha256 checked)"
+    done <<<"$_sa_list"
+fi
+
 if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
     NOTES_SRC="$NOTES_FILE"
 else

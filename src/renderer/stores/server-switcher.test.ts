@@ -210,7 +210,7 @@ describe('Cmd+L wiring', () => {
     expect(keydown).not.toContain('toggle()')
     expect(keydown).not.toContain('setFocus')
 
-    const menu = sliceFn(app, "listen('menu:server-switcher'", "listen('menu:focus-window'")
+    const menu = sliceFn(app, "listenOwnWindow(listen, 'menu:server-switcher'", "listenOwnWindow(listen, 'menu:focus-window'")
     expect(menu).toContain('focusAddress: focusVisibleBrowserAddress')
     expect(menu).toContain('applyCmdL(')
     expect(menu).not.toContain('toggle()')
@@ -244,7 +244,7 @@ describe('Cmd+L wiring', () => {
       'MenuItem::with_id(handle, "server-switcher", "Switch Server", true, None::<&str>)',
     )
     expect(menu).not.toContain('Some("CmdOrCtrl+L")')
-    expect(menu).toContain('emit_to_focused(app, "menu:server-switcher")')
+    expect(menu).toContain('emit_to_focused_window_only(app, "menu:server-switcher")')
 
     const resign = readFileSync(
       resolve(here, '../../../src-tauri/src/commands/ui_webview_focus.rs'),

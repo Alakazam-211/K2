@@ -314,6 +314,9 @@ export const useTerminalSettingsStore = create<TerminalSettingsState>()(
 async function initTerminalZoomListeners(): Promise<void> {
   try {
     const { listen } = await import('@tauri-apps/api/event')
+    // The menu sends terminal zoom to the window in front only; hear only
+    // this window's copy (an untargeted listen hears every window's).
+    const { listenOwnWindow } = await import('@/lib/own-window-listen')
 
     // GH#639: `await` each `listen()` so the promise it returns (which
     // REJECTS in the headless test env — no Tauri window) funnels into
@@ -321,15 +324,15 @@ async function initTerminalZoomListeners(): Promise<void> {
     // unhandled rejection that flips vitest's exit code. Same fix as
     // the old workspace-op listeners in tabs.ts had; this module is pulled in
     // transitively by tabs.test.ts, so its rejections surface there too.
-    await listen('terminal:zoom-in', () => {
+    await listenOwnWindow(listen, 'terminal:zoom-in', () => {
       useTerminalSettingsStore.getState().incrementFontSize()
     })
 
-    await listen('terminal:zoom-out', () => {
+    await listenOwnWindow(listen, 'terminal:zoom-out', () => {
       useTerminalSettingsStore.getState().decrementFontSize()
     })
 
-    await listen('terminal:zoom-reset', () => {
+    await listenOwnWindow(listen, 'terminal:zoom-reset', () => {
       useTerminalSettingsStore.getState().resetFontSize()
     })
   } catch {

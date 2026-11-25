@@ -8,6 +8,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Desktop app
 - **A slow or unreachable other server no longer makes the app look offline; while this server is busy, the app stays usable and shows a small reconnecting note.**
 - **The Postal tab is now called Friends: agents on other servers your agent can talk to.** The tab and its server switch say Friends, Add a friend and Friend requests, and a line at the top says it is the Postal service. Addresses still end in `.postal.bot`, and the `k2 postal` commands are unchanged.
+- With several K2 windows open, menu commands and their shortcuts act only in the window you're in: ⌘, opens Settings there, not in every window, and New Tab, Close Tab, Toggle Sidebar, zoom and the rest do the same.
 
 ### Home
 - **Attach files and images in Home DMs and channels.** The message box has the agent chat's own **+** (Attach a file or image), and you can also drop files on the chat or paste an image into the box. Each file uploads at once, its chip showing how far it is, and Send waits until all are up (up to 10 files per message, up to the size the server allows, 1 GB by default). Pictures show in the message, open in the image viewer, and every file has Download. Files go through your server's K2 as you, and only people who can read the message can open them. Files aren't scanned for viruses, so they always download as files and never open in K2. Your server's K2 needs this release.

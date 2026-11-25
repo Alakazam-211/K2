@@ -28,13 +28,6 @@ function fnBody(src: string, name: string): string {
   return src.slice(start, end)
 }
 
-/** `fn <name>(` bodies for the given cfg attribute line. */
-function cfgFnBody(src: string, cfg: string, name: string): string {
-  const at = src.indexOf(`${cfg}\nfn ${name}(`)
-  if (at < 0) throw new Error(`menu.rs has no ${cfg} fn ${name}`)
-  return fnBody(src.slice(at), name)
-}
-
 const WINDOW_ONLY_LOOKUPS = /get_webview_window\(|webview_windows\(\)/
 
 describe('⌘, opens Settings from the native menu', () => {
@@ -43,23 +36,22 @@ describe('⌘, opens Settings from the native menu', () => {
     expect(HOTKEYS.find((h) => h.id === 'openSettings')?.defaultKey).toBe('Meta+,')
     const handler = fnBody(menuRs, 'handle_menu_event')
     const arm = handler.slice(handler.indexOf('"settings" =>'), handler.indexOf('"check-for-updates" =>'))
-    expect(arm).toContain('app.emit("menu:open-settings", ())')
+    // To the window in front only (several windows: only that one opens Settings).
+    expect(arm).toContain('emit_to_focused_window_only(app, "menu:open-settings");')
   })
 
   it('no menu path looks windows up in a way that skips a window with a Browser or Design child webview', () => {
-    for (const name of ['handle_menu_event', 'emit_to_focused', 'emit_to_focused_window_only']) {
+    for (const name of ['handle_menu_event', 'emit_to_focused_window_only']) {
       expect(fnBody(menuRs, name), `fn ${name}`).not.toMatch(WINDOW_ONLY_LOOKUPS)
     }
-    // With browser-pane (the default build) the helpers count every window.
-    const mainPane = cfgFnBody(menuRs, '#[cfg(all(target_os = "macos", feature = "browser-pane"))]', 'main_webview')
-    expect(mainPane).toContain('app.get_webview("main")')
-    expect(mainPane).not.toMatch(WINDOW_ONLY_LOOKUPS)
+    // With browser-pane (the default build) the window lookup counts every
+    // window, a window holding a child webview among them.
     const focused = fnBody(menuRs, 'focused_window_label')
     expect(focused).toContain('#[cfg(feature = "browser-pane")]\n    let windows = app.windows();')
   })
 
   it('the renderer opens Settings on menu:open-settings and on a ⌘, keydown', () => {
-    expect(appTsx).toContain("listen('menu:open-settings', () => openSettings())")
+    expect(appTsx).toContain("listenOwnWindow(listen, 'menu:open-settings', () => openSettings())")
     expect(appTsx).toMatch(/if \(e\.metaKey && e\.key === ','\) \{\s*e\.preventDefault\(\)\s*openSettings\(\)/)
   })
 })

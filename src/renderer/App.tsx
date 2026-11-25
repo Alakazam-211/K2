@@ -80,6 +80,7 @@ import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { applyCmdL } from './stores/server-switcher'
 import { useTabsStore, initApiSandboxTabAdoption, initOpenUrlBrowserTabs, initOpenChangesTabs, initOpenMobileTabs, initOpenDesktopTabs } from './stores/tabs'
 import { menuNewTab } from './lib/menu-new-tab'
+import { listenOwnWindow } from './lib/own-window-listen'
 import { primaryRoom } from './stores/room'
 import { focusedRoom, installRoomFocusTracking } from './stores/window-room'
 import { RoomProvider } from './components/Room/RoomContext'
@@ -787,28 +788,32 @@ function AppRoot(): React.JSX.Element {
       if (torndown) safeUnlisten(fn)
       else unlisteners.push(fn)
     }
+    // Every native menu command below is window-local: menu.rs sends it to
+    // the focused window's label only, and each listener here hears only
+    // its own window's copy (listenOwnWindow). An untargeted listen() would
+    // hear every window's, and ⌘, (or New Tab, ⌘B …) acted in every window.
     import('@tauri-apps/api/event').then(({ listen }) => {
-      listen('menu:open-settings', () => openSettings()).then(track)
-      listen('menu:check-for-updates', () => {
+      listenOwnWindow(listen, 'menu:open-settings', () => openSettings()).then(track)
+      listenOwnWindow(listen, 'menu:check-for-updates', () => {
         useSettingsStore.setState({ pendingUpdateCheck: true })
         openSettings('general')
       }).then(track)
-      // Send feedback to K2 (PF4): the macOS app menu reaches every window;
-      // only the one in front opens its dialog.
-      listen('menu:send-feedback', () => {
-        if (document.hasFocus()) openSendFeedback()
+      // Send feedback to K2 (PF4): the shell sends it to the window in front
+      // only (see listenOwnWindow).
+      listenOwnWindow(listen, 'menu:send-feedback', () => {
+        openSendFeedback()
       }).then(track)
       // Room-scoped menu items act on the focused room only (MS18); with
       // no focused room they do nothing (MS17).
-      listen('menu:new-document', () => {
+      listenOwnWindow(listen, 'menu:new-document', () => {
         const room = focusedRoom()
         if (!room) return
         room.tabs.getState().openUntitledDocument(room.cwd())
       }).then(track)
-      listen('menu:new-tab', () => {
+      listenOwnWindow(listen, 'menu:new-tab', () => {
         menuNewTab()
       }).then(track)
-      listen('menu:launch-agent', async () => {
+      listenOwnWindow(listen, 'menu:launch-agent', async () => {
         const room = focusedRoom()
         if (!room) return
         const cwd = room.cwd()
@@ -819,7 +824,7 @@ function AppRoot(): React.JSX.Element {
           state.launchPreset(room.tabs, defaultPreset.id, cwd, 'tab')
         }
       }).then(track)
-      listen('menu:split-pane', () => {
+      listenOwnWindow(listen, 'menu:split-pane', () => {
         const room = focusedRoom()
         if (!room) return
         const tabsState = room.tabs.getState()
@@ -837,41 +842,41 @@ function AppRoot(): React.JSX.Element {
         const newPaneId = crypto.randomUUID()
         tabsState.splitPane(activeTab.id, firstPaneId, newPaneId, { type: 'terminal', terminalId: newPaneId, cwd }, 'column')
       }).then(track)
-      listen('menu:open-workspace', () => {
+      listenOwnWindow(listen, 'menu:open-workspace', () => {
         pickWorkspaceFolder().then((path) => {
           if (path) useProjectsStore.getState().addProject(path)
         })
       }).then(track)
-      listen('menu:close-tab', () => {
+      listenOwnWindow(listen, 'menu:close-tab', () => {
         const room = focusedRoom()
         if (!room) return
         const { activeTabId, removeTab } = room.tabs.getState()
         if (activeTabId) removeTab(activeTabId)
       }).then(track)
-      listen('menu:command-palette', () => {
+      listenOwnWindow(listen, 'menu:command-palette', () => {
         if (!useWindowFocusStore.getState().isFocused) return
         toggleCommandPalette()
       }).then(track)
       // 0.40.31 — the View-menu "Review Queue" item became "Running
       // Agents" (⌘J): the native accelerator consumes the keystroke on
       // macOS, so the menu event is how ⌘J reaches us from the menu path.
-      listen('menu:running-agents', () => {
+      listenOwnWindow(listen, 'menu:running-agents', () => {
         if (!useWindowFocusStore.getState().isFocused) return
         useRunningAgentsStore.getState().toggle()
       }).then(track)
-      listen('menu:projects', () => {
+      listenOwnWindow(listen, 'menu:projects', () => {
         useSettingsStore.getState().closeSettings()
         usePageViewStore.getState().setPage('projects')
       }).then(track)
-      listen('menu:toggle-sidebar', () => {
+      listenOwnWindow(listen, 'menu:toggle-sidebar', () => {
         if (zenShownNow()) return
         useSidebarStore.getState().toggle()
       }).then(track)
-      listen('menu:server-switcher', () => {
+      listenOwnWindow(listen, 'menu:server-switcher', () => {
         if (zenShownNow()) return
         applyCmdL({ focusAddress: focusVisibleBrowserAddress })
       }).then(track)
-      listen('menu:focus-window', () => {
+      listenOwnWindow(listen, 'menu:focus-window', () => {
         if (zenShownNow()) return
         // Home M4 (MS57/MS67): the Focus window looks the project up on
         // THIS computer's daemon. It acts on the focused room, and only
@@ -896,15 +901,15 @@ function AppRoot(): React.JSX.Element {
       // Menu zoom — same CSS path as Cmd+=/- (not native WKWebView zoom,
       // which would also scale terminal cells and fight the terminal-font
       // shortcuts).
-      listen('app:zoom-in', () => {
+      listenOwnWindow(listen, 'app:zoom-in', () => {
         window.__k2Zoom = Math.min(Math.round(((window.__k2Zoom ?? 1) + 0.1) * 10) / 10, 2.0)
         applyK2Zoom()
       }).then(track)
-      listen('app:zoom-out', () => {
+      listenOwnWindow(listen, 'app:zoom-out', () => {
         window.__k2Zoom = Math.max(Math.round(((window.__k2Zoom ?? 1) - 0.1) * 10) / 10, 0.5)
         applyK2Zoom()
       }).then(track)
-      listen('app:zoom-reset', () => {
+      listenOwnWindow(listen, 'app:zoom-reset', () => {
         window.__k2Zoom = 1
         applyK2Zoom()
       }).then(track)

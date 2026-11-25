@@ -380,9 +380,9 @@ function runAppFrames(root: HTMLElement): void {
     f.style.cssText = 'flex:1;border:1px solid #444;background:#000;min-width:0'
     host.appendChild(f)
   }
-  // Native menu items reach the webview as `win.emit('menu:*')`
-  // (src-tauri/src/menu.rs emit_to_focused). Fire one the same way after
-  // both rooms boot: every realm's App listener receives it.
+  // Native menu items reach the webview as `emit_to(<window label>, 'menu:*')`
+  // (src-tauri/src/menu.rs emit_to_focused_window_only). Fire one the same
+  // way after both rooms boot: every realm in this window receives it.
   setTimeout(() => {
     const label = getCurrentWindow().label
     console.info('[roomframe-probe] emitTo', label, 'menu:new-tab')

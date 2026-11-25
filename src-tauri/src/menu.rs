@@ -190,9 +190,6 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
 pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
-        // ⌘, : the accelerator consumes the keystroke, so this event is the
-        // only way Settings opens from the keyboard. Sent from the app
-        // handle, never through a window lookup (see `main_webview`).
         // Only with `board_file_preview` on (see `app_menu`): Quit has to be able to ask about a board file's edit
         // that isn't saved, which the predefined item (NSApplication terminate:) can't.
         "board-file-quit" => {
@@ -202,77 +199,75 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
                 app.exit(0);
             }
         }
+        // Every command that acts on a window goes to the window in front
+        // ONLY (`emit_to_focused_window_only`): ⌘, opened Settings in every
+        // open K2 window while it was `app.emit`. Check for Updates also
+        // opens Settings, so it goes to the window in front too.
+        // ⌘, : the accelerator consumes the keystroke, so this event is the
+        // only way Settings opens from the keyboard. The window is found by
+        // `focused_window_label`, which counts a window holding a Browser or
+        // Design child webview.
         "settings" => {
-            let _ = app.emit("menu:open-settings", ());
+            emit_to_focused_window_only(app, "menu:open-settings");
         }
         "check-for-updates" => {
-            let _ = app.emit("menu:check-for-updates", ());
+            emit_to_focused_window_only(app, "menu:check-for-updates");
         }
         "send-feedback" => {
-            let _ = app.emit("menu:send-feedback", ());
+            emit_to_focused_window_only(app, "menu:send-feedback");
         }
-        "app-zoom-in" | "app-zoom-out" | "app-zoom-reset" => {
-            // Zoom via menu items (keyboard zoom handled in App.tsx)
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static ZOOM_LEVEL: AtomicU32 = AtomicU32::new(100); // percentage
-
-            let current = ZOOM_LEVEL.load(Ordering::Relaxed);
-            let next = match id {
-                "app-zoom-in" => (current + 10).min(200),
-                "app-zoom-out" => current.saturating_sub(10).max(50),
-                _ => 100, // reset
-            };
-            ZOOM_LEVEL.store(next, Ordering::Relaxed);
-
-            if let Some(win) = main_webview(app) {
-                let scale = next as f64 / 100.0;
-                let js = format!(
-                    "window.__k2Zoom={scale};if(typeof window.__k2ApplyPageTitle==='function')window.__k2ApplyPageTitle();"
-                );
-                let _ = win.eval(&js);
-            }
+        // Page zoom is per window (`window.__k2Zoom`, the same CSS path as
+        // the webview's Cmd+= / Cmd+-). The window's own listener steps it.
+        "app-zoom-in" => {
+            emit_to_focused_window_only(app, "app:zoom-in");
+        }
+        "app-zoom-out" => {
+            emit_to_focused_window_only(app, "app:zoom-out");
+        }
+        "app-zoom-reset" => {
+            emit_to_focused_window_only(app, "app:zoom-reset");
         }
         "terminal-zoom-in" => {
-            emit_to_focused(app, "terminal:zoom-in");
+            emit_to_focused_window_only(app, "terminal:zoom-in");
         }
         "terminal-zoom-out" => {
-            emit_to_focused(app, "terminal:zoom-out");
+            emit_to_focused_window_only(app, "terminal:zoom-out");
         }
         "new-document" => {
-            emit_to_focused(app, "menu:new-document");
+            emit_to_focused_window_only(app, "menu:new-document");
         }
         "new-tab" => {
-            emit_to_focused(app, "menu:new-tab");
+            emit_to_focused_window_only(app, "menu:new-tab");
         }
         "launch-agent" => {
-            emit_to_focused(app, "menu:launch-agent");
+            emit_to_focused_window_only(app, "menu:launch-agent");
         }
         "split-pane" => {
-            emit_to_focused(app, "menu:split-pane");
+            emit_to_focused_window_only(app, "menu:split-pane");
         }
         "open-workspace" => {
-            emit_to_focused(app, "menu:open-workspace");
+            emit_to_focused_window_only(app, "menu:open-workspace");
         }
         "close-tab" => {
-            emit_to_focused(app, "menu:close-tab");
+            emit_to_focused_window_only(app, "menu:close-tab");
         }
         "command-palette" => {
-            emit_to_focused(app, "menu:command-palette");
+            emit_to_focused_window_only(app, "menu:command-palette");
         }
         "running-agents" => {
-            emit_to_focused(app, "menu:running-agents");
+            emit_to_focused_window_only(app, "menu:running-agents");
         }
         "projects" => {
-            emit_to_focused(app, "menu:projects");
+            emit_to_focused_window_only(app, "menu:projects");
         }
         "toggle-sidebar" => {
-            emit_to_focused(app, "menu:toggle-sidebar");
+            emit_to_focused_window_only(app, "menu:toggle-sidebar");
         }
         "server-switcher" => {
-            emit_to_focused(app, "menu:server-switcher");
+            emit_to_focused_window_only(app, "menu:server-switcher");
         }
         "focus-window" => {
-            emit_to_focused(app, "menu:focus-window");
+            emit_to_focused_window_only(app, "menu:focus-window");
         }
         "zen-toggle" => {
             emit_to_focused_window_only(app, "menu:zen-toggle");
@@ -422,65 +417,81 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
-/// The main window's own webview. Never `get_webview_window("main")` or
-/// `webview_windows()` in the menu paths: tauri counts a window as a
-/// "webview window" only while it holds one webview, so once a Browser or
-/// Design tab adds its child webview to the window both return nothing and
-/// every menu event (⌘, Settings among them) was silently dropped.
-#[cfg(all(target_os = "macos", feature = "browser-pane"))]
-fn main_webview(app: &AppHandle) -> Option<tauri::Webview> {
-    app.get_webview("main")
-}
-
-/// Without `browser-pane` there are no child webviews.
-#[cfg(all(target_os = "macos", not(feature = "browser-pane")))]
-fn main_webview(app: &AppHandle) -> Option<tauri::WebviewWindow> {
-    app.get_webview_window("main")
-}
-
 /// The focused window's label, counting a window that hosts a Browser or
-/// Design child webview (see `main_webview`).
+/// Design child webview. With `browser-pane` (the default build), never
+/// `get_webview_window(..)` or `webview_windows()` in the menu paths: tauri counts a window as a
+/// "webview window" only while it holds one webview, so once a Browser or
+/// Design tab adds its child webview to the window both skip it and every
+/// menu event (⌘, Settings among them) was silently dropped.
 #[cfg(target_os = "macos")]
 fn focused_window_label(app: &AppHandle) -> Option<String> {
     #[cfg(feature = "browser-pane")]
     let windows = app.windows();
     #[cfg(not(feature = "browser-pane"))]
     let windows = app.webview_windows();
-    windows
+    let windows: Vec<(String, bool)> = windows
         .into_iter()
-        .find(|(_, w)| w.is_focused().unwrap_or(false))
-        .map(|(label, _)| label)
+        .map(|(label, w)| {
+            let focused = w.is_focused().unwrap_or(false);
+            (label, focused)
+        })
+        .collect();
+    menu_target_label(&windows)
 }
 
-#[cfg(target_os = "macos")]
-fn emit_to_focused(app: &AppHandle, event: &str) {
-    // One emit per menu action (the old "emit from every window" loop ran
-    // the action once PER WINDOW, an amplifier in the Cmd+Shift+T
-    // multi-spawn bug). `Emitter::emit` reaches every untargeted listener
-    // whichever handle sends it, so the app handle sends it once a window
-    // exists (the focused one, else "main").
-    if focused_window_label(app).is_some() || main_webview(app).is_some() {
-        let _ = app.emit(event, ());
-    }
+/// Which window a window-local menu command goes to: the focused one; with
+/// none focused (the menu bar used with no key window), "main" if it is
+/// open, else any open window, so the command still lands somewhere.
+#[cfg(any(target_os = "macos", test))]
+fn menu_target_label(windows: &[(String, bool)]) -> Option<String> {
+    windows
+        .iter()
+        .find(|(_, focused)| *focused)
+        .or_else(|| windows.iter().find(|(label, _)| label == "main"))
+        .or_else(|| windows.first())
+        .map(|(label, _)| label.clone())
 }
 
-/// Like `emit_to_focused`, but delivered ONLY to that window's listeners.
-/// `Emitter::emit` reaches every window's untargeted listener, so the Zen
-/// toggle (per Home, shared across windows) would flip once per window.
-/// The renderer listens with target `AnyLabel { label: <its own label> }`.
+/// Send a menu command to the window in front ONLY. `Emitter::emit`
+/// reaches every window's untargeted listener, so ⌘, opened Settings (and
+/// New Tab opened a tab, ⌘B toggled the sidebar …) in every open window.
+/// One emit, to that window's label; the renderer listens with target
+/// `AnyLabel { label: <its own label> }` (`listenOwnWindow`), since an
+/// untargeted JS listener hears every emit whatever its target.
 #[cfg(target_os = "macos")]
 fn emit_to_focused_window_only(app: &AppHandle, event: &str) {
-    let label = focused_window_label(app).unwrap_or_else(|| "main".to_string());
+    let Some(label) = focused_window_label(app) else {
+        return;
+    };
     let _ = app.emit_to(EventTarget::AnyLabel { label }, event, ());
 }
 
 #[cfg(test)]
 mod zen_menu_tests {
-    use super::zen_menu_label;
+    use super::{menu_target_label, zen_menu_label};
 
     #[test]
     fn zen_menu_label_flips() {
         assert_eq!(zen_menu_label(false), "Enter Zen Mode");
         assert_eq!(zen_menu_label(true), "Exit Zen Mode");
+    }
+
+    fn windows(list: &[(&str, bool)]) -> Vec<(String, bool)> {
+        list.iter().map(|(l, f)| (l.to_string(), *f)).collect()
+    }
+
+    #[test]
+    fn menu_commands_go_to_the_focused_window_only() {
+        let w = windows(&[("main", false), ("window-a", true), ("window-b", false)]);
+        assert_eq!(menu_target_label(&w).as_deref(), Some("window-a"));
+    }
+
+    #[test]
+    fn with_no_window_focused_main_then_any_window() {
+        let w = windows(&[("window-a", false), ("main", false)]);
+        assert_eq!(menu_target_label(&w).as_deref(), Some("main"));
+        let w = windows(&[("window-a", false), ("window-b", false)]);
+        assert_eq!(menu_target_label(&w).as_deref(), Some("window-a"));
+        assert_eq!(menu_target_label(&[]), None);
     }
 }

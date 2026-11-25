@@ -633,7 +633,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   const reportTerminalLive = sessionChrome?.reportTerminalLive
 
   // Live-subscribe to the terminal settings store so Cmd+Shift+=
-  // / Cmd+Shift+- menu events (wired via listen('terminal:zoom-*')
+  // / Cmd+Shift+- menu events (wired via listenOwnWindow(listen, 'terminal:zoom-*')
   // in terminal-settings.ts) update this component's font size
   // immediately. Prop takes precedence for tests / ad-hoc consumers
   // that want to override.

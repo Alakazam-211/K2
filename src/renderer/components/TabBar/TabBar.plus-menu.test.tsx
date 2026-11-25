@@ -608,7 +608,7 @@ describe('tab bar plus menu', () => {
       join(dirname(fileURLToPath(import.meta.url)), '../../App.tsx'),
       'utf8',
     )
-    expect(app).toMatch(/listen\('menu:new-tab',\s*\(\)\s*=>\s*\{\s*menuNewTab\(\)/)
+    expect(app).toMatch(/listenOwnWindow\(listen, 'menu:new-tab',\s*\(\)\s*=>\s*\{\s*menuNewTab\(\)/)
   })
 
   it('Show launch bar off hides PresetsBar, keeps menu presets, and the bit survives a remount', async () => {

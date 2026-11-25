@@ -90,7 +90,7 @@ unit_prefix = "k2"
 # Where people are sent.
 [links]
 site = "https://k2.dev"
-support_email = "support@k2.dev"
+support_email = "hello@alakazamlabs.com"
 # Where people write when their server can't send feedback, and the
 # address a person may ask to be written back from.
 contact_email = "hello@alakazamlabs.com"

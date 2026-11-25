@@ -166,7 +166,7 @@ describe('the renderer brand module', () => {
     expect(PUBLIC_SITE).toBe('https://k2.dev')
     expect(INFRA_ZONE).toBe('k2.dev')
     expect(HOSTED_ZONES).toEqual(['k2.dev'])
-    expect(SUPPORT_EMAIL).toBe('support@k2.dev')
+    expect(SUPPORT_EMAIL).toBe('hello@alakazamlabs.com')
     expect(RELEASE_REPO_NAMES).toEqual(['Alakazam-211/K2', 'AlakazamLabs/K5'])
     expect(RELEASE_REPO_NAMES).toContain(RELEASE_REPO)
     expect(RELEASE_REPO_URL).toBe(`https://github.com/${RELEASE_REPO}`)

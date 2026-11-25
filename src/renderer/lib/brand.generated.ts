@@ -27,7 +27,7 @@ export const PRODUCT_LOCKUP: string = 'K2 by Alakazam Labs'
 export const PUBLIC_SITE: string = 'https://k2.dev'
 
 /** Where people write for help. */
-export const SUPPORT_EMAIL: string = 'support@k2.dev'
+export const SUPPORT_EMAIL: string = 'hello@alakazamlabs.com'
 
 /** Where people write when their server can't send feedback. */
 export const CONTACT_EMAIL: string = 'hello@alakazamlabs.com'

@@ -199,7 +199,7 @@ Version: $VERSION
 Section: devel
 Priority: optional
 Architecture: $ARCH
-Maintainer: Alakazam Labs <support@k2.dev>
+Maintainer: Alakazam Labs <hello@alakazamlabs.com>
 Homepage: https://k2.dev
 Installed-Size: $INSTALLED_SIZE
 Description: K2 daemon - AI workspace orchestration backend

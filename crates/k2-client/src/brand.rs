@@ -79,7 +79,7 @@ pub const INFRA_ZONE: &str = crate::hosts::PRIMARY_ZONE;
 pub const HOSTED_ZONES: &[&str] = &[crate::hosts::PRIMARY_ZONE];
 
 /// Where people write for help: the brand file's `links.support_email`, or
-/// the default brand's ("support@k2.dev" in ours).
+/// the default brand's ("hello@alakazamlabs.com" in ours).
 pub const SUPPORT_EMAIL: &str = k2_brand::links::SUPPORT_EMAIL;
 
 /// Where people write when their server can't send feedback: the brand
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(CLI_ALIASES, &["k2so"]);
         assert_eq!(PUBLIC_SITE, "https://k2.dev");
         assert_eq!(INFRA_ZONE, "k2.dev");
-        assert_eq!(SUPPORT_EMAIL, "support@k2.dev");
+        assert_eq!(SUPPORT_EMAIL, "hello@alakazamlabs.com");
         assert_eq!(CONTACT_EMAIL, "hello@alakazamlabs.com");
         assert_eq!(REPO_URL, "https://github.com/Alakazam-211/K2");
         assert_eq!(RELEASE_REPO_NAMES, &["Alakazam-211/K2", "AlakazamLabs/K5"]);

@@ -77,7 +77,7 @@ unit_prefix = "k2"
 # Where people are sent.
 [links]
 site = "https://k2.dev"
-support_email = "support@k2.dev"
+support_email = "hello@alakazamlabs.com"
 # contact_email and repo: brand/k2 says what each is.
 contact_email = "hello@alakazamlabs.com"
 repo = "https://github.com/Alakazam-211/K2"

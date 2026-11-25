@@ -1,4 +1,4 @@
-# Maintainer: Alakazam Labs <support@k2.dev>
+# Maintainer: Alakazam Labs <hello@alakazamlabs.com>
 pkgname=k2-bin
 _pkgname=${pkgname%-bin}
 pkgver=0.46.7

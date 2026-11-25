@@ -17,7 +17,7 @@
 //! an Admin has "Record calls in DMs" on (Sew's `recording.dm_enabled`;
 //! Sew decides, K2 adds no rule of its own). Never a Voice & Chat only
 //! login (`routes::recording_act`), never an agent (join's refusals).
-//! Record goes on the person's held Home chat session, the one the call
+//! Record goes on the voice BFF's session for this login, the one the call
 //! itself uses, and asks Sew for [`DM_AUDIO_KEEP_DAYS`] of audio, capped by
 //! the server's longest keep (`recording.audio_max_days`). Stop and the
 //! consent answer take a recording id and need nothing DM-specific.
@@ -29,10 +29,16 @@
 //! Voice & Chat only logins call like any person (Sew sees a person; DMs
 //! ignore Space roles).
 //!
-//! **Whose session.** Each Sew call goes on the person's held Home chat
-//! session (`home_chat::routes::sew_as`). The call K2 records for the join
-//! is this login session's, so `session/leave` and the call's own routes
-//! find it as they find a room's.
+//! **Whose session.** Each Sew call (join, decline, ring, cancel, Record,
+//! the controls read) goes on the voice BFF's plain user session for this
+//! login (`bff::as_person`, with its renew on a 401), the same one a room
+//! join and the kit door use. Never the Home chat follower's held session
+//! (`home_chat::routes::sew_as`): Sew's device scope hashes the install and
+//! the session's lineage, so a call on another session is another scope,
+//! and the phone's call client then tries to enrol a second device, which
+//! Sew refuses (`e2ee_refused` on a DM call while rooms worked). The call
+//! K2 records for the join is this login session's, so `session/leave` and
+//! the call's own routes find it as they find a room's.
 //!
 //! **Cancel (Sew 0.10.0 A).** Only when Sew reports `call_cancel`. Without
 //! it the caller's Cancel is a leave (`POST /api/v1/me/voice/leave`), and the
@@ -55,6 +61,13 @@ use serde_json::{json, Value};
 use k2_core::voice_rooms::Hosting as Tier;
 
 use super::bff::{self, Person, Refusal};
+
+/// `/boot-status` lists this (0.46.18): every DM call route goes on the
+/// voice BFF's plain user session for the person's own login, as room joins
+/// do (see "Whose session"). The phone offers DM calls only on a server
+/// that lists it: an older K2 put them on the Home chat session, and the
+/// phone's e2ee device enrolment was refused there.
+pub const FEATURE_SESSION: &str = "dm-call-voice-session-v1";
 
 /// DM calls ride the voice rooms' Pro gate (`host_not_pro`) while this is
 /// true; false makes them free on every Linux server.
@@ -159,8 +172,10 @@ fn the_dm(p: &Person, b: &Value) -> R<String> {
     Ok(dm)
 }
 
-fn sew(p: &Person, path: &str, body: &Value) -> R<Value> {
-    let a = crate::home_chat::routes::sew_as(&p.ext.to_string(), "POST", path, Some(body))?;
+/// One POST to Sew for a DM call, on the voice BFF's session for this login
+/// (the room joins' session; see "Whose session" above).
+fn sew(p: &Person, d: &bff::Deps, path: &str, body: &Value) -> R<Value> {
+    let a = bff::as_person(p, d, path, body)?;
     if a.ok() {
         Ok(a.body)
     } else {
@@ -211,7 +226,7 @@ pub fn join(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
                 .retry(bff::RETRY_SECS));
         }
     };
-    let a = sew(p, &bff::paths::call_join(&dm), &body)?;
+    let a = sew(p, &ctx.bff, &bff::paths::call_join(&dm), &body)?;
     let room = format!("dm:{dm}");
     let call_id = bff::note_call(p, &dm, &room);
     let voice = a.get("voice").unwrap_or(&Value::Null);
@@ -239,7 +254,7 @@ pub fn decline(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
     gate(ctx)?;
     let dm = the_dm(p, b)?;
     let id = call_id(b)?;
-    sew(p, &bff::paths::call_decline(&dm), &json!({ "call_id": id }))?;
+    sew(p, &ctx.bff, &bff::paths::call_decline(&dm), &json!({ "call_id": id }))?;
     Ok(json!({ "ok": true, "declined": true, "callId": id }))
 }
 
@@ -256,7 +271,7 @@ pub fn ring(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
         }
         Some(_) => return Err(usage("memberIds is a list of Sew member ids")),
     }
-    let sew_body = sew(p, &bff::paths::call_ring(&dm), &body)?;
+    let sew_body = sew(p, &ctx.bff, &bff::paths::call_ring(&dm), &body)?;
     Ok(json!({ "ok": true, "rung": true, "callId": id, "sew": sew_body }))
 }
 
@@ -268,7 +283,7 @@ pub fn cancel(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
     let dm = the_dm(p, b)?;
     let id = call_id(b)?;
     if ctx.call_cancel {
-        sew(p, &bff::paths::call_cancel(&dm), &json!({ "call_id": id }))?;
+        sew(p, &ctx.bff, &bff::paths::call_cancel(&dm), &json!({ "call_id": id }))?;
         return Ok(json!({ "ok": true, "cancelled": true, "via": "cancel", "callId": id }));
     }
     let mut v = bff::leave(p, None, &ctx.bff)?;
@@ -280,13 +295,13 @@ pub fn cancel(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
 }
 
 /// `POST /cli/voice/recording/start {dm}`: the person's own Record in the
-/// DM's call, on their held Home chat session. Pressing Record is the
+/// DM's call, on the call's own session (the voice BFF's). Pressing Record is the
 /// starter's own consent and nobody else's; Sew tells the other person.
 pub fn recording_start(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
     gate(ctx)?;
     let dm = the_dm(p, b)?;
     let body = json!({ "audio_keep_days": dm_keep_days(ctx.audio_max_days) });
-    let a = crate::home_chat::routes::sew_as(&p.ext.to_string(), "POST", &bff::paths::recording_start(&dm), Some(&body))?;
+    let a = bff::as_person(p, &ctx.bff, &bff::paths::recording_start(&dm), &body)?;
     bff::note_recording_sew_status(a.status);
     if !a.ok() {
         return Err(bff::recording_act_refusal(&a));
@@ -300,7 +315,7 @@ pub fn recording_start(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
 pub fn recording_controls(p: &Person, b: &Value, ctx: &Ctx) -> R<Value> {
     gate(ctx)?;
     let dm = the_dm(p, b)?;
-    let a = crate::home_chat::routes::sew_as(&p.ext.to_string(), "GET", &bff::paths::channel(&dm), None)?;
+    let a = bff::get_as_person(p, &ctx.bff, &bff::paths::channel(&dm))?;
     if !a.ok() {
         return Err(bff::sew_refusal(&a));
     }

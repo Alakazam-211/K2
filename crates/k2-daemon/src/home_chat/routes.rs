@@ -216,8 +216,9 @@ fn as_person(c: &Caller, method: &str, path: &str, body: Option<&Value>) -> R<Se
     sew_as(&c.ext, method, path, body)
 }
 
-/// One call to Sew as box person `ext` on their held session (DM calls use
-/// it too: `voice::dm_call`); a 401 signs in again once.
+/// One call to Sew as box person `ext` on their held session; a 401 signs
+/// in again once. Never for calls: DM calls go on the voice BFF's session
+/// (`voice::dm_call`), as room joins do.
 pub(crate) fn sew_as(ext: &str, method: &str, path: &str, body: Option<&Value>) -> R<SewAnswer> {
     sew_as_keyed(ext, method, path, body, None)
 }

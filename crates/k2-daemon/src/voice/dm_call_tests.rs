@@ -3,7 +3,7 @@
 //! and the phone pushes from the person feed. Each test fails loudly; none
 //! touches `~/.k2`, the keychain or a daemon.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,27 +31,58 @@ fn sam() -> Person {
     Person { ident, ext, login: "sam".into(), role: Role::VoiceChat, client: Client::Login }
 }
 
-/// The login session's own Sew (the BFF's leave goes there).
+/// The voice BFF's Sew: the login session's own plain user session, where
+/// room joins, the leave and every DM call route go. It records each
+/// request's bearer, path and body, and each pass `auth/k2` traded.
 #[derive(Default)]
 struct LoginSew {
     calls: Mutex<Vec<String>>,
+    sent: Mutex<Vec<(Option<String>, String, Value)>>,
+    passes: Mutex<Vec<String>>,
+    answers: Mutex<HashMap<String, (u16, Value)>>,
 }
 
-impl SewApi for LoginSew {
-    fn post(&self, _bearer: Option<&str>, path: &str, _body: &Value) -> Result<SewAnswer, String> {
+/// The token the voice BFF's session signs in to (never the Home chat
+/// follower's `sews_first.x`).
+const VOICE_TOKEN: &str = "sews_voice.x";
+
+impl LoginSew {
+    fn answer(&self, path: &str, status: u16, body: Value) {
+        self.answers.lock().unwrap().insert(path.to_string(), (status, body));
+    }
+    fn calls_to(&self, path: &str) -> Vec<(Option<String>, Value)> {
+        self.sent.lock().unwrap().iter().filter(|c| c.1 == path).map(|c| (c.0.clone(), c.2.clone())).collect()
+    }
+    fn reply(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String> {
         self.calls.lock().unwrap().push(path.to_string());
+        self.sent.lock().unwrap().push((bearer.map(str::to_string), path.to_string(), body.clone()));
+        if path == bff::paths::AUTH_K2 {
+            self.passes.lock().unwrap().push(body["pass"].as_str().expect("auth/k2 carries a pass").to_string());
+            return Ok(SewAnswer { status: 200, body: json!({"token": VOICE_TOKEN}) });
+        }
+        if let Some((status, body)) = self.answers.lock().unwrap().get(path).cloned() {
+            return Ok(SewAnswer { status, body });
+        }
         match path {
-            bff::paths::AUTH_K2 => Ok(SewAnswer { status: 200, body: json!({"token": "sews_login.x"}) }),
             bff::paths::ME_VOICE_LEAVE => Ok(SewAnswer { status: 200, body: json!({"ok": true}) }),
             _ => Err(format!("login sew: nothing at {path}")),
         }
     }
 }
 
+impl SewApi for LoginSew {
+    fn post(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String> {
+        self.reply(bearer, path, body)
+    }
+    fn get(&self, bearer: Option<&str>, path: &str) -> Result<SewAnswer, String> {
+        self.reply(bearer, path, &Value::Null)
+    }
+}
+
 fn bff_deps(sew: Arc<LoginSew>) -> Arc<bff::Deps> {
     Arc::new(bff::Deps {
         sew,
-        mint: Arc::new(|i: &crate::chat_pass::identity::PassIdentity| Ok::<_, String>(format!("pass-for-{}", i.sub))),
+        mint: Arc::new(|i: &crate::chat_pass::identity::PassIdentity| Ok::<_, String>(format!("pass-for-{}-sid-{}", i.sub, i.sid))),
         connect_gate: Arc::new(|_: &str, _: &str| Ok::<_, String>(ConnectChatGate::Ready)),
         level_pending: Arc::new(|_: &ExternalId| Ok::<_, String>(false)),
         lane_hold: Duration::from_millis(200),
@@ -159,14 +190,15 @@ fn a_dm_join_rings_or_answers_and_shapes_the_answer_by_client() {
     let api = Arc::new(FakeApi::default());
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     let h = sam_in_dm_900();
-    api.answer("/api/v1/channels/900/call/join", 200, call_join_answer());
     let login = Arc::new(LoginSew::default());
-    let c = ctx(false, login);
+    login.answer("/api/v1/channels/900/call/join", 200, call_join_answer());
+    let c = ctx(false, login.clone());
 
     let v = join(&sam(), &json!({"dm": "900", "join": {"self_mute": true}}), &c).expect("join");
-    let sent = api.calls_to("/api/v1/channels/900/call/join");
+    let sent = login.calls_to("/api/v1/channels/900/call/join");
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].0.as_deref(), Some("sews_first.x"), "on the person's held session");
+    assert_eq!(sent[0].0.as_deref(), Some(VOICE_TOKEN), "on the voice BFF's session, as a room join");
+    assert!(api.calls_to("/api/v1/channels/900/call/join").is_empty(), "never on the Home chat session");
     assert_eq!(sent[0].1, json!({"self_mute": true, "ring": true, "call_credential": true}), "starts the call, ringing");
     let mut want = call_join_answer()["voice"].clone();
     want["call"] = call_join_answer()["call"].clone();
@@ -178,7 +210,7 @@ fn a_dm_join_rings_or_answers_and_shapes_the_answer_by_client() {
     // A call rings for Sam in the DM: this join answers it.
     h.state.lock().unwrap().apply_call_event("call_ring", &json!({"call_id": "88", "channel_id": "900", "started_by": "42", "ringing": true, "silent": false}));
     let v = join(&sam(), &json!({"dm": "900", "callAnswer": true}), &c).expect("answer");
-    let sent = api.calls_to("/api/v1/channels/900/call/join");
+    let sent = login.calls_to("/api/v1/channels/900/call/join");
     assert_eq!(sent[1].1, json!({"ring": false, "call_credential": true}), "answers, never rings back");
     assert_eq!(v["join"], call_join_answer(), "passed through unchanged for a call client that takes it");
 
@@ -218,19 +250,21 @@ fn cancel_is_sews_only_with_the_flag_else_a_leave() {
     let api = Arc::new(FakeApi::default());
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     sam_in_dm_900();
-    api.answer("/api/v1/channels/900/call/cancel", 200, json!({"ok": true}));
 
     let login = Arc::new(LoginSew::default());
+    login.answer("/api/v1/channels/900/call/cancel", 200, json!({"ok": true}));
     let v = cancel(&sam(), &json!({"dm": "900", "callId": "88"}), &ctx(true, login.clone())).expect("cancel");
     assert_eq!((v["cancelled"].clone(), v["via"].clone()), (json!(true), json!("cancel")));
-    assert_eq!(api.calls_to("/api/v1/channels/900/call/cancel")[0].1, json!({"call_id": "88"}));
+    let sent = login.calls_to("/api/v1/channels/900/call/cancel");
+    assert_eq!((sent[0].0.as_deref(), &sent[0].1), (Some(VOICE_TOKEN), &json!({"call_id": "88"})), "on the voice BFF's session");
     assert!(!login.calls.lock().unwrap().iter().any(|p| p == bff::paths::ME_VOICE_LEAVE), "with the flag: no leave");
 
     let login = Arc::new(LoginSew::default());
     let v = cancel(&sam(), &json!({"dm": "900", "callId": "89"}), &ctx(false, login.clone())).expect("leave");
     assert_eq!((v["cancelled"].clone(), v["via"].clone(), v["left"].clone()), (json!(false), json!("leave"), json!(true)));
     assert!(login.calls.lock().unwrap().iter().any(|p| p == bff::paths::ME_VOICE_LEAVE), "without it: the caller leaves");
-    assert_eq!(api.calls_to("/api/v1/channels/900/call/cancel").len(), 1, "Sew's cancel is never called without the flag");
+    assert!(login.calls_to("/api/v1/channels/900/call/cancel").is_empty(), "Sew's cancel is never called without the flag");
+    assert!(api.calls_to("/api/v1/channels/900/call/cancel").is_empty(), "never on the Home chat session");
     follower::release_all();
     crate::home_chat::set_deps(None);
 }
@@ -244,19 +278,167 @@ fn decline_and_ring_reach_sew_as_the_person() {
     let api = Arc::new(FakeApi::default());
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     sam_in_dm_900();
-    api.answer("/api/v1/channels/900/call/decline", 200, json!({"ok": true}));
-    api.answer("/api/v1/channels/900/call/ring", 200, json!({"ok": true}));
-    let c = ctx(false, Arc::new(LoginSew::default()));
+    let login = Arc::new(LoginSew::default());
+    login.answer("/api/v1/channels/900/call/decline", 200, json!({"ok": true}));
+    login.answer("/api/v1/channels/900/call/ring", 200, json!({"ok": true}));
+    let c = ctx(false, login.clone());
     decline(&sam(), &json!({"dm": "900", "callId": "88"}), &c).expect("decline");
-    assert_eq!(api.calls_to("/api/v1/channels/900/call/decline")[0].1, json!({"call_id": "88"}));
+    let sent = login.calls_to("/api/v1/channels/900/call/decline");
+    assert_eq!((sent[0].0.as_deref(), &sent[0].1), (Some(VOICE_TOKEN), &json!({"call_id": "88"})), "on the voice BFF's session");
     ring(&sam(), &json!({"dm": "900", "callId": "88", "memberIds": ["42"]}), &c).expect("ring");
-    assert_eq!(api.calls_to("/api/v1/channels/900/call/ring")[0].1, json!({"call_id": "88", "member_ids": ["42"]}));
+    let sent = login.calls_to("/api/v1/channels/900/call/ring");
+    assert_eq!((sent[0].0.as_deref(), &sent[0].1), (Some(VOICE_TOKEN), &json!({"call_id": "88", "member_ids": ["42"]})));
     assert_eq!(code(&ring(&sam(), &json!({"dm": "900", "callId": "88", "memberIds": ["x"]}), &c).unwrap_err()), (400, "usage"));
     assert_eq!(code(&decline(&sam(), &json!({"dm": "900"}), &c).unwrap_err()), (400, "usage"), "no call id");
-    api.answer("/api/v1/channels/900/call/ring", 429, json!({"error": {"code": "rate_limited", "hint": "at most 3 rings"}}));
+    login.answer("/api/v1/channels/900/call/ring", 429, json!({"error": {"code": "rate_limited", "hint": "at most 3 rings"}}));
     assert_eq!(ring(&sam(), &json!({"dm": "900", "callId": "88"}), &c).unwrap_err().status, 429, "Sew's limit comes back as is");
     follower::release_all();
     crate::home_chat::set_deps(None);
+}
+
+/// e2ee_refused on a phone's DM call (Sew 0.11.6): Sew's device scope
+/// hashes the install and the session's lineage, so a DM call on another
+/// session than the room joins' is another scope; the phone then tries to
+/// enrol a second device and Sew refuses. A room join and a DM call's
+/// join, ring, decline and cancel for the same person all go on ONE
+/// session: the voice BFF's plain user session for this login (a Bearer
+/// from `auth/k2` with a pass for the login's own session id), never the
+/// Home chat follower's daemon-held `hc_` session, and never act-as (that
+/// seam is `sew_chat`'s mgmt client; nothing here reaches it).
+#[test]
+fn a_room_join_and_every_dm_call_route_share_the_voice_bff_session() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _l = super::super::lane::test_lock();
+    let _home = k2_core::test_env::TempHome::new();
+    super::super::lane::publish(super::super::lane::LaneState::not_applicable());
+    bff::forget_all();
+    let api = Arc::new(FakeApi::default());
+    crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    sam_in_dm_900();
+    let login = Arc::new(LoginSew::default());
+    login.answer(&bff::paths::channel_join("950"), 200, json!({"url": "wss://media.example.test/rtc", "token": "room-media"}));
+    let dm_paths = [
+        bff::paths::call_join("900"),
+        bff::paths::call_ring("900"),
+        bff::paths::call_decline("900"),
+        bff::paths::call_cancel("900"),
+    ];
+    for p in &dm_paths {
+        let body = if p.ends_with("/call/join") { call_join_answer() } else { json!({"ok": true}) };
+        login.answer(p, 200, body);
+    }
+    let c = ctx(true, login.clone());
+    let rooms = vec![k2_core::tool_hook::admin_space::RoomRow {
+        n: 1,
+        slug: "room-1".into(),
+        channel_id: Some("950".into()),
+        name: Some("Room 1".into()),
+        want_name: None,
+        state: k2_core::tool_hook::admin_space::ROOM_ACTIVE.into(),
+        close_now: false,
+        why: None,
+    }];
+
+    bff::join(&sam(), "room-1", &json!({}), &rooms, &c.bff).expect("room join");
+    join(&sam(), &json!({"dm": "900"}), &c).expect("dm join");
+    ring(&sam(), &json!({"dm": "900", "callId": "88"}), &c).expect("ring");
+    decline(&sam(), &json!({"dm": "900", "callId": "88"}), &c).expect("decline");
+    cancel(&sam(), &json!({"dm": "900", "callId": "88"}), &c).expect("cancel");
+
+    let room = login.calls_to(&bff::paths::channel_join("950"));
+    assert_eq!(room.len(), 1, "the room join reached the voice BFF's Sew");
+    let room_bearer = room[0].0.clone().expect("the room join carries the person's own session");
+    assert_eq!(room_bearer, VOICE_TOKEN);
+    for p in &dm_paths {
+        let sent = login.calls_to(p);
+        assert_eq!(sent.len(), 1, "{p}: on the voice BFF's session");
+        assert_eq!(sent[0].0.as_deref(), Some(room_bearer.as_str()), "{p}: the room join's session, so one device scope");
+        assert!(api.calls_to(p).is_empty(), "{p}: never on the Home chat follower's session");
+    }
+    // One plain user session: one auth/k2, its pass for the login's own
+    // session id (not the follower's daemon-held hc_ sid), shared by all.
+    let passes = login.passes.lock().unwrap().clone();
+    assert_eq!(passes.len(), 1, "one session for the room and the DM call: {passes:?}");
+    let sid = sam().ident.sid;
+    assert!(!sid.starts_with(crate::home_chat::sessions::SID_PREFIX), "the login's own sid: {sid}");
+    assert_eq!(passes[0], format!("pass-for-{}-sid-{sid}", sam().ident.sub), "a plain user pass for this login session");
+    assert!(api.calls_to(crate::home_chat::sessions::AUTH_K2).is_empty(), "the Home chat session is never signed in for a call");
+    bff::forget_all();
+    follower::release_all();
+    crate::home_chat::set_deps(None);
+}
+
+/// The plain user session is the person's own: only their own login
+/// (`person_of`: a Connect login session) makes a DM call on it. An agent's
+/// passport (with Manage chat and voice or not), the owner token, an App
+/// pass or API key, an ended phone session and a bad token are refused at
+/// the door, before any Sew session is minted or used, on every DM call
+/// route. Sew answers each call path here, so a leak would succeed.
+#[test]
+fn an_agent_or_app_never_gets_a_plain_session_dm_call() {
+    let _g = SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+    let _l = super::super::lane::test_lock();
+    let _home = k2_core::test_env::TempHome::new();
+    bff::forget_all();
+    let api = Arc::new(FakeApi::default());
+    crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
+    sam_in_dm_900();
+    let login = Arc::new(LoginSew::default());
+    let dm_paths = [
+        bff::paths::call_join("900"),
+        bff::paths::call_ring("900"),
+        bff::paths::call_decline("900"),
+        bff::paths::call_cancel("900"),
+        bff::paths::recording_start("900"),
+        bff::paths::channel("900"),
+    ];
+    for p in &dm_paths {
+        login.answer(p, 200, call_join_answer());
+        api.answer(p, 200, call_join_answer());
+    }
+    bff::set_deps(Some(bff_deps(login.clone())));
+    k2_core::voice_preview::set_enabled(false);
+    k2_core::home_chat::set_enabled(true);
+    let cases: [(&str, &[u8]); 7] = [
+        (routes::JOIN, br#"{"dm":"900"}"#),
+        (routes::CALL_RING, br#"{"dm":"900","callId":"88"}"#),
+        (routes::CALL_DECLINE, br#"{"dm":"900","callId":"88"}"#),
+        (routes::CALL_CANCEL, br#"{"dm":"900","callId":"88"}"#),
+        (routes::CALL_LEAVE, br#"{"callId":"vc_x"}"#),
+        (routes::RECORDING_START, br#"{"dm":"900"}"#),
+        (routes::RECORDING_CONTROLS, br#"{"dm":"900"}"#),
+    ];
+    for caller in [Caller::Passport, Caller::ChatManager, Caller::OwnerToken, Caller::App, Caller::DeviceEnded, Caller::Invalid] {
+        for (p, body) in cases {
+            let r = routes::handle(p, caller.clone(), "o", true, body);
+            assert!(r.status.starts_with('4'), "{caller:?} {p}: refused at the door, got {} {}", r.status, r.body);
+        }
+    }
+    bff::set_deps(None);
+    k2_core::home_chat::set_enabled(false);
+    // Sam's only (the seam is process-wide: another test's person may pass
+    // through it meanwhile).
+    let sams: Vec<String> = login.passes.lock().unwrap().iter().filter(|p| p.contains(&sam().ident.sub)).cloned().collect();
+    assert!(sams.is_empty(), "no plain user session is minted for a caller that isn't the person: {sams:?}");
+    for p in &dm_paths {
+        assert!(login.calls_to(p).is_empty(), "{p}: no DM call on the voice BFF's session for a caller that isn't the person");
+    }
+    assert!(api.calls_to(crate::home_chat::sessions::AUTH_K2).is_empty(), "nor the Home chat session");
+    for p in &dm_paths {
+        assert!(api.calls_to(p).is_empty(), "{p}: never reached on any session");
+    }
+    bff::forget_all();
+    follower::release_all();
+    crate::home_chat::set_deps(None);
+}
+
+/// `/boot-status` advertises `dm-call-voice-session-v1`: the phone offers
+/// DM calls only on a server that lists it (one with this fix).
+#[test]
+fn boot_status_advertises_the_dm_call_voice_session() {
+    assert_eq!(FEATURE_SESSION, "dm-call-voice-session-v1");
+    let f = crate::boot_status::features();
+    assert!(f.contains(&FEATURE_SESSION), "{f:?}");
 }
 
 // ── ringing (S12) ────────────────────────────────────────────────────
@@ -579,32 +761,34 @@ fn a_dm_record_goes_to_sew_on_the_held_session_with_the_keep_days() {
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     sam_in_dm_900();
     let path = "/api/v1/channels/900/recording/start";
-    api.answer(path, 200, json!({"id": "42", "state": "recording", "started_by": "41"}));
-    let c = ctx(false, Arc::new(LoginSew::default()));
+    let login = Arc::new(LoginSew::default());
+    login.answer(path, 200, json!({"id": "42", "state": "recording", "started_by": "41"}));
+    let c = ctx(false, login.clone());
 
     assert_eq!(DM_AUDIO_KEEP_DAYS, 30, "Q7's default: Sew's own 30 days");
     let v = recording_start(&sam(), &json!({"dm": "900"}), &c).expect("record");
     assert_eq!((v["action"].as_str(), v["dm"].as_str(), v["recording"]["id"].as_str()), (Some("started"), Some("900"), Some("42")), "{v}");
-    let sent = api.calls_to(path);
+    let sent = login.calls_to(path);
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].0.as_deref(), Some("sews_first.x"), "on the person's held session, as the call");
+    assert_eq!(sent[0].0.as_deref(), Some(VOICE_TOKEN), "on the voice BFF's session, as the call");
+    assert!(api.calls_to(path).is_empty(), "never on the Home chat session");
     assert_eq!(sent[0].1, json!({"audio_keep_days": 30}));
 
     let capped = Ctx { audio_max_days: Some(7), ..c.clone() };
     recording_start(&sam(), &json!({"dm": "900"}), &capped).expect("record");
-    assert_eq!(api.calls_to(path)[1].1, json!({"audio_keep_days": 7}), "the server's longest keep caps it");
+    assert_eq!(login.calls_to(path)[1].1, json!({"audio_keep_days": 7}), "the server's longest keep caps it");
     assert_eq!(dm_keep_days(Some(90)), 30, "a longer server keep never lengthens a DM's");
 
     assert_eq!(code(&recording_start(&sam(), &json!({"dm": "901"}), &c).unwrap_err()), (404, "dm_not_found"));
     assert_eq!(code(&recording_start(&sam(), &json!({"dm": "../900"}), &c).unwrap_err()), (400, "usage"));
-    assert_eq!(api.calls_to("/api/v1/channels/901/recording/start").len(), 0, "never asked for another DM");
+    assert_eq!(login.calls_to("/api/v1/channels/901/recording/start").len(), 0, "never asked for another DM");
     let off = Ctx { chat: (false, Some("sew_off")), ..c.clone() };
     assert_eq!(code(&recording_start(&sam(), &json!({"dm": "900"}), &off).unwrap_err()), (503, "chat_unavailable"));
     let free = Ctx { tier: Tier::NotPro, ..c.clone() };
     assert_eq!(code(&recording_start(&sam(), &json!({"dm": "900"}), &free).unwrap_err()), (403, "host_not_pro"), "DM recording needs Pro, as DM calls do");
 
     // DM recording off on this server: Sew's refusal, its reason kept.
-    api.answer(path, 403, json!({"error": {"code": "missing_permission", "hint": "", "details": {"reason": "recording_disabled"}}}));
+    login.answer(path, 403, json!({"error": {"code": "missing_permission", "hint": "", "details": {"reason": "recording_disabled"}}}));
     let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (403, "recording_disabled"));
     assert_eq!(r.details.unwrap()["sew"]["details"]["reason"], "recording_disabled");
@@ -626,15 +810,16 @@ fn a_dm_record_with_dm_recording_off_says_so() {
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     sam_in_dm_900();
     let path = "/api/v1/channels/900/recording/start";
-    let c = ctx(false, Arc::new(LoginSew::default()));
+    let login = Arc::new(LoginSew::default());
+    let c = ctx(false, login.clone());
     let body = json!({"ok": false, "error": {"code": "policy_denied", "hint": "", "details": {"reason": "dm_recording_disabled"}}});
-    api.answer(path, 403, body.clone());
+    login.answer(path, 403, body.clone());
     let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (403, "dm_recording_disabled"));
     assert!(r.hint.contains("policy set dm_enabled on"), "{}", r.hint);
     assert_eq!(r.details.unwrap()["sew"], body["error"], "Sew's own error kept");
     // The word in the code only: not the contract, read as a plain 403.
-    api.answer(path, 403, json!({"ok": false, "error": {"code": "dm_recording_disabled", "hint": ""}}));
+    login.answer(path, 403, json!({"ok": false, "error": {"code": "dm_recording_disabled", "hint": ""}}));
     let r = recording_start(&sam(), &json!({"dm": "900"}), &c).unwrap_err();
     assert_eq!((r.status, r.code.as_str()), (403, "cannot_record"), "only details.reason names a recording refusal");
     follower::release_all();
@@ -658,21 +843,22 @@ fn a_dm_join_into_a_recorded_call_is_consent_required_with_sews_details() {
     let api = Arc::new(FakeApi::default());
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     sam_in_dm_900();
-    let c = ctx(false, Arc::new(LoginSew::default()));
+    let login = Arc::new(LoginSew::default());
+    let c = ctx(false, login.clone());
     let details = json!({
         "reason": "recording_consent_required", "auto": false,
         "recording": {"id": "77", "channel_id": "900", "state": "recording", "started_by": "42"},
         "consent_prompt": {"recording_id": "77", "notice_version": 3141, "decline_mode": "join_unrecorded", "audio_keep_days": 30},
     });
-    api.answer("/api/v1/channels/900/call/join", 409, json!({"ok": false, "error": {"code": "conflict", "hint": "answer the recording notice", "details": details}}));
+    login.answer("/api/v1/channels/900/call/join", 409, json!({"ok": false, "error": {"code": "conflict", "hint": "answer the recording notice", "details": details}}));
     let r = join(&sam(), &json!({"dm": "900", "callAnswer": true}), &c).unwrap_err();
     assert_eq!(code(&r), (409, "recording_consent_required"));
     assert_eq!(r.details.clone().expect("details"), details, "Sew's details unchanged, as from_sew_error reads them");
 
     let notice = json!({"recording_id": "77", "consent": true, "notice_version": 3141});
-    api.answer("/api/v1/channels/900/call/join", 200, call_join_answer());
+    login.answer("/api/v1/channels/900/call/join", 200, call_join_answer());
     let v = join(&sam(), &json!({"dm": "900", "callAnswer": true, "join": {"recording_notice": notice}}), &c).expect("answered");
-    let sent = api.calls_to("/api/v1/channels/900/call/join");
+    let sent = login.calls_to("/api/v1/channels/900/call/join");
     assert_eq!(sent.last().unwrap().1["recording_notice"], notice, "the answer rides to Sew as sent");
     assert_eq!(v["join"], call_join_answer(), "Sew's call/join answer unchanged");
     follower::release_all();
@@ -691,16 +877,18 @@ fn a_dm_controls_read_says_dm_and_never_the_agent_line() {
     crate::home_chat::set_deps(Some(deps_with(api.clone(), "127.0.0.1:9".into(), HomeChatFeatures::default())));
     sam_in_dm_900();
     let both = bff::perms::RECORD_CALLS | bff::perms::MANAGE_CHANNELS;
-    api.answer("/api/v1/channels/900", 200, json!({"channel": {"id": "900", "kind": "dm", "my_perms": bff::perms::RECORD_CALLS.to_string()}}));
-    let c = ctx(false, Arc::new(LoginSew::default()));
+    let login = Arc::new(LoginSew::default());
+    login.answer("/api/v1/channels/900", 200, json!({"channel": {"id": "900", "kind": "dm", "my_perms": bff::perms::RECORD_CALLS.to_string()}}));
+    let c = ctx(false, login.clone());
     let v = recording_controls(&sam(), &json!({"dm": "900"}), &c).expect("perms");
     assert_eq!((v["room"].as_str(), v["channelId"].as_str()), (Some("dm:900"), Some("900")));
     assert_eq!((v["recordCalls"].as_bool(), v["manageChannels"].as_bool()), (Some(true), Some(false)), "{v}");
-    assert_eq!(api.calls_to("/api/v1/channels/900")[0].0.as_deref(), Some("sews_first.x"));
-    api.answer("/api/v1/channels/900", 200, json!({"id": "900", "my_perms": both}));
+    assert_eq!(login.calls_to("/api/v1/channels/900")[0].0.as_deref(), Some(VOICE_TOKEN), "the call's session");
+    assert!(api.calls_to("/api/v1/channels/900").is_empty(), "never on the Home chat session");
+    login.answer("/api/v1/channels/900", 200, json!({"id": "900", "my_perms": both}));
     let v = recording_controls(&sam(), &json!({"dm": "900"}), &c).expect("perms at the top level");
     assert_eq!(v["myPerms"], both.to_string());
-    api.answer("/api/v1/channels/900", 200, json!({"id": "900"}));
+    login.answer("/api/v1/channels/900", 200, json!({"id": "900"}));
     assert_eq!(code(&recording_controls(&sam(), &json!({"dm": "900"}), &c).unwrap_err()), (502, "chat_unavailable"));
     assert_eq!(code(&recording_controls(&sam(), &json!({"dm": "901"}), &c).unwrap_err()), (404, "dm_not_found"));
 

@@ -1413,6 +1413,9 @@ pub fn features() -> Vec<&'static str> {
     if k2_core::recording::in_apps() {
         out.push(FEATURE_VOICE_RECORD);
     }
+    // DM calls on the voice BFF's session, as room joins (0.46.18): the
+    // phone offers DM calls only on a server that lists it.
+    out.push(crate::voice::dm_call::FEATURE_SESSION);
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1, §10):
     // listed only while the global switch is on (setting or env; the
     // setting defaults on from 0.46.11, `permission_default`). Its flip
@@ -1647,6 +1650,8 @@ mod tests {
                 "remote-desktop-v1",
                 // Sew 0.9.0's pin: voice:record in App roles.
                 "app-voice-record-v1",
+                // 0.46.18: DM calls on the voice BFF's session.
+                "dm-call-voice-session-v1",
                 "boot-status-views-v1"
             ];
         // Virtual desktops (prd-linux-virtual-desktop-v1 LD-16): Linux only,

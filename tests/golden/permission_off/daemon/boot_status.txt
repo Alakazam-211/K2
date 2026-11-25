@@ -106,4 +106,5 @@ features:
   project-icons-rev-v1
   remote-desktop-v1
   app-voice-record-v1
+  dm-call-voice-session-v1
   boot-status-views-v1

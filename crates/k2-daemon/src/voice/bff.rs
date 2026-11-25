@@ -774,7 +774,10 @@ pub fn cached_session(sid: &str, fresh: bool, d: &Deps, mint: impl FnOnce() -> R
 }
 
 /// One Sew call as the person; a 401 (the session ran out) renews once.
-fn as_person(p: &Person, d: &Deps, path: &str, body: &Value) -> Result<SewAnswer, Refusal> {
+/// The person's plain user session for this login (never act-as): room
+/// joins and every DM call route (`dm_call`) go through it, so Sew sees one
+/// session lineage and one device scope for the person's calls.
+pub(crate) fn as_person(p: &Person, d: &Deps, path: &str, body: &Value) -> Result<SewAnswer, Refusal> {
     let tok = session(p, d, false)?;
     let a = d.sew.post(Some(&tok), path, body).map_err(unreachable)?;
     if a.status != 401 {
@@ -1217,7 +1220,7 @@ pub mod perms {
 }
 
 /// One GET as the person; a 401 (the session ran out) renews once.
-fn get_as_person(p: &Person, d: &Deps, path: &str) -> Result<SewAnswer, Refusal> {
+pub(crate) fn get_as_person(p: &Person, d: &Deps, path: &str) -> Result<SewAnswer, Refusal> {
     let tok = session(p, d, false)?;
     let a = d.sew.get(Some(&tok), path).map_err(unreachable)?;
     if a.status != 401 {

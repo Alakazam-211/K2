@@ -6,7 +6,7 @@
 # cwd=<path>, cwd-gone, append=<word>). Escapes: \s space, \t tab, \n newline, \\ backslash, \xNN
 # a byte. Placeholders: {dir} {home} {k2home} {proj} {tmp} {fx} {sock} {port}, and {fresh:<name>}
 # (a copy of {fx}/<name> made for the one probe: a native run may write to it). partner: yes when a
-# partner box can have that environment (K2's ruling, m_whANAYZnNb).
+# partner box can have that environment (off Unix and test-only paths are not).
 variant	group	partner	set	unset	special	reason
 proxy-http	proxy	yes	https_proxy=http://127.0.0.1:9	-	-	an http proxy for https (nothing listens on port 9)
 proxy-http-upper	proxy	yes	HTTPS_PROXY=http://127.0.0.1:9	-	-	the same, upper case

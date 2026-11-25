@@ -278,8 +278,17 @@ mod tests {
             }
         }
         assert!(renderer_files.len() >= 4 && unsessioned.is_empty(), "renderer worker spawns outside their own session: {unsessioned:?}");
-        assert_eq!(keeping.len(), 1, "spawns that keep the daemon's session: {keeping:?}");
-        assert!(keeping[0].contains("k2-daemon/src/vault/run.rs:"), "{keeping:?}");
+        // Two keep the session on purpose: k2 vault run's child; and the
+        // agent exec helper's program under the Unix-socket block
+        // (agent_fence.rs, Agent Isolation M2), which runs inside the
+        // agent's own session, never the daemon's: the supervisor's child
+        // keeps the agent's terminal.
+        assert_eq!(keeping.len(), 2, "spawns that keep the daemon's session: {keeping:?}");
+        assert!(keeping.iter().any(|k| k.contains("k2-daemon/src/vault/run.rs:")), "{keeping:?}");
+        assert!(
+            keeping.iter().all(|k| k.contains("k2-daemon/src/vault/run.rs:") || k.contains("k2-core/src/agent_fence.rs:")),
+            "{keeping:?}"
+        );
         assert!(groups.iter().all(|g| g.contains("k2-daemon/src/vault/run.rs:")), "process_group outside k2 vault run: {groups:?}");
     }
 

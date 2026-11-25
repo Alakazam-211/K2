@@ -394,9 +394,35 @@ pub fn binary_supports_no_daemon(program: &str, search_path: &str) -> Result<(),
     }
 }
 
+/// The agent workspace `binary` (or where it resolves) lies in, if any.
+/// K2 probes only programs that aren't an agent's own files: a program in
+/// an agent's workspace is never run by a probe.
+pub(crate) fn in_an_agents_workspace(binary: &Path) -> Option<std::path::PathBuf> {
+    let db = crate::db::try_shared()?;
+    let paths: Vec<std::path::PathBuf> = {
+        let conn = db.lock();
+        let mut st = conn.prepare("SELECT path FROM projects").ok()?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).ok()?;
+        rows.flatten().map(std::path::PathBuf::from).collect()
+    };
+    let real = dunce::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
+    paths.into_iter().find(|w| {
+        let wc = dunce::canonicalize(w).unwrap_or_else(|_| w.clone());
+        !w.as_os_str().is_empty() && (binary.starts_with(w) || real.starts_with(&wc))
+    })
+}
+
 /// Run `<binary> <flag>` (stdin closed, `PROBE_TIMEOUT` cap) and return
 /// stdout. Only `--help` or `--version`: each prints and exits, never a TUI.
 pub(crate) fn probe(binary: &Path, flag: &str, search_path: &str) -> Result<String, String> {
+    if let Some(ws) = in_an_agents_workspace(binary) {
+        return Err(format!(
+            "{} is in an agent's workspace ({}); {} never runs an agent's own files itself",
+            binary.display(),
+            ws.display(),
+            crate::brand::PRODUCT_NAME
+        ));
+    }
     let program = binary.to_string_lossy().into_owned();
     let (prog, args) =
         crate::terminal::win_cmd::resolve_command(&program, &[flag.to_string()], search_path);
@@ -457,6 +483,36 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// A program inside an agent's workspace is never run by a probe: the
+    /// probe answers that it doesn't, and the program leaves no trace. One
+    /// outside every workspace is probed as before.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_never_runs_a_program_in_an_agents_workspace() {
+        let _db = crate::db::scoped_for_test();
+        let root = crate::test_env::short_tmp(format!("k2probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let ws = root.join("ws");
+        let outside = root.join("tools");
+        std::fs::create_dir_all(ws.join("bin")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        crate::db::shared()
+            .lock()
+            .execute("INSERT INTO projects (id, name, path, handle) VALUES ('p1', 'probe-ws', ?1, 'probe-ws')", [ws.to_string_lossy()])
+            .unwrap();
+        let marker = root.join("ran");
+        let body = format!("#!/bin/sh\necho ran > {}\necho '  --no-daemon  Run without the shared app-server'\n", marker.display());
+        write_exec(&ws.join("bin/codex"), &body);
+        let e = probe(&ws.join("bin/codex"), "--help", "").unwrap_err();
+        assert!(e.contains("agent's workspace"), "{e}");
+        assert!(!marker.exists(), "the program in the workspace never ran");
+        write_exec(&outside.join("codex"), &body);
+        first_run(&outside.join("codex"));
+        let _ = std::fs::remove_file(&marker);
+        assert!(probe(&outside.join("codex"), "--help", "").unwrap().contains("--no-daemon"), "outside every workspace: probed as before");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn write_exec(path: &Path, body: &str) {
         crate::test_env::write_executable(path, body);
     }

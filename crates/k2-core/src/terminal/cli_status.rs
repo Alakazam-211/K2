@@ -397,6 +397,10 @@ fn probe_version(
     guard: &GuardEnv,
 ) -> Result<String, String> {
     let program = bin.to_string_lossy().into_owned();
+    // Never a program in an agent's workspace (as the Codex probe).
+    if let Some(ws) = super::codex_no_daemon::in_an_agents_workspace(bin) {
+        return Err(format!("not checked: {} is in an agent's workspace ({})", bin.display(), ws.display()));
+    }
     match super::agent_spawn_guard::resolve_program(&program, "", guard) {
         // A shim dir maps the program elsewhere: not this file, don't run it.
         Ok(p) if p == program => {}

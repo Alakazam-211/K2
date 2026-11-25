@@ -947,7 +947,12 @@ impl DaemonPtySession {
         // (durable `store_args` above stay clean); skipped for microVM
         // cells, whose program runs in their own guest.
         let mut spawn_args = spawn_args;
-        if let Some(prog) = guarded_program.as_deref() {
+        // A fenced session's program is never probed: the `--help` probe
+        // below and the later `--version` read (from the launch recorded
+        // here) are skipped. Its Codex runs in the agent's own CODEX_HOME,
+        // so the shared app-server is that agent's alone.
+        let fenced = cfg.isolation.as_ref().is_some_and(|i| i.fence);
+        if let Some(prog) = guarded_program.as_deref().filter(|_| !fenced) {
             // The daemon's per-tab passport check reads this tab's Codex
             // version later, from the same binary and PATH. Nothing runs here.
             if crate::terminal::codex_no_daemon::is_codex_program(prog) {

@@ -110,6 +110,7 @@ last() { tail -1 "$LOG" | python3 -c "import json,sys; v=json.load(sys.stdin); x
 last_key() { tail -1 "$LOG" | python3 -c "import json,sys; b=json.load(sys.stdin)['body']; print(json.dumps(b[sys.argv[1]], sort_keys=True) if sys.argv[1] in b else '-')" "$1"; }
 
 echo "== label add / remove =="
+# covers: compute node label
 out="$("$K2" compute node label node-a add release for:0.46.18 </dev/null)"
 expect_eq "add path" "$(last path)" "/cli/compute/nodes/labels/set"
 expect_eq "add body" "$(last body)" '{"add": ["release", "for:0.46.18"], "node": "node-a"}'
@@ -121,6 +122,7 @@ expect_eq "remove body" "$(last body)" '{"node": "node-a", "remove": ["for:0.46.
 expect_has "remove renders" "$out" "node-a: labels release."
 
 echo "== labels =="
+# covers: compute node labels
 out="$("$K2" compute node labels </dev/null)"
 expect_eq "labels path" "$(last path)" "/cli/compute/nodes/labels"
 expect_has "node-a line" "$out" "node-a: release"
@@ -128,6 +130,7 @@ expect_has "node-b line" "$out" "node-b: (no labels)"
 expect_has "says they are this server's" "$out" "(these labels are this server's own"
 "$K2" compute node labels node-b </dev/null >/dev/null
 expect_eq "one node: ?node=" "$(last query)" '{"node": "node-b"}'
+# covers: compute node labels --json
 out="$("$K2" compute node labels --json </dev/null)"
 expect_has "--json is the answer" "$out" '"nodes": ['
 

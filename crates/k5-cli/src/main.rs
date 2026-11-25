@@ -158,8 +158,8 @@ fn main() {
     }
     trace::mark("port");
     // No `HOME`: the shell's prelude stops at its K2 home (`set -u`), so
-    // every command stops here, before anything is read or sent (K2's
-    // ruling: never a guessed home, see offline::HOME_UNSET_LINE).
+    // every command stops here, before anything is read or sent (never a
+    // guessed home: see offline::HOME_UNSET_LINE).
     match offline::home_check(&offline::Env::current()) {
         offline::HomeCheck::Go => {}
         offline::HomeCheck::Refuse => {

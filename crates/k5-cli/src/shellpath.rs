@@ -248,8 +248,8 @@ pub fn cd_dash(dir: &str) -> CdDash {
 
 /// What bash prints for `cd <dir>` with an invalid option `c`: its error
 /// (bash puts the script's name and line before it: `<path>: line <n>: `;
-/// the binary doesn't, K2's ruling, the named difference
-/// `cd-option-prefix`) and the usage line.
+/// the binary doesn't: the named difference `cd-option-prefix`) and the
+/// usage line.
 pub fn cd_refusal(c: char) -> String {
     format!("cd: -{c}: invalid option\n{CD_USAGE}\n")
 }

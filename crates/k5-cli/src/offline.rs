@@ -249,7 +249,7 @@ pub enum HomeCheck {
     Shell,
 }
 
-/// The refusal with no `HOME` (K2's ruling; the named difference
+/// The refusal with no `HOME` (the named difference
 /// `home-unset-prefix`). bash's prelude stops there too, under `set -u`
 /// at `K2_HOME="${HOME}/.k2"`, with its own words: `<path to cli/k2>:
 /// line <n>: HOME: unbound variable`, exit 1. The binary never guesses

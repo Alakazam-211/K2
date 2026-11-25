@@ -43,8 +43,8 @@
 //! a number past bash's 64-bit range. An answer that is not UTF-8 is read
 //! with U+FFFD for each bad byte, as [`super::inbox`].
 //!
-//! Where the binary differs on purpose (`sim-install-dash-path`, K2's
-//! ruling 1): an install path starting with `-` reaches bash's `dirname`
+//! Where the binary differs on purpose (`sim-install-dash-path`, a native
+//! refusal for input bash only half-handles): an install path starting with `-` reaches bash's `dirname`
 //! and `basename` as their options, and the run stops with the system
 //! tools' own usage lines (GNU's or BSD's words), exit 1. The binary
 //! refuses it in its own words, exit 1 too. Neither sends anything.
@@ -614,8 +614,7 @@ fn parse_verb(
             let dir = dirname(p);
             // `dirname` and `basename` would read the path as their
             // options and fail in the system's own words: refused here
-            // instead (K2's ruling 1, the named difference
-            // sim-install-dash-path).
+            // instead (the named difference sim-install-dash-path).
             if p.starts_with('-') || dir.starts_with('-') {
                 // Exit 1, as bash stops there.
                 return Err(Die {

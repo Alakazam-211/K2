@@ -216,12 +216,11 @@ pub enum Compare {
     MktempTried { stem: &'static str },
     /// `cd` with a folder named as an option it doesn't take: bash's error
     /// line starts with the script's path and line (`<cli/k2>: line <n>: `),
-    /// the binary's doesn't (K2's ruling, the named difference
-    /// `cd-option-prefix`). Everything as [`Compare::Exact`] but that.
+    /// the binary's doesn't (the named difference `cd-option-prefix`). Everything as [`Compare::Exact`] but that.
     CdOptionPrefix,
-    /// No `HOME` (K2's ruling, the named difference `home-unset-prefix`):
-    /// bash's prelude stops under `set -u` with `<cli/k2>: line <n>: HOME:
-    /// unbound variable`; the binary refuses at its front in K2's words
+    /// No `HOME` (the named difference `home-unset-prefix`): bash's
+    /// prelude stops under `set -u` with `<cli/k2>: line <n>: HOME:
+    /// unbound variable`; the binary refuses at its front in its own words
     /// ([`k5_cli::offline::HOME_UNSET_LINE`]). Everything else as
     /// [`Compare::Exact`] (exit 1, nothing on stdout, nothing sent).
     HomeUnset,

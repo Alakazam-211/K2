@@ -10,7 +10,7 @@
 //!   otherwise).
 //! - HOME unset ([`k5_cli::offline::home_check`]): bash's prelude stops
 //!   under `set -u` at its K2 home, for every command; the binary refuses
-//!   at its front, in K2's words (the named difference
+//!   at its front, in its own words (the named difference
 //!   `home-unset-prefix`), and reads and sends nothing first. An empty
 //!   `HOME` is a `HOME`.
 //! - `CDPATH` ([`k5_cli::shellpath::cdpath`]): searched only for a
@@ -98,8 +98,8 @@ fn a_pwd_bash_would_tidy() {
     }
 }
 
-/// No `HOME`: every form stops at the front (`home-unset-prefix`, K2's
-/// ruling): one kind of form each, a page, a daemon call, an offline line
+/// No `HOME`: every form stops at the front (`home-unset-prefix`): one
+/// kind of form each, a page, a daemon call, an offline line
 /// and `--version`. Nothing is sent.
 #[test]
 fn home_unset_is_refused_at_the_front() {
@@ -449,7 +449,7 @@ fn with_dash_file(r: &Rig) {
 }
 
 /// `sim install` with a path starting with `-` (the named difference
-/// `sim-install-dash-path`, K2's ruling 1): bash's `dirname` and `basename`
+/// `sim-install-dash-path`): bash's `dirname` and `basename`
 /// read it as their options and the run stops with the system tools' own
 /// usage lines, exit 1; the binary refuses it in its own words, exit 1 too.
 /// Neither sends anything: only the words differ.

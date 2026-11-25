@@ -339,3 +339,64 @@ fn a_folder_cd_reads_as_a_bad_option() {
         });
     }
 }
+
+fn with_dash_file(r: &Rig) {
+    owner_and_port(r);
+    std::fs::write(r.proj.join("-app.apk"), "x").unwrap();
+}
+
+/// `sim install` with a path starting with `-` (the named difference
+/// `sim-install-dash-path`, K2's ruling 1): bash's `dirname`, `basename`
+/// and `cd` read it as their options and bash sends the install with a
+/// mangled path; the binary refuses it, exit 2, and sends nothing.
+#[test]
+fn sim_install_refuses_a_dash_path() {
+    let rig = Rig::new("sim", "dashpath");
+    let c = case(
+        "sim install -app.apk",
+        &["install", "-app.apk"],
+        &[],
+        vec![ok("{}")],
+        with_dash_file,
+        0,
+        1,
+    );
+    rig.prepare(Side::Bash, &c);
+    let b = rig.run(true, &c);
+    let sent = rig.read(Side::Bash, false, c.name);
+    assert_eq!(sent.len(), 1, "bash sends the install: {b:?}");
+    let head = String::from_utf8_lossy(&sent[0].bytes).into_owned();
+    assert!(
+        head.starts_with("POST /cli/sim/install "),
+        "bash's request: {head}"
+    );
+    assert!(
+        !head.contains(&*rig.proj.join("-app.apk").to_string_lossy()),
+        "bash sent the path as it is: the difference no longer holds: {head}"
+    );
+    let r = Case {
+        replies: vec![],
+        ..c
+    };
+    rig.prepare(Side::Rust, &r);
+    let out = rig.run(false, &r);
+    let sent = rig.read(Side::Rust, true, r.name);
+    assert!(sent.is_empty(), "the binary sent {} request(s)", sent.len());
+    let cli = k2_client::cli_name!();
+    let hint = format!(
+        "{cli} sim install: a path starting with \"-\" can't be read safely; use ./-app.apk instead"
+    );
+    assert_eq!(
+        (out.code, out.stdout.as_str(), out.stderr.as_str()),
+        (
+            Some(2),
+            "",
+            format!(
+                "Error: {hint}\n{{\"error\": {{\"code\": \"usage\", \"hint\": \"{}\"}}}}\n",
+                hint.replace('"', "\\\"")
+            )
+            .as_str()
+        ),
+        "the binary's refusal"
+    );
+}

@@ -37,11 +37,17 @@
 //! bash's own edges, where bash prints its own error line: a
 //! `--workspace` folder `cd` reads as options it takes or one `CDPATH`
 //! moves ([`crate::shellpath::cd_to_shell`]; one named as an option `cd`
-//! doesn't take is `cd`'s usage error here), an install path `dirname`
-//! reads as an option (a leading `-`) or one `CDPATH` would move, a duration with
+//! doesn't take is `cd`'s usage error here), an install path whose folder
+//! `CDPATH` would move, a duration with
 //! other than ASCII in it (Python's `\d` and `float` take any digits), and
 //! a number past bash's 64-bit range. An answer that is not UTF-8 is read
 //! with U+FFFD for each bad byte, as [`super::inbox`].
+//!
+//! Where the binary differs on purpose (`sim-install-dash-path`, K2's
+//! ruling 1): an install path starting with `-` reaches bash's `dirname`,
+//! `basename` and `cd` as their options, and bash goes on to send the
+//! install with a mangled path. The binary refuses it before anything is
+//! sent: its usage error, exit 2.
 
 use super::{curl_port, get, py_d, py_get, py_iter, py_left, py_space, raised, Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -606,7 +612,16 @@ fn parse_verb(
                 ));
             }
             let dir = dirname(p);
-            if p.starts_with('-') || dir.starts_with('-') || cd_moved(&dir) {
+            // `dirname`, `basename` and `cd` would read the path as their
+            // options, and bash goes on to send a mangled path: refused
+            // here, before anything is sent (K2's ruling 1, the named
+            // difference sim-install-dash-path).
+            if p.starts_with('-') || dir.starts_with('-') {
+                return Err(usage(format!(
+                    "{n} sim install: a path starting with \"-\" can't be read safely; use ./{p} instead"
+                )));
+            }
+            if cd_moved(&dir) {
                 return Ok(Parsed::Shell);
             }
             // The absolute path is made once the plan runs (`cd`).

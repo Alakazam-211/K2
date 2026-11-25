@@ -1,4 +1,4 @@
-// The hosted web build's licence notices (Kessel Steward findings G2 and G3).
+// The hosted web build's licence notices: third-party licence notices must ship in every package.
 //
 // The web app bundles the kept shiki grammars, so the texts their licences
 // require ship with it, as they do in the desktop app's resources

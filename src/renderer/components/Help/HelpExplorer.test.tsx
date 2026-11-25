@@ -112,7 +112,7 @@ describe('the rail lists the CLI tools and the pages', () => {
     expect(screen.getByTestId('help-noun-k2:vault')).toBeTruthy()
   })
 
-  // Kessel Steward G2: the web app links the licence notices its build
+  // Third-party licence notices: the web app links the notices its build
   // carries (scripts/notices/web-notices-plugin.mjs); the desktop app has
   // them in its resources, so no link there.
   it('the web app links Third-party notices under Pages; the desktop app does not', () => {

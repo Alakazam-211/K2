@@ -74,7 +74,7 @@ if ! printf '%s\n' "$DEB_LIST" | grep '/dfn3/dfn3_ll\.nnef\.tar$' >/dev/null; th
     echo "FATAL: the deb has no dfn3/dfn3_ll.nnef.tar (noise removal's DeepFilterNet3)" >&2
     exit 1
 fi
-# The third-party licence notices (Kessel Steward G3; tauri.conf.json's
+# The third-party licence notices (they must ship in every package; tauri.conf.json's
 # bundle.resources, under _up_/resources/; scripts/check-third-party-notices.sh).
 if ! printf '%s\n' "$DEB_LIST" | grep '/_up_/resources/THIRD-PARTY-NOTICES\.md$' >/dev/null; then
     echo "FATAL: the deb has no _up_/resources/THIRD-PARTY-NOTICES.md (third-party licence notices)" >&2

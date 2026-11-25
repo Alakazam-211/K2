@@ -32,7 +32,7 @@ jobs:
       - name: Arch/Omarchy packaging lock (O14–O27 files)
         run: bash tests/packaging/arch-omarchy-bundle.sh
 
-      # Kessel Steward G2/G3: the third-party notices file ships in the app,
+      # Third-party licence notices must ship in every package: the app,
       # the server .deb, the Arch package and the web build.
       - name: Third-party notices ship in every output (no build)
         run: bash scripts/check-third-party-notices.sh

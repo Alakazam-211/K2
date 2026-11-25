@@ -223,7 +223,7 @@ package() {
 
     install -Dm644 "${tree}/LICENSE.md" \
         "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.md"
-    # Third-party licence notices (Kessel Steward G3): the notices file, and
+    # Third-party licence notices (they must ship in every package): the notices file, and
     # the texts the desktop app carries in its resources (--no-bundle above
     # leaves Tauri's resources out, so they are installed here).
     install -Dm644 "${tree}/resources/THIRD-PARTY-NOTICES.md" \

@@ -112,7 +112,7 @@ install -D -m 0755 "$NODE_BIN" "$PKGROOT/usr/bin/k2-node"
 # The k5 command's program, where k2-client's cli_install looks for it
 # (beside the daemon). Off by default.
 install -D -m 0755 "$K5_BIN" "$PKGROOT/usr/bin/k5-cli"
-# Licence notices (Kessel Steward G3, release sign-off area): the binaries
+# Licence notices (they must ship in every package): the binaries
 # above carry third-party code (the PostgreSQL parser, SQLite, ...) whose
 # licences want their notices shipped with it.
 # scripts/check-third-party-notices.sh checks the built .deb below.

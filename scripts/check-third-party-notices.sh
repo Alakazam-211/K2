@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check-third-party-notices.sh — the third-party licence notices ship with
-# every K2 output (Kessel Steward findings G2 and G3).
+# every K2 output: third-party licence notices must ship in every package.
 #
 #   scripts/check-third-party-notices.sh               the source tree and the
 #                                                      packaging (no build)
@@ -70,7 +70,7 @@ sync_notice() {
     echo "check-third-party-notices: copied NOTICE.md into $FILE_REL"
 }
 
-# The file itself: the notices G3 asks for, and NOTICE.md unchanged.
+# The file itself: the notices it must hold, and NOTICE.md unchanged.
 check_file() {
     if [ ! -f "$FILE" ]; then
         bad "$FILE_REL is missing"
@@ -103,7 +103,7 @@ check_file() {
     elif ! notice_copy | cmp -s - "$ROOT/NOTICE.md"; then
         bad "$FILE_REL's copy of NOTICE.md differs from NOTICE.md (run scripts/check-third-party-notices.sh --sync)"
     elif [ "$problems" -eq "$before" ]; then
-        ok "$FILE_REL holds the G3 notices and NOTICE.md unchanged"
+        ok "$FILE_REL holds the third-party notices and NOTICE.md unchanged"
     fi
 }
 

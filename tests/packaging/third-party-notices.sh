@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-third-party-notices.sh on a copy of the tree: it passes on
 # the real files, and fails on each way an output can lose the notices
-# (Kessel Steward findings G2 and G3). No build; temp dirs only.
+# (third-party licence notices must ship in every package). No build; temp dirs only.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

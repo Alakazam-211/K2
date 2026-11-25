@@ -393,7 +393,11 @@ mod tests {
         assert_eq!(with("ws", None, &[]), CdPath::NotSearched);
         assert_eq!(with("ws", Some(""), &[]), CdPath::NotSearched);
         for dir in ["/a", ".", "..", "./ws", "../ws", ""] {
-            assert_eq!(with(dir, Some("/c"), &["/c/ws"]), CdPath::NotSearched, "{dir}");
+            assert_eq!(
+                with(dir, Some("/c"), &["/c/ws"]),
+                CdPath::NotSearched,
+                "{dir}"
+            );
         }
         // `.k2` is a relative name: searched.
         assert_eq!(with(".k2", Some("/c"), &["/c/ws"]), CdPath::NoMatch);
@@ -402,9 +406,15 @@ mod tests {
         assert_eq!(with("ws", Some("/c/"), &["/c/ws"]), found("/c/ws", true));
         assert_eq!(with("ws", Some("/n:/c"), &["/c/ws"]), found("/c/ws", true));
         // `.` is an entry like any other: it prints.
-        assert_eq!(with("ws", Some(".:/c"), &["./ws", "/c/ws"]), found("./ws", true));
+        assert_eq!(
+            with("ws", Some(".:/c"), &["./ws", "/c/ws"]),
+            found("./ws", true)
+        );
         // An empty entry is the current folder, and prints nothing.
-        assert_eq!(with("ws", Some(":/c"), &["./ws", "/c/ws"]), found("./ws", false));
+        assert_eq!(
+            with("ws", Some(":/c"), &["./ws", "/c/ws"]),
+            found("./ws", false)
+        );
         assert_eq!(with("ws", Some("/c:"), &["./ws"]), found("./ws", false));
         assert_eq!(with("ws", Some("/c"), &["./ws"]), CdPath::NoMatch);
     }

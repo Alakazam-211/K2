@@ -136,7 +136,10 @@ fn home_unset_is_refused_at_the_front() {
 fn a_bad_port_setting_comes_first() {
     let rig = Rig::new("agent", "nohome-port");
     rig.check(&with(
-        vec![("HOME", UNSET.to_string()), ("K2_PORT", "70000".to_string())],
+        vec![
+            ("HOME", UNSET.to_string()),
+            ("K2_PORT", "70000".to_string()),
+        ],
         case(
             "agent list, HOME unset, K2_PORT 70000",
             &["list"],
@@ -155,7 +158,12 @@ fn a_bad_port_setting_comes_first() {
 fn an_empty_home_is_a_home() {
     for (verb, args, replies, requests) in [
         ("permission", &["help"][..], vec![ok(ON)], 1),
-        ("agent", &["list"][..], vec![ok(r#"{"ok":true,"agents":[]}"#)], 1),
+        (
+            "agent",
+            &["list"][..],
+            vec![ok(r#"{"ok":true,"agents":[]}"#)],
+            1,
+        ),
     ] {
         let rig = Rig::new(verb, "emptyhome");
         let args: &'static [&'static str] = Box::leak(args.to_vec().into_boxed_slice());
@@ -208,7 +216,8 @@ fn home_unset_reads_and_sends_nothing() {
     }
     fifo(&secrets.join(".k2-passport"));
     let port = rig.stub().port.to_string();
-    let table = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/router_forms.tsv");
+    let table =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/router_forms.tsv");
     let forms = std::fs::read_to_string(table).expect("router_forms.tsv");
     let mut lines: Vec<Vec<String>> = Vec::new();
     for row in forms.lines().filter(|l| !l.starts_with('#')).skip(1) {
@@ -247,7 +256,10 @@ fn home_unset_reads_and_sends_nothing() {
         );
         assert_eq!(got, (Some(1), true, want.clone()), "{who}");
     }
-    assert!(rig.stub().take_log().is_empty(), "a request reached the stub");
+    assert!(
+        rig.stub().take_log().is_empty(),
+        "a request reached the stub"
+    );
 }
 
 /// A `CDPATH` folder with `ws/` in it.
@@ -435,9 +447,10 @@ fn with_dash_file(r: &Rig) {
 }
 
 /// `sim install` with a path starting with `-` (the named difference
-/// `sim-install-dash-path`, K2's ruling 1): bash's `dirname`, `basename`
-/// and `cd` read it as their options and bash sends the install with a
-/// mangled path; the binary refuses it, exit 2, and sends nothing.
+/// `sim-install-dash-path`, K2's ruling 1): bash's `dirname` and `basename`
+/// read it as their options and the run stops with the system tools' own
+/// usage lines, exit 1; the binary refuses it with its usage error, exit
+/// 2. Neither sends anything.
 #[test]
 fn sim_install_refuses_a_dash_path() {
     let rig = Rig::new("sim", "dashpath");
@@ -450,28 +463,19 @@ fn sim_install_refuses_a_dash_path() {
         0,
         1,
     );
-    // Bash never refuses it with this line: on Linux it sends the install
-    // with a mangled path; macOS's dirname and basename fail and it stops
-    // with their usage lines. Either way not the path as it is.
+    // Bash (3.2 on macOS and 5.2 on Linux alike): dirname and basename
+    // read the path as their options and fail, the assignment fails under
+    // set -e, and the run stops with their usage lines, exit 1, nothing
+    // sent. Their words are the system's own (GNU's or BSD's).
     rig.prepare(Side::Bash, &c);
     let b = rig.run(true, &c);
     let sent = rig.read(Side::Bash, false, c.name);
-    assert!(sent.len() <= 1, "bash sent {} requests: {b:?}", sent.len());
+    assert!(sent.is_empty(), "bash sent {} request(s): {b:?}", sent.len());
+    assert_eq!((b.code, b.stdout.as_str()), (Some(1), ""), "bash: {b:?}");
     assert!(
-        !b.stderr.contains("can't be read safely"),
-        "bash refuses it now: the difference no longer holds: {b:?}"
+        b.stderr.starts_with("dirname: ") && b.stderr.contains("\nbasename: "),
+        "bash's stderr: {b:?}"
     );
-    for r in &sent {
-        let head = String::from_utf8_lossy(&r.bytes).into_owned();
-        assert!(
-            head.starts_with("POST /cli/sim/install "),
-            "bash's request: {head}"
-        );
-        assert!(
-            !head.contains(&*rig.proj.join("-app.apk").to_string_lossy()),
-            "bash sent the path as it is: the difference no longer holds: {head}"
-        );
-    }
     rig.stub_of(Side::Bash).reset(&[]);
     let r = Case {
         replies: vec![],

@@ -44,10 +44,10 @@
 //! with U+FFFD for each bad byte, as [`super::inbox`].
 //!
 //! Where the binary differs on purpose (`sim-install-dash-path`, K2's
-//! ruling 1): an install path starting with `-` reaches bash's `dirname`,
-//! `basename` and `cd` as their options, and bash goes on to send the
-//! install with a mangled path. The binary refuses it before anything is
-//! sent: its usage error, exit 2.
+//! ruling 1): an install path starting with `-` reaches bash's `dirname`
+//! and `basename` as their options, and the run stops with the system
+//! tools' own usage lines (GNU's or BSD's words), exit 1. The binary
+//! refuses it with its usage error, exit 2. Neither sends anything.
 
 use super::{curl_port, get, py_d, py_get, py_iter, py_left, py_space, raised, Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -612,10 +612,10 @@ fn parse_verb(
                 ));
             }
             let dir = dirname(p);
-            // `dirname`, `basename` and `cd` would read the path as their
-            // options, and bash goes on to send a mangled path: refused
-            // here, before anything is sent (K2's ruling 1, the named
-            // difference sim-install-dash-path).
+            // `dirname` and `basename` would read the path as their
+            // options and fail in the system's own words: refused here
+            // instead (K2's ruling 1, the named difference
+            // sim-install-dash-path).
             if p.starts_with('-') || dir.starts_with('-') {
                 return Err(usage(format!(
                     "{n} sim install: a path starting with \"-\" can't be read safely; use ./{p} instead"

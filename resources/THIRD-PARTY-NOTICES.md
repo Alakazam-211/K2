@@ -508,7 +508,7 @@ included libgit2, Alakazam Labs will give anyone who asks a complete,
 machine-readable copy of the corresponding source code of libgit2 as it was
 included in those releases, on a medium customarily used for software
 interchange, for a charge no more than the cost of physically performing
-the distribution. To ask, write to Alakazam Labs at support@k2.dev.
+the distribution. To ask, write to Alakazam Labs at hello@alakazamlabs.com.
 
 ### libgit2 1.8.1 `COPYING` (`libgit2-sys-0.17.0+1.8.1/libgit2/COPYING`)
 

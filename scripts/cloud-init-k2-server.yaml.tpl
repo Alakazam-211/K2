@@ -19,6 +19,7 @@ write_files:
     content: |
       K2_TUNNEL_TOKEN=${K2_TUNNEL_TOKEN}
       K2_SUBDOMAIN=${K2_SUBDOMAIN}
+      K2_HOSTED_CLAIM=1
       K2_CALLBACK_URL=${K2_CALLBACK_URL}
       K2_CALLBACK_TOKEN=${K2_CALLBACK_TOKEN}
 
@@ -33,7 +34,7 @@ runcmd:
     fi
     set -a; . /etc/k2-provision.env; set +a
     /opt/k2/provision-k2-server.sh 2>&1 | tee /var/log/k2-provision.log
-    # The generated owner password (if any) is in the log ONLY when no
-    # callback URL was provided; the control plane normally receives it
-    # via the callback and the log stays credential-free.
+    # 0.46.18: the provisioner makes no login, so no password is ever in
+    # the log; the k2.dev dashboard claims the first owner (the marker
+    # K2_HOSTED_CLAIM=1 writes lets it, once).
     shred -u /etc/k2-provision.env

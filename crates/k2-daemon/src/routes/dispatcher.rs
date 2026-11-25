@@ -1683,15 +1683,15 @@ async fn handle_one_request(
     // audit record (G6).
     let mut pre_read_body: Option<Vec<u8>> = None;
     let mut attested: Option<k2_core::edge_attest::Attestation> = None;
-    // 0.46.18: a server's first owner login, claimed from the k2.dev
-    // dashboard (`first_owner_claim`). Off the tunnel, or without the
-    // dashboard's own signature: a plain 404, whoever asks (the owner token
-    // and agents included). The reason is only audited.
+    // 0.46.18: a hosted server's first owner login, claimed from the k2.dev
+    // dashboard (`first_owner_claim`). Off the tunnel, another brand, no
+    // hosted-claim marker or no dashboard signature: a plain 404, whoever
+    // asks (the owner token and agents included). Only audited.
     if path == crate::first_owner_claim::PATH {
         let body = if is_post { super::http::read_post_body(&mut *stream, &mut buf).await } else { let _ = stream.read(&mut buf).await; Vec::new() };
         let header = super::http::extract_header(&headers_blob, k2_core::edge_attest::HEADER_NAME);
         let expected_sub = k2_core::tunnel::config::load().map(|c| c.subdomain.trim().to_ascii_lowercase()).unwrap_or_default();
-        match crate::first_owner_claim::admit(ingress, is_post, header, &path, &body, &expected_sub, k2_core::edge_attest::now_unix()) {
+        match crate::first_owner_claim::admit(ingress, is_post, &crate::first_owner_claim::Opener::here(), header, &path, &body, &expected_sub, k2_core::edge_attest::now_unix()) {
             Ok(att) => {
                 let via = format!("edge:{}", att.kid);
                 let r = tokio::task::spawn_blocking(move || crate::first_owner_claim::handle(&body, &via))

@@ -34,7 +34,7 @@ pub mod session;
 // crate's root, lib.rs), as consts, the command's aliases with their modes, and the
 // brand's id.
 pub use k2_brand::{
-    AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, CLI_NO_BASH, LOGIN_NAME,
+    AliasMode, BRAND_ID, CLI_ALIASES, CLI_ALIAS_MODES, CLI_NAME, CLI_NO_BASH, IS_OURS, LOGIN_NAME,
     PRODUCT_NAME,
 };
 

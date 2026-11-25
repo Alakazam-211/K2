@@ -748,6 +748,7 @@ mod tests {
 
     #[test]
     fn dashboard_steps_trust_only_the_baked_dashboard_keys_in_a_release_build() {
+        const BOX: &str = "box-a";
         crate::tunnel::test_support::with_temp_home(|| {
             // No file: the baked dashboard key alone, never the app Worker's.
             let keys = dashboard_key_set(false);
@@ -770,15 +771,15 @@ mod tests {
             );
             let body = b"{}";
             let t = now();
-            let h = mine.header("POST", "/cli/users/claim-first-owner", SUB, t, &random_nonce(), "-", body);
+            let h = mine.header("POST", "/cli/users/claim-first-owner", BOX, t, &random_nonce(), "-", body);
             assert_eq!(
-                verify_with_keys(Some(&h), "POST", "/cli/users/claim-first-owner", body, SUB, t, &release),
+                verify_with_keys(Some(&h), "POST", "/cli/users/claim-first-owner", body, BOX, t, &release),
                 Err(AttestError::BadSignature),
                 "a key planted under the dashboard's kid doesn't verify"
             );
-            let h = extra.header("POST", "/cli/users/claim-first-owner", SUB, t, &random_nonce(), "-", body);
+            let h = extra.header("POST", "/cli/users/claim-first-owner", BOX, t, &random_nonce(), "-", body);
             assert_eq!(
-                verify_with_keys(Some(&h), "POST", "/cli/users/claim-first-owner", body, SUB, t, &release),
+                verify_with_keys(Some(&h), "POST", "/cli/users/claim-first-owner", body, BOX, t, &release),
                 Err(AttestError::UnknownKid)
             );
             // The ordinary trusted set takes the file (login keeps working).
@@ -787,8 +788,8 @@ mod tests {
             let app = EdgeSigner::generate("k2-edge-app-test").unwrap();
             app.install_trust_file().unwrap();
             assert!(!dashboard_keys().contains_key("k2-edge-app-test"));
-            let h = app.header("POST", "/cli/users/claim-first-owner", SUB, t, &random_nonce(), "-", body);
-            assert_eq!(verify_dashboard(Some(&h), "POST", "/cli/users/claim-first-owner", body, SUB, t), Err(AttestError::UnknownKid));
+            let h = app.header("POST", "/cli/users/claim-first-owner", BOX, t, &random_nonce(), "-", body);
+            assert_eq!(verify_dashboard(Some(&h), "POST", "/cli/users/claim-first-owner", body, BOX, t), Err(AttestError::UnknownKid));
         });
     }
 

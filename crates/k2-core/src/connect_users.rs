@@ -715,6 +715,29 @@ struct Store {
     /// of these, so a removed person's id never names someone else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     retired_ids: Vec<String>,
+    /// 0.46.18: the hosted first-owner claim was used (when, and by whom).
+    /// Set once, never cleared: removing, demoting or disabling logins
+    /// doesn't touch it, so the claim never opens a second time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_owner_claimed: Option<String>,
+}
+
+/// The hosted first-owner claim's record ([`Store::first_owner_claimed`]):
+/// `Some` once a claim has been used on this server.
+pub fn first_owner_claimed() -> Result<Option<String>, String> {
+    Ok(load_store()?.first_owner_claimed)
+}
+
+/// Record that the hosted first-owner claim was used (`note`: when and
+/// who). Refused when it already was; nothing ever clears it.
+pub fn record_first_owner_claimed(note: &str) -> Result<(), String> {
+    update_store(|store| {
+        if let Some(prev) = &store.first_owner_claimed {
+            return Err(format!("the first-owner claim was already used ({prev})"));
+        }
+        store.first_owner_claimed = Some(note.to_string());
+        Ok(())
+    })
 }
 
 /// A fresh account id: uuid v4, not held by any account and never retired.

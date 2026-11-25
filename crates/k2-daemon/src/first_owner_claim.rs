@@ -9,16 +9,23 @@
 //! initial password it keeps for the buyer's "reveal") here over the
 //! server's K2 Connect tunnel, signed with the dashboard's edge key, right
 //! after provisioning. K2 Web signs a claim only for a server row its own
-//! records link to that buyer's account (its side of the contract,
-//! `.k2/prds/contract-first-owner-claim-v1.md`). A retry after a lost
-//! answer gets 409 `owner_exists`; the dashboard confirms it is its own
-//! login by signing in with it.
+//! records link to that buyer's account (its side of the contract, which
+//! K2 Web holds: when to call, retries, the answer, no password logged). A
+//! retry after a lost answer gets 409 `already_claimed`; the dashboard
+//! confirms the login is its own by signing in with it.
 //!
-//! Every one of these must hold, or nothing is made:
+//! Hosted servers only, once. Every one of these must hold, or nothing is
+//! made:
 //!
-//! 1. **The tunnel only.** Loopback, LAN and App ingress get a plain 404:
-//!    the owner token, agents, the CLI and every on-box caller never reach
-//!    it.
+//! 0. **Our own brand and the hosted-claim marker.** A build of another
+//!    brand answers a plain 404 whatever its files say. The marker is a
+//!    file the provisioner writes as root, [`MARKER_PATH`], root-owned,
+//!    mode 0600, in a root-owned folder no group or other may write: the
+//!    daemon only looks at it (it can't read, change or remove it), and a
+//!    box without it (a self-hosted server) answers a plain 404.
+//! 1. **The tunnel only.** Loopback, LAN and App ingress get a plain 404.
+//!    The tunnel listener itself is on 127.0.0.1, so a process on this box
+//!    can reach it; what it can't do is use it, because of 2.
 //! 2. **The dashboard's signature** (`X-K2-Edge-Sig`, a `k2-edge-dash-…`
 //!    kid, [`k2_core::edge_attest::verify_dashboard`]): over this path, the
 //!    exact body, and this daemon's own subdomain, fresh and never replayed.
@@ -26,9 +33,14 @@
 //!    daemon user's home, writable from this box) never adds one in a
 //!    release build, and the `*.app.k2.dev` Worker's keys (which proxy any
 //!    browser) never count. Unsigned or badly signed → the same plain 404.
-//! 3. **No owner login at all** (enabled or disabled). Once one exists this
-//!    answers 409 `owner_exists` for good; the owner adds others in person.
-//! 4. A new username (an existing login is never promoted or re-keyed) and
+//! 3. **Never claimed before.** The first claim that makes its logins
+//!    burns the door: a record in the login store
+//!    ([`connect_users::record_first_owner_claimed`]) that removing,
+//!    demoting or disabling logins never clears. After it, a signed claim
+//!    gets 409 `already_claimed`, for good, even with no owner left.
+//! 4. **No owner login at all** (enabled or disabled), as a second check:
+//!    409 `owner_exists`; the owner adds others in person.
+//! 5. A new username (an existing login is never promoted or re-keyed) and
 //!    a password that meets the server's policy.
 //!
 //! With `opsUsername` (k2.dev's website-management login, `k2cloud`) the
@@ -91,12 +103,92 @@ pub fn audit_refused(body: &[u8], reason: &str, ingress: &str) {
     audit(&body_username(body), &format!("deny {reason}"), ingress);
 }
 
-/// The door's own check, before the claim is read: the tunnel, a POST, and
-/// the dashboard's signature over (`path`, `body`, `expected_sub`). `Err`
-/// carries the audit reason; the wire answer is always the same plain 404.
+/// The hosted-claim marker: written by the provisioner as root (0600, in
+/// the root helper's root-owned config folder) on a hosted server only.
+pub const MARKER_PATH: &str = "/etc/k2-root-helper/hosted-claim";
+
+/// Where the marker is looked for, and the owner it must have. A release
+/// build: [`MARKER_PATH`], root. A test build (`test-util`): the same name
+/// under `~/.k2/test-root-etc/`, owned by the test's own user, so tests
+/// can make, break and remove it.
+pub fn marker_location() -> (std::path::PathBuf, u32) {
+    if k2_core::TEST_BUILD {
+        (k2_core::paths::k2_home().join("test-root-etc").join("hosted-claim"), current_uid())
+    } else {
+        (std::path::PathBuf::from(MARKER_PATH), 0)
+    }
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
+}
+
+/// Is `path` a marker this server can trust: a regular file (not a link)
+/// owned by `owner_uid` with mode exactly 0600, in a folder owned by
+/// `owner_uid` that no group or other can write? Only its metadata is read
+/// (the daemon can't read a root-owned 0600 file, and needn't). `Err` is
+/// the audit reason.
+#[cfg(unix)]
+pub fn marker_ok(path: &std::path::Path, owner_uid: u32) -> Result<(), &'static str> {
+    use std::os::unix::fs::MetadataExt;
+    let m = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("no_marker"),
+        Err(_) => return Err("marker_unreadable"),
+    };
+    if !m.file_type().is_file() {
+        return Err("marker_not_file");
+    }
+    if m.uid() != owner_uid {
+        return Err("marker_owner");
+    }
+    if m.mode() & 0o7777 != 0o600 {
+        return Err("marker_mode");
+    }
+    let dir = path.parent().ok_or("marker_dir")?;
+    match std::fs::symlink_metadata(dir) {
+        Ok(d) if d.file_type().is_dir() && d.uid() == owner_uid && d.mode() & 0o022 == 0 => Ok(()),
+        _ => Err("marker_dir"),
+    }
+}
+
+/// No hosted claim off Unix (hosted servers are Linux).
+#[cfg(not(unix))]
+pub fn marker_ok(_path: &std::path::Path, _owner_uid: u32) -> Result<(), &'static str> {
+    Err("no_marker")
+}
+
+/// What opens the door at all, before any signature is looked at: our own
+/// brand, and a trusted marker.
+pub struct Opener {
+    pub ours: bool,
+    pub marker: Result<(), &'static str>,
+}
+
+impl Opener {
+    /// This build and this box, now.
+    pub fn here() -> Self {
+        let (path, uid) = marker_location();
+        Opener { ours: k2_core::brand::IS_OURS, marker: marker_ok(&path, uid) }
+    }
+}
+
+/// The door's own check, before the claim is read: the tunnel, a POST, our
+/// brand, the marker, and the dashboard's signature over (`path`, `body`,
+/// `expected_sub`). `Err` carries the audit reason; the wire answer is
+/// always the same plain 404.
+#[allow(clippy::too_many_arguments)]
 pub fn admit(
     ingress: Ingress,
     is_post: bool,
+    opener: &Opener,
     header: Option<&str>,
     path: &str,
     body: &[u8],
@@ -110,6 +202,10 @@ pub fn admit(
     if !is_post {
         return Err("not_post".to_string());
     }
+    if !opener.ours {
+        return Err("not_our_brand".to_string());
+    }
+    opener.marker.map_err(str::to_string)?;
     k2_core::edge_attest::verify_dashboard(header, "POST", path, body, expected_sub, now).map_err(|e| format!("bad_attest:{}", e.reason()))
 }
 
@@ -138,6 +234,17 @@ pub fn handle(body: &[u8], ingress: &str) -> CliResponse {
     };
     let account = req.k2_account.as_deref().map(str::trim).filter(|a| !a.is_empty()).unwrap_or("-").to_string();
     let _g = CLAIM_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    match connect_users::first_owner_claimed() {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            audit(&req.username, &format!("deny already_claimed account={account}"), ingress);
+            return json_err("409 Conflict", "already_claimed", "this server's first owner was already claimed; it can't be claimed again.");
+        }
+        Err(e) => {
+            audit(&req.username, "deny store_error", ingress);
+            return CliResponse::internal_error(e);
+        }
+    }
     match owner_login_count() {
         Ok(0) => {}
         Ok(_) => {
@@ -207,6 +314,22 @@ pub fn handle(body: &[u8], ingress: &str) -> CliResponse {
         }
     };
     let ops_line = ops.as_deref().map(|o| format!(" ops={o}")).unwrap_or_default();
+    // Burn the door. If the record can't be written, the logins are taken
+    // back: a claim either makes its logins AND closes for good, or makes
+    // nothing.
+    let note = format!("at={} user={user}{ops_line} account={account}", k2_core::edge_attest::now_unix());
+    if let Err(e) = connect_users::record_first_owner_claimed(&note) {
+        let undo: Vec<String> = std::iter::once(user.clone())
+            .chain(ops.iter().cloned())
+            .filter_map(|n| connect_users::remove_user(&n).err().map(|err| format!("{n}: {err}")))
+            .collect();
+        audit(&user, &format!("deny burn_failed undo={} account={account}", if undo.is_empty() { "ok" } else { "FAILED" }), ingress);
+        return CliResponse::internal_error(if undo.is_empty() {
+            format!("the claim could not be recorded ({e}); nothing was kept")
+        } else {
+            format!("the claim could not be recorded ({e}), and taking the logins back failed ({})", undo.join("; "))
+        });
+    }
     audit(&user, &format!("ok account={account}{ops_line}"), ingress);
     let mut out = serde_json::json!({ "success": true, "username": user, "role": "owner" });
     if let (Some(o), Some(pw)) = (ops, ops_password) {

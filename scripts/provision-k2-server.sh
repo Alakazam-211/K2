@@ -25,7 +25,7 @@
 #   ./provision-k2-server.sh --allow-not-ready
 #
 #   # self-host interactive path (after install, no K2_TUNNEL_TOKEN):
-#   k2 users add alice --role owner    # prompts for password
+#   k2 users add alice --role owner --keep-password   # prompts for password
 #   k2 connect login                   # k2.dev account → pick subdomain → live
 #
 # Environment:
@@ -38,11 +38,15 @@
 #                      list k2.dev serves for the token)
 #   K2_OWNER_USER      retired in 0.46.18: set, the run stops before any
 #                      work. No run makes an owner login (that takes a
-#                      person present); the k2.dev account holder claims
-#                      the server's first owner from their dashboard, and a
+#                      person present); the k2.dev dashboard makes a hosted
+#                      server's first owner (K2_HOSTED_CLAIM), and a
 #                      self-hosted owner runs k2 users add <you> --role
-#                      owner from their own SSH login. K2_OWNER_PASSWORD
-#                      is ignored.
+#                      owner --keep-password from their own SSH login.
+#                      K2_OWNER_PASSWORD is ignored.
+#   K2_HOSTED_CLAIM    1 = a hosted server: write the root-owned marker
+#                      /etc/k2-root-helper/hosted-claim (0600) that lets
+#                      the k2.dev dashboard claim its first owner, once
+#                      (step 9). Self-hosted runs leave it unset.
 #   K2_CALLBACK_URL    control-plane callback POSTed on success (optional)
 #   K2_CALLBACK_TOKEN  bearer for the callback (optional)
 #   K2_VERSION         pin a daemon release (default: latest)
@@ -258,7 +262,7 @@ k2_curl() {
 [ "$(id -u)" = "0" ] || die "run as root (cloud-init runcmd or sudo)"
 # Step 9: this run makes no owner (claimed from k2.dev); stop before any work.
 if [ "$BAKE_ONLY" != 1 ] && [ -n "${K2_OWNER_USER:-}" ]; then
-	die "K2_OWNER_USER is set, but this script no longer makes an owner login: a server's first owner is claimed from the k2.dev dashboard of the account it is linked to (POST /cli/users/claim-first-owner). Unset K2_OWNER_USER and re-run. Self-hosted: after this run, k2 users add <you> --role owner from your own SSH login"
+	die "K2_OWNER_USER is set, but this script no longer makes an owner login: a server's first owner is claimed from the k2.dev dashboard of the account it is linked to (POST /cli/users/claim-first-owner). Unset K2_OWNER_USER and re-run. Self-hosted: after this run, k2 users add <you> --role owner --keep-password from your own SSH login"
 elif [ "$BAKE_ONLY" != 1 ] && [ -n "${K2_OPS_USER:-}" ]; then
 	die "K2_OPS_USER is set, but this script no longer makes the website-management login: the k2.dev claim makes it, an owner, with the first owner (POST /cli/users/claim-first-owner, opsUsername). Unset K2_OPS_USER and re-run"
 fi
@@ -882,11 +886,28 @@ fi
 # initial password it keeps for the buyer's reveal) and the
 # website-management login (k2cloud, its password made by the server and
 # returned to k2.dev) in one signed call: POST /cli/users/claim-first-owner,
-# over the tunnel, only while the server has no owner login.
+# over the tunnel. The daemon opens that door only on a hosted server: a
+# box with the hosted-claim marker below, which only root can write. The
+# first claim burns the door for good (the daemon records it; deleting
+# owners never reopens it), and the daemon never removes the marker.
 # A self-hosted server's owner makes theirs from their own SSH login:
-# k2 users add <you> --role owner. K2_OWNER_USER and K2_OPS_USER stop the
-# run before any work (above).
-log "first owner: none made here; the k2.dev dashboard makes the owner and website-management logins (claim-first-owner; self-hosted: k2 users add <you> --role owner, from your own SSH login)"
+# k2 users add <you> --role owner --keep-password. K2_OWNER_USER and
+# K2_OPS_USER stop the run before any work (above).
+#
+# K2_HOSTED_CLAIM=1 (hosted provisioning only; cloud-init sets it): write
+# the marker /etc/k2-root-helper/hosted-claim, root:root 0600, in a
+# root-owned 0755 folder. Self-hosted runs never write it.
+HOSTED_CLAIM_DIR=/etc/k2-root-helper
+HOSTED_CLAIM_MARKER="$HOSTED_CLAIM_DIR/hosted-claim"
+if [ "${K2_HOSTED_CLAIM:-}" = 1 ]; then
+	install -d -m 0755 -o root -g root "$HOSTED_CLAIM_DIR" || die "could not make $HOSTED_CLAIM_DIR"
+	HOSTED_CLAIM_TMP=$(mktemp) || die "mktemp failed"
+	printf 'K2 hosted first-owner claim marker (provision-k2-server.sh)\n' >"$HOSTED_CLAIM_TMP"
+	install -m 0600 -o root -g root "$HOSTED_CLAIM_TMP" "$HOSTED_CLAIM_MARKER" || die "could not write $HOSTED_CLAIM_MARKER"
+	rm -f "$HOSTED_CLAIM_TMP"
+	log "hosted-claim marker written ($HOSTED_CLAIM_MARKER, root 0600): the k2.dev dashboard can claim this server's first owner, once"
+fi
+log "first owner: none made here; the k2.dev dashboard makes the owner and website-management logins (claim-first-owner; self-hosted: k2 users add <you> --role owner --keep-password, from your own SSH login)"
 
 # ── 9c. Sew (chat + voice) + Home chat + voice rooms ───────────────
 # Every server gets Sew by default (Rosson, 2026-11-17: "Sew should be set
@@ -1122,7 +1143,7 @@ echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them
 if true; then
 echo ""
 echo "  Next (hosted: the k2.dev dashboard makes the owner for the linked account; interactive self-host, from your own SSH login):"
-echo "    k2 users add <you> --role owner   # prompts for password"
+echo "    k2 users add <you> --role owner --keep-password   # prompts for password"
 [ -z "${K2_TUNNEL_TOKEN:-}" ] && echo "    k2 connect login                 # pair purchased *.k2.dev subdomain"
 echo "  Automation fallback still works: K2_TUNNEL_TOKEN + K2_SUBDOMAIN env."
 fi

@@ -286,6 +286,40 @@ On macOS:
   `Interrupted(Suspended)`, then `Resumed`. Camera ids are
   `AVCaptureDevice.uniqueID`, the same when a camera comes back.
 
+On macOS and iOS:
+- **A self-view with no hop.** A camera source's `apple_preview()` (feature
+  `apple`) gives an `ApplePreview`: a handle on the source's own
+  `AVCaptureSession`. `new_preview_layer(None)` makes an
+  `AVCaptureVideoPreviewLayer` on it, which the system draws straight from
+  the camera, as the Camera app and FaceTime do, instead of the frames
+  going through the app's sink and an `AVSampleBufferDisplayLayer` (one to
+  three frames late). The frames keep coming to `try_recv` and the encoder
+  as before. The layer is a raw pointer the caller owns (+1): make it and
+  use it on the main thread, and release it once. `None` mirrors it when
+  the camera faces the person (`Facing::Front`); the encoded frames are
+  never mirrored. kessel-video never turns the layer: in a portrait-only
+  interface AVFoundation's default is right; an interface that rotates
+  sets the layer connection's rotation from
+  `AVCaptureDevice.RotationCoordinator`'s preview angle. Dropping the
+  source stops the session and empties it, so take the layer down then.
+  `capture_session()` lends the session itself for a host that builds its
+  own preview, under the rules in its safety docs.
+
+  ```swift
+  // ptr: the NonNull<c_void> from new_preview_layer, on the main thread.
+  let layer = Unmanaged<AVCaptureVideoPreviewLayer>
+      .fromOpaque(ptr).takeRetainedValue()
+  layer.videoGravity = .resizeAspectFill
+  selfView.layer.addSublayer(layer)
+  ```
+- **Capture times.** Every camera frame's `host_time` is when the sensor
+  captured it, in nanoseconds of `mach_absolute_time()`
+  (`HostClock::MachAbsoluteTime`, the clock of `CACurrentMediaTime()` and
+  a `CADisplayLink`'s timestamps): the sample's presentation time, moved
+  from the capture session's clock to the host clock. Compare it with a
+  display or send time on the same machine to measure the delay. Other
+  platforms, screens and decoded frames leave it `None`.
+
 On iOS:
 - `system()` gives the Apple backend. The app needs `NSCameraUsageDescription`
   in its Info.plist; without it `camera_permission()` answers `Denied`
@@ -297,7 +331,8 @@ On iOS:
   `facing`. Modes are chosen with the asked box turned landscape (the
   sensor's way), and frames come out upright and unmirrored: held upright, a
   1280 x 720 box gives 720 x 1280 frames. Mirroring the self-view is the
-  app's choice, in its own preview.
+  app's choice, in its own preview (or in a layer from `apple_preview()`,
+  above).
 - iOS stops the camera while the app is in the background, during a phone
   call, when another app takes the camera, and under heavy thermal load. The
   source stays open and sends `SourceEvent::Interrupted` (with
@@ -523,6 +558,11 @@ What parses data from the network, and how it is tested:
   The rest of the crate is `deny(unsafe_code)`: the API, the frame and pixel
   code, conversion, the H.264 helpers, the VP8 glue, the fake and null
   backends. The decode path for VP8 has no `unsafe` of its own.
+- **Two public functions are `unsafe` to call**, both on macOS and iOS
+  only: `ApplePreview::capture_session` and
+  `ApplePreview::new_preview_layer`. They hand the host raw Objective-C
+  pointers (a lent capture session, an owned preview layer); their safety
+  docs give the ownership, main-thread and hands-off rules.
 - **vp8-encoder** is `forbid(unsafe_code)`. **vp8-decoder** is
   `deny(unsafe_code)` except for its NEON (aarch64) and SSE2 (x86_64)
   loop-filter modules (since 0.1.1; its README explains how they are kept

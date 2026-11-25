@@ -102,14 +102,18 @@ pub use apple::pixel::apple_pixel_buffer;
 /// macOS and iOS: a frame around a CVPixelBuffer the host already has.
 #[cfg(all(feature = "apple-codecs", any(target_os = "macos", target_os = "ios")))]
 pub use apple::pixel::pixel_buffer_frame;
+/// macOS and iOS (feature `apple`): a camera source's own capture session,
+/// for a self-view with no hop.
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+pub use apple::preview::ApplePreview;
 /// The `bytes` crate, re-exported so callers use the same version.
 pub use bytes;
 pub use bytes::Bytes;
 pub use convert::{convert, fit_within, psnr_y};
 pub use error::{DecodeError, VideoError};
 pub use frame::{
-    tight_layout, ColorSpace, FrameBuffer, NativeBuffer, NativeFrame, PixelFormat, Planes,
-    VideoFrame,
+    tight_layout, ColorSpace, FrameBuffer, HostClock, HostTime, NativeBuffer, NativeFrame,
+    PixelFormat, Planes, VideoFrame,
 };
 pub use frame_in::{frame_in, FrameIn, FrameInOptions, FrameInSender, Rotation};
 pub use kit::now_us;

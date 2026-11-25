@@ -20,7 +20,8 @@ autolink!("Foundation");
 
 /// An object we hold on another thread. Only used for AVFoundation and
 /// ScreenCaptureKit objects whose methods we call are thread-safe
-/// (sessions, streams, devices, filters).
+/// (sessions, streams, devices, filters). A clone is another retain.
+#[derive(Clone)]
 pub struct ObjSend(pub Retained<AnyObject>);
 // SAFETY: see the type's doc: only thread-safe framework objects.
 unsafe impl Send for ObjSend {}

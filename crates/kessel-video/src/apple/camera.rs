@@ -10,7 +10,10 @@
 //! stopped without an interruption on either OS. [`Life`] decides, from
 //! those signals, which events a source sends.
 
-use super::ffi::{self, cf_const, cm_time, FormatDescriptionArg, SampleBufferArg};
+use super::clock::host_time_of;
+use super::ffi::{
+    self, cf_const, cm_time, CMSampleBufferRef, ClockArg, FormatDescriptionArg, SampleBufferArg,
+};
 #[cfg(target_os = "ios")]
 use super::ios::Rotation;
 use super::objc::{
@@ -20,7 +23,7 @@ use super::objc::{
 use super::pixel::{cpu_frame, native_frame};
 use crate::api::{Done, FrameSource, Wake};
 use crate::error::VideoError;
-use crate::frame::PixelFormat;
+use crate::frame::{HostTime, PixelFormat};
 use crate::kit::{lock, now_us, QueuedSource, SourceControl, SourceShared};
 use crate::types::*;
 use block2::RcBlock;
@@ -325,6 +328,56 @@ pub(crate) fn cameras() -> Vec<CameraInfo> {
 struct Ctx {
     shared: Arc<SourceShared>,
     native: bool,
+    /// The session, for its clock: sample times are on it.
+    session: ObjSend,
+    /// The session answers `synchronizationClock` (macOS 12.3, iOS 15.4);
+    /// else `masterClock`.
+    sync_clock: bool,
+    /// Reading the clock panicked once (an unexpected runtime type): frames
+    /// go on without a host time.
+    clock_failed: AtomicBool,
+}
+
+/// A sample's capture time on the host clock: its presentation time, on
+/// the session's clock, as [`HostClock::MachAbsoluteTime`] nanoseconds
+/// (see [`super::clock::host_time_of`]). A failure costs the time, never
+/// the frame.
+///
+/// [`HostClock::MachAbsoluteTime`]: crate::HostClock::MachAbsoluteTime
+///
+/// # Safety
+/// `sb` must be a live CMSampleBuffer from `ctx.session`.
+unsafe fn sample_host_time(ctx: &Ctx, sb: CMSampleBufferRef) -> Option<HostTime> {
+    if ctx.clock_failed.load(Ordering::Relaxed) {
+        return None;
+    }
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let clock: ClockArg = if ctx.sync_clock {
+            msg_send![&*ctx.session, synchronizationClock]
+        } else {
+            msg_send![&*ctx.session, masterClock]
+        };
+        host_time_of(ffi::CMSampleBufferGetPresentationTimeStamp(sb), clock.0)
+    }));
+    r.unwrap_or_else(|_| {
+        ctx.clock_failed.store(true, Ordering::Relaxed);
+        None
+    })
+}
+
+/// The session's clock: `synchronizationClock` where it answers, else
+/// `masterClock`. Null until the session has one. (Tests.)
+///
+/// # Safety
+/// `session` must be a live AVCaptureSession.
+#[cfg(all(test, feature = "apple"))]
+pub(crate) unsafe fn session_clock(session: &AnyObject) -> ffi::CMClockRef {
+    let clock: ClockArg = if responds(session, sel!(synchronizationClock)) {
+        msg_send![session, synchronizationClock]
+    } else {
+        msg_send![session, masterClock]
+    };
+    clock.0
 }
 
 const IVAR: &std::ffi::CStr = c"kesselVideoCtx";
@@ -354,11 +407,17 @@ unsafe extern "C-unwind" fn did_output(
             return;
         }
         let at = now_us();
+        let host_time = sample_host_time(ctx, sb.0);
         if ctx.native {
-            ctx.shared.deliver(native_frame(pb, at));
+            let mut f = native_frame(pb, at);
+            f.host_time = host_time;
+            ctx.shared.deliver(f);
         } else {
             match cpu_frame(pb, at) {
-                Ok(f) => ctx.shared.deliver(f),
+                Ok(mut f) => {
+                    f.host_time = host_time;
+                    ctx.shared.deliver(f)
+                }
                 Err(e) => ctx.shared.event(SourceEvent::Error(e)),
             }
         }
@@ -405,13 +464,36 @@ struct CameraControl {
     watch: Option<JoinHandle<()>>,
     life: Arc<Watched>,
     observers: Vec<Observer>,
+    /// The camera, which way it faces, and the frame rate fixed at open
+    /// (for [`ApplePreview`](crate::ApplePreview)).
+    #[cfg_attr(not(feature = "apple"), allow(dead_code))]
+    device: ObjSend,
+    #[cfg_attr(not(feature = "apple"), allow(dead_code))]
+    facing: Facing,
+    #[cfg_attr(not(feature = "apple"), allow(dead_code))]
+    fixed_fps: Option<u32>,
+    /// A preview handle was given out: on drop, the session also loses its
+    /// input and output, so a layer that outlives the source holds no
+    /// camera.
+    previewed: AtomicBool,
 }
 
 // SAFETY: the objects are thread-safe AVFoundation objects; ctx is freed
 // only in Drop, after the queue has drained.
 unsafe impl Send for CameraControl {}
 
-impl SourceControl for CameraControl {}
+impl SourceControl for CameraControl {
+    #[cfg(feature = "apple")]
+    fn apple_preview(&self) -> Option<crate::ApplePreview> {
+        self.previewed.store(true, Ordering::Release);
+        Some(super::preview::ApplePreview::new(
+            self.session.0.clone(),
+            self.device.0.clone(),
+            self.facing,
+            self.fixed_fps,
+        ))
+    }
+}
 
 impl Drop for CameraControl {
     fn drop(&mut self) {
@@ -442,9 +524,30 @@ impl Drop for CameraControl {
                     *ivar.load_ptr::<*mut c_void>(&self.delegate) = std::ptr::null_mut();
                 }
                 drop(Box::from_raw(self.ctx));
+                // A preview layer may keep the session alive after us: give
+                // it an empty one, with no camera in it.
+                if self.previewed.load(Ordering::Acquire) {
+                    detach(&self.session, &self.output);
+                }
             }
         });
     }
+}
+
+/// Take every input, and the source's video output, out of a stopped
+/// session (call inside a pool).
+///
+/// # Safety
+/// `session` must be a live AVCaptureSession and `output` its output.
+unsafe fn detach(session: &AnyObject, output: &AnyObject) {
+    let _: () = msg_send![session, beginConfiguration];
+    // `inputs` is a copy, so removing while going through it is fine.
+    let inputs: *mut AnyObject = msg_send![session, inputs];
+    for input in array_items(inputs) {
+        let _: () = msg_send![session, removeInput: input];
+    }
+    let _: () = msg_send![session, removeOutput: output];
+    let _: () = msg_send![session, commitConfiguration];
 }
 
 /// `AVErrorMediaServicesWereReset`: iOS restarted its media services; the
@@ -956,6 +1059,9 @@ unsafe fn open_in_pool(
     let ctx = Box::into_raw(Box::new(Ctx {
         shared: shared.clone(),
         native: c.prefer_native,
+        session: session.clone(),
+        sync_clock: responds(&*session, sel!(synchronizationClock)),
+        clock_failed: AtomicBool::new(false),
     }));
     let delegate: Option<Retained<AnyObject>> = msg_send![delegate_class(), new];
     let Some(delegate) = delegate else {
@@ -980,6 +1086,10 @@ unsafe fn open_in_pool(
         watch: None,
         life: Arc::new(Watched::new(cfg!(target_os = "ios"))),
         observers: Vec::new(),
+        device: device.clone(),
+        facing: facing_of(Retained::as_ptr(&device.0) as *mut AnyObject),
+        fixed_fps: None,
+        previewed: AtomicBool::new(false),
     };
     let ok: Bool = msg_send![&*control.session, canAddOutput: &*control.output];
     if !ok.as_bool() {
@@ -1009,6 +1119,7 @@ unsafe fn open_in_pool(
             if fits {
                 let _: () = msg_send![&*device, setActiveVideoMinFrameDuration: frame];
                 let _: () = msg_send![&*device, setActiveVideoMaxFrameDuration: frame];
+                control.fixed_fps = Some(fps);
             }
             let _: () = msg_send![&*device, unlockForConfiguration];
         } else {

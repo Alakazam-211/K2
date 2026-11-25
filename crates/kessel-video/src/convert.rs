@@ -348,8 +348,21 @@ pub fn convert(
     convert_in(pool(), frame, width, height, format)
 }
 
-/// [`convert`] with the output memory from `pool`.
+/// [`convert`] with the output memory from `pool`. The output keeps the
+/// frame's `capture_us`, colour and `host_time`.
 pub(crate) fn convert_in(
+    pool: &Arc<Pool>,
+    frame: &VideoFrame,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+) -> Result<VideoFrame, VideoError> {
+    let mut out = convert_pixels(pool, frame, width, height, format)?;
+    out.host_time = frame.host_time;
+    Ok(out)
+}
+
+fn convert_pixels(
     pool: &Arc<Pool>,
     frame: &VideoFrame,
     width: u32,

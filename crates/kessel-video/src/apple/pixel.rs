@@ -531,6 +531,7 @@ impl Pools {
         let mut out = unsafe { native_frame(pb, frame.capture_us) };
         drop(owned);
         out.color = frame.color;
+        out.host_time = frame.host_time;
         Ok(out)
     }
 

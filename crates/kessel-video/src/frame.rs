@@ -245,6 +245,71 @@ pub enum FrameBuffer {
     Native(NativeBuffer),
 }
 
+/// The host clock a [`HostTime`] counts on. The codes
+/// ([`HostClock::as_str`]) are API: one is never renamed or reused for
+/// another clock, and a new clock is a new variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum HostClock {
+    /// macOS and iOS: `mach_absolute_time()`, in nanoseconds through
+    /// `mach_timebase_info` (`ticks * numer / denom`). It stops while the
+    /// machine sleeps. The same clock as
+    /// `clock_gettime_nsec_np(CLOCK_UPTIME_RAW)`, `CACurrentMediaTime()`
+    /// (in seconds), `CMClockGetHostTimeClock()`, a `CADisplayLink`'s
+    /// `timestamp` and Swift's `DispatchTime.now().uptimeNanoseconds`, so a
+    /// delay from capture to any of those is one subtraction.
+    MachAbsoluteTime,
+}
+
+impl HostClock {
+    /// A stable snake_case code for logs and wire formats:
+    /// `"mach_absolute_time"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HostClock::MachAbsoluteTime => "mach_absolute_time",
+        }
+    }
+}
+
+impl std::fmt::Display for HostClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// When a frame was captured: nanoseconds on a named host clock (see
+/// [`VideoFrame::host_time`]). The shape is API: a `u64` count of
+/// nanoseconds and the [`HostClock`] it counts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct HostTime {
+    /// Nanoseconds on `clock`.
+    pub nanos: u64,
+    /// The clock.
+    pub clock: HostClock,
+}
+
+impl HostTime {
+    /// `nanos` on `clock`.
+    pub fn new(nanos: u64, clock: HostClock) -> HostTime {
+        HostTime { nanos, clock }
+    }
+}
+
+/// Mach ticks to nanoseconds with a `mach_timebase_info` (`numer` /
+/// `denom`), with no overflow on the way: `None` for a zero `denom` or a
+/// result past `u64`.
+#[cfg_attr(
+    not(all(feature = "apple", any(target_os = "macos", target_os = "ios"))),
+    allow(dead_code)
+)]
+pub(crate) fn mach_ticks_to_nanos(ticks: u64, numer: u32, denom: u32) -> Option<u64> {
+    if denom == 0 {
+        return None;
+    }
+    u64::try_from(ticks as u128 * numer as u128 / denom as u128).ok()
+}
+
 /// One raw video frame. Always upright: the backend applies the camera's
 /// rotation before handing it out.
 #[derive(Clone)]
@@ -262,6 +327,28 @@ pub struct VideoFrame {
     pub color: ColorSpace,
     /// The pixels.
     pub buffer: FrameBuffer,
+    /// When the sensor captured the frame, in nanoseconds on a named host
+    /// clock: for measuring the delay from capture to anything else on the
+    /// same machine (a display layer, an encoder's output, a send). It
+    /// doesn't replace `capture_us`, which stays the backend's own clock and
+    /// the codecs' timestamp.
+    ///
+    /// - **macOS and iOS cameras** set it to the sample buffer's
+    ///   presentation time (which is on the capture session's
+    ///   synchronization clock), moved to the host time clock with
+    ///   `CMSyncConvertTime`, taken to mach ticks with
+    ///   `CMClockConvertHostTimeToSystemUnits` and to nanoseconds with
+    ///   `mach_timebase_info`: [`HostClock::MachAbsoluteTime`]. It is
+    ///   `None` for a sample with no valid presentation time, and while the
+    ///   session has no clock.
+    /// - **Everything else** leaves it `None`: the other platforms' cameras,
+    ///   every screen source, decoders, and the fake and null backends. A
+    ///   frame-in host may set it on the frames it pushes.
+    /// - kessel-video's own scaling, conversion and turning keep it
+    ///   ([`crate::convert`], [`crate::VideoBackend::convert`], a source's
+    ///   fit to its box, a frame-in turn). Encoders don't carry it: an
+    ///   [`crate::EncodedFrame`] has `capture_us` only.
+    pub host_time: Option<HostTime>,
 }
 
 impl std::fmt::Debug for VideoFrame {
@@ -271,6 +358,7 @@ impl std::fmt::Debug for VideoFrame {
             .field("height", &self.height)
             .field("capture_us", &self.capture_us)
             .field("color", &self.color)
+            .field("host_time", &self.host_time)
             .field("format", &self.format())
             .finish()
     }
@@ -291,6 +379,7 @@ impl VideoFrame {
             capture_us,
             color: ColorSpace::default(),
             buffer: FrameBuffer::Planes(planes),
+            host_time: None,
         })
     }
 
@@ -307,6 +396,7 @@ impl VideoFrame {
             capture_us,
             color: ColorSpace::default(),
             buffer: FrameBuffer::Native(buffer),
+            host_time: None,
         }
     }
 
@@ -427,5 +517,83 @@ mod tests {
             px[0] > 230 && px[1] < 20 && px[2] < 20 && px[3] == 255,
             "BT.601 red: {px:?}"
         );
+    }
+
+    #[test]
+    fn a_new_frame_has_no_host_time() {
+        let planes = Planes::tight(PixelFormat::I420, 4, 4, vec![0u8; 24]).expect("planes");
+        let f = VideoFrame::from_planes(planes, 4, 4, 9).expect("frame");
+        assert_eq!(f.host_time, None);
+        let f = VideoFrame::filled(PixelFormat::Nv12, 4, 4, [16, 128, 128], 9).expect("filled");
+        assert_eq!(f.host_time, None);
+    }
+
+    #[test]
+    fn host_time_shape_and_codes_are_stable() {
+        let t = HostTime::new(1_234_567_890, HostClock::MachAbsoluteTime);
+        assert_eq!(t.nanos, 1_234_567_890);
+        assert_eq!(t.clock, HostClock::MachAbsoluteTime);
+        // The codes are API: hosts carry them on their own wires.
+        assert_eq!(HostClock::MachAbsoluteTime.as_str(), "mach_absolute_time");
+        assert_eq!(
+            HostClock::MachAbsoluteTime.to_string(),
+            "mach_absolute_time"
+        );
+        // Copy, so a sink can carry it without a clone; 16 bytes or less
+        // (a u64 and a one-byte clock).
+        let u = t;
+        assert_eq!(u, t);
+        assert!(std::mem::size_of::<HostTime>() <= 16);
+        assert!(std::mem::size_of::<Option<HostTime>>() <= 16);
+    }
+
+    #[test]
+    fn host_time_is_in_the_debug_line() {
+        let mut f = VideoFrame::filled(PixelFormat::I420, 2, 2, [16, 128, 128], 0).expect("f");
+        assert!(format!("{f:?}").contains("host_time: None"), "{f:?}");
+        f.host_time = Some(HostTime::new(42, HostClock::MachAbsoluteTime));
+        let line = format!("{f:?}");
+        assert!(
+            line.contains("nanos: 42") && line.contains("MachAbsoluteTime"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn mach_ticks_become_nanoseconds_without_overflow() {
+        // Apple silicon: 24 MHz ticks, timebase 125/3.
+        assert_eq!(mach_ticks_to_nanos(24_000_000, 125, 3), Some(1_000_000_000));
+        assert_eq!(mach_ticks_to_nanos(3, 125, 3), Some(125));
+        // Intel Macs and the simulator there: 1/1.
+        assert_eq!(mach_ticks_to_nanos(987_654_321, 1, 1), Some(987_654_321));
+        // ticks * numer overflows a u64 here, but the result fits: the
+        // product is taken in 128 bits.
+        let ticks = 3u64 << 57;
+        assert!(ticks.checked_mul(125).is_none());
+        assert_eq!(mach_ticks_to_nanos(ticks, 125, 3), Some(125u64 << 57));
+        assert_eq!(mach_ticks_to_nanos(u64::MAX, 125, 3), None, "past u64");
+        assert_eq!(mach_ticks_to_nanos(1, 1, 0), None, "a zero denominator");
+    }
+
+    #[test]
+    fn conversion_and_scaling_keep_the_host_time() {
+        let t = Some(HostTime::new(5_000, HostClock::MachAbsoluteTime));
+        let mut f = VideoFrame::filled(PixelFormat::I420, 8, 8, [81, 90, 240], 3).expect("f");
+        f.host_time = t;
+        for (w, h, format) in [
+            (8, 8, PixelFormat::I420),
+            (8, 8, PixelFormat::Nv12),
+            (4, 4, PixelFormat::I420),
+            (4, 4, PixelFormat::Nv12),
+            (8, 8, PixelFormat::Bgra),
+            (4, 4, PixelFormat::Rgba),
+        ] {
+            let out = crate::convert::convert(&f, w, h, format).expect("convert");
+            assert_eq!(
+                (out.host_time, out.capture_us),
+                (t, 3),
+                "{w}x{h} {format:?}"
+            );
+        }
     }
 }

@@ -292,6 +292,7 @@ fn prepare(frame: VideoFrame, rotation: Rotation) -> Result<VideoFrame, VideoErr
             frame.capture_us,
         )?;
         out.color = ColorSpace::Bt709Limited;
+        out.host_time = frame.host_time;
         return Ok(out);
     }
     let mut turned = turn(&frame, rotation.degrees())?;
@@ -304,6 +305,7 @@ fn prepare(frame: VideoFrame, rotation: Rotation) -> Result<VideoFrame, VideoErr
             turned.capture_us,
         )?;
         turned.color = ColorSpace::Bt709Limited;
+        turned.host_time = frame.host_time;
     }
     Ok(turned)
 }
@@ -351,6 +353,7 @@ pub(crate) fn turn(frame: &VideoFrame, degrees: u32) -> Result<VideoFrame, Video
         frame.capture_us,
     )?;
     out.color = frame.color;
+    out.host_time = frame.host_time;
     Ok(out)
 }
 
@@ -703,6 +706,30 @@ mod tests {
             assert_eq!(chroma.iter().max(), Some(&240), "{rotation:?}");
             assert!(chroma.contains(&128));
         }
+    }
+
+    #[test]
+    fn a_pushed_host_time_survives_every_turn_and_range_map() {
+        use crate::frame::{HostClock, HostTime};
+        for (i, (rotation, color)) in [
+            (Rotation::Deg0, ColorSpace::Bt601Limited),
+            (Rotation::Deg0, ColorSpace::Bt709Full),
+            (Rotation::Deg90, ColorSpace::Bt601Limited),
+            (Rotation::Deg270, ColorSpace::Bt709Full),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let t = Some(HostTime::new(1_000 + i as u64, HostClock::MachAbsoluteTime));
+            let mut f = nv12(16, 8, 7, 0);
+            f.color = color;
+            f.host_time = t;
+            let out = prepare(f, rotation).expect("prepare");
+            assert_eq!(out.host_time, t, "{rotation:?} {color:?}");
+        }
+        // A frame pushed without one has none.
+        let out = prepare(nv12(16, 8, 7, 0), Rotation::Deg90).expect("prepare");
+        assert_eq!(out.host_time, None);
     }
 
     #[test]

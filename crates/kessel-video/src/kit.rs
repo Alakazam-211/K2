@@ -1051,6 +1051,13 @@ pub trait SourceControl: Send {
     fn set_constraints(&mut self, _c: &CaptureConstraints) -> Result<(), VideoError> {
         Ok(())
     }
+    /// macOS and iOS: the source's capture session for a self-view, as
+    /// [`FrameSource::apple_preview`] (optional: `None`, the default, for
+    /// a source without one).
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn apple_preview(&self) -> Option<crate::ApplePreview> {
+        None
+    }
 }
 
 /// A [`FrameSource`] made of a [`SourceShared`] and a [`SourceControl`].
@@ -1096,6 +1103,11 @@ impl<C: SourceControl> FrameSource for QueuedSource<C> {
             while self.shared.frames.pop().is_some() {}
         }
         self.control.set_paused(paused);
+    }
+
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn apple_preview(&self) -> Option<crate::ApplePreview> {
+        self.control.apple_preview()
     }
 
     fn stats(&self) -> SourceStats {
@@ -1144,5 +1156,34 @@ mod tests {
             (1280, 720),
             "a landscape frame keeps the box"
         );
+    }
+
+    #[test]
+    fn a_frame_fitted_to_the_box_keeps_its_host_time() {
+        use crate::frame::{HostClock, HostTime};
+        let s = SourceShared::new(CaptureConstraints::new(640, 360, 30), 30, no_wake());
+        let t = Some(HostTime::new(77_000, HostClock::MachAbsoluteTime));
+        let mut big = pattern_frame(1280, 720, 1, 0).expect("frame");
+        big.host_time = t;
+        s.deliver(big);
+        let f = s.frames.pop().expect("a frame");
+        assert_eq!((f.width, f.height), (640, 360), "scaled to the box");
+        assert_eq!(f.host_time, t);
+        // One that fits passes through as it is.
+        let mut small = pattern_frame(320, 180, 2, 40_000).expect("frame");
+        small.host_time = t;
+        s.deliver(small);
+        assert_eq!(s.frames.pop().expect("a frame").host_time, t);
+    }
+
+    #[test]
+    fn a_fake_camera_frame_has_no_host_time() {
+        use crate::api::VideoBackend;
+        let backend = crate::fake::FakeBackend::new(crate::fake::FakeConfig::default());
+        let mut camera = backend
+            .open_camera(None, Default::default(), no_wake())
+            .expect("open");
+        let f = wait_for(Duration::from_secs(5), || camera.try_recv()).expect("a frame");
+        assert_eq!(f.host_time, None);
     }
 }

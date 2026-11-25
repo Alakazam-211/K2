@@ -2220,3 +2220,153 @@ fn an_object_without_is_suspended_is_not_suspended() {
     // SAFETY: a live object; isSuspended is only sent if it answers it.
     assert!(!unsafe { camera::is_suspended(&*o) });
 }
+
+// ───────────────────────────── preview and host times ─────────────────────────────
+
+#[test]
+fn the_session_clock_reads_with_the_runtime_types() {
+    autoreleasepool(|_| {
+        // SAFETY: +[AVCaptureSession new], then a live session. objc2
+        // checks the clock's type encoding here (debug builds), as the
+        // camera callback does on every frame.
+        unsafe {
+            let s: Option<Obj> = msg_send![class!(AVCaptureSession), new];
+            let s = s.expect("a session");
+            let clock = camera::session_clock(&s);
+            if !clock.is_null() {
+                let t = clock::host_time_of(ffi::CMClockGetTime(clock), clock)
+                    .expect("the session clock's now as a host time");
+                let now = clock::now_nanos().expect("now");
+                assert!(t.nanos.abs_diff(now) < 100_000_000, "{} vs {now}", t.nanos);
+            }
+        }
+    });
+}
+
+#[test]
+fn only_camera_sources_have_a_preview_handle() {
+    let fake = crate::fake::FakeBackend::new(crate::fake::FakeConfig::default());
+    let src = fake
+        .open_camera(None, Default::default(), no_wake())
+        .expect("a fake camera");
+    assert!(src.apple_preview().is_none(), "the fake camera has none");
+    let (_tx, rx) =
+        crate::frame_in(crate::FrameInOptions::default(), no_wake()).expect("a frame-in source");
+    assert!(rx.apple_preview().is_none(), "a frame-in source has none");
+}
+
+#[test]
+fn a_preview_layer_is_the_callers_and_shows_the_session() {
+    use objc2::rc::{Retained, Weak};
+    let weak_layer = autoreleasepool(|_| {
+        // SAFETY: +[AVCaptureSession new]; each layer's +1 is taken over by
+        // Retained::from_raw and released once when it drops. The test
+        // runs off the main thread, so it also takes the CATransaction
+        // path.
+        unsafe {
+            let s: Option<Obj> = msg_send![class!(AVCaptureSession), new];
+            let s = s.expect("a session");
+            // The device is only messaged when a frame rate was fixed.
+            let p = preview::ApplePreview::new(s.clone(), stand_in(), Facing::Front, None);
+            assert_eq!(p.facing(), Facing::Front);
+            assert_eq!(
+                p.capture_session().as_ptr() as *const AnyObject,
+                Retained::as_ptr(&s),
+                "the source's own session, lent"
+            );
+            assert!(format!("{p:?}").contains("Front"));
+            let q = p.clone();
+            for mirrored in [None, Some(true), Some(false)] {
+                let raw = q.new_preview_layer(mirrored).expect("a layer");
+                let layer = Retained::from_raw(raw.as_ptr().cast::<AnyObject>()).expect("non-null");
+                assert_eq!(
+                    preview::layer_session(Retained::as_ptr(&layer) as *mut AnyObject)
+                        as *const AnyObject,
+                    Retained::as_ptr(&s),
+                    "the layer shows the source's session"
+                );
+            }
+            let raw = p.new_preview_layer(None).expect("a layer");
+            let layer = Retained::from_raw(raw.as_ptr().cast::<AnyObject>()).expect("non-null");
+            Weak::from_retained(&layer)
+        }
+    });
+    // The caller held the one reference it was given: once that and the
+    // handles are gone, the layer goes too (no retain leaked).
+    assert!(
+        wait_for(Duration::from_secs(2), || weak_layer
+            .load()
+            .is_none()
+            .then_some(()))
+        .is_some(),
+        "the preview layer was over-retained"
+    );
+}
+
+/// By hand on a Mac with a camera, from a binary with
+/// NSCameraUsageDescription and the camera allowed:
+/// `cargo test -p kessel-video real_camera_preview -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs a camera and the camera permission"]
+fn real_camera_preview_and_host_times() {
+    use crate::frame::HostClock;
+    use objc2::rc::Retained;
+    let b = backend().expect("backend");
+    assert_eq!(
+        b.camera_permission(),
+        Permission::Granted,
+        "allow the camera first"
+    );
+    let mut src = b
+        .open_camera(None, CaptureConstraints::new(1280, 720, 30), no_wake())
+        .expect("camera");
+    let preview = src.apple_preview().expect("an Apple camera source has one");
+    // SAFETY: the test takes each layer's +1 over with Retained::from_raw.
+    let (plain, self_view) = unsafe {
+        let a = preview.new_preview_layer(Some(false)).expect("a layer");
+        let b = preview.new_preview_layer(None).expect("a layer");
+        (
+            Retained::from_raw(a.as_ptr().cast::<AnyObject>()).expect("non-null"),
+            Retained::from_raw(b.as_ptr().cast::<AnyObject>()).expect("non-null"),
+        )
+    };
+    let ptr = |l: &Retained<AnyObject>| Retained::as_ptr(l) as *mut AnyObject;
+    // SAFETY: live layers.
+    unsafe {
+        assert_eq!(preview::layer_mirrored(ptr(&plain)), Some(false));
+        assert_eq!(
+            preview::layer_mirrored(ptr(&self_view)),
+            Some(preview.facing() == Facing::Front),
+            "a self-view mirrors a camera that faces the person"
+        );
+    }
+    // Frames still reach the caller with the layers on the session, each
+    // with a host time on mach_absolute_time, going forward.
+    let mut last = 0;
+    for _ in 0..10 {
+        let f = wait_for(Duration::from_secs(5), || src.try_recv()).expect("a frame");
+        let t = f.host_time.expect("an Apple camera frame has a host time");
+        assert_eq!(t.clock, HostClock::MachAbsoluteTime);
+        let now = clock::now_nanos().expect("now");
+        assert!(t.nanos <= now, "captured before now");
+        assert!(now - t.nanos < 500_000_000, "{} ns ago", now - t.nanos);
+        assert!(t.nanos > last, "host times go forward");
+        last = t.nanos;
+        eprintln!(
+            "[apple] capture to try_recv: {} us",
+            (now - t.nanos) / 1_000
+        );
+    }
+    drop(src);
+    // The source is gone: the layers' session is stopped and holds no
+    // camera.
+    // SAFETY: a live layer and its session.
+    unsafe {
+        let s = preview::layer_session(ptr(&plain));
+        let running: Bool = msg_send![s, isRunning];
+        assert!(!running.as_bool(), "stopped with the source");
+        let inputs: *mut AnyObject = msg_send![s, inputs];
+        let n: usize = msg_send![inputs, count];
+        assert_eq!(n, 0, "no camera left in the session");
+    }
+}

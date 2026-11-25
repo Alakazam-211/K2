@@ -98,6 +98,34 @@ unsafe impl Encode for FormatDescriptionArg {
         Encoding::Pointer(&Encoding::Struct("opaqueCMFormatDescription", &[]));
 }
 
+/// A `CMClockRef`.
+pub type CMClockRef = *const c_void;
+
+/// A `CMClockRef` return value with the runtime's encoding
+/// (`^{OpaqueCMClock=}`): `AVCaptureSession.synchronizationClock` and
+/// `masterClock`.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct ClockArg(pub CMClockRef);
+// SAFETY: a pointer to the opaque struct, as the runtime describes it.
+unsafe impl Encode for ClockArg {
+    const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("OpaqueCMClock", &[]));
+}
+
+/// `kCMTimeFlags_Valid`.
+pub const CM_TIME_VALID: u32 = 1;
+/// `kCMTimeFlags_ImpliedValueFlagsMask`: positive infinity, negative
+/// infinity, indefinite.
+pub const CM_TIME_IMPLIED_VALUE: u32 = 4 | 8 | 16;
+
+/// `mach_timebase_info_data_t`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MachTimebaseInfo {
+    pub numer: u32,
+    pub denom: u32,
+}
+
 #[repr(C)]
 pub struct CFDictionaryKeyCallBacks {
     _p: [usize; 6],
@@ -349,11 +377,20 @@ extern "C" {
     pub fn CMVideoFormatDescriptionGetDimensions(desc: CMFormatDescriptionRef)
         -> CMVideoDimensions;
     pub fn CMFormatDescriptionGetMediaSubType(desc: CMFormatDescriptionRef) -> u32;
+    pub fn CMClockGetHostTimeClock() -> CMClockRef;
+    pub fn CMClockGetTime(clock: CMClockRef) -> CMTime;
+    pub fn CMClockConvertHostTimeToSystemUnits(host_time: CMTime) -> u64;
+    pub fn CMClockMakeHostTimeFromSystemUnits(host_time: u64) -> CMTime;
+    pub fn CMSyncConvertTime(time: CMTime, from: CMClockRef, to: CMClockRef) -> CMTime;
+    pub fn CMTimeCompare(a: CMTime, b: CMTime) -> i32;
 }
 
+// libSystem, which every macOS and iOS program links.
 extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     pub fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
+    pub fn mach_absolute_time() -> u64;
+    pub fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
 }
 
 pub const RTLD_LAZY: i32 = 1;

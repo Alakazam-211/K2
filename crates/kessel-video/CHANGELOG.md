@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.1.9
+
+On macOS and iOS, a camera source's own capture session for a self-view
+with no hop, and every camera frame's capture time on the host clock.
+Additions only: nothing in 0.1.8's API changes or goes away, and frames
+reach the caller and the encoder as before. No new dependency.
+
+### A self-view with no hop (macOS and iOS, feature `apple`)
+
+- `FrameSource::apple_preview()` (a new trait method with a default that
+  answers `None`) gives an Apple camera source's `ApplePreview` (new): a
+  handle on the source's own `AVCaptureSession`, so the host can draw its
+  self-view with an `AVCaptureVideoPreviewLayer` straight from the camera,
+  as the Camera app and FaceTime do, instead of through its sink and an
+  `AVSampleBufferDisplayLayer` (one to three frames late). The frames keep
+  coming to `try_recv` and the encoder as before. Screens, frame-in
+  sources and the fake and null backends answer `None`.
+- `ApplePreview::new_preview_layer(mirrored)` (`unsafe`: main thread, and
+  the caller releases the +1 layer once) makes the layer: mirrored as asked,
+  or with `None` when the camera faces the person (`Facing::Front`), with
+  automatic mirroring off. `ApplePreview::capture_session()` (`unsafe`)
+  lends the session (+0) for a host that builds its own preview, under the
+  rules in its safety docs. `ApplePreview::facing()` says which way the
+  camera faces. The pointers are opaque (`NonNull<c_void>`): no
+  AVFoundation or objc2 type is in the API.
+- The encoded frames never change: on iOS they stay unmirrored and turned
+  upright by the phone's orientation; kessel-video never turns the preview
+  layer, which follows the app's interface (the docs say how).
+- Once a handle has been taken, dropping the source also takes the camera
+  input and the video output out of the stopped session, so a layer that
+  outlives the source holds no camera. If attaching a layer moved the frame
+  rate the source fixed at open, it is fixed again.
+- `kit::SourceControl::apple_preview` (new, with a default that answers
+  `None`) is how `kit::QueuedSource` finds it.
+
+### Capture times on the host clock
+
+- `VideoFrame::host_time: Option<HostTime>` (a new field; `VideoFrame` is
+  `#[non_exhaustive]`, so this is additive): when the sensor captured the
+  frame, as `HostTime { nanos: u64, clock: HostClock }` (both new,
+  `#[non_exhaustive]`, `Copy`). The shape and the clock codes are API.
+- macOS and iOS cameras set it: the sample buffer's presentation time,
+  which is on the capture session's `synchronizationClock` (`masterClock`
+  before macOS 12.3 and iOS 15.4), moved to the host time clock with
+  `CMSyncConvertTime`, then to mach ticks with
+  `CMClockConvertHostTimeToSystemUnits` and to nanoseconds with
+  `mach_timebase_info`: `HostClock::MachAbsoluteTime` (code
+  `"mach_absolute_time"`), the clock of `CACurrentMediaTime()`,
+  `CLOCK_UPTIME_RAW` and a `CADisplayLink`'s timestamps. Everything else
+  leaves it `None`; a frame-in host may set it.
+- Scaling and conversion (`convert`, `VideoBackend::convert`, a source's
+  fit to its box) and frame-in's turns keep it. Encoders don't carry it.
+
 ## 0.1.8
 
 H.264 decoding for files: a File mode beside real time, with B-frames,

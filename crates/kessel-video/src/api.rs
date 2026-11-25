@@ -39,6 +39,21 @@ pub trait FrameSource: Send {
     fn set_paused(&mut self, paused: bool);
     /// Counters since open.
     fn stats(&self) -> SourceStats;
+    /// macOS and iOS: a handle on this camera source's own
+    /// `AVCaptureSession`, for a self-view with no hop, as the Camera app
+    /// and FaceTime draw theirs: an `AVCaptureVideoPreviewLayer` on the
+    /// session the encoder's frames come from (see [`crate::ApplePreview`]).
+    /// Frames keep coming through [`try_recv`](FrameSource::try_recv) as
+    /// before.
+    ///
+    /// `Some` for an Apple camera source; `None` for screens, frame-in
+    /// sources, the fake and null backends' sources, and (the default)
+    /// sources from other crates. Each call gives a new handle on the same
+    /// session.
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn apple_preview(&self) -> Option<crate::ApplePreview> {
+        None
+    }
 }
 
 /// A video encoder (one layer). Outputs come in submit order, at most one per

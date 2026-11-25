@@ -44,6 +44,9 @@ autolink!(
 // camera module, so it is always there).
 #[cfg(any(feature = "apple", target_os = "ios"))]
 mod camera;
+// Capture times on the host clock (cameras).
+#[cfg(any(feature = "apple", target_os = "ios"))]
+mod clock;
 mod ffi;
 #[cfg(target_os = "ios")]
 mod ios;
@@ -51,6 +54,10 @@ mod ios;
 #[cfg_attr(not(feature = "apple"), allow(dead_code))]
 mod objc;
 pub(crate) mod pixel;
+// A camera source's session for the host's self-view (public through
+// `ApplePreview`).
+#[cfg(feature = "apple")]
+pub(crate) mod preview;
 #[cfg(all(feature = "apple", target_os = "macos"))]
 mod screen;
 mod vt_dec;

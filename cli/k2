@@ -3029,6 +3029,34 @@ cli_post_json_stdin() {
     # _k2_curl with no config: its stdin is the body, so the URL and the
     # header stay on fd 3. A body read from stdin is never retried.
     local out rc=0
+    # Agent Isolation M1: the session's passport goes over the session
+    # socket first, marked, as every other passport request does
+    # (_k2_via_session_sock reads the fd-3 config here). The body is held
+    # so a socket that takes nothing (curl 7) can send it over TCP.
+    if _k2_via_session_sock "$_K2_CFG" "${BASE_URL}${endpoint}"; then
+        local body via_sock="$_K2_VIA_SOCK"
+        body="$(cat; printf x)"
+        body="${body%x}"
+        out="$(r=0; printf '%s' "$body" | _k2_curl "" -s -K /dev/fd/3 --unix-socket "$via_sock" -X POST \
+            --connect-timeout 5 --max-time 30 \
+            -H "Content-Type: application/json" \
+            --data-binary @- 2>/dev/null 3<<<"${_K2_CFG}"$'\n''header = "X-K2-Via-Tcp: 1"' || r=$?; printf x; exit "$r")" || rc=$?
+        if [ "$rc" -ne 7 ]; then
+            out="${out%x}"
+            _permission_note "$out"
+            printf '%s' "$out"
+            return "$rc"
+        fi
+        rc=0
+        out="$(r=0; printf '%s' "$body" | _k2_curl "" -s -K /dev/fd/3 -X POST \
+            --connect-timeout 5 --max-time 30 \
+            -H "Content-Type: application/json" \
+            --data-binary @- 2>/dev/null 3<<<"$_K2_CFG" || r=$?; printf x; exit "$r")" || rc=$?
+        out="${out%x}"
+        _permission_note "$out"
+        printf '%s' "$out"
+        return "$rc"
+    fi
     out="$(r=0; _k2_curl "" -s -K /dev/fd/3 -X POST \
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" \

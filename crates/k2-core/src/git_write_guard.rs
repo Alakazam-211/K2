@@ -198,7 +198,7 @@ pub fn program_keys(repo: &gix::Repository) -> Vec<String> {
 enum Found {
     /// No repository at or above the folder: nothing to check.
     NotARepo,
-    Repo(gix::Repository),
+    Repo(Box<gix::Repository>),
     /// A repository is there, but K2 can't open it the way git will (gix
     /// refuses it, or git would take a nearer `.git` than gix did). The
     /// folder is the one holding the nearest `.git`, else the one asked.
@@ -226,7 +226,7 @@ fn find(dir: &Path) -> Found {
                     return Found::Unopenable(n.clone());
                 }
             }
-            Found::Repo(repo)
+            Found::Repo(Box::new(repo))
         }
         Err(_) => match nearest {
             None if !crate::gitx::repository_above(dir) => Found::NotARepo,

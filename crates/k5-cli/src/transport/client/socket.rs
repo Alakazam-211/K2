@@ -439,8 +439,8 @@ impl Client {
     /// longer token that starts with the passport holds it too). The mark
     /// is a config line after the credential and a Codex call's
     /// conversation headers, so it goes before the command line's `-H`s.
-    /// `cli_post_json_stdin` gives its URL and credential on `-K
-    /// /dev/fd/3`, which the shell's check never sees: it stays on TCP.
+    /// `cli_post_json_stdin`'s credential is on its `-K /dev/fd/3`, after
+    /// the hand-over headers: the mark follows it there.
     #[cfg(unix)]
     pub(super) fn session_route(
         &self,
@@ -448,7 +448,7 @@ impl Client {
         target: &Target,
         request: &Request,
     ) -> Option<(Target, Request)> {
-        if matches!(kind, Kind::ControlPlane { .. } | Kind::PostJsonStdin) {
+        if matches!(kind, Kind::ControlPlane { .. }) {
             return None;
         }
         let Target::Tcp { host, .. } = target else {
@@ -965,8 +965,20 @@ mod session_tests {
         assert!(routed(&base, Kind::Request));
         assert!(routed(&base, Kind::SendJsonPost));
         assert!(routed(&base, Kind::RequestPost));
-        // `cli_post_json_stdin`'s URL and credential are on fd 3.
-        assert!(!routed(&base, Kind::PostJsonStdin));
+        // `cli_post_json_stdin`'s URL and credential are on fd 3: the mark
+        // right after its late credential, before its Content-Type.
+        assert!(routed(&base, Kind::PostJsonStdin));
+        let (target, request) = base
+            .build(Kind::PostJsonStdin, Channel::Tcp, "/cli/x", &[], b"{}")
+            .unwrap();
+        let (_, marked) = base
+            .session_route(Kind::PostJsonStdin, &target, &request)
+            .unwrap();
+        let names: Vec<&str> = marked.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            [VERSION_HEADER, VIA_HEADER, "Authorization", VIA_TCP_HEADER, "Content-Type"]
+        );
         // `_K2_CURL_NOT_DAEMON`.
         assert!(!routed(&base, Kind::ControlPlane { method: Method::Get }));
         // The host as `BASE_URL` spells it.

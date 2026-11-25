@@ -375,7 +375,7 @@ mod tests {
         });
     }
 
-    /// K2's ruling: a build with no shell CLI never says k5 in what this
+    /// A build with no shell CLI never says k5 in what this
     /// route tells the owner (the POST refusal, the owner-only refusal, the
     /// GET note); it names the brand's command. The brand's own name is
     /// taken out first, so the test holds for any brand, xy too.

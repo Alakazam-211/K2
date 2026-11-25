@@ -49,11 +49,11 @@ pub mod ours;
 /// Why this brand can't be built for `target_os` (cargo's
 /// `CARGO_CFG_TARGET_OS`), if it can't: a brand with `cli.no_bash` true has
 /// no command on Windows, which has only the shell CLI until the k5
-/// program ships there (K2's ruling), so no Windows build of it is made.
+/// program ships there, so no Windows build of it is made.
 pub fn target_refusal(b: &Brand, target_os: &str) -> Option<String> {
     (b.no_bash && target_os == "windows").then(|| {
         "cli.no_bash is true and the target is Windows: a build with no shell CLI has no \
-         command on Windows until the k5 program ships there (K2's ruling); no Windows build \
+         command on Windows until the k5 program ships there; no Windows build \
          of this brand"
             .to_string()
     })

@@ -41,7 +41,7 @@ fn main() {
             process::exit(1);
         }
     };
-    // K2's ruling (Q2): no Windows build of a brand with no shell CLI until
+    // No Windows build of a brand with no shell CLI until
     // the k5 program ships on Windows. Windows has only the script today, so
     // such a build would have no command at all.
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");

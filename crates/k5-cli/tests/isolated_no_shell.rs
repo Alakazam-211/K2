@@ -1,5 +1,5 @@
-//! An isolated agent session's passport call, end to end, in this build
-//! (K2's ruling). The session is marked by `AGENT_CGROUP` (here under its
+//! An isolated agent session's passport call, end to end, in this build.
+//! The session is marked by `AGENT_CGROUP` (here under its
 //! `K2_` name) and carries a session passport, so the front hands the call
 //! to the shell, which sends it over the session socket.
 //!

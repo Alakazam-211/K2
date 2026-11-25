@@ -1,7 +1,7 @@
 # The programs a brand's Linux build ships, one per line: <program> <marked|unmarked>.
 # Each is a binary of the crate of the same name (crates/<program>).
 #   marked    carries the brand mark (scripts/brand/check-brand-mark.py)
-#   unmarked  the root helper: ours in every brand (K2's ruling), so it
+#   unmarked  the root helper: ours in every brand, so it
 #             carries no brand's mark
 # Read by scripts/brand/xy-build.sh (what it builds and checks) and by
 # scripts/brand/check-no-bash.py --bins (each must be there). The

@@ -303,7 +303,7 @@ pub fn check_binary(path: &Path, want: Option<&str>) -> Result<(), String> {
 /// [`check_binary`] for a build that carries the shell CLI or not
 /// (`no_bash`), so a test of either kind runs in any build. A build with
 /// no shell CLI names the program by the brand's command, never as k5
-/// (K2's ruling: a partner build's notes don't say k5).
+/// (a partner build's notes don't say k5).
 pub fn check_binary_in(no_bash: bool, path: &Path, want: Option<&str>) -> Result<(), String> {
     // What `want` is the version of, and the program, in the words below.
     let of = if no_bash {
@@ -1680,7 +1680,7 @@ impl Names {
 mod tests {
     use super::*;
 
-    /// K2's ruling: in a build with no shell CLI the binary check's notes
+    /// In a build with no shell CLI the binary check's notes
     /// name the brand's command, never k5 (the brand's own name is taken
     /// out first, so this holds for any brand); ours keep today's words.
     #[test]

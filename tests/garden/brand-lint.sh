@@ -261,7 +261,7 @@ own_id=25B77D84DA3C24B8 own_line=RWS4JDzahH23JaLG/sJZ6ECPc58g2hi5jkdAVvOH/XPJXUP
 sed -i.bak -e "s#key_id = \"${tkey%% *}\", pubkey = \"${tkey#* }\"#key_id = \"$own_id\", pubkey = \"$own_line\"#" "$T/h-own/brand.toml" && rm -f "$T/h-own/brand.toml.bak"
 lint "$T/h-own" --hosted
 [ "$rc" = 0 ] && [[ "$out" == *"ok (the written lists, the hosted fields)"* ]] || die "the template with its own key --hosted: $out"; ok
-# A partner build carries no shell CLI (Rosson's rule): --hosted refuses
+# A partner build carries no shell CLI: --hosted refuses
 # cli.no_bash = false for a brand that is not ours, and nothing else; the
 # plain lint and our own brands (which spell false) pass.
 cp -R "$T/h-own" "$T/h-bash"

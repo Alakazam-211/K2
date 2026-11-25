@@ -555,7 +555,7 @@ pub fn hand_off(args: &[OsString]) -> Exit {
 /// build carries (`packed`): `None` hands it to the shell, which sends it
 /// over the session socket. With no copy (a build with no shell CLI) it
 /// is [`FrontError::IsolatedNoShell`], decided before anything is looked
-/// at, so nothing is read, written or sent (K2's ruling).
+/// at, so nothing is read, written or sent.
 pub fn identity_refusal(packed: Option<Packed<'_>>, args: &[OsString]) -> Option<FrontError> {
     if packed.is_some() {
         return None;

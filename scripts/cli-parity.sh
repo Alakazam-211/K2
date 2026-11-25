@@ -242,7 +242,7 @@ EXPECTED_DIFFS=(
     "clone-proxy-unread|the clone engine's port|a clone request to an https server that isn't this computer with the person's https_proxy set to a URL of another scheme (the checks: \`clone preview ws1 --host https://cp.example.invalid --token-stdin --json\` with https_proxy=socks5://127.0.0.1:<port>, and with https_proxy=https://127.0.0.1:<port>): the binary sends nothing and prints one usage line on stderr naming the scheme, exit 2, stdout empty: {\"error\": \"usage\", \"hint\": \"proxy socks5://\\u2026 is not supported: only http:// proxies are\"} (https:// the same). The shell's Python urllib sends one plain CONNECT cp.example.invalid:443 to <port> each time (it uses a socks or an https proxy URL as an http proxy), in its own version's head (python-connect-host), the token never in it; the proxy's 407 is its {\"error\": \"daemon_unreachable\", ...}, exit 3. (A blank-separated no_proxy is no longer part of it: the binary reads no_proxy as the shell's Python does, K2's one proxy rule.)"
     "home-unset-prefix|native lane step 2 (K2's ruling A: one refusal at the front, never a guessed home)|no HOME in the environment (the check: \`whoami\` and \`help\` with env -i, a port setting given): bash's prelude stops under set -u at K2_HOME=\"\${HOME}/.k2\" with \"<path to cli/k2>: line <n>: HOME: unbound variable\", exit 1; the binary refuses at its front before it reads or sends anything, \"HOME isn't set; set it to your home folder and try again\", exit 1. Neither prints on stdout or sends. A K*_PORT setting that is no port is refused first on both (exit 2), and an empty HOME is a HOME"
     "cd-option-prefix|native lane step 2 (K2's ruling on a folder cd reads as an option)|a --workspace folder whose name starts with - and holds a letter cd doesn't take (the check: \`changes list --workspace -ws\` where -ws is a folder): both print cd's two lines on stderr, \"cd: -w: invalid option\" and cd's usage line (bash 3.2's \"cd: usage: cd [-L|-P] [dir]\", 4.4 and later's \"cd: usage: cd [-L|[-P [-e]] [-@]] [dir]\"), send nothing and exit as cd does under set -e (1 on 3.2, 2 from 4.4); bash puts \"<path to cli/k2>: line <n>: \" before the first line, the binary doesn't. The bash side is /bin/bash, the one the binary hands lines to and models"
-    "sim-install-dash-path|native lane step 2 (K2's ruling 1: a native refusal for input bash only half-handles)|\`sim install <path>\` with a path starting with - (the check: \`sim install -app.apk\` where -app.apk is a file, a port and an owner token on disk but nothing listening): bash's dirname and basename read the path as their options, and the run stops with the system tools' own usage lines (GNU's or BSD's words), exit 1; the binary sends nothing too and prints its usage error, \"Error: <cli> sim install: a path starting with \\\"-\\\" can't be read safely; use ./<path> instead\" and the JSON error line, exit 2. The binary's side is checked in crates/k5-cli/tests/home_pwd_cdpath_parity.rs too, against a stub that must get no request"
+    "sim-install-dash-path|native lane step 2 (K2's ruling 1: a native refusal for input bash only half-handles)|\`sim install <path>\` with a path starting with - (the check: \`sim install -app.apk\` where -app.apk is a file, a port and an owner token on disk but nothing listening): bash's dirname and basename read the path as their options, and the run stops with the system tools' own usage lines (GNU's or BSD's words), exit 1; the binary sends nothing too and prints its usage error, \"Error: <cli> sim install: a path starting with \\\"-\\\" can't be read safely; use ./<path> instead\" and the JSON error line, exit 1 as bash's. Only the words differ. The binary's side is checked in crates/k5-cli/tests/home_pwd_cdpath_parity.rs too, against a stub that must get no request"
 )
 
 # check_version_offline: both CLIs run `--version` with a temp HOME and no
@@ -299,7 +299,7 @@ check_home_unset_prefix() {
 # check_sim_install_dash_path: `sim install -app.apk` in a folder that
 # holds a file named -app.apk, a port and an owner token on disk but
 # nothing listening. Bash stops with dirname's and basename's usage lines,
-# exit 1; the binary refuses before it sends: its two lines, exit 2.
+# exit 1; the binary refuses before it sends: its two lines, exit 1 too.
 check_sim_install_dash_path() {
     local d="$WORK/dsim" rc out err problems=() hint
     # The default brand's command name, as the other checks spell it.
@@ -314,7 +314,7 @@ check_sim_install_dash_path() {
     head -1 "$err" | grep -q '^dirname: ' && grep -q '^basename: ' "$err" \
         || problems+=("bash wrote: $(head -c 300 "$err")")
     rc=0; (cd "$d/ws" && env -i PATH="$PATH" HOME="$d/home" "$WORK/bin/k2" sim install -app.apk) >"$out" 2>"$err" </dev/null || rc=$?
-    [ "$rc" = 2 ] || problems+=("the binary exited $rc, want 2")
+    [ "$rc" = 1 ] || problems+=("the binary exited $rc, want 1")
     [ ! -s "$out" ] || problems+=("the binary printed on stdout: $(head -c 200 "$out")")
     [ "$(sed -n 1p "$err")" = "Error: $hint" ] && [ "$(wc -l <"$err" | tr -d ' ')" = 2 ] \
         || problems+=("the binary wrote: $(head -c 300 "$err")")

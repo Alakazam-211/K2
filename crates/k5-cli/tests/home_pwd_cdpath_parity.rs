@@ -449,8 +449,8 @@ fn with_dash_file(r: &Rig) {
 /// `sim install` with a path starting with `-` (the named difference
 /// `sim-install-dash-path`, K2's ruling 1): bash's `dirname` and `basename`
 /// read it as their options and the run stops with the system tools' own
-/// usage lines, exit 1; the binary refuses it with its usage error, exit
-/// 2. Neither sends anything.
+/// usage lines, exit 1; the binary refuses it in its own words, exit 1 too.
+/// Neither sends anything: only the words differ.
 #[test]
 fn sim_install_refuses_a_dash_path() {
     let rig = Rig::new("sim", "dashpath");
@@ -492,7 +492,7 @@ fn sim_install_refuses_a_dash_path() {
     assert_eq!(
         (out.code, out.stdout.as_str(), out.stderr.as_str()),
         (
-            Some(2),
+            Some(1),
             "",
             format!(
                 "Error: {hint}\n{{\"error\": {{\"code\": \"usage\", \"hint\": \"{}\"}}}}\n",

@@ -47,7 +47,7 @@
 //! ruling 1): an install path starting with `-` reaches bash's `dirname`
 //! and `basename` as their options, and the run stops with the system
 //! tools' own usage lines (GNU's or BSD's words), exit 1. The binary
-//! refuses it with its usage error, exit 2. Neither sends anything.
+//! refuses it in its own words, exit 1 too. Neither sends anything.
 
 use super::{curl_port, get, py_d, py_get, py_iter, py_left, py_space, raised, Raise, Shown};
 use crate::daemon::{self, Settings};
@@ -617,9 +617,13 @@ fn parse_verb(
             // instead (K2's ruling 1, the named difference
             // sim-install-dash-path).
             if p.starts_with('-') || dir.starts_with('-') {
-                return Err(usage(format!(
-                    "{n} sim install: a path starting with \"-\" can't be read safely; use ./{p} instead"
-                )));
+                // Exit 1, as bash stops there.
+                return Err(Die {
+                    exit: Exit::Error,
+                    ..usage(format!(
+                        "{n} sim install: a path starting with \"-\" can't be read safely; use ./{p} instead"
+                    ))
+                });
             }
             if cd_moved(&dir) {
                 return Ok(Parsed::Shell);

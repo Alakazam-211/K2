@@ -117,7 +117,7 @@ fn an_isolated_session_s_passport_call_runs_natively_or_is_refused_with_no_shell
     // A native verb: over the session socket, marked, in any build.
     let native = words(&["agent", "context", "list"]);
     stub.reset(&[]);
-    let r = run(&stub, &home, &proj, path.as_os_str(), &native);
+    let r = run(&stub, &home, &proj, std::ffi::OsStr::new(&path), &native);
     let log = stub.take_log();
     let over_tcp: Vec<String> = log
         .iter()
@@ -140,7 +140,7 @@ fn an_isolated_session_s_passport_call_runs_natively_or_is_refused_with_no_shell
     // A verb that still goes to the shell.
     let shell = words(&["agent", "whois"]);
     stub.reset(&[]);
-    let r = run(&stub, &home, &proj, path.as_os_str(), &shell);
+    let r = run(&stub, &home, &proj, std::ffi::OsStr::new(&path), &shell);
     let noun = noun(&shell);
     let (line, code) = if k2_client::brand::CLI_NO_BASH {
         (FrontError::IsolatedNoShell { noun }.line(), 70)

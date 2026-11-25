@@ -1,5 +1,7 @@
 # Update-key ceremony (U1 → U2, with an offline backup U3)
 
+Names here are placeholders; use your own box and release nodes.
+
 Runbook for the planned rotation of K2's update-signing key
 (prd-security-sweep-0464-v1, SS4/SS5, option C "dual-sign bridge").
 Rosson runs it **once**, on **mac-b**, in a **GUI terminal** (iTerm or

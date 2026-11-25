@@ -281,13 +281,27 @@ pub fn identity_session(lookup: impl Fn(&str) -> Option<OsString>) -> bool {
 /// ([`crate::daemon::passport_on_socket`]). Windows keeps the hand-off
 /// until its lane has built and run the native reroute there.
 pub fn identity_hand_off(facts: Facts, identity: bool, windows: bool) -> bool {
-    windows && identity && decide(facts, || Ancestry::Unknown) == Verdict::Passport
+    windows && isolated_passport_call(facts, identity)
 }
 
 /// [`identity_hand_off`] for this process, its arguments and this OS.
 pub fn identity_hand_off_here(args: &[OsString]) -> bool {
     let lookup = |name: &str| std::env::var_os(name);
     identity_hand_off(facts(args, lookup), identity_session(lookup), cfg!(windows))
+}
+
+/// An identity session's call that carries the session's passport
+/// ([`Verdict::Passport`]), on any OS. A build with no shell CLI refuses
+/// such a call with its own line when it would go to the shell
+/// ([`crate::fallthrough::hand_off`]).
+pub fn isolated_passport_call(facts: Facts, identity: bool) -> bool {
+    identity && decide(facts, || Ancestry::Unknown) == Verdict::Passport
+}
+
+/// [`isolated_passport_call`] for this process and its arguments.
+pub fn isolated_passport_call_here(args: &[OsString]) -> bool {
+    let lookup = |name: &str| std::env::var_os(name);
+    isolated_passport_call(facts(args, lookup), identity_session(lookup))
 }
 
 /// What the shell CLI gets for `verdict`: [`WOULD_REFUSE_VAR`]`=1` when the

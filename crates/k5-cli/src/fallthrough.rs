@@ -534,8 +534,16 @@ pub fn dev_fd(fd: &std::os::fd::OwnedFd) -> OsString {
 /// stands), then [`run`]; its error's line on stderr, and its exit. Nothing
 /// else has changed the process environment, so it is what the shell
 /// inherits. A build with no shell CLI skips the rule (there is no shell
-/// to tell) and [`run`] refuses at once.
+/// to tell) and [`run`] refuses at once; an isolated agent session's
+/// passport call gets its own line there ([`identity_refusal`]).
 pub fn hand_off(args: &[OsString]) -> Exit {
+    if crate::passport::isolated_passport_call_here(args) {
+        if let Some(err) = identity_refusal(embedded(), args) {
+            crate::prelude::plain_http::skip();
+            crate::out::stderr_line(&err.line());
+            return err.exit();
+        }
+    }
     if embedded().is_some() {
         match crate::passport::hand_off_env(crate::passport::current(args)) {
             (name, Some(value)) => std::env::set_var(name, value),

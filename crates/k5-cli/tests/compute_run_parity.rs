@@ -828,7 +828,7 @@ fn compute_run_words() {
             &["run", "--max-wait", "9m", "--", "x"],
             2,
         ),
-        ("--label with no =", &["run", "--label", "k", "--", "x"], 2),
+        ("--label empty", &["run", "--label", "", "--", "x"], 2),
         ("--env with no =", &["run", "--env", "A", "--", "x"], 2),
         ("--secret =X", &["run", "--secret", "=X", "--", "x"], 2),
     ];
@@ -1130,7 +1130,7 @@ fn compute_submit_help_never_acts() {
 }
 
 /// What the binary hands to the shell: `--failures` (the failing tests'
-/// list after the end); bash then stops at the label with no `=`.
+/// list after the end); bash then stops at the empty label.
 #[test]
 fn compute_run_failures_is_the_shells() {
     let rig = Rig::new(VERB, "runfail");
@@ -1152,7 +1152,7 @@ fn compute_run_failures_is_the_shells() {
         compare: Compare::Shell,
         ..case(
             "--wait --failures",
-            &["run", "--wait", "--failures", "--label", "k", "--", "x"],
+            &["run", "--wait", "--failures", "--label", "", "--", "x"],
             &[],
             vec![],
             owner_and_port,

@@ -6,7 +6,8 @@
 # base image with skopeo).
 #
 #   $IT/bin/k2-daemon            this checkout's daemon (debug)
-#   $IT/bin/k2-root-helper-cur   test-keys helper (protocol 8)
+#   $IT/bin/k2-root-helper-cur   test-keys helper (this checkout's protocol)
+#   $IT/protocol                 k2-root-proto's PROTOCOL, written by the runner
 #   $IT/bin/k2-app-engine        this checkout's engine
 #   $IT/bin/testsign             the helper's TEST signer (engine-sig)
 #   $IT/cli/k2, $IT/scripts/install-root-helper.sh
@@ -64,10 +65,12 @@ WS=$K2HOME/ws
 K2() { runuser -u k2 -- env HOME="$K2HOME" PATH=/usr/local/bin:/usr/bin:/bin K2_PROJECT_PATH="$WS" bash -c 'cd "$0" 2>/dev/null || cd ~; exec '"$IT"'/cli/k2 "$@"' "$WS" "$@"; }
 asapp() { runuser -u k2app -- env XDG_RUNTIME_DIR="/run/user/$(id -u k2app)" HOME=/var/lib/k2app bash -c 'cd ~ && "$@"' _ "$@"; }
 
-echo "== helper (protocol 8) + daemon =="
+PROTO="$(cat "$IT/protocol")"
+[ -n "$PROTO" ] || fail "no expected protocol in $IT/protocol"
+echo "== helper (protocol $PROTO) + daemon =="
 K2_ALLOW_TEST_KEYS_BUILD=1 bash "$IT/scripts/install-root-helper.sh" --file "$IT/bin/k2-root-helper-cur" >/tmp/irh.log 2>&1 \
 	|| { cat /tmp/irh.log; fail "install-root-helper.sh"; }
-/usr/local/libexec/k2-root-helper helper version | grep -q '"protocol":8' || fail "helper protocol 8"
+/usr/local/libexec/k2-root-helper helper version | grep -q "\"protocol\":$PROTO[,}]" || fail "helper protocol $PROTO"
 install -m 0755 "$IT/bin/k2-daemon" /usr/local/bin/k2-daemon
 cat >/etc/systemd/system/k2-daemon.service <<UNIT
 [Unit]
@@ -87,7 +90,7 @@ for _ in $(seq 1 300); do
 done
 DPORT="$(cat "$K2HOME/.k2/heartbeat.port")"
 OWNER_TOKEN="$(cat "$K2HOME/.k2/heartbeat.token")"
-ok "helper protocol 8 + k2-daemon on $DPORT"
+ok "helper protocol $PROTO + k2-daemon on $DPORT"
 
 nothing_of_ours() {
 	[ ! -e /opt/k2/podman ] || fail "$1: /opt/k2/podman exists"

@@ -63,6 +63,9 @@ cp "$CARGO_TARGET_DIR/release/k2-app-engine" "$IT/bin/k2-app-engine"
 cp cli/k2 "$IT/cli/k2"
 cp scripts/install-root-helper.sh "$IT/scripts/"
 cp -r tests/linux/guarded-fixture tests/linux/engine_client.py tests/linux/apps_e2e_podman5.sh "$IT/tests/"
+# The helper protocol this checkout builds (the suite checks the installed helper reports it).
+sed -n 's/^pub const PROTOCOL: u32 = \([0-9][0-9]*\);$/\1/p' crates/k2-root-proto/src/version.rs >"$IT/protocol"
+[ -s "$IT/protocol" ] || { echo "FATAL: no PROTOCOL in crates/k2-root-proto/src/version.rs" >&2; exit 1; }
 # The pinned tarball and its sha256, straight from k2-root-proto.
 case "$(uname -m)" in x86_64) A=amd64 ;; aarch64) A=arm64 ;; esac
 P=crates/k2-root-proto/src/podman.rs

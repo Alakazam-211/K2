@@ -448,6 +448,34 @@ fn a_soak_is_never_placed_on_a_release_node() {
     compute_ws::test_detach(other);
 }
 
+/// `status`'s counter: each displacement's time run before it was ended,
+/// plus a finished re-run's time over its usual run.
+#[test]
+fn the_counter_adds_time_run_before_and_a_rerun_over_its_usual_time() {
+    let _db = k2_core::db::scoped_for_test();
+    let db = k2_core::db::shared();
+    let now = compute::now();
+    let n = "dsp-count-f";
+    {
+        let conn = db.lock();
+        node(&conn, n, &["ws-a"]);
+        // Displaced after 4 min; its re-run took 15 min where 10 is usual.
+        let done = job(&conn, "d15f0000000000000000000000000001", n, "ws-a", "normal", false, Some(600), None, now - 2000);
+        conn.execute("UPDATE compute_jobs SET state = 'done', started_at = ?2, ended_at = ?3 WHERE id = ?1", rusqlite::params![done.id, now - 1000, now - 100])
+            .expect("done");
+        store::record_event(&conn, "controller", "job_displaced", Some(n), Some("ws-a"), Some(&done.id), serde_json::json!({"ranSecs": 240}));
+        // Displaced after 1 min; its re-run hasn't ended.
+        let again = job(&conn, "d15f0000000000000000000000000002", n, "ws-a", "normal", false, Some(600), None, now - 500);
+        store::record_event(&conn, "controller", "job_displaced", Some(n), Some("ws-a"), Some(&again.id), serde_json::json!({"ranSecs": 60}));
+    }
+    let c = counter(now);
+    assert_eq!(c["count"], 2);
+    assert_eq!(c["lostSecs"], 240 + 300 + 60, "{c}");
+    assert_eq!(c["minutesLost"], 10);
+    let line = c["line"].as_str().expect("line");
+    assert!(line.starts_with("displaced (24 h): 2 run(s)") && line.contains("~10 min lost"), "{line}");
+}
+
 /// Go elsewhere first (auto): another node starts the CI job now, so
 /// nothing is displaced. Then, with that node full too, the displaced
 /// auto job runs again elsewhere, uncounted, and avoids the node.

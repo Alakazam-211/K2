@@ -273,19 +273,17 @@ fn without_python3_the_json_pages_are_the_binary_s_whatever_python_s_settings_sa
 fn the_unknown_command_prints_the_same_without_python3() {
     let rig = Rig::new("unknown");
     let tier = k5_cli::pages::daily_text(false, false).expect("the daily tier");
+    // The command in these lines is the brand's (xy in a K2_BRAND_DIR=brand/xy build).
+    let cli = k2_client::brand::CLI_NAME;
+    let who = format!("Error: 'who' is retired. Use instead: {cli} connections list\n");
+    let lock = format!(
+        "Error: 'agents lock' is retired (nothing replaces it). Run '{cli} help-deprecated' for the full map.\n"
+    );
     for (args, stdout, stderr) in [
         (&["nope"][..], tier.as_str(), "Unknown command: nope\n"),
         (&["nope", "x", "--json"], tier.as_str(), "Unknown command: nope\n"),
-        (
-            &["who"],
-            "",
-            "Error: 'who' is retired. Use instead: k2 connections list\n",
-        ),
-        (
-            &["agents", "lock", "x"],
-            "",
-            "Error: 'agents lock' is retired (nothing replaces it). Run 'k2 help-deprecated' for the full map.\n",
-        ),
+        (&["who"], "", who.as_str()),
+        (&["agents", "lock", "x"], "", lock.as_str()),
     ] {
         let with = rig.run(args, true, &[]);
         let without = rig.run(args, false, &[]);

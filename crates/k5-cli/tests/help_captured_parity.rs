@@ -614,17 +614,77 @@ fn says_the_brand(argv: &[String], want: &str, text: &str) {
         "{argv:?}: {product} is not where bash named the product:\n{text}"
     );
     if cli != "k2" {
+        let bare = without_wire_names(text);
         assert_eq!(
-            standalone(text, "k2", cli_after),
+            standalone(&bare, "k2", cli_after),
             0,
             "{argv:?}: a typed k2:\n{text}"
         );
         assert_eq!(
-            standalone(text, "K2", product_after),
+            standalone(&bare, "K2", product_after),
             0,
             "{argv:?}: a typed K2:\n{text}"
         );
     }
+}
+
+/// `text` without the wire names in `data/brand_wire_keep.tsv`: words a
+/// page prints that spell k2 in every brand's build (an API object, not the
+/// command). A phrase matches across any run of whitespace, since a page
+/// wraps it.
+fn without_wire_names(text: &str) -> String {
+    let mut out = text.to_string();
+    let rows = include_str!("data/brand_wire_keep.tsv")
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'));
+    for row in rows {
+        let (phrase, why) = row
+            .split_once('\t')
+            .unwrap_or_else(|| panic!("keep row is <phrase><TAB><reason>: {row:?}"));
+        assert!(!why.trim().is_empty(), "keep row without a reason: {row:?}");
+        let words: Vec<&str> = phrase.split(' ').collect();
+        let mut kept = String::new();
+        let mut i = 0;
+        while i < out.len() {
+            if let Some(end) = phrase_at(&out, i, &words) {
+                kept.push(' ');
+                i = end;
+            } else {
+                let c = out[i..].chars().next().unwrap();
+                kept.push(c);
+                i += c.len_utf8();
+            }
+        }
+        out = kept;
+    }
+    out
+}
+
+/// Where `words`, separated by whitespace, end when they start at `at`.
+fn phrase_at(text: &str, at: usize, words: &[&str]) -> Option<usize> {
+    let mut i = at;
+    for (n, w) in words.iter().enumerate() {
+        if n > 0 {
+            let gap = text[i..].len() - text[i..].trim_start().len();
+            if gap == 0 {
+                return None;
+            }
+            i += gap;
+        }
+        if !text[i..].starts_with(w) {
+            return None;
+        }
+        i += w.len();
+    }
+    Some(i)
+}
+
+#[test]
+fn a_wire_name_is_kept_across_a_wrap_and_a_typed_k2_is_not() {
+    let page = "  xy zen guide api lists the\n            k2 object's helpers. Run k2 zen.";
+    let bare = without_wire_names(page);
+    assert_eq!(standalone(&bare, "k2", cli_after), 1, "{bare}");
+    assert_eq!(standalone(page, "k2", cli_after), 2);
 }
 
 /// The pages name the command and the product by the brand (in a build

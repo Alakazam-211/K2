@@ -1,0 +1,5 @@
+# Wire names the help pages print that spell k2 in every brand's build, for
+# help_captured_parity.rs (says_the_brand): taken out before a typed k2 or
+# K2 is counted in a build with another name. Tab-separated:
+#   <phrase, words separated by one space; it matches across a wrap><TAB><what it is, why it stays>
+the k2 object's helpers	zen.txt (zen --help, the widget line): k2 is the widget API's JavaScript object (window.k2), a name widget code calls, the same in every brand

@@ -1352,6 +1352,12 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/users", Admin),
     post("/cli/users/add", Admin),
     get("/cli/users/audit", Owner),
+    // 0.46.18: a server's first owner login, from the k2.dev dashboard of
+    // the account the server is linked to. Public at the token gate; the
+    // dispatcher answers it only on the tunnel, with the dashboard's own
+    // edge signature, while the server has no owner login
+    // (`first_owner_claim`).
+    post("/cli/users/claim-first-owner", Public),
     split("/cli/users/policy", VoiceChat, NoLogin),
     post("/cli/users/remove", Owner),
     post("/cli/users/set-can-clone", Owner),

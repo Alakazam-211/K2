@@ -305,6 +305,8 @@ pub mod routes;
 // in the lib so the provision_users integration suite can drive the
 // SAME module function main.rs's boot sequence calls.
 pub mod seed_users;
+// 0.46.18: a server's first owner login, claimed from the k2.dev dashboard.
+pub mod first_owner_claim;
 // COMPAT-58 (#58 Phase 1 / PR-A): scoped per-session hook tokens + per-cell UDS
 // (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
 pub mod cell_identity;

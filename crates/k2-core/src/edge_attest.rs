@@ -389,10 +389,65 @@ pub fn verify(
     expected_sub: &str,
     now: i64,
 ) -> Result<Attestation, AttestError> {
+    verify_with_keys(header, method, path, body, expected_sub, now, &trusted_keys())
+}
+
+/// The k2.dev dashboard's key-id prefix (`k2-edge-dash-2026-09`, …). Only
+/// k2.dev's own server holds these private halves; the `*.app.k2.dev`
+/// Worker's keys (`k2-edge-app-…`) proxy any browser and never count.
+pub const DASH_KID_PREFIX: &str = "k2-edge-dash-";
+
+/// The keys a dashboard-only step ([`verify_dashboard`]) trusts: the BAKED
+/// dashboard keys only. `~/.k2/edge-keys.json` never adds or replaces one
+/// in a release build: that file is in the daemon user's own home, so a
+/// process on this box (an agent) could otherwise trust a key of its own.
+/// A test build (`test-util`) also reads the file's dashboard-prefixed
+/// entries, so tests sign with an ephemeral key.
+pub fn dashboard_keys() -> HashMap<String, [u8; 32]> {
+    dashboard_key_set(crate::TEST_BUILD)
+}
+
+/// [`dashboard_keys`]; `with_file`: also the override file's dashboard
+/// entries (test builds only).
+fn dashboard_key_set(with_file: bool) -> HashMap<String, [u8; 32]> {
+    let mut keys: HashMap<String, [u8; 32]> = BAKED_KEYS
+        .iter()
+        .filter(|(kid, _)| kid.starts_with(DASH_KID_PREFIX))
+        .filter_map(|(kid, b64)| decode_pub(b64).map(|k| ((*kid).to_string(), k)))
+        .collect();
+    if with_file {
+        keys.extend(trusted_keys().into_iter().filter(|(kid, _)| kid.starts_with(DASH_KID_PREFIX)));
+    }
+    keys
+}
+
+/// [`verify`] for a step only the k2.dev dashboard may sign
+/// ([`dashboard_keys`]): an app-Worker key, or a key added in
+/// `edge-keys.json`, is `UnknownKid`.
+pub fn verify_dashboard(
+    header: Option<&str>,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    expected_sub: &str,
+    now: i64,
+) -> Result<Attestation, AttestError> {
+    verify_with_keys(header, method, path, body, expected_sub, now, &dashboard_keys())
+}
+
+/// [`verify`] against a given `kid → key` set.
+pub fn verify_with_keys(
+    header: Option<&str>,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    expected_sub: &str,
+    now: i64,
+    keys: &HashMap<String, [u8; 32]>,
+) -> Result<Attestation, AttestError> {
     let header = header.ok_or(AttestError::Missing)?;
     let parsed = parse_header(header)?;
     // A1
-    let keys = trusted_keys();
     let pub_key = keys.get(&parsed.kid).ok_or(AttestError::UnknownKid)?;
     // A2
     if (now - parsed.ts).abs() > MAX_SKEW_SECS {
@@ -688,6 +743,52 @@ mod tests {
             // Minted for another box: never verifies here.
             let other = signer.header("POST", "/cli/auth/login", "someone-else", t, &random_nonce(), "-", body);
             assert!(verify(Some(&other), "POST", "/cli/auth/login", body, SUB, t).is_err());
+        });
+    }
+
+    #[test]
+    fn dashboard_steps_trust_only_the_baked_dashboard_keys_in_a_release_build() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            // No file: the baked dashboard key alone, never the app Worker's.
+            let keys = dashboard_key_set(false);
+            assert_eq!(keys.keys().cloned().collect::<Vec<_>>(), vec!["k2-edge-dash-2026-09".to_string()]);
+            // A file on this box naming a dashboard kid, a new one and a
+            // replacement for the baked one: a release build ignores both.
+            let mine = EdgeSigner::generate("k2-edge-dash-2026-09").unwrap();
+            let extra = EdgeSigner::generate("k2-edge-dash-mine").unwrap();
+            let file = serde_json::json!({"keys": [
+                {"kid": mine.kid(), "pub": mine.public_key_b64()},
+                {"kid": extra.kid(), "pub": extra.public_key_b64()},
+            ]});
+            std::fs::write(override_path(), file.to_string()).unwrap();
+            let release = dashboard_key_set(false);
+            assert_eq!(release.len(), 1, "{:?}", release.keys());
+            assert_eq!(
+                release["k2-edge-dash-2026-09"],
+                decode_pub(BAKED_KEYS.iter().find(|(k, _)| *k == "k2-edge-dash-2026-09").unwrap().1).unwrap(),
+                "the file never replaces the baked dashboard key"
+            );
+            let body = b"{}";
+            let t = now();
+            let h = mine.header("POST", "/cli/users/claim-first-owner", SUB, t, &random_nonce(), "-", body);
+            assert_eq!(
+                verify_with_keys(Some(&h), "POST", "/cli/users/claim-first-owner", body, SUB, t, &release),
+                Err(AttestError::BadSignature),
+                "a key planted under the dashboard's kid doesn't verify"
+            );
+            let h = extra.header("POST", "/cli/users/claim-first-owner", SUB, t, &random_nonce(), "-", body);
+            assert_eq!(
+                verify_with_keys(Some(&h), "POST", "/cli/users/claim-first-owner", body, SUB, t, &release),
+                Err(AttestError::UnknownKid)
+            );
+            // The ordinary trusted set takes the file (login keeps working).
+            assert!(trusted_keys().contains_key("k2-edge-dash-mine"));
+            // An app Worker kid is never a dashboard key, even in a test build.
+            let app = EdgeSigner::generate("k2-edge-app-test").unwrap();
+            app.install_trust_file().unwrap();
+            assert!(!dashboard_keys().contains_key("k2-edge-app-test"));
+            let h = app.header("POST", "/cli/users/claim-first-owner", SUB, t, &random_nonce(), "-", body);
+            assert_eq!(verify_dashboard(Some(&h), "POST", "/cli/users/claim-first-owner", body, SUB, t), Err(AttestError::UnknownKid));
         });
     }
 

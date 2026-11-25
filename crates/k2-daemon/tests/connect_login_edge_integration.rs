@@ -2012,3 +2012,191 @@ async fn anonymous_app_spray_closes_only_anonymous_app_logins() {
         assert_eq!(connect.status, 200, "the Connect door stays open; body={}", connect.body);
     });
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 0.46.18: a server's first owner login, claimed from the k2.dev
+// dashboard (`first_owner_claim`).
+// ─────────────────────────────────────────────────────────────────────
+
+const CLAIM: &str = "/cli/users/claim-first-owner";
+const DASH_KID: &str = "k2-edge-dash-test";
+
+/// Tunnel label `rosson` and an ephemeral dashboard key (a test build
+/// reads dashboard-prefixed kids from the override file; a release build
+/// never does, see `edge_attest::dashboard_keys`). No logins.
+fn seed_claim() -> EdgeSigner {
+    set_tunnel_subdomain(SUB);
+    let signer = EdgeSigner::generate(DASH_KID).expect("ephemeral dashboard key");
+    signer.install_trust_file().expect("install edge-keys.json");
+    signer
+}
+
+fn claim_body(user: &str) -> String {
+    format!(r#"{{"username":"{user}","password":"claimed-pass-123","k2Account":"acct-42"}}"#)
+}
+
+/// A claim through the tunnel, signed by `signer` for `sub`.
+fn signed_claim(d: &test_harness::TestDaemon, signer: &EdgeSigner, body: &str, sub: &str) -> Resp {
+    let header = format!("X-K2-Edge-Sig: {}", signer.header("POST", CLAIM, sub, now(), &random_nonce(), "203.0.113.7", body.as_bytes()));
+    http(d.tunnel_port, "POST", CLAIM, Some(body), &[&header])
+}
+
+fn owners() -> Vec<String> {
+    connect_users::list_users()
+        .expect("list users")
+        .into_iter()
+        .filter(|u| u.role == Role::Owner)
+        .map(|u| u.username)
+        .collect()
+}
+
+fn error_code(r: &Resp) -> String {
+    let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON error body");
+    v["error"]["code"].as_str().expect("error.code").to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_owner_claim_from_the_dashboard_works_once_on_a_server_with_no_owner() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed_claim();
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        assert!(owners().is_empty());
+
+        let r = signed_claim(&d, &signer, &claim_body("Alice"), SUB);
+        assert_eq!(r.status, 200, "the first claim makes the owner; body={}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("claim JSON");
+        assert_eq!(v["username"], "alice");
+        assert_eq!(v["role"], "owner");
+        assert_eq!(owners(), vec!["alice".to_string()]);
+        // The password the person chose signs in, and it isn't temporary.
+        let login = attested_login(&d, &signer, r#"{"username":"alice","password":"claimed-pass-123"}"#, now(), &random_nonce(), "203.0.113.7", SUB, &[]);
+        assert_eq!(login.status, 200, "the claimed owner signs in; body={}", login.body);
+        let lv: serde_json::Value = serde_json::from_str(&login.body).expect("login JSON");
+        assert_eq!(lv["mustChangePassword"], false);
+
+        // A second claim, signed and for a new name: refused, nothing made.
+        let r = signed_claim(&d, &signer, &claim_body("mallory"), SUB);
+        assert_eq!(r.status, 409, "a second claim is refused; body={}", r.body);
+        assert_eq!(error_code(&r), "owner_exists");
+        assert!(connect_users::role_for_user("mallory").is_none(), "no login for the second claim");
+        assert_eq!(owners(), vec!["alice".to_string()]);
+
+        let rows = audit_events_for("first-owner-claim");
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0]["user"], "alice");
+        assert_eq!(rows[0]["outcome"], "ok account=acct-42");
+        assert_eq!(rows[0]["ingress"], format!("edge:{DASH_KID}"));
+        assert_eq!(rows[1]["user"], "mallory");
+        assert_eq!(rows[1]["outcome"], "deny owner_exists account=acct-42");
+        let all = serde_json::to_string(&audit_events()).expect("audit JSON");
+        assert!(!all.contains("claimed-pass-123"), "the password is never audited");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_owner_claim_is_refused_with_an_owner_present_even_a_disabled_one() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed_claim();
+        connect_users::add_user("oldowner", "password123").expect("add_user");
+        connect_users::set_role("oldowner", Role::Owner).expect("set_role");
+        connect_users::set_disabled("oldowner", true).expect("set_disabled");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let r = signed_claim(&d, &signer, &claim_body("alice"), SUB);
+        assert_eq!(r.status, 409, "an owner login exists (disabled); body={}", r.body);
+        assert_eq!(error_code(&r), "owner_exists");
+        assert!(connect_users::role_for_user("alice").is_none());
+        assert_eq!(owners(), vec!["oldowner".to_string()]);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_owner_claim_never_promotes_an_existing_login() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed_claim();
+        connect_users::add_user("alice", "member-pass-123").expect("add_user");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let r = signed_claim(&d, &signer, &claim_body("alice"), SUB);
+        assert_eq!(r.status, 409, "the name is taken; body={}", r.body);
+        assert_eq!(error_code(&r), "username_taken");
+        assert_eq!(connect_users::role_for_user("alice"), Some(Role::Member), "never promoted");
+        assert!(owners().is_empty());
+    });
+}
+
+/// Only the dashboard, on the tunnel, signed for this server: everything
+/// else is the same plain 404 and makes nothing. The owner token and an
+/// agent's token on loopback (every on-box caller), an app-Worker
+/// signature, a signature for another server, a changed body, a replay,
+/// no signature at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_owner_claim_takes_only_the_dashboards_signature_on_the_tunnel() {
+    let _g = lock();
+    with_temp_home(|| {
+        let signer = seed_claim();
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let body = claim_body("alice");
+        let auth = format!("Authorization: Bearer {OWNER_TOKEN}");
+
+        // Loopback, even with a valid dashboard signature.
+        let header = format!("X-K2-Edge-Sig: {}", signer.header("POST", CLAIM, SUB, now(), &random_nonce(), "-", body.as_bytes()));
+        let r = http(d.port, "POST", &format!("{CLAIM}?token={OWNER_TOKEN}"), Some(&body), &[&header, &auth]);
+        assert_plain_404(&r, "loopback with the owner token and a dashboard signature");
+        let r = http(d.port, "POST", CLAIM, Some(&body), &["Authorization: Bearer k2hook_agent-scoped-token"]);
+        assert_plain_404(&r, "loopback with an agent's token");
+
+        // The tunnel without a signature, with the owner token.
+        let r = http(d.tunnel_port, "POST", &format!("{CLAIM}?token={OWNER_TOKEN}"), Some(&body), &[&auth]);
+        assert_plain_404(&r, "the tunnel without a signature");
+
+        // The app Worker's key (it proxies any browser) is not the dashboard.
+        let app = EdgeSigner::generate("k2-edge-app-test").expect("app key");
+        let trust = serde_json::json!({"keys": [
+            {"kid": signer.kid(), "pub": signer.public_key_b64()},
+            {"kid": app.kid(), "pub": app.public_key_b64()},
+        ]});
+        std::fs::write(k2_core::edge_attest::override_path(), trust.to_string()).expect("write edge-keys.json");
+        let r = signed_claim(&d, &app, &body, SUB);
+        assert_plain_404(&r, "an app-Worker signature");
+
+        // Signed for another server.
+        let r = signed_claim(&d, &signer, &body, "someone-else");
+        assert_plain_404(&r, "a signature for another server");
+
+        // A body the signature doesn't cover (its nonce isn't spent: only a
+        // good signature records one).
+        let header = format!("X-K2-Edge-Sig: {}", signer.header("POST", CLAIM, SUB, now(), &random_nonce(), "-", body.as_bytes()));
+        let r = http(d.tunnel_port, "POST", CLAIM, Some(&claim_body("mallory")), &[&header]);
+        assert_plain_404(&r, "a changed body");
+        assert!(owners().is_empty(), "nothing made so far");
+
+        // The same header with its own body: the claim. Then its replay.
+        let r = http(d.tunnel_port, "POST", CLAIM, Some(&body), &[&header]);
+        assert_eq!(r.status, 200, "the signed claim; body={}", r.body);
+        let r = http(d.tunnel_port, "POST", CLAIM, Some(&body), &[&header]);
+        assert_plain_404(&r, "a replay");
+
+        assert_eq!(owners(), vec!["alice".to_string()]);
+        assert!(connect_users::role_for_user("mallory").is_none());
+        let outcomes: Vec<String> = audit_events_for("first-owner-claim")
+            .iter()
+            .map(|e| e["outcome"].as_str().expect("outcome").to_string())
+            .collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                "deny off_tunnel",
+                "deny off_tunnel",
+                "deny bad_attest:missing",
+                "deny bad_attest:unknown_kid",
+                "deny bad_attest:bad_sig",
+                "deny bad_attest:bad_sig",
+                "ok account=acct-42",
+                "deny bad_attest:replay",
+            ],
+            "every refusal is audited with its reason"
+        );
+    });
+}

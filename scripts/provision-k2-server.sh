@@ -16,9 +16,9 @@
 #   ./provision-k2-server.sh --bake --with-db   # also bake Postgres sidecar
 #   K2_BAKE_DB=1 ./provision-k2-server.sh --bake
 #
-#   # full provision (bake steps are idempotent — safe on a baked image):
+#   # full provision (bake steps are idempotent — safe on a baked image);
+#   # no owner login: the k2.dev account holder claims it (step 9):
 #   K2_TUNNEL_TOKEN=k2c_... K2_SUBDOMAIN=alice \
-#   K2_OWNER_USER=alice \
 #   ./provision-k2-server.sh
 #
 #   # a deliberate non-App box: a NOT READY `k2 app doctor` is a warning
@@ -36,8 +36,13 @@
 #   K2_RELAYS          optional relay list "host[:port],…" for tunnel.json
 #                      (unset: none; the daemon dials relay.k2.dev, then the
 #                      list k2.dev serves for the token)
-#   K2_OWNER_USER      first owner login to create
-#   K2_OWNER_PASSWORD  its password (omit → generated, printed/callback'd)
+#   K2_OWNER_USER      retired in 0.46.18: set, the run stops before any
+#                      work. No run makes an owner login (that takes a
+#                      person present); the k2.dev account holder claims
+#                      the server's first owner from their dashboard, and a
+#                      self-hosted owner runs k2 users add <you> --role
+#                      owner from their own SSH login. K2_OWNER_PASSWORD
+#                      is ignored.
 #   K2_CALLBACK_URL    control-plane callback POSTed on success (optional)
 #   K2_CALLBACK_TOKEN  bearer for the callback (optional)
 #   K2_VERSION         pin a daemon release (default: latest)
@@ -251,6 +256,10 @@ k2_curl() {
 }
 
 [ "$(id -u)" = "0" ] || die "run as root (cloud-init runcmd or sudo)"
+# Step 9: this run makes no owner (claimed from k2.dev); stop before any work.
+if [ "$BAKE_ONLY" != 1 ] && [ -n "${K2_OWNER_USER:-}" ]; then
+	die "K2_OWNER_USER is set, but this script no longer makes an owner login: a server's first owner is claimed from the k2.dev dashboard of the account it is linked to (POST /cli/users/claim-first-owner). Unset K2_OWNER_USER and re-run. Self-hosted: after this run, k2 users add <you> --role owner from your own SSH login"
+fi
 
 case "$(uname -m)" in
 	x86_64|amd64)   FRP_ARCH="amd64" ;;
@@ -863,53 +872,40 @@ print("; ".join(out) or "the doctor says not ready without naming a check")
 fi
 
 # ── 9. first owner user ──────────────────────────────────────────────
-GENERATED_PW=0
-if [ -n "${K2_OWNER_USER:-}" ]; then
-	if [ -z "${K2_OWNER_PASSWORD:-}" ]; then
-		K2_OWNER_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
-		export K2_OWNER_PASSWORD
-		GENERATED_PW=1
-	fi
-	log "creating owner user '${K2_OWNER_USER}'"
-	BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"password":os.environ["K2_OWNER_PASSWORD"],"mustChangePassword":False}))')
-	ADD_RES_FILE=$(mktemp)
-	OWNER_CREATED=1
-	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$BODY" "" -sS -o "$ADD_RES_FILE" -w '%{http_code}' -X POST)
-	if [ "$HTTP" != "200" ]; then
-		grep -qi "exist" "$ADD_RES_FILE" \
-			|| die "users/add failed ($HTTP): $(cat "$ADD_RES_FILE")"
-		log "owner user already exists — continuing (idempotent re-run, password unchanged)"
-		OWNER_CREATED=0
-	fi
-	rm -f "$ADD_RES_FILE"
-	ROLE_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OWNER_USER"],"role":"owner"}))')
-	k2_curl "$BASE/cli/users/set-role?token=$TOKEN" "$ROLE_BODY" "" -fsS -X POST >/dev/null \
-		|| die "users/set-role owner failed"
-fi
+# This step makes no owner (0.46.18). Since 0.46.15 the owner token can't
+# make an owner login without this computer's own user check, a person
+# present, and an automated run is not one. A hosted server's first owner
+# is the person whose k2.dev account it is linked to: they claim it from
+# their k2.dev dashboard (POST /cli/users/claim-first-owner, signed by the
+# dashboard, over the tunnel, only while the server has no owner login).
+# A self-hosted server's owner makes theirs from their own SSH login:
+# k2 users add <you> --role owner. K2_OWNER_USER stops the run before any
+# work (above).
+log "first owner: none made here; the k2.dev account holder claims it from their dashboard (self-hosted: k2 users add <you> --role owner, from your own SSH login)"
 
 # ── 9b. website-management service user (K2 Cloud only) ─────────────
-# Owner-role user the k2.dev control plane uses to proxy the server
-# modal's actions (user management, subdomain re-pairing) over the
-# tunnel. Customer-visible in their user list; deleting it opts out of
-# website management. Only created when K2_OPS_USER is set (hosted
-# provisioning); self-host runs never get it.
+# The login the k2.dev control plane uses to proxy the server modal's
+# actions (user management, subdomain re-pairing) over the tunnel.
+# Customer-visible in their user list; deleting it opts out of website
+# management. Only created when K2_OPS_USER is set (hosted provisioning);
+# self-host runs never get it. Since 0.46.18 it is made a Member: the
+# owner who claims the server makes it an owner (the k2.dev claim flow
+# does that with the new owner's own session, which needs no further
+# check). A Member login keeps the server claimable (no owner login).
 OPS_PASSWORD=""
 if [ -n "${K2_OPS_USER:-}" ]; then
 	OPS_PASSWORD=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-28)
 	export K2_OPS_USER OPS_PASSWORD
-	log "creating service user '${K2_OPS_USER}' (website management)"
+	log "creating service user '${K2_OPS_USER}' (website management; a Member until the owner claims this server)"
 	OPS_BODY=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"password":os.environ["OPS_PASSWORD"],"mustChangePassword":False}))')
 	OPS_RES=$(mktemp)
 	HTTP=$(k2_curl "$BASE/cli/users/add?token=$TOKEN" "$OPS_BODY" "" -sS -o "$OPS_RES" -w '%{http_code}' -X POST)
 	if [ "$HTTP" != "200" ]; then
 		grep -qi "exist" "$OPS_RES" || die "ops users/add failed ($HTTP): $(cat "$OPS_RES")"
-		log "ops user already exists — leaving its password unchanged"
+		log "ops user already exists — leaving its password and role unchanged"
 		OPS_PASSWORD=""
 	fi
 	rm -f "$OPS_RES"
-	OPS_ROLE=$(python3 -c 'import json,os;print(json.dumps({"username":os.environ["K2_OPS_USER"],"role":"owner"}))')
-	k2_curl "$BASE/cli/users/set-role?token=$TOKEN" "$OPS_ROLE" "" -fsS -X POST >/dev/null \
-		|| die "ops set-role owner failed"
 fi
 
 # ── 9c. Sew (chat + voice) + Home chat + voice rooms ───────────────
@@ -1120,7 +1116,8 @@ if [ -n "${K2_CALLBACK_URL:-}" ]; then
 	CB=$(python3 -c 'import json,os;print(json.dumps({
 		"status":"online",
 		"subdomain":os.environ.get("K2_SUBDOMAIN",""),
-		"ownerUser":os.environ.get("K2_OWNER_USER",""),
+		"ownerUser":"",
+		"firstOwner":"claim",
 		"opsUser":os.environ.get("K2_OPS_USER",""),
 		"opsPassword":os.environ.get("CB_OPS_PASSWORD",""),
 	}))')
@@ -1134,21 +1131,16 @@ fi
 log "PROVISION COMPLETE"
 echo "  daemon:    $(systemctl is-active "$K2_UNIT_NAME") on 127.0.0.1:${PORT}"
 [ -n "${K2_SUBDOMAIN:-}" ] && echo "  address:   https://${K2_SUBDOMAIN}.k2.dev"
-if [ -n "${K2_OWNER_USER:-}" ]; then
-	echo "  owner:     ${K2_OWNER_USER}"
-	if [ "${OWNER_CREATED:-0}" = 1 ] && [ "$GENERATED_PW" = 1 ] && [ -z "${K2_CALLBACK_URL:-}" ]; then
-		echo "  password:  ${K2_OWNER_PASSWORD}   (generated — shown ONCE, store it now)"
-	fi
-fi
+echo "  owner:     none yet (claimed from the k2.dev dashboard of the linked account)"
 echo "  mail:      helper ${MAIL_HELPER_LINE}"
 echo "  apps:      ${APPS_LINE}"
 echo "  sew:       ${SEW_LINE}"
 echo "  recorder:  ${REC_LINE}"
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
-if [ -z "${K2_TUNNEL_TOKEN:-}" ] || [ -z "${K2_OWNER_USER:-}" ]; then
+if true; then
 echo ""
-echo "  Next (interactive self-host):"
-[ -z "${K2_OWNER_USER:-}" ] && echo "    k2 users add <you> --role owner   # prompts for password"
+echo "  Next (hosted: the account holder claims the owner from k2.dev; interactive self-host, from your own SSH login):"
+echo "    k2 users add <you> --role owner   # prompts for password"
 [ -z "${K2_TUNNEL_TOKEN:-}" ] && echo "    k2 connect login                 # pair purchased *.k2.dev subdomain"
 echo "  Automation fallback still works: K2_TUNNEL_TOKEN + K2_SUBDOMAIN env."
 fi

@@ -17,7 +17,7 @@
 # Usage (as root on fresh Ubuntu 24.04 bare metal, post-installimage):
 #
 #   K2_SANDBOX_CONSENT=1 \
-#   K2_TUNNEL_TOKEN=k2c_... K2_SUBDOMAIN=alice K2_OWNER_USER=alice \
+#   K2_TUNNEL_TOKEN=k2c_... K2_SUBDOMAIN=alice \
 #   ./bootstrap-k2-dedicated.sh
 #
 # Environment contract — Dedicated-specific:
@@ -37,7 +37,9 @@
 #                          probe (temp API key → POST /v1/sandboxes) (default: 1)
 #
 # Environment contract — passed through to provision-k2-server.sh (Standard):
-#   K2_TUNNEL_TOKEN K2_SUBDOMAIN K2_OWNER_USER K2_OWNER_PASSWORD K2_OPS_USER
+#   K2_TUNNEL_TOKEN K2_SUBDOMAIN K2_OPS_USER
+#   (0.46.18: no owner login is made; the k2.dev account holder claims the
+#   first owner from their dashboard. K2_OWNER_USER set stops the run.)
 #   K2_CALLBACK_URL K2_CALLBACK_TOKEN K2_VERSION
 #   K2_RUN_USER            daemon service account              (default: k2)
 #   K2_UNIT_NAME           systemd unit name                   (default: k2-daemon)

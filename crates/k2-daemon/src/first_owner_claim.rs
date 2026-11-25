@@ -145,7 +145,10 @@ pub fn handle(body: &[u8], ingress: &str) -> CliResponse {
             return json_err(
                 "409 Conflict",
                 "owner_exists",
-                "this server already has an owner login, so it can't be claimed. Its owner adds other owners in person (k2 users set-role).",
+                &format!(
+                    "this server already has an owner login, so it can't be claimed. Its owner adds other owners in person ({} users set-role).",
+                    k2_core::brand::CLI_NAME
+                ),
             );
         }
         Err(e) => {

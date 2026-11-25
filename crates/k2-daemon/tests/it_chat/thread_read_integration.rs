@@ -734,7 +734,7 @@ async fn a_project_push_with_the_owners_previews_off_still_goes_content_free() {
         let port = d.port;
         isolate_read_state();
         let gina = login(port, "trpgina2");
-        let _gina_dev = register(port, &gina, "gina2");
+        let gina_dev = register(port, &gina, "gina2");
         let gina_key = unread(port, &gina)["badgeKey"].as_str().expect("gina badgeKey").to_string();
         ok(port, "POST", &format!("/cli/settings/update?token={OWNER_TOKEN}"), Some(serde_json::json!({ "pushMessagePreviews": false })));
         let name = format!("Quiet {}", &uuid::Uuid::new_v4().to_string()[..6]);
@@ -747,6 +747,8 @@ async fn a_project_push_with_the_owners_previews_off_still_goes_content_free() {
         assert_eq!(got[0]["data"]["badgeKey"], gina_key.as_str(), "{}", got[0]);
         assert_eq!(got[0]["body"], format!("New message in {name}"), "content-free: {}", got[0]);
         assert!(!got[0].to_string().contains("status update"), "{}", got[0]);
+        // Leave no phone behind for other tests in this process.
+        ok(port, "POST", &format!("/cli/push/unregister-device?token={gina}"), Some(serde_json::json!({ "deviceId": gina_dev })));
         drop(d);
     });
 }

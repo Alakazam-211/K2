@@ -472,7 +472,8 @@ async fn rig(env: &Env, port: u16, name: &str, fake: Arc<FakeBackend>) -> Rig {
     Rig { layout, runner, admin_sock }
 }
 
-/// Every request row (any state) whose names are exactly `names`.
+/// Every request row (any state) on node-a whose names are exactly `names`
+/// (the other test in this binary shares the database, on its own node).
 async fn rows_for(port: u16, names: &[&str]) -> Vec<Value> {
     let r = get(port, "/cli/compute/nodes/packages/requests", OWNER, "state=all&limit=500").await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -485,7 +486,7 @@ async fn rows_for(port: u16, names: &[&str]) -> Vec<Value> {
         .filter(|x| {
             let mut have: Vec<String> = x["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_string()).collect();
             have.sort();
-            have == want
+            x["node"] == "node-a" && have == want
         })
         .cloned()
         .collect()

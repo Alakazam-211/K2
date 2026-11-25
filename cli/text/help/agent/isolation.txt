@@ -39,8 +39,8 @@ WHO MAY
 NEEDS
   Linux with Landlock (Ubuntu 24.04's kernel has it on). Refused (exit 3,
   fence_unavailable) where the kernel has none, or when the agent's
-  workspace is your home folder or holds ~/.k2. Macs get their fence in a
-  later release. The layout needs the root helper at protocol 19 (exit 3,
+  workspace is your home folder or holds ~/.k2. There is no fence on macOS.
+  The layout needs the root helper at protocol 19 (exit 3,
   helper_needed).
 
 SEE ALSO

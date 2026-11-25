@@ -7,7 +7,7 @@ const seqs = (text: string): number[] => findThreadRefs(text).map((r) => r.seq)
 
 describe('findThreadRefs', () => {
   it('takes #N standing alone, with its span', () => {
-    expect(findThreadRefs('card #13664, ok')).toEqual([{ start: 5, end: 11, seq: 13664 }])
+    expect(findThreadRefs('card #42, ok')).toEqual([{ start: 5, end: 8, seq: 42 }])
     expect(seqs('#1 (#2) [#3] "#4". #5!')).toEqual([1, 2, 3, 4, 5])
   })
   it('never a word#N, &#N, ##N, a path or a #N followed by letters', () => {

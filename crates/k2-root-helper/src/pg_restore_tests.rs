@@ -56,7 +56,7 @@ fn controldata_id(root: &Path) -> String {
     std::fs::read_to_string(root.join("controldata-id")).map(|s| s.trim().to_string()).unwrap_or_else(|_| "7000000000000000001".into())
 }
 
-/// akzm's box plus `17/feedback` (port 5434) made with archiving, the
+/// A server's box plus `17/feedback` (port 5434) made with archiving, the
 /// restore tools faked, the source answering a WAL switch and its
 /// archiver, and a restore promoting at once.
 fn archiving_box() -> (T, W) {

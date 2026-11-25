@@ -39,7 +39,7 @@ CEILING="crates/k5-cli/tests/data/native_bar_ceiling.tsv"
 # of the ceiling, which stays at zero for every other form. The gate prints
 # them and their due line; it refuses an allowance without that line.
 ALLOWANCE="crates/k5-cli/tests/data/native_port_allowance.tsv"
-ALLOWANCE_DUE="# due: native port due before the n2 build (0.46.19)"
+ALLOWANCE_DUE="# due: native port; take each row out when its form is native"
 usage() { echo "usage: ceiling-zero-gate.sh [--brand <folder>] --tag <tag> [<repo>] | [--brand <folder>] --tree [<repo>]" >&2; exit 2; }
 refuse() { echo "ceiling-zero: REFUSED ($where): $*" >&2; exit 1; }
 

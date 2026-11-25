@@ -1507,7 +1507,7 @@ fn the_native_bar_ceiling_holds() {
         .map(str::to_string)
         .collect();
     assert!(
-        read(ALLOWANCE).contains("\n# due: native port due before the n2 build (0.46.19)\n"),
+        read(ALLOWANCE).contains("\n# due: native port; take each row out when its form is native\n"),
         "{ALLOWANCE} carries its due line"
     );
     let row = |p: &Probe| format!("{}\t{}\t{}", p.class, p.family, p.form);

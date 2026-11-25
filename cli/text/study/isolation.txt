@@ -6,8 +6,8 @@ LABELLED BY AGENT (on wherever the server can have it)
   unit. K5 does this with the standard Linux kernel; no custom kernel.
   - Labelled: each process an agent starts carries its agent's label
     (systemd-cgls, ps -o pid,cgroup,cmd, k2 agent whois <pid>). A fenced
-    agent can't write to its cgroup files. Until the Unix-socket block
-    lands it can still reach programs of the same user over Unix sockets
+    agent can't write to its cgroup files. Unless the Unix-socket block
+    enforces (it records by default), it can still reach programs of the same user over Unix sockets
     (systemd's buses, your tmux), which can move it or run commands for it
     outside its fence.
   - A copied terminal or job passport alone no longer works: the daemon
@@ -22,8 +22,8 @@ LABELLED BY AGENT (on wherever the server can have it)
   Who places the sessions decides the rest. With the root helper (protocol
   19; /boot-status agentIsolation says "identity": "on") each agent's cgroup
   is root's: an agent can't write itself into another agent's cgroup.
-  Until the bus policy lands, an agent without the fence can still ask
-  systemd to put a process of its own there.
+  An agent without the fence can still ask systemd to put a process of
+  its own there.
   Without it ("identity": "unavailable", "traceable": true) the daemon
   places them in cgroups the server's user owns, so an agent without the
   fence can move a process into another agent's cgroup.
@@ -34,8 +34,8 @@ LABELLED BY AGENT (on wherever the server can have it)
   the owner token on disk, or ptrace where the kernel allows it), it can
   move any agent's processes out of their cgroup (that drops their label
   and their passport stops working), and it can call as the owner. A
-  fenced agent can't do these directly, but until the Unix-socket block
-  lands it can still reach systemd's buses and your tmux, which can do
+  fenced agent can't do these directly, but unless the Unix-socket block
+  enforces it can still reach systemd's buses and your tmux, which can do
   them for it. Fencing an agent does not protect it from an unfenced one.
 
   Agent scopes (the owner's switch, off until turned on): k2 agent
@@ -80,7 +80,7 @@ THE FOLDER FENCE (per agent, off by default, the owner's switch; experimental)
   an ssh-agent, a container socket) and, on kernels before 6.12, signals
   to other processes aren't blocked. Through those sockets a fenced agent
   can run commands outside its fence (systemd-run --user, a new tmux
-  window) or ask systemd to move its processes. The next step closes them.
+  window) or ask systemd to move its processes.
 
   Inside a fence, something refused reads "Permission denied". Builds in the
   workspace, git in the workspace, and the shared caches (cargo, npm, bun,

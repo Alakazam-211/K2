@@ -72,7 +72,7 @@ K5_ONLY = "crates/k5-cli/tests/data/k5_only_forms.tsv"
 # ceiling, which stays at zero. A row that is covered again, or names no
 # census form, fails --check.
 ALLOWANCE = "crates/k5-cli/tests/data/native_port_allowance.tsv"
-ALLOWANCE_DUE = "# due: native port due before the n2 build (0.46.19)"
+ALLOWANCE_DUE = "# due: native port; take each row out when its form is native"
 
 
 def allowance(root):
@@ -338,7 +338,7 @@ def main(argv):
     allowed_now = [f for f in uncovered if f in allowed]
     uncovered = [f for f in uncovered if f not in allowed]
     if allowed_now:
-        print("parity-coverage: %d forms on the named allowance %s (native port due before the n2 build (0.46.19))"
+        print("parity-coverage: %d forms on the named allowance %s (native port; take each row out when its form is native)"
               % (len(allowed_now), ALLOWANCE))
     by = {}
     for f in uncovered:

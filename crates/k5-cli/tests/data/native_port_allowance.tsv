@@ -1,12 +1,12 @@
-# A NAMED, TEMPORARY allowance (K2's ruling, 2026-11-24): the Supabase-compatible
+# A NAMED, TEMPORARY allowance: the Supabase-compatible
 # App layer's new verbs (app compat, identity, storage, cron, user import and
 # user meta; db cluster and db import) are not native in k5 yet. Only the
 # exact rows below may fall through to bash (native_bar) or have no parity
 # case (parity); every other form stays at zero, and no general ceiling rises.
 # The native bar and parity-coverage fail when a row here is native or covered
 # again (take it out) or names no form; the ceiling-zero gate prints it.
-# due: native port due before the n2 build (0.46.19)
-# owner: the Gardener
+# due: native port; take each row out when its form is native
+# owner: the native port's maintainers
 kind	class	family	form
 native_bar	V	db	db cluster basebackup
 native_bar	V	db	db cluster basebackup --json
@@ -74,7 +74,7 @@ native_bar	V	app	app user import
 native_bar	V	app	app user import --json
 native_bar	V	app	app user meta
 native_bar	V	app	app user meta --json
-# agent isolation and agent whois go to bash: due before n2 (native port in 0.46.19)
+# agent isolation and agent whois go to bash: take each row out when its form is native
 native_bar	V	agent	agent isolation
 native_bar	V	agent	agent isolation layout
 native_bar	V	agent	agent whois

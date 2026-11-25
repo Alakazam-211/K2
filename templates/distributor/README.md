@@ -166,7 +166,7 @@ yours.
 |---|---|---|
 | 1 | fetch | K5's public repo at the tag, nothing else; with `--sha`, the tag must still be the commit `pick` saw |
 | 2 | tools | the tag carries the brand tools the driver calls; an older tag is refused |
-| 3 | licence | `scripts/brand/licence-gate.sh`: the tag's `Cargo.lock` holds no crate on `scripts/brand/copyleft-crates.txt`. Today every tag is refused here, for `libgit2-sys` (see "The licence gate") |
+| 3 | licence | `scripts/brand/licence-gate.sh`: the tag's `Cargo.lock` holds no crate on `scripts/brand/copyleft-crates.txt`. A tag before 0.46.18 is refused here for `libgit2-sys`; from 0.46.18 K2 links none (see "The licence gate") |
 | 4 | ceiling-zero | `scripts/brand/ceiling-zero-gate.sh`: every command line is answered by K5's own program. A tag where any command still falls through to the old shell CLI (which prints K5's names) is refused, and so is one with a run-time row (class R: a command under an unusual environment or input) when your brand has no shell CLI |
 | 5 | lint | `scripts/brand.sh lint` on your brand, then `--live` when `lint_live = on` |
 | 6 | build | K5's own Linux release build with `K2_BRAND_DIR` set to your brand folder. **SECRETS** for a real build: your mail sign-in clients |
@@ -225,9 +225,8 @@ a build don't follow the brand file yet.
   can't ship (step 3), every command is native (step 4) and the CLI's
   output names your brand alone (step 7). Early tags fail one of them;
   `driver.sh check` tells you which, quickly.
-- **No tag passes step 3 yet.** Every K5 release so far links
-  `libgit2-sys`. No partner build can pass until a K5 release replaces
-  libgit2 with gitoxide. See "The licence gate".
+- **A tag before 0.46.18 is refused at step 3** for `libgit2-sys`; from
+  0.46.18 K2 links none. See "The licence gate".
 
 ## The licence gate
 

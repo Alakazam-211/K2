@@ -4,7 +4,7 @@
 //! reference it. ... let agents REPLY to specific messages in the Thread."
 //!
 //! `POST /cli/thread/post` takes `replyTo`: the target's seq in the same
-//! Thread, as `N` or `#N` (a card's number is its seq: `card #13664`). The
+//! Thread, as `N` or `#N` (a card's number is its seq: `card #42`). The
 //! daemon finds the stored target and:
 //!
 //! - writes the visible reply the desktop and the phone already draw, from

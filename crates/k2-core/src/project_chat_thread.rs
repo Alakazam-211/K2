@@ -27,8 +27,8 @@
 //!   project's next line moves it first if the backfill hasn't yet.
 //! - **Rollback window** (the keep-the-old-path rule). THE ONE PLACE THAT
 //!   NAMES THE RELEASES: lands in 0.46.18, with the dual write; the dual
-//!   write and [`reconcile_all`] are removed in 0.46.19; the old tables are
-//!   dropped in 0.46.20. In the release this lands in, every line is also written
+//!   write and [`reconcile_all`] are removed in the release after it; the old
+//!   tables are dropped in the one after that. In the release this lands in, every line is also written
 //!   to `project_group_messages` under the same id and seq, with
 //!   `last_msg_seq = seq`, and its send-once key to
 //!   `project_group_client_ids` ([`dual_write`]), so the release before it

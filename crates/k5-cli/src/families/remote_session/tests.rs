@@ -342,6 +342,8 @@ fn write_s_text_forms() {
     assert_eq!(t.file, "tok");
 }
 
+// Used by the Unix-only tests below.
+#[cfg(unix)]
 fn scratch(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("k5-rs-secret-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);

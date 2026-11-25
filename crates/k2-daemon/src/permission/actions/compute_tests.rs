@@ -1340,7 +1340,7 @@ fn pinned_only_allow_flips_the_node_as_the_person_and_deny_changes_nothing() {
 /// `node_id` online with package requests: a live session for the package
 /// routes (`compute_ws`) and the fake admin channel that records each
 /// signed command (`compute_admin`). Detached on drop.
-struct LivePkgNode(String);
+struct LivePkgNode(String, #[allow(dead_code)] crate::compute_ws::TestConn);
 impl LivePkgNode {
     fn attach(node_id: &str) -> LivePkgNode {
         use k2_core::compute::proto::frames::{self as fr, Offer};
@@ -1371,11 +1371,11 @@ impl LivePkgNode {
             pkg: None,
             sim: None,
         };
-        // The receiving end is dropped: what the package routes send the
-        // node over the session is not what these tests read.
-        drop(crate::compute_ws::test_attach(node_id, offer));
+        // Kept for the test's life: a session whose receiving end is gone
+        // reads as offline (`compute_ws::with_engine`).
+        let conn = crate::compute_ws::test_attach(node_id, offer);
         nodes::register(node_id, true, &[wire::FEATURE_ADMIN, feats[0], feats[1]]);
-        LivePkgNode(node_id.to_string())
+        LivePkgNode(node_id.to_string(), conn)
     }
 }
 impl Drop for LivePkgNode {

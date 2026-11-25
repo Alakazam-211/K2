@@ -132,6 +132,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Licences
 - Licence notices for third-party code now ship with the app, the server package and the web app.
 
+### Support
+- The support address is now hello@alakazamlabs.com.
+
 ## 0.46.17 — Read-only calendar links, live documents that save in groups, and agents that report only with your yes
 
 ### Command line

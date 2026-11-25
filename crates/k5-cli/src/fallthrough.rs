@@ -195,6 +195,11 @@ pub enum FrontError {
     /// so a command line the binary doesn't answer has nothing to run it.
     /// Carries the verb.
     NoShellCli { noun: String },
+    /// An isolated agent session's passport call ([`identity_hand_off`])
+    /// in a build that carries no shell CLI: only the shell sends it over
+    /// the session socket, so it is refused, never sent another way.
+    /// Carries the verb.
+    IsolatedNoShell { noun: String },
     /// bash could not be started.
     Run { bash: PathBuf, err: io::Error },
 }
@@ -205,7 +210,7 @@ impl FrontError {
         match self {
             FrontError::NoPython { .. } => Exit::NoPython,
             FrontError::NotOnWindows { .. } => Exit::NotOnWindows,
-            FrontError::NoShellCli { .. } => Exit::NoShellCli,
+            FrontError::NoShellCli { .. } | FrontError::IsolatedNoShell { .. } => Exit::NoShellCli,
             _ => Exit::Error,
         }
     }
@@ -222,7 +227,8 @@ impl FrontError {
         match self {
             FrontError::NoPython { .. }
             | FrontError::NotOnWindows { .. }
-            | FrontError::NoShellCli { .. } => self.to_string(),
+            | FrontError::NoShellCli { .. }
+            | FrontError::IsolatedNoShell { .. } => self.to_string(),
             _ => format!("{}: {self}", k2_client::brand::CLI_NAME),
         }
     }
@@ -251,6 +257,11 @@ impl fmt::Display for FrontError {
                 f,
                 "{name} {noun}: this command line is not built into this program, and this build has no shell CLI to run it. Report it: {name} send-feedback",
                 name = k2_client::brand::CLI_NAME
+            ),
+            FrontError::IsolatedNoShell { noun } => write!(
+                f,
+                "{} {noun}: this command isn't available inside an isolated agent session yet",
+                k2_client::brand::CLI_NAME
             ),
             FrontError::Run { bash, err } => write!(f, "can't run {}: {err}", bash.display()),
         }
@@ -535,6 +546,31 @@ pub fn hand_off(args: &[OsString]) -> Exit {
     let err = run(args);
     // The shell never ran: nothing went to the daemon, so no plain-http
     // line before the front's own.
+    crate::prelude::plain_http::skip();
+    crate::out::stderr_line(&err.line());
+    err.exit()
+}
+
+/// What an isolated agent session's passport call does, by the copy this
+/// build carries (`packed`): `None` hands it to the shell, which sends it
+/// over the session socket. With no copy (a build with no shell CLI) it
+/// is [`FrontError::IsolatedNoShell`], decided before anything is looked
+/// at, so nothing is read, written or sent (K2's ruling).
+pub fn identity_refusal(packed: Option<Packed<'_>>, args: &[OsString]) -> Option<FrontError> {
+    if packed.is_some() {
+        return None;
+    }
+    Some(FrontError::IsolatedNoShell { noun: noun(args) })
+}
+
+/// An isolated agent session's passport call
+/// ([`crate::passport::identity_hand_off_here`]): [`hand_off`] as before
+/// when this build carries the shell CLI; with none, its one line on
+/// stderr and exit 70, and nothing goes to the daemon.
+pub fn identity_hand_off(args: &[OsString]) -> Exit {
+    let Some(err) = identity_refusal(embedded(), args) else {
+        return hand_off(args);
+    };
     crate::prelude::plain_http::skip();
     crate::out::stderr_line(&err.line());
     err.exit()
@@ -1074,6 +1110,45 @@ mod tests {
         assert_eq!(
             line(python_how(false)),
             "k5 msg: this command is not built into k5 yet and needs Python 3. Install it with your system's package manager (python3), then open a new terminal."
+        );
+    }
+
+    /// An isolated agent session's passport call: with no copy it is
+    /// refused with its own line and exit 70, decided from the copy alone
+    /// (nothing else is looked at, so nothing is read, written or sent);
+    /// with a copy it goes to the shell. This build's own answer follows
+    /// its setting.
+    #[test]
+    fn an_isolated_session_s_passport_call_refuses_with_no_shell_cli() {
+        let args = [
+            OsString::from("agent"),
+            OsString::from("context"),
+            OsString::from("list"),
+        ];
+        let err = identity_refusal(None, &args).expect("refused with no copy");
+        assert!(
+            matches!(&err, FrontError::IsolatedNoShell { noun } if noun == "agent"),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.line(),
+            format!(
+                "{} agent: this command isn't available inside an isolated agent session yet",
+                k2_client::brand::CLI_NAME
+            )
+        );
+        assert_eq!(err.exit(), Exit::NoShellCli);
+        assert_eq!(err.exit_code(), 70);
+        let err = identity_refusal(None, &[]).expect("refused with no copy");
+        assert!(
+            matches!(&err, FrontError::IsolatedNoShell { noun } if noun == "help"),
+            "{err:?}"
+        );
+        let f = Fixture::new(SCRIPT);
+        assert!(identity_refusal(Some(f.packed()), &args).is_none());
+        assert_eq!(
+            identity_refusal(embedded(), &args).is_some(),
+            k2_client::brand::CLI_NO_BASH
         );
     }
 

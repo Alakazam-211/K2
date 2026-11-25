@@ -173,7 +173,8 @@ fn main() {
     trace::mark("route");
     // In an identity session a call that carries the session's passport
     // goes to the shell, which sends it over the session socket. The
-    // binary's own verbs (version, cli) and a refused `--` stay here.
+    // binary's own verbs (version, cli) and a refused `--` stay here. A
+    // build with no shell CLI refuses it, exit 70, and sends nothing.
     if passport::identity_hand_off_here(&args)
         && !matches!(
             route,
@@ -185,7 +186,7 @@ fn main() {
                 | Route::NoDashdash
         )
     {
-        std::process::exit(shell(&args).code());
+        std::process::exit(fallthrough::identity_hand_off(&args).code());
     }
     let exit = match route {
         Route::Version => print(&front::version_line(embedded::version()), Exit::Ok),

@@ -9,7 +9,8 @@
 # Postgres 17 with its client tools (the import needs psql, pg_dump and
 # pg_restore): the node's own when it has one, else PGDG's packages
 # unpacked under the job cache without root. Test rigs only: never
-# shipped. REALPG_BIN overrides.
+# shipped. REALPG_BIN overrides. The db door drill's psycopg: a job-local
+# venv (needs python3 with venv and pip), unless REALPG_PY names one.
 #
 # Each drill must report "test result: ok" with at least one test run, or
 # the script fails; every drill runs even after one fails.
@@ -46,6 +47,17 @@ libdir="$(cd "$REALPG_BIN/../../../.." 2>/dev/null && pwd)/lib/x86_64-linux-gnu"
 export REALPG_BIN REALPG_MAJOR=17
 "$REALPG_BIN/postgres" --version || { echo "supa-compat-drills: postgres does not run"; ldd "$REALPG_BIN/postgres" | grep "not found"; exit 1; }
 "$REALPG_BIN/pg_restore" --version || exit 1
+# The db door drill dials Postgres from Python (psycopg, as an App's
+# driver does): a job-local venv with psycopg's binary wheel, unless
+# REALPG_PY names a Python that has it (0.46.18 queue: a node's own
+# python3 usually doesn't).
+if [ -z "${REALPG_PY:-}" ]; then
+    venv="${K2_JOB_CACHE:-${TMPDIR:-/tmp}}/supa-drills-venv"
+    [ -x "$venv/bin/python" ] || python3 -m venv "$venv" || { echo "supa-compat-drills: no venv for psycopg" >&2; exit 1; }
+    "$venv/bin/python" -c 'import psycopg' 2>/dev/null || "$venv/bin/pip" install -q 'psycopg[binary]' || { echo "supa-compat-drills: psycopg didn't install" >&2; exit 1; }
+    export REALPG_PY="$venv/bin/python"
+fi
+"$REALPG_PY" -c 'import psycopg; print("psycopg", psycopg.__version__)' || exit 1
 
 fail=0
 out="$(mktemp)"

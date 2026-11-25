@@ -20,8 +20,9 @@ login = "Globex Account"
 
 [cli]
 name = "xy"
-# A partner build carries no shell CLI (cli/k2): no copy, no embed, no
-# fallback; the k5 binary is the command.
+# The daemon and k5 of a partner build carry and run no shell CLI
+# (cli/k2): no copy, no embed, no fallback; the k5 binary is the command.
+# Every program the xy build makes carries none (check-no-bash.py).
 no_bash = true
 aliases = []
 

@@ -95,7 +95,7 @@ the build, naming it.
 | `names.server` | what a box is called | may (left out: `<product> Server`) |
 | `names.login` | the account your users sign in with | **must**, your own |
 | `cli.name`, `cli.aliases` | the command and its other names ("Your brand's names" above) | **must** (aliases may be `[]`) |
-| `cli.no_bash` | your build carries no shell CLI: the k5 program is the command, with no script inside or beside it and no fallback to one. Not taken from K5's file: left out it is `true` | may (left out: `true`); `--hosted` refuses `false` |
+| `cli.no_bash` | your daemon and the k5 program carry and run no shell CLI: k5 is the command, with no script inside or beside it and no fallback to one. Your boxes still run the shared signed root helper, which holds an inert copy of the shell CLI (see "What a K5 tag gives you today"). Not taken from K5's file: left out it is `true` | may (left out: `true`); `--hosted` refuses `false` |
 | `package.bundle_id`, `desktop_id`, `gui_binary` | the app's ids on macOS and Linux | **must** for app builds |
 | `package.update_feed` | the desktop app's update manifest | **must**, your own |
 | `update.keys` | the update keys your build trusts, primary first; never K5's. They sign your daemon, so they are also the trust root of the Sew pins it carries (there is no separate Sew signer). The template's key is a test-only placeholder that `--hosted` refuses | **must**, your own |
@@ -212,6 +212,14 @@ a build don't follow the brand file yet.
 - **Built:** the Linux server programs (the daemon, the CLI, the compute
   node runtime, the root helper, the App engine), with your names in what
   the CLI prints and your brand mark in every binary.
+- **The shell CLI, in plain words.** Your daemon and the k5 program carry
+  and run no script: k5 answers every command itself. Your boxes run the
+  shared root helper that K5 signs, not one signed for your brand, and it
+  holds an inert copy of the shell CLI that it never writes on a box of
+  yours. So say "the daemon and the CLI carry no shell script", not "the
+  build holds no shell CLI at all". A root helper with no copy, signed
+  for partners, comes in a later release, and the stronger claim can be
+  made then.
 - **Not built by this pipeline yet:** the desktop apps and their
   installers. They follow when a K5 release says its packaging reads the
   brand file; the driver then gains a step for them.

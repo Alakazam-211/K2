@@ -396,9 +396,9 @@ HOSTED_NOT_OURS = (
 # file names no root-helper key.
 ROOT_HELPER_REFUSED = ("the root helper runs as root and is signed only by K5's release keys; partner "
                        "builds ship ours (a new owner decision is needed if a partner runs its own servers)")
-# A brand that is not ours carries no shell CLI.
-NO_BASH_REFUSED = ("must not be false: a partner build carries no shell CLI (cli/k2), no copy and no "
-                   "fallback; the k5 program is the command (leave it out or set it true)")
+# A brand that is not ours builds no shell CLI into its programs.
+NO_BASH_REFUSED = ("must not be false: a partner's daemon and k5 carry and run no shell CLI (cli/k2), no "
+                   "copy and no fallback; the k5 program is the command (leave it out or set it true)")
 # [control] is all six or none (K2's ruling).
 CONTROL = ("relay", "relay_list", "connect", "cert", "push", "web_api")
 # The bash CLI's own copy of control.connect: only our default brand runs

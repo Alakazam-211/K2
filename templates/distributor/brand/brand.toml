@@ -70,8 +70,10 @@ name = "gy"
 # here as "notice", then "tombstone" a release or two after.
 aliases = []
 
-# Your build carries no shell CLI: the k5 program is the command, with no
-# script and no fallback to one. Left out it is true; --hosted refuses false.
+# Your daemon and the k5 program carry and run no shell CLI: k5 is the
+# command, with no script and no fallback to one. (The shared signed root
+# helper your boxes run still holds an inert copy it never writes; see the
+# README.) Left out it is true; --hosted refuses false.
 no_bash = true
 
 # Packaging values. bundle_id: the macOS bundle id. update_feed: the

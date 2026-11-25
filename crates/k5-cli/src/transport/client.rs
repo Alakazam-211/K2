@@ -122,6 +122,13 @@ pub const THREAD_HEADER: &str = "X-K2-Thread";
 /// The switch that turns the conversation headers off: one of `0`,
 /// `off`, `false` or `no`, as written.
 pub const CODEX_BIND_SWITCH: &str = "K2_CODEX_PASSPORT_BIND";
+/// The mark on a request that carries the session's passport over the
+/// cell socket in an identity session: the socket hands it to the same
+/// TCP route code (`_k2_curl`, Agent Isolation M1).
+pub const VIA_TCP_HEADER: &str = "X-K2-Via-Tcp";
+/// `K2_VIA_TCP=1` (that name only, exactly `1`) turns that reroute off,
+/// as the shell's `_k2_via_session_sock` reads it.
+pub const VIA_TCP_SWITCH: &str = "K2_VIA_TCP";
 
 /// The shell's `_k2_codex_headers` (`cli/src/cli-tools-policy.sh`): a
 /// Codex call's conversation headers, sent on every daemon request.
@@ -771,6 +778,11 @@ pub struct Client {
     pub version: String,
     /// `_cli_skip_uds`: a remote host was applied; never the cell socket.
     pub force_tcp: bool,
+    /// An identity session (`AGENT_CGROUP` set by the exec helper) with
+    /// [`VIA_TCP_SWITCH`] not `1`: a request that carries the session's
+    /// passport to this machine's daemon goes over the cell socket first
+    /// ([`Client::session_socket`]).
+    pub passport_on_socket: bool,
     /// `BASE_URL` is `https://…`: TLS over the TCP connection
     /// ([`super::tls`]).
     pub tls: bool,
@@ -876,6 +888,7 @@ impl Client {
             no_token: false,
             version: crate::embedded::version().to_string(),
             force_tcp: false,
+            passport_on_socket: false,
             tls: false,
             via: None,
             unsendable: None,
@@ -1438,8 +1451,30 @@ impl Client {
             (Kind::Own { .. }, Some(c)) => c,
             _ => kind.connect_timeout(),
         };
+        // An identity session: the cell socket first, with the request as
+        // it is plus the mark (`_k2_via_session_sock`).
+        let mut via_sock = self.session_route(kind, &target, &request);
         loop {
             let deadline = Instant::now() + max;
+            if let Some((sock, marked)) = via_sock.take() {
+                match wire::connect(&sock, connect, deadline) {
+                    Ok(mut conn) => {
+                        let r = wire::exchange(&mut conn, &marked, deadline);
+                        if let Ok(a) = &r {
+                            super::brand_headers::note_answer(&self.version, a, &sock);
+                        }
+                        return r;
+                    }
+                    // The socket took none of it (gone, refused): loopback
+                    // TCP at once, unmarked, as before. Not a try of its
+                    // own, but curl writes its `-w` line for it.
+                    Err(Failure::Connect(_)) => {
+                        self.refused.set(self.refused.get() + 1);
+                        continue;
+                    }
+                    Err(f) => return Err(f),
+                }
+            }
             match wire::connect(&target, connect, deadline) {
                 Ok(mut conn) => {
                     let r = wire::exchange(&mut conn, &request, deadline);

@@ -59,10 +59,25 @@ pub struct Settings {
     /// `HOOK_SOCK` is set (any of its names): a session, with a passport
     /// or without one.
     pub session: bool,
+    /// An identity session that sends its passport over the cell socket
+    /// ([`passport_on_socket`]).
+    pub passport_on_socket: bool,
     /// `SECRETS_DIR`, where a refused passport may have been minted again.
     pub secrets_dir: Option<PathBuf>,
     /// The K2 home the files were read from.
     pub home: PathBuf,
+}
+
+/// Agent Isolation M1: `AGENT_CGROUP` is set and not empty (under its
+/// K5_, K2_ and K2SO_ names; the exec helper sets it in a session it
+/// placed in its agent's cgroup), and `K2_VIA_TCP` is not exactly `1`
+/// ([`crate::transport::client::VIA_TCP_SWITCH`], read under that one
+/// name, as the shell reads it). Then every request that carries the
+/// session's passport to this machine's daemon goes over the cell socket
+/// first ([`Client::session_socket`]). Elsewhere nothing changes.
+pub fn passport_on_socket(lookup: impl Fn(&str) -> Option<OsString>) -> bool {
+    let off = lookup(crate::transport::client::VIA_TCP_SWITCH).is_some_and(|v| v == "1");
+    !off && env_names::first_nonempty_os_in(env_names::AGENT_CGROUP, &lookup).is_some()
 }
 
 /// No port: nothing to connect to.
@@ -210,6 +225,7 @@ pub fn settings_with(
         auth,
         owner_from_disk,
         session,
+        passport_on_socket: passport_on_socket(&lookup),
         secrets_dir,
         home: home.to_path_buf(),
     }
@@ -450,6 +466,7 @@ impl Settings {
         c.would_refuse = would_refuse;
         c.owner_from_disk = self.owner_from_disk;
         c.session = self.session;
+        c.passport_on_socket = self.passport_on_socket;
         c.port_file = Some(self.home.join("daemon.port"));
         c.healer = self
             .secrets_dir
@@ -526,6 +543,41 @@ mod tests {
             }
         }
         move |name: &str| map.get(name).cloned()
+    }
+
+    /// Agent Isolation M1: the mark under any of its names, not empty,
+    /// and `K2_VIA_TCP` not exactly `1` (that name only); the client gets
+    /// it.
+    #[test]
+    fn an_identity_session_sends_its_passport_over_the_socket() {
+        let cases: &[(&[(&str, &str)], bool)] = &[
+            (&[("K2_AGENT_CGROUP", "a-ws1")], true),
+            (&[("K5_AGENT_CGROUP", "a-ws1")], true),
+            (&[("K2SO_AGENT_CGROUP", "a-ws1")], true),
+            (&[("K5_AGENT_CGROUP", ""), ("K2_AGENT_CGROUP", "a-ws1")], true),
+            (&[("K2_AGENT_CGROUP", "")], false),
+            (&[], false),
+            (&[("K2_AGENT_CGROUP", "a-ws1"), ("K2_VIA_TCP", "1")], false),
+            (&[("K2_AGENT_CGROUP", "a-ws1"), ("K2_VIA_TCP", "0")], true),
+            (&[("K2_AGENT_CGROUP", "a-ws1"), ("K2_VIA_TCP", "yes")], true),
+            (&[("K2_AGENT_CGROUP", "a-ws1"), ("K2_VIA_TCP", " 1")], true),
+            (&[("K2_AGENT_CGROUP", "a-ws1"), ("K5_VIA_TCP", "1")], true),
+            (&[("K2_AGENT_CGROUP", "a-ws1"), ("K2SO_VIA_TCP", "1")], true),
+        ];
+        for (pairs, want) in cases {
+            assert_eq!(passport_on_socket(env(pairs)), *want, "{pairs:?}");
+        }
+        let dir = scratch("identity");
+        let s = settings(
+            env(&[("K2_AGENT_CGROUP", "a-ws1"), ("K2_PORT", "4100")]),
+            &dir,
+            &dir,
+        );
+        assert!(s.passport_on_socket);
+        assert!(s.client(false).unwrap().passport_on_socket);
+        let s = settings(env(&[("K2_PORT", "4100")]), &dir, &dir);
+        assert!(!s.client(false).unwrap().passport_on_socket);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

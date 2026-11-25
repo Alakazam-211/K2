@@ -416,6 +416,76 @@ impl Client {
             _ => None,
         }
     }
+
+    /// The cell socket that a request carrying the session's passport goes
+    /// over first in an identity session (Agent Isolation M1): with
+    /// [`Client::passport_on_socket`], a passport, its socket a socket
+    /// (`[ -S ]`) and no remote host forcing TCP, the five things the
+    /// shell's `_k2_via_session_sock` and `_k2_py_session_sock_lines`
+    /// read. `None` outside an identity session.
+    pub fn session_socket(&self) -> Option<&Path> {
+        if !self.passport_on_socket {
+            return None;
+        }
+        self.cell_socket()
+    }
+
+    /// `_k2_via_session_sock` for one curl request: the cell socket and
+    /// the request with [`VIA_TCP_HEADER`] added, when
+    /// [`Client::session_socket`] has one, the call is a daemon call (not
+    /// `_K2_CURL_NOT_DAEMON`), it goes to plain http on `127.0.0.1`,
+    /// `localhost` or `[::1]` (the shell's `BASE_URL` spelled that way),
+    /// and its curl config holds `Authorization: Bearer <passport>` (a
+    /// longer token that starts with the passport holds it too). The mark
+    /// is a config line after the credential and a Codex call's
+    /// conversation headers, so it goes before the command line's `-H`s.
+    /// `cli_post_json_stdin` gives its URL and credential on `-K
+    /// /dev/fd/3`, which the shell's check never sees: it stays on TCP.
+    #[cfg(unix)]
+    pub(super) fn session_route(
+        &self,
+        kind: Kind,
+        target: &Target,
+        request: &Request,
+    ) -> Option<(Target, Request)> {
+        if matches!(kind, Kind::ControlPlane { .. } | Kind::PostJsonStdin) {
+            return None;
+        }
+        let Target::Tcp { host, .. } = target else {
+            return None;
+        };
+        if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "[::1]") {
+            return None;
+        }
+        let sock = self.session_socket()?;
+        let passport = self.passport()?.as_str();
+        let at = request.headers.iter().position(|(n, v)| {
+            n == "Authorization"
+                && v.strip_prefix("Bearer ")
+                    .is_some_and(|t| t.starts_with(passport))
+        })?;
+        let conversation = request.headers[at + 1..]
+            .iter()
+            .zip(&self.conversation)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let mut marked = request.clone();
+        marked
+            .headers
+            .insert(at + 1 + conversation, (VIA_TCP_HEADER.into(), "1".into()));
+        Some((Target::Unix(sock.to_path_buf()), marked))
+    }
+
+    /// No Unix sockets: every request goes as it is.
+    #[cfg(not(unix))]
+    pub(super) fn session_route(
+        &self,
+        _kind: Kind,
+        _target: &Target,
+        _request: &Request,
+    ) -> Option<(Target, Request)> {
+        None
+    }
 }
 
 #[cfg(unix)]
@@ -697,5 +767,242 @@ mod tests {
                 "Content-Type"
             ]
         );
+    }
+}
+
+/// Agent Isolation M1 (`_k2_via_session_sock`): in an identity session a
+/// request that carries the session's passport goes over the cell socket,
+/// marked, and falls back to TCP only when the socket takes nothing.
+#[cfg(all(test, unix))]
+mod session_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::os::unix::net::UnixListener;
+
+    const PASSPORT: &str = "sess91.passportfe12";
+
+    /// A short folder for sockets (a Unix socket path has a small limit).
+    fn sock_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = PathBuf::from(format!(
+            "/tmp/k5ps-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The head read from `c`, answered with `{}`.
+    fn answer_once(mut c: impl Read + Write) -> String {
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+            match c.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => got.extend_from_slice(&buf[..n]),
+                Err(e) => panic!("read: {e}"),
+            }
+        }
+        c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .unwrap();
+        String::from_utf8(got).unwrap()
+    }
+
+    fn identity_client(port: u16, sock: &Path) -> Client {
+        let mut c = Client::new(
+            "127.0.0.1",
+            port,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new(PASSPORT).unwrap(),
+                sock: Some(sock.to_path_buf()),
+            },
+        );
+        c.passport_on_socket = true;
+        c.pause = Duration::ZERO;
+        c
+    }
+
+    /// The custom header names of a head, in order (after `Accept`).
+    fn names(head: &str) -> Vec<String> {
+        head.split("\r\n")
+            .skip(4)
+            .take_while(|l| !l.is_empty())
+            .map(|l| l.split(':').next().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    fn nothing_accepted(l: &TcpListener) {
+        std::thread::sleep(Duration::from_millis(100));
+        match l.accept() {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Ok((_, from)) => panic!("a TCP connection from {from}"),
+            Err(e) => panic!("accept: {e}"),
+        }
+    }
+
+    /// The TCP request as it is, over the cell socket, with the mark after
+    /// the credential and a Codex call's conversation headers; nothing
+    /// reaches TCP.
+    #[test]
+    fn an_identity_session_sends_its_passport_over_the_cell_socket() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        let uds = UnixListener::bind(&path).unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        tcp.set_nonblocking(true).unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || answer_once(uds.accept().unwrap().0));
+        let mut c = identity_client(port, &path);
+        c.conversation = vec![
+            (CONVERSATION_HEADER.to_string(), "root-1".to_string()),
+            (THREAD_HEADER.to_string(), "thread-1".to_string()),
+        ];
+        let r = c
+            .call(Channel::Tcp, "/cli/x", Call::Request(&["a=1"]))
+            .unwrap();
+        assert_eq!((r.status, r.body.as_slice()), (200, &b"{}"[..]));
+        let head = served.join().unwrap();
+        assert!(head.starts_with("GET /cli/x?project="), "{head}");
+        assert!(
+            head.contains(&format!("\r\nHost: 127.0.0.1:{port}\r\n")),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("\r\nAuthorization: Bearer {PASSPORT}\r\n")),
+            "{head}"
+        );
+        assert!(head.contains("\r\nX-K2-Via-Tcp: 1\r\n"), "{head}");
+        assert_eq!(
+            &names(&head)[..5],
+            [
+                "Authorization",
+                CONVERSATION_HEADER,
+                THREAD_HEADER,
+                VIA_TCP_HEADER,
+                VERSION_HEADER
+            ]
+        );
+        assert_eq!(c.refused_before_answer(), 0);
+        nothing_accepted(&tcp);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Outside an identity session the call goes over TCP as before, with
+    /// no mark, and the cell socket gets nothing.
+    #[test]
+    fn outside_an_identity_session_the_passport_stays_on_tcp() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        let uds = UnixListener::bind(&path).unwrap();
+        uds.set_nonblocking(true).unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || answer_once(tcp.accept().unwrap().0));
+        let mut c = identity_client(port, &path);
+        c.passport_on_socket = false;
+        let r = c
+            .call(Channel::Tcp, "/cli/x", Call::Request(&[]))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let head = served.join().unwrap();
+        assert!(!head.contains("X-K2-Via-Tcp"), "{head}");
+        assert!(
+            head.contains(&format!("\r\nAuthorization: Bearer {PASSPORT}\r\n")),
+            "{head}"
+        );
+        match uds.accept() {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Ok(_) => panic!("the cell socket got a connection"),
+            Err(e) => panic!("accept: {e}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A socket that takes nothing (its server gone, the file left): the
+    /// same call over TCP at once, unmarked, counted as one refused try.
+    #[test]
+    fn a_socket_that_takes_nothing_falls_back_to_tcp_unmarked() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        drop(UnixListener::bind(&path).unwrap());
+        assert!(is_socket(&path));
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || answer_once(tcp.accept().unwrap().0));
+        let mut c = identity_client(port, &path);
+        let r = c
+            .call(Channel::Tcp, "/cli/x", Call::PostJson(b"{}"))
+            .unwrap();
+        assert_eq!(r.status, 200);
+        let head = served.join().unwrap();
+        assert!(head.starts_with("POST /cli/x HTTP/1.1\r\n"), "{head}");
+        assert!(!head.contains("X-K2-Via-Tcp"), "{head}");
+        assert_eq!(c.refused_before_answer(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The shell's conditions, each on its own: which requests go over
+    /// the socket.
+    #[test]
+    fn which_requests_go_over_the_cell_socket() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        let _live = UnixListener::bind(&path).unwrap();
+        let file = dir.join("not-a-socket");
+        std::fs::write(&file, "").unwrap();
+        let routed = |c: &Client, kind: Kind| -> bool {
+            let (target, request) = c.build(kind, Channel::Tcp, "/cli/x", &[], b"{}").unwrap();
+            c.session_route(kind, &target, &request).is_some()
+        };
+        let base = identity_client(4100, &path);
+        assert!(routed(&base, Kind::Request));
+        assert!(routed(&base, Kind::SendJsonPost));
+        assert!(routed(&base, Kind::RequestPost));
+        // `cli_post_json_stdin`'s URL and credential are on fd 3.
+        assert!(!routed(&base, Kind::PostJsonStdin));
+        // `_K2_CURL_NOT_DAEMON`.
+        assert!(!routed(&base, Kind::ControlPlane { method: Method::Get }));
+        // The host as `BASE_URL` spells it.
+        for (host, want) in [
+            ("localhost", true),
+            ("[::1]", true),
+            ("::1", false),
+            ("LOCALHOST", false),
+            ("10.0.0.2", false),
+            ("box.example.com", false),
+        ] {
+            let mut c = identity_client(4100, &path);
+            c.host = host.to_string();
+            assert_eq!(routed(&c, Kind::Request), want, "{host}");
+        }
+        let mut c = identity_client(4100, &path);
+        c.passport_on_socket = false;
+        assert!(!routed(&c, Kind::Request));
+        let mut c = identity_client(4100, &path);
+        c.force_tcp = true;
+        assert!(!routed(&c, Kind::Request));
+        let c = identity_client(4100, &file);
+        assert!(!routed(&c, Kind::Request));
+        let mut c = identity_client(4100, &path);
+        c.auth = Auth::Owner(PASSPORT.into());
+        assert!(!routed(&c, Kind::Request));
+        // A caller's own credential: only the passport.
+        let own = Kind::Own {
+            post: false,
+            note: false,
+        };
+        let mut c = identity_client(4100, &path);
+        c.own = Some((Some("someone-else".into()), MAX_TIME));
+        assert!(!routed(&c, own));
+        c.own = Some((Some(PASSPORT.into()), MAX_TIME));
+        assert!(routed(&c, own));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

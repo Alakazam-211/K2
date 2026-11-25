@@ -633,6 +633,7 @@ mod tests {
             auth,
             owner_from_disk: false,
             session: false,
+            passport_on_socket: false,
             secrets_dir: None,
             home: "/h".into(),
         }

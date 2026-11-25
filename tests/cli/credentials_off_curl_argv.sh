@@ -190,6 +190,12 @@ echo "== curl config quoting round-trip =="
 # The prelude's two names first, as the CLI sets them: the curl block's
 # hint fill reads both.
 eval "$(grep -E '^_K2_(CLI|PRODUCT)_NAME=' "$K2_CLI")"
+# The prelude's env-name reader too: the curl block's session-socket check
+# calls it whenever a passport is set (the stale-passport probe below). It
+# must be loaded, not missing: a missing reader stops the probe before it
+# sends anything, and the probe's own check would then never run.
+eval "$(sed -n '/^_envn_into() {/,/^}/p' "$K2_CLI")"
+declare -F _envn_into >/dev/null || { echo "FAIL: _envn_into not found in $K2_CLI" >&2; exit 1; }
 eval "$(sed -n '/^# BEGIN_CLI_CURL_CFG/,/^# END_CLI_CURL_CFG/p' "$K2_CLI")"
 roundtrip() { # roundtrip <label> <value>
     local label="$1" value="$2" _K2_CFG=""

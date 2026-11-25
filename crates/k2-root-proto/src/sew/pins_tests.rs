@@ -568,7 +568,8 @@ fn the_0_11_3_entry_equals_its_sha256sums() {
     }
 }
 
-/// The 0.11.4 pin is exactly its SHA256SUMS (vendored, sha256
+/// 0.11.4 (the pin before 0.11.5; an upgrade source and rollback target) is
+/// exactly its SHA256SUMS (vendored, sha256
 /// 082839cd…6d26): every core and sidecar tarball and binary member line,
 /// the App kit's, and the DeepFilterNet3 bundle's two lines. Each hash in
 /// Sew's 0.11.4 pin note (sew-0-11-4-pins-published: the core and sidecar
@@ -576,20 +577,19 @@ fn the_0_11_3_entry_equals_its_sha256sums() {
 /// checked here too, and each was hashed again from the public v0.11.4
 /// release. Its DeepFilterNet3 asset is the same bytes as 0.11.3's.
 #[test]
-fn the_0_11_4_pin_equals_its_sha256sums() {
+fn the_0_11_4_entry_equals_its_sha256sums() {
     let sums = include_str!("../../testdata/sew/sew-0.11.4.SHA256SUMS");
     assert_eq!(
         sha256_hex(sums.as_bytes()),
         "082839cd0aafb8f6cae4cff92f9b210bae8fbf52f377ea821362e590a01b6d26",
         "the vendored SUMS file is the published one"
     );
-    assert_eq!(SEW_RELEASES.last().unwrap().version, "0.11.4", "0.11.4 is the pin");
     assert_eq!(
         pin_equals_sums("0.11.4", sums),
         19,
         "4 binaries × 2 arches × (tarball, member) + the App kit + the DeepFilterNet3 asset and weights"
     );
-    let pin = SEW_RELEASES.last().unwrap();
+    let pin = SEW_RELEASES.iter().find(|r| r.version == "0.11.4").expect("0.11.4 is known");
     let bin = |side: Option<&SewSidecar>, arch: &str| {
         let arts = side.map(|s| s.artifacts).unwrap_or(pin.artifacts);
         arts.iter().find(|a| a.arch == arch).map(|a| (a.tarball_sha256, a.binary_sha256)).expect("pinned")
@@ -625,12 +625,78 @@ fn the_0_11_4_pin_equals_its_sha256sums() {
     );
     let prev = SEW_DFN3.iter().find(|d| d.version == "0.11.3").expect("0.11.3's bundle stays");
     assert_eq!((prev.sha256, prev.weights_sha256), (d.sha256, d.weights_sha256), "the same bytes as 0.11.3's");
-    assert_eq!(SEW_DFN3.last().map(|d| d.version), Some("0.11.4"), "the app ships the pin's bundle");
     // 0.11.3 back to 0.10.0 are older (upgrade sources), by number, not as
     // a string. 0.11.4 adds no migration, so going back to 0.11.3 or 0.11.1
     // is a plain rollback; 0.11.0's two mean the way back to 0.10.6 or older
     // is the rollback with --accept-data-loss.
     for v in ["0.11.3", "0.11.1", "0.10.6", "0.10.5", "0.10.4", "0.10.3", "0.10.2", "0.10.0"] {
+        assert_eq!(version_cmp(v, pin.version), Some(std::cmp::Ordering::Less), "{v}");
+    }
+}
+
+/// The 0.11.5 pin is exactly its SHA256SUMS (vendored, sha256
+/// c55d50be…f62c): every core and sidecar tarball and binary member line,
+/// the App kit's, and the DeepFilterNet3 bundle's two lines. Each hash in
+/// Sew's 0.11.5 pin note (core pins from sew-0.11.5-release.json, PINS-CHECK
+/// PASS: the core and sidecar tarballs, the core binaries, the kit, the model
+/// and DeepFilterNet3) is checked here too, and each was hashed again from the
+/// public v0.11.5 release. Its DeepFilterNet3 asset is the same bytes as 0.11.4's.
+#[test]
+fn the_0_11_5_pin_equals_its_sha256sums() {
+    let sums = include_str!("../../testdata/sew/sew-0.11.5.SHA256SUMS");
+    assert_eq!(
+        sha256_hex(sums.as_bytes()),
+        "c55d50be8f8ae7b7369ef5e83a9c380b4f1b6db879a5785a25b5671acb38f62c",
+        "the vendored SUMS file is the published one"
+    );
+    assert_eq!(SEW_RELEASES.last().unwrap().version, "0.11.5", "0.11.5 is the pin");
+    assert_eq!(
+        pin_equals_sums("0.11.5", sums),
+        19,
+        "4 binaries × 2 arches × (tarball, member) + the App kit + the DeepFilterNet3 asset and weights"
+    );
+    let pin = SEW_RELEASES.last().unwrap();
+    let bin = |side: Option<&SewSidecar>, arch: &str| {
+        let arts = side.map(|s| s.artifacts).unwrap_or(pin.artifacts);
+        arts.iter().find(|a| a.arch == arch).map(|a| (a.tarball_sha256, a.binary_sha256)).expect("pinned")
+    };
+    assert_eq!(
+        bin(None, "x86_64"),
+        ("59cc57ce10527721e581252cc7354aaec58b17f3f7ce1b9d0a78cd5ba276d1dc", "d147b7083939e0b4c710168f180840d0fba01b30792823ee10decd7fbd4ea61d")
+    );
+    assert_eq!(
+        bin(None, "aarch64"),
+        ("772b820c41d830ab1f6c247609ed787c6ae686aaa2f1ab5eaf57b192629cf856", "b50232069dcb551a0d9d738ae5b0c93df8614d515c682d6ac271e1f93265fbe3")
+    );
+    for (side, x86, arm) in [
+        (pin.media.as_ref(), "33b392840738ff9bd9fd63a3afcb9da741b45f4c891dc096a26b9a0a64a0a3a5", "55639efc747c76b8c80a601126193349895f26b946bd87da6bb344972abaa255"),
+        (pin.transcriber.as_ref(), "0b264789ec206268d308b8480618a8e158792fffb51640b66cb5d4d63777fbbd", "4e1c91ae81fcc3cde2b75e2a88c9677773fbb944f911c407650e387f1bec20bb"),
+        (pin.recorder.as_ref(), "48c1d92f83ce05d0f6d81ca4fe4d33d4b0578dd4c3fdd8d6364171d37d090ed3", "b5da93a4d994d17b38316cdc81ac0c272a27d77bd9ccf3774461f604b59a70c3"),
+    ] {
+        assert_eq!((bin(side, "x86_64").0, bin(side, "aarch64").0), (x86, arm), "{:?}", side.map(|s| s.version));
+    }
+    assert_eq!(
+        SEW_APP_KITS.iter().find(|k| k.version == "0.11.5").map(|k| k.sha256),
+        Some("d2182ca2420fe9cd5a4e488044c1d92ee39b94afd67ecd79e38298cdbdbec894")
+    );
+    let d = SEW_DFN3.iter().find(|d| d.version == "0.11.5").expect("0.11.5 ships DeepFilterNet3");
+    assert_eq!(
+        (d.file, d.sha256, d.bytes, d.weights_sha256),
+        (
+            "sew-dfn3-0.11.5.tar.gz",
+            "153721fd5f9f33663da7d831b3b611adcb9ca9e65233a6128d94941ad48d6697",
+            36_353_582,
+            "b6e52c0bc66b82e42e3403d22cdd3b847143026d6a41cc4380a97b044f7766af"
+        )
+    );
+    let prev = SEW_DFN3.iter().find(|d| d.version == "0.11.4").expect("0.11.4's bundle stays");
+    assert_eq!((prev.sha256, prev.weights_sha256), (d.sha256, d.weights_sha256), "the same bytes as 0.11.4's");
+    assert_eq!(SEW_DFN3.last().map(|d| d.version), Some("0.11.5"), "the app ships the pin's bundle");
+    // 0.11.4 back to 0.10.0 are older (upgrade sources), by number, not as
+    // a string. 0.11.5 adds no migration, so going back to 0.11.4, 0.11.3 or
+    // 0.11.1 is a plain rollback; 0.11.0's two mean the way back to 0.10.6 or
+    // older is the rollback with --accept-data-loss.
+    for v in ["0.11.4", "0.11.3", "0.11.1", "0.10.6", "0.10.5", "0.10.4", "0.10.3", "0.10.2", "0.10.0"] {
         assert_eq!(version_cmp(v, pin.version), Some(std::cmp::Ordering::Less), "{v}");
     }
 }
@@ -653,7 +719,7 @@ fn a_box_on_sew_0_8_3_upgrades_to_the_0_9_0_pin_as_a_known_release() {
     for a in r.artifacts {
         assert_eq!(known_binary(a.binary_sha256, a.arch), Some("0.8.3"), "{}", a.arch);
     }
-    assert_eq!(pinned().version, "0.11.4");
+    assert_eq!(pinned().version, "0.11.5");
     assert_eq!(version_cmp("0.8.3", pinned().version), Some(std::cmp::Ordering::Less), "an upgrade, not a downgrade");
     assert_eq!(version_cmp("0.8.2", "0.8.3"), Some(std::cmp::Ordering::Less), "0.8.3 sits between 0.8.2 and the pin");
     for arch in ["x86_64", "aarch64"] {
@@ -666,12 +732,12 @@ fn a_box_on_sew_0_8_3_upgrades_to_the_0_9_0_pin_as_a_known_release() {
 }
 
 /// The real table: the old 0.1.0 placeholder stays and refuses, 0.2.0
-/// and 0.2.1 through 0.11.3 stay known; the pin is Sew 0.11.4 for both
+/// and 0.2.1 through 0.11.4 stay known; the pin is Sew 0.11.5 for both
 /// linux-gnu triples, with all three sidecars, equal to its SHA256SUMS.
 #[test]
-fn real_table_pins_sew_0_11_4_and_keeps_the_old_entries() {
-    assert_eq!(SEW_RELEASES.len(), 27);
-    let known = [(25, "0.11.3"), (24, "0.11.1"), (23, "0.10.6"), (22, "0.10.5"), (21, "0.10.4"), (20, "0.10.3"), (19, "0.10.2"), (18, "0.10.0"), (17, "0.9.3"), (16, "0.9.2"), (15, "0.9.0"), (14, "0.8.3")];
+fn real_table_pins_sew_0_11_5_and_keeps_the_old_entries() {
+    assert_eq!(SEW_RELEASES.len(), 28);
+    let known = [(26, "0.11.4"), (25, "0.11.3"), (24, "0.11.1"), (23, "0.10.6"), (22, "0.10.5"), (21, "0.10.4"), (20, "0.10.3"), (19, "0.10.2"), (18, "0.10.0"), (17, "0.9.3"), (16, "0.9.2"), (15, "0.9.0"), (14, "0.8.3")];
     for (i, v) in known.into_iter().chain([(13, "0.8.2"), (12, "0.8.1"), (11, "0.8.0"), (10, "0.7.3"), (9, "0.7.2"), (8, "0.7.1")]) {
         assert_eq!(SEW_RELEASES[i].version, v);
         assert!(release_is_pinned(&SEW_RELEASES[i]), "{v} stays a real release (an upgrade source and rollback target)");
@@ -697,12 +763,12 @@ fn real_table_pins_sew_0_11_4_and_keeps_the_old_entries() {
     assert!(artifact_in(old, "x86_64").unwrap_err().contains("no Sew pin"));
 
     let pin = SEW_RELEASES.last().unwrap();
-    assert_eq!(pin.version, "0.11.4");
+    assert_eq!(pin.version, "0.11.5");
     assert!(release_is_pinned(pin));
     assert!(artifact_in(pin, "riscv64").unwrap_err().contains("unsupported"));
     let want = [
-        ("x86_64", "d2bdd098cd828cd946cd0ed15be3b5508386e66a5197b72c71734896f93ada8e", "fb635e693a7b49bf3822afe9aa87fa494e386b8caa4418eb5613fc125c2c1bc8"),
-        ("aarch64", "5936272ccdc4b4d2ccaa2f1488470285aac615fefb49f8aa4612f59e88cab4e2", "86ea61d837b0672b567101760857fdc9a84133dbefefbdf81fbcc19a6fd3ef72"),
+        ("x86_64", "59cc57ce10527721e581252cc7354aaec58b17f3f7ce1b9d0a78cd5ba276d1dc", "d147b7083939e0b4c710168f180840d0fba01b30792823ee10decd7fbd4ea61d"),
+        ("aarch64", "772b820c41d830ab1f6c247609ed787c6ae686aaa2f1ab5eaf57b192629cf856", "b50232069dcb551a0d9d738ae5b0c93df8614d515c682d6ac271e1f93265fbe3"),
     ];
     for (arch, tar, bin) in want {
         let a = artifact_in(pin, arch).expect("pinned");
@@ -711,7 +777,7 @@ fn real_table_pins_sew_0_11_4_and_keeps_the_old_entries() {
     }
     for (name, s) in [("media", &pin.media), ("transcriber", &pin.transcriber), ("recorder", &pin.recorder)] {
         let s = s.as_ref().unwrap_or_else(|| panic!("{name} pinned"));
-        assert_eq!(s.version, "0.11.4", "{name}");
+        assert_eq!(s.version, "0.11.5", "{name}");
         let mut arches: Vec<&str> = s.artifacts.iter().map(|a| a.arch).collect();
         arches.sort();
         assert_eq!(arches, ["aarch64", "x86_64"], "{name}");
@@ -720,12 +786,12 @@ fn real_table_pins_sew_0_11_4_and_keeps_the_old_entries() {
         assert!(!checksum_is_placeholder(a), "{a:?}");
     }
     // Every hash is distinct (no copy-paste slip between rows), across
-    // all twenty-six real releases.
+    // all twenty-seven real releases.
     let mut seen = std::collections::HashSet::new();
     for r in &SEW_RELEASES[1..] {
         for a in all_artifacts(r) {
             assert!(seen.insert(a.tarball_sha256) && seen.insert(a.binary_sha256), "{a:?}");
         }
     }
-    assert_eq!(seen.len(), 416);
+    assert_eq!(seen.len(), 432);
 }

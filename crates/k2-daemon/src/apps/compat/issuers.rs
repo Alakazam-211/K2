@@ -159,7 +159,12 @@ fn max_age(cache_control: &str) -> Option<i64> {
 fn http_fetch(url: &str) -> Fetched {
     let url = url.to_string();
     std::thread::spawn(move || -> Fetched {
-        let client = reqwest::blocking::Client::builder().timeout(FETCH_TIMEOUT).build().map_err(|e| e.to_string())?;
+        // The daemon's egress gate (resolve once, refuse loopback, private,
+        // metadata and this box's own addresses; *_PROXY ignored, no
+        // redirects): the issuer's URL is the App owner's, not K2's.
+        let u = url::Url::parse(&url).map_err(|e| format!("fetch {url}: {e}"))?;
+        let dest = crate::egress::Destination::vet(&u, false).map_err(|e| format!("fetch {url}: {e}"))?;
+        let client = crate::egress::client(crate::egress::Purpose::AppIdentityKeys, &dest, FETCH_TIMEOUT).map_err(|e| format!("fetch {url}: {e}"))?;
         let r = client.get(&url).send().map_err(|e| format!("fetch {url}: {e}"))?;
         if !r.status().is_success() {
             return Err(format!("fetch {url}: HTTP {}", r.status()));

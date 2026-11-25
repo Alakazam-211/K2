@@ -147,7 +147,8 @@ pub fn remote_token(claims: &Value, jwt_secret: &str) -> Result<String, String> 
 /// The other side: `GET <base>/<table>?select=*` as each identity.
 /// `base`: `https://<project>.supabase.co/rest/v1`, or PostgREST's root.
 pub async fn remote_side(base: &str, apikey: &str, jwt_secret: &str, tables: &[String], identities: &[Identity]) -> Result<Vec<Probe>, String> {
-    let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build().map_err(|e| e.to_string())?;
+    // The daemon never honours *_PROXY from its environment.
+    let http = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(60)).build().map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for t in tables {
         for who in identities {

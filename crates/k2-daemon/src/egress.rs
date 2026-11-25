@@ -57,6 +57,12 @@ pub enum Purpose {
     /// ([`Destination::socket_addrs`]); it never builds an HTTP client and
     /// never handles keys (those go through the vault key proxy).
     AppEgress,
+    /// The Supabase-compatible layer's issuer key fetch (`k2 app identity`):
+    /// an issuer's JWKS, for verifying the App's phone sign-ins (0.46.18).
+    AppIdentityKeys,
+    /// `k2 app storage import`: a Supabase project's storage API, the
+    /// buckets, object lists and bytes (0.46.18).
+    AppStorageImport,
 }
 
 impl Purpose {
@@ -68,12 +74,17 @@ impl Purpose {
             Purpose::LlmAccountCheck => "llm-account-check",
             Purpose::AppFetch => "app-fetch",
             Purpose::AppEgress => "app-egress",
+            Purpose::AppIdentityKeys => "app-identity-keys",
+            Purpose::AppStorageImport => "app-storage-import",
         }
     }
 
     pub fn connect_timeout(self) -> Duration {
         match self {
-            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source | Purpose::AppFetch | Purpose::AppEgress => Duration::from_secs(10),
+            Purpose::VaultFetch | Purpose::VaultProxy | Purpose::Source | Purpose::AppFetch | Purpose::AppEgress | Purpose::AppIdentityKeys => {
+                Duration::from_secs(10)
+            }
+            Purpose::AppStorageImport => Duration::from_secs(15),
             Purpose::LlmAccountCheck => Duration::from_secs(3),
         }
     }

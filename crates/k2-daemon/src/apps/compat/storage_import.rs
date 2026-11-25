@@ -179,11 +179,15 @@ pub fn is_running(app_id: &str) -> bool {
 
 // ── the source ───────────────────────────────────────────────────────
 
-fn client() -> SResult<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(120))
-        .build()
+/// The client for one source, through the daemon's egress gate: the
+/// source's host resolved once and vetted (loopback, private, metadata and
+/// this box's own addresses refused), *_PROXY ignored, no redirects. The
+/// URL is the caller's. A test drill's source is a loopback mock, so test
+/// builds let an IP literal through (`ip_literal_allowlisted`).
+fn client(src: &Source) -> SResult<reqwest::Client> {
+    let url = url::Url::parse(&src.base).map_err(|e| StorageError::unavailable(format!("the source URL {}: {e}", src.base)))?;
+    let dest = crate::egress::Destination::vet(&url, cfg!(test)).map_err(|e| StorageError::unavailable(format!("the source {}: {e}", src.base)))?;
+    crate::egress::async_client(crate::egress::Purpose::AppStorageImport, &dest, Duration::from_secs(120))
         .map_err(|e| StorageError::internal(format!("http client: {e}")))
 }
 
@@ -463,7 +467,7 @@ pub async fn run(ctx: Ctx, src: Source, opts: Opts) -> SResult<State> {
 }
 
 async fn run_inner(ctx: &Ctx, src: &Source, opts: &Opts, state: &Arc<Mutex<State>>) -> SResult<()> {
-    let c = client()?;
+    let c = client(src)?;
     let mut buckets = src_buckets(&c, src).await?;
     if !opts.buckets.is_empty() {
         buckets.retain(|b| b.get("id").and_then(Value::as_str).is_some_and(|id| opts.buckets.iter().any(|w| w == id)));
@@ -635,7 +639,7 @@ pub async fn verify(ctx: &Ctx, src: Option<&Source>) -> SResult<Verify> {
         }
     }
     if let Some(src) = src {
-        let c = client()?;
+        let c = client(src)?;
         for b in src_buckets(&c, src).await? {
             let Some(id) = b.get("id").and_then(Value::as_str) else { continue };
             for o in src_objects(&c, src, id).await? {

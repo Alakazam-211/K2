@@ -242,6 +242,12 @@ RUST_TOKEN_OK=(
     "crates/k2-daemon/src/apps/grace.rs|1|a notice's text names ?token=, it builds no address"
     "crates/k2-daemon/src/v1_host_sessions.rs|1|the /v1 API hands its caller a terminal WebSocket address with a short-lived stream token"
     "crates/k2-daemon/src/v1_sandboxes.rs|2|the /v1 API hands its caller a terminal WebSocket address with a short-lived stream token"
+    # The Supabase-compatible layer (0.46.18): the protocol puts these
+    # tokens in the query; the door logs the path, never the query.
+    "crates/k2-daemon/src/apps/compat/auth_admin.rs|1|Supabase-compatible protocol: the token travels in the query (/auth/v1/verify links)"
+    "crates/k2-daemon/src/apps/compat/storage_door.rs|3|Supabase-compatible protocol: the token travels in the query (storage signed URLs)"
+    "crates/k2-daemon/src/apps/compat/storage_oracle.rs|1|test-only: the storage test oracle (#[cfg(test)])"
+    "crates/k2-daemon/src/apps/compat/storage_real_pg.rs|1|test-only: the storage real-PG drill (#[cfg(test)])"
 )
 
 lint_rust() { # lint_rust <root>: one line per problem; exit 1 when any

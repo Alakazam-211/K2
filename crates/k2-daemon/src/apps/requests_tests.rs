@@ -297,3 +297,22 @@ fn the_first_line_gives_method_and_a_safe_path_only() {
     assert_eq!(first_line(b"\x16\x03\x01binary"), (String::new(), String::new()));
     assert_eq!(first_line(b""), (String::new(), String::new()));
 }
+
+/// The Supabase-compatible doors' query tokens (0.46.18: storage signed
+/// URLs, /auth/v1/verify links): an App's request row keeps the path only,
+/// never the token in the query.
+#[test]
+fn a_supabase_signed_url_or_verify_link_keeps_only_its_path() {
+    assert_eq!(
+        first_line(b"GET /storage/v1/object/sign/photos/org/a.jpg?token=eyJhbGciOiJIUzI1NiJ9.secret HTTP/1.1\r\n\r\n"),
+        ("GET".into(), "/storage/v1/object/sign/photos/org/a.jpg".into())
+    );
+    assert_eq!(
+        first_line(b"PUT /storage/v1/object/upload/sign/photos/b.jpg?token=eyJ.upload HTTP/1.1\r\n\r\n"),
+        ("PUT".into(), "/storage/v1/object/upload/sign/photos/b.jpg".into())
+    );
+    assert_eq!(
+        first_line(b"GET /auth/v1/verify?token=k2lnk_secret&type=recovery&redirect_to=https%3A%2F%2Fa HTTP/1.1\r\n\r\n"),
+        ("GET".into(), "/auth/v1/verify".into())
+    );
+}

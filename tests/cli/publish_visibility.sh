@@ -181,7 +181,9 @@ SB="$WORK/sb"
 # Own TMPDIR / XDG_RUNTIME_DIR: the daemon's private runtime dir must never be
 # the real one (2026-10-14 incident).
 mkdir -p "$SB/.k2" "$SB/shim" "$SB/tmp" "$SB/run"
-printf '#!/bin/sh\nexec /bin/cat\n' > "$SB/shim/claude"
+# The agent stand-in keeps its session's environment (its passport and
+# session socket) for the identity-session rows below.
+printf '#!/bin/sh\nenv > "%s/shim/claude.env"\nexec /bin/cat\n' "$SB" > "$SB/shim/claude"
 chmod +x "$SB/shim/claude"
 printf '{"token":"tok_test","subdomain":"rosson","e2e":true}' > "$SB/.k2/tunnel.json"
 chmod 600 "$SB/.k2/tunnel.json"
@@ -329,6 +331,52 @@ assert_eq "short PIN exits 2" "$rc" "2"
 assert_contains "short PIN says" "$out" "6 to 64"
 rc=0; out="$(printf '12345678\n' | real publish visibility no-such-site pin 2>&1)" || rc=$?
 assert_eq "unknown label exits 3" "$rc" "3"
+
+# ── an identity session, against this daemon (Agent Isolation M1) ─────
+# The workspace's agent: its passport and session socket. In an identity
+# session (K2_AGENT_CGROUP set) every passport request goes over the
+# session socket, which hands it to the TCP route code. With K2_PORT at a
+# port nothing listens on, only the socket can answer: each command must
+# give exactly what the same passport gets over TCP outside an identity
+# session (0.46.17's path), and the same as the shell CLI gives.
+echo "== an identity session: the socket's forward path answers as TCP does"
+real agent restart "$WSP" --harness claude --json >/dev/null 2>&1 || true
+for _ in $(seq 1 100); do [ -s "$SB/shim/claude.env" ] && break; sleep 0.1; done
+APASS="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/shim/claude.env" 2>/dev/null | head -1)"
+ASOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/shim/claude.env" 2>/dev/null | head -1)"
+if [ -n "$APASS" ] && [ -S "$ASOCK" ]; then
+    ok "the agent's session has a passport and a live session socket"
+    NOBODY="$(free_port)"
+    as_agent() { # port mark stdin-text args…
+        local port="$1" mark="$2" input="$3" cli="$4"
+        shift 4
+        printf '%s' "$input" | env -i PATH="$PATH" HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$port" \
+            K2_HOOK_TOKEN="$APASS" K2_HOOK_SOCK="$ASOCK" K2_PROJECT_PATH="$WSP" \
+            ${mark:+K2_AGENT_CGROUP="$mark"} "$cli" "$@"
+    }
+    same_both_ways() { # label want-rc stdin-text args…
+        local label="$1" want="$2" input="$3"
+        shift 3
+        local tcp_out tcp_rc=0 id_out id_rc=0 sh_out sh_rc=0
+        tcp_out="$(as_agent "$DPORT" "" "$input" "$K2_CLI" "$@" 2>&1)" || tcp_rc=$?
+        id_out="$(as_agent "$NOBODY" a-test "$input" "$K2_CLI" "$@" 2>&1)" || id_rc=$?
+        sh_out="$(as_agent "$NOBODY" a-test "$input" "$CLI_BASH_SOURCE" "$@" 2>&1)" || sh_rc=$?
+        assert_eq "$label: exit over the session socket" "$id_rc" "$want"
+        assert_eq "$label: the same exit as over TCP" "$id_rc" "$tcp_rc"
+        assert_eq "$label: the same output as over TCP" "$id_out" "$tcp_out"
+        assert_eq "$label: the same exit and output as the shell CLI" "$id_rc $id_out" "$sh_rc $sh_out"
+    }
+    # focus-group list: _K2_FORCE_TCP in the shell, force_tcp in the binary.
+    same_both_ways "focus-group list" 0 "" focus-group list
+    # heartbeat wake: its Python ran the proxy rule after the session handler.
+    same_both_ways "heartbeat wake" 0 "" heartbeat wake
+    # The publish PIN: an agent's attempt is held for a person (exit 2)
+    # before the PIN is read, so the _K2_FORCE_TCP send after it is the
+    # owner's alone; the hold must come back the same through the socket.
+    same_both_ways "publish visibility pin (an agent's: held)" 2 $'agent-pin-1\n' publish visibility web pin
+else
+    bad "the agent's session gave no passport or socket: $(cat "$SB/shim/claude.env" 2>/dev/null | grep -c K2_ || true) K2_ lines"
+fi
 
 # Public dev: loud, on purpose.
 rc=0; out="$(real publish visibility web public --reason demo 2>&1)" || rc=$?

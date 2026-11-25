@@ -308,6 +308,8 @@ fn cdpath_set() {
     ] {
         rig.check(&c);
     }
+    // Each row's exit and request count are bash's with no CDPATH
+    // ([`as_bash_without`]).
     let rows: Vec<(&'static str, Case)> = vec![
         (
             "heartbeat",
@@ -315,7 +317,7 @@ fn cdpath_set() {
                 "heartbeat list --workspace .k2, CDPATH set",
                 &["list", "--workspace", ".k2"],
                 &[],
-                vec![ok(r#"{"heartbeats":[]}"#)],
+                vec![ok("[]")],
                 owner_and_port,
                 0,
                 1,
@@ -327,7 +329,7 @@ fn cdpath_set() {
                 "remind list --workspace .k2, CDPATH set",
                 &["list", "--workspace", ".k2"],
                 &[],
-                vec![ok(r#"{"reminders":[]}"#)],
+                vec![ok("[]")],
                 owner_and_port,
                 0,
                 1,
@@ -373,7 +375,23 @@ fn cdpath_set() {
     for (verb, c) in rows {
         let rig = Rig::new(verb, "cdpath");
         let cdp = cdpath_folder(&rig);
+        let c = as_bash_without(&rig, c);
         rig.check(&with(vec![("CDPATH", cdp)], c));
+    }
+}
+
+/// `c` with bash's exit and request count as bash answers it with no
+/// `CDPATH`: a `CDPATH` that has no entry for the folder must leave both
+/// as they are (and the binary must then answer as bash does).
+fn as_bash_without(rig: &Rig, c: Case) -> Case {
+    rig.prepare(Side::Bash, &c);
+    let b = rig.run(true, &c);
+    let sent = rig.read(Side::Bash, false, c.name).len();
+    println!("-- bash with no CDPATH: {b:?}, {sent} request(s)");
+    Case {
+        code: b.code.expect("bash's exit code"),
+        requests: sent,
+        ..c
     }
 }
 
@@ -432,19 +450,29 @@ fn sim_install_refuses_a_dash_path() {
         0,
         1,
     );
+    // Bash never refuses it with this line: on Linux it sends the install
+    // with a mangled path; macOS's dirname and basename fail and it stops
+    // with their usage lines. Either way not the path as it is.
     rig.prepare(Side::Bash, &c);
     let b = rig.run(true, &c);
     let sent = rig.read(Side::Bash, false, c.name);
-    assert_eq!(sent.len(), 1, "bash sends the install: {b:?}");
-    let head = String::from_utf8_lossy(&sent[0].bytes).into_owned();
+    assert!(sent.len() <= 1, "bash sent {} requests: {b:?}", sent.len());
     assert!(
-        head.starts_with("POST /cli/sim/install "),
-        "bash's request: {head}"
+        !b.stderr.contains("can't be read safely"),
+        "bash refuses it now: the difference no longer holds: {b:?}"
     );
-    assert!(
-        !head.contains(&*rig.proj.join("-app.apk").to_string_lossy()),
-        "bash sent the path as it is: the difference no longer holds: {head}"
-    );
+    for r in &sent {
+        let head = String::from_utf8_lossy(&r.bytes).into_owned();
+        assert!(
+            head.starts_with("POST /cli/sim/install "),
+            "bash's request: {head}"
+        );
+        assert!(
+            !head.contains(&*rig.proj.join("-app.apk").to_string_lossy()),
+            "bash sent the path as it is: the difference no longer holds: {head}"
+        );
+    }
+    rig.stub_of(Side::Bash).reset(&[]);
     let r = Case {
         replies: vec![],
         ..c

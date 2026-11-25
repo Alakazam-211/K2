@@ -74,6 +74,10 @@ native_bar	V	app	app user import
 native_bar	V	app	app user import --json
 native_bar	V	app	app user meta
 native_bar	V	app	app user meta --json
+# agent isolation and agent whois go to bash: due before n2 (native port in 0.46.19)
+native_bar	V	agent	agent isolation
+native_bar	V	agent	agent isolation layout
+native_bar	V	agent	agent whois
 parity	-	db	db cluster basebackup --json
 parity	-	db	db cluster backups --json
 parity	-	db	db cluster restore --json

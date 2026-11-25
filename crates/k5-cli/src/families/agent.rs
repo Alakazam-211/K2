@@ -191,6 +191,10 @@ fn run_words(args: &[OsString], words: &[&str], note: Option<&str>) -> Option<Ex
     if words.iter().any(|w| matches!(*w, "-h" | "--help")) {
         return None;
     }
+    // Verbs only the shell has yet: it runs them.
+    if matches!(verb, "isolation" | "whois") {
+        return None;
+    }
     // `agent template` alone only prints its page: the shell skips the
     // gate for it.
     if matches!(verb, "template" | "templates") && rest.first().is_none_or(|w| w.is_empty()) {

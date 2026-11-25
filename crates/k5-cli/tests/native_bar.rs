@@ -754,7 +754,11 @@ fn stage_run_time() -> Machine {
     // The old home is the brand's legacy name (`.k2so` with ours; a brand
     // with no alias has its command's name), as the binary looks for it.
     let legacy = format!(".{}", k2_client::cli_install::LEGACY_NAME);
-    put(&fx.join("oldhome").join(legacy).join("connect-tokens.json"), b"[]", 0o644);
+    put(
+        &fx.join("oldhome").join(legacy).join("connect-tokens.json"),
+        b"[]",
+        0o644,
+    );
     fs::create_dir_all(fx.join("home-c-port-bad-token-dir/.k2/heartbeat.token")).unwrap();
     fs::create_dir_all(fx.join("home-empty/.k2")).unwrap();
     // A PATH with cat on it and nothing else (no ps, no python3).

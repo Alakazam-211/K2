@@ -52,6 +52,13 @@
 //! compares the whole set where python3 is 3.12 or newer). The `https`
 //! branch of the Python is not here: the shell's `BASE_URL` for `app` is
 //! always `http://HOST:PORT`.
+//!
+//! In an identity session (Agent Isolation M1), with the session's
+//! passport and `HOST` spelled `127.0.0.1`, `localhost` or `[::1]`, the
+//! connection is the session's cell socket instead, and the handshake
+//! has `X-K2-Via-Tcp: 1` after its `Authorization` line; a connect there
+//! that fails, whatever the reason, opens TCP as above, unmarked
+//! (`cmd_app_shell`'s `K2_SH_SOCK`).
 
 use super::call::Ctx;
 use super::{Answer, Stop};
@@ -65,10 +72,100 @@ use k2_client::cli_name;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::path::Path;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
+
+/// The session's connection: TCP, or the session's cell socket.
+enum Stream {
+    Tcp(TcpStream),
+    #[cfg(unix)]
+    Unix(UnixStream),
+}
+
+impl Stream {
+    fn set_read_timeout(&self, t: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Stream::Tcp(s) => s.set_read_timeout(t),
+            #[cfg(unix)]
+            Stream::Unix(s) => s.set_read_timeout(t),
+        }
+    }
+
+    fn set_write_timeout(&self, t: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            Stream::Tcp(s) => s.set_write_timeout(t),
+            #[cfg(unix)]
+            Stream::Unix(s) => s.set_write_timeout(t),
+        }
+    }
+
+    #[cfg(unix)]
+    fn as_raw_fd(&self) -> RawFd {
+        match self {
+            Stream::Tcp(s) => s.as_raw_fd(),
+            Stream::Unix(s) => s.as_raw_fd(),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn try_clone(&self) -> std::io::Result<Stream> {
+        match self {
+            Stream::Tcp(s) => s.try_clone().map(Stream::Tcp),
+        }
+    }
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Stream::Tcp(s) => s.read(buf),
+            #[cfg(unix)]
+            Stream::Unix(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Stream::Tcp(s) => s.write(buf),
+            #[cfg(unix)]
+            Stream::Unix(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Stream::Tcp(s) => s.flush(),
+            #[cfg(unix)]
+            Stream::Unix(s) => s.flush(),
+        }
+    }
+}
+
+/// The session's cell socket, connected in at most 15 s; `None` when the
+/// connect failed, whatever the reason.
+#[cfg(unix)]
+fn on_session_socket(sock: &Path) -> Option<Stream> {
+    use crate::transport::wire::{self, Conn, Target};
+    let fifteen = Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + fifteen;
+    match wire::connect(&Target::Unix(sock.to_path_buf()), fifteen, deadline) {
+        Ok(Conn::Unix(s)) => Some(Stream::Unix(s)),
+        _ => None,
+    }
+}
+
+/// No Unix sockets: never a session socket.
+#[cfg(not(unix))]
+fn on_session_socket(_sock: &Path) -> Option<Stream> {
+    None
+}
 
 /// The usage line (exit 2).
 pub mod usage {
@@ -122,6 +219,14 @@ pub fn run(ctx: &mut Ctx, a: &Ask) -> Answer {
         Auth::Owner(t) => t.clone(),
         Auth::Passport { passport, .. } => passport.as_str().to_string(),
     };
+    // The session's own passport to this machine's daemon, in an identity
+    // session: the cell socket (`_k2_via_session_sock`'s rule).
+    let sock = ctx
+        .client
+        .session_socket()
+        .filter(|_| matches!(ctx.client.host.as_str(), "127.0.0.1" | "localhost" | "[::1]"))
+        .filter(|_| !ctx.client.tls)
+        .map(Path::to_path_buf);
     // `urlparse("http://HOST:PORT")`: `hostname` is lower case, without
     // an IPv6 address's brackets; `port or 80`.
     let mut host = ctx.client.host.to_lowercase();
@@ -136,7 +241,7 @@ pub fn run(ctx: &mut Ctx, a: &Ask) -> Answer {
     } else {
         ctx.client.port
     };
-    Ok(session(&host, port, &token, a))
+    Ok(session(&host, port, &token, sock.as_deref(), a))
 }
 
 /// What the Python raises from `line` of its module (`frames` deeper in).
@@ -243,7 +348,7 @@ fn decode_status(status: &[u8]) -> Result<String, String> {
 }
 
 /// The session: the connection, the handshake, then the frames.
-fn session(host: &str, port: u16, token: &str, a: &Ask) -> Shown {
+fn session(host: &str, port: u16, token: &str, sock: Option<&Path>, a: &Ask) -> Shown {
     let tty = crate::prompt::stdin_is_tty();
     let (mut cols, mut rows) = (80u16, 24u16);
     if tty {
@@ -266,22 +371,31 @@ fn session(host: &str, port: u16, token: &str, a: &Ask) -> Shown {
         q.push(("argv", crate::confirm::dumps(&argv)));
     }
     let path = format!("/cli/app/shell?{}", urllib::urlencode(&q));
-    let mut s = match urllib::connect(host, port, Duration::from_secs(15)) {
-        Ok(s) => s,
-        Err(r) => {
-            let e = raised(
-                &[(22, "<module>")],
-                format!("{}: {}", r.class.name(), r.text()),
-            );
-            return Shown::err(e.text(), Exit::Error);
-        }
+    let on_sock = sock.and_then(on_session_socket);
+    let via = if on_sock.is_some() {
+        "X-K2-Via-Tcp: 1\r\n"
+    } else {
+        ""
+    };
+    let mut s = match on_sock {
+        Some(s) => s,
+        None => match urllib::connect(host, port, Duration::from_secs(15)) {
+            Ok(s) => Stream::Tcp(s),
+            Err(r) => {
+                let e = raised(
+                    &[(22, "<module>")],
+                    format!("{}: {}", r.class.name(), r.text()),
+                );
+                return Shown::err(e.text(), Exit::Error);
+            }
+        },
     };
     let fifteen = Some(Duration::from_secs(15));
     let _ = s.set_read_timeout(fifteen);
     let _ = s.set_write_timeout(fifteen);
     let key = pylib::base64::b64encode(&urandom(16));
     let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer {token}\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer {token}\r\n{via}\r\n"
     );
     if let Err(e) = s.write_all(req.as_bytes()) {
         return Shown::err(os_raise(&[(28, "<module>")], &e).text(), Exit::Error);
@@ -339,7 +453,7 @@ fn session(host: &str, port: u16, token: &str, a: &Ask) -> Shown {
 }
 
 /// An answer that is not `101`: the line, exit 3.
-fn refused(s: &mut TcpStream, status: &[u8], rest: &[u8]) -> Shown {
+fn refused(s: &mut Stream, status: &[u8], rest: &[u8]) -> Shown {
     let mut body = rest.to_vec();
     let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
     loop {
@@ -414,7 +528,7 @@ fn exit_of(code: &Value) -> Exit {
 /// The open WebSocket: its buffer of unread bytes and the exit code the
 /// server named.
 struct Ws {
-    s: TcpStream,
+    s: Stream,
     buf: Vec<u8>,
     code: Value,
 }
@@ -1012,7 +1126,7 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let s = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let mut ws = Ws {
-            s,
+            s: Stream::Tcp(s),
             buf: vec![0x82, 2, b'h', b'i', 0x81, 126, 0, 3, b'a', b'b', b'c', 0x88],
             code: Value::Null,
         };

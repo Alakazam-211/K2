@@ -753,3 +753,149 @@ fn a_failed_handshake_s_reason_is_plain_words() {
     assert_eq!(r.reason, "_ssl.c: The handshake operation timed out");
     assert_eq!(r.kind, Kind::Timeout);
 }
+
+/// Agent Isolation M1 (`_K5SessionSock`): the session socket's opener.
+#[cfg(unix)]
+mod session_sock {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    const PASSPORT: &str = "sess91.passportfe12";
+
+    fn sock_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::path::PathBuf::from(format!(
+            "/tmp/k5pu-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn identity_opener(port: u16, sock: &Path, identity: bool) -> Opener {
+        let mut c = Client::new(
+            "127.0.0.1",
+            port,
+            "/p",
+            Auth::Passport {
+                passport: Passport::new(PASSPORT).unwrap(),
+                sock: Some(sock.to_path_buf()),
+            },
+        );
+        c.passport_on_socket = identity;
+        let mut o = Opener::from_client(&c);
+        o.pause = Duration::ZERO;
+        o
+    }
+
+    fn with_bearer(token: &str) -> Request {
+        get("/cli/context/layers").header("Authorization", format!("Bearer {token}"))
+    }
+
+    /// The test, condition by condition: the URL's host, its scheme and
+    /// the request's credential (the Bearer, else the query's `token`).
+    #[test]
+    fn which_requests_go_over_the_session_socket() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        let _live = UnixListener::bind(&path).unwrap();
+        let o = identity_opener(4100, &path, true);
+        let n = "127.0.0.1:4100";
+        assert_eq!(o.session_sock_for(false, n, &with_bearer(PASSPORT)), Some(path.as_path()));
+        assert_eq!(o.session_sock_for(true, n, &with_bearer(PASSPORT)), None);
+        assert_eq!(o.session_sock_for(false, n, &with_bearer("other")), None);
+        assert_eq!(o.session_sock_for(false, n, &get("/cli/x")), None);
+        let q = get("/cli/x").query([("token", PASSPORT)]);
+        assert_eq!(o.session_sock_for(false, n, &q), Some(path.as_path()));
+        let basic = q.clone().header("Authorization", "Basic eA==");
+        assert_eq!(o.session_sock_for(false, n, &basic), Some(path.as_path()));
+        for (netloc, want) in [
+            ("localhost:4100", true),
+            ("[::1]:4100", true),
+            ("::1:4100", true),
+            ("127.0.0.1", true),
+            ("10.0.0.2:4100", false),
+            ("LOCALHOST:4100", false),
+        ] {
+            let got = o.session_sock_for(false, netloc, &with_bearer(PASSPORT));
+            assert_eq!(got.is_some(), want, "{netloc}");
+        }
+        let outside = identity_opener(4100, &path, false);
+        assert_eq!(outside.session_sock_for(false, n, &with_bearer(PASSPORT)), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `parse_qs`'s reading of the query's `token`, after the Bearer.
+    #[test]
+    fn the_credential_as_the_python_reads_it() {
+        assert_eq!(credential(&with_bearer("a.b")), "a.b");
+        assert_eq!(credential(&get("/x?token=a%2Bb+c")), "a+b c");
+        assert_eq!(credential(&get("/x?token=&token=z")), "z");
+        assert_eq!(credential(&get("/x?tok=1&token")), "");
+        assert_eq!(credential(&get("/x").query([("token", "p q")])), "p q");
+        assert_eq!(credential(&get("/x?token=%zz")), "%zz");
+        assert_eq!(credential(&get("/x")), "");
+    }
+
+    /// Over the socket: the same request, `X-K2-Via-Tcp: 1` right after
+    /// `User-Agent`; nothing reaches TCP.
+    #[test]
+    fn the_passport_request_goes_over_the_socket_marked() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        let uds = UnixListener::bind(&path).unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        tcp.set_nonblocking(true).unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let served = std::thread::spawn(move || {
+            let (mut c, _) = uds.accept().unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                match c.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => got.extend_from_slice(&buf[..n]),
+                    Err(e) => panic!("read: {e}"),
+                }
+            }
+            c.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").unwrap();
+            String::from_utf8(got).unwrap()
+        });
+        let o = identity_opener(port, &path, true);
+        let out = o.open(&with_bearer(PASSPORT));
+        assert_eq!(out.status(), Some(200));
+        let head = served.join().unwrap();
+        let ua = format!("\r\nUser-Agent: {}\r\nX-K2-Via-Tcp: 1\r\nAuthorization: Bearer {PASSPORT}\r\n", o.user_agent);
+        assert!(head.contains(&ua), "{head}");
+        assert!(head.contains(&format!("\r\nHost: 127.0.0.1:{port}\r\n")), "{head}");
+        std::thread::sleep(Duration::from_millis(100));
+        match tcp.accept() {
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            Ok((_, from)) => panic!("a TCP connection from {from}"),
+            Err(e) => panic!("accept: {e}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The socket refuses the connect: TCP, unmarked.
+    #[test]
+    fn a_socket_that_takes_nothing_sends_it_over_tcp_unmarked() {
+        let dir = sock_dir();
+        let path = dir.join("c.sock");
+        drop(UnixListener::bind(&path).unwrap());
+        let (port, log) = server(vec![Act::Write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")]);
+        let o = identity_opener(port, &path, true);
+        assert_eq!(o.open(&with_bearer(PASSPORT)).status(), Some(200));
+        let got = log.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        let head = String::from_utf8_lossy(&got[0]);
+        assert!(!head.contains("X-K2-Via-Tcp"), "{head}");
+        assert!(head.contains(&format!("Authorization: Bearer {PASSPORT}")), "{head}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

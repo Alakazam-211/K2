@@ -116,9 +116,19 @@
 //! ([`Refused::write`]) and ends with [`Refused::EXIT`]. Every block that
 //! calls the daemon runs the rule, so a family moves to the `_ruled` pair
 //! as it is checked against it.
+//!
+//! # The session socket
+//!
+//! In an identity session ([`Client::session_socket`]) a request to this
+//! machine's daemon that carries the session's passport goes over the
+//! cell socket instead, as `_K5_PY_HTTP`'s `_K5SessionSock` handler sends
+//! it ([`Opener::session_sock_for`]): the same bytes, with
+//! `X-K2-Via-Tcp: 1` right after `User-Agent` (an unredirected header
+//! urllib adds after its own). A connect there that fails, whatever the
+//! reason, sends it over TCP as before, unmarked.
 
 use super::client::{Auth, Client, OWNER_SOURCE_DISK, OWNER_SOURCE_HEADER, VERSION_HEADER};
-use super::client::{VIA_HEADER, VIA_NATIVE, WOULD_REFUSE_HEADER};
+use super::client::{VIA_HEADER, VIA_NATIVE, VIA_TCP_HEADER, WOULD_REFUSE_HEADER};
 use super::encode::quote_bytes;
 use super::skew;
 use super::wire::SERVER_VERSION_HEADER;
@@ -126,6 +136,7 @@ use crate::exit::Exit;
 use std::convert::Infallible;
 use std::io::{self, BufRead, BufReader, Read as _, Write as _};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// The daemon's pre-ready answer (with a 503) that `_mail_py` and
@@ -390,6 +401,10 @@ pub struct Opener {
     /// The proxy variables as the shell's Python reads them, for an
     /// `https://` daemon ([`super::remote::python_daemon_route`]).
     py_proxy: super::proxy::python::Env,
+    /// The cell socket a request with the session's passport goes over
+    /// first, in an identity session ([`Client::session_socket`]); the
+    /// token is then that passport.
+    session_sock: Option<PathBuf>,
 }
 
 impl Opener {
@@ -445,7 +460,28 @@ impl Opener {
             tls: client.tls,
             unsendable,
             py_proxy,
+            session_sock: client.session_socket().map(Path::to_path_buf),
         }
+    }
+
+    /// `_K5SessionSock`'s test (`_k5_on_socket`): the cell socket when
+    /// this is an identity session's opener, the URL is plain http
+    /// (`tls` false), its host (`netloc` with the port and any brackets
+    /// off) is `127.0.0.1`, `localhost` or `::1`, and the request's
+    /// credential is the session's passport: what follows `Bearer ` in
+    /// its `Authorization` header, else the first `token` in its query.
+    pub fn session_sock_for(&self, tls: bool, netloc: &str, req: &Request) -> Option<&Path> {
+        let sock = self.session_sock.as_deref()?;
+        let passport = self.token()?;
+        if tls {
+            return None;
+        }
+        let host = netloc.rsplit_once(':').map_or(netloc, |(h, _)| h);
+        if !matches!(host.trim_matches(['[', ']']), "127.0.0.1" | "localhost" | "::1") {
+            return None;
+        }
+        let cred = credential(req);
+        (!cred.is_empty() && cred == passport).then_some(sock)
     }
 
     /// The `Host` header: [`Opener::netloc`], with the `https://` (or
@@ -486,6 +522,16 @@ impl Opener {
 
     /// The request's bytes, as http.client writes them.
     pub fn encode(&self, req: &Request) -> Vec<u8> {
+        self.encode_with(req, false)
+    }
+
+    /// [`Opener::encode`] for the session socket: `X-K2-Via-Tcp: 1`
+    /// right after `User-Agent`.
+    pub fn encode_marked(&self, req: &Request) -> Vec<u8> {
+        self.encode_with(req, true)
+    }
+
+    fn encode_with(&self, req: &Request, marked: bool) -> Vec<u8> {
         let mut head = format!(
             "{} {} HTTP/1.1\r\nAccept-Encoding: identity\r\n",
             req.method.as_str(),
@@ -509,6 +555,9 @@ impl Opener {
         }
         head.push_str(&format!("Host: {}\r\n", self.host_header()));
         head.push_str(&format!("User-Agent: {}\r\n", self.user_agent));
+        if marked {
+            head.push_str(&format!("{VIA_TCP_HEADER}: 1\r\n"));
+        }
         for (name, value) in req.headers.iter().chain(&self.handover) {
             head.push_str(&format!("{name}: {value}\r\n"));
         }
@@ -587,15 +636,21 @@ impl Opener {
             }
         };
         let tls = self.tls.then_some(self.host.as_str());
-        let bytes = self.encode(req);
-        let mut reader = match start(
-            &self.host,
-            self.port,
-            tls,
-            via.as_ref(),
-            &bytes,
-            req.timeout,
-        ) {
+        let on_sock = self
+            .session_sock_for(self.tls, &self.host_header(), req)
+            .and_then(|sock| start_on_socket(sock, &self.encode_marked(req), req.timeout));
+        let started = match on_sock {
+            Some(r) => r,
+            None => start(
+                &self.host,
+                self.port,
+                tls,
+                via.as_ref(),
+                &self.encode(req),
+                req.timeout,
+            ),
+        };
+        let mut reader = match started {
             Ok(r) => r,
             Err(r) => return Ok(Outcome::Raised(r)),
         };
@@ -964,6 +1019,95 @@ fn start(
         .and_then(|()| conn.flush())
         .map_err(|e| Raised::url_error(os_error(&e)))?;
     Ok(BufReader::with_capacity(8192, conn))
+}
+
+/// `_K5SockConn`: the connection to the session's cell socket, `timeout`
+/// for the connect and for each send and read, and `bytes` sent. `None`
+/// when the connect failed, whatever the reason (`_K5SockGone`): the
+/// caller goes on over TCP. A failure after the connect is raised as a
+/// TCP one would be.
+#[cfg(unix)]
+pub fn start_on_socket(
+    sock: &Path,
+    bytes: &[u8],
+    timeout: Duration,
+) -> Option<Result<BufReader<super::wire::Conn>, Raised>> {
+    use super::wire::{self, Conn, Target};
+    let deadline = std::time::Instant::now() + timeout;
+    let mut conn = wire::connect(&Target::Unix(sock.to_path_buf()), timeout, deadline).ok()?;
+    let sent = match &conn {
+        Conn::Unix(s) => s
+            .set_write_timeout(Some(timeout))
+            .and_then(|()| s.set_read_timeout(Some(timeout))),
+        _ => Ok(()),
+    }
+    .and_then(|()| conn.write_all(bytes))
+    .and_then(|()| conn.flush());
+    Some(match sent {
+        Ok(()) => Ok(BufReader::with_capacity(8192, conn)),
+        Err(e) => Err(Raised::url_error(os_error(&e))),
+    })
+}
+
+/// No Unix sockets: never a session socket.
+#[cfg(not(unix))]
+pub fn start_on_socket(
+    _sock: &Path,
+    _bytes: &[u8],
+    _timeout: Duration,
+) -> Option<Result<BufReader<super::wire::Conn>, Raised>> {
+    None
+}
+
+/// The credential `_k5_on_socket` reads from a request: what follows
+/// `Bearer ` in its `Authorization` header (the last one, as urllib keeps
+/// it), else the first non-empty `token` in its query, decoded as
+/// `parse_qs` decodes it. Empty when there is neither.
+pub fn credential(req: &Request) -> String {
+    let auth = req
+        .headers
+        .iter()
+        .rev()
+        .find(|(n, _)| n.eq_ignore_ascii_case("Authorization"))
+        .map_or("", |(_, v)| v.as_str());
+    if let Some(t) = auth.strip_prefix("Bearer ") {
+        return t.to_string();
+    }
+    let selector = req.selector();
+    let Some((_, query)) = selector.split_once('?') else {
+        return String::new();
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, v)| !v.is_empty() && unquote_plus(k) == "token")
+        .map(|(_, v)| unquote_plus(v))
+        .unwrap_or_default()
+}
+
+/// `urllib.parse.unquote_plus`: `+` as a space, `%XX` as its byte (a `%`
+/// with no two hex digits after it stays), the bytes read as UTF-8 with
+/// replacement.
+fn unquote_plus(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let hex = |c: u8| (c as char).to_digit(16);
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' => match (b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c))) {
+                (Some(h), Some(l)) => {
+                    out.push((h * 16 + l) as u8);
+                    i += 2;
+                }
+                _ => out.push(b'%'),
+            },
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `HTTPSConnection.connect()` through the person's proxy `p`: the

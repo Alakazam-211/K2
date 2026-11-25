@@ -408,15 +408,28 @@ impl Engine {
         if !token.is_empty() {
             req = req.header("Authorization", format!("Bearer {token}"));
         }
+        let mut op = self.opener.clone();
+        op.netloc = t.host_header.clone();
+        // In an identity session the session's passport goes over the cell
+        // socket first, marked (`_K5SessionSock`); a connect there that
+        // fails goes on over TCP.
+        let on_sock = match w {
+            Which::Local => op.session_sock_for(t.tls, &t.host_header, &req).and_then(|sock| {
+                let mut marked = op.encode_marked(&req);
+                let sent = net::over_session_sock(sock, &marked, timeout_d);
+                net::wipe_bytes(&mut marked);
+                sent
+            }),
+            Which::Remote => None,
+        };
         let mut bytes = match w {
-            Which::Local => {
-                let mut op = self.opener.clone();
-                op.netloc = t.host_header.clone();
-                op.encode(&req)
-            }
+            Which::Local => op.encode(&req),
             Which::Remote => urllib::encode_plain(&t.host_header, &req),
         };
-        let sent = net::over_tcp(&t, via.as_ref(), &bytes, timeout_d);
+        let sent = match on_sock {
+            Some(sent) => sent,
+            None => net::over_tcp(&t, via.as_ref(), &bytes, timeout_d),
+        };
         net::wipe(&mut req);
         net::wipe_bytes(&mut bytes);
         let a = match sent {

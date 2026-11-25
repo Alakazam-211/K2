@@ -197,6 +197,43 @@ pub fn over_unix(path: &std::path::Path, bytes: &[u8], timeout: Duration) -> Res
     Ok(answered_or_stopped(urllib::read_answer(&mut r)))
 }
 
+/// One urllib request over the session's cell socket (`_K5SockConn`):
+/// `None` when the connect failed, whatever the reason (`_K5SockGone`),
+/// and the caller goes on over TCP. A failure after the connect is
+/// raised as over TCP.
+#[cfg(unix)]
+pub fn over_session_sock(path: &std::path::Path, bytes: &[u8], timeout: Duration) -> Option<Sent> {
+    use crate::transport::wire::{self, Conn, Target};
+    let deadline = Instant::now() + timeout;
+    let Ok(Conn::Unix(s)) = wire::connect(&Target::Unix(path.to_path_buf()), timeout, deadline) else {
+        return None;
+    };
+    if let Err(e) = s
+        .set_read_timeout(Some(SLICE))
+        .and_then(|()| s.set_write_timeout(Some(SLICE)))
+    {
+        return Some(raised(url_error(urllib::os_error(&e))));
+    }
+    let mut w = Watched {
+        inner: s,
+        limit: timeout,
+    };
+    if let Err(e) = w.write_all(bytes).and_then(|()| w.flush()) {
+        if stopped(&e) {
+            return Some(Sent::Stopped);
+        }
+        return Some(raised(url_error(urllib::os_error(&e))));
+    }
+    let mut r = BufReader::with_capacity(8192, w);
+    Some(answered_or_stopped(urllib::read_answer(&mut r)))
+}
+
+/// No Unix sockets: never a session socket.
+#[cfg(not(unix))]
+pub fn over_session_sock(_path: &std::path::Path, _bytes: &[u8], _timeout: Duration) -> Option<Sent> {
+    None
+}
+
 /// Wipes a request's body (a password may be in it) once it was sent.
 pub fn wipe(req: &mut Request) {
     if let Some(d) = req.data.as_mut() {

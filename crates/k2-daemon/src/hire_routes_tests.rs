@@ -1271,6 +1271,8 @@ fn passport_hire_refuses_an_existing_workspace_in_every_spelling() {
     let before = workspace_state(&theirs);
     let base = Path::new(&theirs).file_name().unwrap().to_string_lossy().into_owned();
     let root_s = root.to_string_lossy().into_owned();
+    // Grown with the Unix-only spellings below.
+    #[cfg_attr(windows, allow(unused_mut))]
     let mut spellings = vec![
         theirs.clone(),
         format!("{theirs}/"),

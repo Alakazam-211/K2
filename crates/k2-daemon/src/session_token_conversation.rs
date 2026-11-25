@@ -184,6 +184,7 @@ impl WarnOnce {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).insert(version.to_string())
     }
     #[cfg(test)]
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn seen(&self, version: &str) -> bool {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).contains(version)
     }
@@ -194,8 +195,10 @@ fn newer_warned() -> &'static WarnOnce {
     W.get_or_init(WarnOnce::default)
 }
 
-/// The daemon has warned about Codex `version` (tests).
+/// The daemon has warned about Codex `version` (tests; read by Unix-only
+/// ones).
 #[cfg(test)]
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn newer_version_warned(version: &str) -> bool {
     newer_warned().seen(version)
 }

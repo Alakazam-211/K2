@@ -1463,6 +1463,8 @@ mod tests {
 
     /// A live plain session that records what reaches its stdin: `sh -c 'cat
     /// > <log>'` under `agent` in `ws` (no sandbox; this build has none).
+    /// Used by the Unix-only tests.
+    #[cfg_attr(windows, allow(dead_code))]
     fn live_recorder(agent: &str, ws: &str, log: &std::path::Path) -> String {
         let body = serde_json::json!({
             "agent_name": agent,

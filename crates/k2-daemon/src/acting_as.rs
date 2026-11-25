@@ -86,7 +86,9 @@ pub(crate) fn stamp_tcp<'a>(status: &str, body: &'a str) -> Cow<'a, str> {
     }
 }
 
-/// Cell socket: the verb's answer, for this cell's passport.
+/// Cell socket: the verb's answer, for this cell's passport (the cell
+/// socket is Unix only).
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn stamp_cell(status: &str, path: &str, body: &str, principal: &HookPrincipal) -> Option<String> {
     if !covers(path) {
         return None;

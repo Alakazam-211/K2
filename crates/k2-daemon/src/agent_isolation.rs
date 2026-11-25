@@ -32,6 +32,8 @@
 
 use std::path::{Path, PathBuf};
 
+// `Decision` is read by the Unix-only paths below.
+#[cfg_attr(windows, allow(unused_imports))]
 use k2_core::agent_cgroup::{self, Decision, PeerAgent, SessionIsolation};
 use k2_core::log_debug;
 use k2_core::session::SessionId;
@@ -673,9 +675,12 @@ const FORWARD_FROM: [u8; 4] = [127, 0, 0, 1];
 
 static FORWARDS: std::sync::Mutex<Option<std::collections::HashMap<std::net::SocketAddr, String>>> = std::sync::Mutex::new(None);
 
+// The forwarder runs on Unix only (the session socket's TCP forward).
+#[cfg_attr(windows, allow(dead_code))]
 struct ForwardRecord(std::net::SocketAddr);
 
 impl ForwardRecord {
+    #[cfg_attr(windows, allow(dead_code))]
     fn new(local: std::net::SocketAddr, sid: &str) -> Self {
         FORWARDS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(local, sid.to_string());
         ForwardRecord(local)

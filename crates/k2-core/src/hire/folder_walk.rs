@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 pub(crate) enum WalkError {
     /// A link, or something that isn't a folder, at this path.
     NotAFolder(PathBuf),
-    /// Another user could change this folder.
+    /// Another user could change this folder (built by the Unix walk only).
+    #[cfg_attr(windows, allow(dead_code))]
     Unsafe(PathBuf),
     /// The last part was there although the walk was to make it.
     AlreadyThere(PathBuf),

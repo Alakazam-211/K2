@@ -219,6 +219,10 @@ a build don't follow the brand file yet.
   inert copy of the shell CLI that it never writes on a box of yours. So
   say "the daemon and the CLI carry no copy of the shell CLI and run no
   script", not "the build holds no shell CLI at all".
+- **The no-shell-CLI check takes time on this tag.** Step 7's
+  check-no-bash reads every byte of every program. On a release build it
+  took about 30 minutes over the five Linux programs, nearly all of it on
+  the daemon (about 190 MB). Allow for that in the step's time limit.
 - **Not built by this pipeline yet:** the desktop apps and their
   installers. They follow when a K5 release says its packaging reads the
   brand file; the driver then gains a step for them.

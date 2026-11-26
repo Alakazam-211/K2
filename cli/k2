@@ -9,7 +9,7 @@
 # either layout (`.k2/` preferred, `.k2so/` fallback) via `_ws_dot_dir()`, so
 # agents should read/write `<workspace>/.k2/...` going forward.
 
-K2_CLI_VERSION="0.46.17"
+K2_CLI_VERSION="0.46.18"
 
 # The GitHub repo releases come from (owner/name): every release URL this
 # CLI fetches or prints is built from it. The repo is moving from
